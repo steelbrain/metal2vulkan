@@ -9,6 +9,7 @@
 #![warn(missing_docs)]
 
 mod buffer;
+mod cache;
 mod command;
 mod complete;
 mod counters;

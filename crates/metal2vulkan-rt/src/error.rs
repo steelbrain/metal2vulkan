@@ -174,13 +174,15 @@ pub enum Gap {
     /// `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of
     /// a kernel that observes its threadgroup partition and whose partial-threadgroups variant the
     /// translator refused: Metal runs the last threadgroup of such an axis with the threads left.
-    /// The translator refuses the variant of a kernel whose simdgroups it emulates (a lockstep
-    /// pair in divergent flow on a device without `VK_KHR_shader_maximal_reconvergence`), and of
-    /// one whose uniform barriers' vote word its workgroup memory cannot hold. Refused at the
-    /// dispatch; the state's whole grids run.
+    /// The translator refuses the variant of a kernel whose SIMD groups it emulates (SIMD-group
+    /// operations where the device's compute subgroups are neither 32 lanes nor 64 or 128 split
+    /// into 32-lane clusters, or a lockstep pair in divergent flow on a device without
+    /// `VK_KHR_shader_maximal_reconvergence`), and of one whose barriers in a loop need a vote
+    /// word its workgroup memory cannot hold. Refused at the dispatch; the state's whole grids
+    /// run.
     ///
-    /// Basis: ours (the translator's partial-threadgroups variant does not take emulated
-    /// simdgroups).
+    /// Basis: ours (the translator's partial-threadgroups variant does not take the emulated
+    /// SIMD-group tier, nor a vote word past the workgroup memory).
     PartialThreadgroups {
         /// The grid asked for.
         threads_per_grid: [u32; 3],

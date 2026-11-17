@@ -1,6 +1,7 @@
 //! The device: one `VkDevice` for every command queue, every guest process and the compositor;
 //! its queues, its memory blocks, its threads, quiesce and teardown.
 
+use crate::cache::Caches;
 use crate::complete::{self, Done};
 use crate::counters::{Counters, Gauge};
 use crate::error::Error;
@@ -23,6 +24,7 @@ use metal2vulkan::device::{
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{c_char, CString};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -158,6 +160,8 @@ pub(crate) struct Core {
     pub(crate) ids: Ids,
     /// The translator, for what device creation enables, under the identity domains.
     pub(crate) translator: metal2vulkan::device::Device,
+    /// The lowered kernels on disk and the `VkPipelineCache` every pipeline is made through.
+    pub(crate) caches: Caches,
     /// Quiesced or torn down: calls that need a thread are refused.
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
@@ -194,6 +198,16 @@ pub struct DeviceOptions {
     /// Vulkan features the consumer needs for its own raw Vulkan work, each enabled where the
     /// device reports it ([`Device::features`]).
     pub features: Vec<ConsumerFeature>,
+    /// The directory the device keeps compute kernels it lowered and its compiled pipeline data
+    /// in, made where it is missing, so a later device on it, in this run or the next, takes
+    /// them in place of lowering and compiling again ([`Metrics::translations_loaded`]). Each
+    /// kind is bounded at 256 MiB, the least recently used kernels going first past it; a file
+    /// that does not check, or a failed read or write, is a miss and never fails a call. `None`
+    /// keeps nothing on disk. Metal keeps its compiled shaders in a system cache the program does
+    /// not name.
+    ///
+    /// [`Metrics::translations_loaded`]: crate::Metrics::translations_loaded
+    pub pipeline_cache_dir: Option<PathBuf>,
 }
 
 /// Takes a lock. A panic while another thread held it leaves what it guards usable (a queue, the
@@ -288,6 +302,27 @@ impl Device {
         let device = unsafe { vk_instance.create_device(raw, &info, None) }
             .map_err(Error::vulkan("vkCreateDevice"))?;
         drop(links);
+        let mut vulkan11 = vk::PhysicalDeviceVulkan11Properties::default();
+        let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
+        let mut properties = vk::PhysicalDeviceProperties2::default()
+            .push_next(&mut vulkan11)
+            .push_next(&mut vulkan13);
+        // SAFETY: as for the floor check; the device is Vulkan 1.3, which defines both structures.
+        unsafe { vk_instance.get_physical_device_properties2(raw, &mut properties) };
+        let directory = options.pipeline_cache_dir.as_deref();
+        let uuid = properties.properties.pipeline_cache_uuid;
+        // SAFETY: the device is live.
+        let caches = match unsafe { Caches::new(&device, directory, uuid) } {
+            Ok(caches) => caches,
+            Err(result) => {
+                // SAFETY: nothing made from the device is left.
+                unsafe { device.destroy_device(None) };
+                return Err(Error::Vulkan {
+                    call: "vkCreatePipelineCache",
+                    result,
+                });
+            }
+        };
         let counters = Counters::new();
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
@@ -295,8 +330,12 @@ impl Device {
         let (memory_types, filler, done, layout) = match made {
             Ok(made) => made,
             Err(error) => {
-                // SAFETY: nothing made from the device is left.
-                unsafe { device.destroy_device(None) };
+                // SAFETY: nothing made from the device is left but the caches, which made no
+                // pipeline.
+                unsafe {
+                    caches.destroy(&device);
+                    device.destroy_device(None);
+                }
                 return Err(error);
             }
         };
@@ -309,13 +348,6 @@ impl Device {
         } else {
             Arc::clone(&runtime)
         };
-        let mut vulkan11 = vk::PhysicalDeviceVulkan11Properties::default();
-        let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
-        let mut properties = vk::PhysicalDeviceProperties2::default()
-            .push_next(&mut vulkan11)
-            .push_next(&mut vulkan13);
-        // SAFETY: as for the floor check; the device is Vulkan 1.3, which defines both structures.
-        unsafe { vk_instance.get_physical_device_properties2(raw, &mut properties) };
         let unified_memory = matches!(
             properties.properties.device_type,
             vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU
@@ -358,6 +390,7 @@ impl Device {
             ring: Ring::new(),
             ids: Ids::new(),
             translator,
+            caches,
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
         });
@@ -885,8 +918,10 @@ impl Drop for Core {
         for _ in 0..ring_blocks {
             self.counters.fall(Gauge::Blocks);
         }
-        // SAFETY: the device is idle, and nothing made from it is left but these objects.
+        // SAFETY: the device is idle, and nothing made from it is left but these objects; the
+        // caches write the pipeline data a last time.
         let zero_source = unsafe {
+            self.caches.destroy(&self.device);
             self.device.destroy_pipeline_layout(self.layout, None);
             self.done.destroy(&self.device);
             let zero_source = self.filler.destroy(&self.device);

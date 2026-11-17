@@ -17,6 +17,10 @@ pub(crate) enum Metric {
     PipelinesCreated,
     /// [`Metrics::blocks_made`].
     BlocksMade,
+    /// [`Metrics::translations`].
+    Translations,
+    /// [`Metrics::translations_loaded`].
+    TranslationsLoaded,
 }
 
 /// A gauge the runtime moves.
@@ -55,6 +59,8 @@ struct Atomics {
     first_use_wait_nanos: AtomicU64,
     first_use_wait_max_nanos: AtomicU64,
     blocks_made: AtomicU64,
+    translations: AtomicU64,
+    translations_loaded: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -82,6 +88,8 @@ impl Counters {
             Metric::Barriers => &a.barriers,
             Metric::PipelinesCreated => &a.pipelines_created,
             Metric::BlocksMade => &a.blocks_made,
+            Metric::Translations => &a.translations,
+            Metric::TranslationsLoaded => &a.translations_loaded,
         };
         atomic.fetch_add(1, Relaxed);
     }
@@ -129,6 +137,8 @@ impl Counters {
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
             first_use_wait_max_nanos: a.first_use_wait_max_nanos.load(Relaxed),
             blocks_made: a.blocks_made.load(Relaxed),
+            translations: a.translations.load(Relaxed),
+            translations_loaded: a.translations_loaded.load(Relaxed),
         }
     }
 
@@ -178,6 +188,11 @@ pub struct Metrics {
     /// `VkDeviceMemory` allocations made: pooled and dedicated blocks, the zero source and the
     /// parameter ring's blocks, and later image blocks.
     pub blocks_made: u64,
+    /// Kernels the translator lowered, each a pipeline state's module: one for a kernel that does
+    /// not observe its threadgroup partition, two for one that does.
+    pub translations: u64,
+    /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
+    pub translations_loaded: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the

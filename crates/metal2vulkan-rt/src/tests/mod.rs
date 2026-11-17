@@ -1,3 +1,4 @@
+mod cache;
 mod command;
 mod compute;
 mod device;

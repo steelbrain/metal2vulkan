@@ -1,7 +1,7 @@
-//! The reaper thread: it frees what the runtime's other threads give up, one object at a time, and
-//! runs a teardown that starts on the completion thread. No driver free runs on the completion
-//! thread, so no completion waits behind one, and a submission on another thread waits behind at
-//! most one free.
+//! The reaper thread: it frees what the runtime's other threads give up, one object at a time, runs
+//! a teardown that starts on the completion thread, and writes the pipeline data to the cache
+//! directory when it is due. No driver free runs on the completion thread, so no completion waits
+//! behind one, and a submission on another thread waits behind at most one free.
 
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
@@ -61,6 +61,13 @@ impl Reaper {
         self.changed.notify_one();
     }
 
+    /// Wakes the reaper to time the pipeline data's next write.
+    pub(crate) fn wake(&self) {
+        // Taken so the wake cannot fall between the reaper's look at the caches and its wait.
+        drop(lock(&self.state));
+        self.changed.notify_one();
+    }
+
     /// Tells the reaper to end once its queue is empty.
     pub(crate) fn stop(&self) {
         lock(&self.state).stop = true;
@@ -106,28 +113,47 @@ fn free(core: &Core, object: Free) {
     }
 }
 
-/// The reaper thread, until it is stopped and its queue is empty.
+/// What the reaper does next.
+enum Next {
+    Job(Job),
+    /// Write the pipeline data.
+    Save,
+}
+
+/// The reaper thread, until it is stopped and its queue is empty. The device's end writes the
+/// pipeline data a last time.
 pub(crate) fn run(core: Arc<Core>) {
     let reaper = &core.reaper;
     loop {
-        let job = {
+        let next = {
             let mut state = lock(&reaper.state);
             loop {
                 if let Some(job) = state.jobs.pop_front() {
-                    break job;
+                    break Next::Job(job);
                 }
                 if state.stop {
                     return;
                 }
-                state = reaper
-                    .changed
-                    .wait(state)
-                    .unwrap_or_else(PoisonError::into_inner);
+                state = match core.caches.due_in() {
+                    Some(wait) if wait.is_zero() => break Next::Save,
+                    Some(wait) => {
+                        reaper
+                            .changed
+                            .wait_timeout(state, wait)
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .0
+                    }
+                    None => reaper
+                        .changed
+                        .wait(state)
+                        .unwrap_or_else(PoisonError::into_inner),
+                };
             }
         };
-        match job {
-            Job::Free(object) => free(&core, object),
-            Job::Teardown(teardown) => teardown(&core),
+        match next {
+            Next::Job(Job::Free(object)) => free(&core, object),
+            Next::Job(Job::Teardown(teardown)) => teardown(&core),
+            Next::Save => core.caches.save(&core.device),
         }
     }
 }

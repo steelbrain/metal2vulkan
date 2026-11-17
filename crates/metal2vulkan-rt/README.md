@@ -24,7 +24,9 @@ device against the floor below.
   answer passes, and passes over it otherwise; `Device::extensions` lists those enabled, the
   floor's first. The consumer names an extension's dependencies too. It names the core Vulkan
   features its own work needs as `ConsumerFeature`s (`SamplerYcbcrConversion` for now): the device
-  enables each one it reports, once, and `Device::features` lists those enabled.
+  enables each one it reports, once, and `Device::features` lists those enabled. It names the
+  directory the device keeps its compiled kernels in, `pipeline_cache_dir` (see "The cache
+  directory").
 - `Device::raw` gives the instance, physical device, device and queue family handles, and
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock.
   The runtime keeps owning every handle.
@@ -34,7 +36,8 @@ device against the floor below.
 
 The runtime runs four threads per device: the block-maker, the submit thread, the completion
 thread, and the reaper, which frees the semaphores and command pools the others give up, one at a
-time, so no driver free runs on the completion thread and a submission waits behind at most one.
+time, so no driver free runs on the completion thread and a submission waits behind at most one,
+and writes the pipeline data to the cache directory when it is due.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
@@ -59,7 +62,8 @@ by `Device::new`.
 ### Counters
 
 `Device::counters` returns a handle that stays readable after the device is gone. `metrics()` are
-cumulative counts (submissions, passes, barriers, bytes copied, pipelines created, blocks made);
+cumulative counts (submissions, passes, barriers, bytes copied, pipelines created, blocks made,
+first-use waits, kernels lowered and kernels read from the cache directory);
 `gauges()` are live counts per kind of resource, every one zero after teardown. They are relaxed
 atomics, always on.
 
@@ -199,7 +203,8 @@ that touch blocks first.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
-  dispatch past it is refused (`Limit::GroupCount`), where Metal's grids go further.
+  dispatch past it is split into dispatches of at most that many, each told its first
+  threadgroup.
 - `setBytes` takes up to 64 KiB, one ring chunk (`Limit::BytesLength`).
 
 ## Compute encoders
@@ -235,25 +240,63 @@ that touch blocks first.
 - `Device::new_compute_pipeline_state(&ComputePipelineDescriptor)` is
   `newComputePipelineStateWithDescriptor:options:reflection:error:` without reflection. The
   translator compiles the kernel on the calling thread, which waits for it, within its 20-second
-  budget, for what device creation enabled and under its identity domains: each buffer argument
-  is the guest address of the bound buffer plus its offset, pushed. A refusal of the translator is
-  `Error::Translation`.
+  budget per lowering, for what device creation enabled and under its identity domains: each
+  buffer argument is the guest address of the bound buffer plus its offset, pushed. A refusal of
+  the translator is `Error::Translation`.
+- Every kernel is lowered first as its partial-threadgroups variant. A kernel that does not
+  observe its threadgroup partition (it holds no threadgroup memory, barrier, fence or atomic of
+  threadgroup or SIMD-group scope, SIMD-group or quad function, and reads no builtin of the
+  partition; the translator decides from its AIR) keeps that module alone: every direct dispatch
+  runs in tiles of 256 threads, 256 by 1 for a grid 256 threads wide or wider and, for a narrower
+  one, as wide as the grid rounded down to a power of two, so at most nine `VkPipeline`s; the
+  256-wide one is made with the state. An indirect dispatch runs at its own threadgroup size. A
+  kernel that observes its partition is lowered a second time, plainly: its whole grids,
+  `dispatch_threadgroups` and indirect dispatches run that module at their own size, and a
+  `dispatch_threads` grid that is not a whole number of threadgroups runs the variant.
 - The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
   threadgroup (0), the threadgroup size packed as `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's
   threads per grid; an indirect dispatch pushes a zero grid, and its kernel takes the grid from its
   threadgroup count.
-- A state makes one `VkPipeline` per threadgroup size and threadgroup memory lengths, on the
-  encoding thread that first dispatches with them, which waits for it. Nothing the runtime records
+- A state makes one `VkPipeline` per module, threadgroup size and threadgroup memory lengths, on
+  the encoding thread that first dispatches with them, which waits for it. Nothing the runtime records
   depends on when a compile finishes: there is one recorded form, made after the wait. Each such
   wait is counted in `Metrics::first_use_waits`, with its time in `first_use_wait_nanos` and the
   longest in `first_use_wait_max_nanos`.
 - `ComputePipelineState::precision_notes` carries the translator's notes of where the kernel's
-  answers may differ from Metal's on this device, fixed when the state is made.
+  answers may differ from Metal's on this device, fixed when the state is made. A kernel compiled
+  with fast math carries `FastMathRewrites`: a driver may fold its arithmetic differently per
+  `VkPipeline`, so its answers in a tile and at another size may differ in the last place.
+
+### The cache directory
+
+`DeviceOptions::pipeline_cache_dir` names a directory, made where it is missing, that the device
+keeps two things in, for compute pipeline states:
+
+- `translations/`: each kernel lowering, named by its `FunctionCompileKey`, which covers
+  everything that changes the lowering: the kernel's AIR, entry, constants and linked functions,
+  its lowering inputs (the variant), the device profile's fingerprint and the translator's
+  semantics version. A state whose lowering is there reads it in place of lowering
+  (`Metrics::translations_loaded`, beside `Metrics::translations`); a variant the translator
+  refused is kept too. The files take at most 256 MiB; past it the least recently used go.
+- `pipelines-<pipelineCacheUUID>`: the `VkPipelineCache` data, which the driver keys by each
+  pipeline's module and specialization. Every `VkPipeline` is made through the device's
+  `VkPipelineCache`, which starts from this file. The reaper writes it once a `VkPipeline` was
+  made and 10 seconds have passed since the last write, and the device's end writes it a last
+  time. Data past 256 MiB is not written, and a file past it is not read: the cache starts empty.
+
+Each write is a temporary file renamed over its name, and each file checks itself (the
+translator's self-checking encoding, the pipeline data's checksum), so a file cut short is a
+miss. A failed read or write is a miss too, and never fails a call. Devices open on one directory
+share its files, each keeping the cap over the files it knows. With no directory, nothing is kept
+on disk; the `VkPipelineCache` still serves the device's own pipelines.
 
 ### Known gaps of pipeline states
 
-- Each call translates anew: no cache returns a state made before, and no translation or
-  `VkPipeline` compile runs ahead of the call or the dispatch that needs it.
+- No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it: a
+  state reads only its lowerings from the cache directory, and each `VkPipeline` past the first
+  tile is made at its first dispatch, through the pipeline data.
+- A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
+  its plain module); the second lowering's time is unmeasured.
 - A kernel that reads anything the encoder does not supply yet, a texture, a sampler, a function
   table, a `[[stage_in]]` fetch or constant data, is refused (`Gap::KernelInput`). So is a state
   for indirect command buffers (`Gap::IndirectCommandBuffers`).
@@ -262,9 +305,15 @@ that touch blocks first.
   threadgroups of whole SIMD groups; a dispatch of another size is refused
   (`Gap::PartialSimdgroups`): its emulated-SIMD-group variant is not built.
 - `dispatch_threads` with a grid that is not a whole number of threadgroups on some axis is
-  refused (`Gap::PartialThreadgroups`): Metal's partial threadgroups are not built.
-- A kernel runs at the threadgroup size each dispatch gives. Every size makes its own
-  `VkPipeline`, even for a kernel that does not observe its size.
+  refused (`Gap::PartialThreadgroups`) for a kernel that observes its threadgroup partition and
+  whose partial-threadgroups variant the translator refuses. It refuses the variant of a kernel
+  whose SIMD groups it emulates: one with SIMD-group operations where the device's compute
+  subgroups are neither 32 lanes nor 64 or 128 split into 32-lane clusters, and one with a
+  lockstep pair in divergent flow where the device lacks `VK_KHR_shader_maximal_reconvergence`.
+  It refuses the variant of a kernel whose barriers in a loop need a vote word that does not fit
+  beside its threadgroup memory in `maxComputeSharedMemorySize`.
+- A kernel that observes its threadgroup partition makes a `VkPipeline` per threadgroup size it
+  is dispatched at.
 - A dispatch of a size other than the descriptor's `requiredThreadsPerThreadgroup`, which Metal's
   validation stops, runs at the size it gives.
 

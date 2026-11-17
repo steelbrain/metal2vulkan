@@ -11,10 +11,12 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device, finished, within};
+    use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, BlockId, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
-        DispatchType, FunctionDescriptor, Library, MemoryClass, PrecisionNote, StageSource,
+        DeviceOptions, DispatchType, FunctionDescriptor, Gauges, Instance, Library, MemoryClass,
+        PrecisionNote, StageSource,
     };
     use metal2vulkan::Budget;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
@@ -652,5 +654,56 @@ mod on_device {
                 }
             );
         });
+    }
+
+    /// A device on a cache directory a device before it used lowers nothing at creation: the
+    /// tiling kernel's lowering and the observing kernel's two are read from the directory, and
+    /// the pipeline data the first device wrote at its end is there.
+    #[test]
+    fn every_device_takes_the_kernels_a_device_before_it_lowered_from_the_cache_directory() {
+        let (Some(tiled), Some(observing)) = (
+            descriptor("a1_bool_from_float"),
+            descriptor("icb_replay_grid_template"),
+        ) else {
+            return;
+        };
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-cache-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            for round in 0..2 {
+                let mut options = DeviceOptions::default();
+                options.pipeline_cache_dir = Some(dir.clone());
+                let device = Device::new(physical, options)
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let counters = device.counters();
+                let states = [
+                    state(name, &device, &tiled),
+                    state(name, &device, &observing),
+                ];
+                let metrics = counters.metrics();
+                let counted = (metrics.translations, metrics.translations_loaded);
+                // One lowering for the tiling kernel, two for the observing one.
+                let want = [(3, 0), (0, 3)][round];
+                assert_eq!(counted, want, "{name}: device {round} on the directory");
+                drop(states);
+                drop(device);
+                within("the teardown", || counters.gauges() == Gauges::default());
+            }
+            let written = std::fs::read_dir(&dir)
+                .expect("the cache directory")
+                .flatten()
+                .any(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("pipelines-")
+                });
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(written, "{name}: the pipeline data");
+            println!("{name}: 3 lowerings, none on a second device on the directory");
+        }
     }
 }

@@ -27,9 +27,9 @@ use ash::vk;
 use metal2vulkan::error::{Error as TranslationError, Feature};
 use metal2vulkan::library::CompiledFunction;
 use metal2vulkan::pipeline::{
-    AccessSet, Axis, BufferKind, ComputePipeline, ComputePipelineDescriptor, PrecisionNote,
-    PushField, PushLoc, RuntimeFact, SlotClass, SlotInterface, SlotRef, SpecKey, Stage,
-    StageEntries, StageSource,
+    AccessSet, Axis, BufferKind, ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor,
+    LoweringInputs, PrecisionNote, PushField, PushLoc, RuntimeFact, SlotClass, SlotInterface,
+    SlotRef, SpecKey, Stage, StageEntries, StageSource,
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
@@ -186,9 +186,13 @@ impl crate::Device {
     /// The translator compiles the kernel on the calling thread, which waits for it, within the
     /// translator's 20-second budget per lowering: once for a kernel that does not observe its
     /// threadgroup partition, whose 256-wide tile's `VkPipeline` is made here too, and twice for
-    /// one that does (its partial-threadgroups variant and its plain module). Each call compiles
-    /// anew: no cache keeps a state made before. The state's other `VkPipeline`s are made later,
-    /// each by the first encoding call that needs it ([`ComputePipelineState`]).
+    /// one that does (its partial-threadgroups variant and its plain module). Where the device
+    /// has a cache directory ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made
+    /// before is read from it in place of lowering again, and every `VkPipeline` is made through
+    /// the pipeline data it keeps. The state's other `VkPipeline`s are made later, each by the
+    /// first encoding call that needs it ([`ComputePipelineState`]).
+    ///
+    /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     ///
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that reads what the
@@ -216,14 +220,32 @@ impl crate::Device {
                     .map_err(Error::Translation)?;
                 let mut inputs = plain.clone();
                 inputs.partial_threadgroups = true;
-                let lower = |inputs| {
-                    translator.compile_function_from_entries(function, inputs, &budget, &entries)
+                let lower =
+                    |inputs: &LoweringInputs| lower(&core, function, inputs, &budget, &entries);
+                // The translator's refusal of the variant (emulated simdgroups, a vote word its
+                // workgroup memory cannot hold), kept like a lowering: the kernel keeps its plain
+                // module.
+                let variant_key = *translator.function_compile_key(function, &inputs).digest();
+                let variant = if core.caches.refused(&variant_key) {
+                    core.counters.count(Metric::TranslationsLoaded);
+                    None
+                } else {
+                    match lower(&inputs) {
+                        Ok(variant) => Some(variant),
+                        Err(TranslationError::Unsupported(refused))
+                            if refused.feature == Feature::GpuEncodedIndirectCommands =>
+                        {
+                            core.caches.keep_refusal(&variant_key);
+                            None
+                        }
+                        Err(error) => return Err(Error::Translation(error)),
+                    }
                 };
-                match lower(&inputs) {
-                    Ok(variant) if !variant.observes_threadgroup_partition() => {
+                match variant {
+                    Some(variant) if !variant.observes_threadgroup_partition() => {
                         (compiled(variant).map_err(Error::Translation)?, None, false)
                     }
-                    Ok(variant) => {
+                    Some(variant) => {
                         let plain = lower(&plain).and_then(compiled);
                         let variant = compiled(variant);
                         (
@@ -232,15 +254,10 @@ impl crate::Device {
                             true,
                         )
                     }
-                    // The translator's refusal of the variant (emulated simdgroups, a vote word its
-                    // workgroup memory cannot hold): the kernel keeps its plain module.
-                    Err(TranslationError::Unsupported(refused))
-                        if refused.feature == Feature::GpuEncodedIndirectCommands =>
-                    {
+                    None => {
                         let plain = lower(&plain).and_then(compiled);
                         (plain.map_err(Error::Translation)?, None, true)
                     }
-                    Err(error) => return Err(Error::Translation(error)),
                 }
             }
             // A kernel the consumer compiled: the variant it was compiled under.
@@ -296,6 +313,32 @@ impl crate::Device {
             inner: Arc::new(inner),
         })
     }
+}
+
+/// The kernel `function` lowered under `inputs`: the lowering a device kept in the cache directory
+/// under its key, which covers everything that changes the output, or one made now and kept.
+fn lower(
+    core: &Core,
+    function: &FunctionDescriptor,
+    inputs: &LoweringInputs,
+    budget: &Budget,
+    entries: &StageEntries,
+) -> Result<CompiledFunction, TranslationError> {
+    let translator = &core.translator;
+    let key = translator.function_compile_key(function, inputs);
+    let kept = core
+        .caches
+        .translation(key.digest())
+        .and_then(|bytes| CompiledFunction::from_bytes_for_key(&bytes, &key, translator).ok());
+    if let Some(kept) = kept {
+        core.counters.count(Metric::TranslationsLoaded);
+        return Ok(kept);
+    }
+    core.counters.count(Metric::Translations);
+    let lowered = translator.compile_function_from_entries(function, inputs, budget, entries)?;
+    core.caches
+        .keep_translation(key.digest(), &lowered.to_bytes());
+    Ok(lowered)
 }
 
 /// The runtime's view of the translator's kernel, or [`Gap::KernelInput`] where the kernel reads
@@ -614,16 +657,19 @@ impl Kernel {
             .stage(stage)
             .layout(core.layout);
         let device = &core.device;
-        // SAFETY: the module and the layout are the device's, and the specialization gives each
-        // of the kernel's constants a 4-byte value.
-        let made =
-            unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[info], None) };
+        let cache = core.caches.pipeline_cache;
+        // SAFETY: the module, the layout and the cache are the device's, and the specialization
+        // gives each of the kernel's constants a 4-byte value.
+        let made = unsafe { device.create_compute_pipelines(cache, &[info], None) };
         let pipeline = made.map_err(|(_, result)| Error::Vulkan {
             call: "vkCreateComputePipelines",
             result,
         })?[0];
         core.counters.count(Metric::PipelinesCreated);
         core.counters.rise(Gauge::Pipelines);
+        if core.caches.made() {
+            core.reaper.wake();
+        }
         Ok(pipeline)
     }
 

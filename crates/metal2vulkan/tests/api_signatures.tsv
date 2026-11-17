@@ -1156,6 +1156,7 @@ const	metal2vulkan::cache::SOURCE_DIGEST	pub const SOURCE_DIGEST: &str
 const	metal2vulkan::device::NVIDIA_AMPERE_GA10X	pub const NVIDIA_AMPERE_GA10X: &[u32]
 const	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	pub const NOT_MIPMAPPED_MAX_LOD: f32
 const	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	pub const MAX_VERTEX_ALIGNMENT: u32
+const	metal2vulkan::pipeline::NONUNIFORM	pub const NONUNIFORM: u32
 const-value	metal2vulkan-air::bitstream::BLOCKINFO_BLOCK_ID	0
 const-value	metal2vulkan-air::bitstream::TOP_LEVEL_ABBREV_WIDTH	2
 const-value	metal2vulkan-air::budget::BITSTREAM_NESTING	64
@@ -1249,6 +1250,7 @@ const-value	metal2vulkan::cache::SOURCE_DIGEST	env!("M2V_SOURCE_DIGEST")
 const-value	metal2vulkan::device::NVIDIA_AMPERE_GA10X	&[0x2200, 0x2203, 0x2204, 0x2205, 0x2206, 0x2207, 0x2208, 0x220a, 0x220d, 0x2216, 0x222b, 0x222f, 0x2230, 0x2231, 0x2232, 0x2233, 0x2235, 0x2236, 0x2237, 0x2238, 0x223f, 0x2414, 0x2420, 0x2438, 0x2460, 0x2480, 0x2482, 0x2483, 0x2484, 0x2486, 0x2487, 0x2488, 0x2489, 0x248a, 0x248c, 0x248d, 0x248e, 0x249c, 0x249d, 0x249f, 0x24a0, 0x24a4, 0x24ac, 0x24ad, 0x24af, 0x24b0, 0x24b1, 0x24b6, 0x24b7, 0x24b8, 0x24b9, 0x24ba, 0x24bb, 0x24bf, 0x24c0, 0x24c7, 0x24c8, 0x24c9, 0x24dc, 0x24dd, 0x24df, 0x24e0, 0x24fa, 0x2501, 0x2503, 0x2504, 0x2505, 0x2507, 0x2508, 0x2509, 0x2520, 0x2521, 0x2523, 0x252f, 0x2531, 0x2544, 0x2560, 0x2561, 0x2563, 0x2571, 0x2582, 0x2583, 0x2584, 0x25a0, 0x25a2, 0x25a3, 0x25a4, 0x25a5, 0x25a6, 0x25a7, 0x25a9, 0x25aa, 0x25ab, 0x25ac, 0x25ad, 0x25af, 0x25b0, 0x25b2, 0x25b5, 0x25b6, 0x25b8, 0x25b9, 0x25ba, 0x25bb, 0x25bc, 0x25bd, 0x25e0, 0x25e2, 0x25e5, 0x25ec, 0x25ed, 0x25f9, 0x25fa, 0x25fb]
 const-value	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	0.25
 const-value	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	4
+const-value	metal2vulkan::pipeline::NONUNIFORM	1
 enum	metal2vulkan-air::abi::AbiHandle	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum AbiHandle
 enum	metal2vulkan-air::abi::AbiInt	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum AbiInt
 enum	metal2vulkan-air::abi::AccelerationStructureKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum AccelerationStructureKind
@@ -2225,6 +2227,7 @@ field	metal2vulkan-rt::ComputePipelineDescriptor.threadgroup_size_is_multiple_of
 field	metal2vulkan-rt::DeviceOptions.block_mappings	pub block_mappings: Option<Arc<dyn BlockMappings>>
 field	metal2vulkan-rt::DeviceOptions.extensions	pub extensions: Vec<DeviceExtension>
 field	metal2vulkan-rt::DeviceOptions.features	pub features: Vec<ConsumerFeature>
+field	metal2vulkan-rt::DeviceOptions.pipeline_cache_dir	pub pipeline_cache_dir: Option<PathBuf>
 field	metal2vulkan-rt::FunctionDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan-rt::FunctionDescriptor.function	pub function: Function
 field	metal2vulkan-rt::FunctionDescriptor.libraries	pub libraries: DynamicLibraries
@@ -2247,6 +2250,8 @@ field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
+field	metal2vulkan-rt::Metrics.translations	pub translations: u64
+field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device
 field	metal2vulkan-rt::RawDevice.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
@@ -5950,6 +5955,8 @@ fn	metal2vulkan::metal::vertex::vertex_alignment	pub fn vertex_alignment(format:
 fn	metal2vulkan::metal::vertex::vk_vertex_format	pub fn vk_vertex_format(format: VertexFormat) -> Result<vk::Format, Error>
 fn	metal2vulkan::pipeline::heap_sampler_capacity	pub fn heap_sampler_capacity(p: &DeviceProfile) -> u32
 fn	metal2vulkan::pipeline::heap_unused_while_pending	pub fn heap_unused_while_pending(p: &DeviceProfile) -> bool
+fn	metal2vulkan::pipeline::nonuniform_region_bytes	pub fn nonuniform_region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]>
+fn	metal2vulkan::pipeline::region_bytes	pub fn region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]>
 macro-decl	metal2vulkan-air::ir::ArgIdx	ir_id! ArgIdx
 macro-decl	metal2vulkan-air::ir::BlockId	id_type! BlockId
 macro-decl	metal2vulkan-air::ir::BlockId	ir_id! BlockId
@@ -8785,6 +8792,7 @@ method	metal2vulkan-rt::ComputeCommandEncoder::set_bytes	pub fn set_bytes(&mut s
 method	metal2vulkan-rt::ComputeCommandEncoder::set_compute_pipeline_state	pub fn set_compute_pipeline_state(&mut self, state: &ComputePipelineState) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_threadgroup_memory_length	pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::use_resource	pub fn use_resource(&mut self, resource: Resource<'_>, usage: ResourceUsage) -> Result<(), Error>
+method	metal2vulkan-rt::ComputePipelineDescriptor::lowering_inputs	pub fn lowering_inputs(&self) -> LoweringInputs
 method	metal2vulkan-rt::ComputePipelineDescriptor::new	pub fn new(kernel: StageSource) -> ComputePipelineDescriptor
 method	metal2vulkan-rt::ComputePipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error>
 method	metal2vulkan-rt::ComputePipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
@@ -10502,6 +10510,7 @@ method	metal2vulkan::pipeline::CommandWrites::writes_kinds	pub const fn writes_k
 method	metal2vulkan::pipeline::ComputePipeline::content_digest	pub fn content_digest(&self) -> Hash256
 method	metal2vulkan::pipeline::ComputePipeline::footprint	pub fn footprint(&self) -> u64
 method	metal2vulkan::pipeline::ComputePipeline::plan	pub fn plan(&self, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError>
+method	metal2vulkan::pipeline::ComputePipelineDescriptor::lowering_inputs	pub fn lowering_inputs(&self) -> LoweringInputs
 method	metal2vulkan::pipeline::ComputePipelineDescriptor::new	pub fn new(kernel: StageSource) -> ComputePipelineDescriptor
 method	metal2vulkan::pipeline::ComputePipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error>
 method	metal2vulkan::pipeline::ComputePipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
@@ -12763,7 +12772,6 @@ variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
-variant	metal2vulkan-rt::Limit::GroupCount	GroupCount { count: [u32; 3], max: [u32; 3] }
 variant	metal2vulkan-rt::Limit::ThreadgroupShape	ThreadgroupShape { size: [u32; 3], max: [u32; 3] }
 variant	metal2vulkan-rt::MemoryClass::Private	Private
 variant	metal2vulkan-rt::MemoryClass::Shared	Shared
