@@ -665,11 +665,9 @@ unsafe fn translator(
     let description = described
         .and_then(|description| description.with_enabled(&floor::shader_enables(features)))
         .map_err(Error::Translation)?;
-    let policy = DevicePolicy {
-        pointer_domain: PointerDomain::Identity,
-        handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
-    };
+    let mut policy = DevicePolicy::default();
+    policy.pointer_domain = PointerDomain::Identity;
+    policy.handle_domain = HandleDomain::Identity;
     metal2vulkan::device::Device::new(description, policy).map_err(Error::Translation)
 }
 
