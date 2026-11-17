@@ -10,7 +10,10 @@
 //! with the constant false a descriptor of attribute 0 alone makes the state and the target reads
 //! `shade`, `(64, 128, 191, 255)`; with it true that descriptor is refused, and one of both
 //! attributes draws `color`, attribute 1's `(1, 0, 0, 1)` scaled by 0.5 and biased by 0.25:
-//! `(191, 64, 64, 191)`.
+//! `(191, 64, 64, 191)`. Each channel is compared within one code of Metal's: near a tie the
+//! device may store the other of the two codes nearest the channel's scaled value (Vulkan 1.4,
+//! 3.10.2), as the fragment module records (`PrecisionNote::DeviceColorConversion`; NVIDIA's
+//! 615.71.09 stores `shade`'s 0.5 as 127). The two answers lie far more than a code apart.
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on the kind
 //! of device the cfg selects (`llvm-as`).
@@ -143,6 +146,13 @@ fn draw(device: &Device, state: &RenderPipelineState) -> [u8; 4] {
     words_of(&back)[(SIDE + 1) as usize].to_le_bytes()
 }
 
+/// Whether each channel of `got` lies within one code of Metal's `metal` (the module docs).
+fn metal_s_codes(got: [u8; 4], metal: [u8; 4]) -> bool {
+    got.iter()
+        .zip(metal)
+        .all(|(&code, m)| code.abs_diff(m) <= 1)
+}
+
 /// Gated off, the state is made without attribute 1 and draws `shade`; gated on, it is refused
 /// without attribute 1, and with it draws `color` (the module docs).
 #[test]
@@ -157,7 +167,10 @@ fn a_state_without_an_attribute_only_a_gated_off_varying_reads_draws_metal_s_pix
         "UNREAD-ATTRIBUTE: {} gated off draws {shade:?}",
         device.name()
     );
-    assert_eq!(shade, [64, 128, 191, 255], "gated off: Metal's shade");
+    assert!(
+        metal_s_codes(shade, [64, 128, 191, 255]),
+        "gated off: Metal's shade (64, 128, 191, 255), drew {shade:?}"
+    );
     match state(&device, &library, true, 1) {
         Err(Error::Compile(CompileError::InvalidDescriptor(
             DescriptorError::VertexAttribute { attribute: 1 },
@@ -171,5 +184,8 @@ fn a_state_without_an_attribute_only_a_gated_off_varying_reads_draws_metal_s_pix
         "UNREAD-ATTRIBUTE: {} gated on draws {color:?}",
         device.name()
     );
-    assert_eq!(color, [191, 64, 64, 191], "gated on: Metal's color");
+    assert!(
+        metal_s_codes(color, [191, 64, 64, 191]),
+        "gated on: Metal's color (191, 64, 64, 191), drew {color:?}"
+    );
 }
