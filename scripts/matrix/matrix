@@ -324,13 +324,13 @@ class Run:
 
     def size(self, kind, node):
         """RAM and timeout from this kind's last measured runs on NODE: 1.3x the peak (a run that
-        peaked at its reservation keeps it; one that ended for want of RAM gets 1.5x), and 1.5x the
+        peaked at its reservation keeps it; one that ended for want of RAM gets 2x), and 1.5x the
         longest, never below the kind's default: an incremental run's minutes say nothing of a full
         rebuild's."""
         ram, minutes = DEFAULTS[kind]
         runs = self.stats.get(f"{kind}@{node}", [])[-3:]
         if runs:
-            ram = max(math.ceil(r["ram"] * 1.5) if r["killed"] else
+            ram = max(2 * r["ram"] if r["killed"] else
                       r["ram"] if r["peak"] >= 0.95 * r["ram"] else math.ceil(r["peak"] * 1.3 + 0.5)
                       for r in runs)
             minutes = max(minutes, math.ceil(1.5 * max(r["minutes"] for r in runs)))
