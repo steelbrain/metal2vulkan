@@ -14,6 +14,10 @@ publish = false
 # The synthetic metallib writer's function hashes (`metallib`).
 sha2.workspace = true
 
+# The user-space instruction counters (`instructions`): perf_event_open and its ioctls.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+
 # The scratch locks' file identity on Windows (`scratch.rs`'s `same_file`).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

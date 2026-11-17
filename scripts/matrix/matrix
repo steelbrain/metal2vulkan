@@ -1,0 +1,586 @@
+#!/usr/bin/env python3
+"""The per-commit matrix: one commit's checks on every lab GPU, lavapipe and the Windows host,
+run through potluck, with the results attached to the commit as a git note
+(refs/notes/matrix, one JSON document per commit; local, never pushed).
+
+    scripts/matrix/matrix run [SHA] [--legs LEG,...] [--dry-run]
+    scripts/matrix/matrix show [SHA]
+
+SHA defaults to development's tip. A leg is a GPU, named by its PCI vendor:device
+(`1002:744c`), or `lavapipe`. docs/VALIDATION.md ("The matrix") has the legs, the records and
+the rules; CONTRIBUTING.md has how to run it.
+
+The cluster's own facts come from potluck (its nodes, their GPUs and CPUs) and from
+~/.config/metal2vulkan/matrix.json:
+
+    {"builders": [{"node": "A", "gate": "SHELL COMMAND", "portable": true}, {"node": "B"}],
+     "setup": {"A": "SHELL"},
+     "skip_gpus": ["vendor:device"]}
+
+The first builder whose gate command exits 0 (no gate: always) builds the GPU legs' test archive
+and runs the lavapipe leg. Its archive runs on every Linux node when it is `portable`, else only
+on nodes of its CPU model; any other node builds its own. `setup` is shell each job on that node
+runs first. A GPU in `skip_gpus` gets no leg.
+"""
+
+import fcntl
+import json
+import math
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import results  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[2]
+CONFIG = Path.home() / ".config/metal2vulkan/matrix.json"
+STATE = Path.home() / ".cache/metal2vulkan-matrix"
+TREE = STATE / "tree"
+NOTES = "refs/notes/matrix"
+ARCHIVE = "m2v-matrix-gpu.tar.zst"
+#: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
+ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
+#: (RAM GiB, minutes) of each job kind before a run of it was measured.
+DEFAULTS = {"build": (6, 15), "gpu": (4, 15), "lavapipe": (32, 60), "winbuild": (12, 30), "winrun": (4, 15)}
+#: The awk filter between nextest and the job's log: every line up to the summary, then only the
+#: captured output of tests that did not pass, and the records of those that did.
+KEEP = r"""f == 0 { print; if ($0 ~ /^ *Summary \[/) f = 1; next }
+/^ +[A-Z][A-Z-]* +\[ *[0-9.]+s\]/ { k = ($1 != "PASS") }
+k || /M2V-MATRIX / { print }"""
+NEXTEST_OUT = "--no-fail-fast --success-output final --failure-output final"
+DEVICE_LINES = (r"""vulkaninfo --summary 2>/dev/null | tr -d '\r' | sed -n 's/^[[:space:]]*\(deviceName\|driverName\|driverInfo\)[[:space:]]*= */M2V-DEVICE '"{leg}"' \1 /p'""")
+
+
+def log(msg):
+    print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
+
+
+def git(*args, cwd=REPO, check=True):
+    r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    if check and r.returncode:
+        sys.exit(f"git {' '.join(args)}: {r.stderr.strip()}")
+    return r.stdout.strip()
+
+
+def potluck(*args, cwd=None):
+    return subprocess.run(["potluck", *args], cwd=cwd or TREE, capture_output=True, text=True, errors="replace")
+
+
+def load(path, default):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def save(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(value, indent=1, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+# --- notes -------------------------------------------------------------------------------------
+
+def note(sha):
+    r = subprocess.run(["git", "notes", f"--ref={NOTES}", "show", sha], cwd=REPO, capture_output=True, text=True)
+    return json.loads(r.stdout) if r.returncode == 0 else None
+
+
+def base_of(sha, leg_id):
+    """The nearest first-parent ancestor of SHA whose note has leg LEG_ID: (sha, that leg)."""
+    noted = {line.split()[1] for line in git("notes", f"--ref={NOTES}", "list").splitlines() if line}
+    for commit in git("rev-list", "--first-parent", "--max-count=500", f"{sha}~1", check=False).splitlines():
+        if commit in noted:
+            leg = (note(commit) or {}).get("legs", {}).get(leg_id)
+            if leg:
+                return commit, leg
+    return None, None
+
+
+# --- the plan ------------------------------------------------------------------------------------
+
+class Leg:
+    def __init__(self, leg_id, node, gpu=None, icd=None, select=False):
+        self.id, self.node, self.gpu, self.icd, self.select = leg_id, node, gpu, icd, select
+        self.job = None
+        self.started = self.ended = None
+
+
+def plan(nodes, cfg, only):
+    """The legs: each lab GPU on one node, the nodes' loads kept even (the GPUs on fewest nodes
+    placed first), lavapipe, and each Windows GPU on its host."""
+    skip = set(cfg.get("skip_gpus", []))
+    linux = {n: f for n, f in nodes.items() if f["os"] == "linux"}
+    where = {}
+    for name, facts in sorted(linux.items()):
+        for g in facts["gpus"]:
+            vd = f"{g['vendor']}:{g['device']}"
+            if g["vendor"] in ICDS and vd not in skip:
+                where.setdefault(vd, []).append((name, g["id"]))
+    load_of, legs = {n: 0 for n in linux}, []
+    for vd, places in sorted(where.items(), key=lambda item: (len(item[1]), item[0])):
+        icd, select = ICDS[vd.split(":")[0]]
+        taken = {(leg.node, leg.icd) for leg in legs if not leg.select}
+        places = [p for p in places if select or (p[0], icd) not in taken]
+        if not places:
+            log(f"{vd}: every node holding it already runs a leg on its driver, which cannot pick between two")
+            continue
+        node, gpu = min(places, key=lambda p: (load_of[p[0]], p[0]))
+        load_of[node] += 1
+        legs.append(Leg(vd, node, gpu, icd, select))
+    for name, facts in sorted(nodes.items()):
+        if facts["os"] == "windows":
+            legs += [Leg(f"{g['vendor']}:{g['device']}", name, g["id"]) for g in facts["gpus"]
+                     if f"{g['vendor']}:{g['device']}" not in skip]
+    legs.append(Leg("lavapipe", None))
+    if only:
+        unknown = set(only) - {leg.id for leg in legs}
+        if unknown:
+            sys.exit(f"no such leg: {', '.join(sorted(unknown))}")
+        legs = [leg for leg in legs if leg.id in only]
+    return legs
+
+
+def builder(cfg, nodes):
+    for b in cfg["builders"]:
+        if b["node"] in nodes and (not b.get("gate") or subprocess.run(b["gate"], shell=True).returncode == 0):
+            return b
+    sys.exit("no builder is up with its gate open")
+
+
+# --- job scripts ---------------------------------------------------------------------------------
+
+def linux_head(short, setup):
+    """Every Linux job: the per-commit source path the GPU legs' archive is built and run at (the
+    archive holds the build's paths, so every node lays the tree out at the same one), without
+    the observations, which nothing it runs reads."""
+    return f"""set -u
+M="$HOME/.cache/metal2vulkan-matrix"; S="$M/src-{short}"; mkdir -p "$M"
+find "$M" -maxdepth 1 -name 'src-*' ! -name 'src-{short}' -mmin +720 -exec rm -rf {{}} +
+{setup}
+lay_out() {{
+  flock "$M/.lock" sh -c 'test -d "$1" || {{ t="$1.tmp.$$" && rm -rf "$t" && mkdir -p "$t" && git archive HEAD -- . ":(exclude)crates/metal2vulkan-validation/corpus/observations" | tar -x -C "$t" && mv "$t" "$1"; }}' sh "$S"
+}}
+"""
+
+
+def build_script(short, setup):
+    return linux_head(short, setup) + f"""W=$PWD
+lay_out || exit 3
+cd "$S" && RUSTFLAGS='--cfg m2v_gpu' CARGO_TARGET_DIR="$S/target/gpucfg" cargo nextest archive -p metal2vulkan-rt --all-features --archive-file "$W/{ARCHIVE}"
+rc=$?
+echo "M2V-BUILD exit $rc"
+cd "$W" && rm -rf "$S"
+exit $rc
+"""
+
+
+def gpu_script(short, setup, legs, mirror, rev):
+    runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(leg.id + "!" if leg.select else "")])
+                     for leg in legs)
+    return linux_head(short, setup) + f"""lay_out || exit 3
+A="$PWD/{ARCHIVE}"
+git --git-dir="${mirror}" cat-file blob "{rev}:{ARCHIVE}" > "$A" || exit 3
+KEEP='{KEEP}'
+all=0
+leg() {{
+  echo "M2V-LEG $1 begin"
+  (
+    export VK_DRIVER_FILES="/usr/share/vulkan/icd.d/$2_icd.json"
+    if [ -n "$3" ]; then export MESA_VK_DEVICE_SELECT="$3"; fi
+    {DEVICE_LINES.format(leg="$1")}
+    cargo nextest run --archive-file "$A" --workspace-remap "$S" {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+    exit ${{PIPESTATUS[0]}}
+  )
+  rc=$?
+  echo "M2V-SUITE $1 rt exit $rc"
+  [ $rc -eq 0 ] || all=1
+}}
+{runs}
+rm -rf "$S" "$A"
+m="${mirror}"; rm -rf "$m" "${{m%.git}}.lock" "${{m%.git}}.worktrees.lock"
+exit $all
+"""
+
+
+def lavapipe_script(setup):
+    """The gate's suites and the CPU-ICD device tests in one build: `m2v_cpu_icd` adds the device
+    tests to every test the plain build has."""
+    return f"""set -u
+{setup}
+export RUSTFLAGS='--cfg m2v_cpu_icd' RUSTDOCFLAGS='--cfg m2v_cpu_icd' CARGO_TARGET_DIR=target/cpuicd
+export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json LP_NUM_THREADS=1
+KEEP='{KEEP}'
+echo "M2V-LEG lavapipe begin"
+{DEVICE_LINES.format(leg="lavapipe")}
+cargo nextest run --workspace --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+a=${{PIPESTATUS[0]}}
+echo "M2V-SUITE lavapipe workspace exit $a"
+cargo test --workspace --all-features --doc 2>&1 | grep -E '^(test result:|error)|FAILED|panicked'
+d=${{PIPESTATUS[0]}}
+echo "M2V-SUITE lavapipe doctests exit $d"
+[ $a -eq 0 ] && [ $d -eq 0 ]
+"""
+
+
+def windows_head():
+    """Windows jobs build and run under MSYS2 CLANG64 with the pinned nightly's gnullvm host
+    toolchain; `scripts/rustc-wrapper` is a shell script, which cargo cannot run there."""
+    return """set -u
+export PATH="/c/msys64/clang64/bin:$PATH" RUSTC_WRAPPER=
+export RUSTUP_TOOLCHAIN="$(sed -n 's/^channel = "\\(.*\\)"$/\\1/p' rust-toolchain.toml)-x86_64-pc-windows-gnullvm"
+export RUSTFLAGS='--cfg m2v_gpu' CARGO_TARGET_DIR=target/gpucfg
+"""
+
+
+def winbuild_script():
+    return windows_head() + """cargo nextest run -p metal2vulkan-rt --all-features --no-run
+rc=$?
+echo "M2V-BUILD exit $rc"
+exit $rc
+"""
+
+
+def winrun_script(leg):
+    return windows_head() + f"""KEEP='{KEEP}'
+echo "M2V-LEG {leg.id} begin"
+{DEVICE_LINES.format(leg=leg.id)}
+cargo nextest run -p metal2vulkan-rt --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+rc=${{PIPESTATUS[0]}}
+echo "M2V-SUITE {leg.id} rt exit $rc"
+exit $rc
+"""
+
+
+# --- running jobs --------------------------------------------------------------------------------
+
+class Run:
+    def __init__(self, sha, cfg, nodes, legs, build_node, rdir):
+        self.sha, self.short, self.cfg, self.nodes = sha, sha[:12], cfg, nodes
+        self.legs, self.build_node, self.rdir = legs, build_node, rdir
+        self.stats = load(STATE / "stats.json", {})
+        self.spaces = load(STATE / "workspaces.json", {})
+        self.lock = threading.Lock()
+        self.jobs, self.carries, self.failures = [], [], {}
+        self.build_info = None
+
+    def setup(self, node):
+        return self.cfg.get("setup", {}).get(node, "")
+
+    def size(self, kind, node):
+        """RAM and timeout from this kind's last measured runs on NODE: 1.3x the peak (a run that
+        peaked at its reservation keeps it; one ended over it gets 1.5x), 1.5x the longest."""
+        ram, minutes = DEFAULTS[kind]
+        runs = self.stats.get(f"{kind}@{node}", [])[-3:]
+        if runs:
+            ram = max(math.ceil(r["ram"] * 1.5) if r["killed"] else
+                      r["ram"] if r["peak"] >= 0.95 * r["ram"] else math.ceil(r["peak"] * 1.3 + 0.5)
+                      for r in runs)
+            minutes = max(5, math.ceil(1.5 * max(r["minutes"] for r in runs)))
+        return max(ram, 2), minutes
+
+    def job(self, kind, node, script, name, gpus=(), carry=None, space=None):
+        """Dispatch SCRIPT on NODE, wait for it, and return (exit code, output, job record).
+        SPACE names a workspace kept for this kind on this node across runs (incremental builds,
+        and no fresh checkout of the tree)."""
+        ram, minutes = self.size(kind, node)
+        args = ["dispatch", "--json", "--priority", "5", "--kill-on-stall", "--label", "agent=matrix",
+                "--label", f"matrix={self.short}", "--on", f"node={node}", "--ram", str(ram),
+                "--timeout", f"{minutes}m"]
+        if self.nodes[node]["os"] == "windows":
+            args += ["--on", "os=windows"]
+        for gpu in gpus:
+            args += ["--gpu", gpu]
+        if carry:
+            args += ["--carry", carry]
+        key = f"{space}@{node}" if space else None
+        if key:
+            args += ["--hold", "24h"]
+        cmd = ["--", "bash", "-c", script]
+        with self.lock:
+            ws = self.spaces.get(key) if key else None
+        r = potluck(*args, *(["--workspace", ws, "--advance"] if ws else []), *cmd)
+        if r.returncode and ws:
+            log(f"{name}: workspace {ws} refused ({r.stderr.strip()[:200]}); a fresh one")
+            potluck("release", ws)
+            with self.lock:
+                self.spaces.pop(key, None)
+            r = potluck(*args, *cmd)
+        if r.returncode:
+            return None, f"dispatch failed: {r.stderr.strip()[:500]}", None
+        jid = json.loads(r.stdout.strip().splitlines()[-1])["job"]
+        log(f"{name}: job {jid} on {node} ({ram} GiB, {minutes} min)")
+        with self.lock:
+            self.jobs.append(jid)
+        w = subprocess.run(["potluck", "wait", jid], cwd=TREE, capture_output=True, text=True, errors="replace")
+        out = w.stdout + w.stderr
+        (self.rdir / f"{name}.log").write_text(out)
+        rec = self.record(jid)
+        if rec:
+            peak = rec.get("usage", {}).get("peak_mem_bytes", 0) / 2**30
+            took = (rec.get("ended_at", 0) - rec.get("started_at", 0)) / 60000
+            killed = rec.get("exit_code") == 137 and peak >= 0.95 * ram
+            with self.lock:
+                self.stats.setdefault(f"{kind}@{node}", []).append(
+                    dict(ram=ram, peak=round(peak, 2), minutes=round(took, 2), killed=killed))
+                self.stats[f"{kind}@{node}"] = self.stats[f"{kind}@{node}"][-6:]
+                if key and rec.get("workspace"):
+                    self.spaces[key] = rec["workspace"]
+        log(f"{name}: job {jid} ended {w.returncode}")
+        return w.returncode, out, rec
+
+    def record(self, jid):
+        r = potluck("status", "--json")
+        try:
+            status = json.loads(r.stdout)
+        except ValueError:
+            return None
+        for kind in ("recent", "running"):
+            for j in status.get(kind, []):
+                if j.get("id") == jid:
+                    return j
+        return None
+
+    def carry(self, node, rec):
+        """Copy a finished build's archive out of its workspace into a git repository of its own,
+        which GPU jobs name with --carry. Returns (--carry value, mirror variable, commit)."""
+        name = f"m2v-matrix-{self.short}-{re.sub(r'[^A-Za-z0-9]', '', node)[-12:]}"
+        cdir = STATE / "carry" / name
+        shutil.rmtree(cdir, ignore_errors=True)
+        cdir.mkdir(parents=True)
+        git("init", "-q", cwd=cdir)
+        r = potluck("cp", f"{rec['workspace']}:{ARCHIVE}", str(cdir / ARCHIVE))
+        if r.returncode:
+            return None
+        git("add", ARCHIVE, cwd=cdir)
+        git("-c", "user.name=matrix", "-c", "user.email=matrix@localhost", "commit", "-q", "-m", self.sha, cwd=cdir)
+        (cdir / ARCHIVE).unlink()
+        with self.lock:
+            self.carries.append(name)
+        rev = git("rev-parse", "HEAD", cwd=cdir)
+        return f"{cdir}@{rev}", "POTLUCK_MIRROR_" + re.sub(r"[^A-Za-z0-9_]", "_", name), rev
+
+    def fail(self, legs, why, rec=None):
+        with self.lock:
+            for leg in legs:
+                self.failures[leg.id] = why
+                if rec:
+                    leg.job = rec.get("id")
+
+    def linux_build(self, node, label):
+        """Build the GPU legs' archive on NODE (no GPU held) and carry it: (carry, mirror, rev)."""
+        code, out, rec = self.job("build", node, build_script(self.short, self.setup(node)), label, space="build")
+        if code != 0 or not rec:
+            return None, f"the build ({label}, job {rec and rec.get('id')}) failed: exit {code}"
+        if node == self.build_node["node"]:
+            self.build_info = dict(node=node, job=rec["id"], minutes=round((rec["ended_at"] - rec["started_at"]) / 60000, 2))
+        made = self.carry(node, rec)
+        return made, None if made else f"the archive of job {rec['id']} could not be copied"
+
+    def gpu_node(self, node, legs, ready):
+        """One node's GPU legs, in turn, in one job holding their GPUs. READY gives the carry."""
+        made, why = ready()
+        if not made:
+            return self.fail(legs, why)
+        carry, mirror, rev = made
+        for leg in legs:
+            leg.started = time.time()
+        code, out, rec = self.job("gpu", node, gpu_script(self.short, self.setup(node), legs, mirror, rev),
+                                  f"gpu-{node}", gpus=[leg.gpu for leg in legs], carry=carry, space="gpu")
+        self.finish(legs, code, out, rec)
+
+    def finish(self, legs, code, out, rec):
+        parsed = results.parse_job(out or "")
+        for leg in legs:
+            leg.ended, leg.job = time.time(), rec and rec.get("id")
+            if leg.id not in parsed:
+                self.fail([leg], f"job {leg.job} ran no leg {leg.id} (exit {code}): {(out or '').strip()[-300:]}")
+            leg.parsed = parsed.get(leg.id)
+
+    def windows(self, leg):
+        code, out, rec = self.job("winbuild", leg.node, winbuild_script(), f"winbuild-{leg.id}", space="win")
+        if code != 0:
+            return self.fail([leg], f"the Windows build (job {rec and rec.get('id')}) failed: exit {code}", rec)
+        leg.started = time.time()
+        code, out, rec = self.job("winrun", leg.node, winrun_script(leg), f"win-{leg.id}", gpus=[leg.gpu], space="win")
+        self.finish([leg], code, out, rec)
+
+    def lavapipe(self, leg):
+        leg.node = self.build_node["node"]
+        leg.started = time.time()
+        code, out, rec = self.job("lavapipe", leg.node, lavapipe_script(self.setup(leg.node)), "lavapipe",
+                                  space="lavapipe")
+        self.finish([leg], code, out, rec)
+
+    def go(self):
+        """Every chain of jobs at once: the builder (its build, its GPU legs if any, lavapipe),
+        each other Linux GPU node (its own build where the builder's archive cannot run there,
+        then its legs), and each Windows host (build, then its leg)."""
+        b = self.build_node["node"]
+        by_node = {}
+        for leg in self.legs:
+            if leg.id != "lavapipe" and self.nodes[leg.node]["os"] == "linux":
+                by_node.setdefault(leg.node, []).append(leg)
+        built = threading.Event()
+        box = {}
+
+        def from_builder():
+            built.wait()
+            return box["made"]
+
+        threads = []
+
+        def start(fn, *args):
+            t = threading.Thread(target=fn, args=args)
+            t.start()
+            threads.append(t)
+
+        def builder_chain():
+            box["made"] = self.linux_build(b, "build") if by_node else (None, "no GPU leg on Linux")
+            built.set()
+            if b in by_node:
+                self.gpu_node(b, by_node[b], from_builder)
+            if lavapipe:
+                self.lavapipe(lavapipe[0])
+
+        lavapipe = [leg for leg in self.legs if leg.id == "lavapipe"]
+        start(builder_chain)
+        cpu = self.nodes[b]["cpu_model"]
+        for node, legs in sorted(by_node.items()):
+            if node == b:
+                continue
+            if self.build_node.get("portable") or self.nodes[node]["cpu_model"] == cpu:
+                start(self.gpu_node, node, legs, from_builder)
+            else:
+                start(self.gpu_node, node, legs, lambda node=node: self.linux_build(node, f"build-{node}"))
+        for leg in self.legs:
+            if leg.id != "lavapipe" and self.nodes[leg.node]["os"] == "windows":
+                start(self.windows, leg)
+        for t in threads:
+            t.join()
+
+    def cleanup(self):
+        save(STATE / "stats.json", self.stats)
+        save(STATE / "workspaces.json", self.spaces)
+        mirrors = Path.home() / ".local/state/potluck/mirrors"
+        for name in self.carries:
+            shutil.rmtree(STATE / "carry" / name, ignore_errors=True)
+            for m in mirrors.glob(f"{name}-*"):
+                shutil.rmtree(m) if m.is_dir() else m.unlink()
+
+
+# --- commands ------------------------------------------------------------------------------------
+
+def leg_entry(run, leg):
+    """A leg's document in the note, judged against its base where only one leg is needed."""
+    parsed = getattr(leg, "parsed", None) or dict(device={}, suites={})
+    records, problems = results.leg_records(parsed)
+    base_sha, base = base_of(run.sha, leg.id)
+    problems += [run.failures[leg.id]] if leg.id in run.failures else []
+    problems += results.leg_problems(parsed, records, base and base["records"])
+    if not parsed["suites"] and leg.id not in run.failures:
+        problems.append("no suite reported")
+    dev = parsed["device"]
+    return dict(
+        node=leg.node, gpu=leg.id if leg.id != "lavapipe" else None, job=leg.job,
+        device=dev.get("deviceName"), driver=" ".join(v for v in (dev.get("driverName"), dev.get("driverInfo")) if v) or None,
+        started=leg.started and datetime.fromtimestamp(leg.started, timezone.utc).isoformat(timespec="seconds"),
+        minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
+        suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
+        records=records, base=base_sha, base_records=base and base["records"], problems=problems)
+
+
+def run_cmd(sha, only, dry):
+    cfg = load(CONFIG, None)
+    if not cfg or not cfg.get("builders"):
+        sys.exit(f"{CONFIG}: missing or without builders (see {__file__}'s header)")
+    STATE.mkdir(parents=True, exist_ok=True)
+    lock = open(STATE / "run.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit("another matrix run is live: runs share their workspaces, so they never overlap")
+    if not (TREE / ".git").exists():
+        subprocess.run([str(REPO / "scripts/lean-tree"), "worktree", str(TREE), "matrix/tree", sha], check=True)
+        git("switch", "-q", "--detach", sha, cwd=TREE)
+        git("branch", "-q", "-D", "matrix/tree")
+    git("switch", "-q", "--detach", sha, cwd=TREE)
+    if git("status", "--porcelain", cwd=TREE):
+        sys.exit(f"{TREE} has changes: it must be a clean checkout of {sha}")
+    nodes_json = json.loads(potluck("nodes", "--json").stdout)
+    nodes = {n["facts"]["node"]: n["facts"] for n in nodes_json["nodes"] if n.get("alive")}
+    legs = plan(nodes, cfg, only)
+    b = builder(cfg, nodes)
+    for leg in legs:
+        log(f"leg {leg.id}: {leg.node or b['node']}" + (f" ({leg.icd})" if leg.icd else ""))
+    log(f"builder {b['node']}{' (portable)' if b.get('portable') else ''}")
+    if dry:
+        return
+    started = time.time()
+    rdir = STATE / "runs" / f"{sha[:12]}-{time.strftime('%m%d-%H%M%S')}"
+    rdir.mkdir(parents=True)
+    run = Run(sha, cfg, nodes, legs, b, rdir)
+    try:
+        run.go()
+    finally:
+        run.cleanup()
+    entries = {leg.id: leg_entry(run, leg) for leg in legs}
+    gpu = {k: e for k, e in entries.items() if e["gpu"]}
+    for leg_id, problems in results.time_outliers(
+            {k: e["records"]["time"] for k, e in gpu.items()},
+            {k: (e["base_records"] or {}).get("time", {}) for k, e in gpu.items()}).items():
+        entries[leg_id]["problems"] += problems
+    doc = note(sha) or dict(sha=sha, runs=[], legs={})
+    for leg_id, e in entries.items():
+        e.pop("base_records")
+        e["verdict"] = "fail" if e["problems"] else "pass"
+        doc["legs"][leg_id] = e
+    wall = round((time.time() - started) / 60, 2)
+    doc["runs"].append(dict(started=datetime.fromtimestamp(started, timezone.utc).isoformat(timespec="seconds"),
+                            minutes=wall, legs=sorted(entries), build=run.build_info, jobs=sorted(run.jobs)))
+    path = rdir / "note.json"
+    path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
+    git("notes", f"--ref={NOTES}", "add", "-f", "-F", str(path), sha)
+    for leg_id in sorted(entries):
+        print(results.verdict_line(leg_id, doc["legs"][leg_id]))
+    failed = sum(1 for e in entries.values() if e["verdict"] != "pass")
+    print(f"matrix {sha[:12]}: {len(entries) - failed} of {len(entries)} legs pass, {wall} min wall; note {NOTES}")
+    return 1 if failed else 0
+
+
+def show_cmd(sha):
+    doc = note(sha)
+    if not doc:
+        sys.exit(f"no matrix note on {sha}")
+    for leg_id in sorted(doc["legs"]):
+        print(results.verdict_line(leg_id, doc["legs"][leg_id]))
+    last = doc["runs"][-1]
+    print(f"matrix {sha[:12]}: last run {last['started']}, {last['minutes']} min wall, jobs {' '.join(last['jobs'])}")
+
+
+def main(argv):
+    if not argv or argv[0] not in ("run", "show"):
+        sys.exit(__doc__)
+    rest = [a for a in argv[1:] if not a.startswith("--")]
+    only = None
+    if "--legs" in argv:
+        only = argv[argv.index("--legs") + 1].split(",")
+        rest.remove(argv[argv.index("--legs") + 1])
+    sha = git("rev-parse", "--verify", f"{rest[0] if rest else 'development'}^{{commit}}")
+    if argv[0] == "show":
+        return show_cmd(sha)
+    return run_cmd(sha, only, "--dry-run" in argv)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

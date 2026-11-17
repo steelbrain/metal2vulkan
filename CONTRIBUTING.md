@@ -97,6 +97,23 @@ build fingerprint). kache imports incremental state only between targets inside 
 a `CARGO_TARGET_DIR` outside the worktree neither gives nor takes it. `seed-target new` takes such
 a path too (`scripts/seed-target new WORKTREE/target SEED WORKTREE`).
 
+### The matrix
+
+After a landing on `development`, run the matrix on its tip:
+
+```sh
+scripts/matrix/matrix run development     # or a sha; --legs 1002:744c,lavapipe for some legs
+scripts/matrix/matrix show development    # the verdicts already attached to it
+```
+
+It dispatches every leg through potluck at priority 5, waits for them, writes the commit's note
+under `refs/notes/matrix`, and prints one verdict line per leg; it exits 0 only when every leg
+passes. `--dry-run` prints the legs and their nodes and dispatches nothing. Runs never overlap: a
+second one refuses to start. It keeps its state (its own checkout, workspaces, measured job sizes,
+each run's job logs and note) in `~/.cache/metal2vulkan-matrix/`, and reads the lab's builders from
+`~/.config/metal2vulkan/matrix.json` (the script's header has the format).
+[docs/VALIDATION.md](docs/VALIDATION.md) has the legs and the rules.
+
 ## Where tests go
 
 - A test that names an internal item is a unit test of its crate: under `src/tests/` (or its

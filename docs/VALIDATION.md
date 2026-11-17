@@ -261,6 +261,60 @@ RUSTFLAGS='-Dwarnings --cfg m2v_gpu' cargo nextest run --release -p metal2vulkan
   --all-features -j 1 -E 'test(/_fuzz::.*_on_the_device/)'
 ```
 
+## The matrix
+
+`scripts/matrix/matrix run SHA` checks one commit on every lab GPU, on lavapipe and on the Windows
+host at once, through the lab's potluck cluster, and attaches the results to the commit as a git
+note under `refs/notes/matrix`: one JSON document per commit, kept in the local repository and
+never pushed. `scripts/matrix/matrix show SHA` prints a note's verdicts, one line per leg.
+CONTRIBUTING.md says how to run it.
+
+A leg is one GPU, named by its PCI `vendor:device`, or `lavapipe`. Each GPU runs on one node, and
+the nodes run at once; a node with several leg GPUs runs them in turn in one job that holds them.
+
+| Leg | Runs | Built |
+|---|---|---|
+| Each GPU of a Linux node | `metal2vulkan-rt`'s tests under `--cfg m2v_gpu`, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'` | Once per commit as a nextest archive on a CPU node, carried to the GPU nodes, which only run it. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
+| The Windows host's GPU | The same tests, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
+| `lavapipe` | The gate's suites and the device tests in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
+
+A leg passes when every suite passed and no rule below fails. Its line names the device and
+driver as `vulkaninfo` reported them, the node, the tests passed of those run, the records, the
+base it was compared with and the job.
+
+### Records and rules
+
+A test records a value by printing one line on its standard output; the matrix collects the lines
+of passing and failing tests alike:
+
+```text
+M2V-MATRIX <kind> <test>/<name> <value>
+```
+
+The value is an unsigned integer, and a key appears once per leg. The base is the nearest
+first-parent ancestor whose note holds the same leg.
+
+| Kind | What it counts | Fails when |
+|---|---|---|
+| `metric` | A deterministic count per frame or per command buffer: submissions, passes, barriers, bytes copied, pipelines created | It is larger than the base's |
+| `instructions` | User-space CPU instructions per draw or per dispatch | It is more than 1% over the base's |
+| `gauge` | Live objects of one resource kind, the key ending in the point it was read at: `@100` and `@200` (loop iterations), `@drop` (after the device dropped) | `@drop` is not 0, or `@200` differs from `@100` |
+| `time` | Nanoseconds | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs |
+
+Every cache has a test that fills it past its capacity and records its gauge.
+
+`metal2vulkan_devtools::instructions::InstructionCounter` measures `instructions`: the calling
+thread's user-space instructions from Linux's `perf_event_open`, the form an unprivileged process
+may open at `perf_event_paranoid` 2. On a hybrid x86 CPU it sums the event over each core type's
+unit, since the generic event counts on one of them only. Off Linux it opens nothing, so the
+Windows leg records no `instructions`.
+
+The rules have their own tests, which need no cluster:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/matrix
+```
+
 ## The Linux gate in a container
 
 `scripts/linux-gate` runs CI's Linux job, or any command, in a container: Ubuntu 26.04 pinned by

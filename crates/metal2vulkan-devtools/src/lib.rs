@@ -5,8 +5,9 @@
 //! ([`linked_signatures`]), a tool's identity, the MoltenVK toolchain the MSL
 //! checks reproduce, and the generated-program fuzzers ([`fuzz`]) the product's CPU-interpreter
 //! tests and validation's device tests both run, the extended-range bicubic table both check
-//! ([`xr_bicubic`]), and the store-buffering litmus kernel both compile
-//! ([`litmus`]).
+//! ([`xr_bicubic`]), the store-buffering litmus kernel both compile
+//! ([`litmus`]), and the counter of a thread's user-space instructions the matrix's
+//! instructions-per-draw records are measured with ([`instructions`]).
 //!
 //! Scratch directories every suite's temporaries go in ([`scratch`]): one root under the OS temp
 //! directory, each run's directory removed when its owner drops and, when its owner is killed
@@ -26,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 pub mod fuzz;
+pub mod instructions;
 pub mod linked_signatures;
 pub mod litmus;
 pub mod metallib;
