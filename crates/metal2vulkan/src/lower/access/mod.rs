@@ -763,8 +763,9 @@ pub struct AccessPlan {
     pub unwritten: BTreeSet<usize>,
     /// Memory-plan slots reached under the identity domains from their address as it is, which
     /// the binder holds to a multiple of their argument's alignment ([`address_alignment`],
-    /// `RuntimeFact::AddressAlignment`): no access rounds it (`psb::prepare_direct`), and
-    /// `uvec2` and `uvec4` units are taken at offsets proven multiples of their size. Every other
+    /// `RuntimeFact::AddressAlignment`), and whose window the analysis bounds to at most 2 GiB
+    /// ([`DIRECT_WINDOW`]): no access rounds the address (`psb::prepare_direct`), and `uvec2` and
+    /// `uvec4` units are taken at offsets proven multiples of their size. Every other
     /// device-address slot is reached from the word below each access (`psb::prepare_at`).
     pub aligned: BTreeSet<usize>,
     /// The units ([`Units`]) the static-root accesses of each slot read or write whole, by
@@ -1629,7 +1630,9 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
                         align,
                     });
                     // A word memory's base is a multiple of 4, and of 16 for its vector units.
-                    if align >= 4 && start % 16 == 0 {
+                    let bounded =
+                        matches!(window, Window::Bounded { len, .. } if *len <= DIRECT_WINDOW);
+                    if align >= 4 && start % 16 == 0 && bounded {
                         cx.families.access.aligned.insert(i);
                     }
                 }
@@ -1695,13 +1698,21 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     Ok(slots)
 }
 
+/// The longest window a slot reached from its address as it is may have
+/// ([`AccessPlan::aligned`]): its accesses' byte offsets from the window's start index a byte
+/// array (`psb::prepare_direct`), and SPIR-V takes an access chain's index as signed, so a 32-bit
+/// one is exact below 2 GiB only. A slot no access bounds, or one with a longer window, keeps the
+/// word memory's 64-bit address arithmetic, exact to 4 GiB.
+const DIRECT_WINDOW: u64 = 1 << 31;
+
 /// The alignment (2, 4, 8 or 16) the binder holds a device-address slot's address to under the
 /// identity domains: its argument's `air.arg_type_align_size`, at most 16. Metal's API validation
 /// refuses a buffer bound at an offset that is not a multiple of its argument type's alignment
 /// ("must be a multiple of 4 but was set to 2" for a `uint *` argument, "of 16 ... 8" for a
 /// `float4 *`, "of 2 ... 1" for a `ushort *`; `probes/vector_access_placement.m` in the conformance
-/// crate). A slot whose alignment is at least 4 and whose window starts at a multiple of 16 is
-/// then reached from its address as it is ([`AccessPlan::aligned`]). `None` for a buffer-table
+/// crate). A slot whose alignment is at least 4 and whose window starts at a multiple of 16 and
+/// is at most [`DIRECT_WINDOW`] long is then reached from its address as it is
+/// ([`AccessPlan::aligned`]). `None` for a buffer-table
 /// element, an argument buffer, and an argument with no alignment or one of 1.
 fn address_alignment(cx: &SelectCx<'_>, plan: &SlotPlan) -> Option<u32> {
     if !identity(cx.profile) || plan.element.is_some() || plan.argument_buffer {

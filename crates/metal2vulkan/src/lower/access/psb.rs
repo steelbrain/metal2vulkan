@@ -210,7 +210,8 @@ pub fn prepare_at(
 /// `m` from its bind offset, under the identity domains, from `address` (a `u64`), the slot's own
 /// device address, which the binder holds to a multiple of 16 or of the argument's alignment
 /// (`RuntimeFact::AddressAlignment`), and `start` a multiple of 16: the access is the byte offset
-/// `m − start` (in 32 bits) from `address + start`, as a descriptor view's is `m` from its base.
+/// `m − start` (in 32 bits, below 2^31 as the window is at most 2 GiB long, `DIRECT_WINDOW`)
+/// from `address + start`, as a descriptor view's is `m` from its base.
 /// Nothing is rounded, so a constant offset is one immediate. Uncontained, as Metal contains no
 /// device-address access.
 pub fn prepare_direct(

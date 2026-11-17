@@ -177,8 +177,9 @@ impl FunctionBuilder<'_> {
         self.access_chain(at, &[zero, index])
     }
 
-    /// A `PhysicalStorageBuffer` place of a `pointee` at byte `offset` (a 32-bit integer scalar)
-    /// of the memory at device address `base` (a 64-bit integer scalar): element `offset` of the
+    /// A `PhysicalStorageBuffer` place of a `pointee` at byte `offset` (a 32-bit integer scalar
+    /// below 2^31, as SPIR-V takes an access chain's index as signed) of the memory at device
+    /// address `base` (a 64-bit integer scalar): element `offset` of the
     /// byte array at `base` ([`device_element`](Self::device_element) of `u8`, so the device forms
     /// the address from the offset itself), bitcast to a pointer to the one-member
     /// `Block { pointee }`, and the access chain to that member: a place, as
