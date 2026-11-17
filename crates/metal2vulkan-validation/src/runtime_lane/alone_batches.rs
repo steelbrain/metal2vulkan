@@ -31,7 +31,7 @@
 //! after the next command buffer the GPU ran ended.
 
 use super::grouped_submissions::{groups, host_seconds, taken_in, warm};
-use super::{layer_reported_nothing_at_all, loader, open_device, validated_device_with};
+use super::{at_plan, layer_reported_nothing_at_all, loader, open_device, validated_device_with};
 use super::{Messages, ScratchCache, WAIT};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan::device::CompletionPolicy;
@@ -193,8 +193,11 @@ fn a_batch_that_goes_alone_is_counted_once_by_why() {
     {
         // The lane's devices take `DevicePolicy::exact_answers()`, `CompletionPolicy::Exact`
         // among them, under which nothing groups and no reason is counted: this one the default.
+        // Its work places command queues beside each other, an unshared one among them: it takes
+        // its queue plan (`at_plan`).
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = CompletionPolicy::Grouped;
+            at_plan(options);
         })
         .unwrap();
         let grouping = groups(&device);

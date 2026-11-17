@@ -23,7 +23,9 @@
 
 use super::degrade_notices::counts;
 use super::grouped_submissions::{bytes_of, groups, taken_in, warm, GROUPED};
-use super::{layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT};
+use super::{
+    at_plan, layer_reported_nothing_at_all, validated_device_with, Messages, ScratchCache, WAIT,
+};
 use crate::gpu::TEST_DEVICE;
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, EventRef, ResourceOptions, WorkCounts,
@@ -217,8 +219,10 @@ fn an_unmarked_command_buffer_is_seen_complete_at_its_own_end() {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let (moved, seen) = {
+        // Its work places a second command queue (`aside`): it takes its queue plan (`at_plan`).
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.assume_submissions_merge = true;
+            at_plan(options);
         })
         .unwrap();
         let grouping = groups(&device);
