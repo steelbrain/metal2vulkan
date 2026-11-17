@@ -234,6 +234,9 @@ that touch blocks first.
   only at `memory_barrier`, and begins with one where anything was read or written since the last.
 - An encoder that wrote anything owes one barrier at its end. The next command records it, or the
   segment's own end barrier pays it, so a command buffer of one writing encoder has one barrier.
+- A barrier within a segment orders dispatches after dispatches: compute shader writes before it,
+  compute shader reads and writes and indirect argument reads after it. A segment records nothing
+  else that touches memory; the barrier at a segment's end takes every command and the host.
 - Parameters: fields in the push window, `[0, 256)` on every device, are pushed: the dispatch
   region and up to 28 buffer addresses, each kernel pushing only the bytes it reads. Fields past it
   go to a 16-byte aligned block in the parameter ring, whose address is a field in the window: a

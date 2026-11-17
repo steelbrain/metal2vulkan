@@ -118,7 +118,9 @@ enum Launch<'a> {
 /// before the next dispatch. A concurrent encoder places a barrier only at
 /// [`memory_barrier`](Self::memory_barrier). Every resource takes part, whatever its tracking
 /// mode, as serial dispatch is serial order in Metal. An encoder that wrote anything owes one
-/// barrier at its end, which the next command, or the segment's own end, records.
+/// barrier at its end, which the next command, or the segment's own end, records. A barrier
+/// between dispatches orders the dispatches after it after the dispatches before it, and reaches
+/// nothing else, as nothing else in the command buffer touches memory.
 ///
 /// Parameters: a dispatch's parameter block (bound addresses plus offsets, `set_bytes` addresses
 /// and grid values) is pushed as push constants up to 128 bytes; a longer one is written into the
@@ -760,7 +762,7 @@ impl Building {
         interface: &crate::pipeline::Interface,
         accesses: &Accesses<'_>,
     ) -> Result<bool, Error> {
-        let command = self.command()?;
+        let command = self.command(Reach::Dispatches)?;
         let core = Arc::clone(self.device.core());
         let hazards = self.hazards();
         if serial {
@@ -770,7 +772,7 @@ impl Building {
                 || (interface.reads_unbound && hazards.wrote())
                 || (interface.writes_unbound && hazards.touched());
             if conflict {
-                record::barrier(&core.device, command, Reach::Commands);
+                record::barrier(&core.device, command, Reach::Dispatches);
                 core.counters.count(Metric::Barriers);
                 hazards.clear();
             }
@@ -811,7 +813,7 @@ impl Building {
         }
         let push = &parameters.push[..];
         debug_assert!(push.len() <= PUSH_BYTES as usize);
-        let command = self.command()?;
+        let command = self.command(Reach::Dispatches)?;
         // SAFETY: the command buffer is recording outside any render pass; the pipeline and the
         // layout are the device's, and the push range of the layout spans every stage's first 128
         // bytes.

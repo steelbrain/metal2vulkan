@@ -46,26 +46,43 @@ impl Recorder {
     }
 }
 
-/// What a barrier makes earlier writes visible to.
+/// What a barrier orders, and what it makes earlier writes visible to.
 #[derive(Clone, Copy)]
 pub(crate) enum Reach {
+    /// Within a segment: the dispatches after it after the dispatches before it, their shader
+    /// reads and writes and their indirect argument reads seeing the earlier shader writes. A
+    /// segment records nothing else that reads or writes memory, so it orders the segment's
+    /// commands as [`Reach::Commands`] would.
+    Dispatches,
     /// Every later command, in this submission and every later one on the queue.
     Commands,
     /// Every later command, and the host once it has waited for the work.
     Host,
 }
 
-/// Records one global memory barrier: every write earlier in submission order is made visible
-/// to what `reach` names, and every later command waits for every earlier one. It is the only
+/// Records one global memory barrier: the writes earlier in submission order are made visible
+/// to what `reach` names, and the commands it names wait for the earlier ones. It is the only
 /// barrier the runtime records for buffers: none names a buffer or a range. The caller counts it
 /// where it is part of the queues' work.
 pub(crate) fn barrier(device: &ash::Device, buffer: vk::CommandBuffer, reach: Reach) {
-    let (stages, accesses) = match reach {
+    let (source, written, stages, accesses) = match reach {
+        Reach::Dispatches => (
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_WRITE,
+            vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::DRAW_INDIRECT,
+            vk::AccessFlags2::SHADER_READ
+                | vk::AccessFlags2::SHADER_WRITE
+                | vk::AccessFlags2::INDIRECT_COMMAND_READ,
+        ),
         Reach::Commands => (
+            vk::PipelineStageFlags2::ALL_COMMANDS,
+            vk::AccessFlags2::MEMORY_WRITE,
             vk::PipelineStageFlags2::ALL_COMMANDS,
             vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
         ),
         Reach::Host => (
+            vk::PipelineStageFlags2::ALL_COMMANDS,
+            vk::AccessFlags2::MEMORY_WRITE,
             vk::PipelineStageFlags2::ALL_COMMANDS | vk::PipelineStageFlags2::HOST,
             vk::AccessFlags2::MEMORY_READ
                 | vk::AccessFlags2::MEMORY_WRITE
@@ -74,8 +91,8 @@ pub(crate) fn barrier(device: &ash::Device, buffer: vk::CommandBuffer, reach: Re
         ),
     };
     let barrier = [vk::MemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+        .src_stage_mask(source)
+        .src_access_mask(written)
         .dst_stage_mask(stages)
         .dst_access_mask(accesses)];
     let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);

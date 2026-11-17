@@ -453,7 +453,8 @@ impl CommandBuffer {
     }
 
     /// For the device tests: records commands into the current segment with `f`, and keeps each
-    /// buffer's block until the command buffer retires.
+    /// buffer's block until the command buffer retires. The command buffer is to dispatch nothing
+    /// after them: a barrier between dispatches orders only the dispatches before it.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn record_for_test(
         &self,
@@ -461,7 +462,7 @@ impl CommandBuffer {
         f: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<(), Error> {
         self.building(|building| {
-            let command = building.command()?;
+            let command = building.command(Reach::Commands)?;
             f(&building.device.core().device, command);
             for buffer in buffers {
                 building.keep(buffer.held_block());
@@ -562,9 +563,9 @@ impl Building {
         }
     }
 
-    /// The current segment's command buffer, with the barrier owed recorded first. Commands after
-    /// a signal go in a new segment.
-    pub(crate) fn command(&mut self) -> Result<vk::CommandBuffer, Error> {
+    /// The current segment's command buffer, with the barrier owed recorded first, reaching what
+    /// the caller records next (`reach`). Commands after a signal go in a new segment.
+    pub(crate) fn command(&mut self, reach: Reach) -> Result<vk::CommandBuffer, Error> {
         if !self.last().signals.is_empty() {
             self.split()?;
         }
@@ -574,7 +575,7 @@ impl Building {
         };
         if self.owed {
             let core = self.device.core();
-            record::barrier(&core.device, command, Reach::Commands);
+            record::barrier(&core.device, command, reach);
             core.counters.count(Metric::Barriers);
             self.owed = false;
         }
