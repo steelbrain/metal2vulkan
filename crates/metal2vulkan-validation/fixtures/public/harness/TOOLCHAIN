@@ -1,0 +1,6 @@
+# Toolchain that produced the .ll/.air.ll companions (scripts/regen-air-fixtures).
+metal: Apple metal version 32023.922 (metalfe-32023.922.4)
+macosx-sdk: 27.2 (26B118)
+llvm: 21 (pinned: llvm-dis writes each .ll, and llvm-as must accept it)
+llvm-dis: Homebrew LLVM version 21.1.8
+llvm-as: Homebrew LLVM version 21.1.8
