@@ -1181,6 +1181,9 @@ fn heap_set(
     if heap.is_empty() {
         return Ok(None);
     }
+    if crate::lower::access::identity(p) {
+        return identity_set(heap, table).map(Some);
+    }
     // The layout's own features (the module states its indexing features); `select` refuses a
     // function whose heap the profile cannot hold, so a miss here is a function compiled for
     // another profile.
@@ -1236,6 +1239,67 @@ fn heap_set(
         bindings,
         flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
     }))
+}
+
+/// The sampled-image array of the identity domains' set 1: binding 0, one element per index a
+/// texture's resource ID may hold (`docs/RESOURCE-ID.md`).
+const IDENTITY_SAMPLED_IMAGES: u32 = 65_536;
+
+/// The storage-image array of the identity domains' set 1: binding 1, one element per index of a
+/// storage-capable texture.
+const IDENTITY_STORAGE_IMAGES: u32 = 4_096;
+
+/// Set 1 under the identity domains: the same layout for every pipeline, so the consumer binds one
+/// set for every command. Binding 0 is the sampled-image array and binding 1 the storage-image
+/// array, each element the texture whose resource ID holds its index; every heap class the
+/// pipeline's stages declare is a variable of its descriptor type's binding, as the variables of
+/// one set and binding may be (Vulkan's "DescriptorSet and Binding Assignment"). Every stage sees
+/// both arrays, partially bound, updated after binding and while unused elements are pending: the
+/// floor's features.
+fn identity_set(
+    heap: &BTreeMap<HandleClass, HeapDecl>,
+    table: &mut LinkTable,
+) -> Result<DescriptorSetLayout, Error> {
+    for h in heap.values() {
+        let binding = match h.ty {
+            vk::DescriptorType::SAMPLED_IMAGE => 0,
+            vk::DescriptorType::STORAGE_IMAGE => 1,
+            _ => return Err(Unsupported::not_implemented(Feature::IdentityDomains).into()),
+        };
+        for slot in &h.slots {
+            table.bindings.insert(*slot, (1, binding));
+        }
+    }
+    let flags = vk::DescriptorBindingFlags::PARTIALLY_BOUND
+        | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+        | vk::DescriptorBindingFlags::UPDATE_UNUSED_WHILE_PENDING;
+    let array = |binding, ty, count| DescriptorBinding {
+        binding,
+        ty,
+        count,
+        stages: vk::ShaderStageFlags::ALL,
+        source: BindingSource::IdentityArray,
+        immutable_sampler: None,
+        flags,
+        variables: 0,
+        immutable_samplers: Vec::new(),
+    };
+    Ok(DescriptorSetLayout {
+        set: 1,
+        bindings: vec![
+            array(
+                0,
+                vk::DescriptorType::SAMPLED_IMAGE,
+                IDENTITY_SAMPLED_IMAGES,
+            ),
+            array(
+                1,
+                vk::DescriptorType::STORAGE_IMAGE,
+                IDENTITY_STORAGE_IMAGES,
+            ),
+        ],
+        flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
+    })
 }
 
 /// The features a set-1 array of descriptor type `ty` needs in its layout that `p` lacks (the

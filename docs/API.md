@@ -117,8 +117,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   the window always holds. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
   every dispatch, with no `MultiRegion` constant: a dispatch the host knows states Metal's grid
   and its piece's first threadgroup there, and an indirect dispatch a zero grid, whose kernel
-  takes `NumWorkgroups` times its workgroup size. So far they lower a kernel that reaches memory
-  only through its buffer slots; any other function is refused as `Unsupported{IdentityDomains}`.
+  takes `NumWorkgroups` times its workgroup size. A texture slot's `gpuResourceID` is pushed as
+  its `PushField::SlotGuestBase`, and its texture is the element at the ID's index of set 1's two
+  fixed arrays, the same layout for every pipeline ([RESOURCE-ID.md](RESOURCE-ID.md)); it binds no
+  descriptor of its own and declares no specialization constant. No binder chooses a variant
+  there: a slot reads whatever texture its ID names through the plain form, its `float` or `half`
+  reads take the device's sRGB decode with `PrecisionNote::SrgbTexelDecode`, as a heap element's
+  do, and no texture is sparse (the consumer refuses a sparse texture). So far they lower a
+  kernel that reaches memory through its buffer slots and reads, writes, sizes or tests for nil
+  its texture slots. Any other function is refused as `Unsupported{IdentityDomains}`: one that samples, uses
+  an argument buffer's textures, a texture buffer, a slot's levels or swizzle, a two-plane,
+  extended-range or sRGB-twin form, or any other state of a bound texture beyond its ID.
 - **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
   default; changes emitted code). On an integrated GPU or a CPU device a function that only
   samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes

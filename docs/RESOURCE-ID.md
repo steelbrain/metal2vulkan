@@ -26,6 +26,22 @@ the same IDs on every run, and a replay reproduces them.
 A texture view takes its own index, in the class of its own usage. A texture buffer has no index:
 it is a typed refusal under these domains.
 
+## The arrays
+
+Under the identity domains set 1 has one layout for every pipeline: binding 0 is the sampled-image
+array of 65,536 elements and binding 1 the storage-image array of 4,096, each partially bound,
+updated after binding and while unused elements are pending, and seen by every stage. Element `i`
+of each is the texture whose ID holds index `i`, so the consumer writes an element once, as it
+makes the texture, for every pipeline. Element 0 is a null descriptor (`nullDescriptor`): a nil
+texture sizes 0, reads and samples zero, and drops a store, as Metal answers for a nil texture, with
+no code in the shader. Each texture class a shader declares (its shape, numeric type and depth
+comparison, sampled, or storage without a format) is a variable of its descriptor type's binding.
+
+A shader takes a texture slot's ID from the slot's push field (`PushField::SlotGuestBase`). It
+indexes the arrays with the low word, answers `is_null_texture` by whether the index is 0, and,
+where it checks a `read` itself (a device without `robustImageAccess2`), takes an out-of-bounds
+alpha of 1 from bit 12 of the word. Samplers are not lowered under these domains yet.
+
 ## The texture word
 
 `metal2vulkan::metal::resource_word::TextureWord::of(pixelFormat, swizzle)`:

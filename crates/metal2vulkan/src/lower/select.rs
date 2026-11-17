@@ -1862,9 +1862,54 @@ fn finish(
     Ok(plan)
 }
 
+/// Whether fact `f` names state of a bound texture or sampler the identity domains do not source
+/// yet: anything but a texture's presence and its format's missing alpha, which its resource ID
+/// holds.
+fn identity_unsourced(f: &RuntimeFact) -> bool {
+    matches!(
+        f,
+        RuntimeFact::StorageTextureFormat { .. }
+            | RuntimeFact::SamplerCoordinates { .. }
+            | RuntimeFact::SamplerReduction { .. }
+            | RuntimeFact::ImageViewShape { .. }
+            | RuntimeFact::TexelBufferRange { .. }
+            | RuntimeFact::HeapNumericType { .. }
+            | RuntimeFact::StorageTextureNumericType { .. }
+            | RuntimeFact::BicubicTexels { .. }
+            | RuntimeFact::StorageTextureLevels { .. }
+            | RuntimeFact::StorageTextureLevelViews { .. }
+            | RuntimeFact::SparseTexture { .. }
+            | RuntimeFact::TexelFormat { .. }
+            | RuntimeFact::SrgbTexture { .. }
+            | RuntimeFact::UlongAtomicView { .. }
+            | RuntimeFact::OpenClLineTexture { .. }
+            | RuntimeFact::SparseTextureWrites { .. }
+            | RuntimeFact::TextureSwizzle { .. }
+            | RuntimeFact::ConstantLanes { .. }
+            | RuntimeFact::ConstexprSampled { .. }
+            | RuntimeFact::CubicSampler { .. }
+            | RuntimeFact::CubicArgumentSampler { .. }
+            | RuntimeFact::HeapRawSamples { .. }
+            | RuntimeFact::CrossClassReads { .. }
+            | RuntimeFact::StorageTextureWriteRounding { .. }
+            | RuntimeFact::HeapWriteRounding { .. }
+            | RuntimeFact::HeapCrossClassNeutral { .. }
+            | RuntimeFact::HeapResidency { .. }
+            | RuntimeFact::HeapStorageReads { .. }
+            | RuntimeFact::AnisotropicSampler { .. }
+            | RuntimeFact::StorageTextureIntegerChannels { .. }
+            | RuntimeFact::YCbCrInPlace { .. }
+            | RuntimeFact::TexelRows { .. }
+            | RuntimeFact::BorderTexels { .. }
+            | RuntimeFact::TexelBufferParts { .. }
+    )
+}
+
 /// Under the identity domains, the plans lowered so far: a kernel that reaches memory only
-/// through its buffer slots' device addresses, with no descriptor. Its fields past the push window
-/// are a parameter block, whose address the window holds.
+/// through its buffer slots' device addresses and its texture slots' resource IDs, with no
+/// descriptor, no sampler, and no state of a bound texture but its resource ID's
+/// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). Its fields past the push window are a
+/// parameter block, whose address the window holds.
 fn identity_admits(plan: &Plan) -> Result<(), Error> {
     let fields = plan.push.fields.iter().all(|f| match (f.field, f.loc) {
         (PushField::ArgumentTableAddress, loc) => matches!(loc, PushLoc::Push { .. }),
@@ -1878,9 +1923,22 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
         .iter()
         .flatten()
         .all(|c| c.form == BufferForm::Psb);
+    let t = &plan.families.texture;
+    let textures = t.heap.is_empty() && t.slots.values().all(|s| s.identity_lowered());
+    // No sampler use: a read's decode through Metal's own texture unit (`metal_sampler`) is only
+    // a requirement.
+    let sampled = &plan.families.sampler;
+    let unsampled = *sampled
+        == sampler::SamplerPlan {
+            metal_sampler: sampled.metal_sampler,
+            ..Default::default()
+        };
     if plan.stage == Stage::Kernel
         && fields
         && addressed
+        && textures
+        && unsampled
+        && !plan.facts.iter().any(identity_unsourced)
         && plan.descriptors == DescriptorCounts::default()
     {
         return Ok(());

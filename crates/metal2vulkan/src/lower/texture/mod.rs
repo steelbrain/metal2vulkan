@@ -1237,7 +1237,32 @@ pub fn declare(
     _modes: &mut Vec<ExecMode>,
 ) -> BResult<Declared> {
     let mut d = Declared::default();
-    for (index, s) in &plan.families.texture.slots {
+    // Under the identity domains a slot's texture is an element of its class's set-1 array
+    // (`slot::identity_class`), declared once per class, and the slot has no constant: its
+    // presence and its format's missing alpha are its resource ID's (`emit::identity_id`).
+    if plan.families.access.identity {
+        let mut decorated = std::collections::BTreeSet::new();
+        for (index, s) in &plan.families.texture.slots {
+            let Some(decl) = &s.decl else { continue };
+            let Some(class) = slot::identity_class(decl) else {
+                continue;
+            };
+            let g = match d.heap.get(&class) {
+                Some(g) => *g,
+                None => {
+                    let g = heap_array(mb, plan.stage, class, *decl)?;
+                    d.heap.insert(class, g);
+                    g
+                }
+            };
+            if s.volatile && volatile_decorated(plan) && decorated.insert(g) {
+                mb.volatile(g)?;
+            }
+            d.images.insert(*index, (g, decl.declare(mb)?));
+        }
+    }
+    let slots = (plan.families.texture.slots.iter()).filter(|_| !plan.families.access.identity);
+    for (index, s) in slots {
         if let Some(decl) = &s.decl {
             let image = decl.declare(mb)?;
             // A slot's level views are one descriptor array of single-level views, and a texture
@@ -1857,9 +1882,14 @@ pub(crate) fn srgb_texels(
     if shape.dim == ImageDim::Buffer || shape.depth {
         return Ok(false);
     }
-    let ImageRef::Slot(index) = image else {
-        device_decode(cx, None, m)?;
-        return Ok(false);
+    // Under the identity domains a slot's format is never known, as a heap element's is not.
+    let index = match image {
+        ImageRef::Slot(index) if !crate::lower::access::identity(cx.profile) => index,
+        ImageRef::Slot(index) if slot_of(cx, index)?.storage() => return Ok(false),
+        _ => {
+            device_decode(cx, None, m)?;
+            return Ok(false);
+        }
     };
     let s = slot_of(cx, index)?;
     if s.storage() {
@@ -3168,14 +3198,17 @@ fn select_image(
             if let Some(s) = cx.families.texture.slots.get_mut(&index) {
                 s.presence = true;
             }
-            cx.facts
-                .insert(crate::pipeline::facts::RuntimeFact::ResourcePresence {
-                    slot: SlotRef {
-                        stage: cx.stage,
-                        class: SlotClass::Texture,
-                        index,
-                    },
-                });
+            // Under the identity domains the slot's resource ID says it (`emit::identity_id`).
+            if !crate::lower::access::identity(cx.profile) {
+                cx.facts
+                    .insert(crate::pipeline::facts::RuntimeFact::ResourcePresence {
+                        slot: SlotRef {
+                            stage: cx.stage,
+                            class: SlotClass::Texture,
+                            index,
+                        },
+                    });
+            }
             Ok(TextureStrategy::IsNull { index })
         }
         TexOp::Query(q) => select_query(cx, ops, image, shape, q),
@@ -3423,8 +3456,12 @@ fn select_read_as(
             if let Some(s) = cx.families.texture.slots.get_mut(&index) {
                 s.oob_alpha = true;
             }
-            cx.facts
-                .insert(crate::pipeline::facts::RuntimeFact::OutOfBoundsAlpha { slot });
+            // Under the identity domains the slot's resource ID's word says it
+            // (`TextureWord::OUT_OF_BOUNDS_ALPHA_ONE`).
+            if !crate::lower::access::identity(cx.profile) {
+                cx.facts
+                    .insert(crate::pipeline::facts::RuntimeFact::OutOfBoundsAlpha { slot });
+            }
             true
         }
         // A heap element's format is the resident texture's: its handle-table entry's flags say
@@ -3507,9 +3544,11 @@ fn select_read_as(
         .enabled
         .features
         .contains(&crate::device::requirements::VkFeature::ShaderResourceResidency);
+    // Under the identity domains no texture is sparse (the consumer refuses one).
     let constant_lanes = match image {
         ImageRef::Slot(index)
             if sparse_images
+                && !crate::lower::access::identity(cx.profile)
                 && shape.dim != ImageDim::Buffer
                 && texel.lanes == 4
                 && !matches!(texel.conv, TexelConv::U64Words { .. }) =>

@@ -61,6 +61,12 @@ fn value(
             return Ok(None);
         }
         TextureStrategy::Sampling(x) => crate::lower::sampler::sampling_value(cx, fb, x, grads)?,
+        // Under the identity domains a slot is nil where its resource ID's index is 0.
+        TextureStrategy::IsNull { index } if cx.plan.families.access.identity => {
+            let (element, _) = identity_id(cx, fb, *index)?;
+            let null = u32s(fb, 1, 0)?;
+            fb.binary(BinOp::IEqual, element, null)?
+        }
         TextureStrategy::IsNull { index } => {
             let Some(p) = cx.decl.families.texture.presence.get(index).copied() else {
                 return Err(cx.fail("an is_null of a slot without a presence constant"));
@@ -458,6 +464,9 @@ fn image_in(
             });
         }
     };
+    if cx.plan.families.access.identity {
+        return identity_image(cx, fb, index, level);
+    }
     let slot = cx.plan.families.texture.slots.get(&index);
     let (decl, at) = (slot.and_then(|s| s.decl), slot.map(|s| s.slot));
     let global = cx.decl.families.texture.images.get(&index).copied();
@@ -498,6 +507,57 @@ fn image_in(
         img,
         live: None,
         within: Some(within),
+        flagged: None,
+    })
+}
+
+/// Under the identity domains, texture slot `index`'s resource ID, from its push field: the index
+/// of its element in the set-1 arrays (the low word) and its word (the high word,
+/// `metal::resource_word::TextureWord`).
+pub(crate) fn identity_id(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    index: u32,
+) -> BResult<(SValue, SValue)> {
+    let Some(slot) = cx.plan.families.texture.slots.get(&index).map(|s| s.slot) else {
+        return Err(cx.fail(format!("texture slot {index} is not planned")));
+    };
+    let id = cx.push_field(fb, crate::pipeline::sym::PushField::SlotGuestBase(slot))?;
+    Ok((
+        fb.composite_extract(id, &[0])?,
+        fb.composite_extract(id, &[1])?,
+    ))
+}
+
+/// Under the identity domains, texture slot `index`'s image: the element of its class's set-1
+/// array (`slot::identity_class`) at the index its resource ID holds, which is uniform over the
+/// call. A slot has one level here (`level` is `None`).
+fn identity_image(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    index: u32,
+    level: Option<ValueId>,
+) -> BResult<Loaded> {
+    let decl = cx
+        .plan
+        .families
+        .texture
+        .slots
+        .get(&index)
+        .and_then(|s| s.decl);
+    let global = cx.decl.families.texture.images.get(&index).copied();
+    let (Some(decl), Some((g, _)), None) = (decl, global, level) else {
+        return Err(cx.fail(format!("texture slot {index} is not declared")));
+    };
+    let (element, _) = identity_id(cx, fb, index)?;
+    let base = fb.module().global_value(g)?;
+    let p = fb.access_chain(base, &[element])?;
+    let img = fb.load(p, MemAccess::default())?;
+    Ok(Loaded {
+        decl,
+        img,
+        live: None,
+        within: None,
         flagged: None,
     })
 }
@@ -2112,6 +2172,18 @@ pub(super) fn out_of_bounds_texel(
         return fb.module().const_value(z);
     }
     let spec = match *image {
+        // Under the identity domains the format's missing alpha is the resource ID's word's.
+        ImageRef::Slot(index) if cx.plan.families.access.identity => {
+            let (_, word) = identity_id(cx, fb, index)?;
+            let bit = u32s(
+                fb,
+                1,
+                crate::metal::resource_word::TextureWord::OUT_OF_BOUNDS_ALPHA_ONE,
+            )?;
+            let set = fb.binary(BinOp::BitwiseAnd, word, bit)?;
+            let zero = u32s(fb, 1, 0)?;
+            fb.binary(BinOp::INotEqual, set, zero)?
+        }
         ImageRef::Slot(index) => match cx.decl.families.texture.oob_alpha.get(&index).copied() {
             Some(spec) => spec,
             None => {

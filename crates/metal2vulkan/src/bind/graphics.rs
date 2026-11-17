@@ -2192,6 +2192,10 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 | BindingSource::SamplerArray { .. } => {
                     return Err(internal("a heap binding outside the heap planner"))
                 }
+                // The identity domains' arrays are the consumer's, written as it makes textures.
+                BindingSource::IdentityArray => {
+                    return Err(internal("an identity array in the binder's plan"))
+                }
                 BindingSource::SeparateSampler { .. } => {
                     return Err(internal("a separate sampler outside its planner"))
                 }

@@ -1538,6 +1538,7 @@ codec_enum! {
         SnapshotTexels(f0),
         YCbCrPlanes(f0),
         SamplerArray { stage, compare, integer },
+        IdentityArray,
     }
     VertexStride { Static(f0), PerBind }
 }

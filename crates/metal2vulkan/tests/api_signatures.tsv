@@ -12770,6 +12770,7 @@ variant	metal2vulkan-rt::PrecisionNote::AnisotropicFilter	AnisotropicFilter
 variant	metal2vulkan-rt::PrecisionNote::ArgumentPixelSamplerScaling	ArgumentPixelSamplerScaling
 variant	metal2vulkan-rt::PrecisionNote::BicubicFilterArithmetic	BicubicFilterArithmetic
 variant	metal2vulkan-rt::PrecisionNote::BlendedWriteRounding	BlendedWriteRounding
+variant	metal2vulkan-rt::PrecisionNote::CappedLodBias	CappedLodBias
 variant	metal2vulkan-rt::PrecisionNote::ClippedCoverageSplit	ClippedCoverageSplit
 variant	metal2vulkan-rt::PrecisionNote::ColorAttachmentGroups	ColorAttachmentGroups
 variant	metal2vulkan-rt::PrecisionNote::ComputedSampleDepth	ComputedSampleDepth
@@ -15537,6 +15538,7 @@ variant	metal2vulkan::pipeline::BindingSource::CombinedTextureSampler	CombinedTe
 variant	metal2vulkan::pipeline::BindingSource::ExtendedShadow	ExtendedShadow(u32)
 variant	metal2vulkan::pipeline::BindingSource::Heap	Heap(HandleClass)
 variant	metal2vulkan::pipeline::BindingSource::HeapSampler	HeapSampler { stage: Stage, sampler: CombinedSampler }
+variant	metal2vulkan::pipeline::BindingSource::IdentityArray	IdentityArray
 variant	metal2vulkan::pipeline::BindingSource::InputAttachment	InputAttachment(u32)
 variant	metal2vulkan::pipeline::BindingSource::Sampler	Sampler(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::SamplerArray	SamplerArray { stage: Stage, compare: bool, integer: bool }

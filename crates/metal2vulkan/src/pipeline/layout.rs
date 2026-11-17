@@ -101,6 +101,11 @@ pub enum BindingSource {
     },
     /// One runtime array of the set-1 heap.
     Heap(HandleClass),
+    /// An array of the identity domains' set 1: binding 0 the sampled images, binding 1 the
+    /// storage images, element `i` the texture whose resource ID holds index `i`
+    /// (`docs/RESOURCE-ID.md`). The consumer writes an element as it makes a texture, for every
+    /// pipeline at once.
+    IdentityArray,
     /// A separate sampler of `stage` that samples set-1 heap images. A constexpr sampler is the
     /// binding's `immutable_sampler`, which takes no descriptor write.
     HeapSampler {

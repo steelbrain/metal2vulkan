@@ -800,6 +800,11 @@ fn storage_format(
                 StorageImageClass::Identity,
             ));
         }
+        // Under the identity domains no input names the bound format, and a formatless access the
+        // device does not take is not lowered yet.
+        if crate::lower::access::identity(cx.profile) {
+            return Err(Unsupported::not_implemented(Feature::IdentityDomains).into());
+        }
         return Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat {
             slot: s.slot,
         }));
@@ -1271,7 +1276,10 @@ fn declare_slot(
         None
     };
     let (format, class) = if storage {
-        facts.push(RuntimeFact::StorageTextureFormat { slot: s.slot });
+        // Under the identity domains no input names the bound format: the slot is formatless.
+        if !crate::lower::access::identity(cx.profile) {
+            facts.push(RuntimeFact::StorageTextureFormat { slot: s.slot });
+        }
         if s.uses.int_channels {
             facts.push(RuntimeFact::StorageTextureIntegerChannels { slot: s.slot });
             push.push(PushField::TextureIntegerChannels(s.slot));
@@ -1455,47 +1463,52 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         let volatile = !d.rows && forwards(cx, &s.uses, shape.dim == ImageDim::Buffer);
         decls.push((*index, d, volatile));
     }
-    // The slots read, sampled or gathered in any class (a slot only sampled is declared by its
-    // combined bindings, `sampler::finish`).
-    for s in cx.families.texture.slots.values() {
-        if s.shape.is_some_and(|shape| cross_reads(s, shape)) {
-            facts.push(RuntimeFact::CrossClassReads { slot: s.slot });
+    // The variants a slot may take by its bound texture (cross-class reads, planes read in place,
+    // a texture's rows, a texture buffer's parts): under the identity domains no binder chooses a
+    // variant, and the slot reads whatever texture its resource ID names through the plain form.
+    if !crate::lower::access::identity(cx.profile) {
+        // The slots read, sampled or gathered in any class (a slot only sampled is declared by its
+        // combined bindings, `sampler::finish`).
+        for s in cx.families.texture.slots.values() {
+            if s.shape.is_some_and(|shape| cross_reads(s, shape)) {
+                facts.push(RuntimeFact::CrossClassReads { slot: s.slot });
+            }
         }
-    }
-    // The slots whose every access the in-place form reads, on a profile that takes it: their
-    // compile under the form states the same, which its plan holds to.
-    for s in cx.families.texture.slots.values() {
-        let reads = in_place_reads(cx, s);
-        if !reads && cx.inputs.ycbcr_in_place.contains(&s.slot) {
-            return Err(
-                cx.invariant("an in-place texture slot whose accesses the form does not read")
-            );
+        // The slots whose every access the in-place form reads, on a profile that takes it: their
+        // compile under the form states the same, which its plan holds to.
+        for s in cx.families.texture.slots.values() {
+            let reads = in_place_reads(cx, s);
+            if !reads && cx.inputs.ycbcr_in_place.contains(&s.slot) {
+                return Err(
+                    cx.invariant("an in-place texture slot whose accesses the form does not read")
+                );
+            }
+            if s.in_place.device_blocked && cx.inputs.ycbcr_planes_sampled.contains_key(&s.slot) {
+                return Err(cx.invariant(
+                    "a planes image's texture slot with a sample the device's sampler does not take",
+                ));
+            }
+            if reads {
+                facts.push(RuntimeFact::YCbCrInPlace {
+                    slot: s.slot,
+                    samplers: s.in_place.samplers,
+                    device: !s.in_place.device_blocked,
+                });
+            }
         }
-        if s.in_place.device_blocked && cx.inputs.ycbcr_planes_sampled.contains_key(&s.slot) {
-            return Err(cx.invariant(
-                "a planes image's texture slot with a sample the device's sampler does not take",
-            ));
+        // The slots whose every access the rows answer: their compile under the rows variant states
+        // the same, which its plan holds to.
+        for s in cx.families.texture.slots.values() {
+            if rows_reads(s) {
+                facts.push(RuntimeFact::TexelRows { slot: s.slot });
+            }
         }
-        if reads {
-            facts.push(RuntimeFact::YCbCrInPlace {
-                slot: s.slot,
-                samplers: s.in_place.samplers,
-                device: !s.in_place.device_blocked,
-            });
-        }
-    }
-    // The slots whose every access the rows answer: their compile under the rows variant states
-    // the same, which its plan holds to.
-    for s in cx.families.texture.slots.values() {
-        if rows_reads(s) {
-            facts.push(RuntimeFact::TexelRows { slot: s.slot });
-        }
-    }
-    // The texture-buffer slots whose every access their parts answer: their compile under the
-    // parts variant states the same, which its plan holds to.
-    for s in cx.families.texture.slots.values() {
-        if parts_reads(cx, s) {
-            facts.push(RuntimeFact::TexelBufferParts { slot: s.slot });
+        // The texture-buffer slots whose every access their parts answer: their compile under the
+        // parts variant states the same, which its plan holds to.
+        for s in cx.families.texture.slots.values() {
+            if parts_reads(cx, s) {
+                facts.push(RuntimeFact::TexelBufferParts { slot: s.slot });
+            }
         }
     }
     let mut heap = Vec::new();
@@ -1657,8 +1670,12 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // texel buffer or a 1D texture): Metal drops every write to a sparse texture, which the slot's
     // `SparseTexture` specialization drops, and the binder refuses a sparse texture at a slot
     // updated atomically.
+    // Under the identity domains no texture is sparse (the consumer refuses one), so no write is
+    // dropped.
     let mut written = Vec::new();
-    for (index, s) in &cx.families.texture.slots {
+    let slots =
+        (cx.families.texture.slots.iter()).filter(|_| !crate::lower::access::identity(cx.profile));
+    for (index, s) in slots {
         let sparse_type = s
             .shape
             .is_some_and(|x| !matches!(x.dim, ImageDim::Buffer | ImageDim::D1));
@@ -1700,6 +1717,86 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     }
     cx.facts.extend(facts);
     cx.push.extend(push);
-    cx.descriptors = cx.descriptors.plus(&counts);
+    // Under the identity domains a slot's texture is the element of the set-1 array of its
+    // declaration's class ([`identity_class`]) at the index its resource ID holds, which the
+    // slot's push field carries: the slot binds no descriptor of its own.
+    match crate::lower::access::identity(cx.profile) {
+        true => {
+            for s in cx.families.texture.slots.values() {
+                cx.push.insert(PushField::SlotGuestBase(s.slot));
+            }
+        }
+        false => cx.descriptors = cx.descriptors.plus(&counts),
+    }
     Ok(())
+}
+
+impl SlotPlan {
+    /// Whether the identity domains lower the slot: its declaration has an identity array class
+    /// ([`identity_class`]), or it has none (a slot that is only tested for presence), and it reads
+    /// no state of the bound texture but its resource ID's (its presence and its format's missing
+    /// alpha). A conversion by the bound format, a swizzle, sparse residency, border texels,
+    /// constant lanes and offset bases each read a constant or a binding the slot does not have
+    /// there yet.
+    pub(crate) fn identity_lowered(&self) -> bool {
+        let state = self.border_texels
+            || self.sparse_arm
+            || self.tile_map
+            || self.sparse_writes
+            || self.declares_texel_format()
+            || self.unmeasured
+            || self.swizzle
+            || self.constant_lanes
+            || self.offset_base;
+        !state
+            && self
+                .decl
+                .as_ref()
+                .is_none_or(|d| identity_class(d).is_some())
+    }
+}
+
+/// Under the identity domains, the class of the set-1 array whose elements texture slot
+/// declaration `decl` takes: its shape, numeric type and depth comparison, sampled, or a storage
+/// image without a format (the floor's `shaderStorageImageWriteWithoutFormat`). `None` for a
+/// declaration the identity arrays hold no element of yet: a cube viewed as an array, level views,
+/// a texture buffer, its parts or rows, planes, an extended-range, RGBX or `ulong` form, or a
+/// storage image with a format or a conversion.
+pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
+    let plain = !decl.cube_as_array
+        && decl.level_views.is_none()
+        && decl.extended.is_none()
+        && !decl.x_channel
+        && !decl.in_place
+        && decl.planes_sampler.is_none()
+        && !decl.rows
+        && decl.parts.is_none()
+        && decl.class == StorageImageClass::Identity
+        && decl.texel != TexelClass::Uint64;
+    let dim = match decl.dim {
+        Dim::D1 => SymDim::D1,
+        Dim::D2 => SymDim::D2,
+        Dim::D3 => SymDim::D3,
+        Dim::Cube => SymDim::Cube,
+        _ => return None,
+    };
+    let storage = decl.usage == ImageUsage::Storage;
+    if !plain || (storage && decl.format != crate::spv::ImageFormat::Unknown) {
+        return None;
+    }
+    Some(ImageHandleClass {
+        dim,
+        arrayed: decl.arrayed,
+        multisampled: decl.multisampled,
+        sampled_type: decl.texel.sampled_type(),
+        depth_compare: decl.depth,
+        access: match storage {
+            true => ImageAccess::Storage,
+            false => ImageAccess::Sampled,
+        },
+        format: match storage {
+            true => StorageFormatClass::Unknown,
+            false => StorageFormatClass::NotStorage,
+        },
+    })
 }
