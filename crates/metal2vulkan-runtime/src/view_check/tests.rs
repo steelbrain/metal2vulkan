@@ -153,8 +153,7 @@ fn a_record_reads_back_for_its_identity_alone() {
 fn an_answer_with_facts_makes_the_measured_compile_device() {
     use super::{ViewCheck, ViewCosts};
     use metal2vulkan::device::{Device as CompileDevice, DeviceDescription, DevicePolicy};
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/lavapipe.json");
+    let path = metal2vulkan_devtools::validation_dir().join("profiles/lavapipe.json");
     let text = std::fs::read_to_string(path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
     let policy = DevicePolicy::default();
