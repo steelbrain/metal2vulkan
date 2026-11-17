@@ -1871,7 +1871,11 @@ through a snapshot instead of a copy taken before the render pass instance. The 
 the fragment slots that allow it (`StageInterface::snapshot_textures`, `StageModule::
 snapshot_textures`): own-pixel slots whose texels reach no derivative, sample, quad or subgroup
 operation, branch, integer divisor, dynamic vector index or store outside the invocation, directly
-or through a call, in a function that writes no memory. It says why it leaves out each other
+or through a call, in a function that writes no memory. A selection on a texel is allowed where
+its arms leave through its merge alone and hold no derivative, implicit-level sample or
+level-of-detail query, quad or subgroup operation, loop or undefined operand, nor call a function
+that does; what its arms leave behind (its merge's phis, the variables they store to) is judged
+as the texel is. It says why it leaves out each other
 own-pixel slot (`snapshot_refusals`: each slot with every `SnapshotRefusal` that holds for it).
 Name the slots in `BindState::snapshot_textures`; the plan keeps those its pipeline can read so
 and states them in `variant.snapshot_textures`, each with the form its snapshot holds texels in

@@ -1,16 +1,18 @@
 //! [`snapshot_textures`] on hand-built fragment modules: a fetched value that reaches only
 //! arithmetic and an output qualifies, directly, through a variable or through a call; one that
-//! reaches a derivative, a branch, an implicit sample, a quad operation, an integer divisor or a
-//! dynamic index, a store elsewhere, an atomic or an image write, directly, through a variable,
-//! or into and out of a callee, does not; nor does a module with an interlock or a coherent
-//! resource, of a function that writes memory, or a slot past 127. A branch around a demote alone
-//! qualifies. Each slot left out is stated with the clauses that leave it out.
+//! reaches a derivative, an implicit sample, a quad operation, an integer divisor or a dynamic
+//! index, a store elsewhere, an atomic or an image write, directly, through a variable, or into
+//! and out of a callee, does not; nor does a module with an interlock or a coherent resource, of a
+//! function that writes memory, or a slot past 127. A selection on it qualifies where its arms
+//! leave through its merge alone and hold nothing tangled, no loop and no undefined operand, and
+//! what its arms leave behind reaches nothing that leaves the slot out. Each slot left out is
+//! stated with the clauses that leave it out.
 
 use super::snapshot_textures;
 use crate::budget::{Budget, Meter};
 use crate::pipeline::interface::SnapshotRefusal;
 use crate::pipeline::sym::{CombinedSampler, ResourceKind, ResourceSlot, SamplerRef, Stage};
-use crate::spirv::builder::constructs::ArmEnd;
+use crate::spirv::builder::constructs::{ArmEnd, ArmFn, KillForm, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::ids::{TypeId, Value};
 use crate::spirv::ir::{
@@ -69,6 +71,26 @@ enum Sink {
     DemoteMergingValues,
     /// Swapped across the quad.
     QuadSwap,
+    /// Compared, and an arm on the comparison stores the position to a `Private` variable.
+    ArmStores,
+    /// Compared, and an arm on the comparison takes a derivative of the position.
+    ArmDerivative,
+    /// Compared, and an arm on the comparison calls a callee that takes a derivative.
+    ArmCallsDerivative,
+    /// Compared, and an arm on the comparison ends the invocation.
+    ArmKills,
+    /// Compared, and an arm on the comparison runs a loop.
+    ArmLoop,
+    /// Compared, and an arm on the comparison divides by the position's bits.
+    ArmDivides,
+    /// Compared, and a loop left where the comparison holds.
+    LoopExit,
+    /// Compared, an arm on the comparison storing to a `Function` variable whose value after the
+    /// merge reaches a derivative.
+    ArmToDerivative,
+    /// Compared, the arms' different values of the position merged and the merge's derivative
+    /// taken.
+    MergeToDerivative,
     /// Its bits stored to a storage buffer's word.
     StorageStore,
     /// Its bits added to a storage buffer's word by an atomic.
@@ -233,6 +255,13 @@ fn module(sink: Sink) -> TypedModule {
         })
         .expect("pointer");
     let callee = match sink {
+        Sink::ArmCallsDerivative => {
+            let mut g = b.routine(vec4).expect("routine");
+            let x = g.param(vec4).expect("x");
+            let d = g.derivative(DerivOp::DPdx, x).expect("derivative");
+            g.ret(Some(d)).expect("ret");
+            Some(g.finish().expect("callee"))
+        }
         Sink::ThroughCall | Sink::DerivativeOfCall | Sink::BranchInCall => {
             let mut g = b.routine(vec4).expect("routine");
             let x = g.param(vec4).expect("x");
@@ -269,7 +298,7 @@ fn module(sink: Sink) -> TypedModule {
     let mut f = b.function(void).expect("main");
     let tv = f.module().global_value(t).expect("t");
     let uv = f.module().global_value(u).expect("u");
-    let _ = out;
+    let position = f.module().global_value(out).expect("position");
     let cv = f.module().global_value(color).expect("color");
     let img = f.load(tv, MemAccess::default()).expect("t image");
     let zero = scalar(&mut f, u32_, 0);
@@ -440,6 +469,88 @@ fn module(sink: Sink) -> TypedModule {
             let merged = f.if_(&mut (), c, kept, Some(demoted)).expect("if");
             merged.0.first().copied().unwrap_or(texel)
         }
+        Sink::ArmStores
+        | Sink::ArmDerivative
+        | Sink::ArmCallsDerivative
+        | Sink::ArmKills
+        | Sink::ArmLoop
+        | Sink::ArmDivides => {
+            let c = above_half(&mut f, texel, f32_);
+            let pos = f.load(position, MemAccess::default()).expect("position");
+            let arm: ArmFn<'_, ()> = Box::new(move |f, _| {
+                match sink {
+                    Sink::ArmStores => f.store(cv, pos, MemAccess::default())?,
+                    Sink::ArmDerivative => {
+                        f.derivative(DerivOp::DPdx, pos)?;
+                    }
+                    Sink::ArmCallsDerivative => {
+                        f.call(callee.expect("callee"), &[pos])?;
+                    }
+                    Sink::ArmKills => {
+                        f.kill(KillForm::Kill)?;
+                        return Ok(ArmEnd::Exits);
+                    }
+                    Sink::ArmLoop => {
+                        f.loop_(
+                            &mut (),
+                            LoopSpec::default(),
+                            Box::new(|f, _, exits| exits.break_(f)),
+                        )?;
+                    }
+                    _ => {
+                        let x = f.composite_extract(pos, &[0])?;
+                        let bits = f.convert(ConvOp::Bitcast, x, u32_)?;
+                        let three = scalar(f, u32_, 3);
+                        f.binary(BinOp::UDiv, three, bits)?;
+                    }
+                }
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            f.if_(&mut (), c, arm, None).expect("if");
+            texel
+        }
+        Sink::LoopExit => {
+            let c = above_half(&mut f, texel, f32_);
+            let body: crate::spirv::builder::constructs::LoopFn<'_, ()> =
+                Box::new(move |f, _, exits| {
+                    let arm: ArmFn<'_, ()> = Box::new(move |f, _| {
+                        exits.break_(f)?;
+                        Ok(ArmEnd::Exits)
+                    });
+                    f.if_(&mut (), c, arm, None)?;
+                    Ok(())
+                });
+            f.loop_(&mut (), LoopSpec::default(), body).expect("loop");
+            texel
+        }
+        Sink::ArmToDerivative | Sink::MergeToDerivative => {
+            let c = above_half(&mut f, texel, f32_);
+            let pos = f.load(position, MemAccess::default()).expect("position");
+            let twice = f.binary(BinOp::FAdd, pos, pos).expect("twice");
+            let left = match sink {
+                Sink::ArmToDerivative => {
+                    let var = f.local_var(vec4, None).expect("var");
+                    let p = f.var_ptr(var).expect("pointer");
+                    f.store(p, pos, MemAccess::default()).expect("store");
+                    let arm: ArmFn<'_, ()> = Box::new(move |f, _| {
+                        f.store(p, twice, MemAccess::default())?;
+                        Ok(ArmEnd::FallThrough(Vec::new()))
+                    });
+                    f.if_(&mut (), c, arm, None).expect("if");
+                    f.load(p, MemAccess::default()).expect("load")
+                }
+                _ => {
+                    let then: ArmFn<'_, ()> =
+                        Box::new(move |_, _| Ok(ArmEnd::FallThrough(vec![pos])));
+                    let other: ArmFn<'_, ()> =
+                        Box::new(move |_, _| Ok(ArmEnd::FallThrough(vec![twice])));
+                    let merged = f.if_(&mut (), c, then, Some(other)).expect("if");
+                    merged.0.first().copied().expect("merged")
+                }
+            };
+            f.derivative(DerivOp::DPdx, left).expect("derivative");
+            texel
+        }
         Sink::SampleCoordinate => {
             let si = f.load(uv, MemAccess::default()).expect("u");
             let xy = f.vector_shuffle(texel, texel, &[0, 1]).expect("xy");
@@ -462,14 +573,17 @@ fn module(sink: Sink) -> TypedModule {
 /// A fetched value that reaches arithmetic and a color output alone, directly, through a
 /// `Function` variable or through a call, qualifies, as does an unsigned dividend, a signed one
 /// beside a constant divisor without `-1`, and a dynamically indexed vector; a derivative of it,
-/// directly, through a variable or of a call's result, a branch on it, in the entry or in a callee
-/// it reaches as an argument, through a pointer argument's memory or back out of it, an implicit
-/// sample at it, a quad swap of it, a divisor, a signed dividend beside `-1`, a dynamic index, a
-/// store of it to a storage buffer, an atomic of it, or an image write of it leaves the slot out,
-/// as does an interlock or a coherent resource anywhere in the module. A branch on it that only
-/// decides whether the invocation demotes itself, in either arm, qualifies; one whose arm also
-/// writes, or whose arms' values merge apart, does not. Each slot left out is stated with the one
-/// clause that leaves it out. The analysis releases every charge.
+/// directly, through a variable or of a call's result, an implicit sample at it, a quad swap of
+/// it, a divisor, a signed dividend beside `-1`, a dynamic index, a store of it to a storage
+/// buffer, an atomic of it, or an image write of it leaves the slot out, as does an interlock or a
+/// coherent resource anywhere in the module. A selection on it qualifies, in the entry or in a
+/// callee it reaches as an argument, through a pointer argument's memory or back out of it: with
+/// an arm that is empty, demotes (in either arm, also writing, or with the arms' values merging
+/// apart) or stores to a `Private` variable. One whose arm takes a derivative or calls a function
+/// that does, ends the invocation, runs a loop or divides by a value that is not a constant leaves
+/// the slot out for its branch, as does a loop it leaves; one whose arm's store or whose merge's
+/// phi reaches a derivative, for the derivative. Each slot left out is stated with the one clause
+/// that leaves it out. The analysis releases every charge.
 #[test]
 fn only_values_no_helper_can_pass_on_qualify() {
     use SnapshotRefusal as R;
@@ -478,14 +592,14 @@ fn only_values_no_helper_can_pass_on_qualify() {
         (Sink::ThroughVariable, None),
         (Sink::Derivative, Some(R::Derivative)),
         (Sink::DerivativeThroughVariable, Some(R::Derivative)),
-        (Sink::Branch, Some(R::Branch)),
+        (Sink::Branch, None),
         (Sink::SampleCoordinate, Some(R::Sample)),
         (Sink::Interlocked, Some(R::Interlock)),
         (Sink::ThroughCall, None),
         (Sink::DerivativeOfCall, Some(R::Derivative)),
-        (Sink::BranchInCall, Some(R::Branch)),
-        (Sink::BranchInCallThroughPointer, Some(R::Branch)),
-        (Sink::StoredByCallee, Some(R::Branch)),
+        (Sink::BranchInCall, None),
+        (Sink::BranchInCallThroughPointer, None),
+        (Sink::StoredByCallee, None),
         (Sink::Divisor, Some(R::UndefinedOperand)),
         (Sink::UnsignedDividend, None),
         (Sink::SignedDividend, None),
@@ -494,8 +608,17 @@ fn only_values_no_helper_can_pass_on_qualify() {
         (Sink::DynamicVector, None),
         (Sink::DemoteGuard, None),
         (Sink::DemoteInElse, None),
-        (Sink::DemoteAndStore, Some(R::Branch)),
-        (Sink::DemoteMergingValues, Some(R::Branch)),
+        (Sink::DemoteAndStore, None),
+        (Sink::DemoteMergingValues, None),
+        (Sink::ArmStores, None),
+        (Sink::ArmDerivative, Some(R::Branch)),
+        (Sink::ArmCallsDerivative, Some(R::Branch)),
+        (Sink::ArmKills, Some(R::Branch)),
+        (Sink::ArmLoop, Some(R::Branch)),
+        (Sink::ArmDivides, Some(R::Branch)),
+        (Sink::LoopExit, Some(R::Branch)),
+        (Sink::ArmToDerivative, Some(R::Derivative)),
+        (Sink::MergeToDerivative, Some(R::Derivative)),
         (Sink::QuadSwap, Some(R::GroupOperation)),
         (Sink::StorageStore, Some(R::Store)),
         (Sink::AtomicAdd, Some(R::Atomic)),

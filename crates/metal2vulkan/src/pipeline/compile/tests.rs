@@ -2668,6 +2668,44 @@ fn the_interface_states_why_a_slot_takes_no_snapshot() {
     }
 }
 
+/// A selection on the texel a fragment read at its own pixel keeps the slot where a helper
+/// invocation may take either arm (`spirv::requirements::snapshot`'s `arms`): owned fixture
+/// `snapshot_select`'s `ss_read_selecting`, whose arm halves the red, states none on the Radeon
+/// 780M's profile and on lavapipe's; `ss_read_selecting_dfdx`, whose arm also takes a derivative,
+/// and `wlk_readers`'s `wlk_read_branch`, whose texel decides a loop's trip count, state their
+/// branch.
+#[test]
+fn a_selection_on_the_texel_keeps_the_slot_where_a_helper_may_take_either_arm() {
+    use crate::pipeline::interface::SnapshotRefusal;
+    let (Some(selecting), Some(looping)) = (fixture("snapshot_select"), fixture("wlk_readers"))
+    else {
+        return;
+    };
+    for stem in ["amd-780m-radv", "lavapipe"] {
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile");
+        for (bc, entry, refusals) in [
+            (&selecting, "ss_read_selecting", Vec::new()),
+            (
+                &selecting,
+                "ss_read_selecting_dfdx",
+                vec![(0, SnapshotRefusal::Branch)],
+            ),
+            (
+                &looping,
+                "wlk_read_branch",
+                vec![(0, SnapshotRefusal::Branch)],
+            ),
+        ] {
+            let a = crate::pipeline::testing::compile(bc, entry, &p)
+                .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+            assert_eq!(a.interface.own_pixel_textures, [0u32], "{stem} {entry}");
+            let slots: &[u32] = if refusals.is_empty() { &[0] } else { &[] };
+            assert_eq!(a.interface.snapshot_textures, slots, "{stem} {entry}");
+            assert_eq!(a.interface.snapshot_refusals, refusals, "{stem} {entry}");
+        }
+    }
+}
+
 /// The interface states the own-pixel slots a draw can read through a snapshot
 /// (`spirv::requirements::snapshot`): `tob_read`'s, whose texel reaches only its output. Its
 /// snapshot variant (`LoweringInputs::snapshot_textures`) links and validates on every profile with

@@ -11728,7 +11728,7 @@ pub struct WorkCounts {
     /// (`StageModule::snapshot_refusals`).
     pub reading_draws_split_unreadable_own_pixel: u64,
     /// Of `reading_draws_split_unreadable_own_pixel`, those of a slot whose read decides a branch
-    /// or a switch, beside a branch that only decides whether the invocation demotes itself
+    /// or a switch, beside a selection a helper invocation may take either arm of
     /// (`SnapshotRefusal::Branch`). A draw is counted in each of the clauses below that leave out
     /// any of its slots no snapshot serves.
     pub reading_draws_split_unreadable_own_pixel_branch: u64,

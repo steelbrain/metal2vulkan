@@ -43,6 +43,18 @@
 //!   translator lets a snapshot serve its slot (`StageModule::snapshot_textures`): a snapshot for
 //!   each reader where the device takes the path, else a split for each, and never a split for an
 //!   own-pixel read no snapshot serves (`WorkCounts::reading_draws_split_unreadable_own_pixel`).
+//! - [`a_reader_that_selects_by_its_texel_takes_the_snapshot`]: the first test's draws with a
+//!   reader that halves the red it read where it is above 0.4 (`ss_read_selecting` of
+//!   `snapshot_select.metal`): the first reader adds `FILL` twice (`3 * FILL`, 120, under the
+//!   bound), the second adds half of that (180). Its arms leave through their merge alone and hold
+//!   nothing a helper invocation's path through them passes on, so the translator lets a snapshot
+//!   serve its slot (`StageModule::snapshot_textures`): a snapshot for each reader where the device
+//!   takes the path, else a split for each, and never a split for an own-pixel read no snapshot
+//!   serves.
+//! - [`a_reader_whose_arm_takes_a_derivative_takes_the_split_for_its_branch`]: the same draws with
+//!   `ss_read_selecting_dfdx`, whose arm also takes a derivative, whose quad a helper's path would
+//!   change: the same answers, through a split for each reader on every device, each an own-pixel
+//!   read no snapshot serves, counted under its branch alone.
 //! - [`a_reader_that_ends_itself_by_its_texel_takes_the_split_for_its_branch`]: the same draws on
 //!   a device that withholds `shaderDemoteToHelperInvocation`, where the discard ends the
 //!   invocation: the same answers, through a split for each reader on every device, each an
@@ -155,6 +167,15 @@ const READ: Fragment = ("tob_read", "tob_renders.ll");
 
 /// The reader that discards its fragment where the texel it read is redder than 0.4.
 const READ_DISCARDING: Fragment = ("sd_read_discarding", "snapshot_discard.ll");
+
+/// The reader that halves the red it read where it is above 0.4.
+const READ_SELECTING: Fragment = ("ss_read_selecting", "snapshot_select.ll");
+
+/// [`READ_SELECTING`]'s selection, whose arm also takes a derivative.
+const READ_SELECTING_DFDX: Fragment = ("ss_read_selecting_dfdx", "snapshot_select.ll");
+
+/// The red the readers that select leave at the block: `3 * FILL`, then half of that added.
+const SELECTED: u8 = 3 * FILL + 3 * FILL / 2;
 
 /// The features the snapshot path takes.
 const FEATURES: [VkFeature; 4] = [
@@ -733,6 +754,81 @@ fn a_reader_that_ends_itself_by_its_texel_takes_the_split_for_its_branch() {
                  splits {unreadable}, by clause {clauses:?}"
             );
             holds("a reader that ends itself", &bytes, 3 * FILL);
+            assert_eq!(
+                (moved.snapshotted, moved.splits),
+                (0, 2),
+                "readers through snapshots, splits"
+            );
+            assert_eq!(
+                unreadable, 2,
+                "splits for an own-pixel read no snapshot serves"
+            );
+            let named: Vec<_> = clauses.into_iter().filter(|&(_, n)| n != 0).collect();
+            assert_eq!(named, [("branch", 2)], "the clauses that left the slot out");
+        },
+    );
+}
+
+#[test]
+fn a_reader_that_selects_by_its_texel_takes_the_snapshot() {
+    on_default_policy(
+        |_| {},
+        |device| {
+            let queue = device.new_command_queue().unwrap();
+            let format = PixelFormat::RGBA8Unorm;
+            let before = device.work_counts();
+            let (bytes, moved, _) =
+                readers_over(device, &queue, format, true, None, false, READ_SELECTING);
+            let after = device.work_counts();
+            let unreadable = after.reading_draws_split_unreadable_own_pixel
+                - before.reading_draws_split_unreadable_own_pixel;
+            let takes = snapshots(device);
+            eprintln!(
+                "snapshot reads, a selecting reader, features {takes}: {moved:?}, \
+                 unreadable own-pixel splits {unreadable}, by clause {:?}",
+                unreadable_by(&before, &after)
+            );
+            holds("a selecting reader", &bytes, SELECTED);
+            assert_eq!(
+                unreadable, 0,
+                "splits for an own-pixel read no snapshot serves"
+            );
+            let (snapshotted, splits) = if takes { (2, 0) } else { (0, 2) };
+            assert_eq!(
+                (moved.snapshotted, moved.splits),
+                (snapshotted, splits),
+                "readers through snapshots, splits"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_reader_whose_arm_takes_a_derivative_takes_the_split_for_its_branch() {
+    on_default_policy(
+        |_| {},
+        |device| {
+            let queue = device.new_command_queue().unwrap();
+            let format = PixelFormat::RGBA8Unorm;
+            let before = device.work_counts();
+            let (bytes, moved, _) = readers_over(
+                device,
+                &queue,
+                format,
+                true,
+                None,
+                false,
+                READ_SELECTING_DFDX,
+            );
+            let after = device.work_counts();
+            let unreadable = after.reading_draws_split_unreadable_own_pixel
+                - before.reading_draws_split_unreadable_own_pixel;
+            let clauses = unreadable_by(&before, &after);
+            eprintln!(
+                "snapshot reads, a reader whose arm takes a derivative: {moved:?}, unreadable \
+                 own-pixel splits {unreadable}, by clause {clauses:?}"
+            );
+            holds("a reader whose arm takes a derivative", &bytes, SELECTED);
             assert_eq!(
                 (moved.snapshotted, moved.splits),
                 (0, 2),

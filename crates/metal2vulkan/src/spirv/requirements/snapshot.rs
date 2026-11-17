@@ -31,14 +31,23 @@
 //! - a derivative, a sample, gather or level-of-detail query of any image, a subgroup or quad
 //!   operation, an atomic, an image write or texel pointer, a ray query, a mesh output count, or a
 //!   store to any other storage class;
-//! - a conditional branch, a switch, or the entry's returned value, but for a branch that only
-//!   decides whether the invocation demotes itself (`if (c) discard_fragment();` at MSL 2.3 or
-//!   later on a profile with demote): one arm holds `OpDemoteToHelperInvocation` alone and goes on
-//!   to the other, where both paths meet with the same values, so a helper, which is one already,
-//!   takes either path to the same state ("is not considered a flow control instruction",
-//!   `OpDemoteToHelperInvocation`);
+//! - a conditional branch or a switch, but for a selection whose arms a helper may take in place
+//!   of a fragment's to no one's harm (below), or the entry's returned value;
 //! - the divisor of an integer division or remainder, the dividend of a signed one whose divisor
 //!   is not a constant without a `-1` lane, or a dynamic vector component index.
+//!
+//! A selection on such a value keeps the slot where its arms leave through its merge block alone
+//! (no break, continue, return, `OpKill`, `OpTerminateInvocation` or unreachable end) and hold no
+//! derivative, implicit-level sample or level-of-detail query, subgroup or quad operation, loop,
+//! or operand undefined at some value that is not a constant, nor do the functions they call
+//! ([`arms`]). A helper whose constant takes it down another arm than the texel would then
+//! changes nothing another invocation reads: no tangled instruction runs in its arms ("When performing derivative or quad
+//! group operations in a fragment shader, additional invocations may be spawned in order to ensure
+//! correct results", so only those read a helper's values), it reaches the merge as a fragment
+//! does, and `OpDemoteToHelperInvocation` in an arm leaves it what it is ("is not considered a
+//! flow control instruction"). What it leaves behind, the merge's phis and what its arms store in
+//! `Function`, `Private` and `Output` variables, takes the condition's reach, and its uses are
+//! judged as any other. A loop's exit is a branch out of it, which no such selection holds.
 //!
 //! A call is followed into its callee: "Argument N is the object to copy to parameter N of
 //! Function" (`OpFunctionCall`), so each argument's reach is its parameter's, a pointer argument's
@@ -62,13 +71,15 @@ use crate::budget::Meter;
 use crate::error::Error;
 use crate::pipeline::interface::SnapshotRefusal;
 use crate::pipeline::sym::ResourceKind;
-use crate::spirv::ids::{BlockId, Value};
+use crate::spirv::ids::Value;
 use crate::spirv::ir::{
-    BinOp, ConstKind, Constant, ExecModel, GlobalKind, Inst, Phi, StorageClass, Terminator, Type,
+    BinOp, ConstKind, Constant, ExecModel, GlobalKind, Inst, StorageClass, Terminator, Type,
     TypedModule, UnOp, ValueOrigin,
 };
 
 use super::own_pixel::{carried_on, holds_image, use_of, Use};
+
+use arms::Arms;
 
 /// The most passes over the module the reach is followed for; a module whose values take more to
 /// settle (a chain of loop-carried copies longer than this) has no slot.
@@ -76,6 +87,8 @@ const MOST_PASSES: u32 = 16;
 
 /// No slot's image.
 const NONE: u32 = u32::MAX;
+
+mod arms;
 
 #[cfg(test)]
 mod tests;
@@ -131,8 +144,10 @@ pub fn snapshot_textures(
         // Each value's slot image (`NONE` for none), its reach (the slots whose fetched values it
         // holds), the reach of the memory behind it where it is a variable's pointer, and the
         // variable a pointer points into; each block's function, and the reach each function
-        // returns.
-        let tables = n * (4 + 16 + 16 + 4) + 4 * m.blocks().len() + 16 * m.functions().len();
+        // returns; and the walks over the selections' arms.
+        let (blocks, functions) = (m.blocks().len(), m.functions().len());
+        let tables =
+            n * (4 + 16 + 16 + 4) + 4 * blocks + 16 * functions + Arms::bytes(blocks, functions);
         meter.charge(tables)?;
         let result = reach(m, &walked, n, &mut refused);
         meter.release(tables);
@@ -226,6 +241,7 @@ fn reach(m: &TypedModule, own: &[u32], n: usize, bad: &mut Refused) -> Result<()
         }
     }
     let mut returned = vec![0u128; m.functions().len()];
+    let mut arms = Arms::new(m);
     let wanted: u128 = own.iter().fold(0, |acc, &s| acc | (1u128 << s));
     let get = |table: &[u128], v: Value| table.get(v.index()).copied().unwrap_or(0);
     for _ in 0..MOST_PASSES {
@@ -283,8 +299,9 @@ fn reach(m: &TypedModule, own: &[u32], n: usize, bad: &mut Refused) -> Result<()
                             changed |= join(&mut mask, r, operands);
                         }
                     }
+                    // What a kept branch's arms store takes its condition's reach too.
                     Inst::Store { ptr, value, .. } => {
-                        let reach = get(&mask, *value) | get(&mask, *ptr);
+                        let reach = get(&mask, *value) | get(&mask, *ptr) | arms.control(at);
                         if kept_class(m, *ptr)? {
                             let root = root(&base, *ptr);
                             changed |= join(&mut memory, root, reach);
@@ -325,7 +342,7 @@ fn reach(m: &TypedModule, own: &[u32], n: usize, bad: &mut Refused) -> Result<()
                     } => {
                         bad.add(SnapshotRefusal::UndefinedOperand, get(&mask, *b));
                         let unsigned = matches!(op, BinOp::UDiv | BinOp::UMod);
-                        if !unsigned && !never_minus_one(m, *b)? {
+                        if !unsigned && !lanes_all(m, *b, |bits, ones| bits != ones)? {
                             bad.add(SnapshotRefusal::UndefinedOperand, get(&mask, *a));
                         }
                         if let Some(r) = node.result {
@@ -366,11 +383,23 @@ fn reach(m: &TypedModule, own: &[u32], n: usize, bad: &mut Refused) -> Result<()
                 }
             }
             match &b.term {
-                // A branch whose only effect is whether the invocation demotes itself reaches
-                // nothing a helper's value can change.
-                Terminator::CondBranch { t, f, .. } if demote_guard(m, at, *t, *f) => {}
+                // A selection whose arms a helper may take in place of a fragment's hands its
+                // condition's reach to its merge's phis and its arms' stores alone.
                 Terminator::CondBranch { cond: v, .. } | Terminator::Switch { sel: v, .. } => {
-                    bad.add(SnapshotRefusal::Branch, get(&mask, *v))
+                    let reach = get(&mask, *v);
+                    if reach != 0 {
+                        match arms.keeps(m, at, reach)? {
+                            Some((merge, grew)) => {
+                                changed |= grew;
+                                for phi in
+                                    m.blocks().get(merge.index()).map_or(&[][..], |b| &b.phis)
+                                {
+                                    changed |= join(&mut mask, phi.result, reach);
+                                }
+                            }
+                            None => bad.add(SnapshotRefusal::Branch, reach),
+                        }
+                    }
                 }
                 // A callee's returned value reaches its calls' results; the entry's, the stage.
                 Terminator::ReturnValue(v) => {
@@ -521,47 +550,6 @@ fn copies_alone(m: &TypedModule, slots: &[u32], n: usize) -> Result<bool, Error>
     Ok(!elsewhere && fetches.iter().all(|&f| f == 1))
 }
 
-/// Whether a conditional branch of block `from` to `t` or `f` only decides whether the invocation
-/// demotes itself (`if (c) discard_fragment();` at MSL 2.3 or later on a profile with demote,
-/// `lower::fragment::discard`): each target is the block both paths meet at, or a block with no
-/// phi that branches on to it holding nothing or `OpDemoteToHelperInvocation` alone, at least one
-/// of them the demote, and every phi of the meeting block takes the same value from both paths.
-/// Both paths then meet with the same values, and a helper invocation, which is one already, is
-/// no different for the demote: "Demote this fragment shader invocation to a helper invocation",
-/// which "is not considered a flow control instruction" (`OpDemoteToHelperInvocation`). Neither
-/// arm holds a derivative, quad or subgroup operation, loop or undefined behavior a helper's path
-/// could reach.
-fn demote_guard(m: &TypedModule, from: usize, t: BlockId, f: BlockId) -> bool {
-    let blocks = m.blocks();
-    // Where a path through `arm` meets the other: the block it reaches, the block it reaches it
-    // from, and whether it demotes on the way.
-    let path = |arm: BlockId| -> Option<(usize, usize, bool)> {
-        let block = blocks.get(arm.index())?;
-        let demotes_alone =
-            (block.insts.iter()).all(|n| matches!(n.inst, Inst::DemoteToHelperInvocation));
-        let forwards = block.phis.is_empty() && block.merge.is_none() && demotes_alone;
-        match block.term {
-            Terminator::Branch(to) if forwards => {
-                Some((to.index(), arm.index(), !block.insts.is_empty()))
-            }
-            _ => Some((arm.index(), from, false)),
-        }
-    };
-    let (Some((to, a, demotes_a)), Some((other, b, demotes_b))) = (path(t), path(f)) else {
-        return false;
-    };
-    let edge = |phi: &Phi, p: usize| {
-        (phi.incoming.iter())
-            .find(|(_, at)| at.index() == p)
-            .map(|(v, _)| *v)
-    };
-    to == other
-        && a != b
-        && (demotes_a || demotes_b)
-        && (blocks.get(to))
-            .is_some_and(|meet| (meet.phis.iter()).all(|phi| edge(phi, a) == edge(phi, b)))
-}
-
 /// Add `reach` to `table[v]`; whether it grew.
 fn join(table: &mut [u128], v: Value, reach: u128) -> bool {
     match table.get_mut(v.index()) {
@@ -594,8 +582,9 @@ fn root(base: &[u32], ptr: Value) -> Value {
     Value::new(at)
 }
 
-/// Whether `v` is a plain integer constant none of whose lanes is `-1` (every bit of its width set).
-fn never_minus_one(m: &TypedModule, v: Value) -> Result<bool, Error> {
+/// Whether `v` is a plain integer constant each of whose lanes' bits, within the lane's width,
+/// pass `keep(bits, ones)`, `ones` every bit of the width set.
+fn lanes_all(m: &TypedModule, v: Value, keep: impl Fn(u64, u64) -> bool) -> Result<bool, Error> {
     let ValueOrigin::Const(c) = m.value(v)?.origin else {
         return Ok(false);
     };
@@ -610,13 +599,13 @@ fn never_minus_one(m: &TypedModule, v: Value) -> Result<bool, Error> {
         64.. => u64::MAX,
         w => (1u64 << w) - 1,
     };
-    let other = |bits: u64| bits & ones != ones;
+    let lane = |bits: u64| keep(bits & ones, ones);
     Ok(match &m.consts().get(c)?.kind {
-        ConstKind::Plain(Constant::Scalar { bits, .. }) => other(bits.0),
+        ConstKind::Plain(Constant::Scalar { bits, .. }) => lane(bits.0),
         ConstKind::Plain(Constant::Composite { parts, .. }) => parts
             .iter()
-            .all(|part| m.consts().scalar_bits(*part).is_some_and(|b| other(b.0))),
-        ConstKind::Plain(Constant::Null { .. }) => true,
+            .all(|part| m.consts().scalar_bits(*part).is_some_and(|b| lane(b.0))),
+        ConstKind::Plain(Constant::Null { .. }) => lane(0),
         _ => false,
     })
 }

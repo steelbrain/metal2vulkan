@@ -467,8 +467,10 @@ pub struct SamplerArray {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SnapshotRefusal {
-    /// It decides a conditional branch or a switch, but for a branch that only decides whether
-    /// the invocation demotes itself.
+    /// It decides a conditional branch or a switch, but for a selection whose arms leave through
+    /// its merge alone and hold no derivative, implicit-level sample or level-of-detail query,
+    /// subgroup or quad operation, loop, or operand undefined at a value that is not a constant,
+    /// nor call a function that does (a helper may take either of those arms).
     Branch,
     /// It is an operand of a derivative.
     Derivative,
