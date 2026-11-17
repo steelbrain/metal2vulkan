@@ -9,8 +9,8 @@
 //! the bind offset and past the kernels' regions included, so an access placed anywhere but its
 //! own address shows as words that moved. The inputs and the bind offsets are
 //! `metal2vulkan_devtools::vector_word_phases`'s, whose `answer` is every access at its own
-//! address; [`tests`] holds Metal's recorded answer equal to it, and the new runtime's device test
-//! holds its own equal to it.
+//! address; this module's tests hold Metal's recorded answer equal to it, and the new runtime's
+//! device test holds its own equal to it.
 //!
 //! Every input word is a normal `float`, so the kernels' negations and moves are exact on every
 //! device, and every byte compares exactly. Nothing here can fault a GPU: one pass of two

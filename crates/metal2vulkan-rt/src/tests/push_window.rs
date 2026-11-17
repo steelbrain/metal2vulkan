@@ -92,7 +92,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                 FunctionDescriptor::new(function),
             ));
             let len = u64::from(THREADS * 4);
-            each_device("push_window", |name, _, device| {
+            each_device(&format!("push_window_{buffers}"), |name, _, device| {
                 let what = format!("{name}, {buffers} buffers");
                 let state = device
                     .new_compute_pipeline_state(&descriptor)

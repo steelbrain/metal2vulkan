@@ -989,7 +989,7 @@ mod on_device {
         else {
             return;
         };
-        each_device("compute_translated", |name, _, device| {
+        each_device("compute_vector_words", |name, _, device| {
             let before = inputs();
             let (phased, aligned) = (
                 state(name, &device, &phased),
