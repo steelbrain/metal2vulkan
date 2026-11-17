@@ -6349,10 +6349,13 @@ each item named states the rule in full.
   declares the argument unaliased (the `air-buffer-no-alias` attribute, which the AIR of Metal's
   current compiler carries on every buffer argument) and no store, atomic, volatile or coherent
   access of the kernel reaches it, through the argument or through a pointer its address may come
-  back as: its views are decorated `NonWritable`. A dispatch that binds memory to such an argument
-  and to an argument the kernel writes may read those bytes as they were before its own writes,
-  where the device reads read-only memory through another path (RADV reads a uniform address of
-  it with a scalar load). The attribute states that no other argument reaches that memory.
+  back as: its views are decorated `NonWritable`, and under the identity domains (the new runtime)
+  its device-address loads go through `NonWritable` places. Under the identity domains a `constant`
+  buffer argument is read-only memory too, whether or not the AIR declares it unaliased: Metal's
+  `constant` address space is read-only. A dispatch that binds memory to such an argument and to
+  an argument the kernel writes may read those bytes as they were before its own writes, where the
+  device reads read-only memory through another path (RADV reads a uniform address of it with a
+  scalar load). The attribute states that no other argument reaches that memory.
 - **An imageblock's length rounds its cell as an M4 does**
   (`ComputePipelineState::imageblock_memory_length_for_dimensions`), never less than what a
   dispatch counts against the device's threadgroup memory.
