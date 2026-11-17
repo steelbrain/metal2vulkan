@@ -1401,8 +1401,14 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         };
         if crate::lower::access::identity(cx.profile) {
             let refused = || Unsupported::not_implemented(Feature::IdentityDomains);
-            if !matches!(key.sampler, SamplerRef::Slot(_)) || key.unnormalized {
-                return Err(refused().into());
+            if key.unnormalized {
+                return Err(invariant(
+                    "an identity sampling through the device's unnormalized sampler",
+                ));
+            }
+            if let SamplerRef::Constexpr(_) = key.sampler {
+                cx.push
+                    .insert(crate::pipeline::sym::PushField::ConstexprSampler(sampler));
             }
             let class = crate::lower::texture::identity_class(&image).ok_or_else(refused)?;
             identity.insert(

@@ -567,6 +567,24 @@ impl CombinedSampler {
         crate::metal::sampler::SamplerUse::new(self.compare, self.integer)
             .with_unnormalized(self.unnormalized)
     }
+
+    /// The device's sampler of a constexpr sampler in this use: the immutable sampler link bakes
+    /// into the binding's layout, and under the identity domains the sampler the consumer makes
+    /// for `PushField::ConstexprSampler`. Metal compiles a constexpr sampler into the function;
+    /// this is the `MTLSamplerDescriptor` of the same state through `metal::sampler::vk_sampler`,
+    /// with the sampler's own LOD bias as its `mipLodBias`. `None` for a runtime sampler's slot.
+    /// It refuses only what translation for the same profile refused first.
+    pub fn constexpr_sampler(
+        &self,
+        profile: &crate::device::DeviceProfile,
+    ) -> Result<Option<vk::SamplerDesc>, crate::error::Error> {
+        match self.sampler {
+            SamplerRef::Constexpr(words) => {
+                crate::lower::sampler::constexpr_desc(words, self.sampler_use(), profile).map(Some)
+            }
+            SamplerRef::Slot(_) => Ok(None),
+        }
+    }
 }
 
 /// The low bits of a separate texture symbol's index that hold its texture slot; the use's rank is
@@ -1070,8 +1088,8 @@ pub enum PushField {
     /// modulo 2^32.
     SlotBindOffset(SlotRef),
     /// Guest base address of a static-root slot. Under the identity domains, a `u64`: a buffer
-    /// slot's device address (its `gpuAddress` plus the bind offset), and a texture slot's
-    /// `gpuResourceID` (`docs/RESOURCE-ID.md`), 0 for nil.
+    /// slot's device address (its `gpuAddress` plus the bind offset), and a texture or sampler
+    /// slot's `gpuResourceID` (`docs/RESOURCE-ID.md`), 0 for nil.
     SlotGuestBase(SlotRef),
     /// Stride of a pulled vertex buffer layout.
     VertexBufferStride(u32),
@@ -1224,6 +1242,15 @@ pub enum PushField {
     /// width and height, its rows in texels and its first texel in the view
     /// (`bind::TexelRows::words`), from the bound texture's facts (`TextureFacts::texel_rows`).
     TexelRows(SlotRef),
+    /// Under the identity domains, the sampler a sample takes through a constexpr sampler
+    /// (`SamplerRef::Constexpr`), used as the field's [`CombinedSampler`] states: one `u32`, the
+    /// index (1 to 3,999, `docs/RESOURCE-ID.md`) of the element of the set-1 sampler array of the
+    /// use (plain, compare, or integer texture) that holds the device's sampler
+    /// [`CombinedSampler::constexpr_sampler`] describes, as a runtime sampler's resource ID names
+    /// its element. Metal compiles a constexpr sampler into the function; the consumer makes it
+    /// a device sampler of its own. The use's coordinates are normalized: the function scales a
+    /// pixel sampler's coordinates itself.
+    ConstexprSampler(CombinedSampler),
     /// The value a draw or dispatch binds for specialization key `key`, carried as data rather
     /// than specialized: one `u32` holding exactly the value the binder computes for the key's
     /// specialization constant from the bound textures and samplers (a boolean key as 1 or 0; a

@@ -2022,8 +2022,10 @@ fn select_one(
         None => false,
     };
     // A sample the exact fetch takes (its arm comes first) is no unnormalized one; its sampler's
-    // gather is.
+    // gather is. Under the identity domains the consumer makes every sampler normalized and the
+    // shader scales a pixel sampler's coordinates.
     let native = bicubic.is_none()
+        && !crate::lower::access::identity(cx.profile)
         && matches!(image, ImageRef::Slot(_))
         && !crate::lower::texture::status_observed(cx, at)
         && match stat {

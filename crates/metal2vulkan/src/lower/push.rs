@@ -123,6 +123,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::StorageKeptChannels => FieldShape::U32,
         // A specialization key's value carried as data: every such key is a `u32` or a boolean.
         PushField::Specialized(_) => FieldShape::U32,
+        // A constexpr sampler's index in its use's sampler array.
+        PushField::ConstexprSampler(_) => FieldShape::U32,
         // An in-place YCbCr texture's size, planes and conversion.
         PushField::YCbCrInPlace(_) => FieldShape::UVec4Array(2),
         // A texture's size, rows and first texel in its texel buffer view.

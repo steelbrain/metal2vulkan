@@ -918,12 +918,7 @@ fn immutable_sampler(
         }
         _ => return Ok(None),
     };
-    match c.sampler {
-        crate::pipeline::sym::SamplerRef::Constexpr(words) => Ok(Some(
-            crate::lower::sampler::constexpr_desc(words, c.sampler_use(), p)?,
-        )),
-        _ => Ok(None),
-    }
+    c.constexpr_sampler(p)
 }
 
 /// Set each binding's `variables` (`DescriptorBinding::variables`): the most variables one of

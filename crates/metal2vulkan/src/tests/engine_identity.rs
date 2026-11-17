@@ -34,12 +34,16 @@
 //!   `sample_down`) takes the texture and the sampler from set 1's arrays at the indices their
 //!   pushed resource IDs hold, the sampler from the plain array, with no descriptor, no
 //!   specialization constant and no fact of the bound sampler; it passes L3.
+//! - A kernel sampling through a constexpr sampler (the harness's `sample_up`, and the same
+//!   kernel through a pixel sampler) takes the sampler from the plain array at the index the
+//!   consumer pushes for it (`PushField::ConstexprSampler`), whose device sampler is normalized;
+//!   it passes L3.
 //! - A kernel writing integer texels to a storage slot without a format (`ic`, generated)
 //!   saturates each lane to the channel widths the consumer pushes
 //!   (`PushField::TextureIntegerChannels`), with no fact, on the CPU interpreter.
-//! - A kernel that samples through a constexpr sampler (`engine/a2_dynamic_texel_offset`) is still
-//!   refused as
-//!   `Unsupported{IdentityDomains}`, not implemented, where the default domains compile it.
+//! - A kernel that samples through a bicubic constexpr sampler (`engine/a2_bicubic_weights`) is
+//!   still refused as `Unsupported{IdentityDomains}`, not implemented, where the default domains
+//!   compile it.
 //! - A kernel's emulated-simdgroup variant (`engine/gsm2_simd_products`'s `simd_float_products`)
 //!   opens every barrier of its exchanges under a branch on `1 < N`, which the default domains do
 //!   not; on the CPU interpreter a threadgroup of one thread passes no barrier, and threadgroups of
@@ -339,6 +343,141 @@ fn a_runtime_sampler_is_the_set_1_element_its_resource_id_names() {
     }
 }
 
+/// The words of `sample_up`'s constexpr sampler (`fixtures/public/harness/workloads.ll`).
+const SAMPLE_UP_WORDS: [u64; 2] = [34_901_797_601_020_489, 0];
+
+/// A kernel sampling a texture slot through a constexpr sampler (`sample_up`, a 2D `float` sample
+/// of normalized coordinates, and the same kernel through a pixel sampler that the default domains
+/// hand the device's unnormalized sampler) takes the texture from set 1's sampled-image array at
+/// the index its pushed resource ID holds and the sampler from the plain sampler array at the
+/// index the consumer pushes for it (`PushField::ConstexprSampler`, a `u32`), with no descriptor
+/// and no specialization constant. The field's sampler is the constexpr one in normalized
+/// coordinates, whose device sampler (`CombinedSampler::constexpr_sampler`) is normalized: the
+/// shader scales the linear pixel sampler's coordinate and records
+/// `PrecisionNote::PixelSamplerScaling`, which the default domains do not. It passes L3 on each
+/// profile.
+#[test]
+fn a_constexpr_sampler_is_the_set_1_element_its_pushed_index_names() {
+    use crate::air::abi::{AddressMode, Coordinates, Filter, MipFilter, SamplerState};
+    use crate::pipeline::artifact::PrecisionNote;
+    use crate::pipeline::sym::{CombinedSampler, SamplerRef};
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/fixtures/public/harness/workloads.ll");
+    let text = std::fs::read_to_string(path).expect("workloads.ll");
+    let state = |w: [u64; 2]| format!("[2 x i64] [i64 {}, i64 {}]", w[0], w[1]);
+    assert_eq!(text.matches(&state(SAMPLE_UP_WORDS)).count(), 1);
+    let s = crate::lower::sampler::state_of(SAMPLE_UP_WORDS).expect("state");
+    let pixel = crate::lower::sampler::state_words(&SamplerState {
+        coordinates: Coordinates::Pixel,
+        min_filter: Filter::Linear,
+        mag_filter: Filter::Linear,
+        mip_filter: MipFilter::None,
+        max_anisotropy: 1,
+        address_s: AddressMode::ClampToEdge,
+        address_t: AddressMode::ClampToEdge,
+        ..s
+    });
+    let pixel_text = text.replace(&state(SAMPLE_UP_WORDS), &state(pixel));
+    let (Some(normalized), Some(pixel_bc)) = (
+        assemble_text("sample_up", &text),
+        assemble_text("sample_up_pixel", &pixel_text),
+    ) else {
+        return;
+    };
+    let mut profiles: Vec<(String, DeviceProfile)> = PROFILES
+        .iter()
+        .map(|stem| {
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            (stem.to_string(), p)
+        })
+        .collect();
+    profiles.push((
+        "moltenvk-m3 without robustImageAccess2".to_string(),
+        identity_without("moltenvk-m3", &[VkFeature::RobustImageAccess2]),
+    ));
+    for (bc, words) in [(&normalized, SAMPLE_UP_WORDS), (&pixel_bc, pixel)] {
+        for stem in PROFILES {
+            // The default domains read the linear pixel sampler's coordinate through the
+            // device's unnormalized sampler, with no note, so the identity form below scales it
+            // in its place.
+            let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+            let (a, plan, _) = compile_kept(bc, "sample_up", &default)
+                .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
+            let unnormalized: Vec<bool> = (plan.families.sampler.decls.values())
+                .map(|d| d.sampler.unnormalized)
+                .collect();
+            assert_eq!(unnormalized, [words == pixel], "{stem}: default domains");
+            assert!(
+                !a.precision.contains(&PrecisionNote::PixelSamplerScaling),
+                "{stem}: default domains"
+            );
+        }
+        for (stem, p) in &profiles {
+            let (a, plan, _) =
+                compile_kept(bc, "sample_up", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+            assert!(
+                (a.interface.spec.iter()).all(|c| matches!(c.key, SpecKey::LocalSize(_))),
+                "{stem}: {:?}",
+                a.interface.spec
+            );
+            // The sampler's own address modes: no texture's map, so no variant fact.
+            assert!(
+                !(plan.facts.iter()).any(|f| matches!(f, RuntimeFact::ConstexprSampled { .. })),
+                "{stem}: {:?}",
+                plan.facts
+            );
+            let c = CombinedSampler::new(SamplerRef::Constexpr(words), false, false);
+            let mut fields: Vec<_> = (plan.push.fields.iter())
+                .map(|f| f.field)
+                .filter(|f| *f != PushField::DispatchRegion)
+                .collect();
+            fields.sort();
+            assert_eq!(
+                fields,
+                [
+                    PushField::SlotGuestBase(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Texture,
+                        index: 0
+                    }),
+                    PushField::SlotGuestBase(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Texture,
+                        index: 1
+                    }),
+                    PushField::ConstexprSampler(c),
+                ],
+                "{stem}"
+            );
+            let desc = (c.constexpr_sampler(p))
+                .unwrap_or_else(|e| panic!("{stem}: {e}"))
+                .expect("a constexpr sampler");
+            assert!(!desc.unnormalized, "{stem}");
+            // The scaled coordinate's static note.
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::PixelSamplerScaling),
+                words == pixel,
+                "{stem}"
+            );
+            let linked =
+                link(&[&a], &LinkInputs::standalone(), p).unwrap_or_else(|e| panic!("{e}"));
+            assert!(
+                (linked.layout.sets.iter())
+                    .flat_map(|s| &s.bindings)
+                    .all(|b| b.immutable_sampler.is_none() && b.immutable_samplers.is_empty()),
+                "{stem}"
+            );
+            let mut used: Vec<u32> = (linked.table.bindings.values())
+                .filter(|(set, _)| *set == 1)
+                .map(|(_, binding)| *binding)
+                .collect();
+            used.sort();
+            assert_eq!(used, [0, 1, 2], "{stem}");
+        }
+    }
+}
+
 /// A kernel writing `uint4(300, 70000, 5, 2^31)` to its `texture2d<uint, write>` slot 0 at its
 /// position, over a `2 × 1` grid.
 fn channels_kernel() -> String {
@@ -432,19 +571,19 @@ fn identity_arrays() -> Vec<(u32, vk::DescriptorType, u32)> {
     ]
 }
 
-/// A kernel that samples a texture through a constexpr sampler is not lowered under the identity
-/// domains yet.
+/// A kernel that samples a texture through a bicubic constexpr sampler is not lowered under the
+/// identity domains yet.
 #[test]
-fn a_sampling_kernel_is_refused_under_the_identity_domains() {
-    let Some(bc) = assemble("a2_dynamic_texel_offset") else {
+fn a_bicubic_kernel_is_refused_under_the_identity_domains() {
+    let Some(bc) = assemble("a2_bicubic_weights") else {
         return;
     };
     for stem in PROFILES {
         let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
-        compile(&bc, "a2_dynamic_texel_offset", &default)
+        compile(&bc, "a2_bicubic_weights", &default)
             .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        match compile(&bc, "a2_dynamic_texel_offset", &p) {
+        match compile(&bc, "a2_bicubic_weights", &p) {
             Err(Error::Unsupported(u)) => {
                 assert_eq!(
                     (u.feature, u.needs),

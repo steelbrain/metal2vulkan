@@ -20,6 +20,7 @@ use crate::air::ir::ValueId;
 use crate::lower::texture::TexelClass;
 use crate::memory::handles::{entry_field, EntryField};
 use crate::metal::sampler::SamplerWord;
+use crate::pipeline::sym::{CombinedSampler, SamplerRef};
 
 use super::{
     BiasReach, Binding, CombinedImage, CubeFootprint, Hoist, Lod, MinLevel, Offset, Pixel,
@@ -1324,9 +1325,10 @@ fn sampler_id(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, n: u32) -> BRes
 }
 
 /// Under the identity domains, the sampled image of combined binding `key`
-/// ([`super::IdentitySampling`]): the texture slot's element of its class's set-1 array and the
-/// sampler slot's element of the set-1 sampler array of the use, each at the index its pushed
-/// resource ID holds, uniform over the call, joined by `OpSampledImage`.
+/// ([`super::IdentitySampling`]): the texture slot's element of its class's set-1 array at the
+/// index its pushed resource ID holds, and the element of the set-1 sampler array of the use at
+/// the index a runtime sampler slot's pushed resource ID holds, or a constexpr sampler's pushed
+/// index (`PushField::ConstexprSampler`), uniform over the call, joined by `OpSampledImage`.
 fn identity_sampled_image(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1334,9 +1336,6 @@ fn identity_sampled_image(
 ) -> BResult<(SValue, CombinedImage)> {
     let Some(i) = cx.plan.families.sampler.identity.get(&key).copied() else {
         return Err(cx.fail(format!("combined binding {key:?} has no identity sampling")));
-    };
-    let crate::pipeline::sym::SamplerRef::Slot(n) = key.sampler else {
-        return Err(cx.fail("an identity sampling of a constexpr sampler"));
     };
     let slot = cx
         .plan
@@ -1355,8 +1354,16 @@ fn identity_sampled_image(
     let base = fb.module().global_value(images)?;
     let p = fb.access_chain(base, &[element])?;
     let img = fb.load(p, MemAccess::default())?;
-    let id = sampler_id(cx, fb, n)?;
-    let element = fb.composite_extract(id, &[0])?;
+    let element = match key.sampler {
+        SamplerRef::Slot(n) => {
+            let id = sampler_id(cx, fb, n)?;
+            fb.composite_extract(id, &[0])?
+        }
+        SamplerRef::Constexpr(_) => {
+            let c = CombinedSampler::new(key.sampler, key.compare, i.use_.integer_texture);
+            cx.push_field(fb, crate::pipeline::sym::PushField::ConstexprSampler(c))?
+        }
+    };
     let base = fb.module().global_value(samplers)?;
     let p = fb.access_chain(base, &[element])?;
     let sampler = fb.load(p, MemAccess::default())?;
@@ -1984,13 +1991,13 @@ pub(super) fn word_pixel(s: &Sampling) -> Option<Pixel> {
         (
             _,
             Source::Combined(super::BindingKey {
-                sampler: super::SamplerRef::Slot(n),
+                sampler: SamplerRef::Slot(n),
                 ..
             })
             | Source::Heap {
                 key:
                     super::HeapKey {
-                        sampler: super::SamplerRef::Slot(n),
+                        sampler: SamplerRef::Slot(n),
                         ..
                     },
                 ..

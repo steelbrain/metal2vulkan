@@ -1851,11 +1851,16 @@ pub(crate) fn device_texels(cx: &SelectCx<'_>) -> bool {
 /// of the texture the slot's variant binds there (`LoweringInputs::address_maps`), `None` for
 /// the identity. The slot records `RuntimeFact::ConstexprSampled` with the sampler's modes,
 /// which puts it in the variant where the binder binds a texture whose map changes one of them.
+/// Under the identity domains no binder picks a variant: `None`, with no fact, so the sampler
+/// samples with its own modes.
 pub(crate) fn constexpr_address_map(
     cx: &mut SelectCx<'_>,
     index: u32,
     words: [u64; 2],
 ) -> Result<Option<crate::metal::sampler::AddressModeMap>, Error> {
+    if crate::lower::access::identity(cx.profile) {
+        return Ok(None);
+    }
     let slot = slot_of(cx, index)?.slot;
     let modes = crate::lower::sampler::address_modes(words)
         .ok_or_else(|| invariant("a constexpr sampler symbol with undecodable words"))?;

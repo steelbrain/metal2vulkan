@@ -10498,6 +10498,7 @@ method	metal2vulkan::pipeline::ColorGroup::groups	pub fn groups(&self) -> u32
 method	metal2vulkan::pipeline::ColorGroup::location	pub fn location(&self, color: u32) -> u32
 method	metal2vulkan::pipeline::ColorGroup::of	pub fn of(present: Vec<u32>, width: u32, group: u32) -> Option<ColorGroup>
 method	metal2vulkan::pipeline::ColorGroup::width_on	pub fn width_on(profile: &crate::device::DeviceProfile) -> u32
+method	metal2vulkan::pipeline::CombinedSampler::constexpr_sampler	pub fn constexpr_sampler(&self, profile: &crate::device::DeviceProfile) -> Result<Option<vk::SamplerDesc>, crate::error::Error>
 method	metal2vulkan::pipeline::CombinedSampler::from_heap_index	pub fn from_heap_index(sampler: SamplerRef, index: u32) -> CombinedSampler
 method	metal2vulkan::pipeline::CombinedSampler::heap_index	pub fn heap_index(&self) -> u32
 method	metal2vulkan::pipeline::CombinedSampler::new	pub fn new(sampler: SamplerRef, compare: bool, integer: bool) -> CombinedSampler
@@ -15711,6 +15712,7 @@ variant	metal2vulkan::pipeline::PushField::BaseVertexInstance	BaseVertexInstance
 variant	metal2vulkan::pipeline::PushField::CaptureIndexAddress	CaptureIndexAddress
 variant	metal2vulkan::pipeline::PushField::CaptureLayout	CaptureLayout
 variant	metal2vulkan::pipeline::PushField::CommandRecordsAddress	CommandRecordsAddress
+variant	metal2vulkan::pipeline::PushField::ConstexprSampler	ConstexprSampler(CombinedSampler)
 variant	metal2vulkan::pipeline::PushField::ControlPointIndexOffset	ControlPointIndexOffset
 variant	metal2vulkan::pipeline::PushField::DepthClampRange	DepthClampRange
 variant	metal2vulkan::pipeline::PushField::DispatchRegion	DispatchRegion

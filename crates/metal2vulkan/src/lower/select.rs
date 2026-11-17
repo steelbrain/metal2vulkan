@@ -1911,8 +1911,9 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 }
 
 /// Under the identity domains, the plans lowered so far: a kernel that reaches memory only
-/// through its buffer slots' device addresses and its textures' and runtime samplers' resource
-/// IDs, with no descriptor and no state of a bound texture or sampler but its resource ID's
+/// through its buffer slots' device addresses, its textures' and runtime samplers' resource IDs
+/// and its constexpr samplers' pushed indices, with no descriptor and no state of a bound texture
+/// or sampler but its resource ID's
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). Its fields past the push window are a
 /// parameter block, whose address the window holds.
 fn identity_admits(plan: &Plan) -> Result<(), Error> {
@@ -1923,6 +1924,7 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
             PushField::SlotGuestBase(_)
                 | PushField::DispatchRegion
                 | PushField::TextureIntegerChannels(_)
+                | PushField::ConstexprSampler(_)
         ),
     });
     let addressed = plan
@@ -1956,9 +1958,10 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
         && t.heap_raw.is_empty()
         && !t.heap_half
         && t.slots.values().all(|s| s.identity_lowered());
-    // Samples only of a texture slot through a runtime sampler slot (`sampler::IdentitySampling`),
-    // every one's word read from the sampler's resource ID: no constexpr sampler, argument
-    // buffer's sampler, bicubic filter or specialization of a slot's state.
+    // Samples only of a texture slot through a runtime sampler slot or a constexpr sampler
+    // (`sampler::IdentitySampling`), a runtime sampler's word read from its resource ID: no
+    // argument buffer's sampler, array of samplers, bicubic filter or specialization of a slot's
+    // state.
     let sampled = &plan.families.sampler;
     let sampling = sampled
         .combined

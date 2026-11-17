@@ -51,8 +51,14 @@ filter nearest. The consumer makes each from the descriptor (its reduction mode 
 included); it makes none of a descriptor whose min or mag filter is cubic. A shader takes a
 runtime sampler slot's ID from the slot's push field, samples through the element its low word
 indexes, and reads the word's fields where a sample depends on them (pixel coordinates, a nearest
-pixel sampler). A constexpr sampler and an argument buffer's sampler are not lowered under these
-domains yet.
+pixel sampler).
+
+A constexpr sampler has no ID: the consumer places a device sampler of it (the function's
+`PushField::ConstexprSampler` names it and its use, and `CombinedSampler::constexpr_sampler`
+describes it) at an index of the use's array and pushes that index as a `u32`. Its coordinates
+are normalized; the shader scales a pixel sampler's coordinate itself. It samples with its own
+address modes. An argument buffer's
+sampler is not lowered under these domains yet.
 
 ## The texture word
 

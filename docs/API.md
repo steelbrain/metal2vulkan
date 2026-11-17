@@ -130,14 +130,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   (the consumer refuses a sparse texture). A texture slot sampled through a runtime sampler slot
   samples set 1's element of the sampler arrays at the index of the sampler's pushed
   `gpuResourceID`, joined to the texture's element by `OpSampledImage`, and reads the sampler's
-  word from that ID. An integer write to a storage slot without a format saturates to the channel
+  word from that ID. One sampled through a constexpr sampler samples the element at the index the
+  consumer pushes for it (`PushField::ConstexprSampler`), where the consumer places the device
+  sampler `CombinedSampler::constexpr_sampler` describes, normalized: the shader scales a pixel
+  sampler's coordinate. An integer write to a storage slot without a format saturates to the channel
   widths the consumer pushes (`PushField::TextureIntegerChannels`). Every precision note is
   static there: no constant or binder decides one. So far they lower a kernel that reaches memory
   through its buffer slots and reads, writes, sizes or tests for nil its texture slots and its
-  argument buffers' textures, and samples its texture slots through its runtime sampler slots.
-  Any other function is refused as `Unsupported{IdentityDomains}`: one that samples through a
-  constexpr or an argument buffer's sampler or samples an argument buffer's texture, emulates a
-  sampler's anisotropy or bicubic filter, uses a texture buffer, a slot's levels or swizzle, a
+  argument buffers' textures, and samples its texture slots through its runtime sampler slots
+  and its constexpr samplers. Any other function is refused as `Unsupported{IdentityDomains}`:
+  one that samples through an argument buffer's sampler or an array of samplers or samples an
+  argument buffer's texture, emulates a sampler's anisotropy or bicubic filter, uses a texture buffer, a slot's levels or swizzle, a
   two-plane, extended-range or sRGB-twin form, reads an argument buffer's texture through another
   numeric type or as raw texels, or uses any other state of a texture or sampler beyond its ID.
 - **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
@@ -4604,7 +4607,9 @@ bound.
   where it is not a nearest one of one isotropic level). Measured: the device's normalized
   sampler's answer within one `f32` ulp of the quotient on MoltenVK and at the quotient on
   lavapipe; a linear downscale by 8 within 1/255 of Metal's on MoltenVK and 2/255 on lavapipe.
-  Nothing is recorded where Metal's texel or footprint follows from the coordinate itself: a
+  Under the identity domains it is also recorded for a linear sample and a gather through any
+  constexpr pixel sampler, whose device sampler the consumer makes normalized. Nothing is
+  recorded where Metal's texel or footprint follows from the coordinate itself: elsewhere a
   constexpr pixel sampler's sample or gather of a 1D or 2D texture that is no array hands the
   coordinate, moved by its offset, to the device's unnormalized sampler; a nearest sample elsewhere
   hands the device its texel's centre, where the device reads exactly Metal's texel; and a nearest
