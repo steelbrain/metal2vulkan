@@ -197,6 +197,7 @@ pub mod topology_classes;
 pub mod two_plane_copies;
 pub mod two_plane_heap_blits;
 pub mod two_plane_samples;
+pub mod vector_word_phases;
 pub mod vertex_attribute_strides;
 pub mod vertex_fetch_reach;
 pub mod vertex_formats;
@@ -601,6 +602,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(frame_chains::boxed());
     cases.extend(shared_creator_formats::all());
     cases.extend(read_write_tiers::all());
+    for case in vector_word_phases::all() {
+        cases.push(Box::new(case));
+    }
     cases
 }
 
