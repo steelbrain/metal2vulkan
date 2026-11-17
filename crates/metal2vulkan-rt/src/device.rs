@@ -282,13 +282,13 @@ impl Device {
             properties.properties.device_type,
             vk::PhysicalDeviceType::INTEGRATED_GPU | vk::PhysicalDeviceType::CPU
         );
-        let max_block_len = vulkan11
-            .max_memory_allocation_size
-            .min(vulkan13.max_buffer_size);
         let ticks = Ticks::new(
             properties.properties.limits.timestamp_period,
             families[family as usize].timestamp_valid_bits,
         );
+        let max_block_len = vulkan11
+            .max_memory_allocation_size
+            .min(vulkan13.max_buffer_size);
 
         let core = Arc::new(Core {
             instance,
