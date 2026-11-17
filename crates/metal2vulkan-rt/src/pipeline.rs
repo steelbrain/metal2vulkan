@@ -499,15 +499,15 @@ fn interface(
             | RuntimeFact::IndirectGroupCount
             | RuntimeFact::PartialThreadgroups
             | RuntimeFact::DeviceAddresses { .. } => {}
-            // What a variant could relieve, which the module runs without: a predicated walk
-            // that unit axes would make less divergent, and lockstep barriers a one-row region
-            // could skip. Every dispatch runs on this module, keeping its whole groups.
-            RuntimeFact::UnitAxes { axes: 0, .. } | RuntimeFact::RowLockstep => {}
+            // A predicated walk that unit axes would make less divergent, which a variant could
+            // relieve: every dispatch runs on this module.
+            RuntimeFact::UnitAxes { axes: 0, .. } => {}
             // What the translator checks against the descriptor when it compiles, and nothing on
             // the device reads.
             RuntimeFact::CallStackDepth { .. } | RuntimeFact::OpenClMode => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one the encoder
-            // does not supply.
+            // does not supply, `RowLockstep` among them until a device test runs a kernel that
+            // states it.
             _ => return Err(gap()),
         }
     }
