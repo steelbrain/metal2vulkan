@@ -328,8 +328,8 @@ impl ComputeCommandEncoder {
     /// each reading Metal's whole grid from its region.
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`]; [`Limit::ThreadgroupShape`];
-    /// [`Gap::PartialSimdgroups`] for a threadgroup that is not whole SIMD groups of a kernel
-    /// whose tier needs them;
+    /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
+    /// whole SIMD groups of a kernel whose tier needs them;
     /// [`Error::Vulkan`] where the pipeline's compile, the ring or recording fails.
     pub fn dispatch_threadgroups(
         &mut self,
@@ -521,6 +521,18 @@ impl ComputeCommandEncoder {
                         .map(|&index| self.threadgroup_length(index))
                         .collect(),
                 };
+                let length = variant
+                    .threadgroup_lengths
+                    .iter()
+                    .map(|&length| u64::from(length).next_multiple_of(16))
+                    .sum::<u64>()
+                    + u64::from(kernel.interface.static_threadgroup_bytes);
+                if length > u64::from(limits.max_shared_memory) {
+                    return Err(Error::Limit(Limit::ThreadgroupMemory {
+                        length,
+                        max: limits.max_shared_memory,
+                    }));
+                }
                 kernel.pipeline(&core, &variant)?
             }
         };

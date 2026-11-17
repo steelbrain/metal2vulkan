@@ -222,6 +222,17 @@ pub enum Limit {
         /// The device's most.
         max: [u32; 3],
     },
+    /// A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up
+    /// to 16 bytes), is past the device's `maxComputeSharedMemorySize`. Metal's counterpart is
+    /// `maxThreadgroupMemoryLength`, past which its validation stops the dispatch.
+    ///
+    /// Basis: device (the device's `maxComputeSharedMemorySize`).
+    ThreadgroupMemory {
+        /// The threadgroup memory the dispatch takes, in bytes.
+        length: u64,
+        /// The device's most.
+        max: u32,
+    },
     /// `setBytes` data longer than one parameter ring chunk. Metal documents the call for data
     /// under 4 KB.
     ///
@@ -333,6 +344,10 @@ impl fmt::Display for Limit {
             Limit::ThreadgroupShape { size, max } => {
                 write!(f, "a threadgroup of {size:?} is past the device's {max:?}")
             }
+            Limit::ThreadgroupMemory { length, max } => write!(
+                f,
+                "{length} bytes of threadgroup memory are past the device's {max}"
+            ),
             Limit::BytesLength { len, max } => {
                 write!(f, "{len} bytes are past the most one call takes, {max}")
             }

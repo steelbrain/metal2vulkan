@@ -123,6 +123,9 @@ pub(crate) struct Interface {
     pub(crate) threadgroups: Vec<u32>,
     /// `maxTotalThreadsPerThreadgroup`.
     pub(crate) max_total_threads: u32,
+    /// The threadgroup memory every threadgroup takes beside the lengths set: Metal's static part
+    /// and a predicated walk's vote word.
+    pub(crate) static_threadgroup_bytes: u32,
     /// What every threadgroup's threads must be a multiple of: the subgroup size of a tier that
     /// runs each SIMD group as one subgroup, where the local size is flattened.
     pub(crate) multiples: Vec<u32>,
@@ -374,9 +377,12 @@ fn interface(
     }
     // The bind-time facts the encoder supplies.
     let mut multiples = Vec::new();
+    let mut vote = 0;
     for dependency in &pipeline.dependencies {
         match dependency.fact {
             RuntimeFact::LocalSizeConstraint { multiple } => multiples.push(multiple),
+            // The walk's vote word: 4 bytes beside the threadgroup memory.
+            RuntimeFact::PredicationVote => vote = 4,
             RuntimeFact::ThreadsPerThreadgroup
             | RuntimeFact::ThreadgroupMemoryLength { .. }
             | RuntimeFact::LocalSizeLimits
@@ -444,10 +450,16 @@ fn interface(
     if push_len > PUSH_BYTES {
         return Err(gap());
     }
-    let threadgroups: Vec<u32> = translated
-        .threadgroup
+    // The threadgroup memory arguments are the lengths the module specializes on, each by its
+    // `[[threadgroup(n)]]` index.
+    let threadgroups: Vec<u32> = stage
+        .specialization
+        .constants
         .iter()
-        .map(|argument| argument.index)
+        .filter_map(|constant| match constant.key {
+            SpecKey::TgLength(index) => Some(index),
+            _ => None,
+        })
         .collect();
     let mut constants = Vec::new();
     for constant in &stage.specialization.constants {
@@ -492,6 +504,7 @@ fn interface(
         constants,
         threadgroups,
         max_total_threads,
+        static_threadgroup_bytes: pipeline.metal_info.static_threadgroup_memory_length + vote,
         multiples,
         required_subgroup_size: stage.required_subgroup_size,
         stage_flags,

@@ -360,6 +360,7 @@ impl Device {
         let limits = ComputeLimits {
             max_group_count: limits.max_compute_work_group_count,
             max_group_size: limits.max_compute_work_group_size,
+            max_shared_memory: limits.max_compute_shared_memory_size,
         };
         let max_block_len = vulkan11
             .max_memory_allocation_size
@@ -828,6 +829,8 @@ pub(crate) struct ComputeLimits {
     pub(crate) max_group_count: [u32; 3],
     /// `maxComputeWorkGroupSize`.
     pub(crate) max_group_size: [u32; 3],
+    /// `maxComputeSharedMemorySize`.
+    pub(crate) max_shared_memory: u32,
 }
 
 impl Core {

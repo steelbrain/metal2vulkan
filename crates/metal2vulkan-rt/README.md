@@ -206,6 +206,9 @@ that touch blocks first.
   dispatch past it is split into dispatches of at most that many, each told its first
   threadgroup.
 - `setBytes` takes up to 64 KiB, one ring chunk (`Limit::BytesLength`).
+- A dispatch's threadgroup memory, the kernel's own and the lengths set, each rounded up to 16
+  bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
+  Metal's is its `maxThreadgroupMemoryLength`.
 
 ## Compute encoders
 
@@ -316,6 +319,9 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
   is dispatched at.
 - A dispatch of a size other than the descriptor's `requiredThreadsPerThreadgroup`, which Metal's
   validation stops, runs at the size it gives.
+- NVIDIA 615.71.09 on GA10x gives sign-extended bits for a mask over a signed clamp, to exactly N
+  bits' range, of a sum or difference of two values sign-extended from N bits; not reproduced on
+  620.70.06.
 
 ## One path for every device
 

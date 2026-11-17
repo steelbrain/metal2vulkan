@@ -38,7 +38,7 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -56,7 +56,7 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 2 | 5 | 0 | 0 | 4 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 2 | 2 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -631,6 +631,7 @@ Columns:
 | `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 1: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)` | `-` |
 | `BlockIds` | A block after every block number has been used (`Device::take_block`) | every device (a public call's own check of its arguments) | `ours`: block numbers are 32 bits | 1: `crates/metal2vulkan-rt/src/memory.rs (number)` | `-` |
 | `ThreadgroupShape` | A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds 1,024 by 1,024 by 64) | at the device's limit | `device`: the device's `maxComputeWorkGroupSize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `ThreadgroupMemory` | A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up to 16 bytes), is past the device's... | at the device's limit | `device`: the device's `maxComputeSharedMemorySize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
@@ -1142,6 +1143,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)`
 - `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (number)`
 - `rt:Limit::ThreadgroupShape`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Limit::ThreadgroupMemory`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`

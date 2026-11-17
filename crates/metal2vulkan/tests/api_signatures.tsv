@@ -12772,6 +12772,7 @@ variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
+variant	metal2vulkan-rt::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupShape	ThreadgroupShape { size: [u32; 3], max: [u32; 3] }
 variant	metal2vulkan-rt::MemoryClass::Private	Private
 variant	metal2vulkan-rt::MemoryClass::Shared	Shared

@@ -466,8 +466,10 @@ mod on_device {
 
     /// `a1_sign_and_division_precise`, which does not observe its threadgroup partition and
     /// carries no fast-math note, answers the same words in a tile as at the app's own shape (an
-    /// indirect dispatch's size); its fast-math twin's state carries `FastMathRewrites`, the note
-    /// of the rounding a device may choose per pipeline.
+    /// indirect dispatch's size), a NaN's bits aside: those are the device's own
+    /// (`NativeNanEncoding`), and a device may take either operand's payload per pipeline. Its
+    /// fast-math twin's state carries `FastMathRewrites`, the note of the rounding a device may
+    /// choose per pipeline.
     #[test]
     fn every_device_answers_a_precise_kernel_alike_in_a_tile_and_at_the_apps_shape() {
         let (Some(precise), Some(fast)) = (
@@ -539,7 +541,27 @@ mod on_device {
                 words(&outs[0], 0, 4 * threads),
                 words(&outs[1], 0, 4 * threads),
             );
-            let first = tiled.iter().zip(&shaped).position(|(a, b)| a != b);
+            // Words 0 to 2 are `float`s, word 3 two `half`s; two NaNs are alike where the state
+            // notes NaN bits as the device's own.
+            let nan_bits = state
+                .precision_notes()
+                .contains(&PrecisionNote::NativeNanEncoding);
+            let alike = |word: usize, a: u32, b: u32| {
+                let float_nans = || f32::from_bits(a).is_nan() && f32::from_bits(b).is_nan();
+                let half_nan = |bits: u32| bits & 0x7c00 == 0x7c00 && bits & 0x3ff != 0;
+                let halves_alike = || {
+                    [0, 16].iter().all(|&at| {
+                        let (a, b) = ((a >> at) & 0xffff, (b >> at) & 0xffff);
+                        a == b || (half_nan(a) && half_nan(b))
+                    })
+                };
+                let nans = match word % 4 {
+                    3 => halves_alike(),
+                    _ => float_nans(),
+                };
+                a == b || (nan_bits && nans)
+            };
+            let first = (0..tiled.len()).find(|&word| !alike(word, tiled[word], shaped[word]));
             if let Some(word) = first {
                 let thread = word / 4;
                 let pair = &inputs[1][8 * thread..8 * thread + 8];
