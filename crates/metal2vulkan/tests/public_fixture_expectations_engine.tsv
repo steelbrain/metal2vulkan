@@ -2078,6 +2078,8 @@ engine/ob3_vertex_input.air.ll	ob3_vertex_input	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/ob3_vertex_input.ll	ob3_vertex_input	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}
 engine/overlapping_slots.air.ll	overlapping_slots	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
 engine/overlapping_slots.ll	overlapping_slots	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
+engine/pad_simd_shape.air.ll	simd_shape	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/pad_simd_shape.ll	simd_shape	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/pdc_compare_clamp.air.ll	pdc_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/pdc_compare_clamp.air.ll	pdc_slot	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/pdc_compare_clamp.air.ll	pdc_constexpr	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
@@ -3204,6 +3206,10 @@ engine/unv_runtime_levels.air.ll	unv_rlvl2d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/unv_runtime_levels.air.ll	unv_rpos2d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unv_runtime_levels.ll	unv_rlvl2d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(RuntimeDescriptorArray), Feature(DescriptorBindingPartiallyBound), Feature(ShaderSampledImageArrayNonUniformIndexing), Feature(DescriptorBindingSampledImageUpdateAfterBind)]]}
 engine/unv_runtime_levels.ll	unv_rpos2d	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/vector_word_phases.air.ll	vwp_words	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/vector_word_phases.air.ll	vwp_vec16	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/vector_word_phases.ll	vwp_words	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/vector_word_phases.ll	vwp_vec16	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/vertex_amplification.air.ll	amp_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}	ok	ok	ok	ok	ok	ok	ok
 engine/vertex_amplification.air.ll	amp_vertex_store	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}
 engine/vertex_amplification.air.ll	amp_vertex_layer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}	ok	ok	ok	ok	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}	Unsupported{LayeredRendering; AnyOf[[Feature(GeometryShader)]]}
