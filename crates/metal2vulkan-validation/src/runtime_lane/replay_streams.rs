@@ -7,9 +7,12 @@
 //!   Two plays on two devices report the same.
 //! - A command buffer waiting on an event the CPU signals later does not stop another queue's.
 //! - Textures are made at their recorded resource IDs, and read back as written.
+//!
+//! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
+//! their own beside the stream's.
 
-use super::host_memory::on_device;
-use super::public_case;
+use super::host_memory::on_device_with;
+use super::{at_plan, public_case};
 use crate::replay::{OldRuntime, Player, Report, StreamReader, StreamWriter, Value};
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
@@ -180,7 +183,9 @@ fn a_pointer_written_at_a_recorded_address_is_relocated() {
     let path = written(&dir, pointer_chain);
     let mut reports = Vec::new();
     for _ in 0..2 {
-        on_device(|device| reports.push(play("pointer-chain", device, &path)));
+        on_device_with(at_plan, |device| {
+            reports.push(play("pointer-chain", device, &path))
+        });
     }
     let report = &reports[0];
     assert_eq!(report.checks.len(), 1);
@@ -244,7 +249,7 @@ fn a_command_buffer_held_on_an_event_does_not_stop_another_queue() {
             &[("sha256", sha(&[0x11; 16]))],
         )
     });
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let report = play("held", device, &path);
         let order: Vec<&[u64]> = report.completed.iter().map(|(ids, _)| &ids[..]).collect();
         assert_eq!(order, [&[9][..], &[7][..]]);
@@ -306,7 +311,7 @@ fn textures_are_made_at_their_recorded_resource_ids() {
             &[("sha256", sha(&texels))],
         )
     });
-    on_device(|device| {
+    on_device_with(at_plan, |device| {
         let report = play("texture-ids", device, &path);
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     });
