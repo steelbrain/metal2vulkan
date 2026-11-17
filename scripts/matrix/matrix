@@ -194,6 +194,8 @@ exit $rc
 
 
 def gpu_script(short, setup, legs, mirror, rev):
+    """A node's legs in turn. The job removes its carry's mirror on the node when it is done (no
+    other job reads it; potluck never prunes one), and any left by a job that never ran."""
     runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(leg.id + "!" if leg.select else "")])
                      for leg in legs)
     return linux_head(short, setup) + f"""lay_out || exit 3
@@ -217,6 +219,7 @@ leg() {{
 {runs}
 rm -rf "$S" "$A"
 m="${mirror}"; rm -rf "$m" "${{m%.git}}.lock" "${{m%.git}}.worktrees.lock"
+find "$POTLUCK_HOME/mirrors" -maxdepth 1 -name 'm2v-matrix-*' -mmin +720 -exec rm -rf {{}} +
 exit $all
 """
 
