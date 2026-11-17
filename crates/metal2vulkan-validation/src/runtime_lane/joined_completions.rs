@@ -44,16 +44,17 @@ const LONG_FILLS: usize = 16;
 const LONG_BYTES: u64 = 64 << 20;
 
 /// What a run moved: the `vkQueueSubmit` calls that held several batches, the batches they held,
-/// the kernel submissions in all, the groups an unmarked batch closed, the batches that went alone
-/// because no group is kept under `Exact` or because their queue's expected run was past a
-/// group's bound, the grouped-completion notices, and whether the device groups marked batches
-/// ([`groups`]).
+/// the kernel submissions in all, the groups an unmarked batch closed, the groups that went before
+/// a batch their summed expected runs left no room for, the batches that went alone because no
+/// group is kept under `Exact` or because their queue's expected run was past a group's bound, the
+/// grouped-completion notices, and whether the device groups marked batches ([`groups`]).
 #[derive(Debug)]
 struct Moved {
     grouped: u64,
     batches: u64,
     submissions: u64,
     closed: u64,
+    ends_long: u64,
     unkept: u64,
     long: u64,
     heard: usize,
@@ -67,6 +68,7 @@ impl Moved {
             batches: after.batches_grouped - before.batches_grouped,
             submissions: after.queue_submissions - before.queue_submissions,
             closed: after.group_ends_closed - before.group_ends_closed,
+            ends_long: after.group_ends_long - before.group_ends_long,
             unkept: after.batches_held_alone_unkept - before.batches_held_alone_unkept,
             long: after.batches_alone_run_long - before.batches_alone_run_long,
             heard,
@@ -155,14 +157,21 @@ fn parts(marked: bool, checked: bool, assumed: bool) -> Moved {
 }
 
 /// Marked parts group where the device's batches merge, the last unmarked one closing a group;
-/// elsewhere each goes alone.
+/// elsewhere each goes alone. A group holds batches whose queue's expected runs sum to at most
+/// 16 ms (the runtime's `GROUP_RUN`): where the queue's run is longer than a quarter of that, the
+/// parts group in threes or pairs, and the last finds no room in the group before it, which goes
+/// first (`WorkCounts::group_ends_long`), the last then alone. On lavapipe beside the lane's tests
+/// [`warm`]'s fills ran 3 to 14 ms and the parts went in pairs (job m3-max-40006).
 fn grouped_where_merging(checked: bool, assumed: bool) {
     let moved = parts(true, checked, assumed);
     if moved.grouping {
         assert!(moved.grouped >= 1, "{moved:?}: no grouped call");
         assert!(moved.batches >= 3, "{moved:?}: too few batches grouped");
         assert!(moved.submissions < PARTS as u64, "{moved:?}: no call saved");
-        assert!(moved.closed >= 1, "{moved:?}: no group closed by the last");
+        assert!(
+            moved.closed >= 1 || moved.ends_long >= 1,
+            "{moved:?}: no group closed by the last, and none went for want of room"
+        );
         assert_eq!(moved.heard, 1, "{moved:?}: grouped-completion notices");
     } else {
         assert_eq!(
