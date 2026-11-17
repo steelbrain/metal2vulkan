@@ -319,6 +319,7 @@ fn a_pass_s_handlers_run_while_it_goes_on(completion: CompletionPolicy) {
         }))
         .unwrap();
     let later = fill(&second, &targets[1], 4);
+    let grouped_before = device.work_counts().batches_grouped;
     if reached {
         earlier.commit().unwrap();
         later.commit().unwrap();
@@ -348,9 +349,16 @@ fn a_pass_s_handlers_run_while_it_goes_on(completion: CompletionPolicy) {
         after_held(&earlier),
         after_held(&later),
     );
+    // Batches a group took go in one kernel submission, in the order the pass took them, and
+    // each reads the instant that one submission returned (`submit_returned_time`): two the same
+    // group took read the same instant, which orders neither (`Grouped`, where both lie on one
+    // `VkQueue`: RADV's single graphics queue).
+    let grouped = device.work_counts().batches_grouped > grouped_before;
+    let (earlier_at, later_at) = (earlier.submit_returned_time(), later.submit_returned_time());
     assert!(
-        earlier.submit_returned_time() < later.submit_returned_time(),
-        "the later command buffer was submitted before the earlier one ({completion:?})"
+        earlier_at < later_at || (grouped && earlier_at == later_at),
+        "the later command buffer was submitted before the earlier one ({completion:?}; grouped: \
+         {grouped})"
     );
     assert!(
         started < paused,
