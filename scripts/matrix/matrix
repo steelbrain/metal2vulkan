@@ -52,7 +52,7 @@ HARNESS = "m2v-matrix-harness"
 HARNESS_RUNTIMES = ("old",)
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
-#: (RAM GiB, minutes) of each job kind before a run of it was measured.
+#: (RAM GiB, minutes) of each job kind before a run of it was measured; the minutes stay its floor.
 DEFAULTS = {"build": (16, 30), "gpu": (4, 15), "time": (4, 20), "lavapipe": (32, 60), "winbuild": (16, 60),
             "winrun": (4, 15), "wintime": (4, 20)}
 #: The awk filter between nextest and the job's log: every line up to the summary, then only the
@@ -322,14 +322,15 @@ class Run:
 
     def size(self, kind, node):
         """RAM and timeout from this kind's last measured runs on NODE: 1.3x the peak (a run that
-        peaked at its reservation keeps it; one ended over it gets 1.5x), 1.5x the longest."""
+        peaked at its reservation keeps it; one ended over it gets 1.5x), and 1.5x the longest, never
+        below the kind's default: an incremental run's minutes say nothing of a full rebuild's."""
         ram, minutes = DEFAULTS[kind]
         runs = self.stats.get(f"{kind}@{node}", [])[-3:]
         if runs:
             ram = max(math.ceil(r["ram"] * 1.5) if r["killed"] else
                       r["ram"] if r["peak"] >= 0.95 * r["ram"] else math.ceil(r["peak"] * 1.3 + 0.5)
                       for r in runs)
-            minutes = max(5, math.ceil(1.5 * max(r["minutes"] for r in runs)))
+            minutes = max(minutes, math.ceil(1.5 * max(r["minutes"] for r in runs)))
         return max(ram, 2), minutes
 
     def job(self, kind, node, script, name, gpus=(), carry=None, space=None, exclusive=False):
