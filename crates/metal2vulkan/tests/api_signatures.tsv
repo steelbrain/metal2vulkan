@@ -10250,6 +10250,7 @@ method	metal2vulkan::device::Device::compile_render_pipeline	pub fn compile_rend
 method	metal2vulkan::device::Device::compile_render_variant	pub fn compile_render_variant(&self, d: &RenderPipelineDescriptor, v: &VariantKey, b: &Budget) -> Result<RenderPipeline, Error>
 method	metal2vulkan::device::Device::compile_tile_pipeline	pub fn compile_tile_pipeline(&self, d: &TileRenderPipelineDescriptor, b: &Budget) -> Result<ComputePipeline, Error>
 method	metal2vulkan::device::Device::compute_pipeline_key	pub fn compute_pipeline_key(&self, d: &ComputePipelineDescriptor) -> crate::cache::PipelineKey
+method	metal2vulkan::device::Device::from_queries	pub fn from_queries(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error>
 method	metal2vulkan::device::Device::function_compile_key	pub fn function_compile_key(&self, f: &FunctionDescriptor, inp: &LoweringInputs) -> FunctionCompileKey
 method	metal2vulkan::device::Device::generated_commands	pub fn generated_commands(&self) -> Option<&GeneratedCommandsProperties>
 method	metal2vulkan::device::Device::kernel_inputs_read	pub fn kernel_inputs_read(&self, f: &FunctionDescriptor, inp: &LoweringInputs, b: &Budget, entries: &StageEntries) -> Result<LoweringInputs, Error>

@@ -62,10 +62,31 @@ impl Device {
     /// is on (`InvalidDescriptor`), a policy that takes one identity domain without the other
     /// (`InvalidDescriptor`), and the identity domains on a device without `bufferDeviceAddress`
     /// and `shaderInt64` (`Unsupported{IdentityDomains}`).
+    ///
+    /// It reads the description's identity: the driver facts keyed on the driver and its GPU
+    /// (`driver_facts`), the workarounds keyed on them, the Function storage measured on a GPU,
+    /// and the workarounds the consumer measured (`DeviceDescription::measured`), for
+    /// `metal2vulkan-runtime` until the cutover deletes them and `new` becomes
+    /// [`Device::from_queries`].
     pub fn new(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error> {
         // The driver's measured deviations on its GPU, never its name.
         let deviations = super::driver_facts::deviations(&desc);
         Device::with_deviations(desc, policy, deviations)
+    }
+
+    /// The device its Vulkan queries decide, under `policy`: the constructor `metal2vulkan-rt`
+    /// uses. Refuses what [`Device::new`] refuses.
+    ///
+    /// No identity decides anything: the description's `driver_id`, `driver_version`,
+    /// `vendor_id`, `device_id` and `device_name`, and its `measured` workarounds, are not read.
+    /// So no driver fact, deviation, workaround or measured value keyed on a driver or a GPU
+    /// applies, and every note one of them could turn off stays on: the rasterizer splits clipped
+    /// coverage and the tessellator orders triangles as the device does
+    /// (`DriverWorkaround::ClippedCoverageNotMetals`, `DriverWorkaround::TessellatorNotMetals`),
+    /// `InterpolateAtOffset` reads from the pixel's center as GLSL.std.450 states, and a thread's
+    /// Function storage is the 16 KiB floor.
+    pub fn from_queries(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error> {
+        Device::with_deviations(desc.without_identity(), policy, BTreeSet::new())
     }
 
     /// [`Device::new`] with `deviation` taken or not, and the driver's other deviations as

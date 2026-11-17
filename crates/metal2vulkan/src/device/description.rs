@@ -218,6 +218,21 @@ impl DeviceDescription {
         self.features.contains(&feature)
     }
 
+    /// This description without what names its driver and GPU rather than answers a Vulkan
+    /// query: no `driver_id`, `driver_version`, `vendor_id`, `device_id` or `device_name`, and no
+    /// `measured` workarounds ([`Device::from_queries`](crate::device::Device::from_queries)).
+    pub(crate) fn without_identity(self) -> DeviceDescription {
+        DeviceDescription {
+            driver_id: None,
+            driver_version: 0,
+            vendor_id: 0,
+            device_id: 0,
+            device_name: String::new(),
+            measured: BTreeSet::new(),
+            ..self
+        }
+    }
+
     /// Whether `GLSL.std.450 InterpolateAtOffset` reads at the pixel center plus its offset, as
     /// GLSL.std.450 states ("An offset of (0, 0) identifies the center of the pixel"): every
     /// driver but MoltenVK, whose SPIRV-Cross converts the instruction to Metal's

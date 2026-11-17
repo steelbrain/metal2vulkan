@@ -11,6 +11,7 @@ mod on_device {
     use crate::{
         Buffer, ComputePipelineDescriptor, DispatchType, FunctionDescriptor, Library, StageSource,
     };
+    use metal2vulkan::Budget;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
     /// `float` patterns none of which is a NaN or a denormal (the fixture compiles with fast math).
@@ -94,9 +95,30 @@ mod on_device {
             FunctionDescriptor::new(function),
         ));
         each_device("compute_translated", |name, _, device| {
-            let state = device
-                .new_compute_pipeline_state(&descriptor)
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let state = match device.new_compute_pipeline_state(&descriptor) {
+                Ok(state) => state,
+                Err(error) => {
+                    // What the translator gave, for the refusal's reason.
+                    let translated = device
+                        .core()
+                        .translator
+                        .compile_compute_pipeline(&descriptor, &Budget::standard());
+                    if let Ok(pipeline) = translated {
+                        eprintln!(
+                            "{name}: slots {:?}\npush {:?}\nconstants {:?}\ndependencies {:?}\nsets {:?}\nflags {:?} subgroup {:?} blob {}",
+                            pipeline.interface.slots,
+                            pipeline.interface.push,
+                            pipeline.stage.specialization.constants,
+                            pipeline.dependencies,
+                            pipeline.layout.sets,
+                            pipeline.stage.stage_flags,
+                            pipeline.stage.required_subgroup_size,
+                            pipeline.stage.constant_blob.is_some(),
+                        );
+                    }
+                    panic!("{name}: {error}");
+                }
+            };
             let threads = (GROUP * GROUPS) as usize;
             let mut bits = Vec::new();
             let mut halves = Vec::new();
