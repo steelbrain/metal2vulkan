@@ -2505,7 +2505,8 @@ pub(super) struct KeptDispatch {
     /// Its commands: those the encoder's kept state keeps where they are of its planned
     /// ([`Instantiated`]), else instantiated.
     commands: OnceLock<Arc<DispatchCommands>>,
-    /// Each region's `VkPipeline`, where all were found made.
+    /// Each region's `VkPipeline`, where all were found made, each its own key's: never a key's
+    /// residual form, which serves a dispatch only while its own is made.
     made: OnceLock<Vec<Arc<RawPipeline>>>,
 }
 
@@ -3235,17 +3236,22 @@ fn record(
             match made {
                 Some(made) if !apart_samplers(core.device(), objects) => {
                     // Kept with the entry, which the next dispatch of its inputs takes, and with
-                    // what it planned, which the next dispatch of its shape takes.
-                    if let Some(kept) = kept {
-                        drop(kept.made.set(made.clone()));
-                    }
-                    // Not a key's residual form, which serves only while its own is made.
-                    let own = (begun.iter().zip(&made)).all(|((key, _), made)| {
-                        planned.made.get().is_none() && variant.made_as(key, made)
-                    });
+                    // what it planned, which the next dispatch of its shape takes; but never a
+                    // key's residual form, which serves only while its own is made: a later
+                    // dispatch of either asks its regions' pipelines again, as this one did, and
+                    // takes its own key's once made (`tests::residual_memo`). The check costs one
+                    // look in the variant's memo a region, on this path alone (no pipelines kept
+                    // for the dispatch); a dispatch that takes kept ones looks at none.
+                    let own = (begun.iter().zip(&made))
+                        .all(|((key, _), made)| variant.made_as(key, made));
                     if own {
-                        let keys = begun.iter().map(|(key, _)| key.clone()).collect();
-                        drop(planned.made.set((keys, made.clone())));
+                        if let Some(kept) = kept {
+                            drop(kept.made.set(made.clone()));
+                        }
+                        if planned.made.get().is_none() {
+                            let keys = begun.iter().map(|(key, _)| key.clone()).collect();
+                            drop(planned.made.set((keys, made.clone())));
+                        }
                     }
                     (Cow::Owned(made), None)
                 }

@@ -42,7 +42,9 @@
 //!   Only that direction: a draw whose key has 0
 //!   where a made pipeline has 1 waits for its own making, as any draw does. A dispatch or a tile
 //!   dispatch whose region's `VkPipeline` is not made takes its residual form's alike
-//!   (`Variant::begin_region_pipeline`).
+//!   (`Variant::begin_region_pipeline`), and keeps it neither in its encoder's memo of what it
+//!   settled (`compute::DispatchMemo`) nor in what it planned, so a later dispatch of the same
+//!   inputs asks again and takes the key's own pipeline once made.
 //! - **One form where the bind offset buys nothing** ([`reads_views_at_bind`]). Where the driver
 //!   is not measured to load a uniform read at a constant offset ahead of the shader
 //!   (`DriverFact::ConstantOffsetUniformReadsPreloaded`, which no driver carries today), every

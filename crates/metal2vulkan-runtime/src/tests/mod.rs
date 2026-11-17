@@ -745,6 +745,8 @@ mod reserved_queues;
 mod residency;
 #[cfg(all(debug_assertions, any(m2v_gpu, m2v_cpu_icd)))]
 mod resident_uses;
+#[cfg(m2v_cpu_icd)]
+mod residual_memo;
 mod resource;
 mod resource_ids;
 mod retained;
