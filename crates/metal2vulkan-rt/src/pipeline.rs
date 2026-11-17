@@ -1,13 +1,25 @@
-//! Compute pipeline states: a kernel's interface, which the translator states, and its
-//! `VkPipeline`s, one per threadgroup size and threadgroup memory lengths, each made by the
-//! encoding call that first needs it.
+//! Compute pipeline states: the translator's kernel and its interface, and its `VkPipeline`s, one
+//! per threadgroup size and threadgroup memory lengths, each made by the encoding call that first
+//! needs it.
+//!
+//! Nothing the runtime records depends on when a compile finishes: an encoding call whose
+//! `VkPipeline` is not made yet makes it and waits for it, then records, so there is one recorded
+//! form. Each such wait is a first-use wait, counted with its time
+//! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)).
 
 use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
-use crate::error::Error;
+use crate::error::{Error, Gap};
 use crate::hazard::Access;
 use crate::reaper::{Free, Job};
+use crate::times::host_time;
 use ash::vk;
+use metal2vulkan::pipeline::{
+    AccessSet, Axis, BufferKind, ComputePipeline, ComputePipelineDescriptor, PrecisionNote,
+    PushField, PushLoc, RuntimeFact, SlotClass, SlotInterface, SlotRef, SpecKey, Stage,
+};
+use metal2vulkan::Budget;
+use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
 /// The push window: the parameters a kernel reads from push constants, `[0, 128)` on every device,
@@ -27,7 +39,11 @@ pub struct ComputePipelineState {
 pub(crate) struct PipelineInner {
     core: Arc<Core>,
     module: vk::ShaderModule,
+    /// The module's entry point.
+    entry: CString,
     pub(crate) interface: Interface,
+    /// The translator's notes of where the kernel's answers may differ from Metal's.
+    notes: Vec<PrecisionNote>,
     /// The `VkPipeline`s made so far, by their specialization.
     variants: Mutex<Vec<(Variant, vk::Pipeline)>>,
 }
@@ -49,13 +65,28 @@ pub(crate) struct Interface {
     pub(crate) block_address: u32,
     /// The parameters.
     pub(crate) fields: Vec<Field>,
-    /// The specialization constant ids of the threadgroup size's three dimensions.
-    pub(crate) size_ids: [u32; 3],
-    /// The specialization constant id of each threadgroup memory length the kernel takes, by its
-    /// index.
-    pub(crate) threadgroup_ids: Vec<(u32, u32)>,
+    /// The kernel's specialization constants: each one's id and what sets it.
+    pub(crate) constants: Vec<(u32, Constant)>,
+    /// The index of each threadgroup memory argument the kernel takes, in the order of
+    /// [`Variant::threadgroup_lengths`].
+    pub(crate) threadgroups: Vec<u32>,
     /// `maxTotalThreadsPerThreadgroup`.
     pub(crate) max_total_threads: u32,
+}
+
+/// What sets a specialization constant.
+#[derive(Clone, Copy)]
+pub(crate) enum Constant {
+    /// The threadgroup size on one axis, 0 to 2.
+    Size(usize),
+    /// The threadgroup's threads: the product of its size.
+    Threads,
+    /// 1 where the kernel reads the grid from its dispatch region, 0 for an indirect dispatch,
+    /// whose grid is its threadgroup count.
+    Region,
+    /// The length of the threadgroup memory argument at this position of
+    /// [`Interface::threadgroups`].
+    ThreadgroupLength(usize),
 }
 
 /// A parameter and where it goes.
@@ -85,18 +116,213 @@ pub(crate) enum FieldValue {
     DispatchRegion,
 }
 
-/// A `VkPipeline`'s specialization: the threadgroup size and the threadgroup memory lengths in the
-/// order of [`Interface::threadgroup_ids`].
+/// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
+/// order of [`Interface::threadgroups`], and, for a kernel that reads its grid from its dispatch
+/// region, whether the dispatch is indirect.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Variant {
     pub(crate) size: [u32; 3],
     pub(crate) threadgroup_lengths: Vec<u32>,
+    pub(crate) indirect: bool,
+}
+
+impl crate::Device {
+    /// `newComputePipelineStateWithDescriptor:options:reflection:error:`, without reflection.
+    ///
+    /// The translator compiles the kernel on the calling thread, which waits for it, within the
+    /// translator's 20-second budget. Each call compiles anew: no cache keeps a state made before.
+    /// The state's `VkPipeline`s are made later, each by the first encoding call that needs it
+    /// ([`ComputePipelineState`]).
+    ///
+    /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
+    /// [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that reads what the
+    /// compute encoder does not supply yet; [`Error::Vulkan`].
+    pub fn new_compute_pipeline_state(
+        &self,
+        descriptor: &ComputePipelineDescriptor,
+    ) -> Result<ComputePipelineState, Error> {
+        if descriptor.support_indirect_command_buffers {
+            return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
+        }
+        let core = Arc::clone(self.core());
+        let pipeline = core
+            .translator
+            .compile_compute_pipeline(descriptor, &Budget::standard())
+            .map_err(Error::Translation)?;
+        let interface = interface(&pipeline, descriptor.required_threads_per_threadgroup)?;
+        let stage = pipeline.stage;
+        // The translator's entry points hold no NUL; one that did would name no entry point.
+        let entry = CString::new(stage.entry_point).map_err(|_| gap())?;
+        let info = vk::ShaderModuleCreateInfo::default().code(&stage.spirv[..]);
+        // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
+        let module = unsafe { core.device.create_shader_module(&info, None) }
+            .map_err(Error::vulkan("vkCreateShaderModule"))?;
+        Ok(ComputePipelineState {
+            inner: Arc::new(PipelineInner {
+                core,
+                module,
+                entry,
+                interface,
+                notes: stage.precision_notes,
+                variants: Mutex::new(Vec::new()),
+            }),
+        })
+    }
+}
+
+/// The runtime's view of the translator's kernel, or [`Gap::KernelInput`] where the kernel reads
+/// something the compute encoder does not supply.
+fn interface(
+    pipeline: &ComputePipeline,
+    required_size: Option<[u32; 3]>,
+) -> Result<Interface, Error> {
+    let translated = &pipeline.interface;
+    let stage = &pipeline.stage;
+    // Every argument is a pushed address or a specialization: no descriptor, no table the binder
+    // builds, no constant data, no pinned subgroup size.
+    if translated.needs_pointer_translation
+        || translated.needs_handle_translation
+        || translated.reaches_command_buffers
+        || !translated.numbered_samplers.is_empty()
+        || !translated.stage_in.is_empty()
+        || pipeline
+            .layout
+            .sets
+            .iter()
+            .any(|set| !set.bindings.is_empty())
+        || stage.constant_blob.is_some()
+        || stage.required_subgroup_size.is_some()
+        || !stage.stage_flags.is_empty()
+    {
+        return Err(gap());
+    }
+    // The bind-time facts the encoder supplies.
+    for dependency in &pipeline.dependencies {
+        match dependency.fact {
+            RuntimeFact::ThreadsPerThreadgroup
+            | RuntimeFact::ThreadgroupMemoryLength { .. }
+            | RuntimeFact::LocalSizeLimits
+            | RuntimeFact::DispatchGrid
+            | RuntimeFact::IndirectGroupCount
+            | RuntimeFact::DeviceAddresses { .. } => {}
+            _ => return Err(gap()),
+        }
+    }
+    let mut buffers = Vec::new();
+    for (slot, used) in &translated.slots {
+        match (slot.stage, slot.class, used) {
+            (Stage::Kernel, SlotClass::Buffer, SlotInterface::Buffer(buffer))
+                if buffer.kind == BufferKind::Buffer =>
+            {
+                buffers.push((slot.index, access(buffer.access)));
+            }
+            _ => return Err(gap()),
+        }
+    }
+    let mut fields = Vec::new();
+    let mut push_len = 0;
+    let mut block_len = 0;
+    for placement in &translated.push {
+        if placement.stage != Stage::Kernel {
+            return Err(gap());
+        }
+        push_len = placement
+            .push_range
+            .map_or(0, |(offset, size)| offset + size);
+        block_len = placement.argument_table_size;
+        for placed in &placement.fields {
+            let value = match placed.field {
+                PushField::SlotGuestBase(SlotRef {
+                    stage: Stage::Kernel,
+                    class: SlotClass::Buffer,
+                    index,
+                }) => FieldValue::BufferAddress(index),
+                PushField::DispatchRegion => FieldValue::DispatchRegion,
+                _ => return Err(gap()),
+            };
+            let place = match placed.loc {
+                PushLoc::Push { offset } => Place::Push(offset),
+                PushLoc::ArgumentTable { offset } => Place::Block(offset),
+                _ => return Err(gap()),
+            };
+            fields.push(Field { place, value });
+        }
+    }
+    // A block needs its address in the window, a field the translator does not place yet.
+    if push_len > PUSH_BYTES || block_len > 0 {
+        return Err(gap());
+    }
+    let threadgroups: Vec<u32> = translated
+        .threadgroup
+        .iter()
+        .map(|argument| argument.index)
+        .collect();
+    let mut constants = Vec::new();
+    for constant in &stage.specialization.constants {
+        if constant.size != 4 {
+            return Err(gap());
+        }
+        let set = match constant.key {
+            SpecKey::LocalSize(Axis::X) => Constant::Size(0),
+            SpecKey::LocalSize(Axis::Y) => Constant::Size(1),
+            SpecKey::LocalSize(Axis::Z) => Constant::Size(2),
+            SpecKey::FlatLocalSize => Constant::Threads,
+            SpecKey::MultiRegion => Constant::Region,
+            SpecKey::TgLength(index) => Constant::ThreadgroupLength(
+                threadgroups
+                    .iter()
+                    .position(|&argument| argument == index)
+                    .ok_or_else(gap)?,
+            ),
+            _ => return Err(gap()),
+        };
+        constants.push((constant.id, set));
+    }
+    let max_total_threads = match required_size {
+        Some(size) => size.iter().product(),
+        None => pipeline.metal_info.max_total_threads_per_threadgroup,
+    };
+    Ok(Interface {
+        buffers,
+        reads_unbound: translated.reads_unbound_resources,
+        writes_unbound: translated.writes_unbound_resources,
+        push_len,
+        block_len,
+        block_address: 0,
+        fields,
+        constants,
+        threadgroups,
+        max_total_threads,
+    })
+}
+
+/// The refusal of a kernel that reads what the compute encoder does not supply.
+fn gap() -> Error {
+    Error::Unsupported(Gap::KernelInput)
+}
+
+/// The hazard table's access of a slot the kernel reads, writes, or both.
+fn access(used: AccessSet) -> Access {
+    match (used.read, used.write) {
+        (_, false) => Access::Read,
+        (false, true) => Access::Write,
+        (true, true) => Access::ReadWrite,
+    }
 }
 
 impl ComputePipelineState {
-    /// `maxTotalThreadsPerThreadgroup`.
+    /// `maxTotalThreadsPerThreadgroup`: the translator's answer for the device, which is Metal's
+    /// limit or less where the device holds fewer threads in a workgroup; for a descriptor with
+    /// `requiredThreadsPerThreadgroup`, that size's threads, as Metal answers. A dispatch of
+    /// another size within it runs at the size it gives, where Metal's validation stops it.
     pub fn max_total_threads_per_threadgroup(&self) -> u32 {
         self.inner.interface.max_total_threads
+    }
+
+    /// No Metal counterpart: where the kernel's answers may differ from Metal's on this device,
+    /// fixed per operation when the state is made. Metal's answers are its own GPU's.
+    pub fn precision_notes(&self) -> &[PrecisionNote] {
+        &self.inner.notes
     }
 
     /// For the device tests: a state of a hand-made kernel and its interface.
@@ -115,7 +341,9 @@ impl ComputePipelineState {
             inner: Arc::new(PipelineInner {
                 core,
                 module,
+                entry: c"main".to_owned(),
                 interface,
+                notes: Vec::new(),
                 variants: Mutex::new(Vec::new()),
             }),
         })
@@ -133,36 +361,41 @@ impl PipelineInner {
     }
 
     /// The `VkPipeline` of `variant`, made now where it is not yet: the calling thread waits for
-    /// it, so what is recorded never depends on when a compile finishes.
+    /// it, a first-use wait, so what is recorded never depends on when a compile finishes.
     pub(crate) fn pipeline(&self, variant: &Variant) -> Result<vk::Pipeline, Error> {
         let mut variants = lock(&self.variants);
         if let Some((_, pipeline)) = variants.iter().find(|(made, _)| made == variant) {
             return Ok(*pipeline);
         }
+        let began = host_time();
         let pipeline = self.make(variant)?;
+        self.core
+            .counters
+            .first_use_wait(host_time().saturating_sub(began));
         variants.push((variant.clone(), pipeline));
         Ok(pipeline)
     }
 
     fn make(&self, variant: &Variant) -> Result<vk::Pipeline, Error> {
-        let interface = &self.interface;
-        let ids = interface
-            .size_ids
+        let constants = &self.interface.constants;
+        let entries: Vec<vk::SpecializationMapEntry> = constants
             .iter()
-            .chain(interface.threadgroup_ids.iter().map(|(_, id)| id));
-        let entries: Vec<vk::SpecializationMapEntry> = ids
             .enumerate()
-            .map(|(index, &id)| vk::SpecializationMapEntry {
+            .map(|(index, &(id, _))| vk::SpecializationMapEntry {
                 constant_id: id,
                 offset: (index * 4) as u32,
                 size: 4,
             })
             .collect();
-        let values: Vec<u8> = variant
-            .size
+        let values: Vec<u8> = constants
             .iter()
-            .chain(&variant.threadgroup_lengths)
-            .flat_map(|value| value.to_ne_bytes())
+            .map(|&(_, set)| match set {
+                Constant::Size(axis) => variant.size[axis],
+                Constant::Threads => variant.size.iter().product(),
+                Constant::Region => u32::from(!variant.indirect),
+                Constant::ThreadgroupLength(at) => variant.threadgroup_lengths[at],
+            })
+            .flat_map(u32::to_ne_bytes)
             .collect();
         let specialization = vk::SpecializationInfo::default()
             .map_entries(&entries)
@@ -170,14 +403,14 @@ impl PipelineInner {
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(self.module)
-            .name(c"main")
+            .name(&self.entry)
             .specialization_info(&specialization);
         let info = vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(self.core.layout);
         let device = &self.core.device;
-        // SAFETY: the module and the layout are the device's, and the specialization matches the
-        // kernel's constants.
+        // SAFETY: the module and the layout are the device's, and the specialization gives each
+        // of the kernel's constants a 4-byte value.
         let made =
             unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[info], None) };
         let pipeline = made.map_err(|(_, result)| Error::Vulkan {

@@ -1,16 +1,17 @@
 //! Compute encoders, under a device cfg on every device of the cfg's kind: dispatches over bound
-//! buffers and `set_bytes`, the grid bound of `dispatch_threads`, parameters past the push window
+//! buffers and `set_bytes`, parameters past the push window
 //! through the ring, indirect dispatch, barriers only at hazards in a serial encoder and only on
 //! request in a concurrent one, and Metal's refusals.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::hazard::Access;
-    use crate::pipeline::{Field, FieldValue, Interface, Place};
+    use crate::pipeline::{Constant, Field, FieldValue, Interface, Place};
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::kernels;
     use crate::{
-        Buffer, CommandBuffer, ComputePipelineState, Device, DispatchType, Error, Limit, Refusal,
+        Buffer, CommandBuffer, ComputePipelineState, Device, DispatchType, Error, Gap, Limit,
+        Refusal,
     };
 
     /// Words in each test buffer: 256 bytes.
@@ -39,8 +40,12 @@ mod on_device {
             block_len: 0,
             block_address: 0,
             fields,
-            size_ids: [0, 1, 2],
-            threadgroup_ids: Vec::new(),
+            constants: vec![
+                (0, Constant::Size(0)),
+                (1, Constant::Size(1)),
+                (2, Constant::Size(2)),
+            ],
+            threadgroups: Vec::new(),
             max_total_threads: 1024,
         }
     }
@@ -93,8 +98,7 @@ mod on_device {
         assert_eq!(command_buffer.error(), None, "{name}");
     }
 
-    /// A dispatch reads bound buffers and `set_bytes` data by address and writes a bound buffer;
-    /// `dispatch_threads` leaves the threads past the grid idle.
+    /// A dispatch reads bound buffers and `set_bytes` data by address and writes a bound buffer.
     #[test]
     fn every_device_dispatches_over_bound_buffers_and_set_bytes() {
         each_device("compute_bound", |name, _, device| {
@@ -115,13 +119,11 @@ mod on_device {
             encoder.set_bytes(&bytes, 1).expect("bytes");
             encoder.set_buffer(Some(&o), 0, 2).expect("a buffer");
             encoder
-                .dispatch_threads([60, 1, 1], [16, 1, 1])
+                .dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1])
                 .expect("a dispatch");
             encoder.end_encoding();
             run(name, &command_buffer);
-            let expected: Vec<u32> = (0..WORDS as u32)
-                .map(|index| if index < 60 { 2 * index + 100 } else { 0 })
-                .collect();
+            let expected: Vec<u32> = (0..WORDS as u32).map(|index| 2 * index + 100).collect();
             assert_eq!(words(&o), expected, "{name}");
         });
     }
@@ -351,6 +353,11 @@ mod on_device {
             assert!(matches!(
                 encoder.dispatch_threadgroups([u32::MAX, 1, 1], [1, 1, 1]),
                 Err(Error::Limit(Limit::GroupCount { .. }))
+            ));
+            // Partial threadgroups are not built.
+            assert!(matches!(
+                encoder.dispatch_threads([60, 1, 1], [16, 1, 1]),
+                Err(Error::Unsupported(Gap::PartialThreadgroups { .. }))
             ));
             assert_eq!(
                 refused(encoder.dispatch_threadgroups_with_indirect_buffer(&buffer, 2, [1, 1, 1])),

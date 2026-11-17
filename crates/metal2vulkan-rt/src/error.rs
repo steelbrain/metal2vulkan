@@ -36,6 +36,15 @@ pub enum Error {
     NoSuchBlock(BlockId),
     /// The runtime could not start one of its threads. Metal has no counterpart.
     Thread(io::Error),
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state): the
+    /// translator made no pipeline of the kernel: a typed refusal of what it does not translate,
+    /// a descriptor Metal refuses, or a translation past its 20-second budget. Metal's
+    /// counterpart is `newComputePipelineStateWithFunction:error:` failing, which Metal does only
+    /// for a descriptor it refuses. [`Device::new`](crate::Device::new) gives it too where the
+    /// translator takes no description of the device, which the floor leaves no device to do.
+    Translation(metal2vulkan::error::Error),
+    /// A Metal feature the runtime does not build yet: a typed known gap.
+    Unsupported(Gap),
     /// A call that needs one of the runtime's threads, after
     /// [`Device::quiesce`](crate::Device::quiesce) stopped them. Metal has no counterpart.
     Quiesced,
@@ -132,6 +141,36 @@ pub enum Refusal {
     },
 }
 
+/// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
+/// replay stream needs it, never run in a near form. Metal has no counterpart: Metal runs each.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gap {
+    /// A compute pipeline state for indirect command buffers
+    /// (`supportIndirectCommandBuffers`): the runtime has no indirect command buffers yet.
+    ///
+    /// Basis: ours (indirect command buffers are not built).
+    IndirectCommandBuffers,
+    /// A kernel that reads something the compute encoder does not supply yet: a texture or a
+    /// sampler slot, a function table, a `[[stage_in]]` fetch, a parameter the runtime does not
+    /// fill, a specialization the runtime does not set, or a stage that pins a subgroup size.
+    /// Buffers, `setBytes` data, threadgroup memory lengths and the dispatch's grid are supplied.
+    ///
+    /// Basis: ours (the encoder binds buffers alone).
+    KernelInput,
+    /// `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis:
+    /// Metal runs the last threadgroup of such an axis with the threads left. The runtime does
+    /// not dispatch Metal's partial threadgroups yet.
+    ///
+    /// Basis: ours (partial threadgroups are not built).
+    PartialThreadgroups {
+        /// The grid asked for.
+        threads_per_grid: [u32; 3],
+        /// The threadgroup size asked for.
+        threads_per_threadgroup: [u32; 3],
+    },
+}
+
 /// A limit a call ran into, with what it was asked.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +244,8 @@ impl fmt::Display for Error {
             }
             Error::Thread(error) => write!(f, "a runtime thread did not start: {error}"),
             Error::Quiesced => f.write_str("the device is quiesced"),
+            Error::Translation(error) => write!(f, "the translator made no pipeline: {error}"),
+            Error::Unsupported(gap) => write!(f, "{gap}"),
         }
     }
 }
@@ -244,6 +285,26 @@ impl fmt::Display for Refusal {
     }
 }
 
+impl fmt::Display for Gap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Gap::IndirectCommandBuffers => {
+                f.write_str("pipeline states for indirect command buffers are not built")
+            }
+            Gap::KernelInput => {
+                f.write_str("the kernel reads an input the compute encoder does not supply yet")
+            }
+            Gap::PartialThreadgroups {
+                threads_per_grid,
+                threads_per_threadgroup,
+            } => write!(
+                f,
+                "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which are not built"
+            ),
+        }
+    }
+}
+
 impl fmt::Display for Limit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -272,7 +333,12 @@ impl std::error::Error for Error {
             Error::BelowFloor(below) => Some(below),
             Error::Vulkan { result, .. } => Some(result),
             Error::Thread(error) => Some(error),
-            Error::Refused(_) | Error::Limit(_) | Error::NoSuchBlock(_) | Error::Quiesced => None,
+            Error::Translation(error) => Some(error),
+            Error::Refused(_)
+            | Error::Limit(_)
+            | Error::NoSuchBlock(_)
+            | Error::Quiesced
+            | Error::Unsupported(_) => None,
         }
     }
 }

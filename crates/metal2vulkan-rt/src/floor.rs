@@ -8,6 +8,7 @@
 //! [`Device::new`](crate::Device::new) makes that last choice on the device.
 
 use ash::vk;
+use metal2vulkan::device::{EnableSet, VkExtension, VkFeature};
 use std::ffi::{CStr, CString};
 use std::fmt;
 
@@ -24,6 +25,10 @@ pub const DEVICE_EXTENSIONS: &[&CStr] = &[
     ash::khr::swapchain::NAME,
     ash::khr::workgroup_memory_explicit_layout::NAME,
 ];
+
+/// The translator's name for each extension of [`DEVICE_EXTENSIONS`] that its shaders may use.
+pub(crate) const SHADER_EXTENSIONS: &[VkExtension] =
+    &[VkExtension::KhrWorkgroupMemoryExplicitLayout];
 
 /// Slots in the sampled-texture array: the most sampled textures alive at once.
 pub(crate) const SAMPLED_IMAGES: u32 = 65_536;
@@ -121,34 +126,43 @@ pub struct Features {
     pub workgroup_layout: vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR<'static>,
 }
 
-/// One feature: the Vulkan structure that reports it, its member as ash spells it, and the member.
+/// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
+/// the translator's name for it where the translator's shaders may use it.
 pub(crate) struct Feature {
     pub(crate) structure: &'static str,
     pub(crate) member: &'static str,
     pub(crate) field: fn(&mut Features) -> &mut vk::Bool32,
+    pub(crate) translator: Option<VkFeature>,
 }
 
 macro_rules! feature {
-    (core . $member:ident) => {
-        feature!(@ "VkPhysicalDeviceFeatures", core, $member)
+    (@structure core) => {
+        "VkPhysicalDeviceFeatures"
     };
-    (vulkan11 . $member:ident) => {
-        feature!(@ "VkPhysicalDeviceVulkan11Features", vulkan11, $member)
+    (@structure vulkan11) => {
+        "VkPhysicalDeviceVulkan11Features"
     };
-    (vulkan12 . $member:ident) => {
-        feature!(@ "VkPhysicalDeviceVulkan12Features", vulkan12, $member)
+    (@structure vulkan12) => {
+        "VkPhysicalDeviceVulkan12Features"
     };
-    (vulkan13 . $member:ident) => {
-        feature!(@ "VkPhysicalDeviceVulkan13Features", vulkan13, $member)
+    (@structure vulkan13) => {
+        "VkPhysicalDeviceVulkan13Features"
     };
-    (workgroup_layout . $member:ident) => {
-        feature!(@ "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR", workgroup_layout, $member)
+    (@structure workgroup_layout) => {
+        "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR"
     };
-    (@ $structure:literal, $part:ident, $member:ident) => {
+    (@translator) => {
+        None
+    };
+    (@translator $name:ident) => {
+        Some(VkFeature::$name)
+    };
+    ($part:ident . $member:ident $(=> $name:ident)?) => {
         Feature {
-            structure: $structure,
+            structure: feature!(@structure $part),
             member: stringify!($member),
             field: |features| &mut features.$part.$member,
+            translator: feature!(@translator $($name)?),
         }
     };
 }
@@ -156,50 +170,66 @@ macro_rules! feature {
 /// The features the runtime requires.
 pub(crate) const REQUIRED: &[Feature] = &[
     // A buffer's address is its device address, used directly by shaders.
-    feature!(vulkan12.buffer_device_address),
-    feature!(core.shader_int64),
+    feature!(vulkan12.buffer_device_address => BufferDeviceAddress),
+    feature!(core.shader_int64 => ShaderInt64),
     // One descriptor array per image class, indexed by a resource ID read at run time.
-    feature!(vulkan12.runtime_descriptor_array),
-    feature!(vulkan12.descriptor_binding_partially_bound),
-    feature!(vulkan12.descriptor_binding_update_unused_while_pending),
-    feature!(vulkan12.descriptor_binding_sampled_image_update_after_bind),
-    feature!(vulkan12.descriptor_binding_storage_image_update_after_bind),
-    feature!(core.shader_sampled_image_array_dynamic_indexing),
-    feature!(core.shader_storage_image_array_dynamic_indexing),
-    feature!(vulkan12.shader_sampled_image_array_non_uniform_indexing),
-    feature!(vulkan12.shader_storage_image_array_non_uniform_indexing),
-    feature!(core.shader_storage_image_write_without_format),
+    feature!(vulkan12.runtime_descriptor_array => RuntimeDescriptorArray),
+    feature!(vulkan12.descriptor_binding_partially_bound => DescriptorBindingPartiallyBound),
+    feature!(vulkan12.descriptor_binding_update_unused_while_pending => DescriptorBindingUpdateUnusedWhilePending),
+    feature!(vulkan12.descriptor_binding_sampled_image_update_after_bind => DescriptorBindingSampledImageUpdateAfterBind),
+    feature!(vulkan12.descriptor_binding_storage_image_update_after_bind => DescriptorBindingStorageImageUpdateAfterBind),
+    feature!(core.shader_sampled_image_array_dynamic_indexing => ShaderSampledImageArrayDynamicIndexing),
+    feature!(core.shader_storage_image_array_dynamic_indexing => ShaderStorageImageArrayDynamicIndexing),
+    feature!(vulkan12.shader_sampled_image_array_non_uniform_indexing => ShaderSampledImageArrayNonUniformIndexing),
+    feature!(vulkan12.shader_storage_image_array_non_uniform_indexing => ShaderStorageImageArrayNonUniformIndexing),
+    feature!(core.shader_storage_image_write_without_format => ShaderStorageImageWriteWithoutFormat),
     // The translator's shaders: 8-, 16- and 64-bit integers, 8- and 16-bit values in buffers,
     // scalar and std430 layout of buffer, uniform and push-constant blocks, threadgroup memory
     // laid out as Metal lays it, and the Vulkan memory model with device scope for atomics and
     // barriers.
-    feature!(core.shader_int16),
-    feature!(vulkan12.shader_int8),
-    feature!(vulkan11.storage_buffer16_bit_access),
-    feature!(vulkan12.storage_buffer8_bit_access),
-    feature!(vulkan12.scalar_block_layout),
-    feature!(vulkan12.uniform_buffer_standard_layout),
-    feature!(workgroup_layout.workgroup_memory_explicit_layout),
-    feature!(workgroup_layout.workgroup_memory_explicit_layout_scalar_block_layout),
-    feature!(workgroup_layout.workgroup_memory_explicit_layout8_bit_access),
-    feature!(workgroup_layout.workgroup_memory_explicit_layout16_bit_access),
-    feature!(vulkan12.vulkan_memory_model),
-    feature!(vulkan12.vulkan_memory_model_device_scope),
+    feature!(core.shader_int16 => ShaderInt16),
+    feature!(vulkan12.shader_int8 => ShaderInt8),
+    feature!(vulkan11.storage_buffer16_bit_access => StorageBuffer16BitAccess),
+    feature!(vulkan12.storage_buffer8_bit_access => StorageBuffer8BitAccess),
+    feature!(vulkan12.scalar_block_layout => ScalarBlockLayout),
+    feature!(vulkan12.uniform_buffer_standard_layout => UniformBufferStandardLayout),
+    feature!(workgroup_layout.workgroup_memory_explicit_layout => WorkgroupMemoryExplicitLayout),
+    feature!(workgroup_layout.workgroup_memory_explicit_layout_scalar_block_layout => WorkgroupMemoryExplicitLayoutScalarBlockLayout),
+    feature!(workgroup_layout.workgroup_memory_explicit_layout8_bit_access => WorkgroupMemoryExplicitLayout8BitAccess),
+    feature!(workgroup_layout.workgroup_memory_explicit_layout16_bit_access => WorkgroupMemoryExplicitLayout16BitAccess),
+    feature!(vulkan12.vulkan_memory_model => VulkanMemoryModel),
+    feature!(vulkan12.vulkan_memory_model_device_scope => VulkanMemoryModelDeviceScope),
     // Submission, barriers and render passes.
     feature!(vulkan12.timeline_semaphore),
-    feature!(vulkan13.synchronization2),
+    feature!(vulkan13.synchronization2 => Synchronization2),
     feature!(vulkan13.dynamic_rendering),
 ];
 
 /// The features the runtime uses only where the device reports them. Each answer chooses one of
 /// two forms; no other feature does.
 pub(crate) const OPTIONAL: &[Feature] = &[
-    feature!(vulkan12.shader_float16),
-    feature!(core.shader_storage_image_read_without_format),
-    feature!(vulkan12.shader_buffer_int64_atomics),
-    feature!(vulkan12.shader_shared_int64_atomics),
-    feature!(core.shader_float64),
+    feature!(vulkan12.shader_float16 => ShaderFloat16),
+    feature!(core.shader_storage_image_read_without_format => ShaderStorageImageReadWithoutFormat),
+    feature!(vulkan12.shader_buffer_int64_atomics => ShaderBufferInt64Atomics),
+    feature!(vulkan12.shader_shared_int64_atomics => ShaderSharedInt64Atomics),
+    feature!(core.shader_float64 => ShaderFloat64),
 ];
+
+/// What the translator's shaders may use of what device creation enables with `features`: each
+/// enabled feature the translator names, and [`SHADER_EXTENSIONS`].
+pub(crate) fn shader_enables(features: &Features) -> EnableSet {
+    let mut features = *features;
+    let mut enables = EnableSet::new();
+    for feature in REQUIRED.iter().chain(OPTIONAL) {
+        if let Some(name) = feature.translator {
+            if *(feature.field)(&mut features) == vk::TRUE {
+                enables.features.insert(name);
+            }
+        }
+    }
+    enables.extensions.extend(SHADER_EXTENSIONS);
+    enables
+}
 
 /// What [`check`] reads from a physical device.
 pub(crate) struct Queried {

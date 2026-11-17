@@ -3,9 +3,9 @@
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
-use crate::error::{Error, Limit, Refusal};
+use crate::error::{Error, Gap, Limit, Refusal};
 use crate::hazard::Access;
-use crate::pipeline::{ComputePipelineState, FieldValue, Place, Variant, PUSH_BYTES};
+use crate::pipeline::{ComputePipelineState, Constant, FieldValue, Place, Variant, PUSH_BYTES};
 use crate::record::{self, Reach};
 use crate::ring::CHUNK;
 use ash::vk;
@@ -119,9 +119,10 @@ pub struct ComputeCommandEncoder {
     threadgroup_lengths: Vec<(u32, u32)>,
     /// `use_resource` declarations, by resource id.
     declared: Vec<(u32, Access)>,
-    /// The threadgroup size and `VkPipeline` of the last dispatch, while the state and the
-    /// threadgroup memory lengths are unchanged.
-    last: Option<([u32; 3], vk::Pipeline)>,
+    /// The threadgroup size, whether it was an indirect dispatch of a kernel that tells one apart,
+    /// and the `VkPipeline` of the last dispatch, while the state and the threadgroup memory
+    /// lengths are unchanged.
+    last: Option<([u32; 3], bool, vk::Pipeline)>,
     /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
     /// Whether a dispatch of the encoder wrote anything.
@@ -325,10 +326,12 @@ impl ComputeCommandEncoder {
         )
     }
 
-    /// `dispatchThreads:threadsPerThreadgroup:`: the threadgroup counts are rounded up, and the
-    /// grid's extent is a parameter past which the kernel's threads do nothing.
+    /// `dispatchThreads:threadsPerThreadgroup:`: the grid in whole threadgroups, with the grid's
+    /// extent a parameter of the kernel.
     ///
-    /// Err: as [`dispatch_threadgroups`](Self::dispatch_threadgroups).
+    /// Err: as [`dispatch_threadgroups`](Self::dispatch_threadgroups);
+    /// [`Gap::PartialThreadgroups`] for a grid that is not a whole number of threadgroups on some
+    /// axis.
     pub fn dispatch_threads(
         &mut self,
         threads_per_grid: [u32; 3],
@@ -338,7 +341,13 @@ impl ComputeCommandEncoder {
         for axis in 0..3 {
             groups[axis] = match threads_per_threadgroup[axis] {
                 0 => 0,
-                size => threads_per_grid[axis].div_ceil(size),
+                size if threads_per_grid[axis] % size != 0 => {
+                    return Err(Error::Unsupported(Gap::PartialThreadgroups {
+                        threads_per_grid,
+                        threads_per_threadgroup,
+                    }))
+                }
+                size => threads_per_grid[axis] / size,
             };
         }
         self.dispatch(
@@ -443,21 +452,29 @@ impl ComputeCommandEncoder {
                 return Ok(());
             }
         }
+        // Only a kernel that reads its grid from the dispatch region tells an indirect dispatch
+        // apart.
+        let indirect = matches!(grid, Grid::Indirect(..))
+            && interface
+                .constants
+                .iter()
+                .any(|(_, set)| matches!(set, Constant::Region));
         let vk_pipeline = match self.last {
-            Some((last, made)) if last == size => made,
+            Some((last, last_indirect, made)) if last == size && last_indirect == indirect => made,
             _ => {
                 let variant = Variant {
                     size,
                     threadgroup_lengths: interface
-                        .threadgroup_ids
+                        .threadgroups
                         .iter()
-                        .map(|(index, _)| self.threadgroup_length(*index))
+                        .map(|&index| self.threadgroup_length(index))
                         .collect(),
+                    indirect,
                 };
                 pipeline.inner.pipeline(&variant)?
             }
         };
-        self.last = Some((size, vk_pipeline));
+        self.last = Some((size, indirect, vk_pipeline));
         let serial = self.serial;
         let wrote = {
             let accesses = Accesses {

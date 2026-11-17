@@ -17,6 +17,9 @@ use crate::ring::Ring;
 use crate::submit::{self, Work};
 use crate::times::Ticks;
 use ash::vk;
+use metal2vulkan::device::{
+    ApiVersion, DeviceDescription, DevicePolicy, HandleDomain, PointerDomain,
+};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{c_char, CString};
@@ -151,6 +154,8 @@ pub(crate) struct Core {
     pub(crate) ring: Ring,
     /// Resource ids, for the hazard sets.
     pub(crate) ids: Ids,
+    /// The translator, for what device creation enables, under the identity domains.
+    pub(crate) translator: metal2vulkan::device::Device,
     /// Quiesced or torn down: calls that need a thread are refused.
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
@@ -205,12 +210,15 @@ impl Device {
     /// the completion thread.
     ///
     /// Err: [`Error::BelowFloor`] with every item the device lacks; [`Error::Vulkan`] where a
-    /// Vulkan call fails; [`Error::Thread`].
+    /// Vulkan call fails; [`Error::Thread`]; [`Error::Translation`] where the translator takes no
+    /// description of the device.
     pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error> {
         let instance = physical.instance().clone();
         let vk_instance = instance.vk();
         let raw = physical.raw();
         let capabilities = physical.check().map_err(Error::BelowFloor)?;
+        // SAFETY: `raw` is the instance's, which was made at the floor's version.
+        let translator = unsafe { translator(vk_instance, raw, &capabilities.features) }?;
         let family = capabilities.queue_family;
         // SAFETY: as above.
         let families = unsafe { vk_instance.get_physical_device_queue_family_properties(raw) };
@@ -330,6 +338,7 @@ impl Device {
             limits,
             ring: Ring::new(),
             ids: Ids::new(),
+            translator,
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
         });
@@ -638,6 +647,32 @@ fn finish(runner: Option<Runner>, core: &Arc<Core>, deadline: Option<Instant>) -
 /// # Safety
 ///
 /// `device` was made with `capabilities.features`, and `family` is its queues' family.
+/// The translator for `raw` with what device creation enables with `features`, under the identity
+/// domains: a buffer argument is the guest's address of the buffer, a push field, and a texture or
+/// a sampler its resource ID.
+///
+/// # Safety
+///
+/// `raw` is a physical device of `instance`, which was made at [`floor::VERSION`].
+unsafe fn translator(
+    instance: &ash::Instance,
+    raw: vk::PhysicalDevice,
+    features: &floor::Features,
+) -> Result<metal2vulkan::device::Device, Error> {
+    // SAFETY: the caller's contract.
+    let described =
+        unsafe { DeviceDescription::query(instance, raw, ApiVersion::from_packed(floor::VERSION)) };
+    let description = described
+        .and_then(|description| description.with_enabled(&floor::shader_enables(features)))
+        .map_err(Error::Translation)?;
+    let policy = DevicePolicy {
+        pointer_domain: PointerDomain::Identity,
+        handle_domain: HandleDomain::Identity,
+        ..DevicePolicy::default()
+    };
+    metal2vulkan::device::Device::new(description, policy).map_err(Error::Translation)
+}
+
 unsafe fn objects(
     device: &ash::Device,
     capabilities: &floor::Capabilities,

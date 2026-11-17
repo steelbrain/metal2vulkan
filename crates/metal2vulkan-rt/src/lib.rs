@@ -38,11 +38,18 @@ pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};
-pub use error::{Error, Limit, Refusal};
+pub use error::{Error, Gap, Limit, Refusal};
 pub use event::{Event, SharedEvent};
 pub use extension::DeviceExtension;
 pub use instance::{Instance, PhysicalDevice};
 pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass, BLOCK_LEN};
+/// `MTLLibrary` and `MTLFunction`: the translator's, read from AIR or a metallib.
+pub use metal2vulkan::library::{Function, Library};
+/// `MTLComputePipelineDescriptor`, its kernel, and a pipeline's precision notes: the
+/// translator's.
+pub use metal2vulkan::pipeline::{
+    ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote, StageSource,
+};
 pub use pipeline::ComputePipelineState;
 pub use queue::CommandQueue;
 pub use times::host_time;

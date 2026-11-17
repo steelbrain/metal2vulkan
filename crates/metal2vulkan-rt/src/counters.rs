@@ -51,6 +51,9 @@ struct Atomics {
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
     pipelines_created: AtomicU64,
+    first_use_waits: AtomicU64,
+    first_use_wait_nanos: AtomicU64,
+    first_use_wait_max_nanos: AtomicU64,
     blocks_made: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
@@ -83,6 +86,15 @@ impl Counters {
         atomic.fetch_add(1, Relaxed);
     }
 
+    /// One more first-use wait: an encoding call that made the `VkPipeline` it needed, for
+    /// `nanos` nanoseconds.
+    pub(crate) fn first_use_wait(&self, nanos: u64) {
+        let a = &self.atomics;
+        a.first_use_waits.fetch_add(1, Relaxed);
+        a.first_use_wait_nanos.fetch_add(nanos, Relaxed);
+        a.first_use_wait_max_nanos.fetch_max(nanos, Relaxed);
+    }
+
     /// One more live resource of `gauge`'s kind.
     pub(crate) fn rise(&self, gauge: Gauge) {
         self.gauge(gauge).fetch_add(1, Relaxed);
@@ -113,6 +125,9 @@ impl Counters {
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
+            first_use_waits: a.first_use_waits.load(Relaxed),
+            first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
+            first_use_wait_max_nanos: a.first_use_wait_max_nanos.load(Relaxed),
             blocks_made: a.blocks_made.load(Relaxed),
         }
     }
@@ -152,6 +167,14 @@ pub struct Metrics {
     pub bytes_copied: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
+    /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
+    /// for a threadgroup size or threadgroup memory lengths the state had not run with before.
+    pub first_use_waits: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) the first-use waits took, in total.
+    pub first_use_wait_nanos: u64,
+    /// The longest first-use wait, in nanoseconds; a maximum since the device was made, so the
+    /// difference of two reads does not apply to it.
+    pub first_use_wait_max_nanos: u64,
     /// `VkDeviceMemory` allocations made: pooled and dedicated blocks, the zero source and the
     /// parameter ring's blocks, and later image blocks.
     pub blocks_made: u64,
