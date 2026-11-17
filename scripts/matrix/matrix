@@ -61,6 +61,8 @@ KEEP = r"""f == 0 { print; if ($0 ~ /^ *Summary \[/) f = 1; next }
 /^ +[A-Z][A-Z-]* +\[ *[0-9.]+s\]/ { k = ($1 != "PASS") }
 k || /M2V-MATRIX / { print }"""
 NEXTEST_OUT = "--no-fail-fast --success-output final --failure-output final"
+#: A failed allocation in a job's output: a device or host allocation Vulkan refused, or Rust's.
+STARVED = re.compile(r"OUT_OF_(DEVICE|HOST)_MEMORY|memory allocation of \d+ bytes failed")
 DEVICE_LINES = (r"""vulkaninfo --summary 2>/dev/null | tr -d '\r' | sed -n 's/^[[:space:]]*\(deviceName\|driverName\|driverInfo\|driverVersion\)[[:space:]]*= */M2V-DEVICE '"{leg}"' \1 /p'""")
 
 
@@ -322,8 +324,9 @@ class Run:
 
     def size(self, kind, node):
         """RAM and timeout from this kind's last measured runs on NODE: 1.3x the peak (a run that
-        peaked at its reservation keeps it; one ended over it gets 1.5x), and 1.5x the longest, never
-        below the kind's default: an incremental run's minutes say nothing of a full rebuild's."""
+        peaked at its reservation keeps it; one that ended for want of RAM gets 1.5x), and 1.5x the
+        longest, never below the kind's default: an incremental run's minutes say nothing of a full
+        rebuild's."""
         ram, minutes = DEFAULTS[kind]
         runs = self.stats.get(f"{kind}@{node}", [])[-3:]
         if runs:
@@ -336,9 +339,12 @@ class Run:
     def job(self, kind, node, script, name, gpus=(), carry=None, space=None, exclusive=False, again=True):
         """Dispatch SCRIPT on NODE, wait for it, and return (exit code, output, job record).
         SPACE names a workspace kept for this kind on this node across runs (incremental builds,
-        and no fresh checkout of the tree). A job that times anything is EXCLUSIVE. A job killed
-        for going over its RAM runs once more, sized from that kill: a fresh workspace can need
-        more than the incremental runs it was sized from, and the leg is not the job's to lose."""
+        and no fresh checkout of the tree). A job that times anything is EXCLUSIVE. A job that
+        ended for want of RAM runs once more, sized from that run: a fresh workspace can need more
+        than the incremental runs it was sized from, and the leg is not the job's to lose. Wanting
+        RAM is a peak at the reservation and either a kill over it or a failed allocation in the
+        output: a driver that pins host memory for a device allocation can answer the job's limit
+        with an out-of-memory error rather than the kill."""
         ram, minutes = self.size(kind, node)
         args = ["dispatch", "--json", "--priority", "5", "--kill-on-stall", "--label", "agent=matrix",
                 "--label", f"matrix={self.short}", "--on", f"node={node}", "--ram", str(ram),
@@ -379,7 +385,8 @@ class Run:
         if rec and rec.get("started_at") and rec.get("ended_at"):
             peak = rec.get("usage", {}).get("peak_mem_bytes", 0) / 2**30
             took = (rec.get("ended_at", 0) - rec.get("started_at", 0)) / 60000
-            killed = rec.get("exit_code") == 137 and peak >= 0.95 * ram
+            code = rec.get("exit_code")
+            killed = peak >= 0.95 * ram and (code == 137 or (code != 0 and bool(STARVED.search(out))))
             with self.lock:
                 self.stats.setdefault(f"{kind}@{node}", []).append(
                     dict(ram=ram, peak=round(peak, 2), minutes=round(took, 2), killed=killed))
@@ -388,7 +395,7 @@ class Run:
                     self.spaces[key] = rec["workspace"]
         log(f"{name}: job {jid} ended {w.returncode}")
         if killed and again:
-            log(f"{name}: over its {ram} GiB; once more with room from that run")
+            log(f"{name}: wanted more than its {ram} GiB; once more with room from that run")
             return self.job(kind, node, script, name, gpus, carry, space, exclusive, again=False)
         return w.returncode, out, rec
 
