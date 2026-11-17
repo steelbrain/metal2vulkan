@@ -411,8 +411,8 @@ impl crate::Device {
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that reads what the
     /// compute encoder does not supply yet; [`Refusal::SamplerIds`] where `sampler_ids` answers
-    /// another count; [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted) and
-    /// [`Refusal::IndexInUse`](crate::Refusal::IndexInUse) for a constexpr sampler's index;
+    /// another count; [`Refusal::IndicesNotGranted`] and
+    /// [`Refusal::IndexInUse`] for a constexpr sampler's index;
     /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
     pub fn new_compute_pipeline_state(
         &self,
