@@ -465,7 +465,8 @@ impl super::DeviceShared {
     /// device notes queue times (`WorkCounts::batch_submit_cpu_nanos`, and the long calls' apart),
     /// and the call counted
     /// in the queue's place in its driver's period of stalls (`submit_stalls.rs`): `f` makes one
-    /// signalling call.
+    /// signalling call. A batch's call that succeeded is kept among the queue's last
+    /// (`submit_calls.rs`), whose floor decides whether a committing thread makes the next.
     pub(crate) fn submit_logged(
         &self,
         (queue, value): (usize, Option<u64>),
@@ -499,7 +500,14 @@ impl super::DeviceShared {
                         0 => vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
                         raw => vk::Result::from_raw(raw),
                     }),
-                    Err(_) => f(vk_queue),
+                    Err(_) => {
+                        // A device test's slow call (`Device::slow_submit_calls`), a batch's.
+                        let pause = self.submit_call_pause.load(Ordering::Relaxed);
+                        if pause > 0 && value.is_some() {
+                            std::thread::sleep(std::time::Duration::from_nanos(pause));
+                        }
+                        f(vk_queue)
+                    }
                 }
             };
             let submitted = f(vk_queue);
@@ -510,6 +518,10 @@ impl super::DeviceShared {
             crate::command_buffer::completion::trace::submitting("submit returned");
             let nanos = end.saturating_sub(entered);
             (self.counts).batch_submitted_in(nanos, spent);
+            // A batch's call, the queue's cost a committing thread reads (`submit_calls.rs`).
+            if submitted.is_ok() && value.is_some() {
+                slot.calls.called(nanos);
+            }
             let took = period.took(nanos, cpu);
             if submitted.is_ok() && period.called(Caller::Work, took, end) {
                 self.counts.submit_stall_on_work();

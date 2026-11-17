@@ -727,7 +727,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
 - `CommandBuffer::commit_and_submit` commits as `commit` does, then submits on the calling thread
   where no other submission pass is under way: the ready command buffers in commit order, this
   one among them, each needing no host step and no switch of a storage form, up to the pass's
-  bound (under `CompletionPolicy::Grouped`, on a driver whose batches may wait in a group, one
+  bound, but for those of a `VkQueue` whose batches' `vkQueueSubmit` calls are slow (each of its
+  last 15 100 us or more, as timed: a driver that lists every host import in each
+  kernel submission, RADV's over a guest's memory on a host of unified memory), which the
+  scheduler's thread submits while the calling thread goes on
+  (`WorkCounts::scheduler_at_commit_left_slow_calls`; under `CompletionPolicy::Grouped`, on a driver whose batches may wait in a group, one
   goes alone where its `VkQueue` runs at most one earlier submission not seen complete, and is
   left to the scheduler's thread to group where two or more run; one held back, another queue's waiting for its check or an event, holds back only the
   later commits that wait behind it, as on the scheduler's thread), their submission checks run

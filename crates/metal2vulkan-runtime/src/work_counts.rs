@@ -8326,6 +8326,10 @@ pub struct WorkCounts {
     pub scheduler_at_commit_left_unshared: u64,
     /// It waits for its turn on a `VkQueue` it shares (`queue_turns.rs`).
     pub scheduler_at_commit_left_turns: u64,
+    /// Its `VkQueue`'s batches' `vkQueueSubmit` calls are slow, each of the last 15 100 us or
+    /// more, so the scheduler's thread makes them and the committing thread goes on
+    /// (`device/submit_calls.rs`).
+    pub scheduler_at_commit_left_slow_calls: u64,
     /// Anything else: a rebind encodes it again, a decode it reads is queued, a switch of storage
     /// forms rides on it, a group holds it or was held, or its submission was put back.
     pub scheduler_at_commit_left_other: u64,
@@ -12634,6 +12638,7 @@ impl Device {
             scheduler_at_commit_left_binary_waits: left_at_commit(LeftAtCommit::BinaryWait),
             scheduler_at_commit_left_unshared: left_at_commit(LeftAtCommit::Unshared),
             scheduler_at_commit_left_turns: left_at_commit(LeftAtCommit::Turn),
+            scheduler_at_commit_left_slow_calls: left_at_commit(LeftAtCommit::SlowCalls),
             scheduler_at_commit_left_other: left_at_commit(LeftAtCommit::Other),
             footprints_built: counters.footprints_built.load(Ordering::Relaxed),
             footprint_lock_waits: counters.footprint_lock_waits.load(Ordering::Relaxed),

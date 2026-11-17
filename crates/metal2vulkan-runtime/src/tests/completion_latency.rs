@@ -1420,10 +1420,10 @@ const GUEST_RUNS: [[u64; 6]; 3] = [
 /// where the device exports one.
 const GUEST_COMPOSITOR: [u64; 4] = [200, 150, 120, 100];
 
-/// A stand-in for the 780M guest's submission cost: the scheduler and committing threads pause
-/// this long after each `vkQueueSubmit` returned (`trace::pause_after_submit`), as the guest's
-/// submissions there took 240 to 267 us each (its command buffers name hundreds of the guest's
-/// memory objects; these name two).
+/// A stand-in for the 780M guest's submission cost: each batch's `vkQueueSubmit` takes this much
+/// longer, inside the call (`Device::slow_submit_calls`), as the guest's submissions there took
+/// 240 to 267 us each (its command buffers name hundreds of the guest's memory objects; these
+/// name two).
 const GUEST_SUBMIT_COST: Duration = Duration::from_micros(250);
 
 /// One leg of [`guest_shaped_completion_latency`]: what its command buffers carry beyond a
@@ -1434,13 +1434,21 @@ enum GuestLeg {
     Plain,
     /// A submission handler each, as the guest's have.
     SubmissionHandlers,
-    /// And the stand-in submission cost ([`GUEST_SUBMIT_COST`]).
+    /// And the stand-in submission cost ([`GUEST_SUBMIT_COST`]): its calls slow, so committing
+    /// threads leave their batches to the scheduler's thread (`device/submit_calls.rs`).
     SubmitCost,
+    /// As [`SubmitCost`](Self::SubmitCost), every batch a committing thread's to submit whatever
+    /// its call's cost (`Device::leave_calls_from`): the form before slow calls were left.
+    SubmitCostAtCommit,
     /// As [`Plain`](Self::Plain), each command buffer's blit also filling [`GUEST_PAGE`] bytes of
     /// a no-copy buffer over host pages of its queue's own, as a guest's command buffers name its
     /// memory over the guest's pages on a host of unified memory: its encoder keeps its log for a
     /// rebind (`replay.rs`), so its batch holds segments and needs no host step.
     HostPages,
+    /// As [`HostPages`](Self::HostPages), every batch whose queue's calls were timed left to the
+    /// scheduler's thread whatever their cost (`Device::leave_calls_from`): what the hand-off
+    /// costs at the device's own calls.
+    HostPagesHandedOff,
 }
 
 /// The bytes of host pages each queue's no-copy buffer of [`GuestLeg::HostPages`] lies over, and
@@ -1471,6 +1479,8 @@ struct GuestSeen {
     completed_handler: u64,
     /// The host nanoseconds just before its `commit_and_submit` call.
     committed: u64,
+    /// Its GPU start, in host nanoseconds (`CommandBuffer::gpu_start_time`).
+    gpu_start: u64,
     /// The return of the driver's submission that carried its last batch
     /// (`CommandBuffer::submit_returned_time`), and the start of its submission handler (0 in a
     /// leg without one).
@@ -1517,7 +1527,9 @@ fn guest_shaped_completion_latency() {
         GuestLeg::Plain,
         GuestLeg::SubmissionHandlers,
         GuestLeg::SubmitCost,
+        GuestLeg::SubmitCostAtCommit,
         GuestLeg::HostPages,
+        GuestLeg::HostPagesHandedOff,
     ] {
         guest_leg(leg);
     }
@@ -1528,7 +1540,7 @@ fn guest_leg(leg: GuestLeg) {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("m2v-guest-latency-{}", std::process::id())));
     std::fs::create_dir_all(&scratch.0).unwrap();
-    let host_pages = matches!(leg, GuestLeg::HostPages);
+    let host_pages = matches!(leg, GuestLeg::HostPages | GuestLeg::HostPagesHandedOff);
     let pages = GuestPages(match host_pages {
         true => (0..=GUEST_RUNS.len())
             .map(|_| super::host_os::private(GUEST_PAGE))
@@ -1612,7 +1624,10 @@ fn guest_leg(leg: GuestLeg) {
     let seen: Arc<Mutex<Vec<GuestSeen>>> = Arc::default();
     let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let a_frame: usize = runs.iter().map(|runs| runs.len()).sum();
-    let handlers = matches!(leg, GuestLeg::SubmissionHandlers | GuestLeg::SubmitCost);
+    let handlers = matches!(
+        leg,
+        GuestLeg::SubmissionHandlers | GuestLeg::SubmitCost | GuestLeg::SubmitCostAtCommit
+    );
     let commit = |(queue, buffer, page): (&CommandQueue, &Buffer, Option<&Buffer>),
                   micros: u64,
                   sync_file: bool,
@@ -1649,6 +1664,7 @@ fn guest_leg(leg: GuestLeg) {
                 if noted {
                     let (queue, seen_at_turn) = trace::seen_of(finished);
                     let gpu_end = (finished.gpu_end_time().unwrap() * 1e9).round() as u64;
+                    let gpu_start = (finished.gpu_start_time().unwrap() * 1e9).round() as u64;
                     let seen_handler = seen_at.load(std::sync::atomic::Ordering::SeqCst);
                     let returned = (finished.submit_returned_time() * 1e9).round() as u64;
                     let submission_handler = submitted_at.load(std::sync::atomic::Ordering::SeqCst);
@@ -1660,6 +1676,7 @@ fn guest_leg(leg: GuestLeg) {
                         seen_handler,
                         completed_handler,
                         committed,
+                        gpu_start,
                         returned,
                         submission_handler,
                     });
@@ -1689,8 +1706,13 @@ fn guest_leg(leg: GuestLeg) {
             std::thread::sleep(Duration::from_micros(50));
         }
     };
-    if matches!(leg, GuestLeg::SubmitCost) {
-        trace::pause_after_submit(Some(GUEST_SUBMIT_COST));
+    if matches!(leg, GuestLeg::SubmitCost | GuestLeg::SubmitCostAtCommit) {
+        device.slow_submit_calls(Some(GUEST_SUBMIT_COST));
+    }
+    match leg {
+        GuestLeg::SubmitCostAtCommit => device.leave_calls_from(Some(u64::MAX)),
+        GuestLeg::HostPagesHandedOff => device.leave_calls_from(Some(1)),
+        _ => {}
     }
     let mut before = None;
     let mut started = Instant::now();
@@ -1728,7 +1750,6 @@ fn guest_leg(leg: GuestLeg) {
     }
     wait_done((GUEST_WARM + GUEST_FRAMES) * a_frame);
     let wall = started.elapsed();
-    trace::pause_after_submit(None);
     let steps = trace::stop();
     let (before, after) = (before.unwrap(), device.work_counts());
     let per_frame = |count: fn(&WorkCounts) -> u64| {
@@ -1790,6 +1811,28 @@ fn guest_leg(leg: GuestLeg) {
         .map(|one| us(one.committed, one.returned))
         .collect();
     let (timed, to_submission) = (to_submission.len(), tail(to_submission));
+    // From each command buffer's `commit_and_submit` call to its GPU start, and the commit calls'
+    // own time, with each `VkQueue`'s floor of its last batch calls (`device/submit_calls.rs`).
+    let to_gpu_start = tail(
+        (seen.iter())
+            .filter(|one| one.committed > 0 && one.gpu_start >= one.committed)
+            .map(|one| us(one.committed, one.gpu_start))
+            .collect(),
+    );
+    let commit_call = (after.commit_nanos - before.commit_nanos) as f64
+        / (after.commit_calls - before.commit_calls).max(1) as f64
+        / 1e3;
+    let floors: Vec<String> = (device.shared().queues.iter())
+        .map(|slot| format!("{:.1}", slot.calls.floor() as f64 / 1e3))
+        .collect();
+    eprintln!(
+        "COMPLETION-LATENCY guest-shaped, {leg:?} ({}), us: commit call {commit_call:.1} a \
+         commit; commit -> GPU start {to_gpu_start}; at commit a frame {:.2} batches, left for \
+         slow calls {:.2}; batch call floor by VkQueue {floors:?}",
+        device.name(),
+        per_frame(|c| c.batches_submitted_at_commit),
+        per_frame(|c| c.scheduler_at_commit_left_slow_calls),
+    );
     eprintln!(
         "COMPLETION-LATENCY guest-shaped, {leg:?} ({}), us: commit -> its submission returned {} \
          ({} of {}); at commit a frame: {:.2} passes, {:.2} batches; left: taken in {:.2}, \

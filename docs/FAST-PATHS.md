@@ -150,7 +150,8 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   committed with `commit_and_submit`, passes for itself and submits only batches that need
   nothing of the scheduler's thread; where it leaves a compositor's command buffer that the
   scheduler's thread would send first (a scheduled or submission handler for a thread about to
-  block, a host step recorded) or hold the batches behind (above), it leaves the other queues'
+  block, a switch of storage forms, a `VkQueue` whose calls are slow for a committing thread) or
+  hold the batches behind (above), it leaves the other queues'
   batches on that `VkQueue` to that thread too, which then sends the compositor's first: they
   wait for one wake and pass of it, or that hold.
   Under `RenderLoweringPolicy::Worker` a compositor's commit left to the lowering thread holds no

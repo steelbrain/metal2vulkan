@@ -33,6 +33,7 @@ pub(crate) mod queue_quiet;
 pub(crate) mod relay;
 mod staging;
 pub(super) mod submit;
+pub(crate) mod submit_calls;
 pub(crate) mod submit_stalls;
 
 pub use adopt::RawDevice;
@@ -626,6 +627,16 @@ pub(super) struct DeviceShared {
     /// (`Device::fail_next_submissions_with`).
     #[cfg(test)]
     pub(crate) failing_result: std::sync::atomic::AtomicI32,
+    /// How long each `vkQueueSubmit` of a batch takes more, in nanoseconds, slept inside its timed
+    /// call: the device tests' stand-in for a driver whose calls are slow
+    /// (`Device::slow_submit_calls`).
+    #[cfg(test)]
+    pub(crate) submit_call_pause: AtomicU64,
+    /// The call floor at or above which a committing thread leaves a `VkQueue`'s batches to
+    /// the scheduler's thread, where a device test set one (`Device::leave_calls_from`); 0 for
+    /// `submit_calls::SLOW_NANOS`.
+    #[cfg(test)]
+    pub(crate) slow_calls_from: AtomicU64,
     /// Every linear image of a render target renders as a color attachment only under
     /// `VK_NV_linear_color_attachment`'s rule, whatever the device's facts: for the tests of
     /// `merge_scratch.rs` on a device that renders one beside any other
@@ -871,6 +882,19 @@ impl DeviceShared {
             let _ = slot.with(|queue| unsafe { raw.queue_wait_idle(queue) });
             exit_guard::called(Call::QueueWaitIdle);
         }
+    }
+
+    /// Whether a committing thread leaves the batches of `VkQueue` `queue` to the scheduler's
+    /// thread: each of its batches' last calls took `submit_calls::SLOW_NANOS` or more, as timed
+    /// (`submit_calls.rs`).
+    pub(crate) fn submits_slowly(&self, queue: usize) -> bool {
+        let bound = submit_calls::SLOW_NANOS;
+        #[cfg(test)]
+        let bound = match self.slow_calls_from.load(Ordering::Relaxed) {
+            0 => bound,
+            set => set,
+        };
+        self.queues[queue].calls.slow(bound)
     }
 }
 
@@ -1429,6 +1453,9 @@ pub(crate) struct QueueSlot {
     raw: Mutex<(vk::Queue, submit_stalls::Period)>,
     /// Its place's `Period::may_be_due`, as of the last use: read without the lock.
     stall_due: AtomicBool,
+    /// Its batches' last `vkQueueSubmit` calls' times and their floor (`submit_calls.rs`):
+    /// kept under the lock, the floor read without it.
+    pub(crate) calls: submit_calls::SubmitCalls,
     /// The queue's family, which the command pools of what it runs are made for.
     pub(super) family: u32,
     /// The family's queue flags: the commands it runs, and so the accesses a barrier recorded
@@ -1673,6 +1700,22 @@ impl Device {
     pub(crate) fn fail_next_submissions_with(&self, count: u64, result: vk::Result) {
         (self.shared().failing_result).store(result.as_raw(), Ordering::Relaxed);
         self.fail_next_submissions(count);
+    }
+
+    /// Make each `vkQueueSubmit` of a batch take `pause` more, inside its timed call, from now on
+    /// (`None`: no more): the tests' stand-in for a driver whose calls are slow
+    /// (`submit_calls.rs`).
+    pub(crate) fn slow_submit_calls(&self, pause: Option<std::time::Duration>) {
+        let nanos = pause.map_or(0, |pause| pause.as_nanos() as u64);
+        (self.shared().submit_call_pause).store(nanos, Ordering::Relaxed);
+    }
+
+    /// A committing thread leaves a `VkQueue`'s batches to the scheduler's thread where their
+    /// last calls each took `bound` nanoseconds or more, from now on (`None`:
+    /// `submit_calls::SLOW_NANOS` again): 1 leaves every batch of a queue whose calls were timed,
+    /// `u64::MAX` none.
+    pub(crate) fn leave_calls_from(&self, bound: Option<u64>) {
+        (self.shared().slow_calls_from).store(bound.unwrap_or(0), Ordering::Relaxed);
     }
 }
 
@@ -2417,6 +2460,7 @@ impl Device {
                 QueueSlot {
                     raw: Mutex::new((queue, submit_stalls::Period::new(stalls))),
                     stall_due: AtomicBool::new(false),
+                    calls: submit_calls::SubmitCalls::default(),
                     family,
                     flags: flags_of(family),
                     reads: memory_reads.for_family(flags_of(family)),
@@ -3327,6 +3371,10 @@ impl Device {
             failing_submissions: Default::default(),
             #[cfg(test)]
             failing_result: Default::default(),
+            #[cfg(test)]
+            submit_call_pause: Default::default(),
+            #[cfg(test)]
+            slow_calls_from: Default::default(),
             #[cfg(test)]
             linear_rule_forced: Default::default(),
             #[cfg(test)]

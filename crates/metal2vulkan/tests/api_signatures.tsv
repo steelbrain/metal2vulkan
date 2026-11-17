@@ -3666,6 +3666,7 @@ field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_gone	pub schedul
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_host_steps	pub scheduler_at_commit_left_host_steps: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_other	pub scheduler_at_commit_left_other: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_passing	pub scheduler_at_commit_left_passing: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_slow_calls	pub scheduler_at_commit_left_slow_calls: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_taken_in	pub scheduler_at_commit_left_taken_in: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_turns	pub scheduler_at_commit_left_turns: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_unshared	pub scheduler_at_commit_left_unshared: u64

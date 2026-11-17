@@ -286,6 +286,13 @@ impl CommandBufferShared {
         (self.device.shared().queues[self.queue.vk_queue()].pending_beyond_one()).is_none()
     }
 
+    /// Whether a committing thread leaves its batches to the scheduler's thread, as its
+    /// `VkQueue`'s batches' `vkQueueSubmit` calls are slow (`device/submit_calls.rs`): read
+    /// without the queue's lock.
+    pub(crate) fn submits_slowly(&self) -> bool {
+        self.device.shared().submits_slowly(self.queue.vk_queue())
+    }
+
     /// Its queue's identity: the logical queue its batches line up on in the scheduler's order
     /// (`scheduler/order.rs`).
     pub(crate) fn logical_queue(&self) -> u64 {
