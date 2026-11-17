@@ -1,17 +1,18 @@
 //! Compute encoders, under a device cfg on every device of the cfg's kind: dispatches over bound
 //! buffers and `set_bytes`, parameters past the push window
 //! through the ring, indirect dispatch, barriers only at hazards in a serial encoder and only on
-//! request in a concurrent one, and Metal's refusals.
+//! request in a concurrent one, end barriers that reach the host only after Shared writes and
+//! signals, and Metal's refusals.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::hazard::Access;
     use crate::pipeline::{Constant, Field, FieldValue, Interface, Memory, OwnMemory, Place};
-    use crate::tests::command::on_device::{each_device, finished, Arena};
+    use crate::tests::command::on_device::{each_device, finished, shared_event, Arena, PATIENCE};
     use crate::tests::kernels;
     use crate::{
         Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipelineState, Device, DispatchType,
-        Error, Gap, Refusal,
+        Error, Gap, MemoryClass, Refusal,
     };
 
     /// Words in each test buffer: 256 bytes.
@@ -273,6 +274,115 @@ mod on_device {
             // The sum of index * k for k in 1..=15.
             let expected: Vec<u32> = (0..WORDS as u32).map(|index| index * 120).collect();
             assert_eq!(words(&out), expected, "{name}");
+        });
+    }
+
+    /// A segment's end barrier reaches the host only where the segment wrote Shared memory or
+    /// signals an event, and the host reads the bytes once the command buffer completes or it sees
+    /// the event. A segment that wrote only Private memory leaves the host out, and a later command
+    /// buffer still reads its writes.
+    #[test]
+    fn every_device_reaches_the_host_only_after_shared_writes_and_signals() {
+        each_device("compute_host_reach", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let counters = device.counters();
+            let (add, step) = (add(&device), step(&device));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let block = device
+                .take_block(MemoryClass::Private, 1)
+                .expect("a Private block");
+            let private = device
+                .new_buffer(block.id, 0, 256, true)
+                .expect("a Private buffer");
+            let bytes: Vec<u8> = (0..WORDS as u32)
+                .flat_map(|index| (100 + index).to_le_bytes())
+                .collect();
+            let encode_step = |command_buffer: &CommandBuffer, buffer: &Buffer| {
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&step).expect("a state");
+                encoder.set_buffer(Some(buffer), 0, 0).expect("a buffer");
+                encoder
+                    .dispatch_threadgroups([4, 1, 1], [16, 1, 1])
+                    .expect("a dispatch");
+                encoder.end_encoding();
+            };
+            // `o = private + 100 + index`, into Shared memory.
+            let encode_add = |command_buffer: &CommandBuffer, o: &Buffer| {
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&add).expect("a state");
+                encoder.set_buffer(Some(&private), 0, 0).expect("a buffer");
+                encoder.set_bytes(&bytes, 1).expect("bytes");
+                encoder.set_buffer(Some(o), 0, 2).expect("a buffer");
+                encoder
+                    .dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1])
+                    .expect("a dispatch");
+                encoder.end_encoding();
+            };
+
+            // Private only: the end barrier leaves the host out.
+            let before = counters.host_reaches();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            encode_step(&command_buffer, &private);
+            run(name, &command_buffer);
+            assert_eq!(counters.host_reaches(), before, "{name}: Private only");
+
+            // A later command buffer adds the Private words into Shared memory: the host reads
+            // them once it completes.
+            let o = arena.buffer();
+            let before = counters.host_reaches();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            encode_add(&command_buffer, &o);
+            run(name, &command_buffer);
+            assert_eq!(counters.host_reaches(), before + 1, "{name}: Shared write");
+            let expected: Vec<u32> = (0..WORDS as u32).map(|index| 101 + index).collect();
+            assert_eq!(words(&o), expected, "{name}: after Private only");
+
+            // A Private write before a signal reaches the host; the add after it reads 3.
+            let signaled = shared_event(&device);
+            let o = arena.buffer();
+            let before = counters.host_reaches();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            encode_step(&command_buffer, &private);
+            command_buffer
+                .encode_signal_event(signaled.as_event(), 1)
+                .expect("a signal");
+            encode_add(&command_buffer, &o);
+            run(name, &command_buffer);
+            assert!(signaled.wait_until_signaled_value(1, PATIENCE), "{name}");
+            assert_eq!(counters.host_reaches(), before + 2, "{name}: signal");
+            let expected: Vec<u32> = (0..WORDS as u32).map(|index| 103 + index).collect();
+            assert_eq!(words(&o), expected, "{name}: after a signal");
+
+            // A Shared write before a signal: the host reads it once it sees the event, while the
+            // command buffer waits on the host behind it.
+            let x = arena.buffer();
+            write_words(&x, |index| index);
+            let (signaled, release) = (shared_event(&device), shared_event(&device));
+            let before = counters.host_reaches();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            encode_step(&command_buffer, &x);
+            command_buffer
+                .encode_signal_event(signaled.as_event(), 1)
+                .expect("a signal");
+            command_buffer
+                .encode_wait_for_event(release.as_event(), 1)
+                .expect("a wait");
+            command_buffer.commit().expect("a commit");
+            assert!(signaled.wait_until_signaled_value(1, PATIENCE), "{name}");
+            let expected: Vec<u32> = (0..WORDS as u32).map(|index| 2 * index + 1).collect();
+            assert_eq!(words(&x), expected, "{name}: at the signal");
+            release.set_signaled_value(1);
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert_eq!(
+                counters.host_reaches(),
+                before + 1,
+                "{name}: Shared write and signal"
+            );
         });
     }
 

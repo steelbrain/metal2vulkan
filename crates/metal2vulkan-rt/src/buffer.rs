@@ -3,7 +3,7 @@
 use crate::counters::Gauge;
 use crate::device::Device;
 use crate::error::{Error, Refusal};
-use crate::memory::{Block, BlockId, Mapping};
+use crate::memory::{Block, BlockId, Mapping, MemoryClass};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -122,6 +122,11 @@ impl Buffer {
     /// No Metal counterpart: the buffer's offset in its block.
     pub fn offset(&self) -> u64 {
         self.inner.offset
+    }
+
+    /// Whether the buffer is in Shared memory, which the host reads.
+    pub(crate) fn is_shared(&self) -> bool {
+        self.held_block().memory.class == MemoryClass::Shared
     }
 
     /// The block, for a command buffer to keep.

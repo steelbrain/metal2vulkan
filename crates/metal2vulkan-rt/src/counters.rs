@@ -81,6 +81,9 @@ struct Atomics {
     blocks: AtomicU64,
     events: AtomicU64,
     device_samplers: AtomicU64,
+    /// Segment ends whose barrier reaches the host, for the tests.
+    #[cfg(test)]
+    host_reaches: AtomicU64,
 }
 
 impl Counters {
@@ -119,6 +122,18 @@ impl Counters {
     /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
     pub(crate) fn copied(&self, bytes: u64) {
         self.atomics.bytes_copied.fetch_add(bytes, Relaxed);
+    }
+
+    /// One more segment end whose barrier reaches the host.
+    #[cfg(test)]
+    pub(crate) fn reach_host(&self) {
+        self.atomics.host_reaches.fetch_add(1, Relaxed);
+    }
+
+    /// The segment ends whose barrier reached the host.
+    #[cfg(test)]
+    pub(crate) fn host_reaches(&self) -> u64 {
+        self.atomics.host_reaches.load(Relaxed)
     }
 
     /// One more live resource of `gauge`'s kind.

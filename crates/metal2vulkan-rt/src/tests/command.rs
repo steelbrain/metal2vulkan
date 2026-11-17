@@ -21,7 +21,7 @@ pub(crate) mod on_device {
     use std::time::{Duration, Instant};
 
     /// How long a test waits for what must happen.
-    const PATIENCE: Duration = Duration::from_secs(60);
+    pub(crate) const PATIENCE: Duration = Duration::from_secs(60);
 
     pub(crate) fn within(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + PATIENCE;
@@ -369,7 +369,7 @@ pub(crate) mod on_device {
         });
     }
 
-    fn shared_event(device: &Device) -> SharedEvent {
+    pub(crate) fn shared_event(device: &Device) -> SharedEvent {
         device.new_shared_event().expect("a shared event")
     }
 

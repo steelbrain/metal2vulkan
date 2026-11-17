@@ -153,6 +153,8 @@ pub struct ComputeCommandEncoder {
     threadgroup_lengths: Vec<(u32, u32)>,
     /// `use_resource` declarations, by resource id.
     declared: Vec<(u32, Access)>,
+    /// A `use_resource` declaration writes a Shared buffer.
+    declared_shared_write: bool,
     /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state and the
     /// threadgroup memory lengths are unchanged.
     last: Option<(Module, [u32; 3], vk::Pipeline)>,
@@ -201,6 +203,7 @@ impl CommandBuffer {
             samplers: vec![None; SAMPLER_SLOTS as usize],
             threadgroup_lengths: Vec::new(),
             declared: Vec::new(),
+            declared_shared_write: false,
             last: None,
             parameters: Parameters::default(),
             wrote: false,
@@ -373,25 +376,28 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let id = match resource {
+        let (id, shared) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 building.keep(buffer.held_block());
-                buffer.id()
+                (buffer.id(), buffer.is_shared())
             }
             Resource::Texture(texture) => {
                 if !texture.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 building.keep_texture(texture);
-                texture.id()
+                // The host reads a texture's bytes only through a copy that makes them visible
+                // to it itself (`Texture::get_bytes`).
+                (texture.id(), false)
             }
         };
         let Some(access) = usage.access() else {
             return Ok(());
         };
+        self.declared_shared_write |= access.writes() && shared;
         match self
             .declared
             .iter_mut()
@@ -651,6 +657,17 @@ impl ComputeCommandEncoder {
         };
         self.last = Some((module, local, vk_pipeline));
         let serial = self.serial;
+        // A write the host may read once the command buffer completes: to a Shared buffer bound or
+        // declared, or through an address outside the dispatch's resources.
+        let host = kernel.interface.writes_unbound
+            || self.declared_shared_write
+            || (kernel.interface.buffers.iter()).any(|&(slot, access)| {
+                access.writes()
+                    && matches!(
+                        self.slots.get(slot as usize),
+                        Some(Slot::Buffer { buffer, .. }) if buffer.is_shared()
+                    )
+            });
         let wrote = {
             let accesses = Accesses {
                 slots: &self.slots,
@@ -665,6 +682,9 @@ impl ComputeCommandEncoder {
                 .building
                 .as_mut()
                 .expect("an encoder holds its command buffer's recording until it ends");
+            if host {
+                building.wrote_host();
+            }
             building.dispatch_hazards(serial, &kernel.interface, &accesses)?
         };
         self.wrote |= wrote;

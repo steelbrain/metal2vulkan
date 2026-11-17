@@ -132,6 +132,8 @@ pub(crate) struct Building {
     args_unordered: bool,
     /// The pipeline bound in the current segment's command buffer.
     bound: Option<vk::Pipeline>,
+    /// The current segment wrote memory the host may read: its end barrier reaches the host.
+    host_written: bool,
 }
 
 /// What the GPU uses: the recorder, the segments, and the blocks kept until retirement.
@@ -209,6 +211,7 @@ impl CommandBuffer {
                         owed: false,
                         args_unordered: false,
                         bound: None,
+                        host_written: false,
                     }),
                     ended: None,
                     times: Times::default(),
@@ -476,6 +479,8 @@ impl CommandBuffer {
     ) -> Result<(), Error> {
         self.building(|building| {
             let command = building.command(Reach::Commands)?;
+            // What a test records may write anything the host reads.
+            building.wrote_host();
             f(&building.device.core().device, command);
             for buffer in buffers {
                 building.keep(buffer.held_block());
@@ -544,7 +549,11 @@ impl Building {
                 if let Some(recorder) = &mut self.gpu.recorder {
                     recorder.hazards.clear();
                 }
-                record::end(&core.device, command, &core.counters)
+                // The host reads what the segment wrote to Shared memory once the command buffer
+                // completes, and may read after an event the segment signals.
+                let host = self.host_written || !self.last().signals.is_empty();
+                self.host_written = false;
+                record::end(&core.device, command, host, &core.counters)
             }
             None => Ok(()),
         }
@@ -604,6 +613,11 @@ impl Building {
         if reach.reaches_indirect() {
             self.args_unordered = false;
         }
+    }
+
+    /// A dispatch wrote memory the host may read: the segment's end barrier reaches the host.
+    pub(crate) fn wrote_host(&mut self) {
+        self.host_written = true;
     }
 
     /// A dispatch wrote: an indirect dispatch after it needs a barrier that reaches its

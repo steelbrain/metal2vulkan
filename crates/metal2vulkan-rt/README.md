@@ -243,8 +243,12 @@ made, with no lock, and never rewritten for layouts.
   are made and not yet completed.
 - A `CommandBuffer` records at once, with no replay log. Event waits and signals split it into
   segments, one `VkCommandBuffer` each where it has commands. Each ends with one global memory
-  barrier: its writes are visible to every later command and to the host, and later commands run
-  after its own, as Metal orders a queue's command buffers. No segment starts with a barrier.
+  barrier: its writes are visible to every later command, and later commands run after its own,
+  as Metal orders a queue's command buffers. The barrier also reaches the host where the segment
+  wrote Shared memory (a Shared buffer bound or declared for writing, or a write through an address
+  outside the dispatch's resources) or signals an event, so the host reads those writes once the
+  command buffer completes or it sees the event; a segment that wrote only Private memory leaves
+  the host out. No segment starts with a barrier.
   `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
   thread and returns. A committed command buffer holds no device handle.
 - The submit thread passes whatever is ready to one `vkQueueSubmit2`, in the device's commit

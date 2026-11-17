@@ -117,18 +117,27 @@ pub(crate) fn barrier(device: &ash::Device, buffer: vk::CommandBuffer, reach: Re
     unsafe { device.cmd_pipeline_barrier2(buffer, &dependency) };
 }
 
-/// Ends a segment's command buffer after its one barrier, which reaches the host: Shared memory
-/// reads the GPU's writes once the command buffer completes or the host sees an event it signals,
-/// and a later command buffer's commands run after this one's, as Metal orders the command
-/// buffers of a queue. A segment begins with no barrier: the one ending each earlier segment,
-/// upload and fill covers it.
+/// Ends a segment's command buffer after its one barrier: a later command buffer's commands run
+/// after this one's, as Metal orders the command buffers of a queue, and where `host` (the segment
+/// wrote Shared memory, or signals an event) the barrier also reaches the host, so Shared memory
+/// reads the GPU's writes once the command buffer completes or the host sees the event. A segment
+/// begins with no barrier: the one ending each earlier segment, upload and fill covers it.
 pub(crate) fn end(
     device: &ash::Device,
     buffer: vk::CommandBuffer,
+    host: bool,
     counters: &Counters,
 ) -> Result<(), Error> {
-    barrier(device, buffer, Reach::Host);
+    barrier(
+        device,
+        buffer,
+        if host { Reach::Host } else { Reach::Commands },
+    );
     counters.count(Metric::Barriers);
+    #[cfg(test)]
+    if host {
+        counters.reach_host();
+    }
     // SAFETY: the buffer is recording.
     unsafe { device.end_command_buffer(buffer) }.map_err(Error::vulkan("vkEndCommandBuffer"))
 }
