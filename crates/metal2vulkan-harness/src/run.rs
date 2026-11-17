@@ -1,6 +1,6 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
-use crate::plan::{Binding, BufferPlan, Constant, Grid, Plan, Source};
+use crate::plan::{Binding, BufferPlan, Constant, Filter, Grid, Plan, Source, TexturePlan};
 use crate::{
     clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputeDevice,
     Device, Library, Refused, Result, Storage, Waits,
@@ -12,6 +12,10 @@ use std::time::{Duration, Instant};
 
 /// The kernel of the authored library that moves bytes for the harness, 16 a thread.
 const COPY_FUNCTION: &str = "copy_words";
+
+/// The kernels of the authored library that move texels for the harness, between a buffer of
+/// `float4`s and a texture, one a thread, in threadgroups of 16x16: into the texture, and out.
+const TEXELS_FUNCTIONS: [&str; 2] = ["texels_in", "texels_out"];
 
 /// The most threadgroups a dispatch of the copy kernel takes in x: the least
 /// `maxComputeWorkGroupCount[0]` Vulkan allows.
@@ -217,11 +221,14 @@ pub fn percentile(values: &[f64], p: u32) -> Option<f64> {
     sorted.get(rank - 1).copied()
 }
 
-/// The harness on a device: its own queue, the authored library and its copy kernel, and the
-/// metallibs the plans named so far.
+/// The harness on a device: its own queue, the authored library and its copy kernel, its texel
+/// kernels once a plan has textures, and the metallibs the plans named so far.
 pub struct Harness<D: ComputeDevice> {
     queue: D::CommandQueue,
     copy: D::ComputePipelineState,
+    /// The pipeline states of [`TEXELS_FUNCTIONS`], made for the first plan with a texture, so a
+    /// session that runs none makes no more pipelines than before.
+    texels: Option<[D::ComputePipelineState; 2]>,
     authored: D::Library,
     metallibs: HashMap<PathBuf, D::Library>,
     device: D,
@@ -230,6 +237,9 @@ pub struct Harness<D: ComputeDevice> {
 /// A plan's objects on the device.
 struct Made<D: ComputeDevice> {
     buffers: Vec<D::Buffer>,
+    textures: Vec<D::Texture>,
+    /// A sampler state for each filter the plan's bindings name.
+    samplers: Vec<(Filter, D::SamplerState)>,
     states: Vec<D::ComputePipelineState>,
     /// The index in `states` of each dispatch's.
     state_of: Vec<usize>,
@@ -245,6 +255,7 @@ impl<D: ComputeDevice> Harness<D> {
         Ok(Harness {
             queue: device.new_command_queue()?,
             copy,
+            texels: None,
             authored,
             metallibs: HashMap::new(),
             device,
@@ -312,8 +323,25 @@ impl<D: ComputeDevice> Harness<D> {
         let buffers = (plan.buffers.iter())
             .map(|buffer| self.device.new_buffer(buffer.length, buffer.storage))
             .collect::<Result<Vec<_>>>()?;
+        let textures = (plan.textures.iter())
+            .map(|texture| self.device.new_texture(texture.width, texture.height))
+            .collect::<Result<Vec<_>>>()?;
+        let mut samplers: Vec<(Filter, D::SamplerState)> = Vec::new();
+        for binding in plan
+            .dispatches
+            .iter()
+            .flat_map(|dispatch| &dispatch.bindings)
+        {
+            if let Binding::Sampler { filter, .. } = binding {
+                if !samplers.iter().any(|(made, _)| made == filter) {
+                    samplers.push((*filter, self.device.new_sampler_state(*filter)?));
+                }
+            }
+        }
         Ok(Made {
             buffers,
+            textures,
+            samplers,
             states,
             state_of,
         })
@@ -356,6 +384,16 @@ impl<D: ComputeDevice> Harness<D> {
                         offset,
                     } => encoder.set_buffer(&made.buffers[*buffer], *offset, *index)?,
                     Binding::Bytes { index, bytes } => encoder.set_bytes(bytes, *index)?,
+                    Binding::Texture { index, texture } => {
+                        encoder.set_texture(&made.textures[*texture], *index)?
+                    }
+                    Binding::Sampler { index, filter } => {
+                        // `make` made one for every filter a binding names.
+                        let made = made.samplers.iter().find(|(made, _)| made == filter);
+                        let (_, sampler) =
+                            made.ok_or("a sampler state the plan names is unmade")?;
+                        encoder.set_sampler_state(sampler, *index)?
+                    }
                 }
             }
             match dispatch.grid {
@@ -402,6 +440,75 @@ impl<D: ComputeDevice> Harness<D> {
         command_buffer.wait_until_completed()
     }
 
+    /// The texel kernels' pipeline states.
+    fn make_texels(&self) -> Result<[D::ComputePipelineState; 2]> {
+        let [into, out] = TEXELS_FUNCTIONS.map(|name| {
+            let function = self.authored.new_function(name, &[])?;
+            self.device.new_compute_pipeline_state(&function)
+        });
+        Ok([into?, out?])
+    }
+
+    /// The texel kernels' pipeline states, which `run` makes for the first plan with a texture.
+    fn texels(&self) -> Result<&[D::ComputePipelineState; 2]> {
+        Ok(self.texels.as_ref().ok_or("the texel kernels are unmade")?)
+    }
+
+    /// Every texture's starting texels, written in from `Shared` buffers by the texel kernel,
+    /// all in one command buffer, waited for.
+    fn fill_textures(&self, plans: &[TexturePlan], textures: &[D::Texture]) -> Result<()> {
+        let mut staged = Vec::new();
+        for (plan, texture) in plans.iter().zip(textures) {
+            let Some(texels) = &plan.texels else {
+                continue;
+            };
+            let bytes: Vec<u8> = texels
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect();
+            let stage = self
+                .device
+                .new_buffer(bytes.len() as u64, Storage::Shared)?;
+            write(&stage, &bytes)?;
+            staged.push((stage, texture, plan));
+        }
+        if staged.is_empty() {
+            return Ok(());
+        }
+        let [into, _] = self.texels()?;
+        let command_buffer = self.queue.command_buffer()?;
+        let mut encoder = command_buffer.compute_command_encoder()?;
+        encoder.set_compute_pipeline_state(into)?;
+        for (stage, texture, plan) in &staged {
+            encoder.set_buffer(stage, 0, 0)?;
+            encoder.set_bytes(&plan.width.to_le_bytes(), 1)?;
+            encoder.set_texture(texture, 0)?;
+            encoder.dispatch_threadgroups(tiles(plan), [16, 16, 1])?;
+        }
+        encoder.end_encoding()?;
+        command_buffer.commit()?;
+        command_buffer.wait_until_completed()
+    }
+
+    /// A texture's texels, row by row, four `float`s each: read out to a `Shared` buffer by the
+    /// texel kernel.
+    fn read_texture(&self, texture: &D::Texture, plan: &TexturePlan) -> Result<Vec<u8>> {
+        let length = 16 * u64::from(plan.width) * u64::from(plan.height);
+        let stage = self.device.new_buffer(length, Storage::Shared)?;
+        let [_, out] = self.texels()?;
+        let command_buffer = self.queue.command_buffer()?;
+        let mut encoder = command_buffer.compute_command_encoder()?;
+        encoder.set_compute_pipeline_state(out)?;
+        encoder.set_texture(texture, 0)?;
+        encoder.set_buffer(&stage, 0, 0)?;
+        encoder.set_bytes(&plan.width.to_le_bytes(), 1)?;
+        encoder.dispatch_threadgroups(tiles(plan), [16, 16, 1])?;
+        encoder.end_encoding()?;
+        command_buffer.commit()?;
+        command_buffer.wait_until_completed()?;
+        bytes(&stage, length)
+    }
+
     /// The first `length` bytes of `buffer`: a `Shared` one's through `contents`, a `Private`
     /// one's copied out to a `Shared` buffer first.
     fn read(&self, buffer: &D::Buffer, storage: Storage, length: u64) -> Result<Vec<u8>> {
@@ -431,7 +538,11 @@ impl<D: ComputeDevice> Session for Harness<D> {
         plan.validate()?;
         self.load(&plan.library)?;
         let made = self.make(plan)?;
+        if !plan.textures.is_empty() && self.texels.is_none() {
+            self.texels = Some(self.make_texels()?);
+        }
         self.fill(&plan.buffers, &made.buffers)?;
+        self.fill_textures(&plan.textures, &made.textures)?;
         wait_run::<D>(&self.commit_run(plan, &made)?)?;
         for expect in &plan.expect {
             let storage = plan.buffers[expect.buffer].storage;
@@ -443,6 +554,12 @@ impl<D: ComputeDevice> Session for Harness<D> {
             let buffer = expect.buffer;
             (expect.values.compare(&bytes))
                 .map_err(|why| format!("{}: buffer {buffer}: {why}", plan.name))?;
+        }
+        for expect in &plan.expect_textures {
+            let texture = expect.texture;
+            let bytes = self.read_texture(&made.textures[texture], &plan.textures[texture])?;
+            (expect.values.compare(&bytes))
+                .map_err(|why| format!("{}: texture {texture}: {why}", plan.name))?;
         }
         let mut outputs = Vec::with_capacity(plan.outputs.len());
         for output in &plan.outputs {
@@ -539,6 +656,11 @@ fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport
         }
     }
     Ok(report)
+}
+
+/// The threadgroups of 16x16 that cover a texture (whole ones: `Plan::validate`).
+fn tiles(plan: &TexturePlan) -> crate::Size {
+    [u64::from(plan.width / 16), u64::from(plan.height / 16), 1]
 }
 
 /// Dispatches of the copy kernel, already set on `encoder`, moving the first `length` bytes (a

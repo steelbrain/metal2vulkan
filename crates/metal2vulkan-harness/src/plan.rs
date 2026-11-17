@@ -15,6 +15,8 @@ pub struct Plan {
     pub library: Source,
     /// The buffers it makes, in order; dispatches, expectations and outputs name them by index.
     pub buffers: Vec<BufferPlan>,
+    /// The textures it makes, in order; dispatches and expectations name them by index.
+    pub textures: Vec<TexturePlan>,
     /// The dispatches of one run, in order, in one compute encoder of each command buffer.
     pub dispatches: Vec<Dispatch>,
     /// How many dispatches each command buffer of a run holds, its command buffers committed in
@@ -23,6 +25,8 @@ pub struct Plan {
     pub per_command_buffer: Option<usize>,
     /// What the first run must leave in its buffers: a CPU reference.
     pub expect: Vec<Expect>,
+    /// What the first run must leave in its textures: a CPU reference.
+    pub expect_textures: Vec<TextureExpect>,
     /// The buffers whose contents after the first run each runtime's must match the first
     /// runtime's, for a workload with no CPU reference.
     pub outputs: Vec<Output>,
@@ -48,6 +52,29 @@ pub struct BufferPlan {
     /// `contents`, for `Private` copied in from a `Shared` buffer by the harness's own kernel.
     /// `None`: as `newBufferWithLength:` made it.
     pub contents: Option<Vec<u8>>,
+}
+
+/// One texture of a plan: 2D, `RGBA16Float`, one level, `Private`, of `ShaderRead | ShaderWrite`
+/// usage. Its width and height are multiples of 16, the harness's transfer kernels' threadgroups.
+#[derive(Clone, Debug)]
+pub struct TexturePlan {
+    /// Its width in texels.
+    pub width: u32,
+    /// Its height in texels.
+    pub height: u32,
+    /// The texels it starts with, row by row, four `float`s each, written in by the harness's own
+    /// kernel (`texels_in`) from a `Shared` buffer. `None`: as `newTextureWithDescriptor:` made it.
+    pub texels: Option<Vec<f32>>,
+}
+
+/// A sampler state's filter: its `minFilter` and `magFilter`. Its coordinates are normalized and
+/// each address mode clamps to the edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filter {
+    /// `MTLSamplerMinMagFilterNearest`.
+    Nearest,
+    /// `MTLSamplerMinMagFilterLinear`.
+    Linear,
 }
 
 /// One dispatch: the calls an encoder makes for it. The pipeline state is set where it differs
@@ -105,6 +132,20 @@ pub enum Binding {
         /// The bytes.
         bytes: Vec<u8>,
     },
+    /// `setTexture:atIndex:` of the plan's texture `texture`.
+    Texture {
+        /// The texture table index.
+        index: u32,
+        /// The plan's texture.
+        texture: usize,
+    },
+    /// `setSamplerState:atIndex:` of a sampler state of `filter`, made once per plan.
+    Sampler {
+        /// The sampler table index.
+        index: u32,
+        /// Its filter.
+        filter: Filter,
+    },
 }
 
 /// A dispatch call.
@@ -142,6 +183,16 @@ pub struct Expect {
     /// The plan's buffer.
     pub buffer: usize,
     /// Its contents from its start.
+    pub values: Values,
+}
+
+/// What a texture must hold after the first run.
+#[derive(Clone, Debug)]
+pub struct TextureExpect {
+    /// The plan's texture.
+    pub texture: usize,
+    /// Its texels from its first, row by row, four `float`s each, as the harness's own kernel
+    /// reads them out (`texels_out`).
     pub values: Values,
 }
 
@@ -273,16 +324,37 @@ impl Plan {
                 }
             }
         }
+        for (i, texture) in self.textures.iter().enumerate() {
+            let (width, height) = (texture.width, texture.height);
+            if width == 0 || height == 0 || width % 16 != 0 || height % 16 != 0 {
+                return Err(format!(
+                    "{name}: texture {i}'s size {width}x{height} is not in whole 16x16 tiles"
+                )
+                .into());
+            }
+            if let Some(texels) = &texture.texels {
+                if texels.len() as u64 != 4 * u64::from(width) * u64::from(height) {
+                    return Err(format!(
+                        "{name}: texture {i} has {} floats of texels for {width}x{height}",
+                        texels.len()
+                    )
+                    .into());
+                }
+            }
+        }
         let known = |buffer: usize| buffer < self.buffers.len();
         for (i, dispatch) in self.dispatches.iter().enumerate() {
             for binding in &dispatch.bindings {
-                if let Binding::Buffer { buffer, .. } = binding {
-                    if !known(*buffer) {
-                        return Err(format!(
-                            "{name}: dispatch {i} binds buffer {buffer}, which the plan lacks"
-                        )
-                        .into());
-                    }
+                let (kind, at, count) = match binding {
+                    Binding::Buffer { buffer, .. } => ("buffer", *buffer, self.buffers.len()),
+                    Binding::Texture { texture, .. } => ("texture", *texture, self.textures.len()),
+                    Binding::Bytes { .. } | Binding::Sampler { .. } => continue,
+                };
+                if at >= count {
+                    return Err(format!(
+                        "{name}: dispatch {i} binds {kind} {at}, which the plan lacks"
+                    )
+                    .into());
                 }
             }
         }
@@ -298,6 +370,22 @@ impl Plan {
                 return Err(format!(
                     "{name}: buffer {} is shorter than its expected values",
                     expect.buffer
+                )
+                .into());
+            }
+        }
+        for expect in &self.expect_textures {
+            let Some(texture) = self.textures.get(expect.texture) else {
+                return Err(format!(
+                    "{name}: an expectation names texture {}, which the plan lacks",
+                    expect.texture
+                )
+                .into());
+            };
+            if expect.values.length() > 16 * u64::from(texture.width) * u64::from(texture.height) {
+                return Err(format!(
+                    "{name}: texture {} is smaller than its expected values",
+                    expect.texture
                 )
                 .into());
             }

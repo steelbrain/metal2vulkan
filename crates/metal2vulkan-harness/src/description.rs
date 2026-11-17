@@ -88,6 +88,8 @@ impl Described {
             buffers: Vec::new(),
             dispatches: Vec::new(),
             expect: Vec::new(),
+            textures: Vec::new(),
+            expect_textures: Vec::new(),
             outputs: Vec::new(),
             per_command_buffer: None,
         };

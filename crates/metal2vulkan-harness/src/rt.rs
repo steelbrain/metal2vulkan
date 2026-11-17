@@ -10,13 +10,16 @@
 //! the same range, which the runtime zeroes as `newBufferWithLength:options:` does.
 //!
 //! Its known gaps and the device's limits (`Error::Unsupported`, `Error::Limit`) are typed
-//! refusals ([`Refused`]); its other errors are failures.
+//! refusals ([`Refused`]); its other errors are failures. It makes no texture or sampler state
+//! yet: a plan with either is refused when it is made, so its texture and sampler types have no
+//! value.
 
-use crate::plan::{self, Constant};
+use crate::plan::{self, Constant, Filter};
 use crate::{Code, Refused, Result, Size, Storage, Waits};
 use ash::vk;
 use metal2vulkan_rt as rt;
 use std::cell::RefCell;
+use std::convert::Infallible;
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -300,6 +303,8 @@ impl crate::ComputeDevice for Device {
     type CommandQueue = rt::CommandQueue;
     type CommandBuffer = rt::CommandBuffer;
     type ComputeCommandEncoder = rt::ComputeCommandEncoder;
+    type Texture = Infallible;
+    type SamplerState = Infallible;
 
     fn new_library(&self, code: Code<'_>) -> Result<rt::Library> {
         Ok(match code {
@@ -323,6 +328,20 @@ impl crate::ComputeDevice for Device {
         (self.device)
             .new_command_queue(QUEUE_COMMAND_BUFFERS)
             .map_err(error)
+    }
+
+    /// A typed refusal: the runtime makes no texture yet.
+    fn new_texture(&self, _width: u32, _height: u32) -> Result<Infallible> {
+        Err(Box::new(Refused(
+            "the new runtime makes no texture yet".to_owned(),
+        )))
+    }
+
+    /// A typed refusal: the runtime makes no sampler state yet.
+    fn new_sampler_state(&self, _filter: Filter) -> Result<Infallible> {
+        Err(Box::new(Refused(
+            "the new runtime makes no sampler state yet".to_owned(),
+        )))
     }
 }
 
@@ -384,6 +403,14 @@ impl crate::ComputeCommandEncoder<Device> for rt::ComputeCommandEncoder {
 
     fn set_bytes(&mut self, bytes: &[u8], index: u32) -> Result<()> {
         rt::ComputeCommandEncoder::set_bytes(self, bytes, index).map_err(error)
+    }
+
+    fn set_texture(&mut self, texture: &Infallible, _index: u32) -> Result<()> {
+        match *texture {}
+    }
+
+    fn set_sampler_state(&mut self, sampler: &Infallible, _index: u32) -> Result<()> {
+        match *sampler {}
     }
 
     fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<()> {

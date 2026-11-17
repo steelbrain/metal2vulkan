@@ -2,10 +2,12 @@
 //! the same name. The cutover deletes this file, its `mod` line, the `--runtime old` arm of the
 //! command and the crate's dependency on the old runtime.
 
-use crate::plan::{self, Constant};
+use crate::plan::{self, Constant, Filter};
 use crate::{Code, Result, Size, Storage};
+use metal2vulkan::bind::SamplerDescriptor;
+use metal2vulkan::metal::{PixelFormat, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan_runtime as runtime;
-use runtime::{CommandBufferStatus, PipelineOptions, ResourceOptions};
+use runtime::{CommandBufferStatus, PipelineOptions, ResourceOptions, TextureDescriptor};
 use std::ptr::NonNull;
 
 /// The old runtime's `MTLCreateSystemDefaultDevice`: the preferred Vulkan physical device
@@ -78,6 +80,8 @@ impl crate::ComputeDevice for runtime::Device {
     type CommandQueue = runtime::CommandQueue;
     type CommandBuffer = runtime::CommandBuffer;
     type ComputeCommandEncoder = runtime::ComputeCommandEncoder;
+    type Texture = runtime::Texture;
+    type SamplerState = runtime::SamplerState;
 
     fn new_library(&self, code: Code<'_>) -> Result<runtime::Library> {
         match code {
@@ -98,6 +102,29 @@ impl crate::ComputeDevice for runtime::Device {
 
     fn new_command_queue(&self) -> Result<runtime::CommandQueue> {
         Ok(runtime::Device::new_command_queue(self)?)
+    }
+
+    fn new_texture(&self, width: u32, height: u32) -> Result<runtime::Texture> {
+        let mut descriptor = TextureDescriptor::texture_2d(
+            PixelFormat::RGBA16Float,
+            width.into(),
+            height.into(),
+            false,
+        );
+        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+        descriptor.resource_options = ResourceOptions::private();
+        Ok(runtime::Device::new_texture(self, &descriptor)?)
+    }
+
+    fn new_sampler_state(&self, filter: Filter) -> Result<runtime::SamplerState> {
+        let filter = match filter {
+            Filter::Nearest => SamplerMinMagFilter::Nearest,
+            Filter::Linear => SamplerMinMagFilter::Linear,
+        };
+        let mut descriptor = SamplerDescriptor::new();
+        descriptor.min_filter = filter;
+        descriptor.mag_filter = filter;
+        Ok(runtime::Device::new_sampler_state(self, &descriptor)?)
     }
 }
 
@@ -169,6 +196,22 @@ impl crate::ComputeCommandEncoder<runtime::Device> for runtime::ComputeCommandEn
     fn set_bytes(&mut self, bytes: &[u8], index: u32) -> Result<()> {
         Ok(runtime::ComputeCommandEncoder::set_bytes(
             self, bytes, index,
+        )?)
+    }
+
+    fn set_texture(&mut self, texture: &runtime::Texture, index: u32) -> Result<()> {
+        Ok(runtime::ComputeCommandEncoder::set_texture(
+            self,
+            Some(texture),
+            index,
+        )?)
+    }
+
+    fn set_sampler_state(&mut self, sampler: &runtime::SamplerState, index: u32) -> Result<()> {
+        Ok(runtime::ComputeCommandEncoder::set_sampler_state(
+            self,
+            Some(sampler),
+            index,
         )?)
     }
 

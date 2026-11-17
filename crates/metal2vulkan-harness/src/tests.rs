@@ -3,7 +3,8 @@
 use crate::authored::WORKLOADS;
 use crate::description;
 use crate::plan::{
-    Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Grid, Output, Plan, Source, Values,
+    Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Filter, Grid, Output, Plan,
+    Source, TextureExpect, TexturePlan, Values,
 };
 use crate::rt::{self, Ranges};
 use crate::run::{
@@ -103,6 +104,8 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
             buffer: 0,
             values: Values::Words(vec![0; 4]),
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -125,6 +128,54 @@ fn a_plan_with_a_part_length_a_missing_buffer_or_no_dispatch_is_refused() {
     let mut idle = one_buffer_plan(16, None, 0);
     idle.dispatches.clear();
     assert!(idle.validate().is_err());
+}
+
+/// A plan of one `side` by `side` texture, bound at `bound`, with a sampler, and its
+/// expectation of `expected` floats.
+fn one_texture_plan(side: u32, texels: Option<usize>, bound: usize, expected: usize) -> Plan {
+    let mut plan = one_buffer_plan(16, None, 0);
+    plan.textures = vec![TexturePlan {
+        width: side,
+        height: side,
+        texels: texels.map(|count| vec![0.0; count]),
+    }];
+    plan.dispatches[0].bindings = vec![
+        Binding::Texture {
+            index: 0,
+            texture: bound,
+        },
+        Binding::Sampler {
+            index: 0,
+            filter: Filter::Linear,
+        },
+    ];
+    plan.expect_textures = vec![TextureExpect {
+        texture: 0,
+        values: Values::Floats {
+            values: vec![0.0; expected],
+            tolerance: 0.0,
+        },
+    }];
+    plan
+}
+
+#[test]
+fn a_plan_with_a_part_tile_texture_a_missing_texture_or_too_many_texels_is_refused() {
+    assert!(one_texture_plan(16, Some(4 * 256), 0, 4 * 256)
+        .validate()
+        .is_ok());
+    assert!(one_texture_plan(16, None, 0, 4).validate().is_ok());
+    assert!(one_texture_plan(24, None, 0, 4).validate().is_err());
+    assert!(one_texture_plan(16, Some(4 * 255), 0, 4)
+        .validate()
+        .is_err());
+    assert!(one_texture_plan(16, None, 1, 4).validate().is_err());
+    assert!(one_texture_plan(16, None, 0, 4 * 256 + 1)
+        .validate()
+        .is_err());
+    let mut unknown = one_texture_plan(16, None, 0, 4);
+    unknown.expect_textures[0].texture = 1;
+    assert!(unknown.validate().is_err());
 }
 
 /// Each authored plan is whole: its builder's inputs, kernels and references agree in shape.

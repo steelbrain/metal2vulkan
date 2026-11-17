@@ -197,6 +197,10 @@ pub trait ComputeDevice: Device {
     type CommandBuffer: CommandBuffer<Self>;
     /// `MTLComputeCommandEncoder`.
     type ComputeCommandEncoder: ComputeCommandEncoder<Self>;
+    /// `MTLTexture`.
+    type Texture;
+    /// `MTLSamplerState`.
+    type SamplerState;
 
     /// `newLibraryWithData:error:` of a metallib; of AIR bitcode, the translator's library.
     fn new_library(&self, code: Code<'_>) -> Result<Self::Library>;
@@ -209,6 +213,14 @@ pub trait ComputeDevice: Device {
 
     /// `newCommandQueue`.
     fn new_command_queue(&self) -> Result<Self::CommandQueue>;
+
+    /// `newTextureWithDescriptor:` of a [`TexturePlan`](plan::TexturePlan)'s texture: 2D,
+    /// `RGBA16Float`, one level, `Private`, of `ShaderRead | ShaderWrite` usage.
+    fn new_texture(&self, width: u32, height: u32) -> Result<Self::Texture>;
+
+    /// `newSamplerStateWithDescriptor:` of `filter`'s min and mag filter, normalized coordinates
+    /// and every address mode clamped to the edge.
+    fn new_sampler_state(&self, filter: plan::Filter) -> Result<Self::SamplerState>;
 }
 
 /// `MTLBuffer`.
@@ -258,6 +270,12 @@ pub trait ComputeCommandEncoder<D: ComputeDevice> {
 
     /// `setBytes:length:atIndex:`.
     fn set_bytes(&mut self, bytes: &[u8], index: u32) -> Result<()>;
+
+    /// `setTexture:atIndex:`.
+    fn set_texture(&mut self, texture: &D::Texture, index: u32) -> Result<()>;
+
+    /// `setSamplerState:atIndex:`.
+    fn set_sampler_state(&mut self, sampler: &D::SamplerState, index: u32) -> Result<()>;
 
     /// `dispatchThreadgroups:threadsPerThreadgroup:`.
     fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<()>;

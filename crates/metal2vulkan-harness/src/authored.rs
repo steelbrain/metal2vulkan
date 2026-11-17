@@ -3,8 +3,8 @@
 //! exact on any device but the ALU workload's, whose `float` chains are held to a tolerance.
 
 use crate::plan::{
-    seeded_words as words, Binding, BufferPlan, Constant, Dispatch, Expect, Grid, Plan, Source,
-    Values,
+    seeded_words as words, Binding, BufferPlan, Constant, Dispatch, Expect, Filter, Grid, Plan,
+    Source, TextureExpect, TexturePlan, Values,
 };
 use crate::{Result, Storage};
 
@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 9] = [
+pub const WORKLOADS: [Workload; 11] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -55,6 +55,14 @@ pub const WORKLOADS: [Workload; 9] = [
     Workload {
         name: "zero_products",
         plan: zero_products,
+    },
+    Workload {
+        name: "sampling",
+        plan: sampling,
+    },
+    Workload {
+        name: "constexpr_sampling",
+        plan: constexpr_sampling,
     },
 ];
 
@@ -117,6 +125,8 @@ fn bandwidth() -> Plan {
             buffer: 1,
             values: Values::Words(output),
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -155,6 +165,8 @@ fn alu() -> Plan {
                 tolerance: 1e-4,
             },
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -187,6 +199,8 @@ fn threadgroup_scan() -> Plan {
             buffer: 1,
             values: Values::Words(output),
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -239,6 +253,8 @@ fn simd_reduce() -> Plan {
                 values: Values::Words(vec![total, 0, 0, 0]),
             },
         ],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -292,6 +308,8 @@ fn image_filter() -> Plan {
             buffer: 1,
             values: Values::Words(output),
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -334,6 +352,8 @@ fn dispatch_chain() -> Plan {
             buffer: 0,
             values: Values::Words(output),
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -413,6 +433,8 @@ fn frame() -> Plan {
             buffer: 0,
             values: Values::Words(output),
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: Some(STEPS / COMMAND_BUFFERS),
     }
@@ -453,6 +475,8 @@ fn narrow_ints() -> Plan {
             buffer: 0,
             values: Values::Words(output),
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -505,6 +529,8 @@ fn zero_products() -> Plan {
                 tolerance: 1e-4,
             },
         }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
     }
@@ -522,4 +548,140 @@ fn buffer(index: u32, buffer: usize) -> Binding {
 /// `setBytes:length:atIndex:`.
 fn bytes(index: u32, bytes: Vec<u8>) -> Binding {
     Binding::Bytes { index, bytes }
+}
+
+/// `setTexture:atIndex:` of the plan's texture `texture`.
+fn texture(index: u32, texture: usize) -> Binding {
+    Binding::Texture { index, texture }
+}
+
+/// How far a sampled texel may be from its reference. A filter's weights and the conversion to
+/// `RGBA16Float` are the device's own; the sampling workloads' inputs make each result exact in
+/// `half` under weights of halves and quarters, so this allows two last-place steps of a `half`
+/// below 4.
+const TEXEL_TOLERANCE: f32 = 1.0 / 256.0;
+
+/// A `side` by `side` texture's starting texels, four channels each, every one a sixteenth of a
+/// whole number below 64: exact in `half`.
+fn sixteenths(seed: u64, side: u32) -> Vec<f32> {
+    let count = 4 * side as usize * side as usize;
+    (words(seed, count).into_iter())
+        .map(|word| (word & 63) as f32 / 16.0)
+        .collect()
+}
+
+/// One thread a texel of a `side` by `side` texture, in threadgroups of 16x16.
+fn texel_grid(side: u32) -> Grid {
+    let tiles = u64::from(side / 16);
+    Grid::Threadgroups {
+        groups: [tiles, tiles, 1],
+        threads: [16, 16, 1],
+    }
+}
+
+/// A sampling workload's plan: `function` from a `from`-sided texture of `source` texels into a
+/// `to`-sided one, which must then hold `expected`.
+fn sampling_plan(
+    name: &str,
+    function: &str,
+    (from, source): (u32, Vec<f32>),
+    (to, expected): (u32, Vec<f32>),
+    sampler: Option<Filter>,
+) -> Plan {
+    let mut bindings = vec![texture(0, 0), texture(1, 1)];
+    bindings.extend(sampler.map(|filter| Binding::Sampler { index: 0, filter }));
+    Plan {
+        name: name.to_owned(),
+        library: Source::Authored,
+        buffers: Vec::new(),
+        textures: vec![
+            TexturePlan {
+                width: from,
+                height: from,
+                texels: Some(source),
+            },
+            TexturePlan {
+                width: to,
+                height: to,
+                texels: None,
+            },
+        ],
+        dispatches: vec![Dispatch {
+            function: function.to_owned(),
+            constants: Vec::new(),
+            bindings,
+            grid: texel_grid(to),
+        }],
+        expect: Vec::new(),
+        expect_textures: vec![TextureExpect {
+            texture: 1,
+            values: Values::Floats {
+                values: expected,
+                tolerance: TEXEL_TOLERANCE,
+            },
+        }],
+        outputs: Vec::new(),
+        per_command_buffer: None,
+    }
+}
+
+/// Sampling through a runtime sampler (`setSamplerState:atIndex:`, linear, clamped to the edge):
+/// a 2x downsample of a 2048x2048 `RGBA16Float` texture into a 1024x1024 one (`sample_down`),
+/// each texel one sample at the corner its four source texels share, one texture write a thread.
+/// Each filter weight is one half, so each texel is the mean of its four source texels.
+fn sampling() -> Plan {
+    const SIDE: u32 = 2048;
+    let source = sixteenths(15, SIDE);
+    let half = SIDE / 2;
+    let at = |x: u32, y: u32, channel: u32| source[(4 * (y * SIDE + x) + channel) as usize];
+    let expected = (0..half)
+        .flat_map(|y| (0..half).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
+        .map(|(x, y, c)| {
+            let (x, y) = (2 * x, 2 * y);
+            (at(x, y, c) + at(x + 1, y, c) + at(x, y + 1, c) + at(x + 1, y + 1, c)) / 4.0
+        })
+        .collect();
+    sampling_plan(
+        "sampling",
+        "sample_down",
+        (SIDE, source),
+        (half, expected),
+        Some(Filter::Linear),
+    )
+}
+
+/// Sampling through a constexpr sampler (linear, clamped to the edge): a 2x upsample of a
+/// 1024x1024 `RGBA16Float` texture into a 2048x2048 one (`sample_up`), each texel one sample a
+/// quarter of a source texel from a source texel's center, one texture write a thread. Each
+/// filter weight is a quarter or three quarters.
+fn constexpr_sampling() -> Plan {
+    const SIDE: u32 = 1024;
+    let source = sixteenths(16, SIDE);
+    // A destination coordinate's two source texels along its axis, and the second's weight: the
+    // sample is at `x / 2 - 1/4` source texels from the first texel's center, clamped to the edge.
+    let taps = |x: u32| {
+        let k = x / 2;
+        if x % 2 == 0 {
+            (k.saturating_sub(1), k, 0.75f32)
+        } else {
+            (k, (k + 1).min(SIDE - 1), 0.25f32)
+        }
+    };
+    let at = |x: u32, y: u32, channel: u32| source[(4 * (y * SIDE + x) + channel) as usize];
+    let double = 2 * SIDE;
+    let expected = (0..double)
+        .flat_map(|y| (0..double).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
+        .map(|(x, y, c)| {
+            let ((x0, x1, wx), (y0, y1, wy)) = (taps(x), taps(y));
+            let row = |y| at(x0, y, c) * (1.0 - wx) + at(x1, y, c) * wx;
+            row(y0) * (1.0 - wy) + row(y1) * wy
+        })
+        .collect();
+    sampling_plan(
+        "constexpr_sampling",
+        "sample_up",
+        (SIDE, source),
+        (double, expected),
+        None,
+    )
 }
