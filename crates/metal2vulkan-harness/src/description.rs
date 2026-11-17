@@ -10,6 +10,8 @@
 //! buffer LENGTH shared|private FILL      the next buffer, numbered from 0
 //! set-buffer INDEX BUFFER [OFFSET]       setBuffer:offset:atIndex: before the next dispatch
 //! set-bytes INDEX LENGTH FILL            setBytes:length:atIndex: before the next dispatch
+//! constant INDEX TYPE HEX                a function constant of the next dispatch's kernel: its
+//!                                        index, raw MTLDataType and value's bytes
 //! dispatch FUNCTION threadgroups GX GY GZ TX TY TZ [repeat N]
 //! dispatch FUNCTION threads X Y Z TX TY TZ [repeat N]
 //! check BUFFER exact                     an output: each word equal between runtimes
@@ -24,7 +26,7 @@
 //! same starting contents, and its outputs after the first run must match the first runtime's.
 
 use crate::plan::{
-    seeded_words, Binding, BufferPlan, Comparison, Dispatch, Grid, Output, Plan, Source,
+    seeded_words, Binding, BufferPlan, Comparison, Constant, Dispatch, Grid, Output, Plan, Source,
 };
 use crate::{Result, Size, Storage};
 use std::path::{Path, PathBuf};
@@ -92,14 +94,15 @@ impl Described {
             let words: Vec<&str> = words.iter().map(String::as_str).collect();
             line(&words).map_err(|why| format!("line {number}: {why}"))
         });
-        // A dispatch at a time: the lines up to it, its bindings among them.
+        // A dispatch at a time: the lines up to it, its bindings and constants among them.
         loop {
-            let mut bindings = Vec::new();
+            let (mut bindings, mut constants) = (Vec::new(), Vec::new());
             let dispatch = loop {
                 match lines.next().transpose()? {
                     None => break None,
                     Some(Line::Buffer(buffer)) => plan.buffers.push(buffer),
                     Some(Line::Binding(binding)) => bindings.push(binding),
+                    Some(Line::Constant(constant)) => constants.push(constant),
                     Some(Line::Output(output)) => plan.outputs.push(output),
                     Some(Line::Dispatch {
                         function,
@@ -109,22 +112,25 @@ impl Described {
                 }
             };
             let Some((function, grid, repeat)) = dispatch else {
-                if !bindings.is_empty() && !plan.dispatches.is_empty() {
+                if !(bindings.is_empty() && constants.is_empty()) && !plan.dispatches.is_empty() {
                     let name = &self.name;
-                    return Err(
-                        format!("workload {name} sets a binding after its last dispatch").into(),
-                    );
+                    return Err(format!(
+                        "workload {name} sets a binding or a constant after its last dispatch"
+                    )
+                    .into());
                 }
                 break;
             };
             plan.dispatches.push(Dispatch {
                 function: function.clone(),
+                constants: constants.clone(),
                 bindings,
                 grid,
             });
             for _ in 1..repeat {
                 plan.dispatches.push(Dispatch {
                     function: function.clone(),
+                    constants: constants.clone(),
                     bindings: Vec::new(),
                     grid,
                 });
@@ -143,6 +149,7 @@ impl Described {
 enum Line {
     Buffer(BufferPlan),
     Binding(Binding),
+    Constant(Constant),
     Dispatch {
         function: String,
         grid: Grid,
@@ -185,6 +192,11 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
         ["set-bytes", index, length, fill @ ..] => Line::Binding(Binding::Bytes {
             index: number(index)?,
             bytes: filled(number(length)?, fill)?,
+        }),
+        ["constant", index, data_type, hex] => Line::Constant(Constant {
+            index: number(index)?,
+            data_type: number(data_type)?,
+            value: bytes_of(hex)?,
         }),
         ["dispatch", function, kind, sizes @ ..] => {
             let (sizes, repeat) = match sizes {
@@ -260,14 +272,7 @@ fn filled(length: u64, fill: &[&str]) -> std::result::Result<Vec<u8>, String> {
         ["unit", seed] => (words(seed)?.iter())
             .flat_map(|word| ((word >> 8) as f32 / (1u32 << 24) as f32).to_le_bytes())
             .collect(),
-        ["hex", hex] => (0..hex.len())
-            .step_by(2)
-            .map(|at| {
-                (hex.get(at..at + 2))
-                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
-                    .ok_or_else(|| format!("{hex} is not whole bytes of hex"))
-            })
-            .collect::<std::result::Result<_, _>>()?,
+        ["hex", hex] => bytes_of(hex)?,
         _ => {
             return Err(format!(
                 "fill {} is not zero, words, unit or hex",
@@ -279,4 +284,16 @@ fn filled(length: u64, fill: &[&str]) -> std::result::Result<Vec<u8>, String> {
         return Err(format!("the fill has {} bytes, not {length}", bytes.len()));
     }
     Ok(bytes)
+}
+
+/// The bytes `hex` spells, two digits each.
+fn bytes_of(hex: &str) -> std::result::Result<Vec<u8>, String> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|at| {
+            (hex.get(at..at + 2))
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or_else(|| format!("{hex} is not whole bytes of hex"))
+        })
+        .collect()
 }

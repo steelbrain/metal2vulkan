@@ -151,8 +151,8 @@ pub trait Buffer {
 
 /// `MTLLibrary`.
 pub trait Library<D: ComputeDevice> {
-    /// `newFunctionWithName:`.
-    fn new_function(&self, name: &str) -> Result<D::Function>;
+    /// `newFunctionWithName:`, or with `constants` `newFunctionWithName:constantValues:error:`.
+    fn new_function(&self, name: &str, constants: &[plan::Constant]) -> Result<D::Function>;
 }
 
 /// `MTLCommandQueue`.

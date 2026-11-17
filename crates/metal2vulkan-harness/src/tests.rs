@@ -3,7 +3,7 @@
 use crate::authored::WORKLOADS;
 use crate::description;
 use crate::plan::{
-    Binding, BufferPlan, Comparison, Dispatch, Expect, Grid, Output, Plan, Source, Values,
+    Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Grid, Output, Plan, Source, Values,
 };
 use crate::rt::Ranges;
 use crate::run::{compare_outputs, percentile, settled, warm_up, zeroed, Report, Runs};
@@ -87,6 +87,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
         }],
         dispatches: vec![Dispatch {
             function: "copy_words".to_owned(),
+            constants: Vec::new(),
             bindings: vec![Binding::Buffer {
                 index: 0,
                 buffer: bound,
@@ -133,6 +134,8 @@ set-buffer 1 1 16
 set-bytes 2 4 zero
 dispatch k threads 64 2 1 32 2 1 repeat 3
 set-bytes 2 4 unit 2
+constant 3 53 01
+constant 0 29 ffffffff
 dispatch k threadgroups 2 1 1 32 1 1
 check 1 float 0.5
 
@@ -169,6 +172,17 @@ fn a_description_makes_its_plans() {
     assert_eq!(first.dispatches.len(), 4);
     let bindings: Vec<usize> = first.dispatches.iter().map(|d| d.bindings.len()).collect();
     assert_eq!(bindings, [3, 0, 0, 1]);
+    // The constants before a dispatch are its kernel's alone.
+    assert!(first.dispatches[..3].iter().all(|d| d.constants.is_empty()));
+    let constant = |index, data_type, value: &[u8]| Constant {
+        index,
+        data_type,
+        value: value.to_vec(),
+    };
+    assert_eq!(
+        first.dispatches[3].constants,
+        [constant(3, 53, &[1]), constant(0, 29, &[0xff; 4])]
+    );
     assert!(matches!(
         first.dispatches[0].bindings[1],
         Binding::Buffer {
@@ -270,7 +284,15 @@ fn a_faulty_description_is_refused_naming_its_line() {
     assert_eq!(refusal("set-buffer 0 0"), "workload w has no dispatch");
     assert_eq!(
         refusal(&format!("{dispatch}\nset-buffer 1 0")),
-        "workload w sets a binding after its last dispatch"
+        "workload w sets a binding or a constant after its last dispatch"
+    );
+    assert_eq!(
+        refusal(&format!("{dispatch}\nconstant 0 53 01")),
+        "workload w sets a binding or a constant after its last dispatch"
+    );
+    assert_eq!(
+        refusal("constant 0 53 0x"),
+        "line 3: 0x is not whole bytes of hex"
     );
     assert_eq!(
         refusal(&format!("{dispatch}\nworkload w k.metallib")),

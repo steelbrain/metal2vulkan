@@ -2,7 +2,10 @@
 //! the same name. The cutover deletes this file, its `mod` line, the `--runtime old` arm of the
 //! command and the crate's dependency on the old runtime.
 
+use crate::plan::Constant;
 use crate::{Code, Result, Size, Storage};
+use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
+use metal2vulkan::metal::DataType;
 use metal2vulkan_runtime as runtime;
 use runtime::{CommandBufferStatus, PipelineOptions, ResourceOptions};
 use std::ptr::NonNull;
@@ -86,8 +89,17 @@ impl crate::Buffer for runtime::Buffer {
 }
 
 impl crate::Library<runtime::Device> for runtime::Library {
-    fn new_function(&self, name: &str) -> Result<runtime::Function> {
-        Ok(self.new_function_with_name(name)?)
+    fn new_function(&self, name: &str, constants: &[Constant]) -> Result<runtime::Function> {
+        if constants.is_empty() {
+            return Ok(self.new_function_with_name(name)?);
+        }
+        let mut values = FunctionConstantValues::defaults();
+        for constant in constants {
+            let data_type = DataType::try_from(constant.data_type)?;
+            let value = FunctionConstantValue::new(data_type, constant.value.as_slice());
+            values = values.with_index(constant.index, value);
+        }
+        Ok(self.new_function_with_name_constant_values(name, &values)?)
     }
 }
 

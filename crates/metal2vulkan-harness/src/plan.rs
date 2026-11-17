@@ -50,10 +50,23 @@ pub struct BufferPlan {
 pub struct Dispatch {
     /// The kernel's name in the plan's library.
     pub function: String,
+    /// The values of the kernel's function constants, by index; none where it declares none.
+    pub constants: Vec<Constant>,
     /// The binding calls before the dispatch, in order.
     pub bindings: Vec<Binding>,
     /// The dispatch call.
     pub grid: Grid,
+}
+
+/// A function constant's value, as `setConstantValue:type:atIndex:` takes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Constant {
+    /// The constant's index.
+    pub index: u32,
+    /// Its `MTLDataType`, raw.
+    pub data_type: u32,
+    /// Its bytes.
+    pub value: Vec<u8>,
 }
 
 /// A binding call.

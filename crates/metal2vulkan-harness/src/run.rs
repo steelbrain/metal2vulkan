@@ -1,6 +1,6 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
-use crate::plan::{Binding, BufferPlan, Grid, Plan, Source};
+use crate::plan::{Binding, BufferPlan, Constant, Grid, Plan, Source};
 use crate::{
     clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputeDevice,
     Device, Library, Result, Storage,
@@ -189,7 +189,8 @@ impl<D: ComputeDevice> Harness<D> {
     /// ([`authored::library_air`](crate::authored::library_air)).
     pub fn new(device: D, authored: &[u8]) -> Result<Self> {
         let authored = device.new_library(Code::Air(authored))?;
-        let copy = device.new_compute_pipeline_state(&authored.new_function(COPY_FUNCTION)?)?;
+        let copy =
+            device.new_compute_pipeline_state(&authored.new_function(COPY_FUNCTION, &[])?)?;
         Ok(Harness {
             queue: device.new_command_queue()?,
             copy,
@@ -224,17 +225,18 @@ impl<D: ComputeDevice> Harness<D> {
     /// [`load`](Self::load) made, and its buffers.
     fn make(&self, plan: &Plan) -> Result<Made<D>> {
         let library = self.library(&plan.library);
-        let mut functions: Vec<&str> = Vec::new();
+        // Each function and its constants' values, made once.
+        let mut functions: Vec<(&str, &[Constant])> = Vec::new();
         let mut states = Vec::new();
         let mut state_of = Vec::with_capacity(plan.dispatches.len());
         for dispatch in &plan.dispatches {
-            let name = dispatch.function.as_str();
-            let at = match functions.iter().position(|&known| known == name) {
+            let key = (dispatch.function.as_str(), dispatch.constants.as_slice());
+            let at = match functions.iter().position(|known| *known == key) {
                 Some(at) => at,
                 None => {
-                    let function = library.new_function(name)?;
+                    let function = library.new_function(key.0, key.1)?;
                     states.push(self.device.new_compute_pipeline_state(&function)?);
-                    functions.push(name);
+                    functions.push(key);
                     functions.len() - 1
                 }
             };

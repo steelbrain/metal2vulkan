@@ -92,6 +92,7 @@ fn bandwidth() -> Plan {
         buffers: vec![private(float_bytes(&input)), unset(16 * VECTORS)],
         dispatches: vec![Dispatch {
             function: "scale_offset".to_owned(),
+            constants: Vec::new(),
             bindings: vec![
                 buffer(0, 0),
                 buffer(1, 1),
@@ -129,6 +130,7 @@ fn alu() -> Plan {
         buffers: vec![unset(4 * THREADS as u64)],
         dispatches: vec![Dispatch {
             function: "fma_chains".to_owned(),
+            constants: Vec::new(),
             bindings: vec![buffer(0, 0), bytes(1, ROUNDS.to_le_bytes().to_vec())],
             grid: Grid::groups_of_256(THREADS as u64 / 256),
         }],
@@ -162,6 +164,7 @@ fn threadgroup_scan() -> Plan {
         buffers: vec![private(word_bytes(&input)), unset(4 * WORDS as u64)],
         dispatches: vec![Dispatch {
             function: "block_scan".to_owned(),
+            constants: Vec::new(),
             bindings: vec![buffer(0, 0), buffer(1, 1)],
             grid: Grid::groups_of_256(WORDS as u64 / 256),
         }],
@@ -199,11 +202,13 @@ fn simd_reduce() -> Plan {
         dispatches: vec![
             Dispatch {
                 function: "reduce_sum".to_owned(),
+                constants: Vec::new(),
                 bindings: vec![buffer(0, 0), buffer(1, 1), bytes(2, shape(WORDS, CHUNK))],
                 grid: Grid::groups_of_256(GROUPS as u64),
             },
             Dispatch {
                 function: "reduce_sum".to_owned(),
+                constants: Vec::new(),
                 bindings: vec![buffer(0, 1), buffer(1, 2), bytes(2, shape(GROUPS, GROUPS))],
                 grid: Grid::groups_of_256(1),
             },
@@ -259,6 +264,7 @@ fn image_filter() -> Plan {
         buffers: vec![private(float_bytes(&input)), unset(4 * input.len() as u64)],
         dispatches: vec![Dispatch {
             function: "binomial3x3".to_owned(),
+            constants: Vec::new(),
             bindings: vec![buffer(0, 0), buffer(1, 1), bytes(2, size)],
             grid: Grid::Threads {
                 threads: [WIDTH as u64, HEIGHT as u64, 1],
@@ -292,6 +298,7 @@ fn dispatch_chain() -> Plan {
             let set_bytes = bytes(1, increment(step).to_le_bytes().to_vec());
             Dispatch {
                 function: "lcg_step".to_owned(),
+                constants: Vec::new(),
                 bindings: match step {
                     0 => vec![buffer(0, 0), set_bytes],
                     _ => vec![set_bytes],
