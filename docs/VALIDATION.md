@@ -294,9 +294,10 @@ M2V-MATRIX <kind> <test>/<name> <value>
 
 The value is an unsigned integer (`time`: microseconds, decimals allowed), and a key appears once
 per leg. The base is the nearest
-first-parent ancestor whose note holds the same leg. Times are compared only when the base's
-`crates/metal2vulkan-harness` tree is this commit's: the harness's warm-up and windows are part of
-the measurement, so a commit that changes the harness sets the base for the next.
+first-parent ancestor whose note holds the same leg. Times, and the harness's own records (keys
+starting `harness-`), are compared only when the base's `crates/metal2vulkan-harness` tree is this
+commit's: the harness's warm-up, windows and workloads are part of the measurement, so a commit that
+changes the harness sets the base for the next.
 
 | Kind | What it counts | Fails when |
 |---|---|---|

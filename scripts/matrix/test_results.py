@@ -183,6 +183,15 @@ class RuleTests(unittest.TestCase):
         self.assertIn("333 cell(s) changed under an unchanged key and 0 under a changed profile",
                       results.old_path_moved(leg, [])[0])
 
+    def test_a_changed_harness_leaves_its_own_counts_uncompared(self):
+        base = recs(metric={"harness-old/authored/pipelines_created": 8, "rt/submissions": 3})
+        now = recs(metric={"harness-old/authored/pipelines_created": 10, "rt/submissions": 4})
+        self.assertEqual(self.problems(now, results.base_records(base, True)),
+                         ["metric harness-old/authored/pipelines_created: 8 -> 10",
+                          "metric rt/submissions: 3 -> 4"])
+        self.assertEqual(self.problems(now, results.base_records(base, False)),
+                         ["metric rt/submissions: 3 -> 4"])
+
     def test_time_needs_three_gpus(self):
         bases = {"a": {"t": 100}, "b": {"t": 100}}
         self.assertEqual(results.time_outliers({"a": {"t": 100}, "b": {"t": 300}}, bases), ({}, {}))

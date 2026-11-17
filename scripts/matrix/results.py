@@ -30,6 +30,24 @@ PARKED_TESTS = {
     "metal2vulkan-validation runtime_lane::compute_inherited_buffers::"
     "a_host_step_orders_the_commands_by_their_barriers_alone":
         "the old runtime's barrier count moves with its background pipeline builds",
+    # Each of these failed in one lavapipe run and passed in the runs around it, the old
+    # runtime's code unchanged between them.
+    "metal2vulkan-runtime tests::view_check_device::the_check_stands_by_while_the_device_s_work_goes_on":
+        "failed once on lavapipe (cfa389aa9b) between passing runs of unchanged code",
+    "metal2vulkan-runtime tests::queue_share_device::"
+    "a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst":
+        "failed once on lavapipe (c944d63548) between passing runs of unchanged code",
+    "metal2vulkan-runtime tests::host_ram_device::"
+    "a_chunk_an_object_waited_for_the_thread_s_import_of_is_not_given_back":
+        "failed once on lavapipe (73e0af4b66) between passing runs of unchanged code",
+    "metal2vulkan-validation runtime_lane::commit_work::"
+    "fills_across_rounds_reuse_a_bounded_set_of_command_pools":
+        "failed once on lavapipe (cfa389aa9b) between passing runs of unchanged code",
+    "metal2vulkan-validation runtime_lane::first_use::new_resources_wait_for_no_gpu_work":
+        "failed on lavapipe at c944d63548 and bfe63b5097 between passing runs of unchanged code",
+    "metal2vulkan-validation runtime_lane::host_memory::"
+    "memory_metal_makes_no_buffer_over_is_refused_when_it_is_made":
+        "failed once on lavapipe (7fa6662170) between passing runs of unchanged code",
 }
 #: Record keys, by prefix, whose gauge @100-to-@200 flatness and cross-GPU time outliers are parked
 #: for the same reason (a gauge's @drop still fails): the old runtime frees idle memory blocks at
@@ -151,6 +169,20 @@ def leg_records(leg):
                     problems.append(f"record {kind} {key}: recorded by two suites")
                 records[kind][key] = value
     return records, problems
+
+
+#: Record keys, by prefix, that the harness measures: its counts sum over its own workloads, so,
+#: like its times, they compare only with a base the same harness measured.
+HARNESS_RECORDS = "harness-"
+
+
+def base_records(records, same_harness):
+    """The base's RECORDS a leg is judged against: all of them under the same harness, else those
+    the harness did not measure."""
+    if same_harness:
+        return records
+    return {kind: {key: value for key, value in values.items() if not key.startswith(HARNESS_RECORDS)}
+            for kind, values in records.items()}
 
 
 def leg_parked(leg, records):

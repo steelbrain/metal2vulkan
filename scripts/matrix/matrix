@@ -634,7 +634,8 @@ def leg_entry(run, leg):
     records, problems = results.leg_records(parsed)
     base_sha, base = base_of(run.sha, leg.id)
     problems += run.failures.get(leg.id, [])
-    problems += results.leg_problems(parsed, records, base and base["records"])
+    base_records = base and results.base_records(base["records"], harness_tree(base_sha) == harness_tree(run.sha))
+    problems += results.leg_problems(parsed, records, base_records)
     problems += results.old_path_moved(parsed, run.since_bless)
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
