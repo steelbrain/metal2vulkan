@@ -308,9 +308,9 @@ the measurement, so a commit that changes the harness sets the base for the next
 Every cache has a test that fills it past its capacity and records its gauge.
 
 The old runtime takes no fixes until the cutover deletes it, so its failures that the matrix has
-met are parked (`PARKED_TESTS` and `PARKED_GAUGES` in `scripts/matrix/results.py`, each with its
-reason): a parked test's failure, or a parked gauge's change between `@100` and `@200`, is named
-on the leg's line and fails no leg. A parked gauge's `@drop` still fails. The list goes with the old
+met are parked (`PARKED_TESTS` and `PARKED_RECORDS` in `scripts/matrix/results.py`, each with its
+reason): a parked test's failure, a parked gauge's change between `@100` and `@200`, or a parked
+time's cross-GPU outlier is named on the leg's line and fails no leg. A parked gauge's `@drop` still fails. The list goes with the old
 runtime.
 
 `metal2vulkan_devtools::instructions::InstructionCounter` measures `instructions`: the calling

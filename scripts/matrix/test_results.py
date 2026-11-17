@@ -136,7 +136,7 @@ class RuleTests(unittest.TestCase):
                          ["suite rt exited 100, 1 failed: metal2vulkan-rt tests::breaks"])
 
     def test_a_parked_gauge_moves_between_iterations_but_must_reach_zero(self):
-        prefix = results.PARKED_GAUGES[0]
+        prefix = results.PARKED_RECORDS[0]
         now = recs(gauge={f"{prefix}w/b@100": 3, f"{prefix}w/b@200": 2, f"{prefix}w/b@drop": 1})
         self.assertEqual(self.problems(now, None), [f"gauge {prefix}w/b: 1 live at device drop"])
         self.assertEqual(results.leg_parked(leg_of(now), now),
@@ -151,14 +151,22 @@ class RuleTests(unittest.TestCase):
         bases = {"a": {"t": 100}, "b": {"t": 200}, "c": {"t": 50}, "d": {"t": 10}}
         # Every GPU 10% slower: no outlier.
         times = {"a": {"t": 110}, "b": {"t": 220}, "c": {"t": 55}, "d": {"t": 11}}
-        self.assertEqual(results.time_outliers(times, bases), {})
+        self.assertEqual(results.time_outliers(times, bases), ({}, {}))
         # One GPU 50% slower while the others hold: it alone fails.
         times["d"] = {"t": 15}
-        self.assertEqual(list(results.time_outliers(times, bases)), ["d"])
+        self.assertEqual(list(results.time_outliers(times, bases)[0]), ["d"])
+
+    def test_a_parked_time_outlier_is_named_and_fails_no_leg(self):
+        key = results.PARKED_RECORDS[0] + "frame"
+        bases = {leg: {key: 100} for leg in "abcd"}
+        times = {"a": {key: 100}, "b": {key: 101}, "c": {key: 99}, "d": {key: 150}}
+        failing, parked = results.time_outliers(times, bases)
+        self.assertEqual(failing, {})
+        self.assertEqual(list(parked), ["d"])
 
     def test_time_needs_three_gpus(self):
         bases = {"a": {"t": 100}, "b": {"t": 100}}
-        self.assertEqual(results.time_outliers({"a": {"t": 100}, "b": {"t": 300}}, bases), {})
+        self.assertEqual(results.time_outliers({"a": {"t": 100}, "b": {"t": 300}}, bases), ({}, {}))
 
 
 if __name__ == "__main__":

@@ -689,9 +689,13 @@ def run_cmd(sha, only, dry):
         if e["gpu"]:
             times[leg_id] = e["records"]["time"]
             bases[leg_id] = base_times(sha, e["base"], e["base_records"] and {"records": e["base_records"]})
-    for leg_id, problems in results.time_outliers(times, bases).items():
+    outliers, parked = results.time_outliers(times, bases)
+    for leg_id, problems in outliers.items():
         if leg_id in entries:
             entries[leg_id]["problems"] += problems
+    for leg_id, lines in parked.items():
+        if leg_id in entries:
+            entries[leg_id]["parked"] += lines
     for leg_id, e in entries.items():
         e.pop("base_records")
         e["verdict"] = "fail" if e["problems"] else "pass"

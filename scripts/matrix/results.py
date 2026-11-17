@@ -31,9 +31,11 @@ PARKED_TESTS = {
     "a_host_step_orders_the_commands_by_their_barriers_alone":
         "the old runtime's barrier count moves with its background pipeline builds",
 }
-#: Gauge keys, by prefix, whose @100-to-@200 flatness is parked for the same reason (their @drop
-#: still fails): the old runtime frees idle memory blocks at times of its own.
-PARKED_GAUGES = ("harness-old/",)
+#: Record keys, by prefix, whose gauge @100-to-@200 flatness and cross-GPU time outliers are parked
+#: for the same reason (a gauge's @drop still fails): the old runtime frees idle memory blocks at
+#: times of its own, and its frame timing on the UHD 630 swings by half between runs of unchanged
+#: code (1.58x at a68d520bee, 1.47x at 9af29fbb20).
+PARKED_RECORDS = ("harness-old/",)
 
 RECORD = re.compile(r"^\s*M2V-MATRIX (\S+) (\S+) (\S+)\s*$")
 LEG = re.compile(r"^M2V-LEG (\S+) begin\s*$")
@@ -137,13 +139,13 @@ def leg_records(leg):
 
 
 def leg_parked(leg, records):
-    """The leg's parked failures (PARKED_TESTS, PARKED_GAUGES), one line each."""
+    """The leg's parked failures (PARKED_TESTS, PARKED_RECORDS' gauges), one line each."""
     out = [f"test {test}" for suite in leg["suites"].values() for test in suite["failed"]
            if test in PARKED_TESTS]
     gauges = records["gauge"]
     for key, value in sorted(gauges.items()):
         name, _, point = key.rpartition("@")
-        if (point == "200" and name.startswith(PARKED_GAUGES) and f"{name}@100" in gauges
+        if (point == "200" and name.startswith(PARKED_RECORDS) and f"{name}@100" in gauges
                 and value != gauges[f"{name}@100"]):
             out.append(f"gauge {name}: {gauges[f'{name}@100']} at iteration 100, {value} at 200")
     return out
@@ -166,7 +168,7 @@ def leg_problems(leg, records, base):
         name, _, point = key.rpartition("@")
         if point == "drop" and value != 0:
             problems.append(f"gauge {name}: {value} live at device drop")
-        if (point == "200" and not name.startswith(PARKED_GAUGES) and f"{name}@100" in gauges
+        if (point == "200" and not name.startswith(PARKED_RECORDS) and f"{name}@100" in gauges
                 and value != gauges[f"{name}@100"]):
             problems.append(f"gauge {name}: {gauges[f'{name}@100']} at iteration 100, {value} at 200")
     if base is not None:
@@ -185,8 +187,9 @@ def time_outliers(times, bases):
     """Timing fails only as a cross-GPU outlier. TIMES and BASES: {leg: {key: microseconds}} of
     the GPU legs now and at their bases. For each key that at least TIME_MIN_GPUS legs timed at
     both, a leg whose slowdown (now over base) is more than TIME_OUTLIER times the legs' median
-    slowdown fails. Returns {leg: [problems]}."""
-    out = {}
+    slowdown is an outlier. Returns ({leg: [problems]}, {leg: [parked]}): an outlier of a
+    PARKED_RECORDS key is parked, not a problem."""
+    out, parked = {}, {}
     keys = {key for values in times.values() for key in values}
     for key in sorted(keys):
         ratios = {leg: values[key] / bases[leg][key]
@@ -197,10 +200,10 @@ def time_outliers(times, bases):
         median = statistics.median(ratios.values())
         for leg, ratio in sorted(ratios.items()):
             if ratio > TIME_OUTLIER * median:
-                out.setdefault(leg, []).append(
+                (parked if key.startswith(PARKED_RECORDS) else out).setdefault(leg, []).append(
                     f"time {key}: {ratio:.2f}x its base, against a median of {median:.2f}x "
                     f"over {len(ratios)} GPUs")
-    return out
+    return out, parked
 
 
 def verdict_line(leg_id, leg):
