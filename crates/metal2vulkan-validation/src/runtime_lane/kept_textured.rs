@@ -236,7 +236,12 @@ fn fresh(
 }
 
 /// A device under the validation layer, a queue of it and a page of [`COMMANDS`] commands, for
-/// `case`, which ends with the layer having reported nothing.
+/// `case`, which ends with the layer having reported nothing. The device's view check answered
+/// first (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs
+/// from the device's making, and its import of host pages and that import's release each change
+/// the device's host aliases (`host_aliases.rs`'s version), after which a draw notes its resident
+/// uses afresh (the runtime's `noted_apart.rs`): frame 1 walked 521 and 525 against frame 0's 517
+/// on the RX 7900 XTX.
 fn run(case: impl FnOnce(&Device, &CommandQueue, &mut Page)) {
     run_with(|_| {}, case)
 }
@@ -248,6 +253,7 @@ fn run_with(adjust: fn(&mut DeviceOptions), case: impl FnOnce(&Device, &CommandQ
     let messages = Messages::default();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), adjust).unwrap();
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         println!(
             "KEPT-TEXTURED {}: descriptorBindingUpdateUnusedWhilePending {}",
             device.name(),
