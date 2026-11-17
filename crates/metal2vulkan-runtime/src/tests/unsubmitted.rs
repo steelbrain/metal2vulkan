@@ -374,9 +374,9 @@ const ZEROS: u64 = 64 << 10;
 /// with a fill queue or without one, and leaves the fill waiting
 /// (`WorkCounts::new_buffer_zero_fills` unmoved); the next command buffer, a copy of the buffer,
 /// takes it before its copy, which reads zeros. Before, on a device without a fill queue, the
-/// empty one carried the fill in a submission of its own: a macOS guest's WebGL page on the Iris
-/// Xe (ANV) made a buffer and committed an empty command buffer each frame, each such call of
-/// 300 us or more.
+/// empty one carried the fill in a submission of its own: a 3D step in a consumer's macOS guest
+/// on the Iris Xe (ANV) made a buffer and committed an empty command buffer each frame, each such
+/// call of 300 us or more.
 #[test]
 fn an_empty_command_buffer_leaves_a_new_buffer_s_zeros_waiting() {
     let device = device();

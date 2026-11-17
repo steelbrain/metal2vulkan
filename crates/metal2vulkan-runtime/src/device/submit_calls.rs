@@ -34,8 +34,8 @@
 //! no GPU work; most of those a committing thread submitted took 15 to 40 us for the whole commit,
 //! where the batches with work took 173 us at their first quartile, so the floor stayed under
 //! [`SLOW_NANOS`] and the committing threads made 85 to 88% of the calls. Of the calls of commands
-//! alone, the least of each 15 the window server's thread made was 143 us at its tenth
-//! percentile. On the Iris Xe (ANV), a third of a Safari video step's batches had no GPU work, and
+//! alone, the least of each 15 the compositor's committing thread made was 143 us at its tenth
+//! percentile. On the Iris Xe (ANV), a third of a video step's batches had no GPU work, and
 //! its calls, 306 to 374 us on the average, stayed on the committing threads. A batch with no
 //! command buffer is left to the scheduler's thread with the rest of its queue's where those are
 //! slow, and is counted as such.
