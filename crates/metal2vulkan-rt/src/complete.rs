@@ -13,6 +13,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+/// How long [`Done::wait`] waits on the GPU at a time before it checks for a loss.
+const LOSS_POLL: Duration = Duration::from_millis(100);
+
 /// The completion side: what the completion thread has to do, and its two timeline semaphores.
 pub(crate) struct Done {
     state: Mutex<DoneState>,
@@ -74,6 +77,42 @@ enum Item {
 }
 
 impl Done {
+    /// Waits until the progress semaphore reaches `value`, a value [`Work::flush`] gave: once
+    /// what that batch carries has completed.
+    ///
+    /// Err: [`Error::Vulkan`] (`VK_ERROR_DEVICE_LOST`) where the device is lost first.
+    ///
+    /// [`Work::flush`]: crate::submit::Work::flush
+    pub(crate) fn wait(&self, core: &Core, value: u64) -> Result<(), Error> {
+        let lost = Error::Vulkan {
+            call: "vkWaitSemaphores",
+            result: vk::Result::ERROR_DEVICE_LOST,
+        };
+        let semaphores = [self.progress];
+        let values = [value];
+        let wait = vk::SemaphoreWaitInfo::default()
+            .semaphores(&semaphores)
+            .values(&values);
+        loop {
+            // SAFETY: the progress semaphore is the device's, live while the core is.
+            match unsafe {
+                core.device
+                    .wait_semaphores(&wait, LOSS_POLL.as_nanos() as u64)
+            } {
+                Ok(()) => return Ok(()),
+                // A lost device's pending batches never signal: the work side ends them.
+                Err(vk::Result::TIMEOUT) if core.work.lock().lost() => return Err(lost),
+                Err(vk::Result::TIMEOUT) => {}
+                Err(result) => {
+                    return Err(Error::Vulkan {
+                        call: "vkWaitSemaphores",
+                        result,
+                    })
+                }
+            }
+        }
+    }
+
     /// Makes the two semaphores.
     ///
     /// # Safety

@@ -33,6 +33,8 @@ pub(crate) struct WorkState {
     upload: Option<Upload>,
     /// Something changed that may let a held segment go.
     dirty: bool,
+    /// The upload is to go at once, alone where no segment is ready ([`Work::flush`]).
+    flush: bool,
     /// The submit thread is to end: it submits what is ready, then ends what is held.
     stop: bool,
     /// Quiesced or torn down: commits and uploads are refused.
@@ -105,6 +107,7 @@ impl Work {
                 progress: 0,
                 upload: None,
                 dirty: false,
+                flush: false,
                 stop: false,
                 closed: false,
                 lost: false,
@@ -195,6 +198,24 @@ impl Work {
                 )
             }
         })
+    }
+
+    /// Has the upload submitted at once, alone where no commit is ready: the progress value at
+    /// which everything recorded into uploads so far has completed and is visible to the host,
+    /// for [`Done::wait`](crate::complete::Done::wait).
+    pub(crate) fn flush(&self) -> u64 {
+        let mut state = self.lock();
+        if state.upload.is_none() {
+            // Every upload so far went in a batch already submitted.
+            return state.progress;
+        }
+        state.flush = true;
+        state.dirty = true;
+        // The next batch takes the upload.
+        let value = state.progress + 1;
+        drop(state);
+        self.wake();
+        value
     }
 
     /// Ends `queue`'s held and unsubmitted command buffers with `NotRun`.
@@ -343,9 +364,10 @@ impl WorkState {
                 }
             }
         }
-        if segments.is_empty() {
+        if segments.is_empty() && !(self.flush && self.upload.is_some()) {
             return None;
         }
+        self.flush = false;
         self.progress = value;
         Some(Batch {
             value,
@@ -491,9 +513,10 @@ fn submit(core: &Core, batch: Batch) {
         watch,
     } = batch;
     let device = &core.device;
-    // The upload's fills are visible to every command after it.
+    // What the upload wrote is visible to every command after it, and to the host once the
+    // batch completes.
     let mut ok = upload.as_ref().is_none_or(|upload| {
-        record::barrier(device, upload.command, Reach::Commands);
+        record::barrier(device, upload.command, Reach::Host);
         core.counters.count(Metric::Barriers);
         // SAFETY: the upload's command buffer was recording under the work lock, which `stage`
         // took it out under.
@@ -553,8 +576,8 @@ fn submit(core: &Core, batch: Batch) {
 }
 
 impl Upload {
-    /// Recycles the upload's recorder and gives up what it holds: once its submission completed, or
-    /// where it never went.
+    /// Recycles the upload's recorder and gives up what it holds: once its submission completed,
+    /// or where it never went.
     pub(crate) fn retire(self, core: &Core) {
         core.recorders.give_back(core, self.recorder);
     }
