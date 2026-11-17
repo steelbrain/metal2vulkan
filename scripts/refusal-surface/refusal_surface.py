@@ -20,7 +20,10 @@ The refusal surface is read from the construction sites of the typed refusals, o
   it forwards to, found from the forwarding variants' payloads: each of these is a claim that Metal
   itself refuses an input, so each carries a declared basis;
 - the new runtime's floor (`floor::BelowFloor`, in crates/metal2vulkan-rt): each `floor::Missing`
-  item a device below the floor lacks.
+  item a device below the floor lacks;
+- the new runtime's own refusal enums: each variant of its `Error` whose payload is one enum it
+  declares (`Refused(Refusal)`, `Limit(Limit)`, and any added later), found from that payload, one
+  section each, every variant with a declared basis.
 
 Each refusal is one row per variant, with what it blocks (the variant's doc comment), the device
 condition (from the constructor: every device, or the capabilities, driver defects or families
@@ -70,6 +73,10 @@ TREES = [
 
 # The new runtime's floor: the file that declares `Missing`, the items of `BelowFloor`.
 FLOOR_RS = CRATES / "metal2vulkan-rt" / "src" / "floor.rs"
+
+# The new runtime's error: each variant whose payload is one enum the runtime declares is a family
+# of typed refusals (`Refused(Refusal)`, `Limit(Limit)`, `Unsupported(Gap)`, and any added later).
+RT_ERROR_RS = CRATES / "metal2vulkan-rt" / "src" / "error.rs"
 
 CONSTRUCTORS = {
     "not_implemented": "NotImplemented",
@@ -418,11 +425,12 @@ def is_pattern(text, start, end):
     return False
 
 
-def scan(sub_problems=()):
+def scan(sub_problems=(), rt_enums=()):
     """Rows keyed by (section, variant): conditions, sites.
 
     `sub_problems` are the problem enums `Problem` forwards to: their variants are construction
-    sites of a refusal too, and are counted as `Problem`'s own are.
+    sites of a refusal too, and are counted as `Problem`'s own are. `rt_enums` are the new
+    runtime's refusal enums ([`rt_refusal_enums`]), each its own section.
     """
     rows = defaultdict(lambda: {"conds": set(), "kinds": set(), "sites": [], "indirect": []})
     feature_refs = defaultdict(list)
@@ -519,12 +527,18 @@ def scan(sub_problems=()):
                 if is_pattern(text, m.start(), m.end()):
                     continue
                 rows[("floor", m.group(1))]["sites"].append(site(m.start()))
+            # The runtime's own refusal enums, one section each.
+            for enum in rt_enums:
+                for m in re.finditer(r"(?<![A-Za-z0-9_])" + enum + r"::([A-Z][A-Za-z0-9_]*)", text):
+                    if is_pattern(text, m.start(), m.end()):
+                        continue
+                    rows[(rt_section(enum), m.group(1))]["sites"].append(site(m.start()))
         for m in re.finditer(r"\bBindError::([A-Z][A-Za-z0-9_]*)", text):
             if m.group(1) not in BIND_REFUSALS or is_pattern(text, m.start(), m.end()):
                 continue
             rows[("bind", m.group(1))]["sites"].append(site(m.start()))
         for m in re.finditer(r"\bLimit::([A-Z][A-Za-z0-9_]*)", text):
-            if is_pattern(text, m.start(), m.end()):
+            if tree == "rt" or is_pattern(text, m.start(), m.end()):
                 continue
             if rel.endswith("metal2vulkan-air/src/error.rs"):
                 continue
@@ -621,6 +635,31 @@ def runtime_enum_files():
     return where
 
 
+def rt_section(enum):
+    """The section key of one of the new runtime's refusal enums."""
+    return f"rt:{enum}"
+
+
+def rt_refusal_enums():
+    """(variant, enum, file) for each variant of the new runtime's `Error` whose whole payload is
+    one enum the runtime declares: `Refused(Refusal)`, `Limit(Limit)`, and any family added later.
+
+    Structural, as `forwarded_problems` is: no list of names is kept here.
+    """
+    where = {}
+    for tree, rel, text in source_files():
+        if tree != "rt":
+            continue
+        for m in re.finditer(r"^pub enum ([A-Za-z0-9_]+) \{", text, re.M):
+            where.setdefault(m.group(1), ROOT / rel)
+    out = []
+    for name, _, payload in enum_arms(RT_ERROR_RS, "Error"):
+        payload = payload.strip()
+        if re.fullmatch(r"[A-Z][A-Za-z0-9_]*", payload) and payload in where and payload != "Error":
+            out.append((name, payload, where[payload]))
+    return out
+
+
 def forwarded_problems(path):
     """Every problem enum `Problem` forwards to, and every one those forward to, in their order.
 
@@ -664,7 +703,8 @@ def strip_refs(text):
 
 
 def summary(doc):
-    doc = strip_refs(doc.strip())
+    # A rustdoc link `[text](path)` reads as its text: the path is the crate's, not this file's.
+    doc = re.sub(r"\[([^\]]+)\]\([^)\s]*\)", r"\1", strip_refs(doc.strip()))
     if not doc:
         return ""
     m = re.match(r"(.+?[.:])(\s|$)", doc)
@@ -725,7 +765,8 @@ def head_sha():
 def build():
     error_rs = CRATES / "metal2vulkan-runtime" / "src" / "error.rs"
     subs = forwarded_problems(error_rs)
-    rows, feature_refs = scan([enum for enum, _, _, _, _ in subs])
+    rt_enums = rt_refusal_enums()
+    rows, feature_refs = scan([enum for enum, _, _, _, _ in subs], [enum for _, enum, _ in rt_enums])
     reach = load_reach()
     fdocs = OrderedDict(enum_variants(CRATES / "metal2vulkan" / "src" / "error" / "mod.rs", "Feature"))
     for n, d in enum_variants(CRATES / "metal2vulkan-air" / "src" / "error.rs", "Feature"):
@@ -785,6 +826,14 @@ def build():
         ),
         ("floor", mdocs, "Devices below the new runtime's floor (`floor::BelowFloor`: each `floor::Missing`)"),
     ]
+    for variant, enum, file in rt_enums:
+        sections.append(
+            (
+                rt_section(enum),
+                OrderedDict((n, d) for n, d, _ in enum_arms(file, enum)),
+                f"The new runtime's `{enum}` (`Error::{variant}({enum})`)",
+            )
+        )
     sub_section = next(i for i, (s, _, _) in enumerate(sections, 1) if s == "subproblem")
     for section, docs, title in sections:
         out = []
@@ -819,7 +868,7 @@ def build():
             else:
                 state = "direct"
             notsched = " (not scheduled)" if "not scheduled" in doc.lower() else ""
-            if section in ("invalid", "subproblem", "floor"):
+            if section in ("invalid", "subproblem", "floor") or section.startswith("rt:"):
                 # Reach is not marked here: every one of these is an argument of a public call,
                 # so a reach mark would say `app` for all of them; and the floor turns on the
                 # device, whatever the program.
@@ -832,7 +881,7 @@ def build():
             prose, marker = split_basis(doc)
             if marker is None:
                 basis, cite = derived_basis(section, (r["kinds"] if r else set())), ""
-                if section == "invalid":
+                if section == "invalid" or section.startswith("rt:"):
                     basis_faults.append((section, name, "carries no `Basis:` line"))
                 elif section == "subproblem":
                     parent, value, required = sub_family[name.split("::")[0]]
@@ -850,6 +899,13 @@ def build():
                 doc = prose
             if section == "invalid" and basis == DELEGATED:
                 cite = f"{cite}, section {sub_section}"
+            if section.startswith("rt:"):
+                # A device's own limit refuses on devices whose limit the call passes; every other
+                # refusal of the runtime is a public call's check of its arguments.
+                if basis == "device":
+                    conds = ["at the device's limit"]
+                else:
+                    conds = ["every device (a public call's own check of its arguments)"]
             if sites:
                 sc = sites_cell(sites)
             elif indirect:
@@ -889,6 +945,8 @@ def render(tables):
         "an input, with the basis of that claim; section 9 holds the problem enums a `Problem` "
         "forwards to, where most of those claims live. Section 10 is the new runtime's floor: a "
         "device below it is refused when the device is made, with every item it lacks named. "
+        "The sections after it are the new runtime's own typed refusals, one for each enum its "
+        "`Error` carries, every row with its declared basis. "
         "Malformed input of no Metal call at all is misuse and is not listed. "
         "[`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no "
         "counterpart for at all."
@@ -935,8 +993,9 @@ def render(tables):
     lines.append("  - `?`: not assessed yet.")
     lines.append(
         "  Metal's own refusals (sections 8 and 9) carry no reach mark: every one of them is an "
-        "argument of a public call. Nor does the floor (section 10), which turns on the device "
-        "whatever the program."
+        "argument of a public call. Nor do the floor (section 10), which turns on the device "
+        "whatever the program, and the new runtime's refusals after it, each an argument of a "
+        "public call."
     )
     lines.append("")
     # totals

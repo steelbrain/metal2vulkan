@@ -42,11 +42,16 @@ pub enum Error {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// [`Device::new_buffer`](crate::Device::new_buffer) with a length of 0: Metal answers nil
-    /// for a buffer of no bytes.
+    /// A buffer of no bytes ([`Device::new_buffer`](crate::Device::new_buffer) with a length of
+    /// 0). Metal answers nil.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max: newBufferWithLength:0 answers nil).
     EmptyBuffer,
-    /// [`Device::new_buffer`](crate::Device::new_buffer) with a range that leaves its block:
+    /// A buffer whose range leaves its block ([`Device::new_buffer`](crate::Device::new_buffer)).
     /// Metal answers nil for a buffer placed past the end of its heap.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil
+    /// for a 4096-byte buffer at offset 1,047,552).
     BufferPastBlock {
         /// The buffer's offset in the block.
         offset: u64,
@@ -61,17 +66,22 @@ pub enum Refusal {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Limit {
-    /// [`Device::take_block`](crate::Device::take_block) for more bytes than one allocation and
-    /// one buffer can hold on the device (`maxMemoryAllocationSize` and `maxBufferSize`). Metal's
-    /// counterpart is `maxBufferLength`, past which it answers nil.
+    /// A block longer than one allocation and one buffer hold on the device
+    /// ([`Device::take_block`](crate::Device::take_block) past `maxMemoryAllocationSize` or
+    /// `maxBufferSize`). Metal's counterpart is `maxBufferLength`, past which it answers nil.
+    ///
+    /// Basis: device (the device's `maxMemoryAllocationSize` and `maxBufferSize`).
     BlockLen {
         /// The length asked for, rounded up to the allocation granule.
         len: u64,
         /// The most the device holds in one block.
         max: u64,
     },
-    /// [`Device::take_block`](crate::Device::take_block) after every block number has been used:
-    /// numbers are never reused during a device's life. Metal has no counterpart.
+    /// A block after every block number has been used
+    /// ([`Device::take_block`](crate::Device::take_block)): numbers are never reused during a
+    /// device's life. Metal has no counterpart.
+    ///
+    /// Basis: ours (block numbers are 32 bits).
     BlockIds,
 }
 

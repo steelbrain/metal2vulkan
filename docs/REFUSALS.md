@@ -1,6 +1,6 @@
 # The refusal surface
 
-Every refusal of something Metal accepts, read from the code: the construction sites of the typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Sections 8 and 9 are the other half: what a call did wrong, each row a claim that Metal itself refuses an input, with the basis of that claim; section 9 holds the problem enums a `Problem` forwards to, where most of those claims live. Section 10 is the new runtime's floor: a device below it is refused when the device is made, with every item it lacks named. Malformed input of no Metal call at all is misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no counterpart for at all.
+Every refusal of something Metal accepts, read from the code: the construction sites of the typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Sections 8 and 9 are the other half: what a call did wrong, each row a claim that Metal itself refuses an input, with the basis of that claim; section 9 holds the problem enums a `Problem` forwards to, where most of those claims live. Section 10 is the new runtime's floor: a device below it is refused when the device is made, with every item it lacks named. The sections after it are the new runtime's own typed refusals, one for each enum its `Error` carries, every row with its declared basis. Malformed input of no Metal call at all is misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no counterpart for at all.
 
 Columns:
 
@@ -21,7 +21,7 @@ Columns:
   - `rare`: public API, but specialized: few apps reach it;
   - `none`: no public API path: malformed or non-Metal input, Apple-private calls, or a cap no valid program of ordinary size meets;
   - `?`: not assessed yet.
-  Metal's own refusals (sections 8 and 9) carry no reach mark: every one of them is an argument of a public call. Nor does the floor (section 10), which turns on the device whatever the program.
+  Metal's own refusals (sections 8 and 9) carry no reach mark: every one of them is an argument of a public call. Nor do the floor (section 10), which turns on the device whatever the program, and the new runtime's refusals after it, each an argument of a public call.
 
 ## Totals
 
@@ -37,6 +37,8 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -52,6 +54,8 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -249,7 +253,7 @@ Columns:
 | `RateMapRegions` | A draw in a rate-mapped pass that the region path does not draw, for the compile layer's reason (`rate_mapped_pass.rs`) | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/rate_mapped_pass.rs (refusal)` | `rare`: draws in rate-mapped passes the region path does not draw |
 | `LayeredPass` | A layered render pass (`renderTargetArrayLength` 2 or more) that needs a step of one layer | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/color_resolve.rs (plan)` | `rare`: layered passes needing a per-layer color resolve |
 | `OverlappingTextureCopies` | A blit copy between overlapping regions of one texture's texels (`copyFromTexture:...` with the source's region meeting the destination's, through... (not scheduled) | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/blit_texture.rs (texture_copies_of_bytes)` | `rare`: overlapping texture copies (Metal races) |
-| `EmptyFillPattern` | A texture fill given no pattern bytes (`fillTexture:level:slice:region:bytes:length:` of length 0,... | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/blit_fill.rs (check_pattern)` | `none`: a fill of no pattern bytes through the Apple-private fillTexture:...:bytes:length: |
+| `EmptyFillPattern` | A texture fill given no pattern bytes (`fillTexture:level:slice:region:bytes:length:` of length 0, `BlitCommandEncoder::fill_texture`) | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/blit_fill.rs (check_pattern)` | `none`: a fill of no pattern bytes through the Apple-private fillTexture:...:bytes:length: |
 | `RebindTextures` | `Buffer::rebind_bytes_no_copy` of a no-copy buffer whose GPU writes are dropped (Metal's private option bit 24) with a live texture over its... | every device (runtime piece not built) | `ours` | 11: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (rebind_host_pages)`, `crates/metal2vulkan-runtime/src/texture/heap.rs (dma_buf_heap_images_again)` (+4) | `none`: a runtime extension's rebind with a live texture |
 | `PvrtcBlockOrder` | A PVRTC texture's blocks in a Metal block order the runtime does not lay out | every device (runtime piece not built) | `ours` | 1: `crates/metal2vulkan-runtime/src/texture.rs (host_copy)` | `rare`: PVRTC regions off whole levels |
 | `DecodedHeapTexture` | A heap's or a sparse heap's texture of an ASTC format on a device without that ASTC format (`astc.rs`), or a sparse heap's texture of an ETC2 or... | every device (runtime piece not built) | `ours` | 4: `crates/metal2vulkan-runtime/src/texture.rs (plan_sparse_texture)`, `crates/metal2vulkan-runtime/src/texture/heap.rs (heap_plan)` (+1) | `app`: an ASTC texture in a heap on a device without ASTC |
@@ -388,7 +392,7 @@ Columns:
 | `Heap` | A heap, or a resource placed in one, Metal stops (`new_heap` and the heap's calls) | every device (a public call's own check of its arguments) | `delegated`: HeapProblem, section 9 | 13: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (one_copy_buffer)`, `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (rebind_host_pages)` (+11) | `-` |
 | `ResourceId` | A resource ID, placed or reserved, of `limit` or more | every device (a public call's own check of its arguments) | `metal-measured`: an M4 and an M3 Max, macOS 27.0.1: the IDs at which Metal ends the process, recorded in `resource_ids.rs` | 1: `crates/metal2vulkan-runtime/src/resource_ids.rs (check_limit)` | `-` |
 | `ReservationHangs` | An indirect command buffer ID of `limit` (2^31) to 2^32 - 1 in a reservation (`Device::reserve_resource_ids`) | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: Metal's call never returns, its pool spinning | 1: `crates/metal2vulkan-runtime/src/resource_ids.rs (reserve_resource_ids_now)` | `-` |
-| `OutsidePlacement` | [`IdPlacement::Outside`](crate::IdPlacement::Outside) for anything but a texture `Device::new_texture` or `Device::new_texture_with_vk_image` makes | every device (a public call's own check of its arguments) | `ours`: a runtime extension's misuse: Metal has no such placement | 4: `crates/metal2vulkan-runtime/src/resource_ids.rs (check_sampler_placement)`, `crates/metal2vulkan-runtime/src/resource_ids.rs (check_texture_placement)` (+2) | `-` |
+| `OutsidePlacement` | `IdPlacement::Outside` for anything but a texture `Device::new_texture` or `Device::new_texture_with_vk_image` makes | every device (a public call's own check of its arguments) | `ours`: a runtime extension's misuse: Metal has no such placement | 4: `crates/metal2vulkan-runtime/src/resource_ids.rs (check_sampler_placement)`, `crates/metal2vulkan-runtime/src/resource_ids.rs (check_texture_placement)` (+2) | `-` |
 | `FunctionTable` | A visible-function table call, or a table or buffer binding a dispatch reads as the other, Metal stops | every device (a public call's own check of its arguments) | `delegated`: FunctionTableProblem, section 9 | 3: `crates/metal2vulkan-runtime/src/argument_table.rs (check_function_tables)`, `crates/metal2vulkan-runtime/src/function_table.rs (not_one_stage)` (+1) | `-` |
 | `IndirectCommandBuffer` | An indirect command buffer call plain Metal itself refuses, ending its process or failing the call | every device (a public call's own check of its arguments) | `delegated`: IndirectCommandBufferProblem, section 9 | 1: `crates/metal2vulkan-runtime/src/indirect_command_buffer.rs (problem)` | `-` |
 | `RateMap` | A rasterization-rate map's descriptor Metal stops (`new_rasterization_rate_map`) | every device (a public call's own check of its arguments) | `delegated`: RateMapProblem, section 9 | 6: `crates/metal2vulkan-runtime/src/rate_map.rs (map_physical_to_screen_coordinates, 2 sites)`, `crates/metal2vulkan-runtime/src/rate_map.rs (map_screen_to_physical_coordinates, 2 sites)` (+2) | `-` |
@@ -439,7 +443,7 @@ Columns:
 | `CopyQueueProblem::Encoder` | An encoder but a blit encoder | every device (a public call's own check of its arguments) | `ours`: from `Problem::CopyQueue` | 3: `crates/metal2vulkan-runtime/src/encoder.rs (open_placed)`, `crates/metal2vulkan-runtime/src/render.rs (render_command_encoder)` (+1) | `-` |
 | `CopyQueueProblem::Command` | A blit command but `copy_from_buffer_to_buffer`, `fill_buffer` and the fence updates and waits | every device (a public call's own check of its arguments) | `ours`: from `Problem::CopyQueue` | 1: `crates/metal2vulkan-runtime/src/blit.rs (logged_after)` | `-` |
 | `CopyQueueProblem::Buffer` | A buffer the caller made (`Device::new_buffer_with_vk_buffer`) that is not concurrent with the copy engine's family, whose contents that family... | every device (a public call's own check of its arguments) | `ours`: from `Problem::CopyQueue` | 1: `crates/metal2vulkan-runtime/src/blit.rs (refuse_unshared)` | `-` |
-| `TextureProblem::NotAFormat` | `Invalid`, or a format Metal describes none of ([`Device::pixel_format_info`](crate::Device::pixel_format_info) answers... | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal's descriptor validation ends the process, "MTLTextureDescriptor has invalid pixelFormat (0)", the API validation layer off | 2: `crates/metal2vulkan-runtime/src/texture.rs (image_error)`, `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)` | `-` |
+| `TextureProblem::NotAFormat` | `Invalid`, or a format Metal describes none of (`Device::pixel_format_info` answers `PixelFormatInfo::INVALID`) | every device (a public call's own check of its arguments) | `metal-measured`: an M3 Max, macOS 27.0.1: plain Metal's descriptor validation ends the process, "MTLTextureDescriptor has invalid pixelFormat (0)", the API validation layer off | 2: `crates/metal2vulkan-runtime/src/texture.rs (image_error)`, `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)` | `-` |
 | `TextureProblem::ZeroExtent` | A width, height or depth of 0 | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has width of zero", and the same for a height of zero | 1: `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)` | `-` |
 | `TextureProblem::ExtentForType` | A height other than 1 for a 1D or buffer texture, or a depth other than 1 for a texture that is not 3D | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2 | 1: `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)` | `-` |
 | `TextureProblem::CubeNotSquare` | A cube whose width and height differ | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor width must equal height for cube textures" | 1: `crates/metal2vulkan-runtime/src/texture_descriptor.rs (check_made)` | `-` |
@@ -600,6 +604,20 @@ Columns:
 | `Limit` | A limit below what the runtime uses | devices below the floor, at device creation | `device` | 2: `crates/metal2vulkan-rt/src/floor.rs (decide, 2 sites)` | `-` |
 | `QueueFamily` | A queue family with both `VK_QUEUE_GRAPHICS_BIT` and `VK_QUEUE_COMPUTE_BIT` | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (decide)` | `-` |
 | `MemoryType` | A memory type with these property flags, as Vulkan names them, for buffers of every usage the runtime gives them | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (choose)` | `-` |
+
+## 11. The new runtime's `Refusal` (`Error::Refused(Refusal)`)
+
+| Variant | What it blocks | Where | Basis | Sites | Reach |
+|---|---|---|---|---|---|
+| `EmptyBuffer` | A buffer of no bytes (`Device::new_buffer` with a length of 0) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: newBufferWithLength:0 answers nil | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
+| `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
+
+## 12. The new runtime's `Limit` (`Error::Limit(Limit)`)
+
+| Variant | What it blocks | Where | Basis | Sites | Reach |
+|---|---|---|---|---|---|
+| `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 1: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)` | `-` |
+| `BlockIds` | A block after every block number has been used (`Device::take_block`) | every device (a public call's own check of its arguments) | `ours`: block numbers are 32 bits | 1: `crates/metal2vulkan-rt/src/memory.rs (number)` | `-` |
 
 ## Appendix: every site
 
@@ -1086,4 +1104,8 @@ Each refusal's sites, with the function that builds it.
 - `floor::Limit`: `crates/metal2vulkan-rt/src/floor.rs (decide, 2 sites)`
 - `floor::QueueFamily`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
 - `floor::MemoryType`: `crates/metal2vulkan-rt/src/floor.rs (choose)`
+- `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
+- `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
+- `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)`
+- `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (number)`
 
