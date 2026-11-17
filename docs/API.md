@@ -120,14 +120,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   takes `NumWorkgroups` times its workgroup size. A texture slot's `gpuResourceID` is pushed as
   its `PushField::SlotGuestBase`, and its texture is the element at the ID's index of set 1's two
   fixed arrays, the same layout for every pipeline ([RESOURCE-ID.md](RESOURCE-ID.md)); it binds no
-  descriptor of its own and declares no specialization constant. No binder chooses a variant
-  there: a slot reads whatever texture its ID names through the plain form, its `float` or `half`
-  reads take the device's sRGB decode with `PrecisionNote::SrgbTexelDecode`, as a heap element's
-  do, and no texture is sparse (the consumer refuses a sparse texture). So far they lower a
-  kernel that reaches memory through its buffer slots and reads, writes, sizes or tests for nil
-  its texture slots. Any other function is refused as `Unsupported{IdentityDomains}`: one that samples, uses
-  an argument buffer's textures, a texture buffer, a slot's levels or swizzle, a two-plane,
-  extended-range or sRGB-twin form, or any other state of a bound texture beyond its ID.
+  descriptor of its own and declares no specialization constant. An argument buffer's texture is
+  the element at the index of the `gpuResourceID` its member holds, with no handle table, so a
+  slot and a member of one class index one array. No binder chooses a variant there: a
+  texture reads through the plain form whatever texture its ID names, its `float` or `half` reads
+  take the device's sRGB decode with `PrecisionNote::SrgbTexelDecode`, and no texture is sparse
+  (the consumer refuses a sparse texture). So far they lower a kernel that reaches memory through
+  its buffer slots and reads, writes, sizes or tests for nil its texture slots and its argument
+  buffers' textures. Any other function is refused as `Unsupported{IdentityDomains}`: one that
+  samples, uses a texture buffer, a slot's levels or swizzle, a two-plane, extended-range or
+  sRGB-twin form, reads an argument buffer's texture through another numeric type or as raw
+  texels, or uses any other state of a texture beyond its ID.
 - **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
   default; changes emitted code). On an integrated GPU or a CPU device a function that only
   samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes

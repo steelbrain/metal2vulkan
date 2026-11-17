@@ -37,8 +37,9 @@ texture sizes 0, reads and samples zero, and drops a store, as Metal answers for
 no code in the shader. Each texture class a shader declares (its shape, numeric type and depth
 comparison, sampled, or storage without a format) is a variable of its descriptor type's binding.
 
-A shader takes a texture slot's ID from the slot's push field (`PushField::SlotGuestBase`). It
-indexes the arrays with the low word, answers `is_null_texture` by whether the index is 0, and,
+A shader takes a texture slot's ID from the slot's push field (`PushField::SlotGuestBase`), and an
+argument buffer's texture's ID from the member's 8 bytes, with no table between. It indexes the
+arrays with the low word, answers `is_null_texture` by whether the index is 0, and,
 where it checks a `read` itself (a device without `robustImageAccess2`), takes an out-of-bounds
 alpha of 1 from bit 12 of the word. Samplers are not lowered under these domains yet.
 

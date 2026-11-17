@@ -680,7 +680,7 @@ pub(super) fn sampled_image(
                 arrayed: element.decl.arrayed,
                 texel: element.decl.texel,
             };
-            Ok((si, image, Some(element.live)))
+            Ok((si, image, element.live))
         }
         Source::HeapSampler {
             handle,
@@ -703,7 +703,7 @@ pub(super) fn sampled_image(
                 arrayed: element.decl.arrayed,
                 texel: element.decl.texel,
             };
-            Ok((si, image, Some(element.live)))
+            Ok((si, image, element.live))
         }
         Source::HeapArray {
             handle,
@@ -726,7 +726,7 @@ pub(super) fn sampled_image(
                 arrayed: element.decl.arrayed,
                 texel: element.decl.texel,
             };
-            Ok((si, image, Some(element.live)))
+            Ok((si, image, element.live))
         }
     }
 }

@@ -183,12 +183,12 @@ use crate::lower::access::handle::HandleTarget;
 use crate::memory::handles::{Candidate, HeapGroups};
 use crate::pipeline::lower_inputs::StorageImageClass;
 use crate::pipeline::sym::{ImageAccess, ImageHandleClass};
-pub(crate) use slot::image_class;
 #[cfg(test)]
 pub use slot::max_levels;
 pub use slot::{
     finish, heap_layout_features, HeapPlan, ImageDecl, ReadCheck, SlotPlan, TexelClass,
 };
+pub(crate) use slot::{identity_class, image_class};
 use std::borrow::Cow;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1645,13 +1645,16 @@ pub(crate) fn status_observed(cx: &mut SelectCx<'_>, at: InstId) -> bool {
 /// access's outside the footprint, records `PrecisionNote::SparseResidency` where it is not
 /// (`lower::sampler`). A heap element's residency takes none: its word is 0, Metal's for a texture
 /// that is not sparse, and the stage states `RuntimeFact::HeapResidency`, by which the binder
-/// refuses a sparse texture its handle tables reach. A word with another bit observed is refused.
+/// refuses a sparse texture its handle tables reach (under the identity domains the consumer
+/// refuses every sparse texture). A word with another bit observed is refused.
 pub(crate) fn residency(cx: &mut SelectCx<'_>, at: InstId, image: ImageRef) -> Result<bool, Error> {
     match status_use(cx, at) {
         None => Ok(false),
         Some(StatusUse::Residency) if image.heap() => {
-            cx.facts
-                .insert(crate::pipeline::facts::RuntimeFact::HeapResidency { stage: cx.stage });
+            if tabled(cx, image) {
+                cx.facts
+                    .insert(crate::pipeline::facts::RuntimeFact::HeapResidency { stage: cx.stage });
+            }
             Ok(false)
         }
         Some(StatusUse::Residency) => {
@@ -2589,7 +2592,7 @@ pub(super) fn heap_alpha_in_red(
     shape: ImageShape,
     texel: TexelConv,
 ) -> bool {
-    let applies = image.heap()
+    let applies = tabled(cx, image)
         && matches!(texel, TexelConv::F32 | TexelConv::F16)
         && shape.dim != ImageDim::Buffer
         && crate::metal::format::alpha_in_red(crate::metal::PixelFormat::A8Unorm, cx.profile);
@@ -2599,6 +2602,14 @@ pub(super) fn heap_alpha_in_red(
     applies
 }
 
+/// Whether `image` is a heap image whose members the binder holds in the handle tables' forms
+/// (their classes, raw texels and conversions): any heap image but under the identity domains,
+/// where an argument buffer's texture is the element its resource ID names, read in the class the
+/// shader declares through the plain form (`access::handle::emit_identity_handle`).
+fn tabled(cx: &SelectCx<'_>, image: ImageRef) -> bool {
+    image.heap() && !crate::lower::access::identity(cx.profile)
+}
+
 /// Whether a storage read of `image` reads the null element where its handle carries
 /// `memory::handles::FLAG_STORAGE_UNREADABLE` ([`Read::heap_unreadable`]): a heap image on a
 /// device that reads storage without a format by the formats' own bits alone
@@ -2606,7 +2617,7 @@ pub(super) fn heap_alpha_in_red(
 /// view's format lacks the read bit for its writes alone (`bind::heap`). The handle-table search
 /// then carries the flag.
 fn heap_unreadable(cx: &mut SelectCx<'_>, image: ImageRef) -> bool {
-    let applies = image.heap() && cx.profile.storage_reads_by_format_bits();
+    let applies = tabled(cx, image) && cx.profile.storage_reads_by_format_bits();
     if applies {
         cx.families.access.heap_unreadable = true;
     }
@@ -2667,7 +2678,7 @@ pub(super) fn heap_storage_conversions(
     texel: TexelConv,
 ) -> HeapConversions {
     let mut out = HeapConversions::default();
-    if !image.heap()
+    if !tabled(cx, image)
         || !matches!(texel, TexelConv::F32 | TexelConv::F16)
         || shape.dim == ImageDim::Buffer
     {
@@ -3301,14 +3312,14 @@ fn select_read(
     // that class, its words handed back as declared, as Metal reads it (the probe's argument
     // buffer half, the slot's rule): one sibling read per other class.
     let (storage, _) = image_access(cx, image)?;
-    let crosses = matches!(image, ImageRef::Heap { .. })
+    let crosses = tabled(cx, image)
         && !storage
         && !shape.ms
         && !shape.depth
         && shape.dim != ImageDim::Buffer
         && !r.residency
         && matches!(texel.conv, TexelConv::F32 | TexelConv::F16 | TexelConv::I32);
-    if let (false, ImageRef::Heap { group, .. }) = (crosses, image) {
+    if let (false, true, ImageRef::Heap { group, .. }) = (crosses, tabled(cx, image), image) {
         if let Some(h) = cx.families.texture.heap.get_mut(&group) {
             h.uncrossed = true;
         }
@@ -3508,7 +3519,8 @@ fn select_read_as(
     // where its handle names one, from the group's unsigned integer class.
     let heap_raw = match image {
         ImageRef::Heap { group, .. }
-            if !storage
+            if tabled(cx, image)
+                && !storage
                 && as_class.is_none()
                 && !shape.ms
                 && shape.dim != ImageDim::Buffer
@@ -3873,7 +3885,7 @@ fn heap_ycbcr_writes(
     shape: ImageShape,
     texel: TexelForm,
 ) -> bool {
-    let applies = image.heap()
+    let applies = tabled(cx, image)
         && matches!(texel.conv, TexelConv::F32 | TexelConv::F16)
         && texel.lanes == 4
         && shape.dim == ImageDim::D2
@@ -3972,7 +3984,9 @@ fn select_query(
     // A sampled heap group's query of one sample reads a member of a form a heap reads through
     // the group's unsigned integer class, where its handle names one.
     let heap_raw = match image {
-        ImageRef::Heap { group, .. } if !storage && !shape.ms && shape.dim != ImageDim::Buffer => {
+        ImageRef::Heap { group, .. }
+            if tabled(cx, image) && !storage && !shape.ms && shape.dim != ImageDim::Buffer =>
+        {
             if let Some(h) = cx.families.texture.heap.get_mut(&group) {
                 h.reads_raw = true;
             }
@@ -3989,7 +4003,7 @@ fn select_query(
             }
             true
         }
-        ImageRef::Heap { group, .. } => {
+        ImageRef::Heap { group, .. } if tabled(cx, image) => {
             if let Some(h) = cx.families.texture.heap.get_mut(&group) {
                 h.uncrossed = true;
             }

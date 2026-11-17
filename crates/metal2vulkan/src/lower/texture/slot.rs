@@ -1540,15 +1540,32 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     }
     // A storage class the function reads: the planner refuses a texture whose writes Metal drops
     // or stores through its write shadow that the stage reaches there, whose read is not measured.
+    // The identity domains hold no write shadow.
+    let identity = crate::lower::access::identity(cx.profile);
     for (class, u) in &class_uses {
-        if class.access == ImageAccess::Storage && u.read {
+        if class.access == ImageAccess::Storage && u.read && !identity {
             facts.push(RuntimeFact::HeapStorageReads {
                 stage: cx.stage,
                 class: *class,
             });
         }
     }
-    let volatile_classes: Vec<ImageHandleClass> = class_uses
+    // Under the identity domains a slot's texture is an element of its class's array too, so a
+    // load through a slot may meet a store through any slot or group of its class.
+    let mut shared = class_uses.clone();
+    if identity {
+        for (index, d, _) in &decls {
+            let (Some(class), Some(s)) = (identity_class(d), cx.families.texture.slots.get(index))
+            else {
+                continue;
+            };
+            let u = shared.entry(class).or_default();
+            u.read |= s.uses.read;
+            u.write |= s.uses.write;
+            u.atomic |= s.uses.atomic;
+        }
+    }
+    let volatile_classes: Vec<ImageHandleClass> = shared
         .iter()
         .filter(|(class, u)| forwards(cx, u, class.dim == SymDim::Buffer))
         .map(|(class, _)| *class)
@@ -1596,7 +1613,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             }
             h.cross = wanted
                 .into_iter()
-                .filter(|&k| color && own.is_some_and(|own| own != k))
+                .filter(|&k| color && !identity && own.is_some_and(|own| own != k))
                 .filter_map(|k| {
                     let sampled_type = match k {
                         TexelClass::Float => SampledType::Float,
@@ -1617,7 +1634,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             // member the stage reaches.
             let every_member =
                 h.uncrossed || h.uses.sample || h.uses.write || h.uses.atomic || h.uses.faces;
-            if own.is_some() {
+            if own.is_some() && !identity {
                 facts.push(RuntimeFact::HeapCrossClassNeutral {
                     stage: cx.stage,
                     class,
@@ -1710,6 +1727,10 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         if srgb && written {
             cx.precision.insert(PrecisionNote::DevicePackConversion);
         }
+        let volatile = match crate::lower::access::identity(cx.profile) {
+            true => identity_class(&d).is_some_and(|c| volatile_classes.contains(&c)),
+            false => volatile,
+        };
         if let Some(s) = cx.families.texture.slots.get_mut(&index) {
             s.decl = Some(d);
             s.volatile = volatile;

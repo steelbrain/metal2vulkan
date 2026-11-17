@@ -1906,7 +1906,7 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 }
 
 /// Under the identity domains, the plans lowered so far: a kernel that reaches memory only
-/// through its buffer slots' device addresses and its texture slots' resource IDs, with no
+/// through its buffer slots' device addresses and its textures' resource IDs, with no
 /// descriptor, no sampler, and no state of a bound texture but its resource ID's
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). Its fields past the push window are a
 /// parameter block, whose address the window holds.
@@ -1924,7 +1924,31 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
         .flatten()
         .all(|c| c.form == BufferForm::Psb);
     let t = &plan.families.texture;
-    let textures = t.heap.is_empty() && t.slots.values().all(|s| s.identity_lowered());
+    // An argument buffer's texture is the element its resource ID's index names in its class's
+    // array (`access::handle::emit_identity_handle`), with no other class to read it through and
+    // nothing from a handle-table entry but its word's out-of-bounds alpha.
+    let groups = t.heap.values().all(|h| {
+        h.decl.as_ref().and_then(texture::identity_class) == h.class
+            && h.plain.is_none()
+            && h.raw.is_none()
+            && h.cross.is_empty()
+    });
+    let entry = matches!(
+        plan.families.access.lookup(),
+        crate::memory::handles::Lookup::Element
+            | crate::memory::handles::Lookup::Flagged {
+                class: false,
+                red_blue: false,
+                ycbcr: false,
+                unreadable: false,
+                ..
+            }
+    );
+    let textures = groups
+        && entry
+        && t.heap_raw.is_empty()
+        && !t.heap_half
+        && t.slots.values().all(|s| s.identity_lowered());
     // No sampler use: a read's decode through Metal's own texture unit (`metal_sampler`) is only
     // a requirement.
     let sampled = &plan.families.sampler;

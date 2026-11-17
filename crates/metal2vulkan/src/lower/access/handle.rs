@@ -787,6 +787,11 @@ fn lookup(
             )?)
         }
     };
+    // Under the identity domains a texture's resource ID is its handle: its index is the element
+    // of the set-1 arrays (`emit_identity_handle`), and no table is searched.
+    if table == Table::Handles && super::identity(cx.profile) {
+        return Ok(access);
+    }
     let ids = if legal::holds_wide(cx.profile) {
         HandleIds::Words
     } else {
@@ -939,6 +944,8 @@ pub fn emit(
             fb.binary(BinOp::IAdd, base, delta)?
         }
         HandleStrategy::Lookup(a) | HandleStrategy::SamplerLookup(a) => {
+            let identity =
+                matches!(s, HandleStrategy::Lookup(_)) && cx.plan.families.access.identity;
             let id = match a.as_ref() {
                 IdLoad::Static(a) => {
                     let p = cx.operand(fb, a.ptr)?;
@@ -950,6 +957,9 @@ pub fn emit(
             let Some(id) = id else {
                 return Err(cx.fail("a resource-id load without a value"));
             };
+            if identity {
+                return emit_identity_handle(cx, fb, vid, id);
+            }
             let table = match s {
                 HandleStrategy::SamplerLookup(_) => cx.decl.families.access.sampler_table,
                 _ => cx.decl.families.access.handle_table,
@@ -966,6 +976,40 @@ pub fn emit(
         }
     };
     cx.define(vid, r);
+    Ok(())
+}
+
+/// Under the identity domains, the handle of a texture whose resource ID `id` (`uvec2`, low word
+/// first) an argument buffer holds (`docs/RESOURCE-ID.md`), defining `vid`: the id's index, the
+/// element of the set-1 arrays (0, nil, the null descriptor), with the word's missing-alpha bit
+/// (`TextureWord::OUT_OF_BOUNDS_ALPHA_ONE`) moved to `HANDLE_ALPHA_ONE` where the function's
+/// handles carry it (`memory::handles::Lookup::Flagged`'s `alpha`). The admission allows no other
+/// form (`select::identity_admits`).
+fn emit_identity_handle(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    vid: ValueId,
+    id: SValue,
+) -> BResult<()> {
+    use crate::metal::resource_word::TextureWord;
+    let index = fb.composite_extract(id, &[0])?;
+    let h = match cx.plan.families.access.lookup() {
+        handles::Lookup::Element => index,
+        handles::Lookup::Flagged { alpha: true, .. } => {
+            let word = fb.composite_extract(id, &[1])?;
+            let shift = handles::HANDLE_ALPHA_ONE.trailing_zeros()
+                - TextureWord::OUT_OF_BOUNDS_ALPHA_ONE.trailing_zeros();
+            let shift = k32(fb, shift)?;
+            let moved = fb.binary(BinOp::ShiftLeftLogical, word, shift)?;
+            let bit = k32(fb, handles::HANDLE_ALPHA_ONE)?;
+            let alpha = fb.binary(BinOp::BitwiseAnd, moved, bit)?;
+            fb.binary(BinOp::BitwiseOr, index, alpha)?
+        }
+        other => {
+            return Err(cx.fail(format!("an identity handle of the {other:?} form")));
+        }
+    };
+    cx.define(vid, h);
     Ok(())
 }
 

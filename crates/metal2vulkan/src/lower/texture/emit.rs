@@ -458,7 +458,7 @@ fn image_in(
             return Ok(Loaded {
                 decl: h.decl,
                 img: h.img,
-                live: Some(h.live),
+                live: h.live,
                 within: None,
                 flagged: h.flagged,
             });
@@ -674,8 +674,9 @@ pub(crate) struct HeapElement {
     pub decl: ImageDecl,
     /// The image, loaded through a `NonUniform` access chain.
     pub img: SValue,
-    /// The handle is live (not the null element).
-    pub live: SValue,
+    /// The handle is live (not the null element). `None` under the identity domains, whose
+    /// element 0 is a null descriptor that answers as Metal's nil texture does.
+    pub live: Option<SValue>,
     /// The handle's flags, where the function's handle-table search carries the element's
     /// out-of-bounds-alpha flag (`memory::handles::Lookup`'s `alpha`): `heap_alpha_one` reads
     /// the flag.
@@ -842,8 +843,13 @@ fn heap_element_of(
     };
     let p = fb.access_chain_non_uniform(base, element)?;
     let img = fb.load(p, MemAccess::default())?;
-    let null = u32s(fb, 1, NEUTRAL_ELEMENT)?;
-    let live = fb.binary(BinOp::INotEqual, element, null)?;
+    let live = match cx.plan.families.access.identity {
+        true => None,
+        false => {
+            let null = u32s(fb, 1, NEUTRAL_ELEMENT)?;
+            Some(fb.binary(BinOp::INotEqual, element, null)?)
+        }
+    };
     Ok(HeapElement {
         decl,
         img,

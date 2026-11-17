@@ -22,6 +22,9 @@
 //!   the textures there, answers the width and `is_null_texture` by the index (0 for nil), and,
 //!   where the shader checks reads (no `robustImageAccess2`), takes a format's missing alpha out of
 //!   bounds from the word, as `tests/resource_words.tsv` gives it.
+//! - The same kernel with its textures in an argument buffer (`tex` with `ab`) reads their
+//!   resource IDs from the buffer's members, at its pushed address, and answers the same at the
+//!   same elements, with no handle table and no descriptor.
 //! - A kernel that samples a texture (`engine/a2_dynamic_texel_offset`) is still refused as
 //!   `Unsupported{IdentityDomains}`, not implemented, where the default domains compile it.
 //!
@@ -36,6 +39,7 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
 use crate::lower::dispatch::{region_bytes, NONUNIFORM};
 use crate::lower::select::{LowerInputs, Plan};
+use crate::memory::handles::Lookup;
 use crate::metal::resource_word::TextureWord;
 use crate::metal::{PixelFormat, TextureSwizzleChannels};
 use crate::pipeline::facts::RuntimeFact;
@@ -273,53 +277,113 @@ fn vector_word(pf: PixelFormat) -> u32 {
     word
 }
 
-/// A kernel over a `5 × 2` grid that reads `src` (texture 0) at its position, writes the texel to
-/// `dst` (texture 1) there, and stores, at word `2 · (y · 5 + x)` of `out`, `src`'s width with
-/// `is_null_texture(other)` (texture 2) in bit 16, and the texel's alpha bits in the next word.
-fn texture_kernel() -> String {
-    "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+/// A kernel over a `5 × 2` grid that reads `src` at its position, writes the texel to `dst`
+/// there, and stores, at word `2 · (y · 5 + x)` of `out`, `src`'s width with
+/// `is_null_texture(other)` in bit 16, and the texel's alpha bits in the next word. Its textures
+/// are slots 0 to 2 and `out` buffer 0, or, with `ab`, the members of the argument buffer at
+/// buffer 0 (`src`, `dst` and `other`, 8 bytes each) and `out` buffer 1.
+fn texture_kernel(ab: bool) -> String {
+    let texture = |member: u32, access: &str, name: &str| {
+        format!(
+            "!{{i32 {member}, !\"air.texture\", !\"air.location_index\", i32 {member}, i32 1, !\"air.{access}\", !\"air.arg_type_name\", !\"texture2d<float, {access}>\", !\"air.arg_name\", !\"{name}\"}}"
+        )
+    };
+    let textures = [
+        texture(0, "read", "src"),
+        texture(1, "write", "dst"),
+        texture(2, "read", "other"),
+    ];
+    let out = |arg: u32, index: u32| {
+        format!(
+            "!{{i32 {arg}, !\"air.buffer\", !\"air.location_index\", i32 {index}, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}}"
+        )
+    };
+    let tid = |arg: u32| {
+        format!(
+            "!{{i32 {arg}, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint2\", !\"air.arg_name\", !\"tid\"}}"
+        )
+    };
+    let tail = "ptr addrspace(1) noundef \"air-buffer-no-alias\" %out, <2 x i32> noundef %tid";
+    let (types, params, loads, args) = match ab {
+        false => (
+            String::new(),
+            format!("ptr addrspace(1) %src, ptr addrspace(1) %dst, ptr addrspace(1) %other, {tail}"),
+            String::new(),
+            format!(
+                "!11 = !{{!12, !13, !14, !15, !16}}\n!12 = {}\n!13 = {}\n!14 = {}\n!15 = {}\n!16 = {}\n",
+                textures[0],
+                textures[1],
+                textures[2],
+                out(3, 0),
+                tid(4)
+            ),
+        ),
+        true => (
+            "%struct.T = type { ptr addrspace(1) }\n%struct.R = type { %struct.T, %struct.T, %struct.T }\n\n"
+                .to_string(),
+            format!("ptr addrspace(2) %r, {tail}"),
+            ["src", "dst", "other"]
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    format!(
+                        "  %p{name} = getelementptr inbounds %struct.R, ptr addrspace(2) %r, i64 0, i32 {i}, i32 0\n  %{name} = load ptr addrspace(1), ptr addrspace(2) %p{name}, align 8\n"
+                    )
+                })
+                .collect(),
+            format!(
+                "!11 = !{{!19, !15, !16}}\n!12 = {}\n!13 = {}\n!14 = {}\n!15 = {}\n!16 = {}\n\
+!19 = !{{i32 0, !\"air.indirect_buffer\", !\"air.buffer_size\", i32 24, !\"air.location_index\", i32 0, i32 1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.struct_type_info\", !20, !\"air.arg_type_size\", i32 24, !\"air.arg_type_align_size\", i32 8, !\"air.arg_type_name\", !\"R\", !\"air.arg_name\", !\"r\"}}\n\
+!20 = !{{i32 0, i32 8, i32 0, !\"texture2d<float, read>\", !\"src\", !\"air.indirect_argument\", !12, i32 8, i32 8, i32 0, !\"texture2d<float, write>\", !\"dst\", !\"air.indirect_argument\", !13, i32 16, i32 8, i32 0, !\"texture2d<float, read>\", !\"other\", !\"air.indirect_argument\", !14}}\n",
+                textures[0],
+                textures[1],
+                textures[2],
+                out(1, 1),
+                tid(2)
+            ),
+        ),
+    };
+    format!(
+        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
 target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
-define void @tex(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(1) %2, ptr addrspace(1) noundef \"air-buffer-no-alias\" %3, <2 x i32> noundef %4) {\n\
+{types}\
+define void @tex({params}) {{\n\
 entry:\n\
+{loads}\
   %s = tail call ptr addrspace(2) @air.get_read_sampler()\n\
-  %r = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) %0, ptr addrspace(2) %s, <2 x i32> %4, <2 x i32> zeroinitializer, i32 0, i32 1)\n\
-  %v = extractvalue { <4 x float>, i8 } %r, 0\n\
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) %1, <2 x i32> %4, <4 x float> %v, i32 0, i32 2)\n\
-  %w = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) %0, i32 0)\n\
-  %n = tail call i1 @air.is_null_texture_2d(ptr addrspace(1) %2)\n\
+  %r0 = tail call {{ <4 x float>, i8 }} @air.read_texture_2d.v4f32(ptr addrspace(1) %src, ptr addrspace(2) %s, <2 x i32> %tid, <2 x i32> zeroinitializer, i32 0, i32 1)\n\
+  %v = extractvalue {{ <4 x float>, i8 }} %r0, 0\n\
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) %dst, <2 x i32> %tid, <4 x float> %v, i32 0, i32 2)\n\
+  %w = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) %src, i32 0)\n\
+  %n = tail call i1 @air.is_null_texture_2d(ptr addrspace(1) %other)\n\
   %nz = zext i1 %n to i32\n\
   %ns = shl i32 %nz, 16\n\
   %q = or i32 %w, %ns\n\
   %a = extractelement <4 x float> %v, i64 3\n\
   %ab = bitcast float %a to i32\n\
-  %tx = extractelement <2 x i32> %4, i64 0\n\
-  %ty = extractelement <2 x i32> %4, i64 1\n\
+  %tx = extractelement <2 x i32> %tid, i64 0\n\
+  %ty = extractelement <2 x i32> %tid, i64 1\n\
   %row = mul i32 %ty, 5\n\
   %idx = add i32 %row, %tx\n\
   %i0 = shl i32 %idx, 1\n\
   %i1 = or i32 %i0, 1\n\
   %e0 = zext i32 %i0 to i64\n\
   %e1 = zext i32 %i1 to i64\n\
-  %p0 = getelementptr inbounds i32, ptr addrspace(1) %3, i64 %e0\n\
-  %p1 = getelementptr inbounds i32, ptr addrspace(1) %3, i64 %e1\n\
+  %p0 = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %e0\n\
+  %p1 = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %e1\n\
   store i32 %q, ptr addrspace(1) %p0, align 4\n\
   store i32 %ab, ptr addrspace(1) %p1, align 4\n\
   ret void\n\
-}\n\n\
+}}\n\n\
 declare ptr addrspace(2) @air.get_read_sampler()\n\
-declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32)\n\
+declare {{ <4 x float>, i8 }} @air.read_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32)\n\
 declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float>, i32, i32)\n\
 declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)\n\
 declare i1 @air.is_null_texture_2d(ptr addrspace(1))\n\n\
-!air.kernel = !{!9}\n!air.version = !{!17}\n!air.language_version = !{!18}\n\
-!9 = !{ptr @tex, !10, !11}\n!10 = !{}\n!11 = !{!12, !13, !14, !15, !16}\n\
-!12 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.read\", !\"air.arg_type_name\", !\"texture2d<float, read>\", !\"air.arg_name\", !\"src\"}\n\
-!13 = !{i32 1, !\"air.texture\", !\"air.location_index\", i32 1, i32 1, !\"air.write\", !\"air.arg_type_name\", !\"texture2d<float, write>\", !\"air.arg_name\", !\"dst\"}\n\
-!14 = !{i32 2, !\"air.texture\", !\"air.location_index\", i32 2, i32 1, !\"air.read\", !\"air.arg_type_name\", !\"texture2d<float, read>\", !\"air.arg_name\", !\"other\"}\n\
-!15 = !{i32 3, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}\n\
-!16 = !{i32 4, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint2\", !\"air.arg_name\", !\"tid\"}\n\
-!17 = !{i32 2, i32 8, i32 0}\n!18 = !{!\"Metal\", i32 4, i32 0, i32 0}\n"
-        .to_string()
+!air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
+!9 = !{{ptr @tex, !10, !11}}\n!10 = !{{}}\n{args}\
+!17 = !{{i32 2, i32 8, i32 0}}\n!18 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
+    )
 }
 
 /// `stem`'s committed profile under the identity domains, without `drop`.
@@ -369,7 +433,24 @@ fn texture(
 /// bounds from the word, as the test vectors give it.
 #[test]
 fn texture_slots_are_the_set_1_elements_their_pushed_resource_ids_name() {
-    let Some(bc) = assemble_text("tex", &texture_kernel()) else {
+    textures_at_their_resource_ids(false);
+}
+
+/// An argument buffer's textures under the identity domains are the same elements, at the
+/// indices of the resource IDs its members hold, with no handle table and no descriptor of the
+/// argument buffer's own.
+#[test]
+fn argument_buffer_textures_are_the_set_1_elements_their_resource_ids_name() {
+    textures_at_their_resource_ids(true);
+}
+
+/// The address of the argument buffer of [`texture_kernel`]`(true)`.
+const AB: u64 = 0x4_0000_0100;
+
+/// [`texture_kernel`]`(ab)` under the identity domains, on the CPU interpreter: its textures are
+/// the set-1 elements their resource IDs name, pushed or, with `ab`, in the argument buffer.
+fn textures_at_their_resource_ids(ab: bool) {
+    let Some(bc) = assemble_text("tex", &texture_kernel(ab)) else {
         return;
     };
     const L: [u32; 3] = [5, 2, 1];
@@ -407,6 +488,25 @@ fn texture_slots_are_the_set_1_elements_their_pushed_resource_ids_name() {
         let (a, plan, module) =
             compile_kept(&bc, "tex", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        // An argument buffer's handle is its ID's index, with the word's missing-alpha bit where
+        // the shader checks the read, and nothing else.
+        let handles = match (ab, checked) {
+            (false, _) => None,
+            (true, false) => Some(Lookup::Element),
+            (true, true) => Some(Lookup::Flagged {
+                alpha: true,
+                class: false,
+                red_blue: false,
+                ycbcr: false,
+                unreadable: false,
+            }),
+        };
+        let used = !plan.families.texture.heap.is_empty();
+        assert_eq!(
+            used.then(|| plan.families.access.lookup()),
+            handles,
+            "{stem}"
+        );
         assert!(
             a.interface
                 .spec
@@ -470,6 +570,7 @@ fn texture_slots_are_the_set_1_elements_their_pushed_resource_ids_name() {
         for (word, other, alpha) in [(red, 0, 1.0f32), (rgba, resource_id(1, rgba), 0.0)] {
             let oob = [0, 0, 0, f(alpha)];
             let robust = (!checked).then_some(oob);
+            let ids = [resource_id(SRC, word), resource_id(DST, rgba), other];
             let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
             let mut fields = Vec::new();
             for field in &plan.push.fields {
@@ -478,11 +579,10 @@ fn texture_slots_are_the_set_1_elements_their_pushed_resource_ids_name() {
                 };
                 let o = offset as usize;
                 let bytes = match field.field {
-                    PushField::SlotGuestBase(s) => match (s.class, s.index) {
-                        (SlotClass::Buffer, 0) => OUT,
-                        (SlotClass::Texture, 0) => resource_id(SRC, word),
-                        (SlotClass::Texture, 1) => resource_id(DST, rgba),
-                        (SlotClass::Texture, 2) => other,
+                    PushField::SlotGuestBase(s) => match (ab, s.class, s.index) {
+                        (false, SlotClass::Buffer, 0) | (true, SlotClass::Buffer, 1) => OUT,
+                        (false, SlotClass::Texture, i @ 0..=2) => ids[i as usize],
+                        (true, SlotClass::Buffer, 0) => AB,
                         _ => panic!("{stem}: unexpected slot {s:?}"),
                     },
                     PushField::DispatchRegion => {
@@ -496,19 +596,27 @@ fn texture_slots_are_the_set_1_elements_their_pushed_resource_ids_name() {
                 push[o..o + 8].copy_from_slice(&bytes.to_le_bytes());
                 fields.push(field.field);
             }
-            assert_eq!(fields.len(), 5, "{stem}: {fields:?}");
+            assert_eq!(fields.len(), [5, 3][usize::from(ab)], "{stem}: {fields:?}");
             let mut images: Vec<Image> = (0..SRC)
                 .map(|e| texture(sampled, e, [1, 1], filler, None))
                 .collect();
             images.push(texture(sampled, SRC, [4, 2], src_texel, robust));
             images.extend((0..DST).map(|e| texture(storage, e, [1, 1], filler, None)));
             images.push(texture(storage, DST, [5, 2], |_, _| [0; 4], None));
-            let res = Resources {
-                buffers: vec![Buffer {
+            let mut buffers = vec![Buffer {
+                slot: None,
+                address: Some(OUT),
+                bytes: vec![0; 4 * 21],
+            }];
+            if ab {
+                buffers.push(Buffer {
                     slot: None,
-                    address: Some(OUT),
-                    bytes: vec![0; 4 * 21],
-                }],
+                    address: Some(AB),
+                    bytes: ids.iter().flat_map(|id| id.to_le_bytes()).collect(),
+                });
+            }
+            let res = Resources {
+                buffers,
                 push,
                 spec: local_size3(L),
             };
