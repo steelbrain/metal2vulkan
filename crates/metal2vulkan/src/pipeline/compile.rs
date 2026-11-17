@@ -49,7 +49,7 @@ use crate::library::{
 };
 use crate::lower::dispatch::LocalSizeForm;
 use crate::lower::select::{LowerInputs, Plan};
-use crate::pipeline::artifact::{PrecisionNote, StrategyCensus, StrategyUse};
+use crate::pipeline::artifact::{PrecisionNote, Reconvergence, StrategyCensus, StrategyUse};
 use crate::pipeline::compile::key::{DynamicKey, LinkedKey};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, DynamicLibraries, FunctionDescriptor, LinkedFunction,
@@ -3317,15 +3317,22 @@ fn compile_bounded<K>(
                 .insert(VkFeature::ShaderSampleRateInterpolationFunctions);
         }
     }
+    // Implementation-defined where a tangled instruction runs without maximal reconvergence
+    // (`lower::simd` chooses the entry's reconvergence mode), which the stage's note records.
+    let reconvergence = crate::lower::simd::reconvergence(&plan);
+    if reconvergence == Reconvergence::ImplementationDefined
+        && !precision.contains(&PrecisionNote::DeviceReconvergence)
+    {
+        precision.push(PrecisionNote::DeviceReconvergence);
+        precision.sort_unstable();
+    }
     let artifact = Arc::new(FunctionArtifact {
         key,
         module,
         interface,
         facts: plan.facts.clone(),
         subgroup: plan.subgroup,
-        // Implementation-defined where a tangled instruction runs without maximal reconvergence
-        // (`lower::simd` chooses the entry's reconvergence mode).
-        reconvergence: crate::lower::simd::reconvergence(&plan),
+        reconvergence,
         precision,
         strategies: emitted_census(&plan, helper_guard),
         stats,

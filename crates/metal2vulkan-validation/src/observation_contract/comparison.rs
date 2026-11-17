@@ -341,7 +341,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::UnorderedFetchWithinDraw
         | N::NativeLogicOperation
         | N::NativeFloat8
-        | N::CappedLodBias => Allowance::Unbounded,
+        | N::CappedLodBias
+        | N::DeviceReconvergence => Allowance::Unbounded,
     }
 }
 

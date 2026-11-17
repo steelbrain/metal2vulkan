@@ -2937,6 +2937,9 @@ degradations! {
         /// device's, where Metal reads `0x7FC00000`. Not bounded: a NaN in a sum makes the sum a
         /// NaN.
         NativeFloat8 = "native-float8";
+        /// Class: reconvergence. The stage's reconvergence after divergence is the device's, where
+        /// Metal's is maximal; announced beside `ImplementationDefinedReconvergence`.
+        DeviceReconvergence = "device-reconvergence";
     }
 }
 

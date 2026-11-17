@@ -182,6 +182,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             NativeFloat8,
         ],
         Elsewhere: [
+            DeviceReconvergence,
             HalfOutputPrecision,
             NativeHalfConversion,
             NativeHalfQuantize,

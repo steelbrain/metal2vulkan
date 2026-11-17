@@ -6227,6 +6227,7 @@ macro-member	metal2vulkan-runtime::Degradation::DeviceNanEncoding	DeviceNanEncod
 macro-member	metal2vulkan-runtime::Degradation::DevicePackConversion	DevicePackConversion = "device-pack-conversion";
 macro-member	metal2vulkan-runtime::Degradation::DevicePointSize	DevicePointSize = "device-point-size";
 macro-member	metal2vulkan-runtime::Degradation::DeviceRayIntersection	DeviceRayIntersection = "device-ray-intersection";
+macro-member	metal2vulkan-runtime::Degradation::DeviceReconvergence	DeviceReconvergence = "device-reconvergence";
 macro-member	metal2vulkan-runtime::Degradation::DeviceRecovered	DeviceRecovered = "device-recovered", Performance,
 macro-member	metal2vulkan-runtime::Degradation::DeviceRoundedResolve	DeviceRoundedResolve = "device-rounded-resolve", Precision,
 macro-member	metal2vulkan-runtime::Degradation::DeviceSampleLevel	DeviceSampleLevel = "device-sample-level";
@@ -12781,6 +12782,7 @@ variant	metal2vulkan-rt::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
 variant	metal2vulkan-rt::PrecisionNote::DevicePackConversion	DevicePackConversion
 variant	metal2vulkan-rt::PrecisionNote::DevicePointSize	DevicePointSize
 variant	metal2vulkan-rt::PrecisionNote::DeviceRayIntersection	DeviceRayIntersection
+variant	metal2vulkan-rt::PrecisionNote::DeviceReconvergence	DeviceReconvergence
 variant	metal2vulkan-rt::PrecisionNote::DeviceSampleLevel	DeviceSampleLevel
 variant	metal2vulkan-rt::PrecisionNote::DeviceSampling	DeviceSampling
 variant	metal2vulkan-rt::PrecisionNote::DeviceSignedZeroInfNan	DeviceSignedZeroInfNan
@@ -15624,6 +15626,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceNanEncoding	DeviceNanEncodi
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePackConversion	DevicePackConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePointSize	DevicePointSize
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceRayIntersection	DeviceRayIntersection
+variant	metal2vulkan::pipeline::PrecisionNote::DeviceReconvergence	DeviceReconvergence
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceSampleLevel	DeviceSampleLevel
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceSampling	DeviceSampling
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceSignedZeroInfNan	DeviceSignedZeroInfNan

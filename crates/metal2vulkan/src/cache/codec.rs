@@ -1527,6 +1527,7 @@ codec_enum! {
         NativeLogicOperation,
         NativeFloat8,
         CappedLodBias,
+        DeviceReconvergence,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

@@ -636,6 +636,7 @@ fn reconvergence_follows_the_profile() {
     let (_, words) = link_and_validate(&a, &maximal).expect("valid");
     assert!(spirv_dis(&words).contains("MaximallyReconvergesKHR"));
     assert_eq!(a.reconvergence, Reconvergence::Guaranteed);
+    assert!(!a.precision.contains(&PrecisionNote::DeviceReconvergence));
 
     let pascal = profile("nvidia-pascal-linux", DevicePolicy::default()).expect("profile");
     let sg = pascal.fields().subgroup;
@@ -648,6 +649,8 @@ fn reconvergence_follows_the_profile() {
             && !text.contains("SubgroupUniformControlFlowKHR")
     );
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
+    // The stage records the device's reconvergence as a note.
+    assert!(a.precision.contains(&PrecisionNote::DeviceReconvergence));
 }
 
 /// Float sums record the device's association order.
@@ -1023,6 +1026,7 @@ fn uniform_control_flow_mode_without_maximal_reconvergence() {
         .extensions
         .contains(&VkExtension::KhrShaderSubgroupUniformControlFlow));
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
+    assert!(a.precision.contains(&PrecisionNote::DeviceReconvergence));
 }
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";

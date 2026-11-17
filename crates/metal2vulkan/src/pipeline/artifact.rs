@@ -2385,6 +2385,18 @@ pub enum PrecisionNote {
     ///
     /// Validation derives no tolerance from it.
     CappedLodBias,
+    /// The stage holds a tangled instruction (a simdgroup or quad operation, or a barrier whose
+    /// lanes depend on reconvergence) on a device without maximal reconvergence
+    /// (`Reconvergence::ImplementationDefined`): after divergent control flow the device decides
+    /// which lanes run it together, where Metal's lanes reconverge maximally, so such an operation
+    /// may see other lanes active than Metal's. Under subgroup-uniform control flow
+    /// (`shaderSubgroupUniformControlFlow`) the lanes reconverge where control flow is uniform.
+    /// Static per stage: recorded for any tangled instruction in the entry, as the stage's
+    /// `reconvergence` is.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    DeviceReconvergence,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are
