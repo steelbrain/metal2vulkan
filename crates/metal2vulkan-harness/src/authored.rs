@@ -359,6 +359,15 @@ fn private(contents: Vec<u8>) -> BufferPlan {
     }
 }
 
+/// A `Shared` buffer starting with `contents`, written through `contents`.
+fn shared(contents: Vec<u8>) -> BufferPlan {
+    BufferPlan {
+        length: contents.len() as u64,
+        storage: Storage::Shared,
+        contents: Some(contents),
+    }
+}
+
 /// A `Private` buffer of `length` bytes whose first run writes before it reads.
 fn unset(length: u64) -> BufferPlan {
     BufferPlan {
@@ -370,7 +379,9 @@ fn unset(length: u64) -> BufferPlan {
 
 /// A window server's frame: many small command buffers, each of two tiny dispatches. A run is
 /// 160 command buffers of two `lcg_step` dispatches over 256 words of `Private` storage, each
-/// dispatch setting its bindings, since a command buffer starts with none.
+/// dispatch setting its bindings, since a command buffer starts with none. Both are buffers
+/// (`setBuffer:offset:atIndex:`): the words, and the increment in a `Shared` buffer written
+/// once; the frame makes no `setBytes` call (`dispatch_chain` measures those).
 fn frame() -> Plan {
     const WORDS: usize = 256;
     const COMMAND_BUFFERS: usize = 160;
@@ -387,13 +398,16 @@ fn frame() -> Plan {
     let dispatch = Dispatch {
         function: "lcg_step".to_owned(),
         constants: Vec::new(),
-        bindings: vec![buffer(0, 0), bytes(1, increment.to_le_bytes().to_vec())],
+        bindings: vec![buffer(0, 0), buffer(1, 1)],
         grid: Grid::groups_of_256(1),
     };
     Plan {
         name: "frame".to_owned(),
         library: Source::Authored,
-        buffers: vec![private(word_bytes(&input))],
+        buffers: vec![
+            private(word_bytes(&input)),
+            shared(word_bytes(&[increment, 0, 0, 0])),
+        ],
         dispatches: vec![dispatch; STEPS],
         expect: vec![Expect {
             buffer: 0,
