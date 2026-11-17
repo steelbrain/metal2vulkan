@@ -40,7 +40,9 @@ pub enum Error {
     Thread(io::Error),
     /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state): the
     /// translator made no pipeline of the kernel: a typed refusal of what it does not translate,
-    /// a descriptor Metal refuses, or a translation past its 20-second budget. Metal's
+    /// a descriptor Metal refuses, or a translation past its 20-second budget.
+    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state): the translator made no
+    /// device sampler of the descriptor. Metal's
     /// counterpart is `newComputePipelineStateWithFunction:error:` failing, which Metal does only
     /// for a descriptor it refuses. [`Device::new`](crate::Device::new) gives it too where the
     /// translator takes no description of the device, which the floor leaves no device to do.
@@ -161,9 +163,10 @@ pub enum Refusal {
         /// The first index of the range that is not granted.
         index: u32,
     },
-    /// A texture at an index where a texture lives already
-    /// ([`Device::new_texture`](crate::Device::new_texture)). Metal has no counterpart: Metal
-    /// chooses its resource IDs itself.
+    /// A texture or a sampler state at an index where an object lives already
+    /// ([`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state)). Metal has no
+    /// counterpart: Metal chooses its resource IDs itself.
     ///
     /// Basis: ours (an index names one object at a time, and its elements are that object's).
     IndexInUse {
@@ -172,7 +175,7 @@ pub enum Refusal {
         /// The index.
         index: u32,
     },
-    /// A release of a grant while a texture lives at one of its indices
+    /// A release of a grant while a texture or a sampler state lives at one of its indices
     /// ([`Device::release_indices`](crate::Device::release_indices)). Metal has no counterpart.
     ///
     /// Basis: ours (an object's index stays granted while the object lives).
@@ -347,6 +350,12 @@ pub enum Gap {
         /// The pixel format asked for.
         pixel_format: PixelFormat,
     },
+    /// A sampler state whose minification or magnification filter is cubic
+    /// ([`Device::new_sampler_state`](crate::Device::new_sampler_state)).
+    ///
+    /// Basis: ours (the translator's identity domains do not filter bicubically, and Vulkan's
+    /// cubic filter is not Metal's).
+    CubicSampler,
     /// [`Texture::replace_region`](crate::Texture::replace_region) or
     /// [`Texture::get_bytes`](crate::Texture::get_bytes) of a texture whose image is no plain
     /// copy of Metal's bytes in one aspect: a format of depth and stencil both, or a multisample
@@ -449,6 +458,16 @@ pub enum Limit {
         max_extent: [u32; 3],
         /// The device's most layers.
         max_layers: u32,
+    },
+    /// A sampler state whose device samplers would take the device past its
+    /// `maxSamplerAllocationCount`, less the sampler arrays' two defaults
+    /// ([`Device::new_sampler_state`](crate::Device::new_sampler_state)). Equal create infos share
+    /// one sampler, so it bounds distinct samplers, not sampler states.
+    ///
+    /// Basis: device (the device's `maxSamplerAllocationCount`).
+    DeviceSamplers {
+        /// The most samplers the device's states hold.
+        max: u32,
     },
     /// A multisample texture of a sample count the device does not make for its format, type and
     /// usage.
@@ -601,6 +620,7 @@ impl fmt::Display for Gap {
                 "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which this kernel's variant does not run"
             ),
             Gap::MemorylessTexture => f.write_str("Memoryless textures are not built"),
+            Gap::CubicSampler => f.write_str("cubic sampler filters are not built"),
             Gap::TextureBuffer => f.write_str("texture buffers are not built"),
             Gap::TextureFormat { pixel_format } => write!(
                 f,
@@ -653,6 +673,9 @@ impl fmt::Display for Limit {
                 f,
                 "a texture of {extent:?} in {layers} layers is past the device's {max_extent:?} in {max_layers}"
             ),
+            Limit::DeviceSamplers { max } => {
+                write!(f, "the device holds {max} samplers for sampler states already")
+            }
             Limit::TextureSamples {
                 sample_count,
                 counts,

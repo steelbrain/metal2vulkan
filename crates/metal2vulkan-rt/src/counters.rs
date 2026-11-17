@@ -32,6 +32,8 @@ pub(crate) enum Gauge {
     Buffers,
     /// [`Gauges::textures`].
     Textures,
+    /// [`Gauges::samplers`].
+    Samplers,
     /// [`Gauges::descriptor_slots`].
     DescriptorSlots,
     /// [`Gauges::pipelines`].
@@ -134,6 +136,7 @@ impl Counters {
         match gauge {
             Gauge::Buffers => &a.buffers,
             Gauge::Textures => &a.textures,
+            Gauge::Samplers => &a.samplers,
             Gauge::DescriptorSlots => &a.descriptor_slots,
             Gauge::Pipelines => &a.pipelines,
             Gauge::Blocks => &a.blocks,
@@ -234,14 +237,16 @@ pub struct Gauges {
     pub pipelines: u64,
     /// Command buffers not yet retired.
     pub command_buffers: u64,
-    /// Occupied indices of set 1's arrays: one for each texture made at an index.
+    /// Occupied indices of set 1's arrays: one for each texture made at an index and each sampler
+    /// state.
     pub descriptor_slots: u64,
     /// Live `VkDeviceMemory` allocations: blocks the consumer holds, blocks ready or idle in the
     /// pool, and the runtime's own.
     pub blocks: u64,
     /// Events and shared events (timeline semaphores).
     pub events: u64,
-    /// `VkSampler`s the runtime holds: the default samplers of the sampler arrays. They count
-    /// against the device's `maxSamplerAllocationCount`.
+    /// `VkSampler`s the runtime holds: the default samplers of the sampler arrays, and the
+    /// sampler states' device samplers, one for each create info. They count against the
+    /// device's `maxSamplerAllocationCount`.
     pub device_samplers: u64,
 }

@@ -1396,6 +1396,7 @@ enum	metal2vulkan-air::tensor_ops::OperandIndex	#[derive(Clone, Copy, Debug, Par
 enum	metal2vulkan-air::tensor_ops::TensorSpace	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TensorSpace
 enum	metal2vulkan-rt::CommandBufferError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CommandBufferError
 enum	metal2vulkan-rt::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum CommandBufferStatus
+enum	metal2vulkan-rt::CompareFunction	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum CompareFunction
 enum	metal2vulkan-rt::ConsumerFeature	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ConsumerFeature
 enum	metal2vulkan-rt::DispatchType	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum DispatchType
 enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
@@ -2269,6 +2270,21 @@ field	metal2vulkan-rt::Region.origin	pub origin: [u32; 3]
 field	metal2vulkan-rt::Region.size	pub size: [u32; 3]
 field	metal2vulkan-rt::ResourceId.index	pub index: u32
 field	metal2vulkan-rt::ResourceId.word	pub word: u32
+field	metal2vulkan-rt::SamplerDescriptor.border_color	pub border_color: metal::SamplerBorderColor
+field	metal2vulkan-rt::SamplerDescriptor.compare_function	pub compare_function: metal::CompareFunction
+field	metal2vulkan-rt::SamplerDescriptor.lod_average	pub lod_average: bool
+field	metal2vulkan-rt::SamplerDescriptor.lod_bias	pub lod_bias: f32
+field	metal2vulkan-rt::SamplerDescriptor.lod_max_clamp	pub lod_max_clamp: f32
+field	metal2vulkan-rt::SamplerDescriptor.lod_min_clamp	pub lod_min_clamp: f32
+field	metal2vulkan-rt::SamplerDescriptor.mag_filter	pub mag_filter: metal::SamplerMinMagFilter
+field	metal2vulkan-rt::SamplerDescriptor.max_anisotropy	pub max_anisotropy: u32
+field	metal2vulkan-rt::SamplerDescriptor.min_filter	pub min_filter: metal::SamplerMinMagFilter
+field	metal2vulkan-rt::SamplerDescriptor.mip_filter	pub mip_filter: metal::SamplerMipFilter
+field	metal2vulkan-rt::SamplerDescriptor.normalized_coordinates	pub normalized_coordinates: bool
+field	metal2vulkan-rt::SamplerDescriptor.r_address_mode	pub r_address_mode: metal::SamplerAddressMode
+field	metal2vulkan-rt::SamplerDescriptor.reduction_mode	pub reduction_mode: metal::SamplerReductionMode
+field	metal2vulkan-rt::SamplerDescriptor.s_address_mode	pub s_address_mode: metal::SamplerAddressMode
+field	metal2vulkan-rt::SamplerDescriptor.t_address_mode	pub t_address_mode: metal::SamplerAddressMode
 field	metal2vulkan-rt::TextureDescriptor.array_length	pub array_length: u32
 field	metal2vulkan-rt::TextureDescriptor.depth	pub depth: u32
 field	metal2vulkan-rt::TextureDescriptor.height	pub height: u32
@@ -6004,7 +6020,15 @@ macro-decl	metal2vulkan-air::ir::Sym	ir_id! Sym
 macro-decl	metal2vulkan-air::ir::TypeId	id_type! TypeId
 macro-decl	metal2vulkan-air::ir::TypeId	ir_id! TypeId
 macro-decl	metal2vulkan-air::metal::DataType	metal_enum! DataType
+macro-decl	metal2vulkan-rt::CompareFunction	metal_enum! CompareFunction
 macro-decl	metal2vulkan-rt::PixelFormat	metal_enum! PixelFormat
+macro-decl	metal2vulkan-rt::SamplerAddressMode	metal_enum! SamplerAddressMode
+macro-decl	metal2vulkan-rt::SamplerAddressMode	vk_enum! SamplerAddressMode
+macro-decl	metal2vulkan-rt::SamplerBorderColor	metal_enum! SamplerBorderColor
+macro-decl	metal2vulkan-rt::SamplerMinMagFilter	metal_enum! SamplerMinMagFilter
+macro-decl	metal2vulkan-rt::SamplerMipFilter	metal_enum! SamplerMipFilter
+macro-decl	metal2vulkan-rt::SamplerReductionMode	metal_enum! SamplerReductionMode
+macro-decl	metal2vulkan-rt::SamplerReductionMode	vk_enum! SamplerReductionMode
 macro-decl	metal2vulkan-rt::TextureSwizzle	metal_enum! TextureSwizzle
 macro-decl	metal2vulkan-rt::TextureType	metal_enum! TextureType
 macro-decl	metal2vulkan-rt::TextureUsage	metal_flags! TextureUsage
@@ -6226,6 +6250,16 @@ macro-member	metal2vulkan-air::metal::DataType::UShort3	UShort3 = 43, "MTLDataTy
 macro-member	metal2vulkan-air::metal::DataType::UShort4	UShort4 = 44, "MTLDataTypeUShort4";
 macro-member	metal2vulkan-air::metal::DataType::VisibleFunctionTable	VisibleFunctionTable = 115, "MTLDataTypeVisibleFunctionTable";
 macro-member	metal2vulkan-air::metal::DataType::aliases	aliases
+macro-member	metal2vulkan-rt::CompareFunction::Always	Always = 7, "MTLCompareFunctionAlways";
+macro-member	metal2vulkan-rt::CompareFunction::CompareFunction	CompareFunction = "MTLCompareFunction"
+macro-member	metal2vulkan-rt::CompareFunction::Equal	Equal = 2, "MTLCompareFunctionEqual";
+macro-member	metal2vulkan-rt::CompareFunction::Greater	Greater = 4, "MTLCompareFunctionGreater";
+macro-member	metal2vulkan-rt::CompareFunction::GreaterEqual	GreaterEqual = 6, "MTLCompareFunctionGreaterEqual";
+macro-member	metal2vulkan-rt::CompareFunction::Less	Less = 1, "MTLCompareFunctionLess";
+macro-member	metal2vulkan-rt::CompareFunction::LessEqual	LessEqual = 3, "MTLCompareFunctionLessEqual";
+macro-member	metal2vulkan-rt::CompareFunction::Never	Never = 0, "MTLCompareFunctionNever";
+macro-member	metal2vulkan-rt::CompareFunction::NotEqual	NotEqual = 5, "MTLCompareFunctionNotEqual";
+macro-member	metal2vulkan-rt::CompareFunction::aliases	aliases
 macro-member	metal2vulkan-rt::PixelFormat::A1BGR5Unorm	A1BGR5Unorm = 41, "MTLPixelFormatA1BGR5Unorm";
 macro-member	metal2vulkan-rt::PixelFormat::A8Unorm	A8Unorm = 1, "MTLPixelFormatA8Unorm";
 macro-member	metal2vulkan-rt::PixelFormat::ABGR4Unorm	ABGR4Unorm = 42, "MTLPixelFormatABGR4Unorm";
@@ -6529,6 +6563,45 @@ macro-member	metal2vulkan-rt::PixelFormat::YCBCR84442P	YCBCR84442P = 503, "MTLPi
 macro-member	metal2vulkan-rt::PixelFormat::YCBCR84442PSRGB	YCBCR84442PSRGB = 523, "MTLPixelFormatYCBCR8_444_2P_sRGB";
 macro-member	metal2vulkan-rt::PixelFormat::YCBCRA84441P	YCBCRA84441P = 560, "MTLPixelFormatYCBCRA8_444_1P";
 macro-member	metal2vulkan-rt::PixelFormat::aliases	aliases
+macro-member	metal2vulkan-rt::SamplerAddressMode::CLAMP_TO_BORDER	CLAMP_TO_BORDER = 3, "VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER";
+macro-member	metal2vulkan-rt::SamplerAddressMode::CLAMP_TO_EDGE	CLAMP_TO_EDGE = 2, "VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE";
+macro-member	metal2vulkan-rt::SamplerAddressMode::ClampToBorderColor	ClampToBorderColor = 5, "MTLSamplerAddressModeClampToBorderColor";
+macro-member	metal2vulkan-rt::SamplerAddressMode::ClampToEdge	ClampToEdge = 0, "MTLSamplerAddressModeClampToEdge";
+macro-member	metal2vulkan-rt::SamplerAddressMode::ClampToZero	ClampToZero = 4, "MTLSamplerAddressModeClampToZero";
+macro-member	metal2vulkan-rt::SamplerAddressMode::MIRRORED_REPEAT	MIRRORED_REPEAT = 1, "VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT";
+macro-member	metal2vulkan-rt::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE	MIRROR_CLAMP_TO_EDGE = 4, "VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE";
+macro-member	metal2vulkan-rt::SamplerAddressMode::MirrorClampToEdge	MirrorClampToEdge = 1, "MTLSamplerAddressModeMirrorClampToEdge";
+macro-member	metal2vulkan-rt::SamplerAddressMode::MirrorRepeat	MirrorRepeat = 3, "MTLSamplerAddressModeMirrorRepeat";
+macro-member	metal2vulkan-rt::SamplerAddressMode::REPEAT	REPEAT = 0, "VK_SAMPLER_ADDRESS_MODE_REPEAT";
+macro-member	metal2vulkan-rt::SamplerAddressMode::Repeat	Repeat = 2, "MTLSamplerAddressModeRepeat";
+macro-member	metal2vulkan-rt::SamplerAddressMode::SamplerAddressMode	SamplerAddressMode = "MTLSamplerAddressMode"
+macro-member	metal2vulkan-rt::SamplerAddressMode::SamplerAddressMode	SamplerAddressMode(i32) = "VkSamplerAddressMode"
+macro-member	metal2vulkan-rt::SamplerAddressMode::aliases	aliases
+macro-member	metal2vulkan-rt::SamplerBorderColor::OpaqueBlack	OpaqueBlack = 1, "MTLSamplerBorderColorOpaqueBlack";
+macro-member	metal2vulkan-rt::SamplerBorderColor::OpaqueWhite	OpaqueWhite = 2, "MTLSamplerBorderColorOpaqueWhite";
+macro-member	metal2vulkan-rt::SamplerBorderColor::SamplerBorderColor	SamplerBorderColor = "MTLSamplerBorderColor"
+macro-member	metal2vulkan-rt::SamplerBorderColor::TransparentBlack	TransparentBlack = 0, "MTLSamplerBorderColorTransparentBlack";
+macro-member	metal2vulkan-rt::SamplerBorderColor::aliases	aliases
+macro-member	metal2vulkan-rt::SamplerMinMagFilter::Cubic	Cubic = 2, "MTLSamplerMinMagFilterCubic";
+macro-member	metal2vulkan-rt::SamplerMinMagFilter::Linear	Linear = 1, "MTLSamplerMinMagFilterLinear";
+macro-member	metal2vulkan-rt::SamplerMinMagFilter::Nearest	Nearest = 0, "MTLSamplerMinMagFilterNearest";
+macro-member	metal2vulkan-rt::SamplerMinMagFilter::SamplerMinMagFilter	SamplerMinMagFilter = "MTLSamplerMinMagFilter"
+macro-member	metal2vulkan-rt::SamplerMinMagFilter::aliases	aliases
+macro-member	metal2vulkan-rt::SamplerMipFilter::Linear	Linear = 2, "MTLSamplerMipFilterLinear";
+macro-member	metal2vulkan-rt::SamplerMipFilter::Nearest	Nearest = 1, "MTLSamplerMipFilterNearest";
+macro-member	metal2vulkan-rt::SamplerMipFilter::NotMipmapped	NotMipmapped = 0, "MTLSamplerMipFilterNotMipmapped";
+macro-member	metal2vulkan-rt::SamplerMipFilter::SamplerMipFilter	SamplerMipFilter = "MTLSamplerMipFilter"
+macro-member	metal2vulkan-rt::SamplerMipFilter::aliases	aliases
+macro-member	metal2vulkan-rt::SamplerReductionMode::MAX	MAX = 2, "VK_SAMPLER_REDUCTION_MODE_MAX";
+macro-member	metal2vulkan-rt::SamplerReductionMode::MIN	MIN = 1, "VK_SAMPLER_REDUCTION_MODE_MIN";
+macro-member	metal2vulkan-rt::SamplerReductionMode::Maximum	Maximum = 2, "MTLSamplerReductionModeMaximum";
+macro-member	metal2vulkan-rt::SamplerReductionMode::Minimum	Minimum = 1, "MTLSamplerReductionModeMinimum";
+macro-member	metal2vulkan-rt::SamplerReductionMode::SamplerReductionMode	SamplerReductionMode = "MTLSamplerReductionMode"
+macro-member	metal2vulkan-rt::SamplerReductionMode::SamplerReductionMode	SamplerReductionMode(i32) = "VkSamplerReductionMode"
+macro-member	metal2vulkan-rt::SamplerReductionMode::WEIGHTED_AVERAGE	WEIGHTED_AVERAGE = 0, "VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE";
+macro-member	metal2vulkan-rt::SamplerReductionMode::WEIGHTED_AVERAGE_RANGECLAMP_QCOM	WEIGHTED_AVERAGE_RANGECLAMP_QCOM = 1000521000, "VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_RANGECLAMP_QCOM";
+macro-member	metal2vulkan-rt::SamplerReductionMode::WeightedAverage	WeightedAverage = 0, "MTLSamplerReductionModeWeightedAverage";
+macro-member	metal2vulkan-rt::SamplerReductionMode::aliases	aliases
 macro-member	metal2vulkan-rt::TextureSwizzle::Alpha	Alpha = 5, "MTLTextureSwizzleAlpha";
 macro-member	metal2vulkan-rt::TextureSwizzle::Blue	Blue = 4, "MTLTextureSwizzleBlue";
 macro-member	metal2vulkan-rt::TextureSwizzle::Green	Green = 3, "MTLTextureSwizzleGreen";
@@ -9182,6 +9255,7 @@ method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice, option
 method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: BlockId, offset: u64, length: u64, zeroed: bool) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
 method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
+method	metal2vulkan-rt::Device::new_sampler_state	pub fn new_sampler_state(&self, descriptor: &SamplerDescriptor, index: u32) -> Result<SamplerState, Error>
 method	metal2vulkan-rt::Device::new_shared_event	pub fn new_shared_event(&self) -> Result<SharedEvent, Error>
 method	metal2vulkan-rt::Device::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>) -> Result<Texture, Error>
 method	metal2vulkan-rt::Device::quiesce	pub fn quiesce(&self, timeout: Duration) -> bool
@@ -9223,6 +9297,10 @@ method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDev
 method	metal2vulkan-rt::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-rt::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-rt::ResourceId::to_bits	pub fn to_bits(self) -> u64
+method	metal2vulkan-rt::SamplerDescriptor::new	pub fn new() -> SamplerDescriptor
+method	metal2vulkan-rt::SamplerDescriptor::shape	pub fn shape(&self) -> SamplerShape
+method	metal2vulkan-rt::SamplerState::descriptor	pub fn descriptor(&self) -> &SamplerDescriptor
+method	metal2vulkan-rt::SamplerState::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
 method	metal2vulkan-rt::SharedEvent::as_event	pub fn as_event(&self) -> &Event
 method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&self, value: u64, listener: impl FnOnce(u64) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
@@ -11276,6 +11354,8 @@ struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
 struct	metal2vulkan-rt::Region	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Region
 struct	metal2vulkan-rt::ResourceId	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct ResourceId
 struct	metal2vulkan-rt::ResourceUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct ResourceUsage(u32)
+struct	metal2vulkan-rt::SamplerDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerDescriptor
+struct	metal2vulkan-rt::SamplerState	#[derive(Clone)] pub struct SamplerState
 struct	metal2vulkan-rt::SharedEvent	#[derive(Clone)] pub struct SharedEvent
 struct	metal2vulkan-rt::Texture	#[derive(Clone)] pub struct Texture
 struct	metal2vulkan-rt::TextureDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TextureDescriptor
@@ -11830,6 +11910,7 @@ trait-impl	metal2vulkan-rt::Gap impl fmt::Display	impl fmt::Display for Gap
 trait-impl	metal2vulkan-rt::Limit impl fmt::Display	impl fmt::Display for Limit
 trait-impl	metal2vulkan-rt::Refusal impl fmt::Display	impl fmt::Display for Refusal
 trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsage
+trait-impl	metal2vulkan-rt::SamplerDescriptor impl Default	impl Default for SamplerDescriptor
 trait-impl	metal2vulkan-rt::TextureSwizzleChannels impl Default	impl Default for TextureSwizzleChannels
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl std::error::Error	impl std::error::Error for BelowFloor
@@ -13144,6 +13225,15 @@ variant	metal2vulkan-rt::CommandBufferStatus::Enqueued	Enqueued
 variant	metal2vulkan-rt::CommandBufferStatus::Error	Error
 variant	metal2vulkan-rt::CommandBufferStatus::NotEnqueued	NotEnqueued
 variant	metal2vulkan-rt::CommandBufferStatus::Scheduled	Scheduled
+variant	metal2vulkan-rt::CompareFunction::Always	Always
+variant	metal2vulkan-rt::CompareFunction::Equal	Equal
+variant	metal2vulkan-rt::CompareFunction::Greater	Greater
+variant	metal2vulkan-rt::CompareFunction::GreaterEqual	GreaterEqual
+variant	metal2vulkan-rt::CompareFunction::Less	Less
+variant	metal2vulkan-rt::CompareFunction::LessEqual	LessEqual
+variant	metal2vulkan-rt::CompareFunction::Never	Never
+variant	metal2vulkan-rt::CompareFunction::None	None
+variant	metal2vulkan-rt::CompareFunction::NotEqual	NotEqual
 variant	metal2vulkan-rt::ConsumerFeature::SamplerYcbcrConversion	SamplerYcbcrConversion
 variant	metal2vulkan-rt::DispatchType::Concurrent	Concurrent
 variant	metal2vulkan-rt::DispatchType::Serial	Serial
@@ -13157,6 +13247,7 @@ variant	metal2vulkan-rt::Error::Thread	Thread(io::Error)
 variant	metal2vulkan-rt::Error::Translation	Translation(metal2vulkan::error::Error)
 variant	metal2vulkan-rt::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
+variant	metal2vulkan-rt::Gap::CubicSampler	CubicSampler
 variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
 variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
@@ -13172,6 +13263,7 @@ variant	metal2vulkan-rt::IndexClass::Texture	Texture
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
+variant	metal2vulkan-rt::Limit::DeviceSamplers	DeviceSamplers { max: u32 }
 variant	metal2vulkan-rt::Limit::IndexRange	IndexRange { class: IndexClass, first: u32, count: u32 }
 variant	metal2vulkan-rt::Limit::TextureSamples	TextureSamples { sample_count: u32, counts: u32 }
 variant	metal2vulkan-rt::Limit::TextureSize	TextureSize { extent: [u32; 3], layers: u32, max_extent: [u32; 3], max_layers: u32 }

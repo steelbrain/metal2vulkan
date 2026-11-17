@@ -54,6 +54,7 @@ fn at_the_floor() -> Queried {
         .vulkan12
         .shader_storage_image_array_non_uniform_indexing = vk::TRUE;
     features.core.shader_storage_image_write_without_format = vk::TRUE;
+    features.core.sampler_anisotropy = vk::TRUE;
     features.core.shader_int16 = vk::TRUE;
     features.vulkan12.shader_int8 = vk::TRUE;
     features.vulkan11.storage_buffer16_bit_access = vk::TRUE;
@@ -222,7 +223,7 @@ fn each_missing_feature_is_named() {
     const LAYOUT: &str = "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 31] = [
+    let cases: [(Clear, Missing); 32] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -361,6 +362,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.robustness2.null_descriptor = vk::FALSE,
             feature(ROBUSTNESS2, "nullDescriptor"),
+        ),
+        (
+            |f| f.core.sampler_anisotropy = vk::FALSE,
+            feature(CORE, "samplerAnisotropy"),
         ),
     ];
     assert_eq!(

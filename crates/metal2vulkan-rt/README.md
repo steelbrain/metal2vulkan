@@ -4,8 +4,9 @@ The Metal API on Vulkan, with one path for every device. It replaces `metal2vulk
 takes its name when it does; until then it is unpublished.
 
 Its public API so far: the instance and the device, memory blocks and the buffers in them, the
-grants of texture and sampler indices, textures, command queues, command buffers and events, the
-device's counters, and `floor`, the check of a Vulkan device against the floor below.
+grants of texture and sampler indices, textures, sampler states, command queues, command buffers
+and events, the device's counters, and `floor`, the check of a Vulkan device against the floor
+below.
 
 ## Instance and device
 
@@ -209,6 +210,30 @@ made, with no lock, and never rewritten for layouts.
 - A texture's memory is device-local; where the device has none left, the call fails
   (`Error::Vulkan`).
 - Texture views, heap textures and textures over a swapchain image are not built yet.
+
+## Sampler states
+
+- `Device::new_sampler_state(descriptor, index)` is `newSamplerStateWithDescriptor:` at `index`
+  of a live `IndexClass::Sampler` grant. `SamplerDescriptor` is the translator's, and so is each
+  device sampler: `metal::sampler::vk_sampler` of the use, its create info chained by
+  `ash_interop::sampler_create_info`. A state takes a device sampler for each array it can be
+  read through: the plain array always, the comparison array where its compare function is not
+  `Never` (else that element keeps the array's default), and the integer-texture array, nearest
+  with the integer border colour. All three are written at `index` before the call returns.
+- Device samplers are shared: equal create infos, across uses and states, are one `VkSampler`,
+  and a border colour no address mode reads is left out of a create info, so a nearest state
+  clamped to the edge takes one sampler for its plain and integer-texture uses. They count
+  against the device's `maxSamplerAllocationCount`, the arrays' two defaults among them; past it
+  a state is `Limit::DeviceSamplers`. None is made at bind time. `Gauges::device_samplers` counts
+  them, `Gauges::samplers` the states.
+- `SamplerState::gpu_resource_id` is its index and the translator's `SamplerWord` of its
+  descriptor (`docs/RESOURCE-ID.md`).
+- A state holds the device. Once its last handle and the last command buffer that used it are
+  gone, its elements read the defaults again and its index is free; a device sampler no other
+  state holds goes to the reaper.
+- Anisotropy is the device's own filter (`samplerAnisotropy` is in the floor). A cubic filter is
+  `Gap::CubicSampler`. A descriptor the translator makes no device sampler of is
+  `Error::Translation`.
 
 ## Queues, command buffers and events
 
@@ -520,6 +545,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderStorageImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
 | `shaderStorageImageWriteWithoutFormat` | `VkPhysicalDeviceFeatures` | writes to array elements of any pixel format |
 | `nullDescriptor` | `VkPhysicalDeviceRobustness2FeaturesEXT` | every texture element no texture owns: a nil, freed or unowned index reads zeros, sizes 0 and drops writes, as Metal's nil texture does. The robust buffer and image access beside it stay off |
+| `samplerAnisotropy` | `VkPhysicalDeviceFeatures` | a sampler state's `maxAnisotropy`, which the device's own filter takes |
 | `shaderInt16` | `VkPhysicalDeviceFeatures` | `short` and `ushort` in shaders |
 | `shaderInt8` | `VkPhysicalDeviceVulkan12Features` | `char` and `uchar` in shaders |
 | `storageBuffer16BitAccess` | `VkPhysicalDeviceVulkan11Features` | 16-bit values in buffers |

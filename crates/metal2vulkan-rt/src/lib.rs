@@ -30,6 +30,7 @@ mod readback;
 mod reaper;
 mod record;
 mod ring;
+mod sampler;
 mod submit;
 #[cfg(test)]
 mod tests;
@@ -48,7 +49,15 @@ pub use extension::{ConsumerFeature, DeviceExtension};
 pub use instance::{Instance, PhysicalDevice};
 pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass, BLOCK_LEN};
 /// `MTLLibrary`: the translator's, read from AIR or a metallib.
+/// `MTLSamplerDescriptor`: the translator's.
+pub use metal2vulkan::bind::SamplerDescriptor;
 pub use metal2vulkan::library::Library;
+/// `MTLSamplerMinMagFilter`, `MTLSamplerMipFilter`, `MTLSamplerAddressMode`,
+/// `MTLSamplerBorderColor`, `MTLCompareFunction` and `MTLSamplerReductionMode`: the translator's.
+pub use metal2vulkan::metal::{
+    CompareFunction, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter,
+    SamplerReductionMode,
+};
 /// `MTLPixelFormat`, `MTLTextureType`, `MTLTextureUsage` and `MTLTextureSwizzleChannels` with its
 /// `MTLTextureSwizzle`: the translator's.
 pub use metal2vulkan::metal::{
@@ -61,5 +70,6 @@ pub use metal2vulkan::pipeline::{
 };
 pub use pipeline::ComputePipelineState;
 pub use queue::CommandQueue;
+pub use sampler::SamplerState;
 pub use texture::{Region, StorageMode, Texture, TextureDescriptor};
 pub use times::host_time;

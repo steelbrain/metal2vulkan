@@ -227,6 +227,8 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan12.shader_sampled_image_array_non_uniform_indexing => ShaderSampledImageArrayNonUniformIndexing),
     feature!(vulkan12.shader_storage_image_array_non_uniform_indexing => ShaderStorageImageArrayNonUniformIndexing),
     feature!(core.shader_storage_image_write_without_format => ShaderStorageImageWriteWithoutFormat),
+    // A sampler state's anisotropy is the device's own filter.
+    feature!(core.sampler_anisotropy => SamplerAnisotropy),
     // Every array element no texture owns is a null descriptor: a nil, freed or unowned texture
     // index reads zeros, answers 0 to its size queries and drops its writes, as Metal's nil
     // texture does, with no code in the shader.

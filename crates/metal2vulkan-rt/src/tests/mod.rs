@@ -13,6 +13,7 @@ mod null_descriptor;
 mod one_path;
 mod push_window;
 mod readback;
+mod sampler;
 mod texture;
 mod translate;
 

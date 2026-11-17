@@ -54,6 +54,8 @@ pub(crate) enum Free {
         image: vk::Image,
         memory: vk::DeviceMemory,
     },
+    /// A device sampler no sampler state holds; the device samplers gauge falls with it.
+    Sampler(vk::Sampler),
     /// A staging buffer of texture bytes, and its memory; the blocks gauge falls with it.
     Staging {
         buffer: vk::Buffer,
@@ -175,6 +177,12 @@ fn free(core: &Core, object: Free) {
             }
             core.counters.fall(Gauge::Textures);
             core.counters.fall(Gauge::Blocks);
+        }
+        Free::Sampler(sampler) => {
+            // SAFETY: no element of set 1 holds it, and every command buffer that used a state
+            // of it held the state until it retired.
+            unsafe { device.destroy_sampler(sampler, None) };
+            core.counters.fall(Gauge::DeviceSamplers);
         }
         Free::Staging { buffer, memory } => {
             // SAFETY: the upload that copied through it retired, and no reader holds its mapping;

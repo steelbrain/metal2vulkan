@@ -16,6 +16,7 @@ use crate::pipeline::PUSH_BYTES;
 use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
 use crate::ring::Ring;
+use crate::sampler::SamplerTable;
 use crate::submit::{self, Work};
 use crate::times::Ticks;
 use ash::vk;
@@ -159,6 +160,8 @@ pub(crate) struct Core {
     pub(crate) layout: vk::PipelineLayout,
     /// Set 1: the texture and sampler arrays, and the grants of their indices.
     pub(crate) arrays: Arrays,
+    /// The sampler states' device samplers, shared by create info.
+    pub(crate) samplers: Mutex<SamplerTable>,
     /// The device's compute limits.
     pub(crate) limits: ComputeLimits,
     /// The parameter ring.
@@ -366,6 +369,8 @@ impl Device {
             families[family as usize].timestamp_valid_bits,
         );
         let limits = &properties.properties.limits;
+        // The sampler arrays' two defaults count against the device's samplers too.
+        let sampler_cap = limits.max_sampler_allocation_count.saturating_sub(2);
         let limits = ComputeLimits {
             max_group_count: limits.max_compute_work_group_count,
             max_group_size: limits.max_compute_work_group_size,
@@ -405,6 +410,7 @@ impl Device {
             query_pools: Mutex::new(Vec::new()),
             layout,
             arrays,
+            samplers: Mutex::new(SamplerTable::new(sampler_cap)),
             limits,
             ring: Ring::new(),
             ids: Ids::new(),

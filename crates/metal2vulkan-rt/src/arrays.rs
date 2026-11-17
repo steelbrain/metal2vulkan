@@ -331,6 +331,39 @@ impl Arrays {
         unsafe { device.update_descriptor_sets(&writes[..count], &[]) };
     }
 
+    /// Writes a sampler state's elements at `index` of the three sampler arrays, plain,
+    /// comparison and integer texture: each array's default where a sampler is `None`.
+    ///
+    /// # Safety
+    ///
+    /// The caller owns the elements (the index is occupied for it, or is being vacated by it), and
+    /// each sampler is live and of the device whenever work uses it.
+    pub(crate) unsafe fn write_samplers(
+        &self,
+        device: &ash::Device,
+        index: u32,
+        samplers: [Option<vk::Sampler>; 3],
+    ) {
+        let defaults = [self.plain, self.compare, self.plain];
+        let infos =
+            [0, 1, 2].map(|array| {
+                [vk::DescriptorImageInfo::default()
+                    .sampler(samplers[array].unwrap_or(defaults[array]))]
+            });
+        let writes = [0, 1, 2].map(|array| {
+            write(
+                self.set,
+                FIRST_SAMPLER_BINDING + array as u32,
+                vk::DescriptorType::SAMPLER,
+                &infos[array],
+            )
+            .dst_array_element(index)
+        });
+        // SAFETY: the caller's contract; the bindings are update-after-bind and
+        // update-unused-while-pending, so elements of other owners may be written meanwhile.
+        unsafe { device.update_descriptor_sets(&writes, &[]) };
+    }
+
     /// Destroys set 1.
     ///
     /// # Safety

@@ -38,8 +38,8 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 26 | 26 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -56,8 +56,8 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 9 | 6 | 0 | 0 | 11 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 5 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 9 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 6 | 3 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -625,8 +625,8 @@ Columns:
 | `IndirectOffset` | An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer than 12 bytes (three 32-bit counts) in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset inside the buffer | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` | `-` |
 | `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
 | `IndicesNotGranted` | A release of an index that is not granted (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: a grant is returned once | 2: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`, `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
-| `IndexInUse` | A texture at an index where a texture lives already (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index names one object at a time, and its elements are that object's | 1: `crates/metal2vulkan-rt/src/arrays.rs (occupy)` | `-` |
-| `IndicesInUse` | A release of a grant while a texture lives at one of its indices (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: an object's index stays granted while the object lives | 1: `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
+| `IndexInUse` | A texture or a sampler state at an index where an object lives already (`Device::new_texture`, `Device::new_sampler_state`) | every device (a public call's own check of its arguments) | `ours`: an index names one object at a time, and its elements are that object's | 1: `crates/metal2vulkan-rt/src/arrays.rs (occupy)` | `-` |
+| `IndicesInUse` | A release of a grant while a texture or a sampler state lives at one of its indices (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: an object's index stays granted while the object lives | 1: `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
 | `TextureIndex` | A texture whose usage shaders reach (read or write) made without an index, or one of no such usage made with one (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index is an element of set 1's texture arrays, which only shaders read | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture)` | `-` |
 | `TextureZeroExtent` | A texture with a width, height or depth of 0 | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has width of zero", and the same for a height of zero | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
 | `TextureExtentForType` | A texture with a height other than 1 of a 1D type, or a depth other than 1 of a type that is not 3D | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2 | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
@@ -650,6 +650,7 @@ Columns:
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)` | `-` |
 | `IndexRange` | A grant of no indices, or one past its class's range (`Device::grant_indices`, [`IndexClass::range`]) | every device (a public call's own check of its arguments) | `ours`: the descriptor arrays are 65,536 sampled textures, 4,096 storage textures and 4,000 samplers of each use, and index 0 is nil | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
 | `TextureSize` | A texture whose extent or array layers are past what the device makes of its format, type, usage and sample count | at the device's limit | `device`: the image format query's `maxExtent` and `maxArrayLayers` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
+| `DeviceSamplers` | A sampler state whose device samplers would take the device past its `maxSamplerAllocationCount`, less the sampler arrays' two defaults... | at the device's limit | `device`: the device's `maxSamplerAllocationCount` | 1: `crates/metal2vulkan-rt/src/sampler.rs (take)` | `-` |
 | `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
@@ -663,6 +664,7 @@ Columns:
 | `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture)` | `-` |
 | `TextureBuffer` | A texture buffer (`MTLTextureTypeTextureBuffer`) | every device (a public call's own check of its arguments) | `ours`: no texel-buffer array; no replay stream uses one | 2: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)` | `-` |
 | `TextureFormat` | A texture of a pixel format the runtime makes no image of on this device for the descriptor's usage | every device (a public call's own check of its arguments) | `ours`: the device's format query, or the identity domains' shaders read every texture through its view alone | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
+| `CubicSampler` | A sampler state whose minification or magnification filter is cubic (`Device::new_sampler_state`) | every device (a public call's own check of its arguments) | `ours`: the translator's identity domains do not filter bicubically, and Vulkan's cubic filter is not Metal's | 1: `crates/metal2vulkan-rt/src/sampler.rs (new_sampler_state)` | `-` |
 | `TextureBytes` | `Texture::replace_region` or `Texture::get_bytes` of a texture whose image is no plain copy of Metal's bytes in one aspect | every device (a public call's own check of its arguments) | `ours`: no copy between such an image and bytes is built | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
 | `FloatDepthUpload` | `Texture::replace_region` into a 32-bit float depth (`Depth32Float`) | every device (a public call's own check of its arguments) | `ours`: no upload of a 32-bit float depth is built | 1: `crates/metal2vulkan-rt/src/texture.rs (replace_region)` | `-` |
 
@@ -1185,6 +1187,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`
 - `rt:Limit::IndexRange`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
 - `rt:Limit::TextureSize`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
+- `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-rt/src/sampler.rs (take)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
@@ -1193,6 +1196,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::MemorylessTexture`: `crates/metal2vulkan-rt/src/texture.rs (new_texture)`
 - `rt:Gap::TextureBuffer`: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)`
 - `rt:Gap::TextureFormat`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
+- `rt:Gap::CubicSampler`: `crates/metal2vulkan-rt/src/sampler.rs (new_sampler_state)`
 - `rt:Gap::TextureBytes`: `crates/metal2vulkan-rt/src/texture.rs (copy)`
 - `rt:Gap::FloatDepthUpload`: `crates/metal2vulkan-rt/src/texture.rs (replace_region)`
 
