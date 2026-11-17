@@ -120,7 +120,7 @@ pub struct Report {
     /// `GPUEndTime`, in microseconds.
     pub gpu_us: Vec<f64>,
     /// The pipeline barriers the runtime recorded per timed run, where it counts them
-    /// ([`Device::barriers`](crate::Device::barriers)).
+    /// ([`Device::barriers`]).
     pub barriers: Option<u64>,
     /// Each run's encoding thread's wall time from the command buffer's creation through
     /// `commit`'s return, in nanoseconds.
