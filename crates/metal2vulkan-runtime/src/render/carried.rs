@@ -80,9 +80,12 @@
 //!   what the encoder's render state decides (`restated.rs`) and records every state command it
 //!   sets into the instance's command buffer. That instance is the one the encoder opened with,
 //!   the pass's first: a carried draw is kept only while it is (`RenderLowering::select_kept`),
-//!   and records into its command buffer as it stands, which a draw of another state before it
-//!   may have begun, each such draw kept, drawn again or rebound under the epoch, as every draw
-//!   between a kept draw and its next is. Its tables' stamps are the encoder's tables' first
+//!   or past a split that re-homed it into the instance after it (`render/draw_again.rs`,
+//!   re-homed past a split: `WorkCounts::kept_draws_rehomed_carried`), and records into its
+//!   command buffer as it stands, which a draw of another state before it may have begun, each
+//!   such draw kept, drawn again or rebound under the epoch, as every draw between a kept draw
+//!   and its next is. One the pass went on past otherwise is let go at its state's next draw
+//!   (`WorkCounts::kept_draws_carried_unopened`), which takes every step. Its tables' stamps are the encoder's tables' first
 //!   ones: a new encoder inherits no binding, so its first draw brings in every slot its calls
 //!   bound since the opening (`argument_table::Changes`), and its rebind stops where the bind
 //!   state holds a slot bound that none of them bound (`WorkCounts::draws_carry_stopped_stale`):
@@ -98,7 +101,8 @@
 //!   (`Kept::again`), which it takes of the kept draw. It stops where it reads such a texture
 //!   through a slot narrowed to levels apart from the attached ones, which the kept draw did not
 //!   (`draws_carry_stopped_attached`). It begins its pass's first instance as every step's draw
-//!   begins it (`render/inline_first.rs`), where no draw before it began it. What it compares at
+//!   begins it (`render/inline_first.rs`), where no draw before it began it; one re-homed past a
+//!   split records into the instance the split's draw began, as every step's draw there does. What it compares at
 //!   a draw again is the encoder's: the command buffer its instance records into, and what it
 //!   read that changes with no call (`Under`), as of the opening.
 //! - **A reader through snapshots** (`render/snapshot.rs`) carries as any kept draw: same pass

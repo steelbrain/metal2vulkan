@@ -136,7 +136,8 @@
 //!   compare with. It begins its
 //!   pass's first instance as every step's first draw does (`RenderLowering::inline_begin`), and
 //!   records every state command it sets into that instance's command buffer, whose record holds
-//!   none (`WorkCounts::draws_rebound_carried`). It retains into its encoder what every step
+//!   none (`WorkCounts::draws_rebound_carried`); one re-homed past a split (below) begins none,
+//!   recording into the instance the split's draw began. It retains into its encoder what every step
 //!   retains beyond its tables' objects: its pipeline state, its variant's objects and its
 //!   `VkPipeline`, which its encoder's later draws then retain no more, as after every step's
 //!   (`LastRetained`); one carried across a commit (`Kept::across`), whose command buffer holds
@@ -147,7 +148,8 @@
 //!   record: its tables' stamps are its own, so it brings in what its encoder's calls changed
 //!   since, as any draw rebound does; its uses are made again whole, and its uses of shadowed
 //!   textures are gathered with them into its instance, whose copies then take them, as every
-//!   step gathers them there.
+//!   step gathers them there. One carried in and not drawn since is rebound as a carried draw is
+//!   (above), its stamps the encoder's first ones, into that instance.
 //! - **Into an instance recorded inline after a split** (`render/inline_splits.rs`), which keeps
 //!   its draws' recordings in its room until its copies are known: its recording is kept there
 //!   as every step's is, and recorded at its group's end through the pass's record, which
@@ -484,6 +486,8 @@ impl RenderLowering {
         let watch = crate::degradation::EachWatch::start();
         // Carried in from the command buffer's last render encoder (`render/carried.rs`).
         let carried = (self.again.kept.as_ref()).is_some_and(|kept| kept.carried);
+        // Re-homed past a split (`Kept::rehomed`): into the instance the split's draw began.
+        let rehomed = (self.again.kept.as_ref()).is_some_and(|kept| kept.rehomed);
         // A draw of other arguments, or a carried one, whose rebind stops is counted by where.
         let stopped = |encoder: &Self, (why, carry): (ArgumentsStop, CarryStop)| {
             if reargued {
@@ -600,8 +604,9 @@ impl RenderLowering {
             return Again::Refused(refused);
         }
         // A carried draw begins its pass's first instance (`render/carried.rs`), its colors read
-        // through snapshots in the feedback loop layout from its begin.
-        if carried {
+        // through snapshots in the feedback loop layout from its begin; one re-homed past a split
+        // records into the instance the split's draw began, as every step's draw there does.
+        if carried && !rehomed {
             if let Err(refused) = self.begin_carried(feedback) {
                 return Again::Refused(refused);
             }

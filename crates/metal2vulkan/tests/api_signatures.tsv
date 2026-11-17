@@ -3375,6 +3375,7 @@ field	metal2vulkan-runtime::WorkCounts.kept_contexts_made	pub kept_contexts_made
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carried	pub kept_draws_carried: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carried_across	pub kept_draws_carried_across: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carried_aside	pub kept_draws_carried_aside: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_carried_unopened	pub kept_draws_carried_unopened: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_between	pub kept_draws_carry_dropped_between: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_commit	pub kept_draws_carry_dropped_commit: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_carry_dropped_layout	pub kept_draws_carry_dropped_layout: u64
@@ -3389,6 +3390,7 @@ field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_store_action	pub kept_d
 field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_use	pub kept_draws_let_go_use: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_let_go_visibility	pub kept_draws_let_go_visibility: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_rehomed	pub kept_draws_rehomed: u64
+field	metal2vulkan-runtime::WorkCounts.kept_draws_rehomed_carried	pub kept_draws_rehomed_carried: u64
 field	metal2vulkan-runtime::WorkCounts.kept_draws_uncarried_attached	pub kept_draws_uncarried_attached: u64
 field	metal2vulkan-runtime::WorkCounts.kept_padding_aliases	pub kept_padding_aliases: u64
 field	metal2vulkan-runtime::WorkCounts.kept_resident_keys_compared	pub kept_resident_keys_compared: u64

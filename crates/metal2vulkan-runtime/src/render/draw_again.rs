@@ -171,9 +171,9 @@
 //!   draws set aside with the states of other pipeline states into its instance
 //!   (`RenderLowering::rehome_aside`, `WorkCounts::kept_draws_rehomed`), but those that read
 //!   its pass's colors other than through snapshots of their own (as past a reader below), the
-//!   readers through snapshots, the draws carried in and not drawn since, and those that read
-//!   what changes with no call otherwise than it did, which it lets go. Each is kept there as a
-//!   carried draw is kept in the instance its encoder opened with ([`Kept::rehomed`]): after
+//!   readers through snapshots, and those that read what changes with no call otherwise than it
+//!   did, which it lets go. Each is kept there as a carried draw is kept in the instance its
+//!   encoder opened with ([`Kept::rehomed`]): after
 //!   draws of other states, recorded through no record, under a render state of another stamp
 //!   but its stamp beyond the scissor rectangles, so its next draw is rebound (`rebound.rs`),
 //!   deriving again what the render state decides (its scissor rectangles alone where the encoder
@@ -182,7 +182,12 @@
 //!   noted, added to the pass's reads and gathered whole into the new instance with its
 //!   shadowed textures' (which the copies before it then take), where it uses those exactly as
 //!   the kept draw did, and every state command it sets recorded against what that instance's
-//!   record holds. Its tables' stamps are its own still: its encoder's tables went on.
+//!   record holds. Its tables' stamps are its own still: its encoder's tables went on. A draw
+//!   carried in and not drawn since is re-homed so too (`WorkCounts::kept_draws_rehomed_carried`):
+//!   its stamps are the encoder's first ones, so its next draw is rebound as a carried draw is
+//!   (`render/carried.rs`), bringing in every slot the encoder's calls bound since the opening
+//!   and retaining what every step retains, but into the instance the split's draw began rather
+//!   than the pass's first, which it begins not.
 //! - **Carried to the next encoder.** An encoder that ends with a kept draw of its pass's current
 //!   instance, the first or one after a split (re-homed past it, above, among them), carries it,
 //!   with its bind state and settles and the kept draws set aside with the states of up to fifteen
@@ -400,7 +405,8 @@ pub(crate) struct Kept {
     /// render pass instance of its pass began that instance, and was kept into it
     /// ([`rehomed_into`](Kept::rehomed_into), the module docs), and has not been drawn since:
     /// its next draw is rebound, gathering its uses whole into that instance and its shadowed
-    /// textures' uses with them (`rebound.rs`).
+    /// textures' uses with them (`rebound.rs`); of a draw [`carried`](Kept::carried) too, as a
+    /// carried draw is, into that instance, beginning no other.
     pub(super) rehomed: bool,
     /// The `VkPipeline` it recorded through, held while it is kept: its recording names it by
     /// handle, and a draw carried across retains it (`render/carried.rs`).
@@ -453,6 +459,9 @@ impl Kept {
         self.command_buffer = draws;
         self.settled = None;
         self.carried = true;
+        // Kept in the instance the encoder opens with, which its first draw begins where none
+        // began it: no longer one a split of the ended encoder re-homed it into.
+        self.rehomed = false;
     }
 
     /// Whether what the draw read that changes with no call is as it was, but what it was noted
@@ -921,25 +930,25 @@ impl RenderLowering {
     /// render pass instance the draw just drawn began after a split, keeping nothing only for
     /// recording into it (the module docs): each that reads its pass's colors other than through
     /// snapshots of its own (whose next draw's steps read them past the split), a reader through
-    /// snapshots, one carried in and not drawn since, and one that read what changes with no call
-    /// otherwise than that draw ([`Kept::rehomed_into`]) let go, the others kept into it
-    /// (`WorkCounts::kept_draws_rehomed`). The last direct draw's is that draw's, which kept
-    /// nothing.
+    /// snapshots, and one that read what changes with no call otherwise than that draw
+    /// ([`Kept::rehomed_into`]) let go, the others kept into it, those carried in and not drawn
+    /// since among them (`WorkCounts::kept_draws_rehomed`, `kept_draws_rehomed_carried`). The last
+    /// direct draw's is that draw's, which kept nothing.
     pub(super) fn rehome_aside(&mut self, live: &mut LiveBind) -> Result<(), Error> {
         let (under, draws) = (self.kept_under(), self.current.draws);
         let (memo, version) = (&mut self.attached, self.layout.version());
         let layout: &PassLayout = &self.layout;
+        let mut carried = 0;
         let rehomed = live.rehome_kept(|kept, uses| -> Result<bool, Error> {
-            if kept.reader.is_some()
-                || kept.carried
-                || kept.reads_colors((&mut *memo, layout, version), uses)?
-            {
+            if kept.reader.is_some() || kept.reads_colors((&mut *memo, layout, version), uses)? {
                 return Ok(false);
             }
-            Ok(kept.rehomed_into(under, draws))
+            let rehomed = kept.rehomed_into(under, draws);
+            carried += u64::from(rehomed && kept.carried);
+            Ok(rehomed)
         })?;
         self.again.kept = None;
-        self.core.counts().kept_draws_rehomed(rehomed);
+        self.core.counts().kept_draws_rehomed(rehomed, carried);
         Ok(())
     }
 
@@ -1065,8 +1074,10 @@ impl RenderLowering {
     /// before draws of other states recorded: it is [`Kept::between`]. One carried in from the
     /// command buffer's last render encoder (`render/carried.rs`) is kept while the current
     /// instance is the one the encoder opened with, the pass's first, which the draws since
-    /// recorded into or began (each a draw kept, drawn again or rebound, under the epoch): it
-    /// records into that instance's command buffer as it is now.
+    /// recorded into or began (each a draw kept, drawn again or rebound, under the epoch), or one
+    /// a split re-homed it into ([`Kept::rehomed`]): it records into that instance's command
+    /// buffer as it is now. One the pass went on past otherwise is let go
+    /// (`WorkCounts::kept_draws_carried_unopened`), and the draw takes every step.
     pub(super) fn select_kept(&mut self, live: &mut LiveBind) {
         let Some(RenderStateKind::Graphics(pipeline)) = self.pipeline.as_ref().map(|p| p.kind())
         else {
@@ -1079,9 +1090,13 @@ impl RenderLowering {
         live.select(pipeline);
         let epoch = self.again.epoch;
         let opened = self.again.opened == Some(self.current.shape.version());
-        self.again.kept = (live.take_kept()).filter(|kept| {
-            kept.epoch == epoch && kept.pipeline.is(pipeline) && (opened || !kept.carried)
-        });
+        let kept =
+            (live.take_kept()).filter(|kept| kept.epoch == epoch && kept.pipeline.is(pipeline));
+        let unopened = (kept.as_ref()).is_some_and(|kept| kept.carried && !kept.rehomed && !opened);
+        if unopened && !self.replaying && !self.rerouting {
+            self.core.counts().kept_draw_carried_unopened();
+        }
+        self.again.kept = kept.filter(|_| !unopened);
         if let Some(kept) = self.again.kept.as_mut() {
             kept.between = true;
             if kept.carried {

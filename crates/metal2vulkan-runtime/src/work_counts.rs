@@ -971,6 +971,8 @@ struct CommandCounters {
     draws_restated: AtomicU64,
     draws_restated_scissors: AtomicU64,
     kept_draws_rehomed: AtomicU64,
+    kept_draws_rehomed_carried: AtomicU64,
+    kept_draws_carried_unopened: AtomicU64,
     draws_rebound_arguments: AtomicU64,
     draws_rebind_stopped_arguments: AtomicU64,
     draws_rebind_stopped_arguments_by: [AtomicU64; ArgumentsStop::COUNT],
@@ -2012,11 +2014,22 @@ impl Counting<'_> {
     }
 
     /// `count` kept draws set aside kept into the render pass instance a draw began after a
-    /// split (`WorkCounts::kept_draws_rehomed`).
-    pub(crate) fn kept_draws_rehomed(&self, count: u64) {
+    /// split (`WorkCounts::kept_draws_rehomed`), `carried` of them carried in and not drawn since
+    /// (`WorkCounts::kept_draws_rehomed_carried`).
+    pub(crate) fn kept_draws_rehomed(&self, count: u64, carried: u64) {
         if count > 0 {
             self.0.add(|counts| &counts.kept_draws_rehomed, count);
         }
+        if carried > 0 {
+            self.0
+                .add(|counts| &counts.kept_draws_rehomed_carried, carried);
+        }
+    }
+
+    /// A kept draw carried in and not drawn since let go at its state's next draw, in another
+    /// instance than the one its encoder opened with (`WorkCounts::kept_draws_carried_unopened`).
+    pub(crate) fn kept_draw_carried_unopened(&self) {
+        self.0.add(|counts| &counts.kept_draws_carried_unopened, 1);
     }
 
     /// A render draw rebound with other arguments than its kept draw's
@@ -9724,10 +9737,21 @@ pub struct WorkCounts {
     /// the render pass instance a draw began after a split, of the same shape, where that draw
     /// kept nothing only for recording into it (`render/draw_again.rs`): each but those that read
     /// the pass's colors other than through snapshots of their own, a reader through snapshots,
-    /// one carried in and not drawn since, or one that read what changes with no call otherwise,
-    /// which are let go. The next draw of each is rebound into that instance (`draws_rebound`),
-    /// in place of taking every step (`draws_none_kept`).
+    /// or one that read what changes with no call otherwise, which are let go. The next draw of
+    /// each is rebound into that instance (`draws_rebound`), in place of taking every step
+    /// (`draws_none_kept`).
     pub kept_draws_rehomed: u64,
+    /// Of `kept_draws_rehomed`, those carried in from the command buffer's last render encoder,
+    /// or past a commit, and not drawn since (`render/carried.rs`): the next draw of each is
+    /// rebound as a carried draw is, into the instance after the split, bringing in every slot
+    /// its encoder's calls bound since the opening (`draws_rebound_carried`), in place of taking
+    /// every step (`draws_none_kept`).
+    pub kept_draws_rehomed_carried: u64,
+    /// Kept draws carried in and not drawn since, let go at their state's next draw because the
+    /// encoder's pass records into another render pass instance than the one the encoder opened
+    /// with and no split re-homed them (`render/carried.rs`, `kept_draws_rehomed_carried`): that
+    /// draw takes every step (`draws_none_kept`).
+    pub kept_draws_carried_unopened: u64,
     /// Of `draws_rebound`, those that differed from the draw they repeat only in their arguments
     /// (`draws_unlike_kept_arguments_alone` lists them: their call of the same primitive type,
     /// with indices or without, their counts and starts, index buffer, index type or index buffer
@@ -13164,6 +13188,8 @@ impl Device {
             draws_restated: commands(|counts| &counts.draws_restated),
             draws_restated_scissors: commands(|counts| &counts.draws_restated_scissors),
             kept_draws_rehomed: commands(|counts| &counts.kept_draws_rehomed),
+            kept_draws_rehomed_carried: commands(|counts| &counts.kept_draws_rehomed_carried),
+            kept_draws_carried_unopened: commands(|counts| &counts.kept_draws_carried_unopened),
             draws_rebound_arguments: commands(|counts| &counts.draws_rebound_arguments),
             draws_rebound_carried: commands(|counts| &counts.draws_rebound_carried),
             draws_none_kept: commands(|counts| &counts.draws_none_kept),

@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds|restated|moved|guest]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds|restated|moved|guest|splits]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -81,6 +81,15 @@
 //!   its slot, then 16 bytes of `set_vertex_bytes` at index 1 and of `set_fragment_bytes` at
 //!   index 0, each its own; every second draw first `set_render_pipeline_state` (the next of 4)
 //!   and `set_fragment_sampler_states`.
+//! - **splits**, a guest's render encoders that split their pass: 8 command buffers of 8 passes
+//!   over the target (the first cleared, the rest loaded) of 4 draws each, every pass after the
+//!   constants buffer and the sampler. Its first draw is through the first pipeline state; then
+//!   `memory_barrier_with_scope` over the render targets, fragment to fragment, and a draw of the
+//!   fourth state sampling the target itself, which splits the pass; then a draw of the second
+//!   state and one of the third, each after `set_fragment_texture` (the next of 16). Each
+//!   draw is a 4-vertex triangle strip after `set_vertex_buffer` at its slot. Every pass after a
+//!   command buffer's first opens from the kept draws the pass before it carried, the second and
+//!   third states' undrawn before its split.
 //!
 //! The slots lie in 64 KiB no-copy buffers over host pages (`new_buffer_with_bytes_no_copy`), as
 //! a guest's upload chunks do, each command buffer's in chunks of its own. With `--heap`, the
@@ -151,8 +160,8 @@
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::device::{HostPageTexturePolicy, RenderLoweringPolicy};
 use metal2vulkan::metal::{
-    BlendFactor, IndexType, PixelFormat, PrimitiveType, SamplerAddressMode, SamplerMinMagFilter,
-    TextureUsage, VertexFormat,
+    BarrierScope, BlendFactor, IndexType, PixelFormat, PrimitiveType, RenderStages,
+    SamplerAddressMode, SamplerMinMagFilter, TextureUsage, VertexFormat,
 };
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource, VertexAttributeDescriptor,
@@ -231,7 +240,12 @@ enum Stream {
     /// vertex slot and its vertex and fragment bytes, every second one the pipeline state and the
     /// sampler again ([`Bench::guest_steps`]).
     Guest,
+    /// Passes of [`SPLIT_PASS_DRAWS`] draws that split after their first ([`Bench::split_steps`]).
+    Splits,
 }
+
+/// A splits shape's draws a pass.
+const SPLIT_PASS_DRAWS: usize = 4;
 
 /// A guest shape's passes a command buffer, and a pass's draws.
 const GUEST_PASSES: usize = 4;
@@ -280,7 +294,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 14] = [
+const SHAPES: [Shape; 15] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -381,13 +395,19 @@ const SHAPES: [Shape; 14] = [
         draws: GUEST_PASSES * GUEST_PASS_DRAWS,
         stream: Stream::Guest,
     },
+    Shape {
+        name: "splits",
+        buffers: 8,
+        draws: 8 * SPLIT_PASS_DRAWS,
+        stream: Stream::Splits,
+    },
 ];
 
 impl Shape {
     /// The slots a draw takes: its vertex bytes, and its fragment bytes in a compositor's stream.
     fn slots(self) -> u64 {
         match self.stream {
-            Stream::Bytes | Stream::Clipped | Stream::Damaged | Stream::Guest => 1,
+            Stream::Bytes | Stream::Clipped | Stream::Damaged | Stream::Guest | Stream::Splits => 1,
             Stream::Layers => 2,
             // Its slots lie in the compositor's or the scene's own buffer.
             Stream::Composited { .. } | Stream::Passes(_) | Stream::Scene { .. } => 0,
@@ -408,7 +428,7 @@ impl Shape {
 }
 
 /// The calls `--calls` counts apart, by their index in a [`Tally`].
-const CALLS: [&str; 19] = [
+const CALLS: [&str; 20] = [
     "command_buffer",
     "render_command_encoder",
     "set_render_pipeline_state",
@@ -428,6 +448,7 @@ const CALLS: [&str; 19] = [
     "set_fragment_textures",
     "set_vertex_bytes",
     "set_fragment_bytes",
+    "memory_barrier_with_scope",
 ];
 
 /// Each call's count, and its instructions, cycles and cache misses ([`call_counts`]), over a
@@ -501,6 +522,9 @@ enum Step<'a> {
     /// 16 bytes, each this value, at this vertex or fragment index.
     VertexBytes(u8, u32),
     FragmentBytes(u8, u32),
+    /// `memory_barrier_with_scope` over the render targets, from the fragment stage to the
+    /// fragment stage.
+    Barrier,
 }
 
 /// The objects every shape draws with.
@@ -728,6 +752,9 @@ impl Bench {
         if shape.stream == Stream::Guest {
             return self.guest_steps(chunks, shape, buffer);
         }
+        if shape.stream == Stream::Splits {
+            return self.split_steps(chunks, shape, buffer);
+        }
         let mut steps = vec![
             Step::Pipeline(&self.pipelines[0]),
             Step::VertexBuffer(&self.constants, 0, 1),
@@ -756,7 +783,8 @@ impl Bench {
                 Stream::Composited { .. }
                 | Stream::Passes(_)
                 | Stream::Scene { .. }
-                | Stream::Guest => {}
+                | Stream::Guest
+                | Stream::Splits => {}
                 Stream::Clipped | Stream::Damaged => {
                     if draw % RUN == 0 {
                         steps.push(Step::Pipeline(&self.pipelines[draw / RUN % PIPELINES]));
@@ -804,6 +832,44 @@ impl Bench {
             steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
             steps.push(Step::VertexBytes(draw as u8, 1));
             steps.push(Step::FragmentBytes(draw as u8, 0));
+            steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
+        }
+        steps
+    }
+
+    /// Command buffer `buffer`'s calls of a splits shape ([`Stream::Splits`]), over `chunks`: each
+    /// pass's draw through the first pipeline state, the barrier, the draw of the fourth sampling
+    /// the target, which splits the pass, then the draws of the second and the third.
+    fn split_steps<'a>(
+        &'a self,
+        chunks: &'a [Buffer],
+        shape: Shape,
+        buffer: usize,
+    ) -> Vec<Step<'a>> {
+        let target = self.pass.color_attachments[0].texture.as_ref();
+        let mut steps = Vec::new();
+        for draw in 0..shape.draws {
+            let at = draw % SPLIT_PASS_DRAWS;
+            if at == 0 {
+                steps.push(Step::Begin(match draw {
+                    0 => &self.pass,
+                    _ => &self.loaded,
+                }));
+                steps.push(Step::VertexBuffer(&self.constants, 0, 1));
+                steps.push(Step::FragmentBuffer(&self.constants, 0, 0));
+                steps.push(Step::FragmentSampler(&self.sampler));
+            }
+            let (state, texture) = match (at, target) {
+                (1, Some(target)) => {
+                    steps.push(Step::Barrier);
+                    (3, target)
+                }
+                _ => (at.saturating_sub(1), &self.textures[draw % TEXTURES]),
+            };
+            steps.push(Step::Pipeline(&self.pipelines[state]));
+            steps.push(Step::FragmentTexture(texture, 0));
+            let (chunk, offset) = shape.slot(buffer, draw as u64);
+            steps.push(Step::VertexBuffer(&chunks[chunk], offset, 0));
             steps.push(Step::Draw(PrimitiveType::TriangleStrip, 4));
         }
         steps
@@ -896,6 +962,15 @@ impl Bench {
                     }),
                     Step::FragmentBytes(value, index) => call(&mut tally, 18, || {
                         encoder.set_fragment_bytes(&[value; 16], index)
+                    }),
+                    Step::Barrier => call(&mut tally, 19, || {
+                        let fragment = RenderStages::FRAGMENT;
+                        encoder.memory_barrier_with_scope(
+                            BarrierScope::RENDER_TARGETS,
+                            fragment,
+                            fragment,
+                        );
+                        Ok(())
                     }),
                     Step::DrawIndexed(buffer, offset) => call(&mut tally, 13, || {
                         encoder.draw_indexed_primitives(
@@ -2186,7 +2261,7 @@ fn main() -> Result<()> {
                 || {
                     format!(
                         "no shape {name}: ws, many, 10k, clips, damage, compositor, backdrops, \
-                         pass1, pass17, scene, rebinds, restated, moved or guest"
+                         pass1, pass17, scene, rebinds, restated, moved, guest or splits"
                     )
                 },
             )?),
