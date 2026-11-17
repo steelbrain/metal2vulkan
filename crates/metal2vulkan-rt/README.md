@@ -264,13 +264,20 @@ that touch blocks first.
   `dispatch_threadgroups` and indirect dispatches run that module at their own size, and a
   `dispatch_threads` grid that is not a whole number of threadgroups runs the variant.
 - A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
-  `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32) has an
-  emulated-SIMD-group variant, whose SIMD groups exchange through threadgroup memory between
-  workgroup barriers. The reaper lowers it once the state is made, through the cache directory,
-  and a threadgroup that is not whole SIMD groups runs it at its own size, the last SIMD group
-  partly filled, as Metal runs it. A dispatch of such a size before the reaper is done waits for
-  the lowering, which the reaper takes next: a first-use wait. In a threadgroup of one thread the
-  module's exchanges pass no barrier.
+  `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32), or one per
+  32-lane cluster of a 64- or 128-lane subgroup, runs only workgroups of whole subgroups. A direct
+  dispatch whose threadgroup is whole 32-thread SIMD groups but not whole subgroups (32 threads
+  on a device of 64-lane subgroups) runs on the kernel's partial-threadgroups variant in a
+  workgroup of the next whole subgroup, the invocations past its threads masked as threads that
+  do not exist: they run nothing of the kernel but its barriers, and each SIMD group is one whole
+  cluster.
+- Such a kernel also has an emulated-SIMD-group variant, whose SIMD groups exchange through
+  threadgroup memory between workgroup barriers. The reaper lowers it once the state is made,
+  through the cache directory, and any other threadgroup that is not whole subgroups (one of 80
+  or of 1 thread, an indirect dispatch, a kernel without the partial-threadgroups variant) runs it
+  at its own size, the last SIMD group partly filled, as Metal runs it. A dispatch of such a size
+  before the reaper is done waits for the lowering, which the reaper takes next: a first-use
+  wait. In a threadgroup of one thread the module's exchanges pass no barrier.
 - The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
   threadgroup (0), the threadgroup size packed as `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's
   threads per grid; an indirect dispatch pushes a zero grid, and its kernel takes the grid from its
@@ -328,8 +335,8 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
   the emulated variant. The emulated module's scratch counts in the dispatch's threadgroup memory
   (`Limit::ThreadgroupMemory`).
 - `dispatch_threads` with a grid that is not a whole number of threadgroups on some axis is
-  refused (`Gap::PartialThreadgroups`) at a threadgroup that is not whole SIMD groups of a kernel
-  whose SIMD groups run one per subgroup of 32, and for a kernel that observes its threadgroup
+  refused (`Gap::PartialThreadgroups`) at a threadgroup that is not whole 32-thread SIMD groups of
+  a kernel that runs only whole subgroups, and for a kernel that observes its threadgroup
   partition and whose partial-threadgroups variant the translator refuses. It refuses the
   variant of a kernel whose SIMD groups it emulates: one with SIMD-group operations where the
   device's compute subgroups are neither 32 lanes nor 64 or 128 split into 32-lane clusters, and

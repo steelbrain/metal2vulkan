@@ -176,9 +176,9 @@ pub enum Gap {
     },
     /// `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of
     /// a kernel that observes its threadgroup partition and whose partial-threadgroups variant the
-    /// translator refused, or at a threadgroup that is not whole SIMD groups of a kernel whose
-    /// tier runs only whole ones: Metal runs the last threadgroup of such an axis with the threads
-    /// left. The translator refuses the variant of a kernel whose SIMD groups it emulates
+    /// translator refused, or at a threadgroup that is not whole 32-thread SIMD groups of a
+    /// kernel whose tier runs only whole groups of its subgroup: Metal runs the last threadgroup
+    /// of such an axis with the threads left. The translator refuses the variant of a kernel whose SIMD groups it emulates
     /// (SIMD-group operations where the device's compute subgroups are neither 32 lanes nor 64 or
     /// 128 split into 32-lane clusters, or a lockstep pair in divergent flow on a device without
     /// `VK_KHR_shader_maximal_reconvergence`), and of one whose barriers in a loop need a vote

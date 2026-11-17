@@ -610,13 +610,14 @@ mod on_device {
     /// translator's tier for it is Direct: a pinned subgroup of 32 per SIMD group, its local size
     /// flattened to whole SIMD groups, which runs the 64 and the 32. A device of 64-lane
     /// subgroups that cannot pin runs each SIMD group as half of one, and only whole subgroups:
-    /// the 64. Whatever the module runs only whole groups of, a threadgroup of another size runs
-    /// the emulated-SIMD-group module the reaper lowered. Every answer is Metal's: the products
-    /// over each SIMD group's threads, exact in any order for these inputs. A device that cannot
-    /// pin 32 may take a tier that is refused.
+    /// the 64, and the 32 padded to 64 on the partial-threadgroups variant. Whatever the module
+    /// runs only whole groups of, the 80 and the one run the emulated-SIMD-group module the
+    /// reaper lowered. Every answer is Metal's: the products over each SIMD group's threads,
+    /// exact in any order for these inputs. A device that cannot pin 32 may take a tier that is
+    /// refused.
     #[test]
     fn every_device_runs_simd_groups_at_metals_width() {
-        use crate::pipeline::Lowered;
+        use crate::pipeline::{Form, Lowered};
         use crate::{Error, Gap};
         use ash::vk;
 
@@ -708,11 +709,38 @@ mod on_device {
                     interface.multiples
                 );
             }
+            // 32 threads where the module runs whole groups of 64: padded to 64 on the
+            // partial-threadgroups variant.
+            let padded = match &state.inner.form {
+                Form::Sized {
+                    partial: Some(partial),
+                } => partial
+                    .made()
+                    .iter()
+                    .find(|&&(size, threads)| size == [32, 1, 1] && threads > 32)
+                    .map(|&(_, threads)| threads),
+                _ => None,
+            };
+            if interface
+                .multiples
+                .iter()
+                .any(|&multiple| 32 % multiple != 0)
+            {
+                assert!(
+                    padded.is_some(),
+                    "{name}: 32 threads of whole groups of {:?} ran padded",
+                    interface.multiples
+                );
+            }
             println!(
                 "{name}: SIMD-group products checked in threadgroups of 64, 32, 80 and 1; pinned \
-                 at {:?}, whole groups of {:?}, the others {}",
+                 at {:?}, whole groups of {:?}; 32 {}; 80 and 1 {}",
                 interface.required_subgroup_size,
                 interface.multiples,
+                match padded {
+                    Some(threads) => format!("padded to {threads}"),
+                    None => String::from("as it is"),
+                },
                 match emulated {
                     Some(Lowered::Made(..)) => "emulated",
                     _ => "on the same module",

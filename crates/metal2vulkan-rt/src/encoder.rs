@@ -6,7 +6,8 @@ use crate::counters::Metric;
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::hazard::Access;
 use crate::pipeline::{
-    tile, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
+    padded, tile, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant,
+    PUSH_BYTES,
 };
 use crate::record::{self, Reach};
 use crate::ring::CHUNK;
@@ -337,9 +338,12 @@ impl ComputeCommandEncoder {
     /// A count above the device's `maxComputeWorkGroupCount` is split into dispatches within it,
     /// each reading Metal's whole grid from its region.
     ///
-    /// A threadgroup that is not whole SIMD groups of a kernel whose tier runs only whole ones
-    /// runs the kernel's emulated-SIMD-group module, waiting for the reaper's lowering of it
-    /// where that is not done.
+    /// A threadgroup that is not whole groups of a kernel whose tier runs only whole groups of
+    /// its subgroup: where it is whole 32-thread SIMD groups and the kernel observes its
+    /// threadgroup partition, it runs padded to the next whole group on the kernel's
+    /// partial-threadgroups variant, its invocations past the threads masked; any other runs the
+    /// kernel's emulated-SIMD-group module, waiting for the reaper's lowering of it where that is
+    /// not done.
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`]; [`Limit::ThreadgroupShape`];
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
@@ -371,8 +375,8 @@ impl ComputeCommandEncoder {
     ///
     /// Err: as [`dispatch_threadgroups`](Self::dispatch_threadgroups);
     /// [`Gap::PartialThreadgroups`] for such a grid of a kernel whose partial-threadgroups
-    /// variant the translator refused, or at a threadgroup that is not whole SIMD groups of a
-    /// kernel whose tier needs them.
+    /// variant the translator refused, or at a threadgroup that is not whole 32-thread SIMD groups
+    /// of a kernel whose tier runs only whole groups of its subgroup.
     pub fn dispatch_threads(
         &mut self,
         threads_per_grid: [u32; 3],
@@ -524,23 +528,43 @@ impl ComputeCommandEncoder {
                 None => return Err(partial_threadgroups(threads)),
             },
         };
-        // A threadgroup that is not whole SIMD groups of a module that runs only whole ones runs
-        // the emulated module; the partial-threadgroups variant has none.
+        // A threadgroup that is not whole groups of a module that runs only whole ones: a direct
+        // dispatch of whole 32-thread SIMD groups runs padded on the partial-threadgroups
+        // variant, its invocations past the threads masked; any other runs the emulated module,
+        // which the partial-threadgroups variant has none of.
         let threads = local.iter().map(|&axis| u64::from(axis)).product::<u64>();
-        let (kernel, module) = match kernel
+        let whole = u32::try_from(threads).unwrap_or(u32::MAX);
+        let (kernel, module, invocations) = match kernel
             .interface
             .multiples
             .iter()
             .find(|&&multiple| !threads.is_multiple_of(u64::from(multiple.max(1))))
         {
-            None => (kernel, module),
-            Some(_) if module == Module::Partial => {
-                return Err(partial_threadgroups(
-                    direct.map_or([0; 3], |(threads, ..)| threads),
-                ))
+            None => (kernel, module, whole),
+            Some(&width) => {
+                let padding = match (&inner.form, direct) {
+                    (
+                        Form::Sized {
+                            partial: Some(partial),
+                        },
+                        Some(_),
+                    ) => padded(threads, &partial.interface, limits).map(|at| (&**partial, at)),
+                    _ => None,
+                };
+                match padding {
+                    Some((partial, invocations)) => (partial, Module::Partial, invocations),
+                    None if module == Module::Partial => {
+                        return Err(partial_threadgroups(
+                            direct.map_or([0; 3], |(threads, ..)| threads),
+                        ))
+                    }
+                    None => (inner.emulated_kernel(size, width)?, Module::Emulated, whole),
+                }
             }
-            Some(&width) => (inner.emulated_kernel(size, width)?, Module::Emulated),
         };
+        // A padded threadgroup's region is flagged, as a ragged grid's is: its invocations past
+        // its threads are masked.
+        let masked = invocations != whole;
         // No thread runs: nothing is recorded, so a zero grid stays the kernel's mark of an
         // indirect dispatch.
         if direct.is_some_and(|(_, groups, _)| groups.contains(&0)) {
@@ -551,6 +575,7 @@ impl ComputeCommandEncoder {
             _ => {
                 let variant = Variant {
                     size: local,
+                    threads: invocations,
                     threadgroup_lengths: kernel
                         .interface
                         .threadgroups
@@ -589,8 +614,8 @@ impl ComputeCommandEncoder {
             building.dispatch_hazards(serial, &kernel.interface, &accesses)?
         };
         self.wrote |= wrote;
-        let region = |base, threads, ragged| {
-            match ragged {
+        let region = |base, threads, flagged| {
+            match flagged {
                 true => nonuniform_region_bytes(base, threads, local),
                 false => region_bytes(base, threads, local),
             }
@@ -600,6 +625,7 @@ impl ComputeCommandEncoder {
             (Some((threads, groups, ragged)), _) => {
                 // A count past the device's limit on an axis is split: each piece starts at its
                 // first threadgroup in Metal's grid, which its region carries.
+                let flagged = ragged || masked;
                 let limit = limits.max_group_count;
                 for z in (0..groups[2]).step_by(limit[2] as usize) {
                     for y in (0..groups[1]).step_by(limit[1] as usize) {
@@ -608,7 +634,7 @@ impl ComputeCommandEncoder {
                             let count = std::array::from_fn(|axis| {
                                 limit[axis].min(groups[axis] - base[axis])
                             });
-                            self.fill_parameters(kernel, &region(base, threads, ragged)?);
+                            self.fill_parameters(kernel, &region(base, threads, flagged)?);
                             self.record(vk_pipeline, Launch::Direct(count))?;
                         }
                     }

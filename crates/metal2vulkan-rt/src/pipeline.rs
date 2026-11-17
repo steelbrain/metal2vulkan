@@ -10,10 +10,14 @@
 //! of threadgroups runs the partial-threadgroups variant at its size, where the translator made
 //! one. Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
 //!
-//! A kernel whose tier runs each SIMD group as one subgroup runs only threadgroups of whole SIMD
-//! groups. Once its state is made, the reaper lowers its emulated-SIMD-group variant, whose SIMD
-//! groups exchange through threadgroup memory: a threadgroup that is not whole SIMD groups runs
-//! that module at its own size, whose last SIMD group is partly filled, as Metal runs it.
+//! A kernel whose tier runs each SIMD group as one subgroup, or as a 32-lane cluster of one, runs
+//! only threadgroups of whole subgroups. A direct dispatch of whole 32-thread SIMD groups that
+//! are not whole subgroups runs padded on the partial-threadgroups variant: its workgroup is the
+//! next whole subgroup, and the invocations past the threads are masked as threads that do not
+//! exist ([`padded`]). Once the state is made, the reaper lowers the kernel's
+//! emulated-SIMD-group variant, whose SIMD groups exchange through threadgroup memory: any other
+//! threadgroup that is not whole subgroups runs that module at its own size, whose last SIMD
+//! group may be partly filled, as Metal runs it.
 //!
 //! Nothing the runtime records depends on when a compile finishes: an encoding call whose
 //! `VkPipeline` is not made yet makes it and waits for it, then records, so there is one recorded
@@ -23,7 +27,7 @@
 //! encoding thread.
 
 use crate::counters::{Gauge, Metric};
-use crate::device::{lock, Core};
+use crate::device::{lock, ComputeLimits, Core};
 use crate::error::{Error, Gap};
 use crate::hazard::Access;
 use crate::reaper::{Free, Job};
@@ -247,12 +251,38 @@ pub(crate) enum FieldValue {
     DispatchRegion,
 }
 
-/// A `VkPipeline`'s specialization: the threadgroup size and the threadgroup memory lengths in the
-/// order of [`Interface::threadgroups`].
+/// A `VkPipeline`'s specialization: Metal's threadgroup size, the invocations of a flattened
+/// workgroup, and the threadgroup memory lengths in the order of [`Interface::threadgroups`].
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Variant {
     pub(crate) size: [u32; 3],
+    /// The threads of `size`, or for a padded threadgroup ([`padded`]) more: the invocations
+    /// past the threads are masked.
+    pub(crate) threads: u32,
     pub(crate) threadgroup_lengths: Vec<u32>,
+}
+
+/// The invocations a direct dispatch of `threads` threads a threadgroup runs in on the
+/// partial-threadgroups variant `partial`, where its module runs only whole groups of
+/// `multiples` that the threads are not: the next whole multiple, where the threads are whole
+/// 32-thread SIMD groups and the device's workgroup limits hold it. The invocations past the
+/// threads are masked as threads that do not exist (`NONUNIFORM`): each runs nothing of the body
+/// but its barriers, and in the tiers that run each SIMD group as a 32-lane cluster of a wider
+/// subgroup, every SIMD group of the threads is one whole cluster. `None` elsewhere.
+pub(crate) fn padded(threads: u64, partial: &Interface, limits: &ComputeLimits) -> Option<u32> {
+    if !threads.is_multiple_of(32) {
+        return None;
+    }
+    let multiple = partial.multiples.iter().copied().max()?;
+    let invocations = threads.next_multiple_of(u64::from(multiple.max(1)));
+    let fits = partial
+        .multiples
+        .iter()
+        .all(|&each| invocations.is_multiple_of(u64::from(each.max(1))))
+        && invocations <= u64::from(limits.max_group_size[0])
+        && invocations <= u64::from(limits.max_invocations)
+        && invocations / u64::from(multiple.max(1)) <= u64::from(limits.max_subgroups);
+    fits.then(|| u32::try_from(invocations).ok()).flatten()
 }
 
 impl crate::Device {
@@ -400,6 +430,7 @@ impl crate::Device {
         if let Form::Tiled = inner.form {
             let variant = Variant {
                 size: [TILE_THREADS, 1, 1],
+                threads: TILE_THREADS,
                 threadgroup_lengths: vec![0; inner.whole.interface.threadgroups.len()],
             };
             let made = inner.whole.make(&inner.core, &variant)?;
@@ -853,7 +884,7 @@ impl Kernel {
             .iter()
             .map(|&(_, set)| match set {
                 Constant::Size(axis) => variant.size[axis],
-                Constant::Threads => variant.size.iter().product(),
+                Constant::Threads => variant.threads,
                 Constant::ThreadgroupLength(at) => variant.threadgroup_lengths[at],
             })
             .flat_map(u32::to_ne_bytes)
@@ -895,6 +926,15 @@ impl Kernel {
             core.reaper.wake();
         }
         Ok(pipeline)
+    }
+
+    /// For the device tests: the threadgroup size and invocations of each `VkPipeline` made.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn made(&self) -> Vec<([u32; 3], u32)> {
+        lock(&self.variants)
+            .iter()
+            .map(|(variant, _)| (variant.size, variant.threads))
+            .collect()
     }
 
     /// Gives the module and its `VkPipeline`s to the reaper.
