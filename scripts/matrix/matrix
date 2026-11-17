@@ -460,15 +460,20 @@ class Run:
             self.finish(legs, code, out, rec, suite)
 
     def finish(self, legs, code, out, rec, suite):
-        """Merge one job's legs into theirs: a leg it did not run fails."""
+        """Merge one job's legs into theirs: a leg it did not run, or whose suite never reported its
+        exit, fails. A job killed after it named a leg (its device lines) but before that leg's
+        `M2V-SUITE` line ran nothing of it: on 248d41074f the 3090 and the UHD 630 passed that way,
+        their rt jobs killed for RAM, on their harness suites alone."""
         parsed = results.parse_job(out or "")
         for leg in legs:
             leg.ended = time.time()
             if rec:
                 leg.jobs.append(rec.get("id"))
-            if leg.id not in parsed:
-                self.fail([leg], f"{suite}: job {rec and rec.get('id')} ran no leg {leg.id} (exit {code}): "
-                                 f"{(out or '').strip()[-300:]}")
+            if leg.id not in parsed or not parsed[leg.id]["suites"]:
+                if leg.id in parsed:
+                    leg.parsed["device"].update(parsed[leg.id]["device"])
+                self.fail([leg], f"{suite}: job {rec and rec.get('id')} reported no suite of leg {leg.id} "
+                                 f"(exit {code}): {(out or '').strip()[-300:]}")
                 continue
             leg.parsed["device"].update(parsed[leg.id]["device"])
             leg.parsed["suites"].update(parsed[leg.id]["suites"])
