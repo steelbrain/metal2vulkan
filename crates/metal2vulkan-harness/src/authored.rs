@@ -526,6 +526,7 @@ fn wide_bindings() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
