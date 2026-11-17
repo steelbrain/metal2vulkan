@@ -5,12 +5,13 @@
 //! cargo run --release -p metal2vulkan-runtime --example queue_share -- <mode> \
 //!     [--policy adaptive|per-queue] [--seconds S] [--dispatches N] [--unshared] \
 //!     [--threads T --in-flight F [--one-vk-queue]] [--long-ms L] [--period-ms P] \
-//!     [--isolation bounded|off] [--turns fair|commit-order]
+//!     [--isolation bounded|off] [--turns fair|commit-order] [--fixture PATH]
 //! ```
 //!
 //! Every command buffer is one of two kinds. A *draw*: a render pass over a 512x512 `RGBA8Unorm`
 //! texture, cleared and one triangle drawn (`colored_vertex` and `colored_fragment` of the
-//! repository's owned fixture `runtime_examples.metal`, assembled by `llvm-as` on `PATH`). A *long*
+//! repository's owned fixture `runtime_examples.metal`, assembled by `llvm-as` on `PATH` from its
+//! `.ll`, the repository's or `--fixture`'s, for a binary carried to another tree). A *long*
 //! one: `--dispatches` dispatches of `scale_and_offset` over one buffer, sized as the run starts
 //! so the command buffer's GPU time is `--long-ms` (30 ms by default). Latencies are a command
 //! buffer's `commit` to the start of its completed handler, on the host's clock.
@@ -117,6 +118,8 @@ struct Options {
     churn: usize,
     /// The device answers GPU times from the host (`DeviceOptions::gpu_times_from_host`).
     untimed: bool,
+    /// The fixture's LLVM text: the repository's where `None`.
+    fixture: Option<PathBuf>,
 }
 
 fn options() -> Options {
@@ -136,6 +139,7 @@ fn options() -> Options {
         period: Duration::from_millis(16),
         churn: 340,
         untimed: false,
+        fixture: None,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().unwrap_or_else(|| panic!("{arg} needs a value"));
@@ -169,6 +173,7 @@ fn options() -> Options {
             "--one-vk-queue" => options.one_vk_queue = true,
             "--churn" => options.churn = value().parse().unwrap(),
             "--untimed" => options.untimed = true,
+            "--fixture" => options.fixture = Some(PathBuf::from(value())),
             "--long-ms" => {
                 options.long = Duration::from_secs_f64(value().parse::<f64>().unwrap() / 1e3)
             }
@@ -209,7 +214,8 @@ impl Kit {
             options.isolation,
             device.queue_switch_check_report()
         );
-        let library = metal2vulkan::library::Library::from_air(&fixture_bitcode()).unwrap();
+        let bitcode = fixture_bitcode(options.fixture.as_deref());
+        let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
         let library = device.new_library_with_compile_library(library);
         let vertex = library.new_function_with_name("colored_vertex").unwrap();
         let fragment = library.new_function_with_name("colored_fragment").unwrap();
@@ -377,10 +383,15 @@ fn device(options: &Options) -> Device {
     Device::system_default_with(&device).unwrap()
 }
 
-/// The owned fixture's LLVM text, assembled to AIR bitcode by `llvm-as`.
-fn fixture_bitcode() -> Vec<u8> {
-    let ll = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll");
+/// The owned fixture's LLVM text, at `fixture` where given, assembled to AIR bitcode by `llvm-as`.
+fn fixture_bitcode(fixture: Option<&std::path::Path>) -> Vec<u8> {
+    let ll = fixture.map_or_else(
+        || {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../metal2vulkan-validation/fixtures/public/examples/runtime_examples.ll")
+        },
+        PathBuf::from,
+    );
     let output = Command::new("llvm-as")
         .arg("-o")
         .arg("-")

@@ -228,9 +228,12 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   `exact_answers()` keeps it. The runtime's choice: no pipeline differs. What stays is a batch
   already submitted: it runs to its end (known gaps, below). On lavapipe, both values
   (`queue_share_device::a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst`:
-  twelve 10 ms command buffers of one queue committed at once, a small one of another queue after
-  the first was scheduled): under `Fair` the small one goes before the burst's fourth, under
-  `CommitOrder` after its twelfth. The default on every driver.
+  twelve command buffers of one queue sized for 10 ms each and committed at once, a small one of
+  another queue after the first was scheduled): under `Fair` the small one goes before the
+  burst's fourth, under `CommitOrder` after its twelfth. Measured on lavapipe (a host at load 7,
+  where each of the twelve ran about 37 ms): under `Fair` the small one's GPU run started 37.5 ms
+  after its commit, between the burst's first and second; under `CommitOrder`, 454.8 ms after,
+  behind all twelve. The default on every driver.
 - `pointer_domain`, `handle_domain`, `containment` and `isolation` choose how resources resolve and
   how guests are contained, not an answer of Metal's arithmetic or sampling.
 
