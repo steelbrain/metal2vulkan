@@ -285,6 +285,12 @@ impl StreamReader {
         })
     }
 
+    /// A second reader of the same segments and blob directory, from the stream's start.
+    pub fn reopened(&self) -> Result<Self, StreamError> {
+        let paths: Vec<PathBuf> = self.segments.iter().map(|s| s.path.clone()).collect();
+        StreamReader::open(&paths, self.blob_dir.clone())
+    }
+
     /// Where the last segment's final record was cut short, if it was.
     pub fn truncated(&self) -> Option<&(PathBuf, u64)> {
         self.truncated.as_ref()

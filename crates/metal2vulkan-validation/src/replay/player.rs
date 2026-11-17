@@ -2,7 +2,8 @@
 //! runtime through a [`Backend`], relocating what it uploads, waiting for the command buffers
 //! that can complete (never for one an event wait holds), and reporting per group of command
 //! buffers waited for, per frame and in total what the stream fixed and what the runtime
-//! executed, with the checksums the stream asks for.
+//! executed, with the checksums the stream asks for and the Private buffer ranges it holds around
+//! a dispatch compared.
 
 use super::addresses::AddressMap;
 use super::stream::{Call, StreamError, StreamReader};
@@ -38,6 +39,13 @@ const FIXED: [&str; 8] = [
     WRITTEN_BYTES,
 ];
 
+/// The host's record of a Private buffer range's bytes around one dispatch
+/// (`docs/REPLAY-STREAM.md`, section 8).
+const PRIVATE_BYTES: &str = "m2v.privateBytes";
+
+/// The ids of the player's own objects start past this one, above every id a stream gives.
+const OWN: u64 = 1 << 63;
+
 /// What a backend made for a call that makes an object.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Made {
@@ -47,11 +55,11 @@ pub struct Made {
 
 /// One runtime behind the player. Objects are named by their stream ids; the player resolves blobs
 /// and relocates before a call reaches the backend, and handles `m2v.write`, `m2v.check`,
-/// `m2v.present`, `m2v.commitPart`, `gpuResourceID`, `release` of a device, and the program's
-/// waits itself. A copy from the guest's RAM reaches it with its data relocated (the player's
-/// `upload` says where the data lands), a record of the host's own plumbing as the plain Metal
-/// call it stands for (`plain`), and a copied buffer's descriptor without its `contents`, which
-/// reach it as a write once the buffer is made (`copied`).
+/// `m2v.present`, `m2v.commitPart`, `m2v.privateBytes`, `gpuResourceID`, `release` of a device,
+/// and the program's waits itself. A copy from the guest's RAM reaches it with its data relocated
+/// (the player's `upload` says where the data lands), a record of the host's own plumbing as the
+/// plain Metal call it stands for (`plain`), and a copied buffer's descriptor without its
+/// `contents`, which reach it as a write once the buffer is made (`copied`).
 pub trait Backend {
     /// Run `call`: make its result, or run its receiver's method, or drop the object `release`
     /// names.
@@ -122,6 +130,19 @@ pub struct IdDiffers {
     pub played: Option<u64>,
 }
 
+/// One `m2v.privateBytes` record compared after its dispatch: how many of the range's 4-byte words
+/// (the last one shorter where the length is no multiple of 4) the runtime left otherwise than the
+/// recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateBytes {
+    pub buffer: u64,
+    /// The dispatch's position in the stream.
+    pub dispatch: u64,
+    pub location: u64,
+    pub length: u64,
+    pub differing: u64,
+}
+
 /// What one span of a play counted.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Counts {
@@ -150,6 +171,7 @@ pub struct Report {
     pub frames: Vec<Counts>,
     pub checks: Vec<Check>,
     pub ids: Vec<IdDiffers>,
+    pub private: Vec<PrivateBytes>,
     /// The whole play's counts, the player's readbacks left out. Its calls are the calls played:
     /// where a play stopped, the stopping call is the next.
     pub total: Counts,
@@ -192,6 +214,17 @@ impl Report {
                 .map_or("none".to_owned(), |played| format!("{played:#x}"));
             lines.push(format!("id #{} {:#x} {played}", id.object, id.recorded));
         }
+        for private in &self.private {
+            let verdict = match private.differing {
+                0 => "match".to_owned(),
+                differing => format!("differs {differing}/{}", private.length.div_ceil(4)),
+            };
+            let (at, length) = (private.location, private.length);
+            let (buffer, dispatch) = (private.buffer, private.dispatch);
+            lines.push(format!(
+                "private #{buffer} {dispatch} {at}+{length} {verdict}"
+            ));
+        }
         lines.push(format!("total{}", counted(&self.total)));
         lines
     }
@@ -217,6 +250,69 @@ struct Pending {
     committed: bool,
     /// Released by the stream while it could not yet be waited for.
     released: bool,
+    /// The Private buffer ranges around its dispatches, compared once it completed.
+    snapshots: Vec<Snapshot>,
+}
+
+/// A Private buffer range the stream holds the bytes of before and after one dispatch: an
+/// `m2v.privateBytes` record's receiver, range and blobs.
+#[derive(Clone, Copy)]
+struct Around {
+    buffer: u64,
+    location: u64,
+    length: u64,
+    before: Hash,
+    after: Hash,
+}
+
+impl Around {
+    /// The dispatch's position and the range of `m2v.privateBytes` record `call`:
+    /// `[dispatch, {location, length}, before, after]`.
+    fn of(call: &Call) -> Result<(u64, Around), PlayError> {
+        let bad = || {
+            invalid(format!(
+                "{PRIVATE_BYTES} takes [dispatch, {{location, length}}, before, after], not {}",
+                call
+            ))
+        };
+        let [dispatch, Value::Map(range), Value::Blob(before), Value::Blob(after)] = &call.args[..]
+        else {
+            return Err(bad());
+        };
+        let field = |key: &str| range.iter().find(|(k, _)| &**k == key)?.1.as_uint();
+        let (Some(dispatch), Some(location), Some(length)) =
+            (dispatch.as_uint(), field("location"), field("length"))
+        else {
+            return Err(bad());
+        };
+        let around = Around {
+            buffer: call.receiver,
+            location,
+            length,
+            before: *before,
+            after: *after,
+        };
+        Ok((dispatch, around))
+    }
+}
+
+/// An open compute encoder, kept while a record names a later dispatch: the call that made it and
+/// each call that set its state (`set…` and `use…`), which a fresh encoder takes again.
+struct Encoder {
+    made: Call,
+    state: Vec<Call>,
+}
+
+/// The ranges around one dispatch, until its command buffer completes: `staging`, a Shared buffer
+/// of the player's own, holds their bytes before, then from `half` their bytes after; `fence`, of
+/// the player's own too, orders the copies and the dispatch.
+struct Snapshot {
+    dispatch: u64,
+    staging: u64,
+    fence: u64,
+    half: u64,
+    /// Each range and where its bytes lie in each half.
+    ranges: Vec<(Around, u64)>,
 }
 
 /// Plays one stream on one backend.
@@ -234,6 +330,16 @@ pub struct Player<'b, B: Backend> {
     events: HashMap<u64, u64>,
     /// The live objects whose `gpuResourceID` the player compared.
     compared: HashSet<u64>,
+    /// The `m2v.privateBytes` records, read ahead, by the position of the dispatch each names.
+    ahead: HashMap<u64, Vec<Around>>,
+    /// The next call's position: the calls stepped so far.
+    position: u64,
+    /// The compute encoders open while a record names a later dispatch.
+    encoders: HashMap<u64, Encoder>,
+    /// The snapshots whose command buffers completed, not yet compared.
+    done: Vec<Snapshot>,
+    /// The objects of the player's own made so far.
+    own_made: u64,
     baseline: Counters,
     /// The counts the stream fixes, since the last group.
     fixed: Counters,
@@ -254,13 +360,13 @@ fn add(into: &mut Counters, from: &Counters) {
     }
 }
 
-/// A call the player makes of its own: `selector` on `receiver`, making `result`.
-fn own_call(selector: &str, receiver: u64, result: u64) -> Call {
+/// A call the player makes of its own: `selector` on `receiver` with `args`, making `result`.
+fn own_call(selector: &str, receiver: u64, result: u64, args: &[Value]) -> Call {
     Call {
         selector: Arc::from(selector),
         receiver,
         result,
-        args: Vec::new(),
+        args: args.to_vec(),
         answers: Vec::new(),
     }
 }
@@ -382,6 +488,19 @@ fn copied(descriptor: Value) -> (Value, Option<Vec<u8>>) {
     (Value::Map(fields), contents)
 }
 
+/// Whether a blob of `around` holds as many bytes as its range.
+fn sized(around: &Around, blob: &[u8]) -> Result<(), PlayError> {
+    match blob.len() as u64 == around.length {
+        true => Ok(()),
+        false => Err(invalid(format!(
+            "{PRIVATE_BYTES} of #{}: a blob of {} bytes for a range of {}",
+            around.buffer,
+            blob.len(),
+            around.length
+        ))),
+    }
+}
+
 /// The program's waits for a command buffer, as a stream records them: names of records, not
 /// waits (the player's own waits are its backend's, under `gpu::wait`). Spelled in pieces so the
 /// check that every device wait is bounded (`gpu::tests`) finds none here.
@@ -407,6 +526,11 @@ impl<'b, B: Backend> Player<'b, B> {
             committed: Vec::new(),
             events: HashMap::new(),
             compared: HashSet::new(),
+            ahead: HashMap::new(),
+            position: 0,
+            encoders: HashMap::new(),
+            done: Vec::new(),
+            own_made: 0,
             baseline,
             fixed,
             frame: Counts::default(),
@@ -418,8 +542,10 @@ impl<'b, B: Backend> Player<'b, B> {
     pub fn play(mut self, stream: &mut StreamReader) -> (Report, Result<(), PlayError>) {
         let start = self.baseline.clone();
         let mut readbacks = Counters::new();
-        let result = self.all(stream, &mut readbacks);
+        let result = self.read_ahead(stream);
+        let result = result.and_then(|()| self.all(stream, &mut readbacks));
         let ended = result.and_then(|()| self.finish());
+        let ended = ended.and_then(|()| self.compare(stream, &mut readbacks));
         let now = self.backend.counters();
         let mut executed = grown(&now, &start);
         for (key, value) in &mut executed {
@@ -440,10 +566,35 @@ impl<'b, B: Backend> Player<'b, B> {
     ) -> Result<(), PlayError> {
         while let Some(call) = stream.next_call()? {
             let issued = self.issued(&call);
-            self.step(stream, call, readbacks)?;
+            match self.ahead.remove(&self.position) {
+                Some(ranges) => self.split(stream, call, ranges, readbacks)?,
+                None => self.step(stream, call, readbacks)?,
+            }
+            self.position += 1;
             for key in [Some(CALLS), issued].into_iter().flatten() {
                 *self.fixed.entry(key).or_default() += 1;
             }
+            self.compare(stream, readbacks)?;
+        }
+        Ok(())
+    }
+
+    /// Index the `m2v.privateBytes` records by the dispatch each names, which comes before it. A
+    /// stream error ends the reading: the play meets it where it lies.
+    fn read_ahead(&mut self, stream: &StreamReader) -> Result<(), PlayError> {
+        let mut ahead = stream.reopened()?;
+        let mut position = 0;
+        while let Ok(Some(call)) = ahead.next_call() {
+            if &*call.selector == PRIVATE_BYTES {
+                let (dispatch, around) = Around::of(&call)?;
+                if dispatch >= position {
+                    return Err(invalid(format!(
+                        "{PRIVATE_BYTES} at call {position} names call {dispatch}, no earlier one"
+                    )));
+                }
+                self.ahead.entry(dispatch).or_default().push(around);
+            }
+            position += 1;
         }
         Ok(())
     }
@@ -507,8 +658,9 @@ impl<'b, B: Backend> Player<'b, B> {
             "m2v.setCompletionJoinsNext"
             | "m2v.holdsNoPredication"
             | "m2v.rebindNoCopy"
-            | "m2v.fold"
-            | "m2v.privateBytes" => Ok(()),
+            | "m2v.fold" => Ok(()),
+            // Read ahead: it plays around the dispatch it names (`split`).
+            PRIVATE_BYTES => Ok(()),
             WAIT_COMPLETED | WAIT_SCHEDULED => {
                 self.drain()?;
                 match self.committed.contains(&call.receiver) {
@@ -575,7 +727,8 @@ impl<'b, B: Backend> Player<'b, B> {
         let pending = pending.ok_or_else(|| invalid("a commit of no command buffer"))?;
         pending.committed = true;
         self.committed.push(command_buffer);
-        self.backend.call(&own_call("commit", command_buffer, 0))?;
+        self.backend
+            .call(&own_call("commit", command_buffer, 0, &[]))?;
         *self.fixed.entry(COMMITS).or_default() += 1;
         self.drain()
     }
@@ -588,7 +741,7 @@ impl<'b, B: Backend> Player<'b, B> {
 
     /// Make `part`, a command buffer of `queue`.
     fn part(&mut self, queue: u64, part: u64) -> Result<(), PlayError> {
-        let call = own_call("commandBuffer", queue, part);
+        let call = own_call("commandBuffer", queue, part, &[]);
         self.backend.call(&call)?;
         self.made(&call, part);
         Ok(())
@@ -654,6 +807,7 @@ impl<'b, B: Backend> Player<'b, B> {
         let resolved = Call { args, ..call };
         let resolved = self.uploaded(resolved)?;
         let made = self.backend.call(&resolved)?;
+        self.track(&resolved);
         let object = resolved.result;
         if object == 0 {
             return Ok(());
@@ -824,16 +978,212 @@ impl<'b, B: Backend> Player<'b, B> {
         recorded: Option<Hash>,
         readbacks: &mut Counters,
     ) -> Result<(), PlayError> {
-        let before = self.backend.counters();
-        let bytes = self.backend.read(object)?;
-        let after = self.backend.counters();
-        add(readbacks, &grown(&after, &before));
-        self.baseline = after;
+        let bytes = self.read_back(object, readbacks)?;
         self.report.checks.push(Check {
             object,
             sha256: Sha256::digest(&bytes).into(),
             recorded,
         });
+        Ok(())
+    }
+
+    /// The bytes of `object`, the readback's own work left out of the counts.
+    fn read_back(&mut self, object: u64, readbacks: &mut Counters) -> Result<Vec<u8>, PlayError> {
+        let before = self.backend.counters();
+        let bytes = self.backend.read(object)?;
+        let own = grown(&self.backend.counters(), &before);
+        add(readbacks, &own);
+        add(&mut self.baseline, &own);
+        Ok(bytes)
+    }
+
+    /// Keep what a split needs of the compute encoders open while a record names a later dispatch:
+    /// the call that made each and each call that set its state.
+    fn track(&mut self, call: &Call) {
+        let selector = &*call.selector;
+        if selector.starts_with("computeCommandEncoder") {
+            if !self.ahead.is_empty() {
+                let made = call.clone();
+                let open = Encoder {
+                    made,
+                    state: Vec::new(),
+                };
+                self.encoders.insert(call.result, open);
+            }
+            return;
+        }
+        let Some(open) = self.encoders.get_mut(&call.receiver) else {
+            return;
+        };
+        if selector == "endEncoding" {
+            self.encoders.remove(&call.receiver);
+        } else if selector.starts_with("set") || selector.starts_with("use") {
+            open.state.push(call.clone());
+        }
+    }
+
+    /// A fresh id for an object of the player's own.
+    fn own_object(&mut self) -> u64 {
+        self.own_made += 1;
+        OWN + self.own_made
+    }
+
+    /// Run `selector` on `receiver` with `args`, making `result`: a call of the player's own.
+    fn own(
+        &mut self,
+        receiver: u64,
+        selector: &str,
+        result: u64,
+        args: &[Value],
+    ) -> Result<(), PlayError> {
+        let call = own_call(selector, receiver, result, args);
+        self.backend.call(&call).map(drop)
+    }
+
+    /// Play dispatch `call` with the Private buffer `ranges` around it: put each range's bytes
+    /// before in a Shared buffer of the player's own; then end the dispatch's compute encoder,
+    /// copy them into the ranges in a blit encoder and make the compute encoder afresh with the
+    /// state the program gave it; dispatch; then the same with a blit that copies the ranges out.
+    /// A fence of the player's own orders each encoder after the one before it. The ranges are
+    /// compared once the command buffer completed.
+    fn split(
+        &mut self,
+        stream: &mut StreamReader,
+        call: Call,
+        ranges: Vec<Around>,
+        readbacks: &mut Counters,
+    ) -> Result<(), PlayError> {
+        let dispatch = self.position;
+        let open = match self.issued(&call) {
+            Some(DISPATCHES) => self.encoders.get(&call.receiver),
+            _ => None,
+        };
+        let Some(made) = open.map(|open| open.made.clone()) else {
+            return Err(invalid(format!(
+                "{PRIVATE_BYTES} names call {dispatch}, {}, no compute encoder's dispatch",
+                call.selector
+            )));
+        };
+        let command_buffer = made.receiver;
+        let device = self.owner.get(&command_buffer).map(|&(device, _)| device);
+        let device = device.ok_or_else(|| invalid(format!("#{command_buffer} has no device")))?;
+        let mut placed = Vec::with_capacity(ranges.len());
+        let mut half = 0;
+        for around in ranges {
+            placed.push((around, half));
+            half = (half + around.length).next_multiple_of(16);
+        }
+        let (staging, fence) = (self.own_object(), self.own_object());
+        let length = [Value::Uint((2 * half).max(16)), Value::Uint(0)];
+        self.own(device, "newBufferWithLength:options:", staging, &length)?;
+        self.own(device, "newFence", fence, &[])?;
+        for &(around, at) in &placed {
+            let mut before = stream.blob(&around.before)?;
+            sized(&around, &before)?;
+            if self.addresses.holds(around.buffer) {
+                self.relocate(&mut before, around.location);
+            }
+            *self.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
+            self.backend.write(staging, at, &before)?;
+        }
+        let copy_in = |&(around, at): &(Around, u64)| {
+            let (buffer, location) = (around.buffer, around.location);
+            [staging, at, buffer, location, around.length]
+        };
+        self.blit_between(&made, fence, placed.iter().map(copy_in))?;
+        self.step(stream, call, readbacks)?;
+        let copy_out = |&(around, at): &(Around, u64)| {
+            let (buffer, location) = (around.buffer, around.location);
+            [buffer, location, staging, half + at, around.length]
+        };
+        self.blit_between(&made, fence, placed.iter().map(copy_out))?;
+        let pending = self.pending.get_mut(&command_buffer);
+        let pending = pending.ok_or_else(|| invalid("a dispatch of no open command buffer"))?;
+        pending.snapshots.push(Snapshot {
+            dispatch,
+            staging,
+            fence,
+            half,
+            ranges: placed,
+        });
+        Ok(())
+    }
+
+    /// End compute encoder `made`'s result, copy `copies` (each `[from, offset, to, offset, size]`)
+    /// in a blit encoder of its command buffer, and make the encoder afresh with the state the
+    /// program gave it; each encoder waits for `fence`, which the one before it updates.
+    fn blit_between(
+        &mut self,
+        made: &Call,
+        fence: u64,
+        copies: impl Iterator<Item = [u64; 5]>,
+    ) -> Result<(), PlayError> {
+        let (encoder, command_buffer) = (made.result, made.receiver);
+        let fenced = [Value::Object(fence)];
+        self.own(encoder, "updateFence:", 0, &fenced)?;
+        self.own(encoder, "endEncoding", 0, &[])?;
+        let blit = self.own_object();
+        self.own(command_buffer, "blitCommandEncoder", blit, &[])?;
+        self.own(blit, "waitForFence:", 0, &fenced)?;
+        for [from, offset, to, to_offset, size] in copies {
+            let args = [
+                Value::Object(from),
+                Value::Uint(offset),
+                Value::Object(to),
+                Value::Uint(to_offset),
+                Value::Uint(size),
+            ];
+            let copy = "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:";
+            self.own(blit, copy, 0, &args)?;
+        }
+        self.own(blit, "updateFence:", 0, &fenced)?;
+        self.own(blit, "endEncoding", 0, &[])?;
+        self.backend_release(blit)?;
+        self.backend.call(made)?;
+        self.own(encoder, "waitForFence:", 0, &fenced)?;
+        if let Some(open) = self.encoders.get(&encoder) {
+            for state in &open.state {
+                self.backend.call(state)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compare each range of the snapshots whose command buffers completed with the recording's
+    /// bytes after its dispatch, word by word, relocated as its bytes before were.
+    fn compare(
+        &mut self,
+        stream: &mut StreamReader,
+        readbacks: &mut Counters,
+    ) -> Result<(), PlayError> {
+        let done: Vec<Snapshot> = self.done.drain(..).collect();
+        for snapshot in done {
+            let bytes = self.read_back(snapshot.staging, readbacks)?;
+            self.backend_release(snapshot.staging)?;
+            self.backend_release(snapshot.fence)?;
+            for (around, at) in snapshot.ranges {
+                let mut after = stream.blob(&around.after)?;
+                sized(&around, &after)?;
+                if self.addresses.holds(around.buffer) {
+                    self.addresses.relocate(&mut after, around.location);
+                }
+                let start = (snapshot.half + at) as usize;
+                let played = bytes.get(start..start + after.len());
+                let played = played.ok_or_else(|| PlayError::Runtime {
+                    selector: PRIVATE_BYTES.into(),
+                    error: format!("#{} read back {} bytes", snapshot.staging, bytes.len()),
+                })?;
+                let words = played.chunks(4).zip(after.chunks(4));
+                let differing = words.filter(|(played, after)| played != after).count();
+                self.report.private.push(PrivateBytes {
+                    buffer: around.buffer,
+                    dispatch: snapshot.dispatch,
+                    location: around.location,
+                    length: around.length,
+                    differing: differing as u64,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -858,6 +1208,7 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     fn drop_object(&mut self, object: u64) -> Result<(), PlayError> {
+        self.encoders.remove(&object);
         self.addresses.remove(object);
         self.owner.remove(&object);
         self.compared.remove(&object);
@@ -872,7 +1223,9 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     fn backend_release(&mut self, object: u64) -> Result<(), PlayError> {
-        self.backend.call(&own_call("release", object, 0)).map(drop)
+        self.backend
+            .call(&own_call("release", object, 0, &[]))
+            .map(drop)
     }
 
     /// The committed command buffers that can complete, in commit order: each one whose queue's
@@ -921,6 +1274,7 @@ impl<'b, B: Backend> Player<'b, B> {
         for id in &ready {
             self.backend.wait(*id)?;
             let pending = self.pending.remove(id).expect("a pending command buffer");
+            self.done.extend(pending.snapshots);
             for (event, value) in pending.signals {
                 let known = self.events.entry(event).or_default();
                 *known = (*known).max(value);

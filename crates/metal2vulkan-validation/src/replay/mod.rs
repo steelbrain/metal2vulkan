@@ -9,7 +9,9 @@ mod value;
 
 pub use old_runtime::OldRuntime;
 pub use player::WAIT_COMPLETED;
-pub use player::{Backend, Check, Counters, Counts, IdDiffers, Made, PlayError, Player, Report};
+pub use player::{
+    Backend, Check, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Report,
+};
 pub use stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 pub use value::{Hash, Name, Value};
 

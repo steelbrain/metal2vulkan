@@ -234,8 +234,9 @@ and the (name id, value) answer pairs.
   before and after one dispatch of a compute pipeline made with linked functions: `dispatch` is
   the dispatch's position in the stream (how many call records come before it, from 0), and
   `before` and `after` are blobs that lie in the blob directory alone. It is recorded at the
-  command buffer's completion, so later in the stream than the dispatch. The player plays none of
-  them.
+  command buffer's completion, so later in the stream than the dispatch. The player reads these
+  records ahead and plays the dispatch they name between the bytes before and a comparison with
+  the bytes after (section 10).
 - `m2v.present` (arguments: the texture over the guest surface shown) is recorded where the
   device's display shows a guest present, with or without a window. It ends a frame: the player
   waits for what can complete and closes the frame's counters; it reads nothing.
@@ -343,6 +344,16 @@ and the (name id, value) answer pairs.
   for every committed command buffer that can complete: one whose event waits are met by values the
   CPU set or by signals of command buffers that can complete. It never waits on a command buffer
   held behind an event wait. Each wait is bounded under the validation crate's hang protocol.
+- It reads the `m2v.privateBytes` records (section 8) ahead, before it plays the stream, and plays
+  each dispatch they name with its ranges' bytes before put in and its bytes after compared: it
+  puts the bytes before (relocated as a write's are) in a Shared buffer of its own; ends the
+  dispatch's compute encoder; copies them into the ranges in a blit encoder; makes the compute
+  encoder again by the call that made it, with every `set…` and `use…` call the program made on
+  it; dispatches; then ends it, copies the ranges out in a blit encoder and makes it again the
+  same way. A fence of its own orders each of these encoders after the one before it. Once the
+  command buffer completed, it reads the bytes after back and counts the 4-byte words of each
+  range that differ from the recording's, relocated the same way. A difference is reported, and
+  the play goes on. Its own objects take ids from 2^63 + 1.
 - It reports, for each group of command buffers it waited for (normally the one just committed),
   for each frame and in total, two sets of counts:
   - **Fixed by the stream** (`stream`), the same on every play of the stream on any runtime: the
@@ -352,7 +363,8 @@ and the (name id, value) answer pairs.
     selectors begin `draw` and `dispatch`), the words it relocated (`relocated_words`), the
     8-byte values at offsets 4 past a multiple of 8 that lie in a live range, left as they are
     (`misaligned_address_words`), and the bytes it wrote or copied in, `m2v.write`, the copied
-    buffers' `contents` and the copies from the guest's RAM (`written_bytes`). A group's calls are those played before it completed:
+    buffers' `contents`, the copies from the guest's RAM and the `m2v.privateBytes` bytes before
+    (`written_bytes`). A group's calls are those played before it completed:
     the call that waited for it counts in the next.
   - **As executed** (`executed`): the counters the runtime exposes. The old runtime's are the
     Vulkan commands it recorded (submissions, render passes, barriers, dispatches, draws, copies)
@@ -362,7 +374,8 @@ and the (name id, value) answer pairs.
     made records through the pipeline's general form and keeps nothing for a later encoder to
     draw again. So a play with cold shader caches records more commands than a warm one, and warm
     plays can move a few draws and barriers from one group or frame to another. Only the stream's
-    counts are compared between plays.
+    counts are compared between plays. A dispatch played around `m2v.privateBytes` records adds
+    the player's encoders and copies to them.
 
   Its own readbacks are not counted.
 - A selector, argument or descriptor key the runtime's backend does not implement is a typed
@@ -376,7 +389,8 @@ and the (name id, value) answer pairs.
 `report.txt` holds one line per item: `device NAME`, `completed IDS COUNTS`, `frame N COUNTS`,
 `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
-runtime's getter raises), `total COUNTS` (its `calls` the calls played: where
+runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
+`m2v.privateBytes` range compared, `total COUNTS` (its `calls` the calls played: where
 the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
 KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
