@@ -263,3 +263,20 @@ kernel void signed_zero_products(device float4 *destination [[buffer(0)]],
     }
     destination[index] = a + z;
 }
+
+// A SIMD-group barrier inside a loop, at one SIMD group per threadgroup: every thread of a
+// threadgroup reads the same count of rounds from `steps`, which the translation cannot prove
+// uniform, and steps an LCG that many rounds with a `simdgroup_barrier` in each; it writes its
+// state and its index in its SIMD group. Threadgroups of 32 threads.
+kernel void vote_loop(device const uint *steps [[buffer(0)]],
+                      device uint2 *destination [[buffer(1)]],
+                      uint index [[thread_position_in_grid]],
+                      uint lane [[thread_index_in_simdgroup]]) {
+    uint rounds = steps[index];
+    uint state = index;
+    for (uint r = 0; r < rounds; ++r) {
+        state = state * 1664525u + 1013904223u;
+        simdgroup_barrier(mem_flags::mem_none);
+    }
+    destination[index] = uint2(state, lane);
+}

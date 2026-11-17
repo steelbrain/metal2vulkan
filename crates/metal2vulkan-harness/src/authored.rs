@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 18] = [
+pub const WORKLOADS: [Workload; 19] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -91,6 +91,10 @@ pub const WORKLOADS: [Workload; 18] = [
     Workload {
         name: "waves",
         plan: waves,
+    },
+    Workload {
+        name: "vote_loop",
+        plan: vote_loop,
     },
 ];
 
@@ -598,6 +602,53 @@ fn waves() -> Plan {
         expect: vec![Expect {
             buffer: 0,
             values: Values::Words(output),
+        }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
+        outputs: Vec::new(),
+        per_command_buffer: None,
+        per_encoder: None,
+        commit_to_complete: false,
+    }
+}
+
+/// A SIMD-group barrier inside a loop at one SIMD group per threadgroup: 2^20 threads in
+/// threadgroups of 32 (`vote_loop`), every thread of a threadgroup stepping an LCG its
+/// threadgroup's count of rounds (below 256), with a `simdgroup_barrier` in each round, and
+/// writing its state and its lane. The count is read per thread, so the translation cannot prove
+/// it uniform: on a GPU whose subgroups are 64 wide, a threadgroup is one wave running the
+/// kernel's emulated SIMD group, which votes on the loop's exit once a round.
+fn vote_loop() -> Plan {
+    const THREADS: u32 = 1 << 20;
+    const GROUP: u32 = 32;
+    let counts = words(15, (THREADS / GROUP) as usize);
+    let steps: Vec<u32> = (0..THREADS)
+        .map(|index| counts[(index / GROUP) as usize] & 255)
+        .collect();
+    let ends: Vec<u32> = (0..THREADS)
+        .flat_map(|index| {
+            let state = (0..steps[index as usize]).fold(index, |state, _| {
+                state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223)
+            });
+            [state, index % GROUP]
+        })
+        .collect();
+    Plan {
+        name: "vote_loop".to_owned(),
+        library: Source::Authored,
+        buffers: vec![private(word_bytes(&steps)), unset(8 * u64::from(THREADS))],
+        dispatches: vec![Dispatch {
+            function: "vote_loop".to_owned(),
+            constants: Vec::new(),
+            bindings: vec![buffer(0, 0), buffer(1, 1)],
+            grid: Grid::Threadgroups {
+                groups: [u64::from(THREADS / GROUP), 1, 1],
+                threads: [u64::from(GROUP), 1, 1],
+            },
+        }],
+        expect: vec![Expect {
+            buffer: 1,
+            values: Values::Words(ends),
         }],
         textures: Vec::new(),
         expect_textures: Vec::new(),
