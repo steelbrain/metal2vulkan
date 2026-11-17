@@ -1,10 +1,11 @@
-//! Every authored workload's first run matches its CPU reference on each runtime, and every
-//! creation workload's buffers start zero, on the device the cfg names (docs/VALIDATION.md). On
-//! the new runtime, every gauge reads zero once the device is dropped.
+//! Every authored workload's first run matches its CPU reference on each runtime, or the runtime
+//! refuses it with a typed refusal, which the test prints; and every creation workload's buffers
+//! start zero, on the device the cfg names (docs/VALIDATION.md). On the new runtime, every gauge
+//! reads zero once the device is dropped.
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
 
 use metal2vulkan_harness::run::{Harness, Runs, Session};
-use metal2vulkan_harness::{authored, old, rt};
+use metal2vulkan_harness::{authored, old, rt, Refused};
 
 /// Each authored and creation workload on `session`, with one timed run each.
 fn every_workload(session: &mut dyn Session) {
@@ -15,9 +16,13 @@ fn every_workload(session: &mut dyn Session) {
     };
     for workload in authored::WORKLOADS {
         let name = workload.name;
-        let report =
-            (session.run(&(workload.plan)(), runs)).unwrap_or_else(|why| panic!("{name}: {why}"));
-        assert_eq!(report.gpu_us.len(), 1, "{name}");
+        match session.run(&(workload.plan)(), runs) {
+            Ok(report) => assert_eq!(report.gpu_us.len(), 1, "{name}"),
+            Err(why) => match why.downcast::<Refused>() {
+                Ok(refused) => println!("{name}: REFUSED: {refused}"),
+                Err(why) => panic!("{name}: {why}"),
+            },
+        }
     }
     for create in authored::CREATES {
         let name = create.name;

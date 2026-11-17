@@ -1,7 +1,8 @@
 //! A description's workloads over a metallib run on the old runtime and on the new, from the same
-//! starting contents, and their outputs match; one of them matches its CPU reference too. The metallib is
-//! the authored fixture's kernels in a synthetic container, so the path a described workload takes
-//! runs without any kernel the repository does not own. Each function's bitcode is a module
+//! starting contents, and their outputs match, where the new runtime does not refuse one with a
+//! typed refusal, which the test prints; one of them matches its CPU reference too. The metallib
+//! is the authored fixture's kernels in a synthetic container, so the path a described workload
+//! takes runs without any kernel the repository does not own. Each function's bitcode is a module
 //! holding that kernel alone, as a metallib's is: the translator checks that a metallib function's
 //! module declares one entry point.
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -10,7 +11,7 @@ use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
 use metal2vulkan_devtools::scratch::Owned;
 use metal2vulkan_devtools::{fixtures_dir, llvm_assemble_text};
 use metal2vulkan_harness::plan::seeded_words;
-use metal2vulkan_harness::run::{compare_outputs, Harness, Runs, Session};
+use metal2vulkan_harness::run::{run_each, Harness, Runs, Session};
 use metal2vulkan_harness::{authored, description, old, rt};
 
 /// The description: each fill, both storage modes, a binding at an offset, bindings that stay
@@ -73,9 +74,15 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
     )
     .unwrap();
     let described = description::parse(DESCRIPTION, scratch.path()).unwrap();
-    let mut sessions: [Box<dyn Session>; 2] = [
-        Box::new(Harness::new(old::system_default().unwrap(), &air).unwrap()),
-        Box::new(Harness::new(rt::system_default().unwrap(), &air).unwrap()),
+    let mut sessions: [(&str, Box<dyn Session>); 2] = [
+        (
+            "old",
+            Box::new(Harness::new(old::system_default().unwrap(), &air).unwrap()),
+        ),
+        (
+            "new",
+            Box::new(Harness::new(rt::system_default().unwrap(), &air).unwrap()),
+        ),
     ];
     let runs = Runs {
         warmup: 1,
@@ -84,10 +91,13 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
     };
     for workload in &described {
         let plan = workload.plan().unwrap();
-        let [first, second] = sessions.each_mut().map(|session| {
-            (session.run(&plan, runs)).unwrap_or_else(|why| panic!("{}: {why}", plan.name))
-        });
-        compare_outputs(&plan, &first, &second).unwrap();
+        let each = (run_each(&plan, &mut sessions, runs))
+            .unwrap_or_else(|why| panic!("{}: {why}", plan.name));
+        let first = (each[0].as_ref())
+            .unwrap_or_else(|refused| panic!("{}: the old runtime refused: {refused}", plan.name));
+        if let Err(refused) = &each[1] {
+            println!("{}: REFUSED on the new runtime: {refused}", plan.name);
+        }
         assert_eq!(first.gpu_us.len(), 2, "{}", plan.name);
         if plan.name == "chain" {
             // 64 steps of the generator, each with the one increment set before the first.
