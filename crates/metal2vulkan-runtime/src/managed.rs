@@ -76,7 +76,14 @@ use std::ops::Range;
 use std::sync::Mutex;
 
 /// The most bytes of a range `did_modify_range` names that the submission that takes it writes
-/// inline, from the host copy as it is recorded (`Buffer::upload_inline`, the module docs).
+/// inline, from the host copy as it is recorded (`Buffer::upload_inline`, the module docs). The
+/// largest size measured where the inline form took less GPU time than the copy on both devices
+/// (`tests::managed_inline::managed_inline_bench`, one-dispatch command buffers, GPU time p50 of
+/// 200, over the runtime's own host copy and an import of the caller's pages, two rounds): on an
+/// RX 7900 XTX (RADV) 64 B, 4 KiB, 16 KiB and 64 KiB took 10.2, 11.0, 11.0 and 11.2 us inline
+/// against 11.7, 12.2, 13.8 and 20.8 us copied (5.0 us with no range named); on an RTX 2080
+/// 31.1, 31.7, 39.4 and 70.5 us against 36.4, 38.5, 44.7 and 69.5 us (12.4 us), the inline form's
+/// bytes there costing about 0.65 us a KiB. The commit call's time moved by less than its noise.
 pub(super) const INLINE_BYTES: u64 = 16 << 10;
 
 /// The bound of the ranges written inline on a device: [`INLINE_BYTES`].

@@ -112,7 +112,9 @@
 //!   barrier carrying each image's move (after the fills: an image placed in a new heap moves
 //!   after the heap's fill, so the fill never overwrites what the move wrote), then the images'
 //!   copies of zeros, then a barrier that makes them visible to every later command and to the
-//!   host.
+//!   host. Work that is a `Managed` buffer's uploads alone (copies or inline writes into its
+//!   device copy, which the host never reads) waits for the commands before by a barrier to
+//!   transfers alone, and is made visible by one to every later command but not to the host.
 //!   Commands after it on the same `VkQueue`, in this submission or a later one, see each image
 //!   in `GENERAL` and each fill done. On a device of several `VkQueue`s the batch that did it is
 //!   kept with what owns the memory its work wrote ([`Taken::owners`]) until it completed
@@ -2310,7 +2312,8 @@ impl<'a> Taken<'a> {
     /// carrying every image's move, after the fills (an image placed in a new heap moves after
     /// the heap's fill) and the copies out, then the copies of the kept spans back and the
     /// images' copies of zeros, then the barrier that makes every write visible to every command
-    /// after and to the host.
+    /// after and to the host; to every command after alone where the work is uploads alone,
+    /// which write device copies the host never reads ([`uploaded_barrier`]).
     ///
     /// # Safety
     ///
@@ -2400,7 +2403,13 @@ impl<'a> Taken<'a> {
             unsafe { first.record_zero(device, command_buffer, family) };
             copied = true;
         }
-        if copied {
+        let uploads = (self.held.iter())
+            .all(|held| matches!(held, Held::Fill(_, _, fill) if fill.upload.is_some()));
+        if copied && uploads {
+            // SAFETY: the caller's contract.
+            unsafe { uploaded_barrier(device, command_buffer) };
+            exit_guard::called(Call::CmdPipelineBarrier);
+        } else if copied {
             transfer_barrier(device, command_buffer, false);
             exit_guard::called(Call::CmdPipelineBarrier);
         }
@@ -2455,8 +2464,45 @@ impl<'a> Taken<'a> {
     }
 }
 
+/// Whether `fills` are uploads alone (`FirstFill::upload`): copies or inline writes of a
+/// `Managed` buffer's host copy into its device copy, which the host never reads (`contents` maps
+/// the host copy), and none an acquire.
+fn uploads_only(fills: &[&FirstFill]) -> bool {
+    fills.iter().all(|fill| fill.upload.is_some())
+}
+
+/// The barrier after uploads alone (`Taken::record`): every later command, of every stage, after
+/// their transfers' writes, which it makes visible to it. No host access: the uploads write device
+/// copies, which the host never reads, so it needs no domain operation to the host ("If the
+/// destination access mask includes `VK_ACCESS_HOST_WRITE_BIT` or `VK_ACCESS_HOST_READ_BIT`, a
+/// memory domain operation is performed where available memory in the device domain is also made
+/// available to the host domain", the Vulkan specification, Buffer Memory Barriers), as
+/// `transfer_barrier`'s for writes the host may read performs.
+///
+/// # Safety
+///
+/// `command_buffer` is recording, outside a render pass.
+unsafe fn uploaded_barrier(device: &Vk, command_buffer: vk::CommandBuffer) {
+    let barrier = vk::MemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE);
+    // SAFETY: the caller's contract.
+    unsafe {
+        device.cmd_pipeline_barrier(
+            command_buffer,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[barrier],
+            &[],
+            &[],
+        );
+    }
+}
+
 /// Record `fills` into `command_buffer`: a barrier after every command before (memory other
-/// commands wrote, a heap's included), carrying the acquires among them, then the fills with zeros,
+/// commands wrote, a heap's included), carrying the acquires among them (to the transfers alone
+/// where they are uploads alone, which carry none: [`uploads_only`]), then the fills with zeros,
 /// then, after a barrier, their copies of staged bytes, each copy into bytes a copy before it
 /// wrote after a barrier.
 ///
@@ -2475,7 +2521,17 @@ unsafe fn record_fills(
             .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
             .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)]
     };
-    if !fills.is_empty() {
+    if !fills.is_empty() && uploads_only(fills) {
+        // Uploads alone, transfers that write device copies and read host copies or staging
+        // buffers, carry no acquire: their barrier waits for every command before and makes every
+        // write before available, but visible to transfers alone, the only accesses in its second
+        // scope ("its second access scope only includes memory accesses performed by pipeline
+        // stages explicitly specified in the destination stage mask", the Vulkan specification,
+        // Execution and Memory Dependencies). What runs after them waits for them by the barrier
+        // after them (`Taken::record`) or by the submission's signal (`Fills::record`).
+        transfer_barrier(device, command_buffer, true);
+        exit_guard::called(Call::CmdPipelineBarrier);
+    } else if !fills.is_empty() {
         let acquires: Vec<vk::BufferMemoryBarrier<'_>> = fills
             .iter()
             .filter_map(|fill| fill.acquire_barrier())
