@@ -84,9 +84,15 @@ impl Device {
     /// coverage and the tessellator orders triangles as the device does
     /// (`DriverWorkaround::ClippedCoverageNotMetals`, `DriverWorkaround::TessellatorNotMetals`),
     /// `InterpolateAtOffset` reads from the pixel's center as GLSL.std.450 states, and a thread's
-    /// Function storage is the 16 KiB floor.
+    /// Function storage is the 16 KiB floor. A two-plane YCbCr texture's planes are read in place
+    /// on every device, whatever its type.
     pub fn from_queries(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error> {
-        Device::with_deviations(desc.without_identity(), policy, BTreeSet::new())
+        Device::derived(desc.without_identity(), policy, |desc, policy| {
+            ProfileFields {
+                ycbcr_in_place: true,
+                ..derive_fields(desc, policy, &BTreeSet::new())
+            }
+        })
     }
 
     /// [`Device::new`] with `deviation` taken or not, and the driver's other deviations as
@@ -115,6 +121,18 @@ impl Device {
         policy: DevicePolicy,
         deviations: BTreeSet<DriverDeviation>,
     ) -> Result<Device, Error> {
+        Device::derived(desc, policy, |desc, policy| {
+            derive_fields(desc, policy, &deviations)
+        })
+    }
+
+    /// The device of `desc` under `policy`, its profile's fields as `fields` derives them, once
+    /// the description and the policy pass their checks.
+    fn derived(
+        desc: DeviceDescription,
+        policy: DevicePolicy,
+        fields: impl FnOnce(&DeviceDescription, &DevicePolicy) -> ProfileFields,
+    ) -> Result<Device, Error> {
         if desc.api_version < ApiVersion::V1_2 {
             return Err(Unsupported::needs(
                 Feature::VulkanVersion,
@@ -133,7 +151,7 @@ impl Device {
             ));
         }
         identity_domains(&desc, &policy)?;
-        let fields = derive_fields(&desc, &policy, &deviations);
+        let fields = fields(&desc, &policy);
         let profile = DeviceProfile::of(fields);
         let metal = MetalDeviceProperties::derive(&profile, &desc.allocation);
         Ok(Device(Arc::new(DeviceInner {

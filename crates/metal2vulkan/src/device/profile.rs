@@ -225,9 +225,10 @@ impl DeviceProfile {
     }
 
     /// Whether a function reads a two-plane YCbCr texture's planes in place where its slot reads
-    /// the texture only so (`bind::YCbCrInPlace`): on an integrated GPU or a CPU device, which
-    /// reads host memory with no bus between; elsewhere every such texture's image of converted
-    /// texels is read. The image holds Metal's texels exactly; the planes read in place are
+    /// the texture only so (`bind::YCbCrInPlace`): on every device made by
+    /// [`Device::from_queries`](crate::device::Device::from_queries); by [`Device::new`](crate::device::Device::new),
+    /// on an integrated GPU or a CPU device, which reads host memory with no bus between, and
+    /// elsewhere every such texture's image of converted texels is read. The image holds Metal's texels exactly; the planes read in place are
     /// sampled as `DevicePolicy::ycbcr_in_place_reads` says. The runtime reads it
     /// to state a texture's planes (`TextureFacts::ycbcr_in_place`).
     pub fn reads_ycbcr_planes_in_place(&self) -> bool {
