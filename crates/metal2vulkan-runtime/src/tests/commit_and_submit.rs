@@ -17,10 +17,12 @@
 
 use super::plan_room::device_with_room;
 use crate::device::submit_calls::{CALLS, SLOW_NANOS};
+use crate::tests::SETTLE;
 use crate::{
     Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus, CommandQueue, Device,
     DeviceKind, DeviceOptions, EncoderKind, EventRef, ResourceOptions, Submission,
 };
+use metal2vulkan::device::CompletionPolicy;
 use std::num::NonZeroU64;
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,7 +57,12 @@ fn plan_device() -> Device {
     })
 }
 
-/// [`device`], its other options `base`'s.
+/// [`device`], its other options `base`'s. No commit of it is left for slow calls
+/// (`Device::leave_calls_from`, `u64::MAX`), whatever the host's load: these tests count what a
+/// committing thread submits itself, and a loaded host makes a stretch of a queue's submissions
+/// slow (`device/submit_calls.rs`; on the Radeon 780M beside other jobs on its host, 160 of 200 of
+/// [`a_command_buffer_naming_host_pages_is_submitted_at_its_commit`]'s commits were left so). The
+/// tests of that rule set its bound again.
 fn device_of(base: DeviceOptions) -> Device {
     let options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -68,7 +75,9 @@ fn device_of(base: DeviceOptions) -> Device {
         },
         ..base
     };
-    device_with_room(&options).unwrap()
+    let device = device_with_room(&options).unwrap();
+    device.leave_calls_from(Some(u64::MAX));
+    device
 }
 
 /// A command buffer of `queue` that fills `target` whole with `value`.
@@ -790,19 +799,15 @@ impl Drop for Pages {
 /// `Private` buffer (the plain leg), and no host step is recorded. Counted, in each leg: a batch at
 /// commit for most, none left for a host step (`WorkCounts::scheduler_at_commit_left_host_steps`);
 /// before the committing thread asked whether a step was due, every one of the host pages' leg was
-/// left so. No commit here is left for slow calls (`Device::leave_calls_from`): a loaded host makes
-/// a stretch of the queue's calls slow, which leaves those commits by that rule
-/// (`device/submit_calls.rs`, which
-/// [`a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread`] proves), not for a
-/// host step; on the Radeon 780M beside other jobs on its host, 160 of a leg's 200 were left so.
-/// Each leg prints its share of batches at commit, the time from each commit call to its
+/// left so. No commit here is left for slow calls ([`device_of`]), which
+/// [`a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread`] proves. Each leg
+/// prints its share of batches at commit, the time from each commit call to its
 /// submission's return, and the queue's submission cost at the leg's end and at its least.
 #[test]
 fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
     let pages = Pages(super::host_os::private(PAGES));
     let device = device();
     device.shared().timing.note_queue_times();
-    device.leave_calls_from(Some(u64::MAX));
     let queue = device.new_command_queue().unwrap();
     // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
     let memory = unsafe { crate::HostMemory::new(pages.0) };
@@ -895,6 +900,7 @@ const SLOW_ROUNDS: u64 = 40;
 fn a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread() {
     let pages = Pages(super::host_os::private(PAGES));
     let device = device();
+    device.leave_calls_from(None);
     let queue = device.new_command_queue().unwrap();
     // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
     let memory = unsafe { crate::HostMemory::new(pages.0) };
@@ -986,6 +992,7 @@ fn a_queue_whose_calls_of_commands_are_slow_but_a_third_leaves_them() {
 fn slow_but_every(every: u64) {
     let pages = Pages(super::host_os::private(PAGES));
     let device = device();
+    device.leave_calls_from(None);
     let queue = device.new_command_queue().unwrap();
     // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
     let memory = unsafe { crate::HostMemory::new(pages.0) };
@@ -1120,6 +1127,74 @@ fn a_queue_whose_submissions_turn_cheap_again_goes_back_to_its_committing_thread
     );
 }
 
+/// How much longer each call of commands takes in [`a_group_s_call_is_timed_for_its_last_batch`]:
+/// long enough that a frame's later command buffers are all committed while the scheduler's thread
+/// is in the call of its first.
+const GROUPING_CALL: Duration = Duration::from_millis(2);
+
+/// The command buffers each frame of that test commits before it waits for them.
+const GROUPING_PARTS: usize = 4;
+
+/// The frames of that test.
+const GROUPING_FRAMES: usize = 8;
+
+/// Every call of commands is timed among its queue's submissions (`device/submit_calls.rs`), a
+/// group's for its last batch (`command_buffer/group.rs`): frames of [`GROUPING_PARTS`] fills
+/// committed back to back with `commit`, each call of commands made [`GROUPING_CALL`] longer
+/// (`Device::slow_submit_calls`), so that the scheduler's thread finds a frame's later batches
+/// ready together once its call of the first returned and, where the device's batches may wait in
+/// a group (`CompletionPolicy::Grouped`, and its check found the merge), sends them in one call.
+/// Counted: the groups' calls made there, and the queue's timed submissions moved by every call of
+/// commands. With a group's call untimed, a queue the scheduler's thread served in groups kept its
+/// cost from before for good (the Radeon RX 7900 XTX's, `submit_calls.rs`).
+#[test]
+fn a_group_s_call_is_timed_for_its_last_batch() {
+    let device = device();
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the submission checks never answered"
+    );
+    let groups = device.compile_device().policy().completion == CompletionPolicy::Grouped
+        && device.submissions_merge();
+    let queue = device.new_command_queue().unwrap();
+    let target = device.new_buffer(256, ResourceOptions::private()).unwrap();
+    // The queue's and the target's first use, before the counted frames.
+    let warm = fill(&queue, &target, 0);
+    warm.commit().unwrap();
+    warm.wait_until_completed().unwrap();
+    let calls = &device.shared().queues[queue.vk_queue_sharing().0].calls;
+    // The calls of commands made, which the lengthened ones count (`Device::slow_submit_calls`).
+    let made = || device.shared().submit_call_fast.1.load(Ordering::Relaxed);
+    device.slow_submit_calls(Some(GROUPING_CALL));
+    let (timed, called, before) = (calls.timed(), made(), device.work_counts());
+    for frame in 0..GROUPING_FRAMES {
+        let parts: Vec<CommandBuffer> = (0..GROUPING_PARTS)
+            .map(|part| {
+                let command_buffer = fill(&queue, &target, (frame * GROUPING_PARTS + part) as u8);
+                command_buffer.commit().unwrap();
+                command_buffer
+            })
+            .collect();
+        for command_buffer in &parts {
+            command_buffer.wait_until_completed().unwrap();
+            assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        }
+    }
+    device.slow_submit_calls(None);
+    let after = device.work_counts();
+    let (timed, called) = ((calls.timed() - timed) as u64, made() - called);
+    let grouped = after.grouped_submissions - before.grouped_submissions;
+    println!(
+        "groups' calls ({}, batches grouping {groups}): calls of commands {called}, groups' \
+         {grouped}; submissions timed {timed}",
+        device.name(),
+    );
+    if groups {
+        assert!(grouped > 0, "no group's call: each batch went alone");
+    }
+    assert_eq!(timed, called, "a call of commands left untimed");
+}
+
 /// How often, in fills, [`a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones`]
 /// commits an empty command buffer before one: several among every [`CALLS`] calls.
 const EMPTY_EVERY: u64 = 5;
@@ -1140,6 +1215,7 @@ const EMPTY_EVERY: u64 = 5;
 fn a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones() {
     let pages = Pages(super::host_os::private(PAGES));
     let device = device();
+    device.leave_calls_from(None);
     let queue = device.new_command_queue().unwrap();
     // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
     let memory = unsafe { crate::HostMemory::new(pages.0) };

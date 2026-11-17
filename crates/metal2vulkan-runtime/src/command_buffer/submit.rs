@@ -1784,9 +1784,15 @@ impl CommandBufferShared {
             (false, true) => &parts[..1],
             (false, false) => &parts[..],
         };
-        scheduler
-            .group
-            .hold(parts, buffers, submission, (run.unwrap_or(0), closes));
+        // How long its submission took to here: the group's call is timed from as far before it
+        // where this batch goes last in it (`Group::submit`).
+        let planned = gpu_time::host_nanos().saturating_sub(begun);
+        scheduler.group.hold(
+            parts,
+            buffers,
+            submission,
+            (run.unwrap_or(0), closes, planned),
+        );
         Ok(Submitting::Grouped)
     }
 

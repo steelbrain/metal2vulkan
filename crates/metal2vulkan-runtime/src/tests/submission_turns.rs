@@ -99,7 +99,9 @@ fn device(completion: CompletionPolicy) -> Device {
     device_with(completion, DeviceOptions::default())
 }
 
-/// [`device`], from `options`.
+/// [`device`], from `options`. No commit of it is left for slow calls
+/// (`Device::leave_calls_from`, `u64::MAX`): these tests count what a committing thread submits
+/// itself, which a loaded host's slow stretch of submissions would move (`device/submit_calls.rs`).
 fn device_with(completion: CompletionPolicy, options: DeviceOptions) -> Device {
     let mut options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -118,6 +120,7 @@ fn device_with(completion: CompletionPolicy, options: DeviceOptions) -> Device {
         device.settle_submit_checks(SETTLE),
         "the submission checks never answered"
     );
+    device.leave_calls_from(Some(u64::MAX));
     device
 }
 
@@ -498,6 +501,22 @@ fn a_committing_pass_keeps_only_its_own(completion: CompletionPolicy) {
     // The scheduler's thread held after a pass, counted out: the earlier commit waits in the
     // inbox, and the committing thread's pass takes it in with its own.
     let held = super::waiter_submits::Held::new(&side, &targets[2]);
+    // The holding fill seen complete first, as its queue's waiter publishes its timeline's value
+    // (`command_buffer/completion.rs`; its command buffer completes only once the thread goes
+    // on): where the three queues share a `VkQueue` (lavapipe, RADV, ANV), it would be the
+    // submission before the earlier one there, and while it is not seen complete, `Grouped`'s
+    // committing pass leaves its own batch to the group (`CommandBuffer::goes_alone_at_commit`):
+    // on the Radeon RX 7900 XTX beside other device tests, one batch of the two went at commit.
+    let slot = &device.shared().queues[side.vk_queue_sharing().0];
+    let through = slot.submitted_value();
+    let deadline = std::time::Instant::now() + WAIT;
+    while slot.completed_value() < through {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the holding fill was never seen complete ({completion:?})"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let earlier = fill(&first, &targets[0], 1);
     noting(&earlier, "earlier");
     earlier.commit().unwrap();

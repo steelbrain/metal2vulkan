@@ -13,13 +13,13 @@
 //! batches (`CommandBuffer::commit_and_submit`'s pass), each commit of the guest's held its thread
 //! for both, which the scheduler's thread paid before.
 //!
-//! **Measured, not named.** Each batch that goes to the driver in a call of its own, of one command
-//! buffer or more, is timed from the start of its submission to its call's return, whichever
-//! thread submitted it: what a committing thread pays to submit it. The median of the queue's last
-//! [`CALLS`] such submissions is its cost, published for reads without the lock; none before
-//! [`CALLS`] were timed. The scheduler's thread's submissions are timed as the committing threads'
-//! are, so a queue whose submissions turn cheap again goes back to its committing threads once
-//! half its last [`CALLS`] are under the bound. A median, so the cost is the one a commit pays
+//! **Measured, not named.** Each call of one command buffer or more is timed as the whole
+//! submission of the last batch it carries, from the start of that batch's submission to the
+//! call's return, whichever thread made it: what a committing thread pays to submit a batch. The
+//! median of the queue's last [`CALLS`] such submissions is its cost, published for reads without
+//! the lock; none before [`CALLS`] were timed. The scheduler's thread's submissions are timed as
+//! the committing threads' are, so a queue whose submissions turn cheap again goes back to its
+//! committing threads once half its last [`CALLS`] are under the bound. A median, so the cost is the one a commit pays
 //! half the time or more: a driver's rare long call (NVIDIA's stall in one signalling call of
 //! 1024, `submit_stalls.rs`) or a few submissions other work on the host lengthened move it no
 //! more than a guest queue's smaller batches among another's slow ones do (in reims's traced
@@ -48,8 +48,17 @@
 //! where the batches with work took 173 us at their first quartile. On the Iris Xe (ANV), a third
 //! of a video step's batches had no GPU work, and its calls took 306 to 374 us on the average. A
 //! batch with no command buffer is left to the scheduler's thread with the rest of its queue's
-//! where those are slow, and is counted as such. Nor is a group's call, which carries several
-//! batches (`command_buffer/group.rs`), timed: a committing thread submits each batch alone.
+//! where those are slow, and is counted as such.
+//!
+//! **A group's call.** The scheduler's thread sends the batches it held in a group in one call
+//! (`command_buffer/group.rs`), with a batch after them or not. That call is timed for its last
+//! batch: one after the group from the start of its own submission, and the last one held from as
+//! far before the call as its submission took to its hold. A committing thread would have paid
+//! that batch's submission and a call. Where the group's call went untimed, a queue left to the
+//! scheduler's thread, which groups most of its batches where the driver merges submissions, kept
+//! its cost for good: on the Radeon RX 7900 XTX (RADV) in `tests/drag_submit_bench.rs`, the
+//! queue's cost stayed at 196.5 us through every leg, though the driver's own calls took 72.6 us
+//! on the average, and none of the parts went at its commit where 94.3% had.
 //!
 //! **Left to the scheduler's thread.** Where a `VkQueue`'s cost is [`SLOW_NANOS`] or more, a
 //! committing thread's pass leaves every batch there to the scheduler's thread
@@ -101,6 +110,12 @@ impl SubmitCalls {
     /// were timed.
     pub(crate) fn cost(&self) -> u64 {
         self.cost.load(Ordering::Relaxed)
+    }
+
+    /// How many submissions were timed, in the device tests' builds only.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn timed(&self) -> usize {
+        super::lock(&self.ring).1
     }
 
     /// Whether a committing thread leaves the queue's batches to the scheduler's thread: their
