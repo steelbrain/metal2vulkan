@@ -373,11 +373,14 @@ pub(crate) enum HeldFor {
     /// Other queues' work enough is in flight on its `VkQueue`, which an unshared queue holds
     /// (`unshared_hold.rs`).
     UnsharedIsolation,
+    /// Its own queue's work enough is in flight on its `VkQueue`, which other command queues
+    /// share: it waits for its turn there (`queue_turns.rs`).
+    QueueTurn,
 }
 
 impl HeldFor {
     /// How many there are, for the counters' array.
-    pub(crate) const COUNT: usize = 8;
+    pub(crate) const COUNT: usize = 9;
 }
 
 /// The lists the thread's wait for the GPU fills, kept with their room.
@@ -745,8 +748,9 @@ pub(crate) struct State {
     pub(crate) group: Group,
     /// Those batches as the order held them, with their logical queues, in order.
     grouped: Vec<(u64, Held)>,
-    /// The earliest moment a head held back from a `VkQueue` an unshared queue holds may go
-    /// there, found by the last look (`await_unshared_room`): the thread sleeps no later.
+    /// The earliest moment a head held back from a `VkQueue` an unshared queue holds, or for its
+    /// turn there, may go there, found by the last look (`await_room`): the thread sleeps no
+    /// later.
     wake_by: Option<Instant>,
 }
 
@@ -1457,8 +1461,8 @@ fn run(shared: &Arc<SchedulerShared>) {
             && !shared.inbox.holds_commits()
             && !shared.inbox.nudged()
         {
-            // A head held back from an unshared queue's `VkQueue` waits until it may go there at
-            // most (`await_unshared_room`): a pass looks at it again then.
+            // A head held back from an unshared queue's `VkQueue`, or for its turn there, waits
+            // until it may go there at most (`await_room`): a pass looks at it again then.
             let bound = match state.wake_by {
                 None => None,
                 Some(at) => match at.checked_duration_since(Instant::now()) {
@@ -2000,10 +2004,10 @@ fn submit_ready(
         let binary = &state.binary;
         let decodes = &state.decodes;
         let untracked_decodes = state.untracked_decodes;
-        // The earliest time a head held back for an unshared queue may go before the completion
-        // of the oldest batch in flight on its `VkQueue` ([`await_unshared_room`]), and whether
-        // one was.
-        let (mut unshared_wake, mut isolating) = (None, false);
+        // The earliest time a head held back for an unshared queue, or for its turn, may go
+        // before the completion of the oldest batch in flight on its `VkQueue` ([`await_room`]),
+        // and whether one was.
+        let (mut room_wake, mut isolating) = (None, false);
         // The unshared queues' heads on their way, each with its `VkQueue` and its commit's place:
         // another queue's batch there whose room came after it was posted waits for it
         // (`unshared_hold.rs`, "Commits on their way").
@@ -2024,7 +2028,16 @@ fn submit_ready(
             // is in flight there.
             if let Some(room) = held.buffer.held_for_unshared() {
                 held.held_for(HeldFor::UnsharedIsolation);
-                await_unshared_room(held, room, awaits, &mut unshared_wake);
+                await_room(held, room, awaits, &mut room_wake);
+                isolating = true;
+                return None;
+            }
+            // Held back from a `VkQueue` it shares with other command queues, while its own
+            // queue's work enough is in flight there (`queue_turns.rs`): another queue's later
+            // commit goes ahead of it.
+            if let Some(room) = held.buffer.held_for_turn() {
+                held.held_for(HeldFor::QueueTurn);
+                await_room(held, room, awaits, &mut room_wake);
                 isolating = true;
                 return None;
             }
@@ -2045,7 +2058,7 @@ fn submit_ready(
             }
             waits
         });
-        if let Some(at) = unshared_wake {
+        if let Some(at) = room_wake {
             state.wake_by = Some(state.wake_by.map_or(at, |by: Instant| by.min(at)));
         }
         // The heads this look found waiting behind a batch of an earlier commit on another logical
@@ -2258,7 +2271,8 @@ fn goes_first(held: &Held) -> bool {
     held.buffer.goes_ahead_of_held_work()
 }
 
-/// A head held back from `VkQueue` `queue` for an unshared queue there (`unshared_hold.rs`) until
+/// A head held back from `VkQueue` `queue` for an unshared queue there (`unshared_hold.rs`), or for
+/// its turn there (`queue_turns.rs`), until
 /// the batch there of value `through` completes, the oldest in flight past the completed value the
 /// hold read, or, where the work left ahead falls under the budget before then, `after`
 /// nanoseconds from now: the thread waits for that value (`awaits`), and until then at most
@@ -2267,7 +2281,7 @@ fn goes_first(held: &Held) -> bool {
 /// above every batch in flight, which no completion meets. The gate goes to `awaits` before the
 /// completed value is read again, as [`Scheduler::completions`] says: a completion published
 /// before it wakes the thread at once, one after meets it.
-fn await_unshared_room(
+fn await_room(
     held: &Held,
     (queue, through, after): (usize, u64, Option<u64>),
     awaits: &Awaits,
@@ -2841,6 +2855,8 @@ pub(crate) enum LeftAtCommit {
     BinaryWait,
     /// It is held back for an unshared queue (`unshared_hold.rs`).
     Unshared,
+    /// It waits for its turn on a `VkQueue` it shares (`queue_turns.rs`).
+    Turn,
     /// Anything else: a rebind encodes it again, a decode it reads is queued, a switch of
     /// storage forms rides on it, a group holds it or was held, or its submission was put back.
     Other,
@@ -2848,7 +2864,7 @@ pub(crate) enum LeftAtCommit {
 
 impl LeftAtCommit {
     /// How many there are, for the counters' array.
-    pub(crate) const COUNT: usize = 11;
+    pub(crate) const COUNT: usize = 12;
 }
 
 /// How a commit hands its batches to the scheduler.
@@ -2937,12 +2953,16 @@ fn plain(
     }
     // One held back for an unshared queue is the scheduler thread's to hold, and to wait for its
     // room (`unshared_hold.rs`), as is one an unshared queue's commit not yet taken in may hold
-    // (its passes note the commits it waits behind).
+    // (its passes note the commits it waits behind), and one that waits for its turn on its
+    // `VkQueue` (`queue_turns.rs`).
     let unshared = held.buffer.held_for_unshared().is_some()
         || (held.buffer.unshared_commits()).is_some_and(|(_, (posted, taken))| taken < posted);
-    match unshared {
-        true => Err(LeftAtCommit::Unshared),
-        false => Ok(()),
+    if unshared {
+        return Err(LeftAtCommit::Unshared);
+    }
+    match held.buffer.held_for_turn() {
+        Some(_) => Err(LeftAtCommit::Turn),
+        None => Ok(()),
     }
 }
 

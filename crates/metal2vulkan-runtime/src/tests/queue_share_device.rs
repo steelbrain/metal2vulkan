@@ -63,6 +63,12 @@
 //!   scheduler's own pass and by a committing thread's. One that waits behind an earlier commit of
 //!   the held queue (a fill of the same range) holds nothing, nor one waiting for a value nothing
 //!   submitted reaches: neither the held batch nor the unshared one waits for the other.
+//! - **Turns** (`queue_turns.rs`). On a `VkQueue` two plain queues share, one commits a burst of
+//!   twelve command buffers of about 10 ms each at once, the other a small one once the burst's
+//!   first is scheduled: under `QueueTurnPolicy::Fair` the burst's queue keeps about 16 ms of its
+//!   own work in flight, so the small one goes before the burst's fourth (heads held for their
+//!   turns counted); under `CommitOrder` all twelve go at once, and it starts after the twelfth
+//!   ends. Every device, a `VkQueue` shared on purpose (`PerQueue`, the round robin wrapped).
 //!
 //! Where the device does not share (`PerQueue`, its check found no idling, or it has no two
 //! `VkQueue`s of one family: MoltenVK, RADV, lavapipe) each test asserts that no queue moves, and
@@ -82,7 +88,8 @@ use crate::{
     ResourceOptions, ShaderCacheOptions, Size, WorkCounts,
 };
 use metal2vulkan::device::{
-    CompletionPolicy, DevicePolicy, PipelineWaitPolicy, QueueSharingPolicy, UnsharedIsolationPolicy,
+    CompletionPolicy, DevicePolicy, PipelineWaitPolicy, QueueSharingPolicy, QueueTurnPolicy,
+    UnsharedIsolationPolicy,
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -98,7 +105,10 @@ const SETTLING: Duration = Duration::from_millis(50);
 /// The bytes one fill of a long command buffer writes.
 const FILL_BYTES: u64 = 64 << 20;
 
-/// The options of the device the cfg selects under `queue_sharing`, its shader cache in `cache`.
+/// The options of the device the cfg selects under `queue_sharing`, its shader cache in `cache`,
+/// its queues taking no turns on a `VkQueue` they share (`QueueTurnPolicy::CommitOrder`): these
+/// tests measure the sharing and the unshared hold alone, which the turns would hold work back
+/// beside (the `Off` legs' controls among them); the turns' own test sets them.
 fn options(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> DeviceOptions {
     let mut options = DeviceOptions {
         kinds: match cfg!(m2v_cpu_icd) {
@@ -121,6 +131,7 @@ fn options(cache: &Scratch, queue_sharing: QueueSharingPolicy) -> DeviceOptions 
     };
     options.policy = DevicePolicy::UNTRUSTED;
     options.policy.queue_sharing = queue_sharing;
+    options.policy.queue_turns = QueueTurnPolicy::CommitOrder;
     options
 }
 
@@ -648,13 +659,18 @@ impl Isolation {
 
 /// The fills of one long command buffer of about 30 ms of GPU time over `target`, measured.
 fn long_fills(queue: &CommandQueue, target: &Buffer) -> usize {
+    fills_for(queue, target, 0.030)
+}
+
+/// The fills of one command buffer of about `seconds` of GPU time over `target`, measured.
+fn fills_for(queue: &CommandQueue, target: &Buffer, seconds: f64) -> usize {
     let mut fills = 64;
     for _ in 0..3 {
         let command_buffer = long(queue, target, fills);
         command_buffer.commit().unwrap();
         command_buffer.wait_until_completed_for(WAIT).unwrap();
         let gpu = command_buffer.gpu_end_time().unwrap() - command_buffer.gpu_start_time().unwrap();
-        fills = ((fills as f64 * 0.030 / gpu.max(1e-6)) as usize).clamp(8, 4096);
+        fills = ((fills as f64 * seconds / gpu.max(1e-6)) as usize).clamp(8, 4096);
     }
     fills
 }
@@ -2010,5 +2026,202 @@ fn an_unshared_head_waiting_for_a_value_nothing_submitted_reaches_holds_nothing(
         event.set_signaled_value(1);
         drawn.wait_until_completed_for(WAIT).unwrap();
         assert_eq!(drawn.status(), CommandBufferStatus::Completed, "{leg}");
+    }
+}
+
+/// The GPU time of one command buffer of a [`TurnWork`] burst: 10 ms, so the 16 ms budget lets a
+/// second go at once and a third once the first ran 4 ms, and holds a fourth until the first
+/// completes (`queue_turns.rs`).
+const TURN_RUN: f64 = 0.010;
+
+/// The command buffers of a [`TurnWork`] burst.
+const BURST: usize = 12;
+
+/// The runs [`a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst`]
+/// makes under `Fair` for one whose small command buffer was committed before the burst's first
+/// completed.
+const TURN_RUNS: usize = 5;
+
+/// The turns test's device under `turns` (`PerQueue`), an application's queue, another plain
+/// queue on its `VkQueue`, and the fills of a command buffer of about [`TURN_RUN`].
+struct TurnWork {
+    device: Device,
+    app: CommandQueue,
+    other: CommandQueue,
+    big: Buffer,
+    small: Buffer,
+    fills: usize,
+}
+
+/// One run of [`TurnWork`]: the burst's command buffers' and the other queue's small one's kernel
+/// starts (their first submissions), GPU starts and GPU ends, in seconds of the host's clock.
+struct TurnRun {
+    burst: Vec<(f64, f64, f64)>,
+    small: (f64, f64, f64),
+    /// The host time the small one's commit returned.
+    committed: f64,
+    /// The looks that held a head for its turn (`WorkCounts::heads_held_for_queue_turns`).
+    held: u64,
+    /// The looks that let one go under the idle budget (`WorkCounts::heads_let_go_turn_idle`).
+    let_go_idle: u64,
+    /// The application queue's expected run as the burst was committed, in milliseconds.
+    expected: f64,
+}
+
+impl TurnWork {
+    fn new(scratch: &Scratch, turns: QueueTurnPolicy) -> TurnWork {
+        let mut options = options(scratch, QueueSharingPolicy::PerQueue);
+        options.policy.queue_turns = turns;
+        let device = device_with_room(&options).unwrap();
+        assert!(device.settle_queue_switch_check(WAIT), "the check settles");
+        let app = device.new_command_queue().unwrap();
+        let other = beside(&app, &|| device.new_command_queue().unwrap());
+        let big = device
+            .new_buffer(FILL_BYTES, ResourceOptions::private())
+            .unwrap();
+        let small = device.new_buffer(4096, ResourceOptions::private()).unwrap();
+        let fills = fills_for(&app, &big, TURN_RUN);
+        TurnWork {
+            device,
+            app,
+            other,
+            big,
+            small,
+            fills,
+        }
+    }
+
+    /// Six of the burst's command buffers run alone (a queue's expected run halves toward a
+    /// shorter one: the calibration's longer runs are a 64th of their excess past it), then the
+    /// burst committed at once, each encoded before the first commit, and the other queue's small
+    /// one once the burst's first is scheduled.
+    fn run(&self) -> TurnRun {
+        for _ in 0..6 {
+            let warm = long(&self.app, &self.big, self.fills);
+            warm.commit().unwrap();
+            warm.wait_until_completed_for(WAIT).unwrap();
+        }
+        let expected = self.app.serving().expected().nanos().unwrap_or(0) as f64 / 1e6;
+        let before = self.device.work_counts();
+        let burst: Vec<CommandBuffer> = (0..BURST)
+            .map(|_| long(&self.app, &self.big, self.fills))
+            .collect();
+        let small = small_fill(&self.other, &self.small);
+        for command_buffer in &burst {
+            command_buffer.commit().unwrap();
+        }
+        burst[0].wait_until_scheduled().unwrap();
+        small.commit().unwrap();
+        let committed = crate::host_time();
+        small.wait_until_completed_for(WAIT).unwrap();
+        for command_buffer in &burst {
+            command_buffer.wait_until_completed_for(WAIT).unwrap();
+        }
+        let after = self.device.work_counts();
+        let times = |command_buffer: &CommandBuffer| {
+            (
+                command_buffer.kernel_start_time(),
+                command_buffer.gpu_start_time().unwrap(),
+                command_buffer.gpu_end_time().unwrap(),
+            )
+        };
+        TurnRun {
+            burst: burst.iter().map(times).collect(),
+            small: times(&small),
+            committed,
+            held: after.heads_held_for_queue_turns - before.heads_held_for_queue_turns,
+            let_go_idle: after.heads_let_go_turn_idle - before.heads_let_go_turn_idle,
+            expected,
+        }
+    }
+}
+
+impl TurnRun {
+    fn print(&self, label: &str) {
+        let at = self.burst[0].1;
+        let ms = |time: f64| (time - at) * 1e3;
+        let burst: Vec<String> = (self.burst.iter())
+            .map(|&(kernel, start, end)| {
+                format!("{:.1} ({:.1}-{:.1})", ms(kernel), ms(start), ms(end))
+            })
+            .collect();
+        println!(
+            "{label}: the burst's submissions (GPU runs) {} ms; the small one committed at {:.1}, \
+             submitted at {:.1} ({:.1}-{:.1}) ms; {} looks held, {} let go under the idle budget; \
+             the burst's queue's expected run {:.1} ms",
+            burst.join(", "),
+            ms(self.committed),
+            ms(self.small.0),
+            ms(self.small.1),
+            ms(self.small.2),
+            self.held,
+            self.let_go_idle,
+            self.expected,
+        );
+    }
+}
+
+/// On a `VkQueue` two plain command queues share, twelve command buffers of about 10 ms committed
+/// at once on one, and a small one on the other once the first of them is scheduled: under
+/// `QueueTurnPolicy::Fair` (the default) the burst's queue keeps about 16 ms of its own work in
+/// flight there (its queue's expected run the burst's: six run alone first), so the small one is
+/// submitted, and starts, before the burst's fourth, and heads were held for their turns; under
+/// `CommitOrder` all twelve go at once, and the small one starts after the twelfth ends (with or
+/// after it, on a device that answers GPU times from the host, MoltenVK among them, whose GPU
+/// start is the command buffer's kernel end), with none held.
+///
+/// The burst's fourth goes once the first completed: a run whose small one was committed only
+/// after that (the test's thread late on a loaded host) shows nothing of the turns, and is made
+/// again, up to [`TURN_RUNS`] runs.
+#[test]
+fn a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst() {
+    for turns in [QueueTurnPolicy::Fair, QueueTurnPolicy::CommitOrder] {
+        let scratch = Scratch::new(&format!("queue-turns-{turns:?}"));
+        let work = TurnWork::new(&scratch, turns);
+        assert_eq!(
+            work.app.vk_queue_sharing().0,
+            work.other.vk_queue_sharing().0,
+            "the two queues share a VkQueue"
+        );
+        let device_times = !work.device.shared().timing.answers_from_host();
+        match turns {
+            QueueTurnPolicy::Fair => {
+                let run = (0..TURN_RUNS)
+                    .map(|_| work.run())
+                    .inspect(|run| run.print("Fair"))
+                    .find(|run| run.committed < run.burst[0].2)
+                    .expect("a run committed the small one before the burst's first completed");
+                assert!(run.held > 0, "heads were held for their turns");
+                assert!(
+                    run.small.0 < run.burst[3].0,
+                    "the small one was submitted before the burst's fourth"
+                );
+                if device_times {
+                    assert!(
+                        run.small.1 < run.burst[3].1,
+                        "the small one started before the burst's fourth"
+                    );
+                }
+            }
+            _ => {
+                let run = work.run();
+                run.print("CommitOrder");
+                assert_eq!(run.held, 0, "none held");
+                assert_eq!(run.let_go_idle, 0, "none let go under the idle budget");
+                let last = run.burst[BURST - 1];
+                assert!(
+                    run.small.0 >= last.0,
+                    "the small one was submitted after the burst's twelfth"
+                );
+                let started = match device_times {
+                    true => run.small.1,
+                    false => run.small.2,
+                };
+                assert!(
+                    started >= last.2 - 0.001,
+                    "the small one started after the burst's twelfth ended"
+                );
+            }
+        }
     }
 }

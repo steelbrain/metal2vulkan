@@ -5,7 +5,7 @@
 //! cargo run --release -p metal2vulkan-runtime --example queue_share -- <mode> \
 //!     [--policy adaptive|per-queue] [--seconds S] [--dispatches N] [--unshared] \
 //!     [--threads T --in-flight F [--one-vk-queue]] [--long-ms L] [--period-ms P] \
-//!     [--isolation bounded|off]
+//!     [--isolation bounded|off] [--turns fair|commit-order]
 //! ```
 //!
 //! Every command buffer is one of two kinds. A *draw*: a render pass over a 512x512 `RGBA8Unorm`
@@ -29,7 +29,9 @@
 //!   application's long command buffers a second, and the device's counts of command buffers that
 //!   waited behind another queue's batch (`WorkCounts::command_buffers_behind_other_queues` and
 //!   kin). `--unshared` makes the compositor's queue with `new_command_queue_unshared`;
-//!   `--isolation` sets `UnsharedIsolationPolicy` (`bounded`, the default, or `off`). The
+//!   `--isolation` sets `UnsharedIsolationPolicy` (`bounded`, the default, or `off`), and
+//!   `--turns` sets `QueueTurnPolicy` (`fair`, the default, or `commit-order`): without
+//!   `--unshared`, the compositor's plain queue and the application's take turns. The
 //!   application's GPU-busy share is its command buffers' GPU time over the span from its first
 //!   one's start to its last one's end; the GPU's idle share, that span less every command
 //!   buffer's GPU time, either queue's.
@@ -66,7 +68,9 @@
 //!   consumer that does so does not share `VkQueue`s. The compositor's latencies, the most queues
 //!   live at once, and the device's counts of command buffers that waited behind another queue's.
 
-use metal2vulkan::device::{DevicePolicy, QueueSharingPolicy, UnsharedIsolationPolicy};
+use metal2vulkan::device::{
+    DevicePolicy, QueueSharingPolicy, QueueTurnPolicy, UnsharedIsolationPolicy,
+};
 use metal2vulkan::metal::{PixelFormat, PrimitiveType, TextureUsage};
 use metal2vulkan::pipeline::{ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource};
 use metal2vulkan_runtime::{
@@ -96,6 +100,7 @@ struct Options {
     mode: String,
     policy: QueueSharingPolicy,
     isolation: UnsharedIsolationPolicy,
+    turns: QueueTurnPolicy,
     seconds: f64,
     dispatches: u64,
     unshared: bool,
@@ -120,6 +125,7 @@ fn options() -> Options {
         mode: args.next().unwrap_or_else(|| "isolation".to_owned()),
         policy: QueueSharingPolicy::Adaptive,
         isolation: UnsharedIsolationPolicy::Bounded,
+        turns: QueueTurnPolicy::Fair,
         seconds: 2.0,
         dispatches: 300,
         unshared: false,
@@ -146,6 +152,13 @@ fn options() -> Options {
                     "bounded" => UnsharedIsolationPolicy::Bounded,
                     "off" => UnsharedIsolationPolicy::Off,
                     other => panic!("no isolation {other}"),
+                }
+            }
+            "--turns" => {
+                options.turns = match value().as_str() {
+                    "fair" => QueueTurnPolicy::Fair,
+                    "commit-order" => QueueTurnPolicy::CommitOrder,
+                    other => panic!("no turns {other}"),
                 }
             }
             "--seconds" => options.seconds = value().parse().unwrap(),
@@ -352,13 +365,14 @@ impl Kit {
     }
 }
 
-/// The system default device, of the default policy but for `queue_sharing` and
-/// `unshared_isolation`, as `options` say.
+/// The system default device, of the default policy but for `queue_sharing`,
+/// `unshared_isolation` and `queue_turns`, as `options` say.
 fn device(options: &Options) -> Device {
     let mut device = DeviceOptions::default();
     device.policy = DevicePolicy::UNTRUSTED;
     device.policy.queue_sharing = options.policy;
     device.policy.unshared_isolation = options.isolation;
+    device.policy.queue_turns = options.turns;
     device.gpu_times_from_host = options.untimed;
     Device::system_default_with(&device).unwrap()
 }
@@ -594,9 +608,10 @@ fn frames(kit: &Arc<Kit>, options: &Options) {
     let app_mean = app_spans.iter().sum::<f64>() / app_spans.len().max(1) as f64;
     let submissions = c.queue_submissions - before.queue_submissions;
     println!(
-        "frames (policy {:?}, isolation {:?}, compositor {} every {:?}, application {} in flight of {:.1} ms): compositor {}, {over_16} over 16 ms; application {:.2} long command buffers/s ({:.2} ms of GPU time each), GPU-busy {:.1}%; GPU idle {:.2}%; {:.0} kernel submissions/s; {} looks held a head for isolation",
+        "frames (policy {:?}, isolation {:?}, turns {:?}, compositor {} every {:?}, application {} in flight of {:.1} ms): compositor {}, {over_16} over 16 ms; application {:.2} long command buffers/s ({:.2} ms of GPU time each), GPU-busy {:.1}%; GPU idle {:.2}%; {:.0} kernel submissions/s; {} looks held a head for isolation, {} for its turn, {} let go on an idle turn",
         options.policy,
         options.isolation,
+        options.turns,
         if options.unshared { "unshared" } else { "shared" },
         options.period,
         options.in_flight,
@@ -608,6 +623,8 @@ fn frames(kit: &Arc<Kit>, options: &Options) {
         gpu_idle * 100.0,
         submissions as f64 / elapsed,
         c.heads_held_for_unshared_isolation - before.heads_held_for_unshared_isolation,
+        c.heads_held_for_queue_turns - before.heads_held_for_queue_turns,
+        c.heads_let_go_turn_idle - before.heads_let_go_turn_idle,
     );
     println!(
         "  behind other queues: {} ({} over 16 ms, {} over 33 ms, longest {:.1} ms); unshared {} ({} over 16 ms, {} over 33 ms, longest {:.1} ms); unshared waits over 16 ms: {:.2} batches ahead on average, at most {}, longest run {:.1} ms on average, {} behind one run over 16 ms",

@@ -239,6 +239,13 @@ impl SlotShare {
         (self.unshared_posted.load(Ordering::SeqCst), taken)
     }
 
+    /// Whether two or more command queues hold it, the round robin's and the unshared ones
+    /// counted (`queue_turns.rs`).
+    pub(crate) fn held_by_several(&self) -> bool {
+        let homes = self.homes.load(Ordering::SeqCst);
+        homes + self.unshared.load(Ordering::SeqCst) > 1
+    }
+
     /// Whether another command queue holds it beside the one unshared queue that took it.
     pub(crate) fn held_beside_unshared(&self) -> bool {
         self.homes.load(Ordering::SeqCst) > 0 || self.unshared.load(Ordering::SeqCst) > 1

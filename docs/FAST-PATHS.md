@@ -196,6 +196,41 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   `Off`, the gap before each frame 0.18 ms against 0.12 ms at the median, while under `Bounded`
   its batches waited 10.8 ms a frame in the scheduler instead of in the `VkQueue`
   (`WorkCounts::batch_hold_nanos`). The default on every driver with one graphics queue.
+- `queue_turns = QueueTurnPolicy::Fair` (the default) makes command queues that share a
+  `VkQueue` take turns there (`queue_turns.rs`; every queue shares one on a device with one
+  graphics queue: RADV, ANV, lavapipe, Intel's Windows driver). A batch of a queue not made
+  unshared goes to a `VkQueue` two or more command queues hold only while less than 2 ms of its
+  own queue's expected GPU work is in flight there, or 16 ms while no other command queue took a
+  batch there within the last 50 ms; else the scheduler holds it in its place in the order, and a
+  later commit of another queue that shares nothing with it goes ahead of it (one whose footprint
+  runs in commit order with it still waits behind it). A batch's expected work is its queue's
+  expected run now (`unshared_hold::Expected`: the host's view of how long its recent batches ran,
+  raised at once by a longer one and halved toward a shorter one), so a run longer than the
+  queue's recent ones prices every batch of it in flight at once, where the unshared bound above
+  prices each at the run its queue had at its submission; while a batch of a queue with no run
+  seen yet is in flight there, that queue's next batch waits for its completion, and no other
+  queue's does. So a command buffer another queue commits after one queue's burst (a long command
+  buffer cut into parts, a backlog of frames) goes in behind about 16 ms of it and one batch, not
+  the whole burst, and from its submission on, while that queue keeps submitting there, behind
+  about 2 ms and one batch of each busy queue. An unshared queue's batches are never held for
+  their turn, and count as another queue's. The next batch goes in before the one ahead ends (the
+  scheduler's thread woken at the oldest batch's completion and at the time its run brings the
+  work left under the budget), so the GPU idles for the hold only where that thread answers later
+  than the budget less one batch: a queue alone keeps about 16 ms queued, two queues submitting
+  keep 2 ms each. A committing or waiting thread's pass leaves a held batch to the scheduler's
+  thread (`WorkCounts::scheduler_at_commit_left_turns`). Counted:
+  `WorkCounts::heads_held_for_queue_turns` and `heads_let_go_turn_idle` (heads 2 ms would have
+  held). `queue_turns = QueueTurnPolicy::CommitOrder` submits every ready batch at once, in commit
+  order: a later commit of another queue waits behind every batch submitted before it there. Not
+  an accuracy choice: it trades a queue's work submitted ahead for the other queues' waits; the
+  value nearer Metal's, whose second queue's small command buffer ran beside a first queue's
+  200 ms one on the consumer's oracles (a UHD 630 and a Radeon Pro 5300M, macOS 26.7.1), and
+  `exact_answers()` keeps it. The runtime's choice: no pipeline differs. What stays is a batch
+  already submitted: it runs to its end (known gaps, below). On lavapipe, both values
+  (`queue_share_device::a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst`:
+  twelve 10 ms command buffers of one queue committed at once, a small one of another queue after
+  the first was scheduled): under `Fair` the small one goes before the burst's fourth, under
+  `CommitOrder` after its twelfth. The default on every driver.
 - `pointer_domain`, `handle_domain`, `containment` and `isolation` choose how resources resolve and
   how guests are contained, not an answer of Metal's arithmetic or sampling.
 
@@ -1388,15 +1423,18 @@ driver's. Each is open work.
   and `Device::host_range_remapped` does not release such an import. An import of dma-bufs
   (`HostMemory::with_dma_buf`) keeps its pages on every driver, but is taken only where the device
   refuses the pointer.
-- **On a device with one graphics queue, a compositor's command buffers wait behind another
-  queue's long batch**: RADV, ANV and lavapipe expose a single graphics `VkQueue`, so every command
-  queue, `Device::new_command_queue_unshared`'s included, submits to it, in order
+- **On a device with one graphics queue, a command buffer waits behind another queue's long
+  batch**: RADV, ANV, lavapipe and Intel's Windows driver expose a single graphics `VkQueue`, so
+  every command queue, `Device::new_command_queue_unshared`'s included, submits to it, in order
   (`WorkCounts::unshared_queues_sharing_a_vk_queue` counts each unshared queue so placed). Other
   queues' batches are held back to about 2 ms of expected work ahead of an unshared queue's
-  (`unshared_isolation = UnsharedIsolationPolicy::Bounded`, above), but a batch already submitted
-  runs to its end: a command buffer committed behind another queue's 200 ms one starts after it,
-  where Metal runs the compositor's beside it, and one behind a batch longer than its queue's
-  recent ones waits for the rest of that one too. On the Iris Xe (ANV, Mesa 26.2.6, i915) work of
+  (`unshared_isolation = UnsharedIsolationPolicy::Bounded`, above), and each plain queue's to
+  about 2 ms of its own while another queue submits there (`queue_turns =
+  QueueTurnPolicy::Fair`, above), so a burst of short batches no longer queues a later command
+  buffer behind all of it; but a batch already submitted runs to its end: a command buffer
+  committed behind another queue's 200 ms one starts after it, where Metal runs the compositor's
+  beside it, and one behind a batch longer than its queue's recent ones waits for the rest of that
+  one too. On the Iris Xe (ANV, Mesa 26.2.6, i915) work of
   another `VkDevice` (its own kernel context) ran only between submissions, never inside one,
   whatever its global priority (`HIGH` is refused without privilege; `MEDIUM` against `LOW`
   answered as equal priorities did): a light submission waited the whole of a 440 ms command

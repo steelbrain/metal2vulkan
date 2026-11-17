@@ -113,7 +113,7 @@ impl QueueWaits {
     /// value the host saw the timeline reach, read under this lock: a completion that published a
     /// higher value before this lock was taken is seen here, one after takes the wait), the
     /// command buffer waits behind it: counted, and timed to that batch's completion.
-    /// It enters the `VkQueue`'s flight as `flies` says (`unshared_hold.rs`).
+    /// It enters the `VkQueue`'s flight as `flies` says (`unshared_hold.rs`, `queue_turns.rs`).
     pub(crate) fn taken(
         &self,
         (value, queue, flies): (u64, u64, crate::unshared_hold::Flies<'_>),
@@ -122,7 +122,11 @@ impl QueueWaits {
         counts: &Counters,
     ) {
         let mut ahead = lock(&self.0);
-        ahead.flight.taken(value, flies);
+        if !matches!(flies, crate::unshared_hold::Flies::Not) {
+            ahead
+                .flight
+                .taken(value, flies, crate::gpu_time::host_nanos());
+        }
         let through = match ahead.last {
             Some((last, by)) if by != queue => {
                 ahead.other = last;
@@ -211,5 +215,21 @@ impl QueueWaits {
         let ahead = lock(&self.0);
         let ran = crate::gpu_time::host_nanos().saturating_sub(ahead.head_from);
         ahead.flight.room(ran, completed(), active)
+    }
+
+    /// Whether a batch of command queue `queue`, whose expected run is `expected`, may go to this
+    /// `VkQueue` now on its turn (`queue_turns.rs`), held against its own queue's work in flight
+    /// there, the batches at or below `completed` counted as left, as in
+    /// [`hold_ahead`](Self::hold_ahead).
+    pub(crate) fn turn_ahead(
+        &self,
+        (queue, expected): (u64, &crate::unshared_hold::Expected),
+        completed: impl FnOnce() -> u64,
+    ) -> crate::unshared_hold::Room {
+        let ahead = lock(&self.0);
+        let now = crate::gpu_time::host_nanos();
+        let ran = now.saturating_sub(ahead.head_from);
+        let own = (queue, expected.nanos());
+        ahead.flight.turn(own, ran, completed(), now)
     }
 }

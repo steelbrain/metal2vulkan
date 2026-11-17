@@ -617,7 +617,10 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   ms or more of their expected GPU work is in flight on it (`UnsharedIsolationPolicy::Bounded`, the
   default), and its command buffers wait behind about one batch of theirs, the whole of a long
   one (docs/FAST-PATHS.md, known gaps; counted:
-  `WorkCounts::unshared_command_buffers_behind_other_queues`, and its wait's tallies). Under `QueueSharingPolicy::Adaptive` (the default), where the device's own check
+  `WorkCounts::unshared_command_buffers_behind_other_queues`, and its wait's tallies). The plain
+  queues there take turns (`QueueTurnPolicy::Fair`, the default): each keeps about 2 ms of its
+  own expected GPU work in flight while another submits there, so none waits behind another's
+  whole burst of command buffers (`WorkCounts::heads_held_for_queue_turns`). Under `QueueSharingPolicy::Adaptive` (the default), where the device's own check
   finds its GPU idle between consecutive work of two `VkQueue`s (NVIDIA's driver), the other
   command queues move among the `VkQueue`s of their family at their idle points and share them
   ([docs/API.md](../../docs/API.md#the-policy)); this one keeps the `VkQueue` it takes for its

@@ -1561,6 +1561,7 @@ enum	metal2vulkan::device::ManagedCopyInPolicy	#[cfg_attr(feature = "serde", der
 enum	metal2vulkan::device::PipelineWaitPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PipelineWaitPolicy
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
 enum	metal2vulkan::device::QueueSharingPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum QueueSharingPolicy
+enum	metal2vulkan::device::QueueTurnPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum QueueTurnPolicy
 enum	metal2vulkan::device::RateMapRegionPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RateMapRegionPolicy
 enum	metal2vulkan::device::RenderLoweringPolicy	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderLoweringPolicy
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
@@ -3170,9 +3171,11 @@ field	metal2vulkan-runtime::WorkCounts.heads_held_for_decodes	pub heads_held_for
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_earlier_commits	pub heads_held_for_earlier_commits: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_event_values	pub heads_held_for_event_values: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_host_steps	pub heads_held_for_host_steps: u64
+field	metal2vulkan-runtime::WorkCounts.heads_held_for_queue_turns	pub heads_held_for_queue_turns: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_reencodes	pub heads_held_for_reencodes: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_unshared_commits	pub heads_held_for_unshared_commits: u64
 field	metal2vulkan-runtime::WorkCounts.heads_held_for_unshared_isolation	pub heads_held_for_unshared_isolation: u64
+field	metal2vulkan-runtime::WorkCounts.heads_let_go_turn_idle	pub heads_let_go_turn_idle: u64
 field	metal2vulkan-runtime::WorkCounts.heads_let_go_unshared_idle	pub heads_let_go_unshared_idle: u64
 field	metal2vulkan-runtime::WorkCounts.heads_waiting_at_their_gate	pub heads_waiting_at_their_gate: u64
 field	metal2vulkan-runtime::WorkCounts.heap_arrays_copied	pub heap_arrays_copied: u64
@@ -3640,6 +3643,7 @@ field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_host_steps	pub s
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_other	pub scheduler_at_commit_left_other: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_passing	pub scheduler_at_commit_left_passing: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_taken_in	pub scheduler_at_commit_left_taken_in: u64
+field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_turns	pub scheduler_at_commit_left_turns: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_at_commit_left_unshared	pub scheduler_at_commit_left_unshared: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_gpu_waits	pub scheduler_gpu_waits: u64
 field	metal2vulkan-runtime::WorkCounts.scheduler_passes	pub scheduler_passes: u64
@@ -4701,6 +4705,7 @@ field	metal2vulkan::device::DevicePolicy.pipeline_creation_wait	pub pipeline_cre
 field	metal2vulkan::device::DevicePolicy.pipeline_waits	pub pipeline_waits: PipelineWaitPolicy
 field	metal2vulkan::device::DevicePolicy.pointer_domain	pub pointer_domain: PointerDomain
 field	metal2vulkan::device::DevicePolicy.queue_sharing	pub queue_sharing: QueueSharingPolicy
+field	metal2vulkan::device::DevicePolicy.queue_turns	pub queue_turns: QueueTurnPolicy
 field	metal2vulkan::device::DevicePolicy.rate_map_regions	pub rate_map_regions: RateMapRegionPolicy
 field	metal2vulkan::device::DevicePolicy.render_lowering	pub render_lowering: RenderLoweringPolicy
 field	metal2vulkan::device::DevicePolicy.unshared_isolation	pub unshared_isolation: UnsharedIsolationPolicy
@@ -14049,6 +14054,8 @@ variant	metal2vulkan::device::PipelineWaitPolicy::Exact	Exact
 variant	metal2vulkan::device::PointerDomain::ResidentTable	ResidentTable
 variant	metal2vulkan::device::QueueSharingPolicy::Adaptive	Adaptive
 variant	metal2vulkan::device::QueueSharingPolicy::PerQueue	PerQueue
+variant	metal2vulkan::device::QueueTurnPolicy::CommitOrder	CommitOrder
+variant	metal2vulkan::device::QueueTurnPolicy::Fair	Fair
 variant	metal2vulkan::device::RateMapRegionPolicy::Exact	Exact
 variant	metal2vulkan::device::RateMapRegionPolicy::FanOut	FanOut
 variant	metal2vulkan::device::RenderLoweringPolicy::AtCall	AtCall

@@ -52,7 +52,7 @@ fn a_batch_of_unknown_length_holds_the_next_back_until_it_completes() {
     let app = Arc::new(Expected::default());
     let mut flight = Flight::default();
     assert_eq!(flight.ahead(0, 0, BUDGET), Room::Go, "the first goes");
-    flight.taken(1, Flies::Other(&app));
+    flight.taken(1, Flies::Other(1, &app), 0);
     let first = Room::Hold {
         after: None,
         through: 1,
@@ -66,7 +66,7 @@ fn a_batch_of_unknown_length_holds_the_next_back_until_it_completes() {
     flight.completed(1, 30 * MS);
     assert_eq!(app.nanos(), Some(30 * MS));
     assert_eq!(flight.ahead(0, 0, BUDGET), Room::Go);
-    flight.taken(2, Flies::Other(&app));
+    flight.taken(2, Flies::Other(1, &app), 0);
     assert_eq!(
         flight.ahead(0, 0, BUDGET),
         Room::Hold {
@@ -103,7 +103,7 @@ fn a_queue_whose_batches_got_short_is_let_ahead_again_within_five_of_them() {
     let mut short = 0;
     loop {
         value += 1;
-        flight.taken(value, Flies::Other(&app));
+        flight.taken(value, Flies::Other(1, &app), 0);
         // Another of its batches is ready as this one starts.
         if flight.ahead(0, 0, BUDGET) == Room::Go {
             break;
@@ -127,10 +127,10 @@ fn a_queue_whose_batches_got_short_is_let_ahead_again_within_five_of_them() {
 fn an_unshared_queue_s_batches_count_no_work_ahead() {
     let mut flight = Flight::default();
     for value in 1..=8 {
-        flight.taken(value, Flies::Unshared);
+        flight.taken(value, Flies::Unshared(9), 0);
     }
     assert_eq!(flight.ahead(0, 0, BUDGET), Room::Go);
-    flight.taken(9, Flies::Not);
+    flight.taken(9, Flies::Not, 0);
     assert_eq!(flight.len(), 8, "a batch that flies not is not kept");
 }
 
@@ -138,7 +138,7 @@ fn an_unshared_queue_s_batches_count_no_work_ahead() {
 fn a_batch_goes_while_less_than_the_budget_is_left_ahead() {
     let app = queue(30 * MS);
     let mut flight = Flight::default();
-    flight.taken(1, Flies::Other(&app));
+    flight.taken(1, Flies::Other(1, &app), 0);
     // 30 ms left at its start: held until 28 ms of it ran, or its completion.
     assert_eq!(
         flight.ahead(0, 0, BUDGET),
@@ -156,7 +156,7 @@ fn a_batch_goes_while_less_than_the_budget_is_left_ahead() {
     );
     assert_eq!(flight.ahead(28 * MS + 1, 0, BUDGET), Room::Go);
     // The next one went: 30 ms more ahead, which the oldest's run left does not cover.
-    flight.taken(2, Flies::Other(&app));
+    flight.taken(2, Flies::Other(1, &app), 0);
     let both = Room::Hold {
         after: None,
         through: 1,
@@ -178,10 +178,10 @@ fn a_run_several_batches_complete_in_is_shared_among_the_other_queues_batches() 
     let first = queue(MS);
     let second = queue(MS);
     let mut flight = Flight::default();
-    flight.taken(1, Flies::Other(&first));
-    flight.taken(2, Flies::Unshared);
-    flight.taken(3, Flies::Other(&second));
-    flight.taken(4, Flies::Other(&second));
+    flight.taken(1, Flies::Other(2, &first), 0);
+    flight.taken(2, Flies::Unshared(9), 0);
+    flight.taken(3, Flies::Other(3, &second), 0);
+    flight.taken(4, Flies::Other(3, &second), 0);
     flight.completed(3, 9 * MS);
     assert_eq!(
         first.nanos(),
@@ -204,11 +204,11 @@ fn a_run_several_batches_complete_in_is_shared_among_the_other_queues_batches() 
 fn an_unshared_batch_seen_complete_with_another_queue_s_leaves_it_the_whole_run() {
     let app = queue(30 * MS);
     let mut flight = Flight::default();
-    flight.taken(1, Flies::Other(&app));
-    flight.taken(2, Flies::Unshared);
+    flight.taken(1, Flies::Other(1, &app), 0);
+    flight.taken(2, Flies::Unshared(9), 0);
     flight.completed(2, 30 * MS);
     assert_eq!(app.nanos(), Some(30 * MS));
-    flight.taken(3, Flies::Other(&app));
+    flight.taken(3, Flies::Other(1, &app), 0);
     assert_eq!(
         flight.ahead(14 * MS, 0, BUDGET),
         Room::Hold {
@@ -218,7 +218,7 @@ fn an_unshared_batch_seen_complete_with_another_queue_s_leaves_it_the_whole_run(
         "half way through the next one, no other goes"
     );
     // An unshared batch seen complete alone updates nothing.
-    flight.taken(4, Flies::Unshared);
+    flight.taken(4, Flies::Unshared(9), 0);
     flight.completed(3, 30 * MS);
     flight.completed(4, MS / 10);
     assert_eq!(app.nanos(), Some(30 * MS));
@@ -231,7 +231,7 @@ fn an_unshared_batch_seen_complete_with_another_queue_s_leaves_it_the_whole_run(
 fn a_batch_whose_completion_was_published_counts_as_left_before_it_leaves() {
     let app = Arc::new(Expected::default());
     let mut flight = Flight::default();
-    flight.taken(1, Flies::Other(&app));
+    flight.taken(1, Flies::Other(1, &app), 0);
     assert_eq!(
         flight.ahead(0, 0, BUDGET),
         Room::Hold {
@@ -246,8 +246,8 @@ fn a_batch_whose_completion_was_published_counts_as_left_before_it_leaves() {
     );
     let long = queue(30 * MS);
     let mut flight = Flight::default();
-    flight.taken(1, Flies::Other(&long));
-    flight.taken(2, Flies::Other(&long));
+    flight.taken(1, Flies::Other(4, &long), 0);
+    flight.taken(2, Flies::Other(4, &long), 0);
     assert_eq!(
         flight.ahead(20 * MS, 1, BUDGET),
         Room::Hold {
@@ -289,7 +289,7 @@ fn super_resolution_s_iterations_are_never_held_beside_a_quiet_compositor() {
     let now = 1_000 * MS;
     for (last, quiet) in [(0, true), (now - ACTIVE, true), (now - MS, false)] {
         let mut flight = Flight::default();
-        flight.taken(1, Flies::Unshared);
+        flight.taken(1, Flies::Unshared(9), 0);
         for value in 2..=5 {
             let room = flight.room(0, 1, active(last, now));
             match (quiet, value) {
@@ -303,7 +303,7 @@ fn super_resolution_s_iterations_are_never_held_beside_a_quiet_compositor() {
                     break;
                 }
             }
-            flight.taken(value, Flies::Other(&sr));
+            flight.taken(value, Flies::Other(5, &sr), 0);
         }
     }
 }
@@ -320,7 +320,7 @@ fn a_quiet_compositor_s_first_command_buffer_waits_behind_the_idle_budget_and_on
     let quiet = active(now - ACTIVE, now);
     let mut flight = Flight::default();
     assert_eq!(flight.room(0, 0, quiet), Room::Go, "the first goes");
-    flight.taken(1, Flies::Other(&long));
+    flight.taken(1, Flies::Other(4, &long), 0);
     assert_eq!(
         flight.room(0, 0, quiet),
         Room::Hold {
@@ -342,7 +342,7 @@ fn a_quiet_compositor_s_first_command_buffer_waits_behind_the_idle_budget_and_on
         Room::Idle,
         "under 16 ms left: it goes, where 2 ms would hold it"
     );
-    flight.taken(2, Flies::Other(&long));
+    flight.taken(2, Flies::Other(4, &long), 0);
     assert_eq!(
         flight.room(30 * MS - IDLE_BUDGET + 1, 0, quiet),
         Room::Hold {

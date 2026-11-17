@@ -5524,6 +5524,34 @@ impl CommandBufferShared {
         }
     }
 
+    /// Where a batch of it, otherwise ready, is held back from its `VkQueue` for its turn there
+    /// (`queue_turns.rs`): that `VkQueue`'s index, the value of the oldest batch in flight there
+    /// the host has not seen complete, and in how many nanoseconds its own queue's work left there
+    /// falls under the budget where it does before that batch completes; `None` where it may go,
+    /// as on a lost device, whose submissions fail at once, and for an unshared queue's. The
+    /// budget is 2 ms while another command queue took a batch there within
+    /// `unshared_hold::ACTIVE`, else 16 ms (counted where only that let it go).
+    pub(crate) fn held_for_turn(&self) -> Option<(usize, u64, Option<u64>)> {
+        if self.queue.unshared() || self.device.is_lost() {
+            return None;
+        }
+        let index = self.queue.vk_queue();
+        if !self.device.takes_turns_on(index) {
+            return None;
+        }
+        let shared = self.device.shared();
+        let slot = &shared.queues[index];
+        let own = (self.queue.id(), &**self.queue.expected());
+        match slot.waits.turn_ahead(own, || slot.completed_value()) {
+            crate::unshared_hold::Room::Go => None,
+            crate::unshared_hold::Room::Idle => {
+                shared.counts.head_let_go_turn_idle();
+                None
+            }
+            crate::unshared_hold::Room::Hold { after, through } => Some((index, through, after)),
+        }
+    }
+
     /// Whether a batch of it goes before other queues' batches a pass finds ready with it
     /// (`scheduler/order.rs`, "Heads put first"): its queue is unshared, and its `VkQueue` holds
     /// other queues' work back for it (`unshared_hold.rs`).

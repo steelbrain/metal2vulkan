@@ -487,6 +487,17 @@ impl Drop for Slot {
 
 impl Device {
     /// `newCommandQueue`: a queue of at most 64 uncompleted command buffers, as Metal's.
+    ///
+    /// On a `VkQueue` it shares with other command queues (a device with one graphics queue:
+    /// RADV, ANV, lavapipe), under
+    /// [`QueueTurnPolicy::Fair`](metal2vulkan::device::QueueTurnPolicy::Fair) (the default) its
+    /// batches take turns there: one is held back while 2 ms or more of the queue's own expected
+    /// GPU work is in flight there (16 ms while no other command queue submitted there within the
+    /// last 50 ms), so another queue's command buffer committed after a burst of this one's waits
+    /// behind about that much of it and one batch, where Metal runs it beside them
+    /// (`WorkCounts::heads_held_for_queue_turns`). Under
+    /// [`CommitOrder`](metal2vulkan::device::QueueTurnPolicy::CommitOrder) every ready batch goes
+    /// at once, and a later commit of another queue waits behind all of them.
     pub fn new_command_queue(&self) -> Result<CommandQueue, Error> {
         self.at_serving(|device| device.new_command_queue_now())
     }
@@ -497,8 +508,9 @@ impl Device {
     }
 
     /// `newCommandQueueWithMaxCommandBufferCount:`: a queue of at most `count` uncompleted
-    /// command buffers. A count of 0 is refused (`Invalid`, `MaxCommandBufferCount`), where
-    /// Metal's validation ends the process.
+    /// command buffers, whose batches take turns on a `VkQueue` it shares as
+    /// [`new_command_queue`](Self::new_command_queue)'s do. A count of 0 is refused (`Invalid`,
+    /// `MaxCommandBufferCount`), where Metal's validation ends the process.
     pub fn new_command_queue_with_max_command_buffer_count(
         &self,
         count: usize,

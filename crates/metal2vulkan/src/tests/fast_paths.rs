@@ -9,8 +9,8 @@ use crate::device::{
     BatchOrderPolicy, CompletionPolicy, DevicePolicy, DontCareColorPolicy, ExtendedRangeBlitPolicy,
     HalfChainPolicy, HeapAnswerPolicy, HeapCompressionPolicy, HostPageTexturePolicy,
     IndirectRecordsPolicy, ManagedCopyInPolicy, PipelineWaitPolicy, QueueSharingPolicy,
-    RateMapRegionPolicy, RenderLoweringPolicy, UnsharedIsolationPolicy, UnstoredDontCarePolicy,
-    VertexReachPolicy, WideLinePolicy, YCbCrInPlacePolicy,
+    QueueTurnPolicy, RateMapRegionPolicy, RenderLoweringPolicy, UnsharedIsolationPolicy,
+    UnstoredDontCarePolicy, VertexReachPolicy, WideLinePolicy, YCbCrInPlacePolicy,
 };
 use crate::pipeline::PrecisionNote;
 use std::collections::BTreeSet;
@@ -67,8 +67,9 @@ fn choices() -> Vec<Choice> {
         // how long a pipeline being made is waited for (the bounds' values:
         // `the_ledger_states_the_pipeline_wait_bounds`), which lines draw a wide line, what a
         // blit through a compressed extended-range texture writes, which `VkQueue` a command
-        // queue submits to, how much of other queues' work goes ahead of an unshared queue's, what
-        // a colour attachment stored `DontCare` keeps, what a pass reads of an attachment it loads
+        // queue submits to, how much of other queues' work goes ahead of an unshared queue's, how
+        // much of its own work a queue keeps ahead on a `VkQueue` it shares, what a colour
+        // attachment stored `DontCare` keeps, what a pass reads of an attachment it loads
         // `DontCare` and does not store, which draws pull a vertex layout past a wrapping
         // fixed-function input, how a rate-mapped pass's draws reach its regions, when a
         // `Managed` buffer's GPU copy takes the bytes `didModifyRange:` names, and where an
@@ -87,6 +88,7 @@ fn choices() -> Vec<Choice> {
         extended_range_blits: _,
         queue_sharing: _,
         unshared_isolation: _,
+        queue_turns: _,
         dont_care_colors: _,
         unstored_dont_care_loads: _,
         vertex_reach: _,
@@ -112,6 +114,7 @@ fn choices() -> Vec<Choice> {
         choice!(p.extended_range_blits: ExtendedRangeBlitPolicy { Kept, Canonical }),
         choice!(p.queue_sharing: QueueSharingPolicy { Adaptive, PerQueue }),
         choice!(p.unshared_isolation: UnsharedIsolationPolicy { Bounded, Off }),
+        choice!(p.queue_turns: QueueTurnPolicy { Fair, CommitOrder }),
         choice!(p.dont_care_colors: DontCareColorPolicy { Driver, Kept }),
         choice!(p.unstored_dont_care_loads: UnstoredDontCarePolicy { Driver, Cleared }),
         choice!(p.vertex_reach: VertexReachPolicy { Bounded, Exact }),
@@ -659,6 +662,36 @@ fn the_runtime_s_unshared_isolation_choice_keys_no_profile() {
         assert_eq!(stem, other);
         assert_eq!(b.fingerprint(), o.fingerprint(), "{stem}");
     }
+}
+
+/// The runtime's choice of how much of its own work a command queue keeps ahead on a `VkQueue` it
+/// shares (`queue_turns`) moves no committed profile's fingerprint: no profile carries it, so no
+/// translation follows it.
+#[test]
+fn the_runtime_s_queue_turns_choice_keys_no_profile() {
+    use crate::spirv::testing::committed_profiles_with;
+    let fair = committed_profiles_with(DevicePolicy::UNTRUSTED).expect("profiles");
+    let commit_order = committed_profiles_with(DevicePolicy {
+        queue_turns: QueueTurnPolicy::CommitOrder,
+        ..DevicePolicy::UNTRUSTED
+    })
+    .expect("profiles");
+    assert_eq!(fair.len(), commit_order.len());
+    for ((stem, f), (other, c)) in fair.iter().zip(&commit_order) {
+        assert_eq!(stem, other);
+        assert_eq!(f.fingerprint(), c.fingerprint(), "{stem}");
+    }
+}
+
+/// `DevicePolicy::exact_answers()` keeps the queues' turns on a shared `VkQueue`, the default and
+/// the value nearer Metal's.
+#[test]
+fn exact_answers_keep_the_queues_turns() {
+    assert_eq!(DevicePolicy::UNTRUSTED.queue_turns, QueueTurnPolicy::Fair);
+    assert_eq!(
+        DevicePolicy::UNTRUSTED.exact_answers().queue_turns,
+        QueueTurnPolicy::Fair
+    );
 }
 
 /// `DevicePolicy::exact_answers()` keeps every command queue on the `VkQueue` it took at its

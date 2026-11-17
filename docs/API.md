@@ -302,6 +302,22 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `WorkCounts::heads_held_for_unshared_isolation`. `unshared_isolation =
   UnsharedIsolationPolicy::Off` submits every ready batch at once, so the unshared queue's command
   buffers wait behind every batch submitted before them there.
+- **Command queues take turns on a `VkQueue` they share** (`QueueTurnPolicy::Fair`, the default;
+  the runtime's choice, no pipeline differs). On a `VkQueue` two or more command queues hold (a
+  device with one graphics queue: RADV, ANV, lavapipe), a batch of a queue not made unshared is
+  submitted there only while less than 2 ms of its own queue's expected GPU work is in flight on
+  it, or 16 ms while no other command queue submitted there within the last 50 ms; else the
+  scheduler holds it, in its place in the order, and a later commit of another queue that shares
+  nothing with it goes first. Each batch of a queue in flight counts the queue's expected run now
+  (as above), so a run longer than its recent ones prices the rest of a burst at once; a queue
+  with no run seen yet keeps one batch in flight until it completes. So a command buffer another
+  queue commits after one queue's burst of command buffers waits behind about 16 ms of it and one
+  batch, then about 2 ms and one batch while it keeps submitting, not the whole burst; a batch
+  already submitted still runs to its end. An unshared queue's batches are never held for their
+  turn. Counted: `WorkCounts::heads_held_for_queue_turns`, `heads_let_go_turn_idle`,
+  `scheduler_at_commit_left_turns`. `queue_turns = QueueTurnPolicy::CommitOrder` submits every
+  ready batch at once, in commit order, so a later commit of another queue waits behind every
+  batch submitted before it there (docs/FAST-PATHS.md has the trade).
 - **An attachment loaded `DontCare` and not stored, cleared where its driver clears it no slower**
   (`UnstoredDontCarePolicy::Driver`, the default; the runtime's choice, no pipeline differs). Metal's
   draws read zero (a colour) or the pass's clear value (depth, stencil) of such an attachment

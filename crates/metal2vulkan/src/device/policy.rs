@@ -7,17 +7,19 @@ use std::time::Duration;
 /// Policy inputs of `Device::new`. Every field but `heap_compression`, `heap_answers`,
 /// `completion`, `batch_order`, `render_lowering`, `host_page_textures`, `pipeline_waits`,
 /// `pipeline_creation_wait`, `pipeline_commit_wait`, `wide_lines`, `extended_range_blits`,
-/// `queue_sharing`, `unshared_isolation`, `dont_care_colors`, `unstored_dont_care_loads`,
-/// `vertex_reach`, `rate_map_regions`, `managed_copy_in` and `indirect_records` can change emitted
-/// code, so the profile carries it (containment as the encoding it selects) and its fingerprint
-/// covers it; those nineteen are the runtime's alone (a heap's
+/// `queue_sharing`, `unshared_isolation`, `queue_turns`, `dont_care_colors`,
+/// `unstored_dont_care_loads`, `vertex_reach`, `rate_map_regions`, `managed_copy_in` and
+/// `indirect_records` can change emitted code, so the profile carries it (containment as the
+/// encoding it selects) and its fingerprint covers it; those twenty are the runtime's alone (a
+/// heap's
 /// compressed texture's image, what a heap texture's size query answers, when the host sees a
 /// command buffer complete, how a batch begins after the earlier ones
 /// of its queue, where a render encoder's calls are lowered, what holds a sampled texture over host
 /// pages, whether and how long a pipeline the driver is still making is waited for, which lines
 /// draw a wide line, what a blit through a compressed extended-range texture writes, which
 /// `VkQueue` a command queue submits to, how much of other queues' work goes ahead of an unshared
-/// queue's on a `VkQueue` they share, what a colour attachment stored `DontCare` keeps, what a pass
+/// queue's on a `VkQueue` they share, how much of its own work a command queue keeps submitted
+/// ahead on a `VkQueue` it shares, what a colour attachment stored `DontCare` keeps, what a pass
 /// reads of an attachment it loads `DontCare` and does not store, which draws fetch a vertex
 /// layout in the shader where the device's fixed-function input would wrap past 4 GiB, how a
 /// rate-mapped pass's draws reach its regions, when a `Managed` buffer's GPU copy takes the
@@ -121,6 +123,12 @@ pub struct DevicePolicy {
     /// unshared queue's command buffers wait behind no deep backlog (the default), or submits
     /// every ready batch at once. The runtime's choice alone: no emitted code changes.
     pub unshared_isolation: UnsharedIsolationPolicy,
+    /// Whether command queues that share a `VkQueue` take turns there, each keeping only about
+    /// 2 ms of its own expected GPU work submitted ahead while another submits there, so a
+    /// command buffer of one waits behind no deep backlog of another's (the default), or every
+    /// ready batch is submitted at once, in commit order. The runtime's choice alone: no emitted
+    /// code changes.
+    pub queue_turns: QueueTurnPolicy,
     /// Whether a colour attachment of a texture's own image that a pass stores `DontCare` is
     /// stored as the driver stores it (the default) or renders through a backing so that the
     /// texture keeps the texels it held before the pass, as Apple's GPU leaves them. The runtime's
@@ -170,7 +178,8 @@ impl DevicePolicy {
     /// being made waited for a bound (4.5 s at a state's creation, and 4.5 s from a commit), a
     /// wide line the device's own wherever it draws the width, command queues sharing
     /// `VkQueue`s where the device's GPU idles between work of different ones, other queues' work
-    /// held to about 2 ms ahead of an unshared queue's on a `VkQueue` they share, a colour stored
+    /// held to about 2 ms ahead of an unshared queue's on a `VkQueue` they share, each command
+    /// queue's own work held to about 2 ms ahead on a `VkQueue` it shares, a colour stored
     /// `DontCare` stored as the driver stores it, an attachment loaded `DontCare` and not stored
     /// cleared where its driver clears it no slower, a vertex layout pulled past a wrapping
     /// fixed-function input only where the draw's own values reach past 4 GiB, a rate-mapped
@@ -198,6 +207,7 @@ impl DevicePolicy {
         extended_range_blits: ExtendedRangeBlitPolicy::Kept,
         queue_sharing: QueueSharingPolicy::Adaptive,
         unshared_isolation: UnsharedIsolationPolicy::Bounded,
+        queue_turns: QueueTurnPolicy::Fair,
         dont_care_colors: DontCareColorPolicy::Driver,
         unstored_dont_care_loads: UnstoredDontCarePolicy::Driver,
         vertex_reach: VertexReachPolicy::Bounded,
@@ -236,8 +246,8 @@ impl DevicePolicy {
     /// on the CPU at the commit ([`ManagedCopyInPolicy::AtCommit`]), and every indirect command
     /// buffer's records in the runtime's own pages wherever the device imports host pointers,
     /// which a recovery keeps ([`IndirectRecordsPolicy::Carried`]). Every other field is kept,
-    /// `unshared_isolation` among them: its default is the one nearer Metal's, whose queues do
-    /// not wait for each other's whole command buffers.
+    /// `unshared_isolation` and `queue_turns` among them: their defaults are the ones nearer
+    /// Metal's, whose queues do not wait for each other's whole command buffers.
     pub const fn exact_answers(self) -> DevicePolicy {
         DevicePolicy {
             heap_compression: HeapCompressionPolicy::Uncompressed,
@@ -677,6 +687,39 @@ pub enum UnsharedIsolationPolicy {
     /// Every ready batch is submitted at once: an unshared queue's command buffer waits behind
     /// every batch submitted before it on its `VkQueue`.
     Off,
+}
+
+/// Whether command queues that share a `VkQueue` take turns there. A `VkQueue` runs its
+/// submissions in order, so a command buffer there waits for every batch submitted before it:
+/// where one command queue commits a burst of command buffers (a long one cut into parts, a
+/// backlog of frames) on the one graphics queue of RADV, ANV, lavapipe or another driver that
+/// lends one, a command buffer another queue commits after it waits for the whole burst, where
+/// Metal ran a second queue's small command buffer beside a first queue's 200 ms one (an Intel
+/// UHD 630 and an AMD Radeon Pro 5300M, macOS 26.7.1). A queue made with
+/// `new_command_queue_unshared` is never held under either value; `UnsharedIsolationPolicy`
+/// bounds the other queues' work ahead of it. The runtime's choice alone: no emitted code
+/// changes.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum QueueTurnPolicy {
+    /// The default: on a `VkQueue` that two or more command queues hold, a batch of a queue not
+    /// made unshared is submitted only while less than 2 ms of its own queue's expected GPU work
+    /// is in flight there (16 ms while no other command queue submitted there within the last
+    /// 50 ms), else held in the runtime's scheduler until enough of it completes, while a later
+    /// commit of another queue that shares nothing with it goes ahead of it. So another queue's
+    /// command buffer goes in behind about that much of each busy queue's work and one batch of
+    /// it, not its whole backlog. A batch's expected GPU work is its queue's expected run now
+    /// (the host's view of how long its recent batches ran, raised at once by a longer one and
+    /// halved toward a shorter one), so a run longer than the queue's recent ones prices every
+    /// batch of it in flight at once; while a batch of a queue with no run seen yet is in flight
+    /// there, no other batch of that queue is submitted until it completes. A batch already
+    /// submitted runs to its end.
+    #[default]
+    Fair,
+    /// Every ready batch is submitted at once, in commit order: a command buffer waits behind
+    /// every batch submitted before it on its `VkQueue`.
+    CommitOrder,
 }
 
 /// What a colour attachment of a texture's own image (not a texture over a buffer's bytes, not

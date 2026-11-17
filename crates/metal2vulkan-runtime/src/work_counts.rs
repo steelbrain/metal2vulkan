@@ -330,6 +330,7 @@ pub(crate) struct Counters {
     heads_waiting_at_their_gate: AtomicU64,
     scheduled_behind_host_steps: AtomicU64,
     heads_let_go_unshared_idle: AtomicU64,
+    heads_let_go_turn_idle: AtomicU64,
     heads_held_for_unshared_commits: AtomicU64,
     host_step_gates_narrowed: AtomicU64,
     heads_awaiting_check_signals: AtomicU64,
@@ -3840,6 +3841,13 @@ impl Counters {
     pub(crate) fn head_let_go_unshared_idle(&self) {
         self.heads_let_go_unshared_idle
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A look let a head go on its turn under `unshared_hold::IDLE_BUDGET` that
+    /// `unshared_hold::BUDGET` would hold back: no other command queue took a batch on its
+    /// `VkQueue` within `unshared_hold::ACTIVE` (`queue_turns.rs`).
+    pub(crate) fn head_let_go_turn_idle(&self) {
+        self.heads_let_go_turn_idle.fetch_add(1, Ordering::Relaxed);
     }
 
     /// A look held a head whose room had come behind an unshared queue's commit on its `VkQueue`
@@ -8168,6 +8176,18 @@ pub struct WorkCounts {
     /// and the held head next. Commits posted after its room came never hold it, nor one that
     /// waits for anything else.
     pub heads_held_for_unshared_commits: u64,
+    /// Heads found held back for their turn on a `VkQueue` two or more command queues hold,
+    /// because 2 ms or more of their own queue's expected GPU work was in flight there
+    /// (`queue_turns.rs`, `QueueTurnPolicy::Fair`): another queue's command buffer committed later
+    /// goes in behind about that much of it and one batch, not its whole backlog. While no other
+    /// command queue took a batch there within the last 50 ms, 16 ms or more
+    /// (`heads_let_go_turn_idle`). An unshared queue's heads are never held so.
+    pub heads_held_for_queue_turns: u64,
+    /// Heads a look let go on their turn with 2 ms or more of their own queue's expected GPU work
+    /// in flight on their `VkQueue`, which would hold them (`heads_held_for_queue_turns`), because
+    /// no other command queue took a batch there within the last 50 ms and less than 16 ms was in
+    /// flight (`queue_turns.rs`'s idle budget): a queue alone keeps about 16 ms queued.
+    pub heads_let_go_turn_idle: u64,
     /// Times a look left a head that needs a host step waiting at its gate: the step reads what
     /// the GPU may write, so it waits until the batches that last wrote what it reads completed
     /// (`host_step_gates_narrowed`), or else until every `VkQueue` completed what was submitted to
@@ -8297,6 +8317,8 @@ pub struct WorkCounts {
     pub scheduler_at_commit_left_binary_waits: u64,
     /// It is held back for an unshared queue (`unshared_hold.rs`).
     pub scheduler_at_commit_left_unshared: u64,
+    /// It waits for its turn on a `VkQueue` it shares (`queue_turns.rs`).
+    pub scheduler_at_commit_left_turns: u64,
     /// Anything else: a rebind encodes it again, a decode it reads is queued, a switch of storage
     /// forms rides on it, a group holds it or was held, or its submission was put back.
     pub scheduler_at_commit_left_other: u64,
@@ -12551,6 +12573,8 @@ impl Device {
             heads_held_for_unshared_commits: counters
                 .heads_held_for_unshared_commits
                 .load(Ordering::Relaxed),
+            heads_held_for_queue_turns: held_for(HeldFor::QueueTurn),
+            heads_let_go_turn_idle: counters.heads_let_go_turn_idle.load(Ordering::Relaxed),
             heads_waiting_at_their_gate: counters
                 .heads_waiting_at_their_gate
                 .load(Ordering::Relaxed),
@@ -12596,6 +12620,7 @@ impl Device {
             scheduler_at_commit_left_host_steps: left_at_commit(LeftAtCommit::HostStep),
             scheduler_at_commit_left_binary_waits: left_at_commit(LeftAtCommit::BinaryWait),
             scheduler_at_commit_left_unshared: left_at_commit(LeftAtCommit::Unshared),
+            scheduler_at_commit_left_turns: left_at_commit(LeftAtCommit::Turn),
             scheduler_at_commit_left_other: left_at_commit(LeftAtCommit::Other),
             footprints_built: counters.footprints_built.load(Ordering::Relaxed),
             footprint_lock_waits: counters.footprint_lock_waits.load(Ordering::Relaxed),

@@ -656,6 +656,7 @@ mod queue_share_device;
 mod queue_sharing;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod queue_switch_gate;
+mod queue_turns;
 mod range;
 mod rate_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

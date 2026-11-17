@@ -1652,8 +1652,9 @@ impl CommandBufferShared {
         });
         let completed = || on.completed_value();
         // Its place in the `VkQueue`'s flight, where an unshared queue holds it
-        // (`unshared_hold.rs`).
-        let flies = device.flies(queue, self.queue.unshared(), self.queue.expected());
+        // (`unshared_hold.rs`) or the device's queues take turns (`queue_turns.rs`).
+        let of = (self.queue.id(), self.queue.unshared());
+        let flies = device.flies(queue, of, self.queue.expected());
         let taken = (at.value, self.queue.id(), flies);
         (on.waits).taken(taken, first, completed, &shared.counts);
         for image in &images {

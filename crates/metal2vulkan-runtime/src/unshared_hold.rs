@@ -125,7 +125,7 @@
 //!   lock of its own at the submission and the completion. Counted:
 //!   `WorkCounts::heads_held_for_unshared_isolation` (each look that held a head so).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -198,12 +198,14 @@ impl Expected {
 
 /// How a batch taken on a `VkQueue` enters its [`Flight`].
 pub(crate) enum Flies<'a> {
-    /// Not at all: no unshared queue holds the `VkQueue`, or the device's policy is `Off`.
+    /// Not at all: no unshared queue holds the `VkQueue` under `UnsharedIsolationPolicy::Bounded`,
+    /// and the device's queues take no turns (`QueueTurnPolicy::CommitOrder`).
     Not,
-    /// As an unshared queue's: in flight, with no expected run of other queues' work.
-    Unshared,
-    /// As another queue's, with its queue's expected run.
-    Other(&'a Arc<Expected>),
+    /// As an unshared queue's (its `QueueGen::id`): in flight, with no expected run of other
+    /// queues' work, and no turn of its own.
+    Unshared(u64),
+    /// As another queue's: its `QueueGen::id`, and its queue's expected run.
+    Other(u64, &'a Arc<Expected>),
 }
 
 /// One batch in a [`Flight`].
@@ -211,6 +213,8 @@ pub(crate) enum Flies<'a> {
 struct InFlight {
     /// Its value of its `VkQueue`'s timeline.
     value: u64,
+    /// Its command queue (`QueueGen::id`).
+    queue: u64,
     /// Its expected run, counted in [`Flight::expected`]; 0 for an unshared queue's, and for one
     /// whose queue had no run seen.
     expected: u64,
@@ -220,8 +224,9 @@ struct InFlight {
     of: Option<Arc<Expected>>,
 }
 
-/// The batches taken on one `VkQueue` an unshared queue holds and not seen complete
-/// (`queue_wait::Ahead::flight`), under that `VkQueue`'s waits' lock.
+/// The batches taken on one `VkQueue` an unshared queue holds, or whose queues take turns
+/// (`queue_turns.rs`), and not seen complete (`queue_wait::Ahead::flight`), under that `VkQueue`'s
+/// waits' lock.
 #[derive(Debug, Default)]
 pub(crate) struct Flight {
     /// In the order of their values, which rises.
@@ -230,6 +235,11 @@ pub(crate) struct Flight {
     expected: u64,
     /// How many among them are of unknown length.
     unseen: usize,
+    /// How many among them each command queue not made unshared has (`queue_turns.rs`), by its id.
+    turns: HashMap<u64, usize>,
+    /// The latest batch's command queue and the host time it was taken, and the same of the
+    /// latest of another command queue before it (`queue_turns.rs`, **Two budgets**): 0 for none.
+    latest: [(u64, u64); 2],
 }
 
 /// Whether a batch may go to a `VkQueue` now ([`Flight::ahead`]).
@@ -255,19 +265,28 @@ pub(crate) fn active(last: u64, now: u64) -> bool {
 }
 
 impl Flight {
-    /// A batch took `value`, entering as `flies` says.
-    pub(crate) fn taken(&mut self, value: u64, flies: Flies<'_>) {
-        let (expected, of) = match flies {
+    /// A batch took `value` at host time `now` (`gpu_time::host_nanos`), entering as `flies`
+    /// says.
+    pub(crate) fn taken(&mut self, value: u64, flies: Flies<'_>, now: u64) {
+        let (queue, expected, of) = match flies {
             Flies::Not => return,
-            Flies::Unshared => (Some(0), None),
-            Flies::Other(of) => (of.nanos(), Some(Arc::clone(of))),
+            Flies::Unshared(queue) => (queue, Some(0), None),
+            Flies::Other(queue, of) => {
+                *self.turns.entry(queue).or_default() += 1;
+                (queue, of.nanos(), Some(Arc::clone(of)))
+            }
         };
+        match self.latest[0].0 == queue {
+            true => self.latest[0].1 = now,
+            false => self.latest = [(queue, now), self.latest[0]],
+        }
         let unseen = expected.is_none();
         let expected = expected.unwrap_or(0);
         self.expected += expected;
         self.unseen += usize::from(unseen);
         self.batches.push_back(InFlight {
             value,
+            queue,
             expected,
             unseen,
             of,
@@ -294,6 +313,12 @@ impl Flight {
             self.unseen -= usize::from(batch.unseen);
             if let Some(of) = batch.of {
                 of.observed(share);
+                if let Some(count) = self.turns.get_mut(&batch.queue) {
+                    *count -= 1;
+                    if *count == 0 {
+                        self.turns.remove(&batch.queue);
+                    }
+                }
             }
         }
     }
@@ -353,6 +378,82 @@ impl Flight {
         Room::Hold { after, through }
     }
 
+    /// Whether a batch of command queue `queue` may go now on its turn (`queue_turns.rs`): under
+    /// [`BUDGET`] where another command queue took a batch here within [`ACTIVE`] of `now`
+    /// (`gpu_time::host_nanos`), else under [`IDLE_BUDGET`], [`Room::Idle`] where only that let
+    /// it go. `expected` is its queue's expected run now; `ran` and `completed` are
+    /// [`ahead`](Self::ahead)'s.
+    pub(crate) fn turn(
+        &self,
+        (queue, expected): (u64, Option<u64>),
+        ran: u64,
+        completed: u64,
+        now: u64,
+    ) -> Room {
+        let [last, before] = self.latest;
+        let (_, other) = match last.0 == queue {
+            true => before,
+            false => last,
+        };
+        if active(other, now) {
+            return self.own_ahead((queue, expected), ran, completed, BUDGET);
+        }
+        match self.own_ahead((queue, expected), ran, completed, IDLE_BUDGET) {
+            Room::Go if self.own_ahead((queue, expected), ran, completed, BUDGET) != Room::Go => {
+                Room::Idle
+            }
+            room => room,
+        }
+    }
+
+    /// Whether a batch of command queue `queue`, whose expected run is `expected` now, may go
+    /// under `budget` of its own queue's work left in flight (`queue_turns.rs`): each of its
+    /// batches here counts that run, less what the oldest batch here ran (`ran`, as in
+    /// [`ahead`](Self::ahead)) where it is one of them; one of a queue with no run seen holds the
+    /// next until it completes. Held until the oldest batch here, of value `through`, completes,
+    /// or, where only the budget holds it and its own oldest runs now, until `after`
+    /// nanoseconds from now, where that batch's expected run brings its work left under the
+    /// budget then.
+    pub(crate) fn own_ahead(
+        &self,
+        (queue, expected): (u64, Option<u64>),
+        ran: u64,
+        completed: u64,
+        budget: u64,
+    ) -> Room {
+        let (gone, gone_own) = (self.batches.iter())
+            .take_while(|batch| batch.value <= completed)
+            .fold((0, 0), |(gone, own), batch| {
+                (gone + 1, own + usize::from(batch.queue == queue))
+            });
+        let own = self.turns.get(&queue).map_or(0, |&count| count - gone_own);
+        let Some(oldest) = self.batches.get(gone) else {
+            return Room::Go;
+        };
+        if own == 0 {
+            return Room::Go;
+        }
+        let through = oldest.value;
+        let Some(run) = expected else {
+            return Room::Hold {
+                after: None,
+                through,
+            };
+        };
+        let running = gone == 0 && oldest.queue == queue;
+        let credit = match running {
+            true => ran.min(run),
+            false => 0,
+        };
+        let left = (own as u64).saturating_mul(run) - credit;
+        if left < budget {
+            return Room::Go;
+        }
+        let over = left - budget + 1;
+        let after = (oldest.queue == queue && run - credit >= over).then_some(over);
+        Room::Hold { after, through }
+    }
+
     /// The batches in flight, of every queue.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
@@ -369,18 +470,22 @@ impl crate::Device {
                 == metal2vulkan::device::UnsharedIsolationPolicy::Bounded
     }
 
-    /// How a batch of a command queue (`unshared` where made so) taken on `VkQueue` `index` enters
-    /// its flight, `expected` its queue's expected run.
+    /// How a batch of command queue `queue` (`unshared` where made so) taken on `VkQueue` `index`
+    /// enters its flight, `expected` its queue's expected run: every batch where the device's
+    /// queues take turns (`queue_turns.rs`), else where other queues' work is held back there for
+    /// an unshared queue.
     pub(crate) fn flies<'a>(
         &self,
         index: usize,
-        unshared: bool,
+        (queue, unshared): (u64, bool),
         expected: &'a Arc<Expected>,
     ) -> Flies<'a> {
-        match (self.holds_back_for_unshared(index), unshared) {
-            (false, _) => Flies::Not,
-            (true, true) => Flies::Unshared,
-            (true, false) => Flies::Other(expected),
+        if !self.takes_turns() && !self.holds_back_for_unshared(index) {
+            return Flies::Not;
+        }
+        match unshared {
+            true => Flies::Unshared(queue),
+            false => Flies::Other(queue, expected),
         }
     }
 }
