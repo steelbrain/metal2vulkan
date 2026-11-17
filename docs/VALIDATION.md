@@ -317,7 +317,7 @@ runtime.
 The old runtime's translations do not move either. The golden hash table compiles through
 `Device::new`, the old runtime's path. When its test reports a cell that changed under an unchanged
 key, or one under a changed profile fingerprint, the leg fails with `OLD PATH MOVED`. The one
-exception is a range where a commit since the table's last bless has a message that says
+exception is a range where a commit since the table's last bless has a subject that starts with
 `old-runtime regression fix`. New, gone and re-keyed fixture rows only need a bless.
 
 `metal2vulkan_devtools::instructions::InstructionCounter` measures `instructions`: the calling

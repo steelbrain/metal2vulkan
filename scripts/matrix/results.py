@@ -55,8 +55,9 @@ PARKED_TESTS = {
 #: code (1.58x at a68d520bee, 1.47x at 9af29fbb20).
 PARKED_RECORDS = ("harness-old/",)
 
-#: The phrase that opens the message of a commit allowed to change the old runtime's output: until
-#: the cutover, the translator's output through `Device::new` moves only in such a commit.
+#: The phrase that opens the subject of a commit allowed to change the old runtime's output: until
+#: the cutover, the translator's output through `Device::new` moves only in such a commit. Only the
+#: subject's start counts, so a message that merely quotes the phrase exempts nothing.
 OLD_PATH_FIX = "old-runtime regression fix"
 #: The golden hash table's test (crates/metal2vulkan/src/tests/golden_hashes.rs) compiles through
 #: `Device::new`, the old runtime's path. Its failure names the cells that changed under an
@@ -233,13 +234,14 @@ def leg_problems(leg, records, base):
 def old_path_moved(leg, messages):
     """The old path's output moved: the golden table's test reports a cell changed under an
     unchanged key or under a changed profile fingerprint, and none of MESSAGES (the commits since
-    the table's last bless) says OLD_PATH_FIX. One problem per suite that reports it."""
-    if any(OLD_PATH_FIX in message.lower() for message in messages):
+    the table's last bless) has a subject that starts with OLD_PATH_FIX. One problem per suite that
+    reports it."""
+    if any(message.lstrip().lower().startswith(OLD_PATH_FIX) for message in messages):
         return []
     return [f"OLD PATH MOVED: suite {name}: the golden table, compiled through Device::new, has "
             f"{s['golden']['changed']} cell(s) changed under an unchanged key and "
             f"{s['golden']['profile']} under a changed profile fingerprint, and no commit since "
-            f"its last bless says \"{OLD_PATH_FIX}\""
+            f"its last bless has a subject starting \"{OLD_PATH_FIX}\""
             for name, s in leg["suites"].items()
             if s.get("golden") and (s["golden"]["changed"] or s["golden"]["profile"])]
 

@@ -177,6 +177,10 @@ class RuleTests(unittest.TestCase):
             leg = results.parse_job(job(("cpu", "workspace", 100, text)))["cpu"]
             problems = results.old_path_moved(leg, ["translator: one stage bound on every device"])
             self.assertEqual(len(problems), int(moved), text)
+            # A message that only quotes the phrase, as the check's own commit did, exempts nothing.
+            quoting = ['matrix: the old path moving fails a leg\n\nunless a commit says '
+                       '"old-runtime regression fix"']
+            self.assertEqual(len(results.old_path_moved(leg, quoting)), int(moved), text)
             self.assertEqual(results.old_path_moved(
                 leg, ["Old-runtime regression fix: the stage bound returns to Device::new"]), [])
         leg = results.parse_job(job(("cpu", "workspace", 100, changed)))["cpu"]
