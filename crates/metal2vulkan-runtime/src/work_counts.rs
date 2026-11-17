@@ -612,6 +612,9 @@ pub(crate) struct Counters {
     dma_buf_images_parked_released: AtomicU64,
     dma_buf_images_in_import: AtomicU64,
     exported_dma_buf_images: AtomicU64,
+    exported_dma_buf_images_parked: AtomicU64,
+    exported_dma_buf_images_taken: AtomicU64,
+    exported_dma_buf_images_parked_released: AtomicU64,
     dma_buf_image_fallbacks: AtomicU64,
     modifier_feature_queries: AtomicU64,
     linear_alignments_probed: AtomicU64,
@@ -5315,6 +5318,27 @@ impl Counters {
     #[cfg(unix)]
     pub(crate) fn exported_dma_buf_image_made(&self) {
         (self.exported_dma_buf_images).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Such an image was parked under its buffer's pages as its texture went
+    /// (`dma_buf/parked.rs`).
+    #[cfg(unix)]
+    pub(crate) fn exported_dma_buf_image_parked(&self) {
+        (self.exported_dma_buf_images_parked).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A texture over a buffer of the device's exported memory took a parked image of its plan at
+    /// its texels (`dma_buf/parked.rs`), exporting and importing nothing.
+    #[cfg(unix)]
+    pub(crate) fn exported_dma_buf_image_taken(&self) {
+        (self.exported_dma_buf_images_taken).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `count` parked images over the device's exported memory were released untaken
+    /// (`dma_buf/parked.rs`).
+    #[cfg(unix)]
+    pub(crate) fn exported_dma_buf_images_parked_released(&self, count: usize) {
+        (self.exported_dma_buf_images_parked_released).fetch_add(count as u64, Ordering::Relaxed);
     }
 
     /// A texture placed in a heap over dma-buf pages that such an image would alias is a shadow of
@@ -10833,6 +10857,23 @@ pub struct WorkCounts {
     /// `dma_buf_image_memories_live` until the image goes. One per image made, a shadow's move in
     /// place too; none is a shadow (`shadowed_textures`). A runtime extension: Metal has none.
     pub exported_dma_buf_images: u64,
+    /// Such images (`exported_dma_buf_images`) kept as their texture went, with their import,
+    /// under their buffer's pages, for the next texture over the same buffer of the same image
+    /// plan at the same texels and pitches: one whose `VkImage` was never handed out, within the
+    /// bound and windows of `dma_buf_images_parked`, which counts the images over host pages
+    /// apart. An image taken and parked again is counted again. A runtime-internal reuse, which
+    /// nothing of Metal's observes.
+    pub exported_dma_buf_images_parked: u64,
+    /// Textures over a buffer of the runtime's exported memory whose image was a parked one
+    /// (`exported_dma_buf_images_parked`) taken for them: no `vkGetMemoryFdKHR`, no import and no
+    /// `VkImage` made, the image resting in `GENERAL` on the device's queue family where a
+    /// submission moved it there, else moved as a new one is. Not counted in
+    /// `exported_dma_buf_images`.
+    pub exported_dma_buf_images_taken: u64,
+    /// Parked images over the runtime's exported memory released untaken, their `VkImage`
+    /// destroyed and their import freed: as `dma_buf_images_parked_released` counts those over
+    /// host pages (but no remap of host pages names them), and as their buffer went.
+    pub exported_dma_buf_images_parked_released: u64,
     /// Textures placed in such a heap that such an image would alias but the device made none
     /// (the source failed, the format, usage, extent or plane layout is not supported, or the
     /// driver refused the import): each is a shadow of the heap's bytes in memory of its own
@@ -13452,6 +13493,13 @@ impl Device {
                 .load(Ordering::Relaxed),
             dma_buf_images_in_import: counters.dma_buf_images_in_import.load(Ordering::Relaxed),
             exported_dma_buf_images: counters.exported_dma_buf_images.load(Ordering::Relaxed),
+            exported_dma_buf_images_parked: (counters.exported_dma_buf_images_parked)
+                .load(Ordering::Relaxed),
+            exported_dma_buf_images_taken: (counters.exported_dma_buf_images_taken)
+                .load(Ordering::Relaxed),
+            exported_dma_buf_images_parked_released: (counters
+                .exported_dma_buf_images_parked_released)
+                .load(Ordering::Relaxed),
             dma_buf_image_fallbacks: counters.dma_buf_image_fallbacks.load(Ordering::Relaxed),
             modifier_feature_queries: counters.modifier_feature_queries.load(Ordering::Relaxed),
             linear_alignments_probed: counters.linear_alignments_probed.load(Ordering::Relaxed),

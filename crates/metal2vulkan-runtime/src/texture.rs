@@ -1079,9 +1079,15 @@ fn first_color_subresource() -> vk::ImageSubresource {
 type Aliased = Result<(Arc<Image>, AliasCount), (String, Option<ShadowCause>)>;
 
 /// An image over the runtime's memory exported as a dma-buf, bound to a dedicated import of that
-/// memory's own dma-buf (`Device::exported_dma_buf_alias`).
+/// memory's own dma-buf (`Device::exported_dma_buf_alias`), made or taken parked: where it parks
+/// as it goes (none for the device's check's), and whether a submission made its first move (a
+/// parked one taken, `dma_buf/parked.rs`).
 #[cfg(unix)]
-type ExportedImage = crate::dma_buf::DmaBufImage;
+struct ExportedImage {
+    made: crate::dma_buf::DmaBufImage,
+    park: Option<crate::dma_buf::parked::ParkSpot>,
+    moved: bool,
+}
 
 /// No image is made over a dma-buf on this system.
 #[cfg(not(unix))]
@@ -3716,7 +3722,10 @@ impl Device {
     /// textures take this route wherever the image in the memory is refused, so its verdicts are of
     /// this image), and where the image holds exactly Metal's texels from their first byte to the
     /// buffer's end as one bound in the memory would (`linear_plan::aliases`). With `bind`, the image
-    /// made and bound; else whether it would be, the image released unbound (the placement query).
+    /// made and bound, or the one a texture over the buffer of the same plan at the same texels and
+    /// pitches parked under the buffer's pages as it went, taken (`dma_buf/parked.rs`), which
+    /// exports, imports and makes nothing; else whether it would be, the image released unbound
+    /// (the placement query).
     /// `None` where the memory is no such export or `cause` is the device's policy or check, not a
     /// refusal of the image: the shadow it names stands. Else why not, with the shadow's cause.
     #[cfg(unix)]
@@ -3771,6 +3780,27 @@ impl Device {
             slice_pitch: texels.layout.slice_pitch,
             payload: texels.buffer.carried_payload(),
         };
+        // Where its image parks as it goes, under the buffer's pages, and what takes it: the
+        // next texture over the buffer of the plan at the texels and pitches, which then makes,
+        // exports and imports nothing (`dma_buf/parked.rs`). Not the device's check's textures.
+        let parks = (texels.buffer.fixed_pages()).filter(|_| !in_place::checking());
+        let key = crate::dma_buf::parked::ParkKey {
+            plan: plan.clone(),
+            at: exported_texels.at,
+            row_pitch: exported_texels.row_pitch,
+            slice_pitch: exported_texels.slice_pitch,
+            type_index,
+        };
+        if let Some(pages) = parks.as_ref().filter(|_| bind) {
+            if let Some(image) = pages.parked_images().take(&key) {
+                let shared = self.shared();
+                shared.residency.unparked(self, 1);
+                shared.counts.exported_dma_buf_image_taken();
+                let (made, moved) = image.taken();
+                let park = Some(crate::dma_buf::parked::ParkSpot::exported(pages, key));
+                return Ok(Some(Ok(Some(ExportedImage { made, park, moved }))));
+            }
+        }
         let made = self.exported_dma_buf_image_unbound(plan, facts, &exported_texels)?;
         let (raw, requirements, report) = match made {
             Ok(made) => made,
@@ -3804,7 +3834,15 @@ impl Device {
         }
         let unbound = (raw, requirements, report);
         match self.bind_exported_dma_buf_image(unbound, &exported_texels)? {
-            Ok(made) => Ok(Some(Ok(Some(made)))),
+            Ok(made) => {
+                let park =
+                    parks.map(|pages| crate::dma_buf::parked::ParkSpot::exported(&pages, key));
+                Ok(Some(Ok(Some(ExportedImage {
+                    made,
+                    park,
+                    moved: false,
+                }))))
+            }
             Err(why) => refused(why),
         }
     }
@@ -4077,6 +4115,9 @@ impl Device {
     /// `VK_QUEUE_FAMILY_FOREIGN_EXT` into `GENERAL`, keeping the bytes, as an image over dma-buf
     /// pages does (`dma_buf.rs`, "Their layouts"); the buffer's own acquires
     /// (`Buffer::external_write_done`) order the other API's writes as for an image in the memory.
+    /// It parks under the buffer's pages as it goes, where `made` names the spot; one taken parked
+    /// that a submission moved rests in `GENERAL` on the device's queue family and notes no move
+    /// (`dma_buf/parked.rs`).
     #[cfg(unix)]
     fn exported_dma_buf_texture_image(
         &self,
@@ -4085,10 +4126,11 @@ impl Device {
         descriptor: &TextureDescriptor,
         texels: &Texels,
     ) -> (Arc<Image>, AliasCount) {
+        let ExportedImage { made, park, moved } = made;
         let crate::dma_buf::DmaBufImage { raw, import } = made;
         let image = Image {
             device: self.clone(),
-            raw: Raw::imported(raw, import, None),
+            raw: Raw::imported(raw, import, park),
             owner: Owner::over(texels),
             plan,
             options: texels.options(),
@@ -4115,10 +4157,13 @@ impl Device {
             staging_copies: false,
             objects: ObjectsToken::default(),
         };
-        let undefined = vk::ImageLayout::UNDEFINED;
-        let first = FirstMove::new(raw, image.plan().format, undefined, None)
-            .acquired(self.foreign_acquirer());
-        *lock(&image.first_move) = Some(first);
+        // A parked one a submission moved rests in `GENERAL` on the device's queue family.
+        if !moved {
+            let undefined = vk::ImageLayout::UNDEFINED;
+            let first = FirstMove::new(raw, image.plan().format, undefined, None)
+                .acquired(self.foreign_acquirer());
+            *lock(&image.first_move) = Some(first);
+        }
         let count = AliasCount {
             pitched: false,
             unobserved: texels.buffer.padding_unobserved() && texels.layout.padded(),

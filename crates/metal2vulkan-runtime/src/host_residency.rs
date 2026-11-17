@@ -103,7 +103,8 @@
 //!   Counted: `WorkCounts::host_imports_released_over_most`, within `host_imports_released`.
 //! - **Parked images.** An image in place over a no-copy buffer's dma-buf pages, kept with its
 //!   own import under the import of the pages as its texture goes, for the next texture over the
-//!   same pages (`dma_buf/parked.rs`), is one import on the device's list: counted against the
+//!   same pages, or over a buffer of the runtime's exported memory, kept under the buffer's pages
+//!   (`dma_buf/parked.rs`), is one import on the device's list: counted against the
 //!   most while it is parked, released past it among the groups in the order of its park, and
 //!   released by the thread at its first pass after the park where the device's held imports
 //!   cost every submission, else once parked for [`IDLE`] (a parked image is taken or released,
@@ -148,6 +149,8 @@
 
 use super::buffer::{FixedPages, HostImport, Imported, Pages, Shape};
 use super::device::lock;
+#[cfg(unix)]
+use super::dma_buf::parked::ParkHolder;
 #[cfg(unix)]
 use super::dma_buf::{DmaBufRequest, DmaBufSource, Piece};
 use super::error::{internal, Error};
@@ -691,9 +694,10 @@ impl Shared {
 struct Swept {
     /// The releasable imports, weakly: each goes with its buffer.
     imports: Vec<Weak<HostImport>>,
-    /// The imports images were parked under, weakly, each once (`dma_buf/parked.rs`).
+    /// What images were parked under (host imports, a buffer's pages of exported memory), weakly,
+    /// each once (`dma_buf/parked.rs`).
     #[cfg(unix)]
-    parked: Vec<Weak<HostImport>>,
+    parked: Vec<Weak<dyn ParkHolder>>,
     /// More releasable imports hold their memory than the most the device keeps: the thread
     /// sweeps at once.
     over: bool,
@@ -730,12 +734,12 @@ impl Sweeper {
         true
     }
 
-    /// Take a place for an image of `device` parked under `import` (`dma_buf/parked.rs`): within
-    /// [`PARKED_MOST`], the thread started and the import noted, the image counted as one more
+    /// Take a place for an image of `device` parked under `holder` (`dma_buf/parked.rs`): within
+    /// [`PARKED_MOST`], the thread started and the holder noted, the image counted as one more
     /// import on the device's list ([`Sweeper::resident`]). `false` where the device parks as
     /// many as it parks at most, or the host cannot start the thread: the image is not parked.
     #[cfg(unix)]
-    pub(super) fn park(&self, device: &Device, import: &Arc<HostImport>) -> bool {
+    pub(super) fn park(&self, device: &Device, holder: &Arc<dyn ParkHolder>) -> bool {
         let shared = &self.shared;
         let most = shared.parked_most.load(Ordering::Relaxed);
         let fits = |count: u64| (count < most).then_some(count + 1);
@@ -752,9 +756,10 @@ impl Sweeper {
         {
             let mut state = lock(&shared.state);
             state.parked.retain(|noted| noted.strong_count() > 0);
-            let noted = (state.parked.iter()).any(|noted| noted.as_ptr() == Arc::as_ptr(import));
+            let at = Arc::as_ptr(holder).cast::<()>();
+            let noted = (state.parked.iter()).any(|noted| noted.as_ptr().cast::<()>() == at);
             if !noted {
-                state.parked.push(Arc::downgrade(import));
+                state.parked.push(Arc::downgrade(holder));
             }
         }
         self.resident(device, true, 1);
@@ -1082,9 +1087,9 @@ fn sweep(shared: &Shared, force: bool) -> usize {
     released + release_over_most(shared)
 }
 
-/// The imports images were parked under, weakly, forgetting those gone.
+/// What images were parked under, weakly, forgetting those gone.
 #[cfg(unix)]
-fn parked_noted(shared: &Shared) -> Vec<Weak<HostImport>> {
+fn parked_noted(shared: &Shared) -> Vec<Weak<dyn ParkHolder>> {
     let mut state = lock(&shared.state);
     state.parked.retain(|import| import.strong_count() > 0);
     state.parked.clone()
@@ -1142,7 +1147,7 @@ fn release_parked(shared: &Shared, image: crate::dma_buf::parked::ParkedImage) {
 enum Excess<'a> {
     Group(&'a Group),
     #[cfg(unix)]
-    Parked(&'a Weak<HostImport>, ash::vk::Image),
+    Parked(&'a Weak<dyn ParkHolder>, ash::vk::Image),
 }
 
 impl<'a> Excess<'a> {
@@ -1160,15 +1165,20 @@ impl<'a> Excess<'a> {
 /// `VkImage`, and the most listed imports their device keeps ([`Shared::most`]): `None` where
 /// none is.
 #[cfg(unix)]
-fn parked_ages(shared: &Shared) -> (Vec<(u64, Weak<HostImport>, ash::vk::Image)>, Option<usize>) {
+fn parked_ages(
+    shared: &Shared,
+) -> (
+    Vec<(u64, Weak<dyn ParkHolder>, ash::vk::Image)>,
+    Option<usize>,
+) {
     let (mut ages, mut most) = (Vec::new(), None);
     for import in parked_noted(shared) {
         let Some(live) = import.upgrade() else {
             continue;
         };
         let parked = live.parked_images().ages();
-        if !parked.is_empty() {
-            most.get_or_insert_with(|| shared.most(live.device()));
+        if let Some(device) = live.parked_images().device() {
+            most.get_or_insert_with(|| shared.most(&device));
         }
         ages.extend((parked.into_iter()).map(|(since, raw)| (since, Weak::clone(&import), raw)));
     }
@@ -1277,9 +1287,9 @@ impl Device {
         shared.most.store(most, Ordering::Relaxed);
     }
 
-    /// Park at most `most` images under the imports of host pages from now on
-    /// (`dma_buf/parked.rs`): with 0 none parks, and an image in place goes as it went before
-    /// images parked.
+    /// Park at most `most` images under the imports of host pages and the pages of buffers of
+    /// exported memory from now on (`dma_buf/parked.rs`): with 0 none parks, and an image in
+    /// place goes as it went before images parked.
     pub(crate) fn park_dma_buf_images_at_most(&self, most: u64) {
         let shared = &self.shared().residency.shared;
         shared.parked_most.store(most, Ordering::Relaxed);

@@ -866,9 +866,19 @@ pub(super) struct FixedPages {
     released: AtomicBool,
     /// They went ([`FixedPages::release_lost`]): its drop lets go of nothing.
     freed: AtomicBool,
+    /// The images of textures over them, of the runtime's memory exported as a dma-buf, parked
+    /// as their textures went (`dma_buf/parked.rs`): released as they go.
+    #[cfg(unix)]
+    parked_images: crate::dma_buf::parked::ParkedImages,
 }
 
 impl FixedPages {
+    /// The images parked under them (`dma_buf/parked.rs`).
+    #[cfg(unix)]
+    pub(super) fn parked_images(&self) -> &crate::dma_buf::parked::ParkedImages {
+        &self.parked_images
+    }
+
     /// Destroy the `VkBuffer` and free the memory of the pages of a buffer its device's recovery
     /// carried to the next generation, on the lost one at rest, marked let go of
     /// ([`LostBuffer`]), and let go of its handle of that generation (`device/carry.rs`). Vulkan
@@ -889,6 +899,9 @@ impl FixedPages {
         lock(&shared.memory).free(shared.vk(), &self.pages.memory.placement);
         self.freed.store(true, Ordering::Release);
         drop(busy);
+        // The images parked under them go with them (`dma_buf/parked.rs`).
+        #[cfg(unix)]
+        crate::dma_buf::parked::release(self.parked_images.take_where(|_| true));
         // SAFETY: as above; the pages' drop reads nothing once they went.
         unsafe { self.device.let_go() };
     }
@@ -1083,6 +1096,10 @@ impl Drop for FixedPages {
             }
         }
         drop(busy);
+        // The images parked under them go with them: each holds its own import of the memory's
+        // dma-buf, so none reads the pages' next buffer (`dma_buf/parked.rs`).
+        #[cfg(unix)]
+        crate::dma_buf::parked::release(self.parked_images.take_where(|_| true));
     }
 }
 
@@ -1773,12 +1790,6 @@ impl HostImport {
             #[cfg(unix)]
             parked_images: Default::default(),
         }
-    }
-
-    /// Its device.
-    #[cfg(unix)]
-    pub(super) fn device(&self) -> &Device {
-        &self.device
     }
 
     /// The images parked under it (`dma_buf/parked.rs`).
@@ -3857,6 +3868,8 @@ impl Device {
                 owned: matches!(owner, Owner::Runtime),
                 released: AtomicBool::new(false),
                 freed: AtomicBool::new(false),
+                #[cfg(unix)]
+                parked_images: Default::default(),
             })),
         };
         let own = OwnBytes {
@@ -5360,8 +5373,9 @@ impl Buffer {
     }
 
     /// The pages a buffer of its own lies in for good (the runtime's memory, or the caller's
-    /// `VkBuffer`); `None` for a no-copy buffer and a heap's.
-    fn fixed_pages(&self) -> Option<Arc<FixedPages>> {
+    /// `VkBuffer`), under which the images of textures over its exported memory park
+    /// (`dma_buf/parked.rs`); `None` for a no-copy buffer and a heap's.
+    pub(super) fn fixed_pages(&self) -> Option<Arc<FixedPages>> {
         match &self.s().bytes {
             Bytes::Own(OwnBytes {
                 lie: Lie::Fixed(fixed),
@@ -6079,6 +6093,8 @@ impl Buffer {
                     owned: true,
                     released: AtomicBool::new(false),
                     freed: AtomicBool::new(false),
+                    #[cfg(unix)]
+                    parked_images: Default::default(),
                 })),
                 reserved: own.reserved,
                 identity: own.identity,

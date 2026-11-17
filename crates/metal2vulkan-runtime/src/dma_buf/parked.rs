@@ -61,9 +61,24 @@
 //!   `dma_buf_images_missed` (made anew: none parked of the plan at the texels) and
 //!   `dma_buf_images_parked_released`. A parked image's import stays in
 //!   `dma_buf_image_memories_live`.
+//! - **Over the runtime's exported memory.** A texture in place over a buffer of the runtime's
+//!   memory exported as a dma-buf, or in a block of its buffers allocated exportable as one,
+//!   where no image binds in that memory itself (`texture.rs`'s `exported_dma_buf_alias`), is a
+//!   `DRM_FORMAT_MOD_LINEAR` image bound to a dedicated import of the memory's own dma-buf
+//!   (`dma_buf.rs`'s `bind_exported_dma_buf_image`): a `vkGetMemoryFdKHR` and an import for each
+//!   texture, about 0.33 ms of import on a Radeon 780M (RADV) where a guest makes and frees two
+//!   such textures each frame. It parks as above, under the buffer's pages (`buffer.rs`'s
+//!   `FixedPages`, which no rebind or detach replaces) rather than a host import, keyed by the
+//!   texels' offset in the memory, and the next texture over the same buffer of the same plan at
+//!   the same texels and pitches takes it, so no export, import or `VkImage` is made: within the
+//!   same bound and windows as the images over host pages, released untaken by the residency as
+//!   they are (it never meets a host range a remap names), and as the buffer's pages go, before
+//!   their memory is freed or recycled. Counted apart:
+//!   `WorkCounts::exported_dma_buf_images_parked`, `exported_dma_buf_images_taken` and
+//!   `exported_dma_buf_images_parked_released`.
 
 use super::{DmaBufImage, DmaBufPages};
-use crate::buffer::HostImport;
+use crate::buffer::{FixedPages, HostImport};
 use crate::device::lock;
 use crate::host_residency::now_ms;
 use crate::image_plan::ImagePlan;
@@ -80,7 +95,8 @@ pub(crate) struct ParkKey {
     /// The image's plan: its format, extent, usage, flags and view formats among the rest.
     pub(crate) plan: ImagePlan,
     /// The host address of its texels' first byte among the pages the source makes dma-bufs of
-    /// (`DmaBufTexels::at`).
+    /// (`DmaBufTexels::at`); over the runtime's exported memory, their offset in that memory
+    /// (`ExportedTexels::at`).
     pub(crate) at: u64,
     /// The bytes from a row's first texel to the next row's, and from a slice's to the next
     /// slice's.
@@ -90,28 +106,67 @@ pub(crate) struct ParkKey {
     pub(crate) type_index: u32,
 }
 
-/// Where an image in place over a no-copy buffer's dma-buf pages parks as it goes: the import of
-/// its buffer's pages, weakly (it parks nowhere once that went), what it is taken by, and the host
-/// bytes of its buffer, a remap of any of whose pages releases it.
+/// What images park under: the import of a no-copy buffer's host pages (`buffer.rs`'s
+/// `HostImport`), or the pages of a buffer of the runtime's exported memory (`FixedPages`). Each
+/// releases what it parks as it goes; the residency notes it weakly (`host_residency.rs`).
+pub(crate) trait ParkHolder: Send + Sync {
+    /// The images parked under it.
+    fn parked_images(&self) -> &ParkedImages;
+}
+
+impl ParkHolder for HostImport {
+    fn parked_images(&self) -> &ParkedImages {
+        HostImport::parked_images(self)
+    }
+}
+
+impl ParkHolder for FixedPages {
+    fn parked_images(&self) -> &ParkedImages {
+        FixedPages::parked_images(self)
+    }
+}
+
+/// Where an image parks as it goes: under the import of its no-copy buffer's dma-buf pages, or
+/// under the pages of its buffer of the runtime's exported memory, weakly (it parks nowhere once
+/// that went), what it is taken by, and the host bytes of its buffer, a remap of any of whose
+/// pages releases it (none over exported memory).
 pub(crate) struct ParkSpot {
-    import: Weak<HostImport>,
+    holder: Weak<dyn ParkHolder>,
     key: ParkKey,
     bytes: Range<u64>,
+    /// Over the runtime's exported memory: counted apart.
+    exported: bool,
 }
 
 impl ParkSpot {
     /// The spot under `import` of an image of `key` over a buffer of the host `bytes`.
     pub(crate) fn new(import: &Arc<HostImport>, key: ParkKey, bytes: Range<u64>) -> ParkSpot {
+        let held: Weak<HostImport> = Arc::downgrade(import);
+        let holder: Weak<dyn ParkHolder> = held;
         ParkSpot {
-            import: Arc::downgrade(import),
+            holder,
             key,
             bytes,
+            exported: false,
+        }
+    }
+
+    /// The spot under `pages`, a buffer's pages of the runtime's exported memory, of an image of
+    /// `key` over them.
+    pub(crate) fn exported(pages: &Arc<FixedPages>, key: ParkKey) -> ParkSpot {
+        let held: Weak<FixedPages> = Arc::downgrade(pages);
+        let holder: Weak<dyn ParkHolder> = held;
+        ParkSpot {
+            holder,
+            key,
+            bytes: 0..0,
+            exported: true,
         }
     }
 
     /// Park `raw`, bound to `import`, its dedicated import, which no command uses any more:
-    /// `moved` where a submission made its first move. Given back where it does not park: the
-    /// pages' import went, or the device parks as many as it parks at most.
+    /// `moved` where a submission made its first move. Given back where it does not park: what it
+    /// parks under went, or the device parks as many as it parks at most.
     pub(crate) fn park(
         self,
         device: &Device,
@@ -119,24 +174,28 @@ impl ParkSpot {
         import: Arc<DmaBufPages>,
         moved: bool,
     ) -> Result<(), (vk::Image, Arc<DmaBufPages>)> {
-        let Some(host) = self.import.upgrade() else {
+        let Some(holder) = self.holder.upgrade() else {
             return Err((raw, import));
         };
         let shared = device.shared();
-        if !shared.residency.park(device, &host) {
+        if !shared.residency.park(device, &holder) {
             return Err((raw, import));
         }
-        shared.counts.dma_buf_image_parked();
-        host.parked_images().push(ParkedImage {
+        match self.exported {
+            true => shared.counts.exported_dma_buf_image_parked(),
+            false => shared.counts.dma_buf_image_parked(),
+        }
+        holder.parked_images().push(ParkedImage {
             raw,
             import,
             key: self.key,
             bytes: self.bytes,
             moved,
             since: now_ms(),
+            exported: self.exported,
         });
-        // The pages' import may go here, the last holder of it: it releases what it parks.
-        drop(host);
+        // What it parks under may go here, its last holder: it releases what it parks.
+        drop(holder);
         Ok(())
     }
 }
@@ -151,6 +210,8 @@ pub(crate) struct ParkedImage {
     moved: bool,
     /// When it was parked, in the residency's milliseconds.
     since: u64,
+    /// Over the runtime's exported memory: counted apart.
+    exported: bool,
 }
 
 impl ParkedImage {
@@ -237,14 +298,25 @@ impl ParkedImages {
             .map(|image| (image.since, image.raw))
             .collect()
     }
+
+    /// The device of the images parked, `None` where none is.
+    pub(crate) fn device(&self) -> Option<Device> {
+        (lock(&self.images).first()).map(|image| image.device().clone())
+    }
 }
 
 /// Release `images`, parked images taken out untaken: each `VkImage` destroyed, then its import
-/// freed, each counted (`WorkCounts::dma_buf_images_parked_released`) and let go of by the
-/// residency. No command uses them.
+/// freed, each counted (`WorkCounts::dma_buf_images_parked_released`, or
+/// `exported_dma_buf_images_parked_released`) and let go of by the residency. No command uses
+/// them.
 pub(crate) fn release(images: Vec<ParkedImage>) {
     for image in images {
-        let ParkedImage { raw, import, .. } = image;
+        let ParkedImage {
+            raw,
+            import,
+            exported,
+            ..
+        } = image;
         let device = import.device.clone();
         let shared = device.shared();
         // SAFETY: the image is the device's, and no command uses it: every command buffer that
@@ -252,7 +324,10 @@ pub(crate) fn release(images: Vec<ParkedImage>) {
         unsafe { release::object(shared.vk(), raw) };
         // Its import goes after it.
         drop(import);
-        shared.counts.dma_buf_images_parked_released(1);
+        match exported {
+            true => shared.counts.exported_dma_buf_images_parked_released(1),
+            false => shared.counts.dma_buf_images_parked_released(1),
+        }
         shared.residency.unparked(&device, 1);
     }
 }

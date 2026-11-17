@@ -1238,6 +1238,214 @@ fn every_texture_in_place_over_a_plain_block_is_in_place_over_an_exportable_one(
     );
 }
 
+/// A plane of the picture's luma, 64 of its rows: each texture of the parking test reads it.
+#[cfg(target_os = "linux")]
+const PARK_PLANE: Plane = Plane {
+    format: PixelFormat::R8Unorm,
+    size: [ROW, 64],
+    at: LUMA_AT,
+};
+
+/// The device's counts once `until` holds of them, within [`WAIT`].
+#[cfg(target_os = "linux")]
+fn counts_until(device: &Device, until: impl Fn(&crate::WorkCounts) -> bool) -> crate::WorkCounts {
+    let began = std::time::Instant::now();
+    loop {
+        let counts = device.work_counts();
+        if until(&counts) {
+            return counts;
+        }
+        assert!(began.elapsed() < WAIT, "{counts:?}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Textures over a picture that declares its padding unobserved, in a block of the runtime's own
+/// buffers exportable as a dma-buf too (`memory.rs`'s `Holds::FdDmaBufs`), as a consumer's
+/// surface caches lie: each in place through a dedicated import of the block's dma-buf, whose
+/// image parks under the buffer's pages as the texture goes (`dma_buf/parked.rs`, "Over the
+/// runtime's exported memory").
+///
+/// - **Taken.** The first texture's image, made, read and dropped, parks; the CPU writes other
+///   bytes; a second texture of the same plan at the same texels takes it: one image made for the
+///   two (`WorkCounts::exported_dma_buf_images`), one taken (`exported_dma_buf_images_taken`),
+///   and its blit reads the new bytes. A third, made while the second lives, finds none parked
+///   and is made anew, reading the same bytes.
+/// - **Not parked** where the texture's `VkImage` was handed out (`Texture::vk_image`): its image
+///   goes with its import.
+/// - **Released** untaken: kept by a residency pass within its window where held imports cost
+///   nothing, released by the next where they cost every submission
+///   (`exported_dma_buf_images_parked_released`); and, parked as the buffer goes, with the
+///   buffer's pages, which leaves the device's dma-buf image imports as they were before.
+///
+/// The import tax is forced to cost nothing while a texture is to take a parked image, so that no
+/// pass of the residency thread releases it first. A negative control, run by hand: with the take
+/// disabled, the second texture is made anew and the test fails at its counts. Where the picture
+/// lies in no such block, or its texture is a shadow, it says so and passes without running. On
+/// Linux, whose dma-bufs these are.
+#[test]
+#[cfg(target_os = "linux")]
+fn a_texture_over_a_dma_buf_block_takes_the_image_the_last_one_parked() {
+    use crate::submit_check::{Check, Verdict};
+    let watched = Watched::default();
+    let scratch = Scratch::new("exported-parked-images");
+    let device = device(&watched, &scratch.0);
+    let name = device.name().to_owned();
+    assert!(device.settle_in_place_checks(WAIT), "the check answered");
+    assert!(device.settle_submit_checks(WAIT), "the submission checks");
+    let picture = (device.new_buffer_with_descriptor(
+        BufferDescriptor::new(LENGTH, ResourceOptions::shared(), BufferContents::Zero)
+            .with_aligned_byte(LUMA_AT)
+            .with_padding_unobserved(),
+    ))
+    .unwrap();
+    if picture.bound_memory() != BoundMemory::DmaBufBlocks {
+        eprintln!(
+            "EXPORTED-PARKED on {name}: the picture lies in {:?}, no block exportable as a \
+             dma-buf too: not run",
+            picture.bound_memory()
+        );
+        return;
+    }
+    let plane = PARK_PLANE;
+    let descriptor = descriptor(plane, ResourceOptions::shared());
+    fill(&device, &picture);
+    let checks = &device.shared().submit_checks;
+    let measured = checks.verdict(Check::ImportTax);
+    checks.force(Check::ImportTax, Verdict::Fails);
+    let before = device.work_counts();
+    let first = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+    let made = device.work_counts();
+    if first.shadow().is_some() {
+        eprintln!("EXPORTED-PARKED on {name}: the texture is a shadow: not run");
+        checks.force(Check::ImportTax, measured);
+        return;
+    }
+    assert_eq!(
+        made.exported_dma_buf_images - before.exported_dma_buf_images,
+        1,
+        "the first texture's image made"
+    );
+    assert!(
+        read(&device, &first, plane) == want(plane),
+        "the first texels"
+    );
+    drop(first);
+    let parked = counts_until(&device, |counts| {
+        counts.exported_dma_buf_images_parked > made.exported_dma_buf_images_parked
+    });
+    // The CPU's other bytes, which the taken image reads.
+    let other: Vec<u8> = want(plane).iter().map(|byte| byte ^ 0x5a).collect();
+    // SAFETY: the picture's mapped bytes, which no command uses now.
+    unsafe {
+        let at = picture.contents().unwrap().as_ptr().add(plane.at as usize);
+        std::ptr::copy_nonoverlapping(other.as_ptr(), at, other.len());
+    }
+    let second = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+    let taken = device.work_counts();
+    let third = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+    let anew = device.work_counts();
+    let made_taken = |counts: &crate::WorkCounts| {
+        (
+            counts.exported_dma_buf_images - before.exported_dma_buf_images,
+            counts.exported_dma_buf_images_taken - before.exported_dma_buf_images_taken,
+        )
+    };
+    eprintln!(
+        "EXPORTED-PARKED on {name}: made, taken: the first {:?}, the second {:?}, a third while \
+         the second lives {:?}; parked {}",
+        made_taken(&made),
+        made_taken(&taken),
+        made_taken(&anew),
+        parked.exported_dma_buf_images_parked - before.exported_dma_buf_images_parked
+    );
+    assert_eq!(
+        (made_taken(&taken), made_taken(&anew)),
+        ((1, 1), (2, 1)),
+        "one image made for the first two textures, the second's taken; the third made anew"
+    );
+    assert!(
+        second.shadow().is_none() && third.shadow().is_none(),
+        "in place"
+    );
+    assert!(
+        read(&device, &second, plane) == other,
+        "the taken image reads the CPU's later bytes"
+    );
+    assert!(read(&device, &third, plane) == other, "the third's texels");
+    drop((second, third));
+    let both = counts_until(&device, |counts| {
+        counts.exported_dma_buf_images_parked >= parked.exported_dma_buf_images_parked + 2
+    });
+    // Released untaken by the residency's passes: kept within its window where held imports cost
+    // nothing, released at the next pass where they cost every submission.
+    let released = |counts: &crate::WorkCounts| {
+        counts.exported_dma_buf_images_parked_released
+            - both.exported_dma_buf_images_parked_released
+    };
+    device.shared().residency.sweep(false);
+    let kept = device.work_counts();
+    checks.force(Check::ImportTax, Verdict::Holds);
+    device.shared().residency.sweep(false);
+    let swept = device.work_counts();
+    checks.force(Check::ImportTax, measured);
+    assert_eq!(
+        (released(&kept), released(&swept)),
+        (0, 2),
+        "kept by a pass within the window where held imports cost nothing, released by the next \
+         where they cost every submission"
+    );
+    // A handed-out image parks nowhere.
+    let handed = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+    // SAFETY: the handle is only read here, never used.
+    let raw = unsafe { handed.vk_image() };
+    assert!(raw.is_some(), "the texture's image handed out");
+    let out = device.work_counts();
+    drop(handed);
+    let gone = counts_until(&device, |counts| {
+        counts.dma_buf_image_memories_live < out.dma_buf_image_memories_live
+    });
+    assert_eq!(
+        gone.exported_dma_buf_images_parked, out.exported_dma_buf_images_parked,
+        "a handed-out image parks nowhere"
+    );
+    // One parked as the picture goes is released with its pages.
+    let last = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();
+    drop(last);
+    let parked_last = counts_until(&device, |counts| {
+        counts.exported_dma_buf_images_parked > gone.exported_dma_buf_images_parked
+    });
+    drop(picture);
+    let freed = counts_until(&device, |counts| {
+        counts.dma_buf_image_memories_live == before.dma_buf_image_memories_live
+    });
+    let total = |counts: &crate::WorkCounts| {
+        (
+            counts.exported_dma_buf_images_parked - before.exported_dma_buf_images_parked,
+            counts.exported_dma_buf_images_taken - before.exported_dma_buf_images_taken,
+            counts.exported_dma_buf_images_parked_released
+                - before.exported_dma_buf_images_parked_released,
+        )
+    };
+    eprintln!(
+        "EXPORTED-PARKED on {name}: parked, taken, released: {:?} (the last parked {:?}); dma-buf \
+         image imports live {} as before",
+        total(&freed),
+        total(&parked_last),
+        freed.dma_buf_image_memories_live
+    );
+    let (parked, taken, released) = total(&freed);
+    assert_eq!(
+        parked,
+        taken + released,
+        "every parked image taken or released once the picture went"
+    );
+    watched.layer_reported_nothing(
+        "DRM_FORMAT_MOD_LINEAR images over a dedicated import of a block's dma-buf, parked and \
+         taken",
+    );
+}
+
 /// The counts of textures made shadows because no image of theirs was made
 /// (`WorkCounts::host_texture_shadows_refused_*`), summed.
 fn refusals(counts: &crate::WorkCounts) -> u64 {

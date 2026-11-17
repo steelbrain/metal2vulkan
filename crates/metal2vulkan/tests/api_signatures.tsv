@@ -3127,6 +3127,9 @@ field	metal2vulkan-runtime::WorkCounts.ended_residencies_looked_at	pub ended_res
 field	metal2vulkan-runtime::WorkCounts.event_signals_behind_merge	pub event_signals_behind_merge: u64
 field	metal2vulkan-runtime::WorkCounts.event_waits_met	pub event_waits_met: u64
 field	metal2vulkan-runtime::WorkCounts.exported_dma_buf_images	pub exported_dma_buf_images: u64
+field	metal2vulkan-runtime::WorkCounts.exported_dma_buf_images_parked	pub exported_dma_buf_images_parked: u64
+field	metal2vulkan-runtime::WorkCounts.exported_dma_buf_images_parked_released	pub exported_dma_buf_images_parked_released: u64
+field	metal2vulkan-runtime::WorkCounts.exported_dma_buf_images_taken	pub exported_dma_buf_images_taken: u64
 field	metal2vulkan-runtime::WorkCounts.far_vertex_fetch_pulled_draws	pub far_vertex_fetch_pulled_draws: u64
 field	metal2vulkan-runtime::WorkCounts.fd_blocks_awaited	pub fd_blocks_awaited: u64
 field	metal2vulkan-runtime::WorkCounts.fd_blocks_refused	pub fd_blocks_refused: u64

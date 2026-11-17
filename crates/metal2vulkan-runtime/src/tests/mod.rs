@@ -280,6 +280,8 @@ mod export_after_dma_buf;
 mod export_dedication;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod exported_memory;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod exported_park_bench;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]
 mod exported_semaphore;
 #[cfg(all(unix, any(m2v_gpu, m2v_cpu_icd)))]

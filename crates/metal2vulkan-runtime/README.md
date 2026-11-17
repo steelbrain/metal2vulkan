@@ -839,7 +839,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   device's buffer query takes both, in which no image is bound: a texture over it takes a
   `DRM_FORMAT_MOD_LINEAR` image bound to a dedicated import of its block's dma-buf
   (`WorkCounts::exported_dma_buf_images`), each import held costing each submission as a block
-  held does; elsewhere in a plain block of the runtime's memory, whose making holds the process's
+  held does. As the texture goes its image parks under the buffer, and the next texture over the
+  same buffer of the same plan at the same texels and pitches takes it, exporting and importing
+  nothing (`WorkCounts::exported_dma_buf_images_taken`; untaken, it is released at the residency
+  thread's next pass where held imports cost each submission, and as the buffer goes); elsewhere
+  in a plain block of the runtime's memory, whose making holds the process's
   submissions on RADV (`WorkCounts::plain_buffer_blocks_made`). Its placement starts on the
   device's linear images' memory alignment and takes whole units of it (4096 bytes on Intel's
   driver for the UHD 630 on Windows, which rounds a small linear image's size up to it; every
