@@ -798,7 +798,7 @@ unsafe fn objects(
             size: PUSH_BYTES,
         }];
         let info = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push);
-        // SAFETY: the device is live, and every device holds 128 bytes of push constants.
+        // SAFETY: the device is live, and the floor holds `PUSH_BYTES` of push constants.
         match unsafe { device.create_pipeline_layout(&info, None) } {
             Ok(layout) => Ok((done, layout)),
             Err(result) => {

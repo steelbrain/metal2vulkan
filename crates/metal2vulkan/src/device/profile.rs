@@ -116,6 +116,11 @@ impl DeviceProfile {
         self.facts.half_outputs
     }
 
+    /// How many bytes of push constants a kernel's push window holds.
+    pub(crate) fn push_window(&self) -> PushWindow {
+        self.facts.push_window
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -550,6 +555,8 @@ pub(crate) struct ProfileFacts {
     pub(crate) narrow_wrap: NarrowWrap,
     /// Whether a `half` color output may be declared with 16-bit `float` lanes.
     pub(crate) half_outputs: HalfOutputs,
+    /// How many bytes of push constants a kernel's push window holds.
+    pub(crate) push_window: PushWindow,
 }
 
 impl ProfileFacts {
@@ -560,6 +567,7 @@ impl ProfileFacts {
         reconvergence_note: ReconvergenceNote::Field,
         narrow_wrap: NarrowWrap::Every,
         half_outputs: HalfOutputs::Sixteen,
+        push_window: PushWindow::Guaranteed,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -569,6 +577,7 @@ impl ProfileFacts {
         reconvergence_note: ReconvergenceNote::Noted,
         narrow_wrap: NarrowWrap::Read,
         half_outputs: HalfOutputs::Widened,
+        push_window: PushWindow::Floor,
     };
 }
 
@@ -584,6 +593,17 @@ pub(crate) enum NarrowWrap {
     /// the low bits (another wrapping operation, a truncation, a sign extension) leaves them
     /// unread. `Device::from_queries`' profile.
     Read,
+}
+
+/// How many bytes of push constants a kernel's push window holds (`lower::push::window`): the
+/// fields a kernel reads from push constants up to it, the rest from its `ArgumentTable`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PushWindow {
+    /// 128 bytes, what Vulkan guarantees (`maxPushConstantsSize`): `Device::new`'s profile.
+    Guaranteed,
+    /// 256 bytes, the new runtime's floor for `maxPushConstantsSize`, which every captured device
+    /// reports: a dispatch region and 28 buffer addresses. `Device::from_queries`' profile.
+    Floor,
 }
 
 /// How a `half` color output (a scalar or vector of AIR's `half`) reaches the device

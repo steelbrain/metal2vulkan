@@ -231,8 +231,11 @@ that touch blocks first.
   only at `memory_barrier`, and begins with one where anything was read or written since the last.
 - An encoder that wrote anything owes one barrier at its end. The next command records it, or the
   segment's own end barrier pays it, so a command buffer of one writing encoder has one barrier.
-- Parameters: fields in the push window, `[0, 128)` on every device, are pushed; fields past it go
-  to a 16-byte aligned block in the parameter ring, whose address is a field in the window.
+- Parameters: fields in the push window, `[0, 256)` on every device, are pushed: the dispatch
+  region and up to 28 buffer addresses, each kernel pushing only the bytes it reads. Fields past it
+  go to a 16-byte aligned block in the parameter ring, whose address is a field in the window: a
+  kernel with more than 28 buffers. `Counters::metrics`' `ring_writes` counts each block and each
+  `set_bytes` copy.
   `set_bytes` copies its bytes into the ring at the call, as Metal copies them. The ring is 2 MiB
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
   64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block
@@ -432,7 +435,7 @@ Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's
 | `maxSamplerAllocationCount` | `4000` | a live sampler in every slot |
 | `maxPerStageUpdateAfterBindResources` | `69632` | both texture arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
 | `maxUpdateAfterBindDescriptorsInAllPools` | `73632` | all three arrays |
-| `maxPushConstantsSize` | `128` | per-command values; anything larger goes in a block whose address is pushed |
+| `maxPushConstantsSize` | `256` | per-command values: a dispatch region and 28 buffer addresses; anything larger goes in a block whose address is pushed |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |

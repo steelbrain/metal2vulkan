@@ -1,8 +1,8 @@
 // Owned fixture: the kernels of the harness's authored workloads (crates/metal2vulkan-harness), each
 // standing for a class of compute work: bandwidth-bound, ALU-bound, threadgroup memory with
 // barriers, SIMD reductions, 2D image-like indexing, many tiny dispatches in a chain, narrow
-// integer arithmetic, sampling through a runtime sampler and through a constexpr one, and
-// products by a constant zero of either sign. Written
+// integer arithmetic, sampling through a runtime sampler and through a constexpr one, products
+// by a constant zero of either sign, and many buffers bound for each of many dispatches. Written
 // from scratch for it; `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir harness` compiles
 // it. The harness holds a CPU reference of every result. No translator sweep reads this directory.
 #include <metal_stdlib>
@@ -178,6 +178,59 @@ kernel void sample_up(texture2d<float, access::sample> source [[texture(0)]],
     constexpr sampler filter(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 size = float2(destination.get_width(), destination.get_height());
     destination.write(source.sample(filter, (float2(position) + 0.5f) / size), position);
+}
+
+// Many buffers bound for one kernel: each thread folds one word of each of 23 inputs into the
+// 24th, so a dispatch reads 24 buffer addresses, and many small dispatches each bind all 24.
+kernel void wide_bindings(device const uint *b0 [[buffer(0)]],
+                          device const uint *b1 [[buffer(1)]],
+                          device const uint *b2 [[buffer(2)]],
+                          device const uint *b3 [[buffer(3)]],
+                          device const uint *b4 [[buffer(4)]],
+                          device const uint *b5 [[buffer(5)]],
+                          device const uint *b6 [[buffer(6)]],
+                          device const uint *b7 [[buffer(7)]],
+                          device const uint *b8 [[buffer(8)]],
+                          device const uint *b9 [[buffer(9)]],
+                          device const uint *b10 [[buffer(10)]],
+                          device const uint *b11 [[buffer(11)]],
+                          device const uint *b12 [[buffer(12)]],
+                          device const uint *b13 [[buffer(13)]],
+                          device const uint *b14 [[buffer(14)]],
+                          device const uint *b15 [[buffer(15)]],
+                          device const uint *b16 [[buffer(16)]],
+                          device const uint *b17 [[buffer(17)]],
+                          device const uint *b18 [[buffer(18)]],
+                          device const uint *b19 [[buffer(19)]],
+                          device const uint *b20 [[buffer(20)]],
+                          device const uint *b21 [[buffer(21)]],
+                          device const uint *b22 [[buffer(22)]],
+                          device uint *destination [[buffer(23)]],
+                          uint index [[thread_position_in_grid]]) {
+    uint s = b0[index];
+    s = s * 3u + b1[index];
+    s = s * 3u + b2[index];
+    s = s * 3u + b3[index];
+    s = s * 3u + b4[index];
+    s = s * 3u + b5[index];
+    s = s * 3u + b6[index];
+    s = s * 3u + b7[index];
+    s = s * 3u + b8[index];
+    s = s * 3u + b9[index];
+    s = s * 3u + b10[index];
+    s = s * 3u + b11[index];
+    s = s * 3u + b12[index];
+    s = s * 3u + b13[index];
+    s = s * 3u + b14[index];
+    s = s * 3u + b15[index];
+    s = s * 3u + b16[index];
+    s = s * 3u + b17[index];
+    s = s * 3u + b18[index];
+    s = s * 3u + b19[index];
+    s = s * 3u + b20[index];
+    s = s * 3u + b21[index];
+    s = s * 3u + b22[index];
+    destination[index] = s;
 }
 
 // Products by a constant zero of either sign, in precise arithmetic: `rounds` steps a thread, each

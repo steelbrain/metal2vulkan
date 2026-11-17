@@ -41,10 +41,11 @@ use metal2vulkan::Budget;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// The push window: the parameters a kernel reads from push constants, `[0, 128)` on every device,
-/// as 128 bytes is what Vulkan guarantees. Fields past it go to a block in the parameter ring,
-/// whose address is a field in the window.
-pub(crate) const PUSH_BYTES: u32 = 128;
+/// The push window: the parameters a kernel reads from push constants, `[0, 256)` on every device,
+/// the floor's `maxPushConstantsSize` and the translator's window on `Device::from_queries`'
+/// profile: a dispatch region and 28 buffer addresses. Fields past it go to a block in the
+/// parameter ring, whose address is a field in the window.
+pub(crate) const PUSH_BYTES: u32 = crate::floor::PUSH_CONSTANT_BYTES;
 
 /// The threads of a tile: a kernel that does not observe its threadgroup partition runs every
 /// direct dispatch in tiles of this many threads.

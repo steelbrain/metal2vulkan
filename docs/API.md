@@ -112,8 +112,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
   them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
   pushed as `PushField::SlotGuestBase`, with no root table, no descriptor and no containment, as
-  Metal contains no device-address access. Fields past the 128-byte push window go to a
-  parameter block in memory, read at the device address `PushField::ArgumentTableAddress`, which
+  Metal contains no device-address access. Fields past a kernel's push window (128 bytes; 256 on
+  a device made by `Device::from_queries`, whose runtime's floor requires that much
+  `maxPushConstantsSize`: a dispatch region and 28 buffer addresses) go to a parameter block in
+  memory, read at the device address `PushField::ArgumentTableAddress`, which
   the window always holds. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
   every dispatch, with no `MultiRegion` constant: a dispatch the host knows states Metal's grid
   and its piece's first threadgroup there, and an indirect dispatch a zero grid, whose kernel

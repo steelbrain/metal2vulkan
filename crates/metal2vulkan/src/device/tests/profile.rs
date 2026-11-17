@@ -1225,19 +1225,21 @@ fn large_module_defects_are_keyed_on_anv() {
     }
 }
 
-/// The stage bound, two notes and the narrow wrap are facts of the profile, on every committed
-/// profile: `Device::new` bounds a stage only where its driver's identity names a stage-size defect
+/// The stage bound, two notes, the narrow wrap and the push window are facts of the profile, on
+/// every committed profile: `Device::new` bounds a stage only where its driver's identity names a stage-size defect
 /// (`StageBound::Defects`), notes the controlled `half` pair only where its driver fuses arithmetic
 /// into the narrowing (`HalfPairNote::Fused`), records implementation-defined reconvergence as
 /// the stage's field alone (`ReconvergenceNote::Field`) and masks every narrow result
-/// (`NarrowWrap::Every`); `Device::from_queries` bounds every stage, notes every pair, notes the
-/// reconvergence and masks only the narrow results a use reads (`Every`, `Every`, `Noted`,
-/// `Read`). The facts key the fingerprint: a profile of the same fields with another fact is
+/// (`NarrowWrap::Every`) and pushes 128 bytes to a kernel (`PushWindow::Guaranteed`);
+/// `Device::from_queries` bounds every stage, notes every pair, notes the reconvergence, masks
+/// only the narrow results a use reads and pushes 256 bytes (`Every`, `Every`, `Noted`, `Read`,
+/// `Floor`). The facts key the fingerprint: a profile of the same fields with another fact is
 /// another profile.
 #[test]
 fn the_profiles_facts_follow_its_constructor() {
     use crate::device::profile::{
-        DeviceProfile, HalfPairNote, NarrowWrap, ProfileFacts, ReconvergenceNote, StageBound,
+        DeviceProfile, HalfPairNote, NarrowWrap, ProfileFacts, PushWindow, ReconvergenceNote,
+        StageBound,
     };
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
@@ -1258,6 +1260,12 @@ fn the_profiles_facts_follow_its_constructor() {
         assert_eq!(notes, want, "{stem}");
         let wraps = (old.profile().narrow_wrap(), queries.profile().narrow_wrap());
         assert_eq!(wraps, (NarrowWrap::Every, NarrowWrap::Read), "{stem}");
+        let windows = (old.profile().push_window(), queries.profile().push_window());
+        assert_eq!(
+            windows,
+            (PushWindow::Guaranteed, PushWindow::Floor),
+            "{stem}"
+        );
         let fields = queries.profile().fields().clone();
         let facts = ProfileFacts {
             stage_bound: StageBound::Defects,

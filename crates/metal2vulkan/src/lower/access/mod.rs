@@ -124,7 +124,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::abi::{AbiInt, ParamBinding, ParamRole};
 use crate::air::ir::{AddrSpace, CastOp, Const, Inst, InstId, InstKind, Type, Value, ValueId};
 use crate::budget::Meter;
-use crate::device::profile::{BufferAccess, Containment, DriverWorkaround, Limits};
+use crate::device::profile::{BufferAccess, Containment, DriverWorkaround, Limits, PushWindow};
 use crate::device::requirements::VkLimit;
 use crate::device::DeviceProfile;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
@@ -1204,6 +1204,8 @@ struct Census {
     /// Under the identity domains a device-address slot reads its own address
     /// ([`address_field`]), not the root table.
     identity: bool,
+    /// The profile's push window, which decides where the fields spill.
+    window: PushWindow,
 }
 
 impl Census {
@@ -1211,7 +1213,7 @@ impl Census {
     /// pointer reads the root table.
     fn new(
         push: &BTreeSet<PushField>,
-        (dynamic, identity): (bool, bool),
+        (dynamic, identity, window): (bool, bool, PushWindow),
         forms: impl Iterator<Item = (SlotRef, SlotLowering)>,
         m: &mut Meter,
     ) -> Result<Census, Error> {
@@ -1221,6 +1223,7 @@ impl Census {
             texel: 0,
             fields: push.clone(),
             identity,
+            window,
         };
         let mut psb = dynamic;
         for (slot, l) in forms {
@@ -1255,8 +1258,10 @@ impl Census {
         DescriptorCounts {
             // Under the identity domains the spilled fields are a parameter block at a pushed
             // address, no descriptor.
-            uniform_buffers: u32::from(!self.identity && table::spills(stage, &self.fields))
-                .saturating_add(self.uniform),
+            uniform_buffers: u32::from(
+                !self.identity && table::spills(stage, self.window, &self.fields),
+            )
+            .saturating_add(self.uniform),
             storage_buffers: self.storage,
             sampled_images: self.texel,
             ..DescriptorCounts::default()
@@ -1418,7 +1423,11 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         .chain(own.iter().copied());
     let mut census = Census::new(
         &cx.push,
-        (cx.families.access.dynamic.used, identity(p)),
+        (
+            cx.families.access.dynamic.used,
+            identity(p),
+            p.push_window(),
+        ),
         forms,
         m,
     )?;
@@ -1633,7 +1642,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     }
     let counts = census.counts(stage);
     cx.descriptors = cx.descriptors.plus(&counts);
-    cx.families.access.argument_table = table::spills(stage, &cx.push);
+    cx.families.access.argument_table = table::spills(stage, p.push_window(), &cx.push);
     if cx.families.access.argument_table && identity(p) {
         cx.push.insert(PushField::ArgumentTableAddress);
     }

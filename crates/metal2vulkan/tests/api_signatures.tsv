@@ -2249,6 +2249,7 @@ field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u6
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
+field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64
 field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64

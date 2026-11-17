@@ -612,6 +612,7 @@ impl Building {
     /// Copies `bytes` into the parameter ring, returning their address.
     pub(crate) fn write_ring(&mut self, bytes: &[u8]) -> Result<u64, Error> {
         let core = Arc::clone(self.device.core());
+        core.counters.count(Metric::RingWrites);
         self.gpu.ring.write(&core, bytes)
     }
 

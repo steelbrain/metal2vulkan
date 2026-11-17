@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 14] = [
+pub const WORKLOADS: [Workload; 15] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -75,6 +75,10 @@ pub const WORKLOADS: [Workload; 14] = [
     Workload {
         name: "constexpr_sampling",
         plan: constexpr_sampling,
+    },
+    Workload {
+        name: "wide_bindings",
+        plan: wide_bindings,
     },
 ];
 
@@ -481,6 +485,47 @@ fn lcg_frame(name: &str, command_buffers: usize, per: usize, per_encoder: Option
         outputs: Vec::new(),
         per_command_buffer: Some(per),
         per_encoder,
+    }
+}
+
+/// Many buffers bound for each of many small dispatches: 256 dispatches of 256 threads of
+/// `wide_bindings`, each binding 24 buffers, 23 inputs and the output, and each thread folding one
+/// word of each input (`s · 3 + v`). Each dispatch reads 24 buffer addresses, which a runtime
+/// passes in push constants as far as its push window holds them, and in a parameter block in
+/// memory past it.
+fn wide_bindings() -> Plan {
+    const WORDS: usize = 256;
+    const INPUTS: usize = 23;
+    const DISPATCHES: usize = 256;
+    let inputs: Vec<Vec<u32>> = (0..INPUTS as u64).map(|k| words(40 + k, WORDS)).collect();
+    let output = (0..WORDS)
+        .map(|i| {
+            (1..INPUTS).fold(inputs[0][i], |s, k| {
+                s.wrapping_mul(3).wrapping_add(inputs[k][i])
+            })
+        })
+        .collect();
+    let mut buffers: Vec<BufferPlan> = inputs.iter().map(|w| private(word_bytes(w))).collect();
+    buffers.push(unset(4 * WORDS as u64));
+    let dispatch = Dispatch {
+        function: "wide_bindings".to_owned(),
+        constants: Vec::new(),
+        bindings: (0..=INPUTS).map(|k| buffer(k as u32, k)).collect(),
+        grid: Grid::groups_of_256(1),
+    };
+    Plan {
+        name: "wide_bindings".to_owned(),
+        library: Source::Authored,
+        buffers,
+        dispatches: vec![dispatch; DISPATCHES],
+        expect: vec![Expect {
+            buffer: INPUTS,
+            values: Values::Words(output),
+        }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
+        outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 

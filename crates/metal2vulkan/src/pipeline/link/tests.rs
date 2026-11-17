@@ -121,7 +121,11 @@ pub(super) fn iface(
         stage,
         slots: BTreeMap::new(),
         threadgroup: Vec::new(),
-        push: crate::lower::push::place(stage, &BTreeSet::new()),
+        push: crate::lower::push::place(
+            stage,
+            crate::device::profile::PushWindow::Guaranteed,
+            &BTreeSet::new(),
+        ),
         descriptors,
         spec,
         needs_pointer_translation: false,
@@ -599,10 +603,15 @@ fn push_ranges_are_the_stage_windows() {
         })
     };
     let mut vs = iface(Stage::Vertex, Vec::new(), Vec::new());
-    vs.push = crate::lower::push::place(Stage::Vertex, &BTreeSet::from([sb(Stage::Vertex)]));
+    vs.push = crate::lower::push::place(
+        Stage::Vertex,
+        crate::device::profile::PushWindow::Guaranteed,
+        &BTreeSet::from([sb(Stage::Vertex)]),
+    );
     let mut fs = iface(Stage::Fragment, Vec::new(), Vec::new());
     fs.push = crate::lower::push::place(
         Stage::Fragment,
+        crate::device::profile::PushWindow::Guaranteed,
         &BTreeSet::from([PushField::RootTableAddress, sb(Stage::Fragment)]),
     );
     let (va, fa) = (artifact(vs, None), artifact(fs, None));

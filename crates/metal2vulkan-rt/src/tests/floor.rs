@@ -80,7 +80,7 @@ fn at_the_floor() -> Queried {
         limits: vk::PhysicalDeviceLimits::default()
             .max_sampler_allocation_count(4000)
             .max_color_attachments(8)
-            .max_push_constants_size(128)
+            .max_push_constants_size(256)
             .max_compute_work_group_invocations(1024)
             .max_compute_work_group_size([1024, 1024, 64])
             .timestamp_compute_and_graphics(true),
@@ -425,9 +425,9 @@ fn each_low_limit_is_named() {
             65_536 + 4096 + 4000,
         ),
         (
-            |d| d.limits.max_push_constants_size = 127,
+            |d| d.limits.max_push_constants_size = 255,
             "maxPushConstantsSize",
-            128,
+            256,
         ),
         (
             |d| d.limits.max_compute_work_group_invocations = 1023,
@@ -696,7 +696,7 @@ fn every_missing_item_is_named_at_once() {
             Missing::Limit {
                 name: "maxPushConstantsSize",
                 device: 64,
-                needed: 128,
+                needed: 256,
             },
             Missing::QueueFamily,
             Missing::MemoryType {
@@ -708,7 +708,7 @@ fn every_missing_item_is_named_at_once() {
         below.to_string(),
         "the device is below the runtime's floor: it lacks VK_KHR_swapchain; \
          VK_KHR_workgroup_memory_explicit_layout; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
-         maxPushConstantsSize 64, below 128; a queue family with graphics and compute; a memory \
+         maxPushConstantsSize 64, below 256; a queue family with graphics and compute; a memory \
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers"
     );

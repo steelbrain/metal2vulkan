@@ -56,8 +56,10 @@ pub(crate) const STORAGE_IMAGES: u32 = 4096;
 /// device can hold a sampler in every slot.
 pub(crate) const SAMPLERS: u32 = 4000;
 
-/// Bytes of push constants: what Vulkan guarantees, so no query decides it.
-pub(crate) const PUSH_CONSTANT_BYTES: u32 = 128;
+/// Bytes of push constants: a dispatch region and 28 buffer addresses (the translator's push
+/// window on `Device::from_queries`' profile), which every captured device reports, so no query
+/// decides it.
+pub(crate) const PUSH_CONSTANT_BYTES: u32 = 256;
 
 /// Threads in one compute workgroup: Metal's most threads per threadgroup.
 pub(crate) const WORKGROUP_INVOCATIONS: u32 = 1024;
