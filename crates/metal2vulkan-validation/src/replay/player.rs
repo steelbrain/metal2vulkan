@@ -525,14 +525,15 @@ impl<'b, B: Backend> Player<'b, B> {
         if !self.kinds.contains_key(&target) {
             return Err(invalid(format!("m2v.write to #{target}, made by no call")));
         }
-        if call.args.is_empty() || call.args.len() % 2 != 0 {
+        let (pairs, rest) = call.args.as_chunks::<2>();
+        if pairs.is_empty() || !rest.is_empty() {
             return Err(invalid("m2v.write takes pairs of an offset and its data"));
         }
         self.drain()?;
-        for pair in call.args.chunks_exact(2) {
-            let offset = pair[0].as_uint();
+        for [offset, data] in pairs {
+            let offset = offset.as_uint();
             let offset = offset.ok_or_else(|| invalid("m2v.write of no offset"))?;
-            let mut data = match &pair[1] {
+            let mut data = match data {
                 Value::Bytes(data) => data.clone(),
                 Value::Blob(hash) => stream.blob(hash)?,
                 _ => return Err(invalid("m2v.write of no data")),

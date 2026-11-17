@@ -78,7 +78,7 @@ fn a_stream_reads_back_what_was_written() {
         }
         Ok(())
     });
-    let mut reader = StreamReader::open(&[path.clone()], None).unwrap();
+    let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
     let read = calls(&mut reader).unwrap();
     assert_eq!(read.len(), 2);
     assert_eq!(read[0], read[1]);
@@ -164,7 +164,7 @@ fn unknown_kinds_and_versions_are_refused() {
     let mut bytes = std::fs::read(&path).unwrap();
     bytes.extend_from_slice(&[9, 0]);
     std::fs::write(&path, &bytes).unwrap();
-    let mut reader = StreamReader::open(&[path.clone()], None).unwrap();
+    let mut reader = StreamReader::open(std::slice::from_ref(&path), None).unwrap();
     assert!(matches!(
         calls(&mut reader),
         Err(StreamError::UnknownKind { kind: 9, .. })
@@ -189,7 +189,7 @@ fn a_blob_left_out_is_read_from_the_blob_directory() {
     });
     let blobs = dir.path().join("blobs");
     std::fs::create_dir(&blobs).unwrap();
-    let mut reader = StreamReader::open(&[path.clone()], Some(blobs.clone())).unwrap();
+    let mut reader = StreamReader::open(std::slice::from_ref(&path), Some(blobs.clone())).unwrap();
     assert!(matches!(
         reader.blob(&hash),
         Err(StreamError::MissingBlob(_))
@@ -238,15 +238,16 @@ fn the_address_map_relocates_by_the_innermost_live_range() {
     bytes.extend_from_slice(&(block + 0x100).to_le_bytes());
     bytes.extend_from_slice(&[0u8; 4]);
     bytes.extend_from_slice(&(block + 0x110).to_le_bytes());
-    // `bytes` starts 4 bytes into its target: the second address is at the target's offset 16.
+    // `bytes` starts 4 bytes into its target: the first address is at the target's offset 8, the
+    // second at its offset 20.
     let (moved, misaligned) = map.relocate(&mut bytes, 4);
     assert_eq!((moved, misaligned), (1, 1));
+    assert_eq!(&bytes[4..12], &0x90_0000u64.to_le_bytes());
     assert_eq!(
-        &bytes[4..12],
-        &(block + 0x100).to_le_bytes(),
+        &bytes[16..24],
+        &(block + 0x110).to_le_bytes(),
         "4 past 8 stays"
     );
-    assert_eq!(&bytes[16..24], &0x90_0010u64.to_le_bytes());
 }
 
 /// A backend that keeps what it is asked: the calls, the waits, the bytes written. It places

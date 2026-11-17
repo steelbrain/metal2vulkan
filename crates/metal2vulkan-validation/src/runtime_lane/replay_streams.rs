@@ -280,7 +280,7 @@ fn textures_are_made_at_their_recorded_resource_ids() {
                 "newTextureWithDescriptor:",
                 1,
                 id,
-                &[descriptor.clone()],
+                std::slice::from_ref(&descriptor),
                 &answer,
             )?;
         }

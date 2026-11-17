@@ -29,7 +29,8 @@ enum Object {
     Queue(CommandQueue),
     CommandBuffer(CommandBuffer),
     Compute(ComputeCommandEncoder),
-    Blit(BlitCommandEncoder),
+    /// Boxed: a blit encoder is some 3 KiB, twenty times any other object.
+    Blit(Box<BlitCommandEncoder>),
     Buffer(Buffer),
     /// A block: its heap, and the buffer over all of it where the CPU writes it.
     Block(Heap, Option<Buffer>),
@@ -65,7 +66,7 @@ fn failed<'c>(call: &'c Call) -> impl Fn(Error) -> PlayError + 'c {
     }
 }
 
-fn arg<'c>(call: &'c Call, at: usize) -> Result<&'c Value, PlayError> {
+fn arg(call: &Call, at: usize) -> Result<&Value, PlayError> {
     call.args
         .get(at)
         .ok_or_else(|| refuse(call, format!("no argument {at}")))
@@ -431,7 +432,8 @@ impl OldRuntime {
                 (command_buffer.compute_command_encoder_with_dispatch_type(dispatch))
                     .map(Object::Compute)
             }
-            "blitCommandEncoder" => command_buffer.blit_command_encoder().map(Object::Blit),
+            "blitCommandEncoder" => (command_buffer.blit_command_encoder())
+                .map(|encoder| Object::Blit(Box::new(encoder))),
             "commit" => return command_buffer.commit().map(|()| None).map_err(failed(call)),
             "encodeSignalEvent:value:" => {
                 let event = self.event(call, 0)?;
