@@ -1274,9 +1274,11 @@ fn counts_until(device: &Device, until: impl Fn(&crate::WorkCounts) -> bool) -> 
 /// - **Not parked** where the texture's `VkImage` was handed out (`Texture::vk_image`): its image
 ///   goes with its import.
 /// - **Released** untaken: kept by a residency pass within its window where held imports cost
-///   nothing, released by the next where they cost every submission
-///   (`exported_dma_buf_images_parked_released`); and, parked as the buffer goes, with the
-///   buffer's pages, which leaves the device's dma-buf image imports as they were before.
+///   nothing, released by the residency thread's next pass where they cost every submission
+///   (`exported_dma_buf_images_parked_released`), each destruction in a section of the exit
+///   guard, without which a test build ends the process there; and, parked as the buffer goes,
+///   with the buffer's pages, which leaves the device's dma-buf image imports as they were
+///   before.
 ///
 /// The import tax is forced to cost nothing while a texture is to take a parked image, so that no
 /// pass of the residency thread releases it first. A negative control, run by hand: with the take
@@ -1385,15 +1387,16 @@ fn a_texture_over_a_dma_buf_block_takes_the_image_the_last_one_parked() {
     };
     device.shared().residency.sweep(false);
     let kept = device.work_counts();
+    // The residency thread's own next pass, a runtime thread, whose Vulkan calls each lie in a
+    // section of the exit guard (a test build ends the process at one that does not).
     checks.force(Check::ImportTax, Verdict::Holds);
-    device.shared().residency.sweep(false);
-    let swept = device.work_counts();
+    let swept = counts_until(&device, |counts| released(counts) >= 2);
     checks.force(Check::ImportTax, measured);
     assert_eq!(
         (released(&kept), released(&swept)),
         (0, 2),
-        "kept by a pass within the window where held imports cost nothing, released by the next \
-         where they cost every submission"
+        "kept by a pass within the window where held imports cost nothing, released by the \
+         thread's next where they cost every submission"
     );
     // A handed-out image parks nowhere.
     let handed = (picture.new_texture(&descriptor, plane.at, ROW)).unwrap();

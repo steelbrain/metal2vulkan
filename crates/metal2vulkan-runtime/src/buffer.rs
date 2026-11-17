@@ -891,6 +891,9 @@ impl FixedPages {
             return;
         };
         let shared = self.device.shared();
+        // The images parked under them go with them, before their memory (`dma_buf/parked.rs`).
+        #[cfg(unix)]
+        crate::dma_buf::parked::release(self.parked_images.take_where(|_| true));
         if self.owned {
             // SAFETY: none of the lost generation's command buffers records or is pending, and
             // every later one's work reaches the carried buffer's own pages.
@@ -899,9 +902,6 @@ impl FixedPages {
         lock(&shared.memory).free(shared.vk(), &self.pages.memory.placement);
         self.freed.store(true, Ordering::Release);
         drop(busy);
-        // The images parked under them go with them (`dma_buf/parked.rs`).
-        #[cfg(unix)]
-        crate::dma_buf::parked::release(self.parked_images.take_where(|_| true));
         // SAFETY: as above; the pages' drop reads nothing once they went.
         unsafe { self.device.let_go() };
     }
@@ -1065,6 +1065,10 @@ impl Drop for FixedPages {
             return;
         };
         let shared = self.device.shared();
+        // The images parked under them go first, before their memory is freed or recycled for
+        // another buffer (`dma_buf/parked.rs`).
+        #[cfg(unix)]
+        crate::dma_buf::parked::release(self.parked_images.take_where(|_| true));
         // No pending command buffer uses the pages: one whose commands used the buffer holds it,
         // and one whose resident set lists them holds them, until it completed.
         let placement = &self.pages.memory.placement;
@@ -1096,10 +1100,6 @@ impl Drop for FixedPages {
             }
         }
         drop(busy);
-        // The images parked under them go with them: each holds its own import of the memory's
-        // dma-buf, so none reads the pages' next buffer (`dma_buf/parked.rs`).
-        #[cfg(unix)]
-        crate::dma_buf::parked::release(self.parked_images.take_where(|_| true));
     }
 }
 

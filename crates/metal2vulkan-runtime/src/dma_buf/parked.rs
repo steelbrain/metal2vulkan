@@ -80,6 +80,7 @@
 use super::{DmaBufImage, DmaBufPages};
 use crate::buffer::{FixedPages, HostImport};
 use crate::device::lock;
+use crate::exit_guard;
 use crate::host_residency::now_ms;
 use crate::image_plan::ImagePlan;
 use crate::{release, Device};
@@ -308,7 +309,9 @@ impl ParkedImages {
 /// Release `images`, parked images taken out untaken: each `VkImage` destroyed, then its import
 /// freed, each counted (`WorkCounts::dma_buf_images_parked_released`, or
 /// `exported_dma_buf_images_parked_released`) and let go of by the residency. No command uses
-/// them.
+/// them. On any thread, the residency's among them: each destruction is a section of the exit
+/// guard, as every Vulkan call of a runtime thread is (`exit_guard::check`), and while the process
+/// exits the image is left to its end, as its import is (`DmaBufPages`'s drop).
 pub(crate) fn release(images: Vec<ParkedImage>) {
     for image in images {
         let ParkedImage {
@@ -319,9 +322,12 @@ pub(crate) fn release(images: Vec<ParkedImage>) {
         } = image;
         let device = import.device.clone();
         let shared = device.shared();
-        // SAFETY: the image is the device's, and no command uses it: every command buffer that
-        // used it completed before it was parked, and none took it since.
-        unsafe { release::object(shared.vk(), raw) };
+        if let Some(busy) = exit_guard::enter() {
+            // SAFETY: the image is the device's, and no command uses it: every command buffer
+            // that used it completed before it was parked, and none took it since.
+            unsafe { release::object(shared.vk(), raw) };
+            drop(busy);
+        }
         // Its import goes after it.
         drop(import);
         match exported {
