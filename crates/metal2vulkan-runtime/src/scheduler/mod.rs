@@ -1505,6 +1505,9 @@ fn run(shared: &Arc<SchedulerShared>) {
                 && state.grouped.is_empty()
                 && bound.is_none()
                 && stalls.is_none();
+            // A head's bound that comes before the sleep's end ends it as no slice does: the time
+            // that head may go, the wake for it, whose pass is no rescue.
+            let short = short || bound.is_some_and(|left| left < slice);
             let slice = bound.map_or(slice, |left| left.min(slice));
             let on_gpu = shared.nudge.get().filter(|_| shared.gpu_waits(&mut gpu));
             // The lock of the sleep ([`Sleep`]), under the scheduler's: a waker that found no
@@ -1575,7 +1578,7 @@ fn run(shared: &Arc<SchedulerShared>) {
 }
 
 /// Sleep on the GPU (the module docs): for any of `gpu`'s semaphores to reach its value, or the
-/// nudge its next, at most `slice` ([`WAIT_SLICE`], or less to a head's bound, or, where `short`,
+/// nudge its next, at most `slice` ([`WAIT_SLICE`], or, where `short`, less: to a head's bound, or
 /// the idle's length before a driver's stall is taken, whose end is no slice's), without the locks
 /// `state` and `sleep` hold, the scheduler's coming back taken. Where a value landed, its events
 /// observe their counters, and the state is marked for a pass.

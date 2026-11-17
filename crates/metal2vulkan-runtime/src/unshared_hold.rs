@@ -428,8 +428,9 @@ impl Flight {
     /// Whether a batch of command queue `queue` may go now on its turn (`queue_turns.rs`): under
     /// [`BUDGET`] where another command queue took a batch here within [`ACTIVE`] of `now`
     /// (`gpu_time::host_nanos`), else under [`IDLE_BUDGET`], [`Room::Idle`] where only that let
-    /// it go. `expected` is its queue's expected run now; `ran` and `completed` are
-    /// [`ahead`](Self::ahead)'s.
+    /// it go; one held under [`BUDGET`] that [`IDLE_BUDGET`] would let go is held at most until
+    /// that queue's last batch here is [`ACTIVE`] old. `expected` is its queue's expected run now;
+    /// `ran` and `completed` are [`ahead`](Self::ahead)'s.
     pub(crate) fn turn(
         &self,
         (queue, expected): (u64, Option<u64>),
@@ -443,7 +444,23 @@ impl Flight {
             false => last,
         };
         if active(other, now) {
-            return self.own_ahead((queue, expected), ran, completed, BUDGET);
+            // Held under the 2 ms budget where 16 ms would let it go: it goes once that queue's
+            // last batch here is `ACTIVE` old, at the latest.
+            return match self.own_ahead((queue, expected), ran, completed, BUDGET) {
+                Room::Hold { after, through }
+                    if !matches!(
+                        self.own_ahead((queue, expected), ran, completed, IDLE_BUDGET),
+                        Room::Hold { .. }
+                    ) =>
+                {
+                    let quiet = (other + ACTIVE).saturating_sub(now);
+                    Room::Hold {
+                        after: Some(after.map_or(quiet, |after| after.min(quiet))),
+                        through,
+                    }
+                }
+                room => room,
+            };
         }
         match self.own_ahead((queue, expected), ran, completed, IDLE_BUDGET) {
             Room::Go if self.own_ahead((queue, expected), ran, completed, BUDGET) != Room::Go => {
@@ -457,8 +474,10 @@ impl Flight {
     /// under `budget` of its own queue's work left in flight (`queue_turns.rs`): each of its
     /// batches here counts that run, less what the oldest batch here ran (`ran`, as in
     /// [`ahead`](Self::ahead)) where it is one of them; one of a queue with no run seen holds the
-    /// next until it completes. Held until the oldest batch here, of value `through`, completes,
-    /// or, where only the budget holds it and its own oldest runs now, until `after`
+    /// next until it completes. Held until the batch of value `through` completes
+    /// ([`turn_through`]: the one whose completion lets it go, or makes the batch of its queue
+    /// whose run does so the oldest), or, where only the budget holds it and its own oldest runs
+    /// now, until `after`
     /// nanoseconds from now, where that batch's expected run brings its work left under the
     /// budget then.
     pub(crate) fn own_ahead(
@@ -480,11 +499,13 @@ impl Flight {
         if own == 0 {
             return Room::Go;
         }
-        let through = oldest.value;
+        let in_flight = self.batches.range(gone..);
         let Some(run) = expected else {
+            // Its first batch here gives its queue a run once it completes.
+            let first = (in_flight.clone()).find(|batch| batch.queue == queue);
             return Room::Hold {
                 after: None,
-                through,
+                through: first.map_or(oldest.value, |batch| batch.value),
             };
         };
         let running = gone == 0 && oldest.queue == queue;
@@ -498,7 +519,14 @@ impl Flight {
         }
         let over = left - budget + 1;
         let after = (oldest.queue == queue && run - credit >= over).then_some(over);
-        Room::Hold { after, through }
+        // Its batches that must complete before its work left falls under the budget, each at
+        // `run`: all but those the budget holds.
+        let holds = usize::try_from((budget - 1) / run).unwrap_or(usize::MAX);
+        let must = own - holds.min(own - 1);
+        Room::Hold {
+            after,
+            through: turn_through(in_flight, queue, must),
+        }
     }
 
     /// The batches in flight, of every queue.
@@ -506,6 +534,25 @@ impl Flight {
     pub(crate) fn len(&self) -> usize {
         self.batches.len()
     }
+}
+
+/// The value whose completion lets a held batch of command queue `queue` go, or makes the batch
+/// of its queue whose run does so the oldest here (`queue_turns.rs`, **When it goes**): the batch
+/// before the `must`-th of its queue's in `in_flight`, the batches not seen complete, oldest
+/// first, or that batch itself where it is the oldest. So a completion wakes the scheduler's
+/// thread for it only once it may go, or once its time to go can be told.
+fn turn_through<'a>(in_flight: impl Iterator<Item = &'a InFlight>, queue: u64, must: usize) -> u64 {
+    let (mut seen, mut before, mut last) = (0, None, 0);
+    for batch in in_flight {
+        if batch.queue == queue {
+            seen += 1;
+            if seen == must {
+                return before.unwrap_or(batch.value);
+            }
+        }
+        (before, last) = (Some(batch.value), batch.value);
+    }
+    last
 }
 
 impl crate::Device {

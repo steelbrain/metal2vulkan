@@ -15,6 +15,8 @@
 //! - **Shares of a run.** A light batch seen complete together with another queue's long one keeps
 //!   a light run (`unshared_hold::Shares`), so a compositor's plain queue is never held behind its
 //!   own draw stuck behind an application's batch.
+//! - **The completion that lets it go.** A held batch waits for the completion that lets it go,
+//!   or that makes its queue's batch whose run does so the oldest, not for each one before it.
 //! - **The oldest's run.** What the oldest batch in flight ran counts against its own queue's work
 //!   alone, and only while no completion past it was published; the hold waits for the oldest
 //!   batch's completion, and, where that is its own queue's, for the time its run brings the work
@@ -94,12 +96,17 @@ fn a_later_queue_goes_ahead_of_another_queue_s_burst() {
     );
     flight.taken(5, Flies::Other(B, &probe), later);
     // A's oldest ran 3 ms of its 4: 13 ms of A's left, 2 ms or more, which the 1 ms left of the
-    // oldest's run does not bring under 2 ms: held until it completes.
-    let a_held = Room::Hold {
-        after: None,
-        through: 1,
+    // oldest's run does not bring under 2 ms: held until its third completes, its fourth then the
+    // oldest, whose run brings it under 2 ms; or until B's last is 50 ms old, when 16 ms lets it
+    // go.
+    let a_held = |quiet| Room::Hold {
+        after: Some(quiet),
+        through: 3,
     };
-    assert_eq!(turn(&flight, (A, &app), 3 * MS, later + 1), a_held);
+    assert_eq!(
+        turn(&flight, (A, &app), 3 * MS, later + 1),
+        a_held(ACTIVE - 1)
+    );
     assert_eq!(
         turn(&flight, (B, &probe), 3 * MS, later + 1),
         Room::Go,
@@ -109,7 +116,7 @@ fn a_later_queue_goes_ahead_of_another_queue_s_burst() {
     assert_eq!(turn(&flight, (A, &app), 3 * MS, later + ACTIVE), Room::Idle);
     assert_eq!(
         turn(&flight, (A, &app), 3 * MS, later + ACTIVE - 1),
-        a_held,
+        a_held(1),
         "49.99 ms after B's last"
     );
 }
@@ -215,9 +222,10 @@ fn the_oldest_batch_s_run_counts_against_its_own_queue_s_work_alone() {
     flight.taken(1, Flies::Other(B, &long), T0);
     flight.taken(2, Flies::Other(A, &app), T0);
     let now = T0 + MS;
-    // B's ran 20 ms: none of it counts for A, whose 4 ms waits behind it.
+    // B's ran 20 ms: none of it counts for A, whose 4 ms waits behind it, until B's completes or
+    // is 50 ms old.
     let behind = Room::Hold {
-        after: None,
+        after: Some(ACTIVE - MS),
         through: 1,
     };
     assert_eq!(turn(&flight, (A, &app), 20 * MS, now), behind);
@@ -307,4 +315,45 @@ fn a_batch_of_unknown_length_takes_the_run_beyond_the_others_expected_ones() {
         (first.nanos(), second.nanos()),
         (Some(4 * MS), Some(4 * MS))
     );
+}
+
+/// A held batch waits for the completion that lets it go, or makes the batch of its queue whose
+/// run does so the oldest, not for each completion before it: A's six 1 ms batches beside B's
+/// two, B active (2 ms): A's next waits for its fourth's completion, its fifth then the oldest,
+/// running; then for 1 ms of that run, or its completion.
+#[test]
+fn a_held_batch_waits_for_the_completion_that_lets_it_go() {
+    let (app, other) = (queue(MS), queue(MS));
+    let mut flight = Flight::default();
+    flight.taken(1, Flies::Other(B, &other), T0);
+    for value in 2..=4 {
+        flight.taken(value, Flies::Other(A, &app), T0);
+    }
+    flight.taken(5, Flies::Other(B, &other), T0);
+    for value in 6..=8 {
+        flight.taken(value, Flies::Other(A, &app), T0);
+    }
+    // Six of A's in flight, 6 ms: one of them, 1 ms, is under 2 ms; the five before it must go,
+    // the fifth A's of value 7, after the batch of value 6.
+    let held = Room::Hold {
+        after: Some(ACTIVE),
+        through: 6,
+    };
+    assert_eq!(turn(&flight, (A, &app), 0, T0), held);
+    for completed in 1..6 {
+        assert_eq!(
+            flight.turn((A, app.nanos()), 0, completed, T0),
+            held,
+            "{completed} seen complete: not yet"
+        );
+    }
+    // The batch of value 6 seen complete: A's of value 7 runs, its 1 ms then left of 2 ms.
+    assert_eq!(
+        flight.turn((A, app.nanos()), 0, 6, T0),
+        Room::Hold {
+            after: Some(1),
+            through: 7
+        }
+    );
+    assert_eq!(flight.turn((A, app.nanos()), 0, 7, T0), Room::Go);
 }

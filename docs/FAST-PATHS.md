@@ -217,8 +217,9 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   16 ms of it and one batch, not the whole burst, and from its submission on, while that queue
   keeps submitting there, behind about 2 ms and one batch of each busy queue. An unshared queue's
   batches are never held for their turn, and count as another queue's. The next batch goes in
-  before the one ahead ends (the scheduler's thread woken at the oldest batch's completion and at
-  the time its run brings the work left under the budget), so the GPU idles for the hold only
+  before the one ahead ends (the scheduler's thread woken at the completion that lets it go or
+  makes its queue's batch whose run does so the oldest, and at the time that run brings the work
+  left under the budget, no sleep slice's), so the GPU idles for the hold only
   where that thread answers later than the budget less one batch: a queue alone keeps about 16 ms
   queued, two queues submitting keep 2 ms each. A committing or waiting thread's pass leaves a
   held batch to the scheduler's thread (`WorkCounts::scheduler_at_commit_left_turns`). Counted:

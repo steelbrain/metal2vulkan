@@ -38,11 +38,14 @@
 //!   commit order with it waits behind it, and one that shares nothing with it goes ahead of it.
 //!   It waits for its own queue's work already submitted alone, never for a later commit, so the
 //!   turns add no wait that can close a cycle.
-//! - **When it goes.** As under `unshared_hold.rs`'s bound: a pass that holds such a batch leaves
-//!   the scheduler's thread waiting for the completion of the oldest batch in flight on its
-//!   `VkQueue`, and, where that batch is its own queue's, for the time its expected run brings the
-//!   work left under the budget, so the next batch goes before the one ahead ends. A committing or
-//!   waiting thread's pass leaves such a batch to the scheduler's thread
+//! - **When it goes.** A pass that holds such a batch leaves the scheduler's thread waiting for
+//!   the completion that lets it go, or that makes the batch of its queue whose run does so the
+//!   oldest on its `VkQueue` (`unshared_hold::turn_through`), not for each completion before it;
+//!   where the oldest batch is its own queue's, for the time its expected run brings the work left
+//!   under the budget, so the next batch goes before the one ahead ends; and, where 2 ms holds it
+//!   and 16 ms would not, for the other queue's last batch there to be 50 ms old. A sleep that
+//!   ends at such a time is no sleep slice's (`WorkCounts::scheduler_slice_rescues` counts none
+//!   for it). A committing or waiting thread's pass leaves such a batch to the scheduler's thread
 //!   (`WorkCounts::scheduler_at_commit_left_turns`).
 //! - **What it costs.** A batch already submitted runs to its end: one longer than its queue's
 //!   recent ones holds every later command buffer there for its whole length, as one command
