@@ -51,12 +51,27 @@ struct Entry {
     pending: Option<Pending>,
 }
 
-/// Zero fills recorded into one command buffer, submitted ahead of everything in the next batch,
-/// which holds every block they fill until it retires.
+/// Commands recorded into one command buffer apart from any command buffer of the guest's (zero
+/// fills, and later transfers), submitted ahead of everything in the next batch, which keeps what
+/// they use until it retires.
 pub(crate) struct Upload {
     pub(crate) recorder: Recorder,
     command: vk::CommandBuffer,
-    pub(crate) blocks: Vec<Arc<Block>>,
+    held: Vec<Held>,
+}
+
+/// What an upload keeps until it retires.
+pub(crate) enum Held {
+    Block(Arc<Block>),
+}
+
+impl Held {
+    /// Whether `self` and `other` are the same object.
+    fn is(&self, other: &Held) -> bool {
+        match (self, other) {
+            (Held::Block(a), Held::Block(b)) => Arc::ptr_eq(a, b),
+        }
+    }
 }
 
 /// What one `vkQueueSubmit2` submits.
@@ -113,16 +128,16 @@ impl Work {
         self.wake();
     }
 
-    /// Records the zero fill of `offset..end` of `block` into the upload, which goes ahead of
-    /// every later commit.
+    /// Records into the pending upload with `record`, which is given the device and the upload's
+    /// command buffer, recording, under the work lock: commands that go ahead of every later
+    /// commit, on every queue. The upload keeps each of `held` until it retires.
     ///
     /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made.
-    pub(crate) fn zero(
+    pub(crate) fn upload(
         &self,
         core: &Core,
-        block: &Arc<Block>,
-        offset: u64,
-        end: u64,
+        held: impl IntoIterator<Item = Held>,
+        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<(), Error> {
         let mut state = self.lock();
         if state.closed {
@@ -137,7 +152,7 @@ impl Work {
                     Ok(command) => Upload {
                         recorder,
                         command,
-                        blocks: Vec::new(),
+                        held: Vec::new(),
                     },
                     Err(error) => {
                         core.recorders.give_back(core, recorder);
@@ -147,22 +162,39 @@ impl Work {
             }
         };
         let upload = state.upload.insert(upload);
-        // SAFETY: the upload's command buffer is recording, under the lock; the block's buffer has
-        // every usage, and `offset..end` lies in it.
-        unsafe {
-            fill::record(
-                device,
-                upload.command,
-                core.filler.zeros(),
-                block.memory.buffer,
-                offset,
-                end,
-            )
-        };
-        if !upload.blocks.iter().any(|held| Arc::ptr_eq(held, block)) {
-            upload.blocks.push(Arc::clone(block));
+        record(device, upload.command);
+        for item in held {
+            if !upload.held.iter().any(|kept| kept.is(&item)) {
+                upload.held.push(item);
+            }
         }
         Ok(())
+    }
+
+    /// Records the zero fill of `offset..end` of `block` into the upload.
+    ///
+    /// Err: as [`upload`](Self::upload).
+    pub(crate) fn zero(
+        &self,
+        core: &Core,
+        block: &Arc<Block>,
+        offset: u64,
+        end: u64,
+    ) -> Result<(), Error> {
+        self.upload(core, [Held::Block(Arc::clone(block))], |device, command| {
+            // SAFETY: the upload's command buffer is recording, under the lock; the block's
+            // buffer has every usage, and `offset..end` lies in it.
+            unsafe {
+                fill::record(
+                    device,
+                    command,
+                    core.filler.zeros(),
+                    block.memory.buffer,
+                    offset,
+                    end,
+                )
+            }
+        })
     }
 
     /// Ends `queue`'s held and unsubmitted command buffers with `NotRun`.
@@ -521,7 +553,7 @@ fn submit(core: &Core, batch: Batch) {
 }
 
 impl Upload {
-    /// Recycles the upload's recorder and gives up its blocks: once its submission completed, or
+    /// Recycles the upload's recorder and gives up what it holds: once its submission completed, or
     /// where it never went.
     pub(crate) fn retire(self, core: &Core) {
         core.recorders.give_back(core, self.recorder);
