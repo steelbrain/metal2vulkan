@@ -32,7 +32,11 @@
 //! (`CommandBuffer::submit_returned_time`, the device noting queue times: its planning, any
 //! hold in a group, and the call), and from there to its GPU start; and why the commits' passes
 //! left batches (the `WorkCounts::scheduler_at_commit_left_*` counts) and the groups held past
-//! a pass for two submissions in flight (`WorkCounts::groups_kept_pending`).
+//! a pass for two submissions in flight (`WorkCounts::groups_kept_pending`). And (`DRAG-FRAME`)
+//! each frame's whole (medians and 90th percentiles): from its first commit call to the GPU start
+//! and the GPU end of its last part with work, and its commit calls' time, the committing
+//! thread's for the frame. A part's time from its own commit call leaves out the commit calls
+//! before it, which hold back its commit where the committing thread submits each part itself.
 //!
 //! Ignored: run it in release under `--cfg m2v_gpu` where `/dev/udmabuf` opens,
 //! `cargo test --release -p metal2vulkan-runtime --lib drag_submit_bench -- --ignored --nocapture`.
@@ -65,7 +69,8 @@ const MIXED_PAUSE: Duration = Duration::from_micros(100);
 /// What a measurement's frames noted, in microseconds, of its parts: each commit call's (those with
 /// work, the empty ones'); and of those with work, from the commit call to the GPU start, to the
 /// start of the part's submission, from there to the return of the call that carried it, and
-/// from there to the GPU start.
+/// from there to the GPU start. And of each frame: from its first commit call to its last part
+/// with work's GPU start and GPU end, and its commit calls' time.
 #[derive(Default)]
 struct Times {
     work: Vec<f64>,
@@ -74,6 +79,9 @@ struct Times {
     picked: Vec<f64>,
     called: Vec<f64>,
     ran: Vec<f64>,
+    frame_started: Vec<f64>,
+    frame_ended: Vec<f64>,
+    frame_commits: Vec<f64>,
 }
 
 /// The `at` quantile of `values`, sorted.
@@ -165,6 +173,13 @@ fn drag_submit_bench() {
             if let Some(times) = times {
                 times.work.extend_from_slice(&took[..PARTS - 1]);
                 times.empty.push(took[PARTS - 1]);
+                times.frame_commits.push(took.iter().sum());
+                let first = gpu_time::seconds(committed[0]);
+                let last = &parts[PARTS - 2];
+                if let (Ok(start), Ok(end)) = (last.gpu_start_time(), last.gpu_end_time()) {
+                    times.frame_started.push((start - first) * 1e6);
+                    times.frame_ended.push((end - first) * 1e6);
+                }
                 for (command_buffer, &at) in parts.iter().zip(&committed).take(PARTS - 1) {
                     let at = gpu_time::seconds(at);
                     let Ok(start) = command_buffer.gpu_start_time() else {
@@ -224,6 +239,9 @@ fn drag_submit_bench() {
                 picked,
                 called,
                 ran,
+                frame_started,
+                frame_ended,
+                frame_commits,
             } = times;
             let elapsed = started.elapsed().as_secs_f64();
             let after = device.work_counts();
@@ -282,6 +300,16 @@ fn drag_submit_bench() {
                 moved(|c| c.grouped_submissions),
                 moved(|c| c.batches_grouped),
                 moved(|c| c.groups_kept_pending),
+            );
+            println!(
+                "DRAG-FRAME listed {}, calls of commands {calls_were}, batches {placed}: a frame's \
+                 first commit call to its last part's GPU start p50/p90 {:.1?} us, to its GPU \
+                 end {:.1?} ({} read); its commit calls {:.1?} us",
+                listed.len(),
+                spread(&frame_started),
+                spread(&frame_ended),
+                frame_started.len(),
+                spread(&frame_commits),
             );
         }
         device.slow_submit_calls(None);
