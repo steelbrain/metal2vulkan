@@ -16,7 +16,7 @@
 //! twice, and nothing counted it: the SPIR-V, the keys and the artifacts all came out identical,
 //! so no golden table, no artifact check and no existing count could see the work.
 //!
-//! The derivation now happens where the profile is built (`DeviceProfile::bounded`), which is the
+//! The derivation now happens where the profile is built (`DeviceProfile::of`), which is the
 //! only place a profile comes from, and `fingerprint()` is a read.
 //!
 //! # Why this is a count

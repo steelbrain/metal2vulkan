@@ -41,17 +41,23 @@ walks the flow in the order a consumer meets it:
 Every `air.simd_*` operation keeps Metal's 32-lane simdgroup; there is no option to use the
 driver's subgroup width instead.
 
-A `half` computed in `float` rounds through the device's conversion to 16 bits and back, or its
-`OpQuantizeToF16` alone without `shaderFloat16` (which may flush a value below the smallest normal
-`half`), and the pipeline records `NativeHalfConversion` or `NativeHalfQuantize`; not
-`NativeHalfConversion` on MoltenVK on the Apple M3 Max's macOS 27 identity
-(`DriverDeviation::MetalHalfConversion`), where every such `half` is a conversion of a `float` the
-function holds or of a texel, measured to be Metal's. Where the device has the 16-bit float
-controls (ANV, RADV, NVIDIA) the entry declares them, which make the pair Metal's `half(float)` by
-the Vulkan spec, and computes a `half` `+`, `-`, `*`, `/` and `sqrt` with the device's 16-bit
-instructions; the pair's rounding is still noted on every device, as a driver's compiler may fold
-the pair (NVIDIA's 615.71.09 does) or fuse a `float` addition, subtraction, multiply or fused
-multiply-add into the narrowing and round the exact result once (RADV's does).
+A `half` computed in `float` rounds through the device's conversion to 16 bits and back, Metal's
+`half(float)` under the float controls the entry declares, where the driver keeps that pair (ANV,
+RADV). Elsewhere it rounds through the device's own conversion, or its `OpQuantizeToF16` alone
+without `shaderFloat16` (which may flush a value below the smallest normal `half`), and the
+pipeline records `NativeHalfConversion` or `NativeHalfQuantize`; not `NativeHalfConversion` on
+MoltenVK on the Apple M3 Max's macOS 27 identity (`DriverDeviation::MetalHalfConversion`), where
+every such `half` is a conversion of a `float` the function holds or of a texel, measured to be
+Metal's. NVIDIA's driver (615.71.09) folds the pair
+(`DriverWorkaround::HalfConversionPairFolded`), so it takes the native conversion for that
+rounding; its pipelines still declare the float controls and compute a `half` `+`, `-`, `*`, `/`
+and `sqrt` with the device's 16-bit instructions, as ANV's and RADV's do. RADV's compiler
+fuses a `float` addition, subtraction, multiply or fused multiply-add into the conversion of its
+result and rounds the exact result once (`DriverWorkaround::HalfConversionFusedWithArithmetic`), so
+a pipeline that rounds such a result to `half` there records `NativeHalfConversion`. On a device
+`Device::from_queries` made (`metal2vulkan-rt`), which reads no driver identity, every device with
+the float controls takes the pair, NVIDIA's included, and every pipeline that rounds through it
+records `NativeHalfConversion`, as a driver's compiler may fold the pair or fuse the operation so.
 A `half` read from memory or from its bits is the device's widening on every device (an
 `OpFConvert` of the bits read as a 16-bit float with `shaderFloat16`, `GLSL.std.450
 UnpackHalf2x16` without it), and a `half` stored or reinterpreted as bits, unless they are the

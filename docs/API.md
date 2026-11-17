@@ -5246,16 +5246,22 @@ bound.
 - `metal2vulkan-degrade-native-half-conversion` (precision). `PrecisionNote::NativeHalfConversion`:
   Native half rounding (a conversion): the module rounds a `half` result it computes in `float` (a
   `half` operation's, a function's, a conversion from `float`'s, a texel's) by the device's
-  conversion of the `float` to 16 bits and its widening, on every device with `shaderFloat16`.
-  Under the float controls that make that conversion Metal's `half(float)` by the Vulkan spec
-  (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits, which the entry
-  then declares) the pair is decorated `NoContraction`, and the note is recorded all the same, on
-  every device: a driver's compiler may still fold the pair into the value it started from
-  (NVIDIA's does, leaving the value unrounded) or fuse a `float` addition, subtraction, multiply or
-  fused multiply-add into the narrowing and round the exact result once (RADV's does, one `half`
-  ulp from Metal's where the `float` result lies on a `half` midpoint). Under those controls a
-  `half` `+`, `-`, `*`, `/` and `sqrt` are the device's 16-bit instructions, whose results take no
-  such rounding. Also recorded where a `half` read from its bits is the
+  conversion of the `float` to 16 bits and its widening, on a device with `shaderFloat16` whose
+  float controls do not make that conversion Metal's `half(float)` (`RoundingModeRTE`,
+  `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits: ANV and RADV round through the
+  conversion under them, exactly, with no note): NVIDIA, whose driver folds the conversion's round
+  trip even under those controls (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK,
+  lavapipe, and any device without them. NVIDIA's pipelines compute under those controls all the
+  same: a `half` `+`, `-`, `*`, `/` and `sqrt` there are the device's 16-bit instructions, whose
+  results take no such rounding. Also recorded under those controls on RADV where the
+  `half` is the result of a `float` addition, subtraction, multiply or fused multiply-add: its
+  compiler fuses the operation into the conversion and rounds the exact result once
+  (`DriverWorkaround::HalfConversionFusedWithArithmetic`), one `half` ulp from Metal's where the
+  `float` result lies on a `half` midpoint. On a device `Device::from_queries` made, which reads
+  no driver identity, every device with those controls takes the pair (NVIDIA's included), and
+  every pipeline that rounds through it records the note, a static note of the rounding: a
+  driver's compiler may fold the pair or fuse the operation so. Also recorded where a `half` read
+  from its bits is the
   device's widening, or a `half` encoded to its bits (where they are not the bits it was read from)
   is the device's narrowing, and that conversion is neither under those controls nor measured to be
   Metal's: the conversion on lavapipe, and `GLSL.std.450 UnpackHalf2x16` and

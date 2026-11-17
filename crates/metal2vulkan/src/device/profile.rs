@@ -53,8 +53,9 @@ const SPIRV_VAL_RELAXATIONS: [(VkFeature, &str); 5] = [
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceProfile {
     fields: ProfileFields,
-    /// Which stages the compile holds under a stage bound ([`StageBound`]).
-    stage_bound: StageBound,
+    /// The facts whose form `Device::new` takes from its driver's rows and `Device::from_queries`
+    /// from no identity ([`ProfileFacts`]).
+    facts: ProfileFacts,
     /// [`DeviceProfile::fingerprint`], derived once here, where the fields are fixed.
     ///
     /// Deriving it renders every field of the profile -- a format table alone is tens of
@@ -68,15 +69,14 @@ pub struct DeviceProfile {
 }
 
 impl DeviceProfile {
-    /// The profile of `fields` whose stages are held under `stage_bound`, with its fingerprint
-    /// derived (the only way to build one): the fingerprint is a function of both, so holding them
-    /// together is what keeps it true of them. A test's edit goes through `edit`, which only the
-    /// crate's tests build.
-    pub(crate) fn bounded(fields: ProfileFields, stage_bound: StageBound) -> DeviceProfile {
-        let fingerprint = fingerprint_of(&fields, stage_bound);
+    /// The profile of `fields` and `facts`, with its fingerprint derived (the only way to build
+    /// one): the fingerprint is a function of both, so holding them together is what keeps it true
+    /// of them. A test's edit goes through `edit`, which only the crate's tests build.
+    pub(crate) fn of(fields: ProfileFields, facts: ProfileFacts) -> DeviceProfile {
+        let fingerprint = fingerprint_of(&fields, facts);
         DeviceProfile {
             fields,
-            stage_bound,
+            facts,
             fingerprint,
         }
     }
@@ -87,13 +87,18 @@ impl DeviceProfile {
     #[cfg(test)]
     pub(crate) fn edit<T>(&mut self, change: impl FnOnce(&mut ProfileFields) -> T) -> T {
         let answer = change(&mut self.fields);
-        self.fingerprint = fingerprint_of(&self.fields, self.stage_bound);
+        self.fingerprint = fingerprint_of(&self.fields, self.facts);
         answer
     }
 
     /// Which stages the compile holds under a stage bound.
     pub(crate) fn stage_bound(&self) -> StageBound {
-        self.stage_bound
+        self.facts.stage_bound
+    }
+
+    /// Where a `half` rounded through the conversion pair under the float controls is noted.
+    pub(crate) fn half_pair_note(&self) -> HalfPairNote {
+        self.facts.half_pair_note
     }
 
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
@@ -490,7 +495,7 @@ pub(crate) fn fingerprints_derived() -> u64 {
 /// The fingerprint of `fields` ([`DeviceProfile::fingerprint`]): the rendering streams into the
 /// hash, because a materialized rendering of a profile with a format table is tens of kilobytes
 /// that no input-scaled ledger charge accounts for.
-fn fingerprint_of(fields: &ProfileFields, stage_bound: StageBound) -> Hash256 {
+fn fingerprint_of(fields: &ProfileFields, facts: ProfileFacts) -> Hash256 {
     use sha2::{Digest, Sha256};
     use std::fmt::Write as _;
     struct Hashing(Sha256);
@@ -506,12 +511,54 @@ fn fingerprint_of(fields: &ProfileFields, stage_bound: StageBound) -> Hash256 {
     // `Hashing` never fails, and `Debug` of these plain-data types only fails when the
     // writer does.
     let _ = write!(h, "{:?}", fields);
-    // A profile whose stage bounds are its defects' renders its fields alone, as every profile
-    // did before the bound became a fact of its own; the other renders the bound after them.
-    if stage_bound != StageBound::Defects {
-        let _ = write!(h, "{stage_bound:?}");
+    // A profile whose facts are its driver's rows' (`Device::new`'s) renders its fields alone, as
+    // every profile did before those facts were the profile's own; any other renders its facts
+    // after them.
+    if facts != ProfileFacts::ROWS {
+        let _ = write!(h, "{facts:?}");
     }
     h.0.finalize().into()
+}
+
+/// The facts of a profile whose form `Device::new` takes from its driver's identity rows
+/// (`device::derive`) and `Device::from_queries`, which reads no identity, takes the same on every
+/// device: one field each, which the translator reads alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProfileFacts {
+    /// Which stages the compile holds under a stage bound.
+    pub(crate) stage_bound: StageBound,
+    /// Where a `half` rounded through the conversion pair under the float controls is noted.
+    pub(crate) half_pair_note: HalfPairNote,
+}
+
+impl ProfileFacts {
+    /// `Device::new`'s: each fact as its driver's rows decide it.
+    pub(crate) const ROWS: ProfileFacts = ProfileFacts {
+        stage_bound: StageBound::Defects,
+        half_pair_note: HalfPairNote::Fused,
+    };
+
+    /// `Device::from_queries`': each fact the same on every device.
+    pub(crate) const EVERY: ProfileFacts = ProfileFacts {
+        stage_bound: StageBound::Every,
+        half_pair_note: HalfPairNote::Every,
+    };
+}
+
+/// Where a module records `PrecisionNote::NativeHalfConversion` for a `half` it rounds through the
+/// device's conversion and its widening under the 16-bit float controls
+/// (`QuantizeForm::Controlled`), Metal's `half(float)` by the Vulkan spec.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HalfPairNote {
+    /// Only where the pair narrows the result of `f32` arithmetic on a driver that fuses that
+    /// operation into the narrowing (`DriverWorkaround::HalfConversionFusedWithArithmetic`); a
+    /// driver that folds the pair (`DriverWorkaround::HalfConversionPairFolded`) takes the
+    /// `Converted` form, noted as such: `Device::new`'s profile.
+    Fused,
+    /// Every such module, on every device, a static note of the rounding: a driver's compiler may
+    /// fold the pair into the value it started from or fuse the `f32` operation computing the
+    /// value into the narrowing. `Device::from_queries`' profile, keyed on no identity.
+    Every,
 }
 
 /// Which stages a profile's compile holds under a stage bound (`pipeline::compile`'s stage
@@ -1301,6 +1348,39 @@ pub enum DriverWorkaround {
     /// emitted as `OpBitFieldUExtract(x, 0, N)` there (`lower::arith::ops::mask`), which is the
     /// same bits on every device.
     NarrowMaskAfterSignedClamp,
+    /// The driver's compiler folds a `half` round trip, an `OpFConvert` from 32- to 16-bit floats
+    /// and its widening back, each decorated `NoContraction`, into the 32-bit value it started
+    /// from, in an entry declaring `RoundingModeRTE`, `DenormPreserve` and
+    /// `SignedZeroInfNanPreserve` for 16 bits. Vulkan assumes no value-changing transform of an
+    /// operation decorated `NoContraction`, and rounds a conversion between types correctly
+    /// ("Precision and Operation of SPIR-V Instructions"). Measured on the GeForce RTX 3090
+    /// (`deviceID` 0x2204) under NVIDIA's 615.71.09 (`VK_DRIVER_ID_NVIDIA_PROPRIETARY`): of the
+    /// 2^32 `f32` values, the round trip left 2,231,288,832 off Metal's `half(float)`, under each
+    /// combination of those modes and with or without the decoration. Keyed on NVIDIA's driver
+    /// on every GPU, the others unmeasured. Such a profile rounds an `f32` to `half` in another
+    /// form (`lower::arith::narrow::quantize_form`), and computes under those controls all the
+    /// same (`lower::arith::narrow::half_controls`): its 16-bit instructions and a single
+    /// conversion between 16 and 32 bits are no round trip.
+    HalfConversionPairFolded,
+    /// The driver's compiler fuses an `f32` addition, subtraction, multiply or fused multiply-add
+    /// into the `OpFConvert` to 16 bits of its result, rounding the exact result to `half` once,
+    /// though both are decorated `NoContraction` (which forbids combining the operation with
+    /// another instruction into a single operation), in an entry declaring `RoundingModeRTE`,
+    /// `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits. Metal rounds the `float` result
+    /// to `half`, so where that result lies on a `half` midpoint the two differ by one unit in the
+    /// last place of the `half`. Measured with Mesa 26.2.6 on the Radeon 780M (RADV PHOENIX,
+    /// GFX11): ACO compiled the product's `OpFMul` and the narrowing as one `v_fma_mixlo_f16` (a
+    /// sum's narrowing too), and the product of 2.6822087e-7 and 1.0000001 answered `0x0005` where
+    /// Metal's `half` of the `float` product is `0x0004`; the Radeon RX 7900 XTX (RADV NAVI31,
+    /// GFX11) answered as the 780M did, 4,542 of the 253,958 product lanes off Metal's on each
+    /// (`runtime_lane::half_conversions`). On the Radeon RX 550 (RADV POLARIS12, GFX8) the
+    /// narrowing alone answers its own way (8,185 of the 253,958 lanes of a loaded `float`), every
+    /// narrowing there records `PrecisionNote::NativeHalfConversion` already, and no fusion is told
+    /// apart. A fact of RADV's compiler, keyed on RADV (`VK_DRIVER_ID_MESA_RADV`) on every GPU;
+    /// other drivers unmeasured. Such a profile keeps the conversion under the float controls, and
+    /// a module that rounds such an operation's result through it records
+    /// `PrecisionNote::NativeHalfConversion` (`lower::arith::narrow::rounds_arithmetic`).
+    HalfConversionFusedWithArithmetic,
     /// The driver refuses a fragment shader that reads both barycentric builtins,
     /// `BaryCoordKHR` and `BaryCoordNoPerspKHR`, at pipeline creation, where Metal compiles a
     /// fragment function that declares both `[[barycentric_coord, center_perspective]]` and

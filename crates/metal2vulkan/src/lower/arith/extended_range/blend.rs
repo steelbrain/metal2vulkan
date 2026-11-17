@@ -2306,12 +2306,13 @@ pub fn unorm8_tile_value(
 /// from 65520 up: each rounding of Metal's blend arithmetic. Where the module rounds to `half` by
 /// the device's conversion under the 16-bit float controls ([`QuantizeForm::Controlled`]: the
 /// profile has `shaderFloat16`, `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve`
-/// for 16 bits; [`narrow::quantize_form`]), that conversion and its widening ([`narrow::round`]):
-/// two instructions, Metal's `half(float)` by the Vulkan spec (conversions are correctly rounded,
-/// to nearest even under `RoundingModeRTE`, denormals kept under `DenormPreserve`, zero signs and
-/// infinities under `SignedZeroInfNanPreserve`), as the module's own `half` results round on such a
-/// profile, and like them the device's rounding where its compiler folds the pair (NVIDIA's),
-/// recorded as `PrecisionNote::NativeHalfConversion`. Elsewhere the integer sequence ([`f32_to_half`]), about
+/// for 16 bits, and a driver that keeps the conversion and its widening, not one with
+/// `DriverWorkaround::HalfConversionPairFolded`; [`narrow::quantize_form`]), that conversion
+/// and its widening ([`narrow::round`]): two instructions, Metal's `half(float)` by the Vulkan spec
+/// (conversions are correctly rounded, to nearest even under `RoundingModeRTE`, denormals kept
+/// under `DenormPreserve`, zero signs and infinities under `SignedZeroInfNanPreserve`), as the
+/// module's own `half` results round on such a profile (docs/FAST-PATHS.md's `half` rounding row:
+/// exact under either policy, no note). Elsewhere the integer sequence ([`f32_to_half`]), about
 /// fifty instructions, the same on every device. The two agree on every `x` but a NaN's bits,
 /// which the conversion leaves to the device: the blends clamp a NaN source to zero, and a 16-bit
 /// float blend stores every NaN as Metal's own.

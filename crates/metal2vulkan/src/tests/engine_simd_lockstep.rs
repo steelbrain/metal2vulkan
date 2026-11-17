@@ -2428,9 +2428,9 @@ fn a_kernel_past_the_stage_bound_keeps_the_widest_pin_or_is_refused() {
     other
         .workarounds
         .retain(|w| *w != serialized && *w != memory);
-    let other = &crate::device::profile::DeviceProfile::bounded(
+    let other = &crate::device::profile::DeviceProfile::of(
         other,
-        crate::device::profile::StageBound::Defects,
+        crate::device::profile::ProfileFacts::ROWS,
     );
     assert!(!other.workarounds().contains(&serialized));
     assert!(!other.workarounds().contains(&memory));

@@ -16,8 +16,8 @@ use crate::device::policy::{ContainmentPolicy, DevicePolicy};
 use crate::device::profile::{
     BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
     DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, GuestIsolation,
-    HandleDomain, ImageCaps, Independence, LeafCaps, NanEncoding, PointerDomain, ProfileFields,
-    Robustness, StageBound,
+    HandleDomain, ImageCaps, Independence, LeafCaps, NanEncoding, PointerDomain, ProfileFacts,
+    ProfileFields, Robustness,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -92,7 +92,7 @@ impl Device {
                 ycbcr_in_place: true,
                 ..derive_fields(desc, policy, &BTreeSet::new())
             };
-            (fields, StageBound::Every)
+            (fields, ProfileFacts::EVERY)
         })
     }
 
@@ -123,19 +123,16 @@ impl Device {
         deviations: BTreeSet<DriverDeviation>,
     ) -> Result<Device, Error> {
         Device::derived(desc, policy, |desc, policy| {
-            (
-                derive_fields(desc, policy, &deviations),
-                StageBound::Defects,
-            )
+            (derive_fields(desc, policy, &deviations), ProfileFacts::ROWS)
         })
     }
 
-    /// The device of `desc` under `policy`, its profile's fields and stage bound as `fields`
-    /// derives them, once the description and the policy pass their checks.
+    /// The device of `desc` under `policy`, its profile's fields and facts as `fields` derives
+    /// them, once the description and the policy pass their checks.
     fn derived(
         desc: DeviceDescription,
         policy: DevicePolicy,
-        fields: impl FnOnce(&DeviceDescription, &DevicePolicy) -> (ProfileFields, StageBound),
+        fields: impl FnOnce(&DeviceDescription, &DevicePolicy) -> (ProfileFields, ProfileFacts),
     ) -> Result<Device, Error> {
         if desc.api_version < ApiVersion::V1_2 {
             return Err(Unsupported::needs(
@@ -155,8 +152,8 @@ impl Device {
             ));
         }
         identity_domains(&desc, &policy)?;
-        let (fields, stage_bound) = fields(&desc, &policy);
-        let profile = DeviceProfile::bounded(fields, stage_bound);
+        let (fields, facts) = fields(&desc, &policy);
+        let profile = DeviceProfile::of(fields, facts);
         let metal = MetalDeviceProperties::derive(&profile, &desc.allocation);
         Ok(Device(Arc::new(DeviceInner {
             fingerprint: profile.fingerprint(),
@@ -473,12 +470,18 @@ fn by_identity(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
         Some(vk::DriverId::MESA_LLVMPIPE) => {
             vec![DriverWorkaround::ClippedTrianglesSplitPixelFragments]
         }
-        // On the 3090's generation, a narrow integer's mask dropped.
-        Some(vk::DriverId::NVIDIA_PROPRIETARY)
-            if super::NVIDIA_AMPERE_GA10X.contains(&desc.device_id) =>
-        {
-            vec![DriverWorkaround::NarrowMaskAfterSignedClamp]
+        // A `half` round trip folded on every GPU it drives, and on the 3090's generation a
+        // narrow integer's mask dropped.
+        Some(vk::DriverId::NVIDIA_PROPRIETARY) => {
+            let mut found = vec![DriverWorkaround::HalfConversionPairFolded];
+            if super::NVIDIA_AMPERE_GA10X.contains(&desc.device_id) {
+                found.push(DriverWorkaround::NarrowMaskAfterSignedClamp);
+            }
+            found
         }
+        // An `f32` operation fused into the conversion of its result to `half`, on every GPU it
+        // drives.
+        Some(vk::DriverId::MESA_RADV) => vec![DriverWorkaround::HalfConversionFusedWithArithmetic],
         // A register allocator that faults compiling a module past a word bound, products of one
         // value by zeros of opposite sign kept as one, a stage past 2^20 objects of its
         // serialized form corrupted, and a compiler whose memory outgrows the stage, on every GPU

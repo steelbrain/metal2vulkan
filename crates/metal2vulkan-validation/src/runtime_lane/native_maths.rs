@@ -24,7 +24,7 @@ use super::degrade_notices::{counts, on_device_with};
 use super::{buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::cache::VariantKey;
-use metal2vulkan::device::{FloatControl, FloatWidth, VkProperty};
+use metal2vulkan::device::{DriverWorkaround, FloatControl, FloatWidth, VkProperty};
 use metal2vulkan::error::DriverDeviation;
 use metal2vulkan::library::Library;
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote};
@@ -591,14 +591,14 @@ fn half_operand(r: &mut Stream) -> f32 {
 /// `a` and the sum `a + b` rounded to `float` once (or of the operands rounded, or rounded
 /// itself), exactly. CI's lavapipe (Mesa 26.0.8 with LLVM 21.1.8) rounds here (8192 of 8192). A
 /// device whose float controls make its conversion Metal's (the module declares
-/// `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits: ANV, RADV and
-/// NVIDIA) computes the sum on its 16-bit addition of the narrowed operands, Metal's exactly, and
-/// rounds `half(a)` through the conversion and its widening, a pair a driver's compiler may fold
-/// (NVIDIA's: the RTX 3090 answers `a` itself), so the stage records `NativeHalfConversion` on
-/// every such device and `half(a)` is within its bound. A device whose conversion is measured to be
+/// `RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits: ANV and RADV)
+/// records neither and answers Metal's exactly, and so does one whose conversion is measured to be
 /// Metal's (MoltenVK on the Apple M3 Max's macOS 27 identity,
-/// `DriverDeviation::MetalHalfConversion`: the module requires its property), whose `half` sum is
-/// its own 16-bit addition, records neither and answers Metal's exactly.
+/// `DriverDeviation::MetalHalfConversion`: the module requires its property), whose `half` sum
+/// is its own 16-bit addition. NVIDIA's driver reports those controls but folds the conversion's
+/// round trip (`DriverWorkaround::HalfConversionPairFolded`): its module declares them for the
+/// sum, the device's 16-bit addition of the narrowed operands, Metal's exactly, while `half(a)`,
+/// the round trip, stays the device's, recorded (the RTX 3090 answers `a` itself).
 #[test]
 fn half_rounding_answers_within_its_recorded_bound() {
     let bitcode = llvm_assemble_text(&half_kernel()).unwrap();
@@ -642,15 +642,16 @@ fn half_rounding_answers_within_its_recorded_bound() {
                 .filter(|note| kinds.contains(note))
                 .collect();
             // A rounding by the bare quantize is the device's: only the float controls, or a
-            // conversion measured to be Metal's, answer Metal's sum; only the measured conversion
-            // answers Metal's `half(a)`, the conversion's round trip, which a driver's compiler may
-            // fold under the controls.
+            // conversion measured to be Metal's, answer Metal's.
             let measured = required.contains(&VkProperty::MetalHalfConversion);
+            // A driver that folds the round trip leaves `half(a)` its own under the controls.
+            let folds = (device.compile_device().profile().workarounds())
+                .contains(&DriverWorkaround::HalfConversionPairFolded);
             let sum_metal_s = controlled || measured;
-            let metal_s = measured;
+            let metal_s = (controlled && !folds) || measured;
             eprintln!(
-                "{name}: float controls {controlled}; measured conversion {measured}; announced \
-                 {announced:?}"
+                "{name}: float controls {controlled}; folded round trip {folds}; measured \
+                 conversion {measured}; announced {announced:?}"
             );
             assert_eq!(announced.len(), usize::from(!metal_s), "{name}");
             let operands = half_operands();

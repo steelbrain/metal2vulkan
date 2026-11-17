@@ -3047,10 +3047,27 @@ fn compile_bounded<K>(
     // A `half` rounded through the conversion and its widening under the float controls: Metal's
     // `half(float)` by the Vulkan spec, but a driver's compiler may fold the pair into the value it
     // started from (NVIDIA's) or fuse the `float` operation computing the value into the narrowing
-    // and round its exact result once (RADV's), so the module records the native note on every
-    // device, a static note of the rounding.
-    let controlled_pair = quantize == crate::spirv::builder::QuantizeForm::Controlled
-        && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
+    // and round its exact result once (RADV's). On a profile that notes every such pair
+    // (`HalfPairNote::Every`), the module records the native note on every device, a static note
+    // of the rounding; on one that notes it as its driver's rows say (`HalfPairNote::Fused`), only
+    // a `half` rounded from `float` arithmetic on a driver that fuses the operation into the
+    // narrowing (`DriverWorkaround::HalfConversionFusedWithArithmetic`) records it.
+    let controlled = quantize == crate::spirv::builder::QuantizeForm::Controlled;
+    let controlled_pair = match p.half_pair_note() {
+        crate::device::profile::HalfPairNote::Every => {
+            Some(controlled && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?)
+        }
+        crate::device::profile::HalfPairNote::Fused => None,
+    };
+    let fused =
+        match controlled_pair {
+            Some(pair) => pair,
+            None => controlled
+                && p.workarounds().contains(
+                    &crate::device::profile::DriverWorkaround::HalfConversionFusedWithArithmetic,
+                )
+                && crate::lower::arith::narrow::rounds_arithmetic(&module, m)?,
+        };
     // Its NaN's bits, and those of a `half` held widened that a widening to `float` or a `half`
     // `fabs` moves: Metal's where the device's widening and narrowing are measured to answer
     // them (`DriverDeviation::MetalNanMoves`) and the module moves its `half` values only as
@@ -3066,10 +3083,19 @@ fn compile_bounded<K>(
     // `NoContraction`, under the float controls that make it Metal's, computed by the device's
     // 16-bit arithmetic, which they make Metal's too, or read from its bits by the device's
     // widening, which they make exact but for a NaN's bits: the entry declares them, and so
-    // requires the device's float-controls properties for them, and no fact. The pair's rounding
-    // is noted below all the same.
+    // requires the device's float-controls properties for them, and no fact. On a driver that
+    // folds the round trip (`DriverWorkaround::HalfConversionPairFolded`, so `Converted`) the
+    // pair's rounding is the device's whatever the entry declares, recorded below, and the rest
+    // is Metal's under them as elsewhere.
     let declares_controls = controls
-        && (widens || crate::lower::arith::narrow::computes_in_16_bits(&module) || controlled_pair);
+        && (widens
+            || crate::lower::arith::narrow::computes_in_16_bits(&module)
+            || match controlled_pair {
+                Some(pair) => pair,
+                None => {
+                    controlled && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?
+                }
+            });
     if declares_controls {
         let modes = crate::lower::arith::narrow::controlled_modes(p).unwrap_or_default();
         module.declare_modes(&modes)?;
@@ -3084,7 +3110,7 @@ fn compile_bounded<K>(
         ),
         (device_quantize, PrecisionNote::NativeHalfQuantize),
         (
-            (converts && !measured_conversion) || native_widening || controlled_pair,
+            (converts && !measured_conversion) || native_widening || fused,
             PrecisionNote::NativeHalfConversion,
         ),
     ];
