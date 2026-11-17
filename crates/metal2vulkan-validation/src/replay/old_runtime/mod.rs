@@ -735,6 +735,26 @@ impl Backend for OldRuntime {
         }
     }
 
+    fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError> {
+        let id = match self.objects.get(&object) {
+            Some(Object::Texture(texture)) => texture.gpu_resource_id(),
+            Some(Object::Sampler(sampler)) => sampler.gpu_resource_id(),
+            Some(Object::ComputePipeline(state)) => state.gpu_resource_id(),
+            Some(Object::RenderPipeline(state)) => state.gpu_resource_id(),
+            // Refused on a device that claims Apple10, where Metal's getter raises.
+            Some(Object::DepthStencil(state)) => match state.gpu_resource_id() {
+                Ok(id) => id,
+                Err(_) => return Ok(None),
+            },
+            _ => {
+                return Err(PlayError::Invalid(format!(
+                    "gpuResourceID of #{object}, which has none"
+                )))
+            }
+        };
+        Ok(Some(id.0))
+    }
+
     fn counters(&mut self) -> Counters {
         let counts = self.device.work_counts();
         let c = &counts.commands_recorded;

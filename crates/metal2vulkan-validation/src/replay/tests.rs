@@ -2,7 +2,9 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
-use super::player::{Backend, Counters, Counts, Made, PlayError, Player, Report, WAIT_COMPLETED};
+use super::player::{
+    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, Report, WAIT_COMPLETED,
+};
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
 use crate::ScratchDir;
@@ -250,8 +252,9 @@ fn the_address_map_relocates_by_the_innermost_live_range() {
     );
 }
 
-/// A backend that keeps what it is asked: the calls, the waits, the bytes written. It places
-/// blocks and buffers apart from the recorded addresses, and a buffer in a block at its offset.
+/// A backend that keeps what it is asked: the calls, the waits, the bytes written, the objects
+/// whose resource IDs it gave. It places blocks and buffers apart from the recorded addresses, and
+/// a buffer in a block at its offset.
 #[derive(Default)]
 struct Kept {
     calls: Vec<String>,
@@ -262,6 +265,9 @@ struct Kept {
     bases: HashMap<u64, u64>,
     next: u64,
     commits: u64,
+    /// The resource IDs it gives; an object not here has none (its getter raises).
+    ids: HashMap<u64, u64>,
+    asked: Vec<u64>,
 }
 
 impl Backend for Kept {
@@ -270,7 +276,9 @@ impl Backend for Kept {
         self.args.push(call.args.clone());
         let mut made = Made::default();
         match &*call.selector {
-            "m2v.newBlockWithLength:storageMode:" | "newBufferWithLength:options:" => {
+            "m2v.newBlockWithLength:storageMode:"
+            | "newBufferWithLength:options:"
+            | "newBufferWithDescriptor:" => {
                 self.next += 0x1000_0000;
                 made.address = Some(self.next);
             }
@@ -305,6 +313,11 @@ impl Backend for Kept {
 
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError> {
         Ok(object.to_le_bytes().to_vec())
+    }
+
+    fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError> {
+        self.asked.push(object);
+        Ok(self.ids.get(&object).copied())
     }
 
     fn counters(&mut self) -> Counters {
@@ -729,4 +742,124 @@ fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
         "completed #3 stream calls=10 commits=1 dispatches=1 draws=2 encoders=2 \
          misaligned_address_words=0 relocated_words=0 written_bytes=0 executed submissions=1"
     );
+}
+
+/// `m2v.commitPart` commits its command buffer where its answer `cut` is "Cut" or absent, and
+/// nothing where the host committed nothing ("Fails", `{Whole: reason}`); a command buffer kept
+/// whole commits at its own `commit`. Any other answer stops the play.
+#[test]
+fn a_part_commits_only_where_the_host_cut_it() {
+    let mut kept = Kept::default();
+    let cut = |cut: &str| [("cut", Value::Str(cut.to_owned()))];
+    let whole = [("cut", map(&[("Whole", Value::Str("Committed".to_owned()))]))];
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        for command_buffer in 3..=6 {
+            w.call("commandBuffer", 2, command_buffer, &[], &[])?;
+        }
+        w.call("m2v.commitPart", 3, 0, &[], &cut("Cut"))?;
+        w.call("m2v.commitPart", 4, 0, &[], &[])?;
+        w.call("m2v.commitPart", 5, 0, &[], &cut("Fails"))?;
+        w.call("m2v.commitPart", 6, 0, &[], &whole)?;
+        w.call("commit", 6, 0, &[], &[])?;
+        w.call("m2v.commitPart", 5, 0, &[], &[("cut", Value::Uint(1))])
+    });
+    match ended {
+        Err(PlayError::Invalid(why)) => assert!(why.contains("m2v.commitPart's cut"), "{why}"),
+        other => panic!("the play went on past an unknown cut: {other:?}"),
+    }
+    assert_eq!(kept.waits, [3, 4, 6]);
+    assert_eq!(kept.commits, 3);
+    assert_eq!(report.total.stream["commits"], 3);
+}
+
+/// A buffer made as a copy of host memory starts with its descriptor's `contents`, a blob or
+/// inline bytes: the backend makes it with the contents nil, and the player writes them from its
+/// first byte, relocated where it answered a `gpuAddress` (here a pointer into itself) and
+/// counted; a buffer of no address is written as it is, and a no-copy buffer's nil contents
+/// write nothing.
+#[test]
+fn a_copied_buffer_starts_with_its_contents() {
+    let mut kept = Kept::default();
+    let pointer = (BLOCK + 0x40).to_le_bytes();
+    let mut long = vec![5u8; 128];
+    long[8..16].copy_from_slice(&pointer);
+    let descriptor = |length: u64, contents: Value, no_copy: bool| {
+        let options = Value::List(Vec::new());
+        let fields = [
+            ("length", Value::Uint(length)),
+            ("options", options),
+            ("contents", contents),
+            ("noCopy", Value::Bool(no_copy)),
+        ];
+        [map(&fields)]
+    };
+    let selector = "newBufferWithDescriptor:";
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let blob = Value::Blob(w.blob(&long)?);
+        let at = addressed(BLOCK, 128);
+        w.call(selector, 1, 2, &descriptor(128, blob, false), &at)?;
+        let short = Value::Bytes(pointer.to_vec());
+        w.call(selector, 1, 3, &descriptor(8, short, false), &[])?;
+        w.call(selector, 1, 4, &descriptor(8, Value::Nil, true), &[])
+    });
+    ended.unwrap();
+    for args in &kept.args[1..] {
+        let contents = args[0]
+            .as_map()
+            .unwrap()
+            .iter()
+            .find(|(k, _)| &**k == "contents");
+        assert_eq!(contents.map(|(_, v)| v), Some(&Value::Nil));
+    }
+    let mut moved = long.clone();
+    moved[8..16].copy_from_slice(&(0x1000_0000u64 + 0x40).to_le_bytes());
+    let untouched = (3, 0, pointer.to_vec());
+    assert_eq!(kept.writes, [(2, 0, moved), untouched]);
+    assert_eq!(report.total.stream["written_bytes"], 128 + 8);
+    assert_eq!(report.total.stream["relocated_words"], 1);
+}
+
+/// A `gpuResourceID` record compares the ID the program saw with the runtime's, once per object:
+/// an object the runtime gives another ID, or none, is reported; one whose getter raised (no
+/// answer) is not asked; one the stream never made stops the play.
+#[test]
+fn a_resource_id_the_runtime_gives_otherwise_is_reported() {
+    let mut kept = Kept {
+        ids: HashMap::from([(2, 0x4d), (3, 0x99)]),
+        ..Kept::default()
+    };
+    let id = |id: u64| [("gpuResourceID", Value::Uint(id))];
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        for object in 2..=5 {
+            w.call("newSamplerStateWithDescriptor:", 1, object, &[], &[])?;
+        }
+        w.call("gpuResourceID", 2, 0, &[], &id(0x4d))?;
+        w.call("gpuResourceID", 3, 0, &[], &id(0x1_0000_0005))?;
+        w.call("gpuResourceID", 3, 0, &[], &id(0x1_0000_0005))?;
+        w.call("gpuResourceID", 4, 0, &[], &id(7))?;
+        w.call("gpuResourceID", 5, 0, &[], &[])?;
+        w.call("gpuResourceID", 9, 0, &[], &id(1))
+    });
+    match ended {
+        Err(PlayError::Invalid(why)) => assert!(why.contains("#9, made by no call"), "{why}"),
+        other => panic!("the play went on past an unmade object: {other:?}"),
+    }
+    assert_eq!(kept.asked, [2, 3, 4]);
+    let differs = |object, recorded, played| IdDiffers {
+        object,
+        recorded,
+        played,
+    };
+    let ids = [differs(3, 0x1_0000_0005, Some(0x99)), differs(4, 7, None)];
+    assert_eq!(report.ids, ids);
+    let lines = report.lines();
+    assert!(
+        lines.contains(&"id #3 0x100000005 0x99".to_owned()),
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"id #4 0x7 none".to_owned()), "{lines:?}");
 }

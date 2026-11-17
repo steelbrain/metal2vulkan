@@ -135,6 +135,13 @@ impl<'c> Fields<'c> {
         self.typed(key, "an object", Value::as_object)
     }
 
+    /// An object property a setter record sets: none where it is left as it was (nil), `Some(None)`
+    /// where it is set to nil (object 0), else the object.
+    pub(super) fn set_object(&self, key: &str) -> Result<Option<Option<u64>>, PlayError> {
+        let set = self.object(key)?;
+        Ok(set.map(|id| Some(id).filter(|&id| id != 0)))
+    }
+
     pub(super) fn str(&self, key: &str) -> Result<Option<&'c str>, PlayError> {
         self.typed(key, "a string", Value::as_str)
     }

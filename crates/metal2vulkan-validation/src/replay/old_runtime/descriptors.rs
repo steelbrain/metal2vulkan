@@ -122,11 +122,12 @@ fn option_sets(call: &Call, initial: u64, sets: &[Value]) -> Result<u64, PlayErr
     Ok(held)
 }
 
-/// `newBufferWithDescriptor:`: the buffer's length and options. Its host memory is not in the
-/// stream (nil): a no-copy buffer's bytes arrive as `m2v.write`, and the pinned address is the
-/// host's, which the player relocates. A no-copy buffer is played as a buffer of its length, so
-/// one of the read-only option (`ResourceOptions::PRIVATE_BIT`) is made without it: its GPU writes,
-/// which Metal drops, are kept.
+/// `newBufferWithDescriptor:`: the buffer's length and options. Its host memory reaches it nil: a
+/// copied buffer's `contents` the player writes once the buffer is made, a no-copy buffer's bytes
+/// arrive as `m2v.write`, and the pinned address is the host's, which the player relocates. A
+/// no-copy buffer is played as a buffer of its length, so one of the read-only option
+/// (`ResourceOptions::PRIVATE_BIT`) is made without it: its GPU writes, which Metal drops, are
+/// kept.
 pub(super) fn buffer(call: &Call) -> Result<(u64, ResourceOptions), PlayError> {
     let f = Fields::arg(
         call,
@@ -142,7 +143,7 @@ pub(super) fn buffer(call: &Call) -> Result<(u64, ResourceOptions), PlayError> {
         ],
     )?;
     if f.get("contents").is_some() {
-        return Err(refuse(call, "contents other than host memory"));
+        return Err(refuse(call, "contents that are no bytes"));
     }
     let sets = f.list("options")?.unwrap_or_default();
     let mut raw = option_sets(call, 0, sets)?;
@@ -580,10 +581,11 @@ fn attachment_keys(own: &[&'static str]) -> Vec<&'static str> {
     ATTACHMENT_KEYS.iter().chain(own).copied().collect()
 }
 
-/// What an attachment's setter record sets of the properties every attachment has, resolved.
+/// What an attachment's setter record sets of the properties every attachment has, resolved: an
+/// object property `Some(None)` where it is set to nil.
 struct AttachmentSet {
-    texture: Option<Texture>,
-    resolve_texture: Option<Texture>,
+    texture: Option<Option<Texture>>,
+    resolve_texture: Option<Option<Texture>>,
     level: Option<u64>,
     slice: Option<u64>,
     depth_plane: Option<u64>,
@@ -601,10 +603,10 @@ macro_rules! set_attachment {
         let set = $set;
         let a = $a;
         if let Some(texture) = set.texture {
-            a.texture = Some(texture);
+            a.texture = texture;
         }
         if let Some(texture) = set.resolve_texture {
-            a.resolve_texture = Some(texture);
+            a.resolve_texture = texture;
         }
         let numbers = [
             (set.level, &mut a.level),
@@ -795,8 +797,9 @@ impl OldRuntime {
 
     /// What an attachment's map sets of the properties every attachment has.
     fn attachment_set(&self, call: &Call, f: &Fields) -> Result<AttachmentSet, PlayError> {
-        let texture = |key: &str| match f.object(key)? {
-            Some(id) => self.texture_of(call, id).map(Some),
+        let texture = |key: &str| match f.set_object(key)? {
+            Some(Some(id)) => self.texture_of(call, id).map(|texture| Some(Some(texture))),
+            Some(None) => Ok(Some(None)),
             None => Ok(None),
         };
         Ok(AttachmentSet {
@@ -831,19 +834,22 @@ impl OldRuntime {
     }
 
     /// A setter record of the render pass descriptor `call` is sent to: each property its map
-    /// sets. A nil property is left as it is; `defaultColorSampleCount`, which changes nothing a
-    /// pass shows, is not played; a rate map and accumulated visibility results are refused.
+    /// sets. A nil property is left as it is, and an object property of object 0 set to nil;
+    /// `defaultColorSampleCount`, which changes nothing a pass shows, is not played; a rate map
+    /// and accumulated visibility results are refused.
     pub(super) fn pass_call(&mut self, call: &Call) -> Result<(), PlayError> {
         let failed = super::args::failed(call);
         match &*call.selector {
             "m2v.setPass" => {
                 let f = Fields::arg(call, 0, &PASS_KEYS)?;
-                if f.get("rasterizationRateMap").is_some() {
+                // The pass never holds a rate map, so one set to nil changes nothing.
+                if let Some(Some(_)) = f.set_object("rasterizationRateMap")? {
                     return Err(refuse(call, "a rasterization rate map"));
                 }
                 f.only("visibilityResultType", Fields::uint, 0)?;
-                let visibility = match f.object("visibilityResultBuffer")? {
-                    Some(id) => Some(self.buffer_of(call, id)?),
+                let visibility = match f.set_object("visibilityResultBuffer")? {
+                    Some(Some(id)) => Some(Some(self.buffer_of(call, id)?)),
+                    Some(None) => Some(None),
                     None => None,
                 };
                 let numbers = [
@@ -858,7 +864,7 @@ impl OldRuntime {
                 ]
                 .map(|key| f.uint(key));
                 let pass = self.pass(call.receiver);
-                if visibility.is_some() {
+                if let Some(visibility) = visibility {
                     pass.visibility_result_buffer = visibility;
                 }
                 let fields = [

@@ -48,7 +48,7 @@ Each value starts with a one-byte tag.
 | 4 | sint | zigzag varint | signed integers |
 | 5 | f32 | 4 bytes | read as a number; the recorder writes `float` as f64 |
 | 6 | f64 | 8 bytes | `float`, `double`, `CGFloat` |
-| 7 | object | varint id | Metal objects |
+| 7 | object | varint id | Metal objects; object 0, which no object is, a property set to nil (section 9) |
 | 8 | address | varint | a GPU address: relocated (section 5) |
 | 9 | string | varint length, UTF-8 | `NSString`, names |
 | 10 | bytes | varint length, data | data, inline |
@@ -61,8 +61,9 @@ Each value starts with a one-byte tag.
   `MTLSize` `{width, height, depth}`, `MTLRegion` `{origin, size}`, `NSRange` `{location, length}`,
   `MTLScissorRect` `{x, y, width, height}`, `MTLViewport` `{originX, originY, width, height,
   znear, zfar}`, `MTLClearColor` and `MTLTextureSwizzleChannels` `{red, green, blue, alpha}`.
-- **An optional field** is nil where it is unset. One set to nil reads the same: a player leaves
-  the property as it was either way.
+- **An optional field** is nil where it is unset, and a player leaves the property as it was. One
+  set to nil reads the same, but for the object properties of the pass descriptor's setters
+  (section 9): one of those set to nil is object 0, which a player clears.
 - **Other shapes:** a range of host addresses is the list `[start, end]`; a tuple is a list; an
   enum value without data is its name as a string (`"Itu709"`); one with data is a map of one
   pair, `{Name: value}` (a resource `{Buffer: object}` or `{Texture: object}`, an option setter
@@ -87,7 +88,7 @@ and the (name id, value) answer pairs.
   later calls and writes.
 - **Answers:** what the call returned that the program could see (section 5). A player ignores
   answer keys it does not use.
-- Getters are not recorded.
+- Getters are not recorded, but for `gpuResourceID` (section 5).
 
 ## 4. Objects
 
@@ -124,14 +125,18 @@ and the (name id, value) answer pairs.
   without a pinned address answers none. `newBufferWithBytesNoCopy:length:options:deallocator:`
   is `[nil, length, options, nil]`, and a no-copy descriptor's `contents` nil; their bytes arrive
   as writes.
+- **Copied buffers.** A buffer `newBufferWithDescriptor:` made as a copy of host memory (`contents`
+  set, `noCopy` not) carries the bytes it starts with as its descriptor's `contents`: a blob where
+  they are 64 bytes or longer, bytes otherwise. The player makes the buffer, then puts them at its
+  first byte as a write's bytes (section 6).
 - **Textures over memory:** a buffer's `newTextureWithDescriptor:offset:bytesPerRow:` and
   `newTiledTextureWithDescriptor:offset:bytesPerRow:`, a heap's `newTextureWithDescriptor:offset:`,
   each taking a texture descriptor object (section 9).
 - **The address map** is the ranges `[gpuAddress, gpuAddress + gpuLength)` of the live objects that
   answered them; `release` removes an object's range.
 - **Relocation.** The player makes each object where its runtime has room. In the bytes it puts
-  into an object that answered a `gpuAddress` (`m2v.write` and the copies from the guest's RAM), in
-  the data of every `set*Bytes:length:atIndex:` and in every address value, each 8-byte word at an
+  into an object that answered a `gpuAddress` (`m2v.write`, a copied buffer's `contents` and the
+  copies from the guest's RAM), in the data of every `set*Bytes:length:atIndex:` and in every address value, each 8-byte word at an
   offset that is a multiple of 8 from the target's start, whose value lies in a live range, becomes
   the player's address of that range's object plus the word's offset into the range. The innermost
   range wins: a buffer in a block moves with its own new address. Words outside every live range
@@ -139,10 +144,17 @@ and the (name id, value) answer pairs.
   library bytes and function constants are never rewritten. The player counts the words it
   rewrote; a data word that is no address but lies in a live range is rewritten too, and the count
   shows it.
-- **Resource IDs** are not answered. A descriptor's resource index places its object at that ID, as
-  Metal places it whether or not the index is forced: a texture descriptor's and a render
-  pipeline's `resourceIndex` (`[index, forced]`), a sampler's (an index), and a view's
-  `resourceIndex:` argument. Every other object takes the ID its runtime gives it.
+- **Resource IDs.** A descriptor's resource index places its object at that ID, as Metal places it
+  whether or not the index is forced: a texture descriptor's and a render pipeline's
+  `resourceIndex` (`[index, forced]`), a sampler's (an index), and a view's `resourceIndex:`
+  argument. Every other object takes the ID its runtime gives it.
+- **The IDs the program saw.** Each `gpuResourceID` the platform answered of a texture, sampler,
+  depth-stencil state, compute or render pipeline, indirect command buffer or visible function
+  table is a `gpuResourceID` record: the object its receiver, no arguments, result 0, and the ID
+  under the answer `gpuResourceID`. A getter that raised answers nothing. The player compares the
+  first answer of each object with the ID its runtime gives the object, and reports each object
+  where they differ (section 10): the bytes in which the program wrote that ID name no object of
+  the play.
 
 ## 6. CPU writes
 
@@ -208,8 +220,9 @@ and the (name id, value) answer pairs.
 - **The host's own commit splits** (no Metal counterpart): `m2v.split` commits its command buffer
   as a part and makes the command buffer of the same queue that goes on from it (its result);
   `m2v.part` makes a command buffer of the same queue for a later range (its result), and
-  `m2v.commitPart` commits its receiver as a part. A split or part of result 0 is one the host did
-  not cut: it commits nothing and makes nothing.
+  `m2v.commitPart` commits its receiver as a part where its answer `cut` is `"Cut"`. Where it is
+  `"Fails"` or `{Whole: reason}`, the host committed nothing; a record without the answer commits.
+  A split or part of result 0 is one the host did not cut: it commits nothing and makes nothing.
 - **The host's scheduling records** change nothing a program sees, and a player plays none of
   them: `m2v.setCompletionJoinsNext` (`[joins]`: the host groups the command buffer's completion
   with the next ones of its queue), `m2v.holdsNoPredication` (`[]`), `m2v.fold` (`[later]`: the
@@ -243,7 +256,8 @@ and the (name id, value) answer pairs.
     `level`, `slice`, `depthPlane`, `resolveLevel`, `resolveSlice`, `resolveDepthPlane`,
     `loadAction`, `storeAction`, `storeActionOptions`, then `clearColor`, `clearDepth` and
     `depthResolveFilter`, or `clearStencil` and `stencilResolveFilter`. A nil property takes
-    nothing: the descriptor keeps what it had.
+    nothing: the descriptor keeps what it had. An object property (`visibilityResultBuffer`,
+    `rasterizationRateMap`, `texture`, `resolveTexture`) set to nil is object 0, which clears it.
   - `m2v.rateMapDescriptor` (`[{screenSize, mutability, minFactor}]`) makes an
     `MTLRasterizationRateMapDescriptor`; its layers are set on it afterwards.
 - **Drawables.** A `newTextureWithDescriptor:` of receiver 0 whose argument is a map
@@ -294,7 +308,7 @@ and the (name id, value) answer pairs.
 | `front`, `back` | `frontFaceStencil`, `backFaceStencil` |
 | `heapType` | `type` |
 | `options` | the setters of `resourceOptions`, `storageMode` and `hazardTrackingMode` |
-| `pinnedGpuAddress`, `contents`, `noCopy`, `deallocator`, `zeroFrom` | the host's buffer creation: a pin, no-copy host memory and its deallocator, and the bytes known zero from an offset |
+| `pinnedGpuAddress`, `contents`, `noCopy`, `deallocator`, `zeroFrom` | the host's buffer creation: a pin, the bytes a copied buffer starts with (section 5), no-copy host memory and its deallocator, and the bytes known zero from an offset |
 | `openGlModeEnabled`, `openClMode` | `openGLModeEnabled`, `openCLModeEnabled` |
 | `znear`, `zfar` | `MTLViewport`'s `znear` and `zfar` |
 | `rotation`, `isDrawable`, `framebufferOnly`, `protectionOptions`, `writeSwizzleEnabled` | Apple's texture descriptor properties of those names |
@@ -330,8 +344,8 @@ and the (name id, value) answer pairs.
     and dispatches their calls issued (`draws` and `dispatches`: an encoder's calls whose
     selectors begin `draw` and `dispatch`), the words it relocated (`relocated_words`), the
     8-byte values at offsets 4 past a multiple of 8 that lie in a live range, left as they are
-    (`misaligned_address_words`), and the bytes it wrote or copied in, `m2v.write` and the copies
-    from the guest's RAM (`written_bytes`). A group's calls are those played before it completed:
+    (`misaligned_address_words`), and the bytes it wrote or copied in, `m2v.write`, the copied
+    buffers' `contents` and the copies from the guest's RAM (`written_bytes`). A group's calls are those played before it completed:
     the call that waited for it counts in the next.
   - **As executed** (`executed`): the counters the runtime exposes. The old runtime's are the
     Vulkan commands it recorded (submissions, render passes, barriers, dispatches, draws, copies)
@@ -353,7 +367,9 @@ and the (name id, value) answer pairs.
   read-only option (bit 24) is made without it and keeps the GPU writes Metal drops.
 
 `report.txt` holds one line per item: `device NAME`, `completed IDS COUNTS`, `frame N COUNTS`,
-`check ID SHA256 match|differs|unrecorded`, `total COUNTS` (its `calls` the calls played: where
+`check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
+gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
+runtime's getter raises), `total COUNTS` (its `calls` the calls played: where
 the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
 KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness

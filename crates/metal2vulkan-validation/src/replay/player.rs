@@ -47,9 +47,11 @@ pub struct Made {
 
 /// One runtime behind the player. Objects are named by their stream ids; the player resolves blobs
 /// and relocates before a call reaches the backend, and handles `m2v.write`, `m2v.check`,
-/// `m2v.present`, `release` of a device, and the program's waits itself. A copy from the guest's
-/// RAM reaches it with its data relocated ([`upload`] says where the data lands), and a record of
-/// the host's own plumbing as the plain Metal call it stands for ([`plain`]).
+/// `m2v.present`, `m2v.commitPart`, `gpuResourceID`, `release` of a device, and the program's
+/// waits itself. A copy from the guest's RAM reaches it with its data relocated ([`upload`] says
+/// where the data lands), a record of the host's own plumbing as the plain Metal call it stands
+/// for ([`plain`]), and a copied buffer's descriptor without its `contents`, which reach it as a
+/// write once the buffer is made ([`copied`]).
 pub trait Backend {
     /// Run `call`: make its result, or run its receiver's method, or drop the object `release`
     /// names.
@@ -60,6 +62,8 @@ pub trait Backend {
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError>;
     /// The bytes of buffer or texture `object`, for a checksum.
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError>;
+    /// The `gpuResourceID` the runtime gives `object`; none where its getter raises.
+    fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError>;
     /// The runtime's counters now.
     fn counters(&mut self) -> Counters;
 }
@@ -108,6 +112,16 @@ pub struct Check {
     pub recorded: Option<Hash>,
 }
 
+/// An object whose `gpuResourceID` in the runtime is not the one the program saw: the bytes that
+/// hold the program's ID name no object of the play.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdDiffers {
+    pub object: u64,
+    pub recorded: u64,
+    /// None where the runtime's getter raises.
+    pub played: Option<u64>,
+}
+
 /// What one span of a play counted.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Counts {
@@ -135,6 +149,7 @@ pub struct Report {
     /// Each frame's counts: the groups completed since the present before.
     pub frames: Vec<Counts>,
     pub checks: Vec<Check>,
+    pub ids: Vec<IdDiffers>,
     /// The whole play's counts, the player's readbacks left out. Its calls are the calls played:
     /// where a play stopped, the stopping call is the next.
     pub total: Counts,
@@ -170,6 +185,12 @@ impl Report {
             };
             let sha = super::value::hex(&check.sha256);
             lines.push(format!("check #{} {sha} {verdict}", check.object));
+        }
+        for id in &self.ids {
+            let played = id
+                .played
+                .map_or("none".to_owned(), |played| format!("{played:#x}"));
+            lines.push(format!("id #{} {:#x} {played}", id.object, id.recorded));
         }
         lines.push(format!("total{}", counted(&self.total)));
         lines
@@ -211,6 +232,8 @@ pub struct Player<'b, B: Backend> {
     committed: Vec<u64>,
     /// Each event's value as far as the stream has set or completed it.
     events: HashMap<u64, u64>,
+    /// The live objects whose `gpuResourceID` the player compared.
+    compared: HashSet<u64>,
     baseline: Counters,
     /// The counts the stream fixes, since the last group.
     fixed: Counters,
@@ -326,6 +349,39 @@ fn plain(mut call: Call) -> Option<Call> {
     Some(call)
 }
 
+/// Whether the host committed the command buffer of `m2v.commitPart` `call`: where its answer `cut`
+/// is `"Cut"`, or absent; not where it is `"Fails"` or `{Whole: reason}`.
+fn cut(call: &Call) -> Result<bool, PlayError> {
+    let Some(cut) = call.answer("cut") else {
+        return Ok(true);
+    };
+    match cut {
+        Value::Str(cut) if cut == "Cut" => Ok(true),
+        Value::Str(cut) if cut == "Fails" => Ok(false),
+        Value::Map(whole) if whole.len() == 1 && &*whole[0].0 == "Whole" => Ok(false),
+        _ => Err(invalid(format!("m2v.commitPart's cut {cut}"))),
+    }
+}
+
+/// `descriptor`, a `newBufferWithDescriptor:` map, with its `contents` nil, and the bytes they
+/// held: what a buffer made as a copy of host memory starts with, which the player writes once the
+/// buffer is made (`docs/REPLAY-STREAM.md`, section 5).
+fn copied(descriptor: Value) -> (Value, Option<Vec<u8>>) {
+    let Value::Map(fields) = descriptor else {
+        return (descriptor, None);
+    };
+    let mut contents = None;
+    let fields = fields.into_iter().map(|(key, value)| match value {
+        Value::Bytes(bytes) if &*key == "contents" => {
+            contents = Some(bytes);
+            (key, Value::Nil)
+        }
+        value => (key, value),
+    });
+    let fields = fields.collect();
+    (Value::Map(fields), contents)
+}
+
 /// The program's waits for a command buffer, as a stream records them: names of records, not
 /// waits (the player's own waits are its backend's, under `gpu::wait`). Spelled in pieces so the
 /// check that every device wait is bounded (`gpu::tests`) finds none here.
@@ -350,6 +406,7 @@ impl<'b, B: Backend> Player<'b, B> {
             pending: HashMap::new(),
             committed: Vec::new(),
             events: HashMap::new(),
+            compared: HashSet::new(),
             baseline,
             fixed,
             frame: Counts::default(),
@@ -430,7 +487,12 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.frame = Counts::default();
                 Ok(())
             }
-            "commit" | "m2v.commitPart" => self.commit(call.receiver),
+            "commit" => self.commit(call.receiver),
+            "m2v.commitPart" => match cut(&call)? {
+                true => self.commit(call.receiver),
+                false => Ok(()),
+            },
+            "gpuResourceID" => self.resource_id(&call),
             // A split or part of result 0 is one the host did not cut.
             "m2v.split" | "m2v.part" if call.result == 0 => Ok(()),
             "m2v.split" => {
@@ -531,15 +593,56 @@ impl<'b, B: Backend> Player<'b, B> {
         Ok(())
     }
 
-    /// A call the backend runs, its blobs and addresses resolved, and what it made recorded.
+    /// Compare the ID the program saw of `call`'s receiver, where it saw one, with the runtime's,
+    /// once per object, and report the object where they differ.
+    fn resource_id(&mut self, call: &Call) -> Result<(), PlayError> {
+        let object = call.receiver;
+        if !self.kinds.contains_key(&object) {
+            return Err(invalid(format!(
+                "gpuResourceID of #{object}, made by no call"
+            )));
+        }
+        // A getter that raised answers nothing.
+        let Some(recorded) = call.answer("gpuResourceID") else {
+            return Ok(());
+        };
+        let recorded = recorded.as_uint();
+        let recorded = recorded.ok_or_else(|| invalid("gpuResourceID answers no uint"))?;
+        if !self.compared.insert(object) {
+            return Ok(());
+        }
+        let played = self.backend.resource_id(object)?;
+        if played != Some(recorded) {
+            let differs = IdDiffers {
+                object,
+                recorded,
+                played,
+            };
+            self.report.ids.push(differs);
+        }
+        Ok(())
+    }
+
+    /// A call the backend runs, its blobs and addresses resolved, and what it made recorded; a
+    /// copied buffer's `contents` written once it is made.
     fn make(&mut self, stream: &mut StreamReader, call: Call) -> Result<(), PlayError> {
         let Some(call) = plain(call) else {
             return Ok(());
         };
         let mut relocated = 0;
         let mut args = Vec::with_capacity(call.args.len());
-        for arg in &call.args {
-            args.push(self.resolve(stream, arg, &mut relocated)?);
+        let mut contents = None;
+        for (at, arg) in call.args.iter().enumerate() {
+            let arg = self.resolve(stream, arg, &mut relocated)?;
+            let arg = match (at, &*call.selector) {
+                (0, "newBufferWithDescriptor:") => {
+                    let (descriptor, bytes) = copied(arg);
+                    contents = bytes;
+                    descriptor
+                }
+                _ => arg,
+            };
+            args.push(arg);
         }
         *self.fixed.entry(RELOCATED_WORDS).or_default() += relocated;
         if sets_bytes(&call.selector) {
@@ -574,7 +677,10 @@ impl<'b, B: Backend> Player<'b, B> {
                 .insert(object, address, length, base)
                 .map_err(PlayError::Invalid)?;
         }
-        Ok(())
+        match contents {
+            Some(bytes) => self.put(object, 0, bytes),
+            None => Ok(()),
+        }
     }
 
     /// `call` with the data of the upload it is, if any, relocated where its target answered a
@@ -683,18 +789,24 @@ impl<'b, B: Backend> Player<'b, B> {
         for [offset, data] in pairs {
             let offset = offset.as_uint();
             let offset = offset.ok_or_else(|| invalid("m2v.write of no offset"))?;
-            let mut data = match data {
+            let data = match data {
                 Value::Bytes(data) => data.clone(),
                 Value::Blob(hash) => stream.blob(hash)?,
                 _ => return Err(invalid("m2v.write of no data")),
             };
-            if self.addresses.holds(target) {
-                self.relocate(&mut data, offset);
-            }
-            *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
-            self.backend.write(target, offset, &data)?;
+            self.put(target, offset, data)?;
         }
         Ok(())
+    }
+
+    /// Put `data` at `offset` of `target`, relocated where the target answered a `gpuAddress`, and
+    /// count it.
+    fn put(&mut self, target: u64, offset: u64, mut data: Vec<u8>) -> Result<(), PlayError> {
+        if self.addresses.holds(target) {
+            self.relocate(&mut data, offset);
+        }
+        *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
+        self.backend.write(target, offset, &data)
     }
 
     /// Relocate `data`, which starts `offset` bytes into its target, and count what it found.
@@ -747,6 +859,7 @@ impl<'b, B: Backend> Player<'b, B> {
     fn drop_object(&mut self, object: u64) -> Result<(), PlayError> {
         self.addresses.remove(object);
         self.owner.remove(&object);
+        self.compared.remove(&object);
         if let Some(pending) = self.pending.get_mut(&object) {
             if pending.committed {
                 pending.released = true;

@@ -9,6 +9,9 @@
 //! - Textures made from descriptor records read back as written.
 //! - A render pass its setter records describe clears a drawable the stream never saw made.
 //! - The copies from the guest's RAM and a device copy's fill land where their pieces say.
+//! - A pass setter's object 0 clears the attachment's texture it sets to nil.
+//! - A buffer made as a copy of host memory starts with its contents, and the IDs the program saw
+//!   are compared with the runtime's.
 //!
 //! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
 //! their own beside the stream's.
@@ -459,5 +462,181 @@ fn guest_ram_copies_land_where_their_pieces_say() {
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
         assert_eq!(report.total.stream["written_bytes"], 16 + 12);
         assert_eq!(report.total.stream["relocated_words"], 0);
+    });
+}
+
+/// A 4 by 4 RGBA8Unorm texture descriptor record's map, shader-read and render-target, Shared,
+/// with `extra` fields.
+fn render_target(extra: Vec<(&str, Value)>) -> Value {
+    let Value::Map(mut fields) = uints(&[
+        ("pixelFormat", 70),
+        ("width", 4),
+        ("height", 4),
+        ("usage", 5),
+        ("resourceOptions", 0),
+    ]) else {
+        unreachable!("a map");
+    };
+    fields.extend(extra.into_iter().map(|(key, value)| (key.into(), value)));
+    Value::Map(fields)
+}
+
+/// The whole of a 4 by 4 texture.
+fn whole() -> Value {
+    Value::Map(vec![
+        ("origin".into(), uints(&[("x", 0), ("y", 0), ("z", 0)])),
+        (
+            "size".into(),
+            uints(&[("width", 4), ("height", 4), ("depth", 1)]),
+        ),
+    ])
+}
+
+/// A pass whose setter records set attachment 1's texture and then set it to nil (object 0)
+/// clears attachment 0's texture to green and leaves the other's blue, as Metal leaves a texture
+/// no attachment holds; object 0 for the visibility result buffer, the rate map and a resolve
+/// texture plays too.
+#[test]
+fn a_pass_setter_clears_an_attachment_set_to_nil() {
+    let dir = ScratchDir::new("replay-pass-nil").unwrap();
+    let [red, blue] = [[255u8, 0, 0, 255], [0, 0, 255, 255]].map(|texel| texel.repeat(16));
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 3, &[render_target(vec![])], &[])?;
+        for (texture, texels) in [(4, &red), (5, &blue)] {
+            w.call(
+                "newTextureWithDescriptor:",
+                1,
+                texture,
+                &[Value::Object(3)],
+                &[],
+            )?;
+            let args = [
+                whole(),
+                Value::Uint(0),
+                Value::Bytes(texels.clone()),
+                Value::Uint(16),
+            ];
+            let selector = "replaceRegion:mipmapLevel:withBytes:bytesPerRow:";
+            w.call(selector, texture, 0, &args, &[])?;
+        }
+        let shared = [Value::Uint(64), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 6, &shared, &[])?;
+        w.call("MTLRenderPassDescriptor.new", 0, 7, &[], &[])?;
+        let pass = |visibility: u64, rate_map: Value| {
+            Value::Map(vec![
+                ("visibilityResultBuffer".into(), Value::Object(visibility)),
+                ("rasterizationRateMap".into(), rate_map),
+                ("renderTargetWidth".into(), Value::Uint(4)),
+                ("renderTargetHeight".into(), Value::Uint(4)),
+            ])
+        };
+        w.call("m2v.setPass", 7, 0, &[pass(6, Value::Nil)], &[])?;
+        w.call("m2v.setPass", 7, 0, &[pass(0, Value::Object(0))], &[])?;
+        let clear = |color: [f64; 4]| {
+            let channels = ["red", "green", "blue", "alpha"].into_iter().zip(color);
+            Value::Map(
+                channels
+                    .map(|(key, value)| (key.into(), Value::F64(value)))
+                    .collect(),
+            )
+        };
+        let attachment = |texture: u64, color: [f64; 4]| {
+            let Value::Map(mut fields) =
+                uints(&[("level", 0), ("loadAction", 2), ("storeAction", 1)])
+            else {
+                unreachable!("a map");
+            };
+            fields.push(("texture".into(), Value::Object(texture)));
+            fields.push(("resolveTexture".into(), Value::Object(0)));
+            fields.push(("clearColor".into(), clear(color)));
+            Value::Map(fields)
+        };
+        let set = [Value::Uint(0), attachment(4, [0.0, 1.0, 0.0, 1.0])];
+        w.call("m2v.setColorAttachment", 7, 0, &set, &[])?;
+        let set = [Value::Uint(1), attachment(5, [1.0, 0.0, 0.0, 1.0])];
+        w.call("m2v.setColorAttachment", 7, 0, &set, &[])?;
+        let nil = Value::Map(vec![("texture".into(), Value::Object(0))]);
+        w.call("m2v.setColorAttachment", 7, 0, &[Value::Uint(1), nil], &[])?;
+        w.call("commandBuffer", 2, 8, &[], &[])?;
+        let pass = [Value::Object(7)];
+        w.call("renderCommandEncoderWithDescriptor:", 8, 9, &pass, &[])?;
+        w.call("endEncoding", 9, 0, &[], &[])?;
+        w.call("commit", 8, 0, &[], &[])?;
+        let sums = [&green, &blue].map(|texels| Value::Bytes(Sha256::digest(texels).to_vec()));
+        let answer = [("sha256", Value::List(sums.to_vec()))];
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(4), Value::Object(5)],
+            &answer,
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("pass-nil", device, &path);
+        assert_eq!(report.checks.len(), 2);
+        for check in &report.checks {
+            assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
+        }
+    });
+}
+
+/// A buffer `newBufferWithDescriptor:` made as a copy of host memory reads back as its
+/// `contents`, a blob and inline bytes; a texture placed at its resource index gives the ID the
+/// program saw, and one the runtime placed where it had room another, which the report names.
+#[test]
+fn a_copied_buffer_starts_with_its_contents_and_ids_are_compared() {
+    let dir = ScratchDir::new("replay-contents-ids").unwrap();
+    let long: Vec<u8> = (0..=255).collect();
+    let short = [9u8; 8];
+    let recorded = 0xdead_0000_0001;
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let blob = Value::Blob(w.blob(&long)?);
+        for (buffer, length, contents) in [(2, 256, blob), (3, 8, Value::Bytes(short.to_vec()))] {
+            let descriptor = Value::Map(vec![
+                ("length".into(), Value::Uint(length)),
+                ("options".into(), Value::List(Vec::new())),
+                ("contents".into(), contents),
+                ("noCopy".into(), Value::Bool(false)),
+            ]);
+            w.call("newBufferWithDescriptor:", 1, buffer, &[descriptor], &[])?;
+        }
+        let placed = Value::List(vec![Value::Uint(77), Value::Bool(true)]);
+        let at_77 = render_target(vec![("resourceIndex", placed)]);
+        w.call("m2v.textureDescriptor", 0, 4, &[at_77], &[])?;
+        w.call("m2v.textureDescriptor", 0, 5, &[render_target(vec![])], &[])?;
+        for (texture, descriptor, id) in [(6, 4, 77), (7, 5, recorded)] {
+            let args = [Value::Object(descriptor)];
+            w.call("newTextureWithDescriptor:", 1, texture, &args, &[])?;
+            let answer = [("gpuResourceID", Value::Uint(id))];
+            w.call("gpuResourceID", texture, 0, &[], &answer)?;
+        }
+        let sums =
+            [&long[..], &short[..]].map(|bytes| Value::Bytes(Sha256::digest(bytes).to_vec()));
+        let answer = [("sha256", Value::List(sums.to_vec()))];
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(2), Value::Object(3)],
+            &answer,
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("contents-ids", device, &path);
+        for check in &report.checks {
+            assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
+        }
+        assert_eq!(report.total.stream["written_bytes"], 256 + 8);
+        assert_eq!(report.ids.len(), 1, "{:?}", report.ids);
+        assert_eq!(
+            (report.ids[0].object, report.ids[0].recorded),
+            (7, recorded)
+        );
+        assert!(report.ids[0].played.is_some_and(|id| id != recorded));
     });
 }
