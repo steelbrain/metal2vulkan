@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds|restated|guest]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds|restated|moved|guest]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -72,6 +72,9 @@
 //! - **restated**: as **scene**, but each draw first sets a scissor rectangle of its own, the
 //!   next cell of **damage**'s grid, so nearly every draw is its pipeline state's kept draw
 //!   rebound with its scissor restated, its offsets moved and its own indices.
+//! - **moved**: as **restated**, but each pass sets one material's pipeline state, textures and
+//!   samplers once, before its first draw, so every later draw of the pass changes only its
+//!   scissor rectangle, its offsets and its indices.
 //! - **guest**, a guest's command buffers of a few render encoders: 16 command buffers of 4
 //!   passes over the target (the first cleared, the rest loaded) of 8 draws each. Each draw is a
 //!   4-vertex triangle strip after `set_fragment_texture` (the next of 16), `set_vertex_buffer` at
@@ -218,8 +221,12 @@ enum Stream {
     Passes(usize),
     /// A 3D engine's frame of passes over four color targets ([`Scene`]), each draw binding its
     /// material's textures and samplers again where `rebinds`, and setting a scissor rectangle
-    /// of its own ([`damaged`]) where `scissors`.
-    Scene { rebinds: bool, scissors: bool },
+    /// of its own ([`damaged`]) where `scissors`; a material runs for `run` draws.
+    Scene {
+        rebinds: bool,
+        scissors: bool,
+        run: usize,
+    },
     /// A guest's: [`GUEST_PASSES`] passes of [`GUEST_PASS_DRAWS`] draws, each draw a texture, its
     /// vertex slot and its vertex and fragment bytes, every second one the pipeline state and the
     /// sampler again ([`Bench::guest_steps`]).
@@ -273,7 +280,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 13] = [
+const SHAPES: [Shape; 14] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -335,6 +342,7 @@ const SHAPES: [Shape; 13] = [
         stream: Stream::Scene {
             rebinds: false,
             scissors: false,
+            run: SCENE_RUN,
         },
     },
     Shape {
@@ -344,6 +352,7 @@ const SHAPES: [Shape; 13] = [
         stream: Stream::Scene {
             rebinds: true,
             scissors: false,
+            run: SCENE_RUN,
         },
     },
     Shape {
@@ -353,6 +362,17 @@ const SHAPES: [Shape; 13] = [
         stream: Stream::Scene {
             rebinds: false,
             scissors: true,
+            run: SCENE_RUN,
+        },
+    },
+    Shape {
+        name: "moved",
+        buffers: 8,
+        draws: SCENE_DRAWS,
+        stream: Stream::Scene {
+            rebinds: false,
+            scissors: true,
+            run: SCENE_PASS_DRAWS,
         },
     },
     Shape {
@@ -694,8 +714,16 @@ impl Bench {
         if let (Stream::Passes(each), Some(compositor)) = (shape.stream, &self.compositor) {
             return compositor.small_passes(buffer, shape.draws / each, each);
         }
-        if let (Stream::Scene { rebinds, scissors }, Some(scene)) = (shape.stream, &self.scene) {
-            return scene.steps(buffer, (rebinds, scissors));
+        if let (
+            Stream::Scene {
+                rebinds,
+                scissors,
+                run,
+            },
+            Some(scene),
+        ) = (shape.stream, &self.scene)
+        {
+            return scene.steps(buffer, (rebinds, scissors), run);
         }
         if shape.stream == Stream::Guest {
             return self.guest_steps(chunks, shape, buffer);
@@ -1492,8 +1520,9 @@ impl Scene {
 
     /// Command buffer `buffer`'s steps: its passes and their draws, each draw's slots the next
     /// of the buffer's; each draw binding its material's textures and samplers again where
-    /// `rebinds`, and setting a scissor rectangle of its own where `scissors`.
-    fn steps(&self, buffer: usize, (rebinds, scissors): (bool, bool)) -> Vec<Step<'_>> {
+    /// `rebinds`, and setting a scissor rectangle of its own where `scissors`; a material runs
+    /// for `run` draws, a divisor of a pass's.
+    fn steps(&self, buffer: usize, (rebinds, scissors): (bool, bool), run: usize) -> Vec<Step<'_>> {
         let mut steps = Vec::new();
         for d in 0..SCENE_DRAWS {
             if d % SCENE_PASS_DRAWS == 0 {
@@ -1502,11 +1531,11 @@ impl Scene {
                 steps.push(Step::VertexBuffer(&self.data, SCENE_TRANSFORMS, 1));
                 steps.push(Step::FragmentBuffer(&self.data, SCENE_SCALES, 0));
             }
-            let material = (buffer * SCENE_DRAWS + d) / SCENE_RUN % SCENE_MATERIALS;
-            if d % SCENE_RUN == 0 {
+            let material = (buffer * SCENE_DRAWS + d) / run % SCENE_MATERIALS;
+            if d % run == 0 {
                 steps.push(Step::Pipeline(&self.pipelines[material % SCENE_PIPELINES]));
             }
-            if rebinds || d % SCENE_RUN == 0 {
+            if rebinds || d % run == 0 {
                 steps.push(Step::FragmentTextures(&self.materials[material]));
                 steps.push(Step::FragmentSamplers(&self.samplers));
             }
@@ -2157,7 +2186,7 @@ fn main() -> Result<()> {
                 || {
                     format!(
                         "no shape {name}: ws, many, 10k, clips, damage, compositor, backdrops, \
-                         pass1, pass17, scene, rebinds, restated or guest"
+                         pass1, pass17, scene, rebinds, restated, moved or guest"
                     )
                 },
             )?),
