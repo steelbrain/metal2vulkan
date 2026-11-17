@@ -2238,7 +2238,47 @@ pub(crate) enum Earlier {
     Ended,
 }
 
+/// What a batch's first work of uploads alone is made visible to by the barrier after it
+/// ([`Taken::record`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Later {
+    /// Every later command, of every stage.
+    All,
+    /// The batch's own commands' uses of the device copies the uploads write: the stages and
+    /// access types the batch's encoders' uses of those buffers name, on a device that orders
+    /// its batches by their ends (`command_buffer/submit.rs`). The barrier's second scope is
+    /// limited to them ("the second synchronization scope is limited to operations on the
+    /// pipeline stages determined by the destination stage mask", and its second access scope to
+    /// "memory accesses performed by pipeline stages explicitly specified in the destination stage
+    /// mask", the Vulkan specification, `vkCmdPipelineBarrier` and Execution and Memory
+    /// Dependencies), which holds every command of the batch that reads or writes them. Every
+    /// later batch on its `VkQueue` comes after the batch's end, `Barrier::to_all`, whose first
+    /// scope "includes all commands that occur earlier in submission order" with `ALL_COMMANDS`
+    /// and `MEMORY_WRITE` (the uploads' transfers among them) and whose second includes every
+    /// command after it; a command buffer of another `VkQueue` waits for the batch's signal,
+    /// whose "first access scope includes all memory access performed by the device" (Semaphore
+    /// Signaling).
+    Batch(vk::PipelineStageFlags, vk::AccessFlags),
+}
+
 impl<'a> Taken<'a> {
+    /// The keys of the buffers its uploads write (`FirstFill::upload`), each once; `None` where
+    /// one names none.
+    pub(crate) fn upload_keys(&self) -> Option<Vec<ResourceKey>> {
+        let mut keys = Vec::new();
+        for held in &self.held {
+            if let Held::Fill(_, _, fill) = held {
+                if fill.upload.is_some() {
+                    let key = fill.key?;
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
+                }
+            }
+        }
+        Some(keys)
+    }
+
     /// Whether it took every fill waiting: it took them all ([`FillTake::All`]), or took a move of
     /// an image in memory another resource owns, or a staged copy, each of which comes after every
     /// fill of that memory. Its commands then may reach what any fill-queue submission not yet
@@ -2356,21 +2396,22 @@ impl<'a> Taken<'a> {
     /// the heap's fill) and the copies out, then the copies of the kept spans back and the
     /// images' copies of zeros, then the barrier that makes every write visible to every command
     /// after and to the host; to every command after alone where the work is uploads alone,
-    /// which write device copies the host never reads ([`uploaded_barrier`]). Uploads alone take
-    /// no barrier from the commands before where `earlier` is [`Earlier::Ended`].
+    /// which write device copies the host never reads ([`uploaded_barrier`]), or to what `later`
+    /// names ([`Later::Batch`]). Uploads alone take no barrier from the commands before where
+    /// `earlier` is [`Earlier::Ended`].
     ///
     /// # Safety
     ///
     /// `command_buffer` is recording, outside a render pass, for one of the device's queue
     /// families, of `family`'s flags; the submission that runs it is made before any that uses
-    /// one of the resources, on the same `VkQueue` or waited for; [`Earlier::Ended`] only as its
-    /// docs say.
+    /// one of the resources, on the same `VkQueue` or waited for; [`Earlier::Ended`] and
+    /// [`Later::Batch`] only as their docs say.
     pub(crate) unsafe fn record(
         &self,
         (device, counts): (&Vk, &Counters),
         command_buffer: vk::CommandBuffer,
         family: vk::QueueFlags,
-        earlier: Earlier,
+        (earlier, later): (Earlier, Later),
     ) {
         if self.held.is_empty() {
             return;
@@ -2453,8 +2494,11 @@ impl<'a> Taken<'a> {
             .all(|held| matches!(held, Held::Fill(_, _, fill) if fill.upload.is_some()));
         if copied && uploads {
             // SAFETY: the caller's contract.
-            unsafe { uploaded_barrier(device, command_buffer) };
+            unsafe { uploaded_barrier(device, command_buffer, later) };
             exit_guard::called(Call::CmdPipelineBarrier);
+            if later != Later::All {
+                counts.managed_upload_barrier_narrowed();
+            }
         } else if copied {
             transfer_barrier(device, command_buffer, false);
             exit_guard::called(Call::CmdPipelineBarrier);
@@ -2518,7 +2562,8 @@ fn uploads_only(fills: &[&FirstFill]) -> bool {
 }
 
 /// The barrier after uploads alone (`Taken::record`): every later command, of every stage, after
-/// their transfers' writes, which it makes visible to it. No host access: the uploads write device
+/// their transfers' writes, which it makes visible to it, or the commands `later` names
+/// ([`Later::Batch`]). No host access: the uploads write device
 /// copies, which the host never reads, so it needs no domain operation to the host ("If the
 /// destination access mask includes `VK_ACCESS_HOST_WRITE_BIT` or `VK_ACCESS_HOST_READ_BIT`, a
 /// memory domain operation is performed where available memory in the device domain is also made
@@ -2527,17 +2572,25 @@ fn uploads_only(fills: &[&FirstFill]) -> bool {
 ///
 /// # Safety
 ///
-/// `command_buffer` is recording, outside a render pass.
-unsafe fn uploaded_barrier(device: &Vk, command_buffer: vk::CommandBuffer) {
+/// `command_buffer` is recording, outside a render pass; [`Later::Batch`] only as its docs say,
+/// its access types those its stages make.
+unsafe fn uploaded_barrier(device: &Vk, command_buffer: vk::CommandBuffer, later: Later) {
+    let (stages, access) = match later {
+        Later::All => (
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE,
+        ),
+        Later::Batch(stages, access) => (stages, access),
+    };
     let barrier = vk::MemoryBarrier::default()
         .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-        .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE);
+        .dst_access_mask(access);
     // SAFETY: the caller's contract.
     unsafe {
         device.cmd_pipeline_barrier(
             command_buffer,
             vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::ALL_COMMANDS,
+            stages,
             vk::DependencyFlags::empty(),
             &[barrier],
             &[],

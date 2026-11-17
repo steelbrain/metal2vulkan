@@ -680,6 +680,11 @@ pub(super) struct DeviceShared {
     /// batch order.
     #[cfg(test)]
     pub(crate) uploads_unbarriered_forced: AtomicBool,
+    /// The second scopes of the barriers that made batches' uploads visible to their own uses
+    /// alone (`first_move::Later::Batch`), in the order recorded: for the test of
+    /// `tests/managed_inline.rs` that the scope names every stage its batch uses the buffer in.
+    #[cfg(test)]
+    pub(crate) upload_scopes: Mutex<Vec<(vk::PipelineStageFlags, vk::AccessFlags)>>,
     /// Its encoders record a command that writes a read twin, which they refuse otherwise: the
     /// negative control of the tests of `tests/read_twin_device.rs` (`read_twin::refuses_writes`).
     #[cfg(test)]
@@ -3420,6 +3425,8 @@ impl Device {
             managed_inline_bound: crate::managed::INLINE_BYTES.into(),
             #[cfg(test)]
             uploads_unbarriered_forced: Default::default(),
+            #[cfg(test)]
+            upload_scopes: Default::default(),
             #[cfg(test)]
             read_twin_unguarded: Default::default(),
             #[cfg(test)]

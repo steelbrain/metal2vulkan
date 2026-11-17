@@ -122,6 +122,16 @@ impl Access {
         Access::new(self.stages | other.stages, self.access | other.access)
     }
 
+    /// Its stages and access types as `VkPipelineStageFlags` and `VkAccessFlags` name them, each
+    /// the same or broader ([`legacy_stages`], `legacy_access`), `ALL_COMMANDS` where it names no
+    /// stage: a barrier's second scope.
+    pub(super) fn legacy(self) -> (vk::PipelineStageFlags, vk::AccessFlags) {
+        (
+            legacy_stages(self.stages, vk::PipelineStageFlags::ALL_COMMANDS),
+            legacy_access(self.access),
+        )
+    }
+
     fn intersection(self, other: Access) -> Access {
         Access::new(self.stages & other.stages, self.access & other.access)
     }

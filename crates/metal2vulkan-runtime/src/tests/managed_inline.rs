@@ -14,6 +14,11 @@
 //!   bytes (one, one, two and two `vkCmdUpdateBuffer`s) land whole.
 //! - **The negative control.** Under a test's bound of 0 the same steps read the same bytes and
 //!   count none.
+//! - **A later batch** reads an upload its batch made visible to the batch's own uses alone (a
+//!   kernel's read; `WorkCounts::managed_upload_barriers_narrowed`) at another stage, a blit's
+//!   copy: the end of the upload's batch orders it (`MANAGED-INLINE-LATER`). Like the
+//!   write-after-read test it cannot fail on a driver that runs one queue's submissions one
+//!   after another.
 //! - **Behind a batch still reading the device copy** (`MANAGED-INLINE-WAR`): a kernel spins on
 //!   the buffer's first word, 0, loading it until its cap unless it reads another value; while it
 //!   runs (its command buffer not complete once the next batch's submission was made), the CPU
@@ -323,6 +328,9 @@ struct Behind {
     /// The uploads the next batch recorded with no barrier of their own
     /// (`WorkCounts::managed_uploads_unbarriered`).
     unbarriered: u64,
+    /// The uploads the next batch made visible to its own uses alone
+    /// (`WorkCounts::managed_upload_barriers_narrowed`).
+    narrowed: u64,
     /// The device orders its batches by their ends (`batch_order.rs`).
     by_ends: bool,
 }
@@ -437,6 +445,7 @@ fn upload_behind_a_reader(exact: bool, forced: bool) -> Option<Behind> {
         next_loads: loads_of(&next_loads),
         overlapped,
         unbarriered: after.managed_uploads_unbarriered - before.managed_uploads_unbarriered,
+        narrowed: after.managed_upload_barriers_narrowed - before.managed_upload_barriers_narrowed,
         by_ends: device.shared().by_ends,
     };
     eprintln!(
@@ -462,10 +471,134 @@ fn an_upload_behind_a_batch_reading_the_device_copy_lands_after_its_reads() {
         "the reader read the old word throughout, the next batch the new one: {behind:?}"
     );
     assert_eq!(
-        behind.unbarriered,
-        u64::from(behind.by_ends),
-        "the upload unbarriered where batches are ordered by their ends: {behind:?}"
+        (behind.unbarriered, behind.narrowed),
+        (u64::from(behind.by_ends), u64::from(behind.by_ends)),
+        "the upload unbarriered, and made visible to its batch's uses alone, where batches are \
+         ordered by their ends: {behind:?}"
     );
+}
+
+/// A batch after the upload's batch reads the upload at a stage the upload's batch never used
+/// (a blit's transfer after a kernel's read): the end of the upload's batch, not its barrier to
+/// its own uses, orders it (`first_move::Later::Batch`).
+#[test]
+fn a_later_batch_reads_an_upload_made_visible_to_its_batch_s_uses_alone() {
+    let scratch = Scratch::new("managed-inline-later");
+    let device = device(&scratch.0);
+    if device.properties().has_unified_memory {
+        let name = device.name();
+        eprintln!("MANAGED-INLINE-LATER {name}: unified memory, one copy; nothing is copied in");
+        return;
+    }
+    let pages = Pages::new();
+    let queue = device.new_command_queue().unwrap();
+    let state = spin(&device);
+    let buffer = buffer(&device, Host::Own, &pages);
+    let loads = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    let copied = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    // Every buffer's first work done first, so the upload's batch takes the upload alone.
+    let warm = spinning(&queue, &state, (&buffer, &loads), 1);
+    warm.wait_until_completed_for(WAIT).unwrap();
+    blit(&queue, |blit| blit.fill_buffer(&copied, 0..16, 0).unwrap());
+    // SAFETY: the host copy's first word, aligned, which no command reads.
+    unsafe { (buffer.contents().unwrap().cast::<u32>().as_ptr()).write(7) };
+    buffer.did_modify_range(0..4).unwrap();
+    let before = device.work_counts();
+    let reader = spinning(&queue, &state, (&buffer, &loads), SPIN_CAP);
+    let later = queue.command_buffer().unwrap();
+    let mut blit = later.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_buffer(&buffer, 0, &copied, 0, 4)
+        .unwrap();
+    blit.end_encoding().unwrap();
+    later.commit().unwrap();
+    for command_buffer in [&reader, &later] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(
+            (command_buffer.status(), command_buffer.error()),
+            (CommandBufferStatus::Completed, None)
+        );
+    }
+    let after = device.work_counts();
+    let narrowed = after.managed_upload_barriers_narrowed - before.managed_upload_barriers_narrowed;
+    let by_ends = device.shared().by_ends;
+    let seen = (loads_of(&loads), loads_of(&copied));
+    eprintln!(
+        "MANAGED-INLINE-LATER {}: by ends {by_ends}, narrowed {narrowed}, (kernel loads, copied \
+         word) {seen:?}",
+        device.name()
+    );
+    assert_eq!(
+        seen,
+        (0, 7),
+        "the kernel and the later blit read the uploaded word"
+    );
+    assert_eq!(narrowed, u64::from(by_ends));
+    drop((buffer, state, queue, device, pages));
+}
+
+/// The barrier that makes an upload visible to its batch's own uses alone names every stage and
+/// access type the batch uses the buffer in, across its encoders: a kernel's read and a later
+/// encoder's blit copy (`first_move::Later::Batch`). It fails where the scope misses one.
+#[test]
+fn an_upload_s_barrier_names_every_stage_its_batch_uses_the_buffer_in() {
+    let scratch = Scratch::new("managed-inline-scope");
+    let device = device(&scratch.0);
+    if device.properties().has_unified_memory || !device.shared().by_ends {
+        let name = device.name();
+        eprintln!("MANAGED-INLINE-SCOPE {name}: one copy, or batches not ordered by their ends");
+        return;
+    }
+    let pages = Pages::new();
+    let queue = device.new_command_queue().unwrap();
+    let state = spin(&device);
+    let buffer = buffer(&device, Host::Own, &pages);
+    let loads = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    let copied = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    let warm = spinning(&queue, &state, (&buffer, &loads), 1);
+    warm.wait_until_completed_for(WAIT).unwrap();
+    blit(&queue, |blit| blit.fill_buffer(&copied, 0..16, 0).unwrap());
+    // SAFETY: the host copy's first word, aligned, which no command reads.
+    unsafe { (buffer.contents().unwrap().cast::<u32>().as_ptr()).write(9) };
+    buffer.did_modify_range(0..4).unwrap();
+    crate::device::lock(&device.shared().upload_scopes).clear();
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(&state).unwrap();
+    encoder.set_buffer(Some(&buffer), 0, 0).unwrap();
+    encoder.set_buffer(Some(&loads), 0, 1).unwrap();
+    encoder.set_bytes(&SPIN_CAP.to_le_bytes(), 2).unwrap();
+    encoder
+        .dispatch_threadgroups(Size::new(1, 1, 1), Size::new(1, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    let mut blit = command_buffer.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_buffer(&buffer, 0, &copied, 0, 4)
+        .unwrap();
+    blit.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer.wait_until_completed_for(WAIT).unwrap();
+    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    let scopes = crate::device::lock(&device.shared().upload_scopes).clone();
+    let raw: Vec<(u32, u32)> = (scopes.iter())
+        .map(|(stages, access)| (stages.as_raw(), access.as_raw()))
+        .collect();
+    eprintln!(
+        "MANAGED-INLINE-SCOPE {}: (stages, access) {raw:#x?}",
+        device.name()
+    );
+    assert_eq!((loads_of(&loads), loads_of(&copied)), (0, 9));
+    let [(stages, access)] = scopes[..] else {
+        panic!("one upload's scope: {raw:#x?}");
+    };
+    use ash::vk::{AccessFlags, PipelineStageFlags};
+    assert!(
+        stages.contains(PipelineStageFlags::COMPUTE_SHADER | PipelineStageFlags::TRANSFER)
+            && access.contains(AccessFlags::SHADER_READ | AccessFlags::TRANSFER_READ),
+        "the kernel's read and the blit's copy: {:#x} {:#x}",
+        stages.as_raw(),
+        access.as_raw()
+    );
+    drop((buffer, state, queue, device, pages));
 }
 
 /// Under the exact batch order the upload keeps its barrier, with the same bytes.
@@ -476,7 +609,7 @@ fn under_the_exact_batch_order_an_upload_keeps_its_barrier() {
     };
     assert!(behind.overlapped, "the reader completed first: {behind:?}");
     assert_eq!((behind.reader_loads, behind.next_loads), (SPIN_CAP, 0));
-    assert_eq!(behind.unbarriered, 0, "{behind:?}");
+    assert_eq!((behind.unbarriered, behind.narrowed), (0, 0), "{behind:?}");
 }
 
 /// The negative control (the module docs): the upload forced unbarriered under the exact batch

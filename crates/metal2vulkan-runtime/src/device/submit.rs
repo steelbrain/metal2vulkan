@@ -28,7 +28,7 @@ use crate::exit_guard::{self, Call};
 use crate::release;
 use crate::resource::ResourceKey;
 use crate::submit_failure::{submit_failed, Failed};
-use crate::texture::first_move::{last_of_each, Earlier, FirstMoves, Mine, Taken};
+use crate::texture::first_move::{last_of_each, Earlier, FirstMoves, Later, Mine, Taken};
 use crate::tracker::Point;
 use crate::work_counts::Begun;
 use ash::vk;
@@ -257,7 +257,7 @@ impl Device {
                     (raw, &shared.counts),
                     command_buffer,
                     flags,
-                    Earlier::Barriered,
+                    (Earlier::Barriered, Later::All),
                 )
             }
         })?;
@@ -354,7 +354,7 @@ impl Device {
                     (raw, &shared.counts),
                     objects.buffer,
                     family,
-                    Earlier::Barriered,
+                    (Earlier::Barriered, Later::All),
                 );
             };
         }

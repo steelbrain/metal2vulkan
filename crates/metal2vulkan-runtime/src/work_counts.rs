@@ -649,6 +649,7 @@ pub(crate) struct Counters {
     managed_bytes_copied_in_from_ram: AtomicU64,
     managed_ranges_inlined: AtomicU64,
     managed_uploads_unbarriered: AtomicU64,
+    managed_upload_barriers_narrowed: AtomicU64,
     managed_pages_alone_refused: AtomicU64,
     managed_pages_alone_over_imports: AtomicU64,
     managed_pages_alone_unwritable: AtomicU64,
@@ -5517,6 +5518,13 @@ impl Counters {
     /// its `VkQueue` orders them (`texture/first_move.rs`).
     pub(crate) fn managed_upload_unbarriered(&self) {
         (self.managed_uploads_unbarriered).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A batch's first work, uploads alone into `Managed` buffers' device copies, was made
+    /// visible by a barrier to its own commands' uses of those buffers alone
+    /// (`texture/first_move.rs`'s `Later::Batch`).
+    pub(crate) fn managed_upload_barrier_narrowed(&self) {
+        (self.managed_upload_barriers_narrowed).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A two-copy buffer's host copy was made its pages alone, no import of their own mapping
@@ -11021,6 +11029,12 @@ pub struct WorkCounts {
     /// before it ahead of them and no internal submission of the device's may still be running
     /// (`texture/first_move.rs`). Counted as each is recorded.
     pub managed_uploads_unbarriered: u64,
+    /// The batches whose first work was uploads alone into such buffers' device copies and was
+    /// made visible by a barrier to the stages and access types the batch's own commands' uses
+    /// of those buffers name, not to every later command: on a device that orders its batches by
+    /// their ends, whose end orders every later batch, where the batch's uses of each buffer are
+    /// known (`texture/first_move.rs`). Counted as each is recorded.
+    pub managed_upload_barriers_narrowed: u64,
     /// Host copies of such buffers made (with the buffer, at a rebind, at a recovery) that are
     /// their pages alone, no import of their own mapping them, because the caller's gate refused
     /// their import, the device refused their pointer and no dma-buf of them served, or the import
@@ -13545,6 +13559,8 @@ impl Device {
                 .load(Ordering::Relaxed),
             managed_ranges_inlined: counters.managed_ranges_inlined.load(Ordering::Relaxed),
             managed_uploads_unbarriered: (counters.managed_uploads_unbarriered)
+                .load(Ordering::Relaxed),
+            managed_upload_barriers_narrowed: (counters.managed_upload_barriers_narrowed)
                 .load(Ordering::Relaxed),
             managed_pages_alone_refused: (counters.managed_pages_alone_refused)
                 .load(Ordering::Relaxed),

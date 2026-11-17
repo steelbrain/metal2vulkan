@@ -3437,6 +3437,7 @@ field	metal2vulkan-runtime::WorkCounts.managed_staging_bytes	pub managed_staging
 field	metal2vulkan-runtime::WorkCounts.managed_synchronizes_topped_up	pub managed_synchronizes_topped_up: u64
 field	metal2vulkan-runtime::WorkCounts.managed_synchronizes_unwritten	pub managed_synchronizes_unwritten: u64
 field	metal2vulkan-runtime::WorkCounts.managed_synchronizes_whole	pub managed_synchronizes_whole: u64
+field	metal2vulkan-runtime::WorkCounts.managed_upload_barriers_narrowed	pub managed_upload_barriers_narrowed: u64
 field	metal2vulkan-runtime::WorkCounts.managed_uploads_unbarriered	pub managed_uploads_unbarriered: u64
 field	metal2vulkan-runtime::WorkCounts.managed_writes_undone	pub managed_writes_undone: u64
 field	metal2vulkan-runtime::WorkCounts.memory_allocations_refused_at_limit	pub memory_allocations_refused_at_limit: u64

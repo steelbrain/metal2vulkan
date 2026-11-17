@@ -250,10 +250,10 @@ use crate::sparse::encoder::SparseUpdate;
 use crate::submit_failure::{Carried, TypeFlags};
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
 use crate::texture::faces::FaceFix;
-use crate::texture::first_move::{last_of_each, Earlier, FillTake};
+use crate::texture::first_move::{last_of_each, Earlier, FillTake, Later};
 use crate::texture::wrapped::Transition;
 use crate::texture::Texture;
-use crate::tracker::{Barrier, Point, Summary};
+use crate::tracker::{Access, Barrier, Point, Summary};
 use crate::used_resources::{EncoderKind, EncoderRecord};
 use crate::work_counts::Begun;
 use ash::vk;
@@ -1011,6 +1011,17 @@ impl CommandBufferShared {
             true => Earlier::Ended,
             false => Earlier::Barriered,
         };
+        // And, on a device that orders its batches by their ends, no barrier to every later
+        // command after them, but to the batch's own commands' uses of the buffers they write
+        // (`first_move::Later::Batch`): the batch's end orders every later batch.
+        let later = match (earlier, shared.by_ends) {
+            (Earlier::Ended, true) => upload_readers(&state, start..end, first_work.upload_keys()),
+            _ => Later::All,
+        };
+        #[cfg(test)]
+        if let Later::Batch(stages, access) = later {
+            lock(&shared.upload_scopes).push((stages, access));
+        }
         let recorded = (has_first || has_staged)
             .then(|| {
                 self.record_raw(&mut state, |_, buffer| {
@@ -1029,7 +1040,8 @@ impl CommandBufferShared {
                         // as `Earlier::Ended` says (above).
                         unsafe {
                             let family = shared.queue_flags_of(queue);
-                            first_work.record((raw, &shared.counts), buffer, family, earlier);
+                            let order = (earlier, later);
+                            first_work.record((raw, &shared.counts), buffer, family, order);
                         };
                     }
                     if has_staged {
@@ -2333,6 +2345,40 @@ fn bind_error(device: &crate::Device, failure: BindFailure) -> CommandBufferErro
         BindFailure::Memory(error) => recording_error(device, error),
         BindFailure::Vulkan(error) => submission_error(device, error),
     }
+}
+
+/// What a batch of `state`'s parts `parts` whose first work is uploads alone into the buffers
+/// of `keys` makes that work visible to (`first_move::Later`): the stages and access types its
+/// encoders' uses of those buffers name, joined; every later command where a command of the
+/// command buffer may reach memory no use names, it binds a heap's set, its work may write
+/// through its residency, an upload names no key (`None`), or the batch's uses name none of one
+/// of them.
+fn upload_readers(
+    state: &State,
+    parts: std::ops::Range<usize>,
+    keys: Option<Vec<ResourceKey>>,
+) -> Later {
+    let Some(keys) = keys else {
+        return Later::All;
+    };
+    if state.reaches_unnamed || state.heaps.bound() || state.resident_writes.is_some() {
+        return Later::All;
+    }
+    let mut used = Access::NONE;
+    for key in keys {
+        let of_key = (state.recorded[parts.clone()].iter())
+            .flat_map(|part| part.summary.uses())
+            .filter(|used| used.key == key)
+            .fold(Access::NONE, |all, used| {
+                all.union(used.read).union(used.write)
+            });
+        if of_key.stages.is_empty() {
+            return Later::All;
+        }
+        used = used.union(of_key);
+    }
+    let (stages, access) = used.legacy();
+    Later::Batch(stages, access)
 }
 
 /// Whether a test forces first work of uploads alone to take no barrier from the commands before
