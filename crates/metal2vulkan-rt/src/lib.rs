@@ -8,5 +8,6 @@
 
 #![warn(missing_docs)]
 
+pub mod floor;
 #[cfg(test)]
 mod tests;

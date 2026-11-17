@@ -1,0 +1,442 @@
+//! The floor: the Vulkan version, extensions, features and limits the runtime requires of every
+//! device, and the four features it uses only where a device reports them.
+//!
+//! [`check`] queries a physical device and decides; the decision is a pure function of what it
+//! read, so a test can hand it any set of answers.
+
+use ash::vk;
+use std::ffi::{CStr, CString};
+use std::fmt;
+
+/// The Vulkan version the runtime requires of the instance and of every device.
+pub const VERSION: u32 = vk::API_VERSION_1_3;
+
+/// The instance extensions the runtime requires: presenting goes through a swapchain on the
+/// runtime's own device.
+pub const INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::surface::NAME];
+
+/// The device extensions the runtime requires and device creation enables.
+pub const DEVICE_EXTENSIONS: &[&CStr] = &[ash::khr::swapchain::NAME];
+
+/// Slots in the sampled-texture array: the most sampled textures alive at once.
+pub(crate) const SAMPLED_IMAGES: u32 = 65_536;
+
+/// Slots in the read-write texture array.
+pub(crate) const STORAGE_IMAGES: u32 = 4096;
+
+/// Slots in the sampler array. 4000 is Vulkan's minimum `maxSamplerAllocationCount`, so every
+/// device can hold a sampler in every slot.
+pub(crate) const SAMPLERS: u32 = 4000;
+
+/// Bytes of push constants: what Vulkan guarantees, so no query decides it.
+pub(crate) const PUSH_CONSTANT_BYTES: u32 = 128;
+
+/// Threads in one compute workgroup: Metal's most threads per threadgroup.
+pub(crate) const WORKGROUP_INVOCATIONS: u32 = 1024;
+
+/// A compute workgroup's largest extent in each dimension. Metal allows 1024 threads along any
+/// axis; 64 along the third is the least a lab GPU offers.
+pub(crate) const WORKGROUP_SIZE: [u32; 3] = [1024, 1024, 64];
+
+/// The feature structures of Vulkan 1.3 that the floor reads and device creation enables, each
+/// without its `p_next` link.
+#[derive(Clone, Copy, Default)]
+pub struct Features {
+    /// `VkPhysicalDeviceFeatures`.
+    pub core: vk::PhysicalDeviceFeatures,
+    /// `VkPhysicalDeviceVulkan12Features`.
+    pub vulkan12: vk::PhysicalDeviceVulkan12Features<'static>,
+    /// `VkPhysicalDeviceVulkan13Features`.
+    pub vulkan13: vk::PhysicalDeviceVulkan13Features<'static>,
+}
+
+/// One feature: the Vulkan structure that reports it, its member as ash spells it, and the member.
+pub(crate) struct Feature {
+    pub(crate) structure: &'static str,
+    pub(crate) member: &'static str,
+    pub(crate) field: fn(&mut Features) -> &mut vk::Bool32,
+}
+
+macro_rules! feature {
+    (core . $member:ident) => {
+        feature!(@ "VkPhysicalDeviceFeatures", core, $member)
+    };
+    (vulkan12 . $member:ident) => {
+        feature!(@ "VkPhysicalDeviceVulkan12Features", vulkan12, $member)
+    };
+    (vulkan13 . $member:ident) => {
+        feature!(@ "VkPhysicalDeviceVulkan13Features", vulkan13, $member)
+    };
+    (@ $structure:literal, $part:ident, $member:ident) => {
+        Feature {
+            structure: $structure,
+            member: stringify!($member),
+            field: |features| &mut features.$part.$member,
+        }
+    };
+}
+
+/// The features the runtime requires.
+pub(crate) const REQUIRED: &[Feature] = &[
+    // A buffer's address is its device address, used directly by shaders.
+    feature!(vulkan12.buffer_device_address),
+    feature!(core.shader_int64),
+    // One descriptor array per image class, indexed by a resource ID read at run time.
+    feature!(vulkan12.runtime_descriptor_array),
+    feature!(vulkan12.descriptor_binding_partially_bound),
+    feature!(vulkan12.descriptor_binding_update_unused_while_pending),
+    feature!(vulkan12.descriptor_binding_sampled_image_update_after_bind),
+    feature!(vulkan12.descriptor_binding_storage_image_update_after_bind),
+    feature!(core.shader_sampled_image_array_dynamic_indexing),
+    feature!(core.shader_storage_image_array_dynamic_indexing),
+    feature!(vulkan12.shader_sampled_image_array_non_uniform_indexing),
+    feature!(vulkan12.shader_storage_image_array_non_uniform_indexing),
+    feature!(core.shader_storage_image_write_without_format),
+    // Submission, barriers and render passes.
+    feature!(vulkan12.timeline_semaphore),
+    feature!(vulkan13.synchronization2),
+    feature!(vulkan13.dynamic_rendering),
+];
+
+/// The features the runtime uses only where the device reports them. Each answer chooses one of
+/// two forms; no other feature does.
+pub(crate) const OPTIONAL: &[Feature] = &[
+    feature!(vulkan12.shader_float16),
+    feature!(core.shader_storage_image_read_without_format),
+    feature!(vulkan12.shader_buffer_int64_atomics),
+    feature!(vulkan12.shader_shared_int64_atomics),
+    feature!(core.shader_float64),
+];
+
+/// What [`check`] reads from a physical device.
+pub(crate) struct Queried {
+    /// `VkPhysicalDeviceProperties::apiVersion`.
+    pub(crate) version: u32,
+    pub(crate) limits: vk::PhysicalDeviceLimits,
+    pub(crate) vulkan12: vk::PhysicalDeviceVulkan12Properties<'static>,
+    pub(crate) features: Features,
+    pub(crate) extensions: Vec<CString>,
+}
+
+/// One item of the floor that a device lacks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Missing {
+    /// The device's Vulkan version (`apiVersion`) is below 1.3. The other items are read from
+    /// structures Vulkan 1.3 defines, so such a device is named by its version alone.
+    Version(u32),
+    /// A device extension.
+    Extension(&'static CStr),
+    /// A feature: the Vulkan structure that reports it, and its member's Vulkan name.
+    Feature {
+        /// The structure, such as `VkPhysicalDeviceVulkan12Features`.
+        structure: &'static str,
+        /// The member, such as `bufferDeviceAddress`.
+        member: String,
+    },
+    /// A limit below what the runtime uses.
+    Limit {
+        /// The limit's Vulkan name.
+        name: &'static str,
+        /// The device's value.
+        device: u32,
+        /// The least value the runtime uses.
+        needed: u32,
+    },
+}
+
+impl fmt::Display for Missing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Missing::Version(version) => write!(
+                f,
+                "Vulkan {}.{}.{}, below 1.3",
+                vk::api_version_major(*version),
+                vk::api_version_minor(*version),
+                vk::api_version_patch(*version)
+            ),
+            Missing::Extension(name) => write!(f, "{}", name.to_string_lossy()),
+            Missing::Feature { structure, member } => write!(f, "{structure}.{member}"),
+            Missing::Limit {
+                name,
+                device,
+                needed,
+            } => write!(f, "{name} {device}, below {needed}"),
+        }
+    }
+}
+
+/// A device below the runtime's floor, with every item it lacks.
+///
+/// Metal has no counterpart: every Metal device runs every Metal program its family supports. The
+/// runtime refuses a Vulkan device below its floor at creation, instead of refusing work later.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BelowFloor {
+    /// Each item the device lacks, in the floor's order: the version, extensions, features, then
+    /// limits.
+    pub missing: Vec<Missing>,
+}
+
+impl fmt::Display for BelowFloor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the device is below the runtime's floor: it lacks ")?;
+        for (index, item) in self.missing.iter().enumerate() {
+            if index > 0 {
+                f.write_str("; ")?;
+            }
+            write!(f, "{item}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for BelowFloor {}
+
+/// What a device above the floor offers: the four answers that choose between two forms, and what
+/// device creation enables.
+///
+/// Metal's counterparts are per-family capabilities (`supportsFamily`), and for storage reads
+/// `readWriteTextureSupport`; here each is one Vulkan feature.
+pub struct Capabilities {
+    /// `shaderFloat16`: `half` arithmetic in 16 bits.
+    pub float16: bool,
+    /// `shaderStorageImageReadWithoutFormat`: storage-image reads without a declared format, on
+    /// every format. Where it is false, a format's `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`
+    /// (`VkFormatProperties3`) answers for that format.
+    pub storage_read_without_format: bool,
+    /// `shaderBufferInt64Atomics`: 64-bit integer atomics on buffers.
+    pub buffer_int64_atomics: bool,
+    /// `shaderSharedInt64Atomics`: 64-bit integer atomics on threadgroup memory.
+    pub shared_int64_atomics: bool,
+    /// `shaderFloat64`: 64-bit floats.
+    pub float64: bool,
+    /// The features device creation enables: every one the floor requires, and each of the
+    /// optional ones the device reports.
+    pub features: Features,
+    /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`].
+    pub extensions: &'static [&'static CStr],
+}
+
+/// Checks a physical device against the floor.
+///
+/// Returns what the device offers above the floor, or every item of the floor it lacks.
+///
+/// Metal has no counterpart; see [`BelowFloor`].
+///
+/// # Safety
+///
+/// `physical` is a physical device `instance` enumerated, and `instance` was created with an
+/// `apiVersion` of [`VERSION`] or later.
+pub unsafe fn check(
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+) -> Result<Capabilities, BelowFloor> {
+    // SAFETY: the caller's contract.
+    decide(&unsafe { query(instance, physical) })
+}
+
+/// Reads what [`decide`] needs. A device below Vulkan 1.3 gets its version read alone.
+///
+/// # Safety
+///
+/// As [`check`].
+unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queried {
+    // SAFETY: the caller's contract; each structure below is one Vulkan 1.3 defines, read only
+    // from a device of Vulkan 1.3 or later.
+    unsafe {
+        let version = instance
+            .get_physical_device_properties(physical)
+            .api_version;
+        let mut queried = Queried {
+            version,
+            limits: vk::PhysicalDeviceLimits::default(),
+            vulkan12: vk::PhysicalDeviceVulkan12Properties::default(),
+            features: Features::default(),
+            extensions: Vec::new(),
+        };
+        if version < VERSION {
+            return queried;
+        }
+        let mut properties =
+            vk::PhysicalDeviceProperties2::default().push_next(&mut queried.vulkan12);
+        instance.get_physical_device_properties2(physical, &mut properties);
+        queried.limits = properties.properties.limits;
+        queried.vulkan12.p_next = std::ptr::null_mut();
+
+        let Features {
+            core,
+            vulkan12,
+            vulkan13,
+        } = &mut queried.features;
+        let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut *vulkan12)
+            .push_next(&mut *vulkan13);
+        instance.get_physical_device_features2(physical, &mut features);
+        *core = features.features;
+        vulkan12.p_next = std::ptr::null_mut();
+        vulkan13.p_next = std::ptr::null_mut();
+
+        // A device whose extensions cannot be listed offers none the floor can rely on.
+        queried.extensions = instance
+            .enumerate_device_extension_properties(physical)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|extension| extension.extension_name_as_c_str().ok())
+            .map(CStr::to_owned)
+            .collect();
+        queried
+    }
+}
+
+/// Decides from what [`query`] read.
+pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
+    if device.version < VERSION {
+        return Err(BelowFloor {
+            missing: vec![Missing::Version(device.version)],
+        });
+    }
+    let mut missing = Vec::new();
+    for &extension in DEVICE_EXTENSIONS {
+        if !device
+            .extensions
+            .iter()
+            .any(|name| name.as_c_str() == extension)
+        {
+            missing.push(Missing::Extension(extension));
+        }
+    }
+    let mut reported = device.features;
+    let mut features = Features::default();
+    for feature in REQUIRED {
+        if *(feature.field)(&mut reported) == vk::TRUE {
+            *(feature.field)(&mut features) = vk::TRUE;
+        } else {
+            missing.push(Missing::Feature {
+                structure: feature.structure,
+                member: vulkan_name(feature.member),
+            });
+        }
+    }
+    for (name, value, needed) in limits(device) {
+        if value < needed {
+            missing.push(Missing::Limit {
+                name,
+                device: value,
+                needed,
+            });
+        }
+    }
+    if !missing.is_empty() {
+        return Err(BelowFloor { missing });
+    }
+    for feature in OPTIONAL {
+        *(feature.field)(&mut features) = *(feature.field)(&mut reported);
+    }
+    Ok(Capabilities {
+        float16: features.vulkan12.shader_float16 == vk::TRUE,
+        storage_read_without_format: features.core.shader_storage_image_read_without_format
+            == vk::TRUE,
+        buffer_int64_atomics: features.vulkan12.shader_buffer_int64_atomics == vk::TRUE,
+        shared_int64_atomics: features.vulkan12.shader_shared_int64_atomics == vk::TRUE,
+        float64: features.core.shader_float64 == vk::TRUE,
+        features,
+        extensions: DEVICE_EXTENSIONS,
+    })
+}
+
+/// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
+/// uses.
+pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 14] {
+    let limits = &device.limits;
+    let descriptors = &device.vulkan12;
+    [
+        (
+            "maxPerStageDescriptorUpdateAfterBindSampledImages",
+            descriptors.max_per_stage_descriptor_update_after_bind_sampled_images,
+            SAMPLED_IMAGES,
+        ),
+        (
+            "maxDescriptorSetUpdateAfterBindSampledImages",
+            descriptors.max_descriptor_set_update_after_bind_sampled_images,
+            SAMPLED_IMAGES,
+        ),
+        (
+            "maxPerStageDescriptorUpdateAfterBindStorageImages",
+            descriptors.max_per_stage_descriptor_update_after_bind_storage_images,
+            STORAGE_IMAGES,
+        ),
+        (
+            "maxDescriptorSetUpdateAfterBindStorageImages",
+            descriptors.max_descriptor_set_update_after_bind_storage_images,
+            STORAGE_IMAGES,
+        ),
+        (
+            "maxPerStageDescriptorUpdateAfterBindSamplers",
+            descriptors.max_per_stage_descriptor_update_after_bind_samplers,
+            SAMPLERS,
+        ),
+        (
+            "maxDescriptorSetUpdateAfterBindSamplers",
+            descriptors.max_descriptor_set_update_after_bind_samplers,
+            SAMPLERS,
+        ),
+        (
+            "maxSamplerAllocationCount",
+            limits.max_sampler_allocation_count,
+            SAMPLERS,
+        ),
+        // Samplers do not count against it; a fragment stage's colour attachments do.
+        (
+            "maxPerStageUpdateAfterBindResources",
+            descriptors.max_per_stage_update_after_bind_resources,
+            SAMPLED_IMAGES + STORAGE_IMAGES + limits.max_color_attachments,
+        ),
+        (
+            "maxUpdateAfterBindDescriptorsInAllPools",
+            descriptors.max_update_after_bind_descriptors_in_all_pools,
+            SAMPLED_IMAGES + STORAGE_IMAGES + SAMPLERS,
+        ),
+        (
+            "maxPushConstantsSize",
+            limits.max_push_constants_size,
+            PUSH_CONSTANT_BYTES,
+        ),
+        (
+            "maxComputeWorkGroupInvocations",
+            limits.max_compute_work_group_invocations,
+            WORKGROUP_INVOCATIONS,
+        ),
+        (
+            "maxComputeWorkGroupSize[0]",
+            limits.max_compute_work_group_size[0],
+            WORKGROUP_SIZE[0],
+        ),
+        (
+            "maxComputeWorkGroupSize[1]",
+            limits.max_compute_work_group_size[1],
+            WORKGROUP_SIZE[1],
+        ),
+        (
+            "maxComputeWorkGroupSize[2]",
+            limits.max_compute_work_group_size[2],
+            WORKGROUP_SIZE[2],
+        ),
+    ]
+}
+
+/// A member's Vulkan name from ash's spelling: `buffer_device_address` is `bufferDeviceAddress`.
+pub(crate) fn vulkan_name(member: &str) -> String {
+    let mut name = String::with_capacity(member.len());
+    let mut upper = false;
+    for c in member.chars() {
+        if c == '_' {
+            upper = true;
+        } else if upper {
+            name.push(c.to_ascii_uppercase());
+            upper = false;
+        } else {
+            name.push(c);
+        }
+    }
+    name
+}

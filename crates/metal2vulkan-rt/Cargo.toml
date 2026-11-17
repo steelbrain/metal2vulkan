@@ -16,3 +16,15 @@ autoexamples = false
 [lib]
 name = "metal2vulkan_rt"
 path = "src/lib.rs"
+
+[dependencies]
+# The Vulkan API. Nothing is linked at build time.
+ash = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+# The device tests open the Vulkan loader with `dlopen`.
+ash = { workspace = true, features = ["std", "loaded"] }
+
+# The device tests compile only under the validation crate's device cfgs (docs/VALIDATION.md).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)"] }
