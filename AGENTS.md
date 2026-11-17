@@ -6,12 +6,13 @@ the current task.
 ## The project
 
 metal2vulkan runs Metal shaders and Metal programs on Vulkan. It is a Cargo workspace (a virtual
-manifest at the root) of six crates under `crates/`:
+manifest at the root) of seven crates under `crates/`:
 
 | Crate | Published | What it is |
 |---|---|---|
 | `crates/metal2vulkan` | yes | The translator: Metal AIR to SPIR-V through a Metal-shaped API (device, library, pipelines, binding plans), and the `metal2vulkan` command (feature `cli`) |
-| `crates/metal2vulkan-runtime` | yes | The Metal API on Vulkan, built only on the translator's public API |
+| `crates/metal2vulkan-rt` | no | The new runtime: the Metal API on Vulkan with one path for every device, built only on the translator's public API. It replaces `metal2vulkan-runtime` and takes its name at the cutover |
+| `crates/metal2vulkan-runtime` | yes | The old runtime. Frozen: regression fixes only, by at most one lane; deleted at the cutover |
 | `crates/metal2vulkan-air` | yes | The AIR front end: container, bitstream, bitcode, typed IR, metadata ABI, intrinsics, canonicalization, `graph`, `budget` |
 | `crates/metal2vulkan-validation` | no | Authored semantic cases, Metal and Vulkan execution, harvest, the corpus index and audits |
 | `crates/metal2vulkan-conformance` | no | The Metal conformance suite: one case run on Metal and on the runtime, recorded and compared field by field. Independent of the harvested corpus |
@@ -31,36 +32,65 @@ The translator's core lives in `crates/metal2vulkan-air/src/` and, in
 |---|---|
 | `README.md` | What it is, install, command line, quick library use |
 | `docs/API.md` | The translator's API guide; the degrade-notice catalogue; accepted differences |
-| `crates/metal2vulkan-runtime/README.md` | The runtime's guide |
+| `crates/metal2vulkan-rt/README.md` | The new runtime's guide: its floor, its contract with the consumer (memory, events, addresses, surfaces) and its known gaps |
+| `crates/metal2vulkan-runtime/README.md` | The old runtime's guide |
 | `docs/HOWTO.md` | Integration: tools, caching, failures, isolation |
 | `docs/ARCHITECTURE.md` | The translator's stages and module map |
-| `docs/FAST-PATHS.md` | The ledger of speed-for-accuracy defaults and their exact switches |
+| `docs/FAST-PATHS.md` | The old runtime's and the translator's speed-for-accuracy switches, until the cutover deletes them |
 | `docs/VALIDATION.md` | The validation ladder |
 | `docs/CONFORMANCE-COVERAGE.md` | Generated, along two axes: which Metal items the conformance suite compares against Metal, and which of each Metal enum's and option set's values it compared |
 | `CONTRIBUTING.md` | Build, test, golden tables |
 | `crates/metal2vulkan/src/env_vars.rs` | The `METAL2VULKAN_*` variables |
 
-## The owner's two rules
+## The owner's rules
 
-These override anything below.
+These override anything below. They are in priority order: when reality deviates, apply them in
+order, and a lower one never overrides a higher one.
 
-1. **The GPU's native arithmetic; fast by default, exact on request for the rest.** Arithmetic
-   and value answers (`float` and `half` maths, NaN bits, minimum and maximum, rounding, texel and
-   colour conversions, sampling and filtering, resolves) are the device's own: where the device
-   has a native form, it is the only form, recorded as a `PrecisionNote` where it can differ from
-   Metal's. Never add a path or a switch that emulates Metal's bits where the device has a native
-   form. Capability stays: what the device lacks is implemented or emulated (Translation honesty,
-   below). Every other choice that trades accuracy for speed (pipeline-creation time or GPU time)
-   defaults to the fast form. Its accurate form stays behind an opt-in `DevicePolicy` switch
-   (`DevicePolicy::exact_answers()` selects them all), with tests of both settings. Never delete
-   either form of such a choice, and never make its accurate form the default: that is the
-   owner's call alone. `docs/FAST-PATHS.md` is the ledger, one row per choice, edited in place (a
-   ledger, not a journal). A commit that adds, removes or changes such a choice, its bound or its
-   switch updates its row in the same commit; `tests::fast_paths` checks the ledger against the
-   code.
-2. **An accuracy note is logged, never fatal.** A precision note or degradation is recorded and
-   announced, and the work runs, on every device. Only what Metal itself refuses, or an operation
-   that cannot run at all, may fail or end anything.
+1. **Correct for documented Metal.** Fidelity means what documented Metal lets a program observe.
+   Undefined or unobservable Metal behaviour is not emulated. Arithmetic and value answers
+   (`float` and `half` maths, NaN bits, minimum and maximum, rounding, texel and colour
+   conversions, sampling and filtering, resolves) are the device's own. Where one can differ from
+   Metal's, the operation carries a static note: a `PrecisionNote` fixed per operation, never
+   decided at run time.
+2. **One path for every device.** Differences come only from Vulkan feature, property, format,
+   limit and memory-type queries. Product code holds no vendor, device or driver ID, and no
+   runtime policy switch: every feature has one form. A test enforces this for `metal2vulkan-rt`.
+3. **Native-like speed.** Structure decides speed: driver-owned memory, optimal images in real
+   layouts, direct addresses, nothing copied that Metal would not copy.
+4. **Small.** Every cache is bounded, every feature has one form, and anything unused is deleted.
+
+**An accuracy note is logged, never fatal.** A precision note is recorded and announced, and the
+work runs, on every device. Only what Metal itself refuses, an operation below the floor, or an
+operation that cannot run at all may fail or end anything.
+
+**The workaround ladder.** When a device misbehaves or is slow, take the first rung that works:
+
+1. Find a form that is right and fast on all devices, and use it unconditionally. Verify it is
+   within 3% on one GPU per vendor.
+2. Decide by a Vulkan query.
+3. If it is a driver bug: write a minimal repro, report it upstream, and prefer not using that
+   feature at all. Stay on the Vulkan paths games exercise.
+4. Explicit calibration: a call the consumer makes at install time, cached, never at device
+   start. Allowed only for a cost choice worth 2x or more on a guest workload, and for at most
+   three choices in total.
+5. Record a known gap: a typed refusal or a static note.
+
+**Never:**
+- an identity-keyed branch;
+- an environment gate;
+- a name key;
+- a check that runs beside the program's work, device-start self-checks included;
+- a second permanent form behind a switch.
+
+**Thresholds.** No performance lane below 5% on a guest-visible workload. A single-vendor
+investigation gets a time box, then rung 5.
+
+**The old runtime and old switches.** `metal2vulkan-runtime` takes regression fixes only, from at
+most one lane, until the cutover deletes it. The same goes for the translator's `DevicePolicy`
+switches, the driver-fact tables, the device checks and `docs/FAST-PATHS.md` with
+`tests::fast_paths`: they stay correct until the cutover deletes them. Never add a switch, a
+fact-table row, a device check or a ledger row.
 
 ## Translation honesty
 
@@ -71,10 +101,11 @@ These override anything below.
   defect. No behavior keyed to an app, a shader hash or a corpus census.
 - **Honest FALLBACK.** Unsupported input returns a typed `Err` (the command line prints
   `FALLBACK`). Never emit wrong-but-valid SPIR-V to silence a gate.
-- **Scope is the device's.** Refuse only what the device truly lacks; implement or emulate the
-  rest (an arithmetic or value answer is the device's native one: rule 1). A near-equivalent, the
-  device's native answer included, is allowed only when the artifact records it (a
-  `PrecisionNote`) and the runtime announces it.
+- **Scope.** The new runtime has a floor: one Vulkan version plus a fixed extension list
+  (`crates/metal2vulkan-rt/README.md`); a device below it gets a typed refusal. Above the floor,
+  refuse only what the device truly lacks, and implement the rest. A Metal feature that no replay
+  stream uses is a typed refusal until a stream needs it. A near-equivalent, the device's native
+  answer included, is allowed only when the operation carries its static note (rule 1).
 - **Unknown stays unknown.** Do not invent semantics for unsupported opcodes, types or layouts.
   Fail visibly and leave a test or a doc note.
 - **No env-gated product paths.** Translation never branches on environment variables. The
@@ -193,7 +224,8 @@ in either).
   `crates/metal2vulkan/src/spirv_binary/table.rs` (the test parser's table, test-only) come from
   `scripts/regen-spirv-grammar/`, from Khronos's grammar JSON alone; never hand-edit them. A
   newly named opcode or enumerant goes in that script's `items.txt`, then regenerate.
-- The published crates (`metal2vulkan`, `metal2vulkan-air`, `metal2vulkan-runtime`) take only
+- The published crates (`metal2vulkan`, `metal2vulkan-air`, `metal2vulkan-runtime`, and
+  `metal2vulkan-rt`, which is published under the runtime's name at the cutover) take only
   dependencies that offer a GPL-2.0-compatible license (MIT, BSD, ISC, Unlicense or a similar
   option); never one that is Apache-2.0-only, GPL-3.0-only or LGPL-3.0-only. The dual license's
   GPL-2.0 option must hold for consumers that link the crates into GPL-2.0 programs. Code in
@@ -215,7 +247,7 @@ doctests, so they have their own line. The gate:
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime -p metal2vulkan-devtools --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
 cargo nextest run -p metal2vulkan-conformance --all-features
 cargo test --workspace --all-features --doc
@@ -238,6 +270,19 @@ cargo test --workspace --all-features --doc
 
 When chasing a hang, read the whole nextest output; do not pipe it through `head` or `grep`.
 
+### The matrix
+
+- Every check fans out: one leg per GPU, each on a different node at the same time, plus lavapipe
+  and the Windows host. Macs record Metal reference results. CPU-only jobs go to nodes whose GPU
+  is leased.
+- After each merge, the replay matrix runs on `development` and attaches its results to the sha.
+- Deterministic metrics come first: submissions, passes, barriers, bytes copied and pipelines per
+  frame, and CPU instructions per draw and dispatch. Timing is judged only as a cross-GPU outlier.
+- Leaks: live gauges per resource kind, zero at device drop, flat between loop iterations 100
+  and 200, and a fill-past-capacity test for every cache.
+- Every fixed regression adds its replay snippet or its budget.
+- Lanes are cut by feature, never by vendor; at most six agents.
+
 ## Code style
 
 - **No placeholder ownership tricks.** Never move IR, modules, functions, blocks, instructions or
@@ -259,7 +304,7 @@ When chasing a hang, read the whole nextest output; do not pipe it through `head
   `docs/CONFORMANCE-COVERAGE.md` (generated) and
   `docs/API.md`'s degrade-notice catalogue and accepted differences change in the same commit as
   the behavior they describe. An open gap is recorded where a user reads it: a typed refusal, a
-  degrade notice or precision note, or `docs/FAST-PATHS.md`'s known gaps.
+  static precision note, or the known gaps in the runtime's README.
 - Consumer-visible API or command-line changes update `README.md` and `docs/`.
 - Docs say what is true now, plainly; no history.
 
@@ -275,8 +320,9 @@ When chasing a hang, read the whole nextest output; do not pipe it through `head
   `development` into your branch, resolve it there, commit, and merge again. `development` may be
   broken for a while; a claim about a change still waits for its evidence.
 - **Checks run on `development` after the merge**: fmt, clippy in every configuration, Rustdoc,
-  the suites, the public-surface table, the authored compile census and the golden tables. The
-  golden tables and the compile census are re-blessed on `development`, not in the change.
+  the suites, the public-surface table, the authored compile census, the golden tables and the
+  replay matrix. The golden tables and the compile census are re-blessed on `development`, not in
+  the change.
 - **Fix forward.** Every failure the checks report is a work item for the change's owner, fixed by
   a new commit. Never amend, rebase published history, squash, force-push or revert by rewriting
   history. Never use `git stash`.
@@ -287,8 +333,7 @@ When chasing a hang, read the whole nextest output; do not pipe it through `head
 2. **Read** the code and docs it touches; assume nothing.
 3. **Change** it, keeping product paths free of env gates and name keys.
 4. **Test** it with the test or measurable check it needs.
-5. **Document** it where a durable contract changed (and in `docs/FAST-PATHS.md` for any
-   speed-for-accuracy choice).
+5. **Document** it where a durable contract changed.
 6. **Commit and merge** into `development`, then fix forward what `development`'s checks report.
 
 **Done** means merged into `development`, `development`'s checks green for it, claims matching

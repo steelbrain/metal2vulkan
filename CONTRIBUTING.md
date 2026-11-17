@@ -52,7 +52,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
 scripts/api-docs   # the translator's API reference; fails on a link to a hidden item
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime -p metal2vulkan-devtools --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
 cargo test --workspace --all-features --doc
 ```

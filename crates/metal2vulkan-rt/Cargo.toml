@@ -1,0 +1,18 @@
+[package]
+name = "metal2vulkan-rt"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The Metal API on Vulkan, with one path for every device"
+readme = "README.md"
+repository.workspace = true
+# Published under the runtime's name once it replaces metal2vulkan-runtime.
+publish = false
+autobins = false
+autoexamples = false
+
+[lib]
+name = "metal2vulkan_rt"
+path = "src/lib.rs"

@@ -4,6 +4,7 @@ members = [
     "crates/metal2vulkan-air",
     "crates/metal2vulkan-conformance",
     "crates/metal2vulkan-devtools",
+    "crates/metal2vulkan-rt",
     "crates/metal2vulkan-runtime",
     "crates/metal2vulkan-validation",
 ]

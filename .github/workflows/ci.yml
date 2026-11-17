@@ -131,7 +131,7 @@ jobs:
           rustup target add x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc
           for target in x86_64-pc-windows-gnullvm x86_64-pc-windows-msvc; do
             echo "::group::$target"
-            cargo clippy --target "$target" -p metal2vulkan-air -p metal2vulkan -p metal2vulkan-runtime -p metal2vulkan-devtools --all-targets --all-features -- -D warnings
+            cargo clippy --target "$target" -p metal2vulkan-air -p metal2vulkan -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools --all-targets --all-features -- -D warnings
             echo "::endgroup::"
           done
 
@@ -164,6 +164,7 @@ jobs:
           for row in \
             metal2vulkan=0 \
             metal2vulkan-air=0 \
+            metal2vulkan-rt=0 \
             metal2vulkan-runtime=0 \
             metal2vulkan-validation=0 \
             metal2vulkan-conformance=0 \
@@ -194,12 +195,12 @@ jobs:
       # builds alone against the others' packages, so none reads a file outside its own directory.
       # Validation and the dev-tools crate are not published.
       - name: Package the published crates
-        run: cargo package --workspace --exclude metal2vulkan-validation --exclude metal2vulkan-conformance --exclude metal2vulkan-devtools
+        run: cargo package --workspace --exclude metal2vulkan-validation --exclude metal2vulkan-conformance --exclude metal2vulkan-devtools --exclude metal2vulkan-rt
 
       # With the AIR front end's crate's own tests, and the dev-tools crate's:
       # its tool runner and L3 checks.
       - name: Test metal2vulkan
-        run: cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-runtime -p metal2vulkan-devtools --all-features
+        run: cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools --all-features
 
       # GPU-free on every host: tests that open a device compile only under `--cfg m2v_gpu` or
       # `--cfg m2v_cpu_icd`, and no device-opening code runs without one of them.
