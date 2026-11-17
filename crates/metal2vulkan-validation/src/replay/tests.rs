@@ -572,7 +572,7 @@ fn a_command_buffer_held_on_an_event_does_not_hold_the_others() {
     let groups: Vec<_> = report
         .completed
         .iter()
-        .map(|(ids, c)| (ids.clone(), c["submissions"]))
+        .map(|(ids, c)| (ids.clone(), c.executed["submissions"]))
         .collect();
     assert_eq!(groups, [(vec![7], 3), (vec![5, 6], 0)]);
 }
