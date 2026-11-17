@@ -27,10 +27,14 @@
 //!   same elements, with no handle table and no descriptor.
 //! - A kernel that samples a texture (`engine/a2_dynamic_texel_offset`) is still refused as
 //!   `Unsupported{IdentityDomains}`, not implemented, where the default domains compile it.
+//! - A kernel's emulated-simdgroup variant (`engine/gsm2_simd_products`'s `simd_float_products`)
+//!   opens every barrier of its exchanges under a branch on `1 < N`, which the default domains do
+//!   not; on the CPU interpreter a threadgroup of one thread passes no barrier, and threadgroups of
+//!   one and of 80 threads (a partial simdgroup of 16) answer Metal's products.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
@@ -51,7 +55,10 @@ use crate::pipeline::testing::{
     compile, compile_kept, compile_with, engine_dir, link_and_validate, llvm_assemble, profile,
     typed_module_with, AssembleError,
 };
-use crate::spirv::interp::{run, run_with_images, Buffer, Config, Image, Resources};
+use crate::spirv::interp::{
+    run, run_with_images, BarrierRule, Buffer, Config, Image, Order, Resources,
+};
+use crate::spirv::testing::spirv_dis;
 use crate::vk;
 
 /// Profiles with `bufferDeviceAddress` and `shaderInt64`.
@@ -964,5 +971,151 @@ fn a_partial_threadgroups_variant_answers_the_edge_threadgroups_of_a_ragged_grid
         };
         let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(got.buffers[0], want, "{stem}");
+    }
+}
+
+/// The `OpControlBarrier`s of disassembly `text`: how many open a block that only a branch on
+/// `1 < N` (an `OpSpecConstantOp ULessThan` of the constant 1) enters, and how many others.
+fn barrier_guards(text: &str) -> (usize, usize) {
+    let mut conditions = BTreeSet::new();
+    let mut guarded = BTreeSet::new();
+    let mut block = "";
+    let mut first = false;
+    let (mut inside, mut outside) = (0, 0);
+    for line in text.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        match words[..] {
+            [id, "=", "OpSpecConstantOp", "%bool", "ULessThan", "%uint_1", _] => {
+                conditions.insert(id);
+            }
+            [label, "=", "OpLabel"] => {
+                block = label;
+                first = true;
+                continue;
+            }
+            ["OpBranchConditional", condition, then, _] if conditions.contains(condition) => {
+                guarded.insert(then);
+            }
+            ["OpControlBarrier", ..] if first && guarded.contains(block) => inside += 1,
+            ["OpControlBarrier", ..] => outside += 1,
+            _ => {}
+        }
+        first = false;
+    }
+    (inside, outside)
+}
+
+/// The input of thread `t` of the simdgroup products: 2, 0.5 and 1 in both signs, so every
+/// product is exact in any order.
+fn simd_input(t: u32) -> f32 {
+    let lane = t % 32;
+    let sign = if lane % 2 == 0 { 1.0 } else { -1.0 };
+    match lane {
+        0..8 => 2.0 * sign,
+        8..14 => 0.5 * sign,
+        _ if lane % 3 == 0 => -1.0,
+        _ => 1.0,
+    }
+}
+
+/// Under the identity domains the emulated tier's barriers run only in a threadgroup of more
+/// than one thread: each opens a block a branch on `1 < N` enters, a threadgroup of one passes
+/// none, and threadgroups of one and of 80 threads answer Metal's products, the last simdgroup of
+/// 80 holding 16 threads. The default domains keep every barrier unconditional.
+#[test]
+fn the_emulated_tiers_barriers_run_only_in_a_threadgroup_of_several_threads() {
+    let Some(bc) = assemble("gsm2_simd_products") else {
+        return;
+    };
+    const ENTRY: &str = "simd_float_products";
+    const INPUT: u64 = 0x5_0000_0000;
+    let mut inputs = LowerInputs::new();
+    inputs.emulated_simdgroups = true;
+    for stem in PROFILES {
+        let plain = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let a = compile_with(&bc, ENTRY, &plain, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let (_, words) = link_and_validate(&a, &plain).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let (inside, outside) = barrier_guards(&spirv_dis(&words));
+        assert!(
+            inside == 0 && outside > 0,
+            "{stem}: the default domains guard {inside} barriers and leave {outside}"
+        );
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let a = compile_with(&bc, ENTRY, &p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let text = spirv_dis(&words);
+        let (inside, outside) = barrier_guards(&text);
+        assert!(
+            inside > 0 && outside == 0,
+            "{stem}: {inside} barriers guarded, {outside} not\n{text}"
+        );
+        let (plan, module) =
+            typed_module_with(&bc, ENTRY, &p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        for n in [1u32, 80] {
+            let input: Vec<u8> = (0..n).flat_map(|t| simd_input(t).to_le_bytes()).collect();
+            let mut want = Vec::new();
+            for t in 0..n {
+                let base = t - t % 32;
+                let group = (base..n.min(base + 32)).map(simd_input);
+                let product: f32 = group.clone().product();
+                let inclusive: f32 = group.clone().take((t - base + 1) as usize).product();
+                let exclusive: f32 = group.clone().take((t - base) as usize).product();
+                let negated: f32 = group.map(|x| -x).product();
+                want.extend([product, inclusive, exclusive, negated].map(f32::to_bits));
+            }
+            let region = region_bytes([0; 3], [n, 1, 1], [n, 1, 1]).expect("packs");
+            let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+            for f in &plan.push.fields {
+                let PushLoc::Push { offset } = f.loc else {
+                    panic!("{f:?} spilled");
+                };
+                let o = offset as usize;
+                match f.field {
+                    PushField::SlotGuestBase(s) if s == slot(0) => {
+                        push[o..o + 8].copy_from_slice(&INPUT.to_le_bytes())
+                    }
+                    PushField::SlotGuestBase(s) if s == slot(1) => {
+                        push[o..o + 8].copy_from_slice(&OUT.to_le_bytes())
+                    }
+                    PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
+                    _ => panic!("unexpected push field {f:?}"),
+                }
+            }
+            let res = Resources {
+                buffers: vec![
+                    Buffer {
+                        slot: None,
+                        address: Some(INPUT),
+                        bytes: input,
+                    },
+                    Buffer {
+                        slot: None,
+                        address: Some(OUT),
+                        bytes: vec![0; 16 * n as usize],
+                    },
+                ],
+                push,
+                spec: local_size(n),
+            };
+            for order in [Order::Forward, Order::Reverse] {
+                let cfg = Config {
+                    order,
+                    barriers: BarrierRule::Vulkan,
+                    ..Config::default()
+                };
+                let got = run(&module, &cfg, res.clone())
+                    .unwrap_or_else(|e| panic!("{stem} {n} {order:?}: {e}"));
+                let words: Vec<u32> = got.buffers[1]
+                    .chunks(4)
+                    .map(|w| u32::from_le_bytes(w.try_into().expect("a word")))
+                    .collect();
+                assert_eq!(words, want, "{stem}: a threadgroup of {n} {order:?}");
+                let passed = got.invocations.iter().map(|i| i.barriers).max();
+                match n {
+                    1 => assert_eq!(passed, Some(0), "{stem}: one thread passes no barrier"),
+                    _ => assert!(passed > Some(0), "{stem}: {n} threads exchange"),
+                }
+            }
+        }
     }
 }

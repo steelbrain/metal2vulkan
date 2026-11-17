@@ -277,6 +277,11 @@ pub struct SimdPlan {
     /// In the `Emulated` tier, the words each lane publishes to the scratch in the widest
     /// exchange of the function; 0 when no operation exchanges values.
     pub exchange_words: u32,
+    /// In the `Emulated` tier under the identity domains, the tier's exchange and vote barriers
+    /// run under a workgroup-uniform branch on `1 < N`, the threadgroup's threads: a threadgroup
+    /// of one thread exchanges with itself alone, in program order, and executes none of them
+    /// (`workgroup::Declared::several`).
+    pub guarded_barriers: bool,
     /// The predicated walk of a kernel with a synchronization outside workgroup-uniform control
     /// flow: an emulated site or threadgroup barrier in the `Emulated` tier, a workgroup barrier in
     /// every other tier.
@@ -648,7 +653,12 @@ pub fn declare(
         return Ok(Declared {
             lane: Some(lane),
             size: None,
-            emu: Some(workgroup::declare(mb, plan.stage, simd.exchange_words)?),
+            emu: Some(workgroup::declare(
+                mb,
+                plan.stage,
+                simd.exchange_words,
+                simd.guarded_barriers,
+            )?),
             vote: None,
         });
     }

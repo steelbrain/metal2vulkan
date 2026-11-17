@@ -87,6 +87,7 @@ use crate::memory::arena::MIN_ARENA_BYTES;
 use crate::memory::leaf::Coherence;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{SpecKey, Stage};
+use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::{BResult, BuildError, Dangling};
 use crate::spirv::ids::{ConstId, DemoteTy, GlobalId, TypeId, Value as SValue};
@@ -419,6 +420,7 @@ pub fn check(
         cx.families.simd.implementation_defined = false;
     }
     cx.families.simd.exchange_words = words;
+    cx.families.simd.guarded_barriers = crate::lower::access::identity(cx.profile);
     cx.families.simd.predication = predication;
     if let Some(fact) = fact {
         cx.facts.insert(fact);
@@ -455,13 +457,18 @@ fn divergent_site(
     None
 }
 
-/// The emulated tier's module-scope objects: the threadgroup's thread count and the scratch.
+/// The emulated tier's module-scope objects: the threadgroup's thread count, the scratch, and the
+/// condition its barriers run under.
 #[derive(Clone, Copy, Debug)]
 pub struct Declared {
     /// `sx·sy·sz`, an `OpSpecConstantOp`.
     pub threads: ConstId,
     /// The scratch array, when the function exchanges values.
     pub scratch: Option<GlobalId>,
+    /// `1 < sx·sy·sz`, an `OpSpecConstantOp`, where the plan guards the tier's barriers
+    /// (`SimdPlan::guarded_barriers`) and the function exchanges values: each exchange and vote
+    /// barrier runs only where it holds, a branch the specialization decides.
+    pub several: Option<ConstId>,
 }
 
 fn u32_ty(mb: &mut ModuleBuilder) -> BResult<TypeId> {
@@ -482,9 +489,15 @@ fn konst(mb: &mut ModuleBuilder, v: u32) -> BResult<ConstId> {
 /// Declare the thread count and, for a function that exchanges `words` per lane, the scratch
 /// in `Workgroup` memory: one slot per lane of `(N + 31) & ~31`, a `u32` or, for more than one
 /// word, a `u32[words]`, so a word's pointer is one access chain at the lane and the constant
-/// word with no slot arithmetic. The local-size constants are the dispatch family's for the `stage`
-/// (`SpecKey::dispatch_keys`, default 1).
-pub fn declare(mb: &mut ModuleBuilder, stage: Stage, words: u32) -> BResult<Declared> {
+/// word with no slot arithmetic; with `guarded` the condition `1 < N` its barriers run under. The
+/// local-size constants are the dispatch family's for the `stage` (`SpecKey::dispatch_keys`,
+/// default 1).
+pub fn declare(
+    mb: &mut ModuleBuilder,
+    stage: Stage,
+    words: u32,
+    guarded: bool,
+) -> BResult<Declared> {
     let u32_ = u32_ty(mb)?;
     let [sx, sy, sz] = SpecKey::dispatch_keys(stage)
         .local
@@ -495,8 +508,16 @@ pub fn declare(mb: &mut ModuleBuilder, stage: Stage, words: u32) -> BResult<Decl
         return Ok(Declared {
             threads,
             scratch: None,
+            several: None,
         });
     }
+    let several = if guarded {
+        let one = konst(mb, 1)?;
+        let bool_ = mb.ty(Type::Bool)?;
+        Some(mb.spec_op(SpecOp::ULessThan, bool_, &[one, threads])?)
+    } else {
+        None
+    };
     let up = konst(mb, SIMD_WIDTH - 1)?;
     let mask = konst(mb, !(SIMD_WIDTH - 1))?;
     let padded = mb.spec_op(SpecOp::IAdd, u32_, &[threads, up])?;
@@ -520,6 +541,7 @@ pub fn declare(mb: &mut ModuleBuilder, stage: Stage, words: u32) -> BResult<Decl
     Ok(Declared {
         threads,
         scratch: Some(scratch),
+        several,
     })
 }
 
@@ -537,6 +559,8 @@ pub struct Emu {
     /// exchange publishes after its values: a lane whose flag is clear is inactive. `None`: every
     /// lane inside the threadgroup is active.
     active: Option<SValue>,
+    /// `1 < N`, where the plan guards the tier's barriers ([`Declared::several`]).
+    several: Option<SValue>,
 }
 
 /// Words published by [`Emu::publish`]: each value's first word and type, and the index in
@@ -552,12 +576,17 @@ pub(super) fn emu(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         return Err(cx.fail("the emulated simdgroup tier is not declared"));
     };
     let n = fb.module().const_value(d.threads)?;
+    let several = match d.several {
+        Some(c) => Some(fb.module().const_value(c)?),
+        None => None,
+    };
     let flags = MemFlags {
         threadgroup: true,
         ..MemFlags::default()
     };
     Ok(Emu {
         n,
+        several,
         scratch: d.scratch,
         stride: cx.plan.families.simd.exchange_words,
         coherence: memory_model::coherence(cx.plan),
@@ -590,26 +619,27 @@ pub fn vote(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, live: SValue) -> 
         let zero = k(fb, 0)?;
         let one = k(fb, 1)?;
         let p = fb.module().global_value(word)?;
-        return vote_at(fb, p, sem, live, (zero, one));
+        return vote_at(fb, p, (sem, None), live, (zero, one));
     }
     let e = emu(cx, fb)?;
     let zero = k(fb, 0)?;
     let one = k(fb, 1)?;
     let p = e.word_ptr(fb, zero, 0)?;
-    vote_at(fb, p, e.sem, live, (zero, one))
+    vote_at(fb, p, (e.sem, e.several), live, (zero, one))
 }
 
-/// [`vote`] in the word at `p`, with workgroup barriers of semantics `sem`.
+/// [`vote`] in the word at `p`, with workgroup barriers of semantics `sem`, each under `several`
+/// where it is given ([`guarded_barrier`]).
 fn vote_at(
     fb: &mut FunctionBuilder<'_>,
     p: SValue,
-    sem: Semantics,
+    (sem, several): (Semantics, Option<SValue>),
     live: SValue,
     (zero, one): (SValue, SValue),
 ) -> BResult<SValue> {
     let relaxed = Semantics::RELAXED;
     fb.atomic_store(p, Scope::Workgroup, relaxed, zero)?;
-    fb.control_barrier(Scope::Workgroup, Scope::Workgroup, sem)?;
+    guarded_barrier(fb, sem, several)?;
     let bit = fb.select(live, one, zero)?;
     fb.atomic(
         crate::spirv::ir::AtomicOp::Or,
@@ -618,10 +648,29 @@ fn vote_at(
         relaxed,
         bit,
     )?;
-    fb.control_barrier(Scope::Workgroup, Scope::Workgroup, sem)?;
+    guarded_barrier(fb, sem, several)?;
     let x = fb.atomic_load(p, Scope::Workgroup, relaxed)?;
-    fb.control_barrier(Scope::Workgroup, Scope::Workgroup, sem)?;
+    guarded_barrier(fb, sem, several)?;
     fb.binary(BinOp::INotEqual, x, zero)
+}
+
+/// A workgroup barrier of semantics `sem`, and with `several` (`1 < N`, a specialization
+/// constant, so workgroup uniform) only where it holds: one thread orders its own accesses in
+/// program order, and a threadgroup of one executes no barrier.
+fn guarded_barrier(
+    fb: &mut FunctionBuilder<'_>,
+    sem: Semantics,
+    several: Option<SValue>,
+) -> BResult<()> {
+    let Some(several) = several else {
+        return fb.control_barrier(Scope::Workgroup, Scope::Workgroup, sem);
+    };
+    let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
+        fb.control_barrier(Scope::Workgroup, Scope::Workgroup, sem)?;
+        Ok(ArmEnd::FallThrough(Vec::new()))
+    });
+    fb.if_(&mut (), several, then, None)?;
+    Ok(())
 }
 
 /// Declare the workgroup word a predicated kernel outside the emulated tier votes in.
@@ -631,9 +680,10 @@ pub fn declare_vote(mb: &mut ModuleBuilder) -> BResult<GlobalId> {
 }
 
 impl Emu {
-    /// A workgroup barrier over the scratch.
+    /// A workgroup barrier over the scratch, where the plan guards it only in a threadgroup of
+    /// more than one thread ([`guarded_barrier`]).
     pub fn barrier(&self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
-        fb.control_barrier(Scope::Workgroup, Scope::Workgroup, self.sem)
+        guarded_barrier(fb, self.sem, self.several)
     }
 
     /// A pointer to word `i` of lane `lane`'s slot: the slot's element `i` ([`declare`]).
