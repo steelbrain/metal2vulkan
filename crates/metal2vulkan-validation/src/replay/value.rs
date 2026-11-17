@@ -142,6 +142,47 @@ impl fmt::Display for Value {
     }
 }
 
+impl Value {
+    /// The value's shape: its kinds, list structure and map keys, with none of its data (to
+    /// describe a stream without showing what it holds). A run of equal shapes in a list is one
+    /// shape and `*`.
+    pub fn shape(&self) -> String {
+        match self {
+            Value::Nil => "nil".into(),
+            Value::Bool(_) => "bool".into(),
+            Value::Uint(_) => "uint".into(),
+            Value::Sint(_) => "sint".into(),
+            Value::F32(_) => "f32".into(),
+            Value::F64(_) => "f64".into(),
+            Value::Object(_) => "obj".into(),
+            Value::Address(_) => "addr".into(),
+            Value::Str(_) => "str".into(),
+            Value::Bytes(_) => "bytes".into(),
+            Value::Blob(_) => "blob".into(),
+            Value::List(items) => {
+                let mut runs: Vec<(String, bool)> = Vec::new();
+                for item in items {
+                    let shape = item.shape();
+                    match runs.last_mut() {
+                        Some((last, repeated)) if *last == shape => *repeated = true,
+                        _ => runs.push((shape, false)),
+                    }
+                }
+                let runs: Vec<String> = (runs.into_iter())
+                    .map(|(shape, repeated)| if repeated { shape + "*" } else { shape })
+                    .collect();
+                format!("[{}]", runs.join(", "))
+            }
+            Value::Map(entries) => {
+                let entries: Vec<String> = (entries.iter())
+                    .map(|(key, value)| format!("{key}: {}", value.shape()))
+                    .collect();
+                format!("{{{}}}", entries.join(", "))
+            }
+        }
+    }
+}
+
 /// `bytes` in lowercase hex.
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()

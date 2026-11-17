@@ -10,6 +10,10 @@
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
 //! then `cut SEGMENT OFFSET` where the last segment ends in a record cut short.
 //!
+//! `command-replay shapes --stream FILE` prints, for each selector, how many calls had each shape
+//! of arguments and answers (`Value::shape`: kinds and map keys, no data), most first: what a
+//! stream asks of a player without what it holds.
+//!
 //! GUEST DATA: a stream recorded from a guest, its blobs and the reports are the consumer's: they
 //! stay on the hosts the guest data rule allows and are never committed.
 
@@ -17,14 +21,15 @@ use metal2vulkan_runtime::{DeviceOptions, ShaderCacheOptions};
 use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
-    segments, OldRuntime, PlayError, Player, StreamError, StreamReader,
+    segments, OldRuntime, PlayError, Player, StreamError, StreamReader, Value,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
-                     --shader-cache DIR [--blobs DIR]\n       command-replay dump --stream FILE";
+                     --shader-cache DIR [--blobs DIR]\n       command-replay dump --stream FILE\n       \
+                     command-replay shapes --stream FILE";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -34,6 +39,7 @@ fn main() {
             with_options(&args[1..], &required, play)
         }
         Some("dump") => with_options(&args[1..], &["stream"], dump),
+        Some("shapes") => with_options(&args[1..], &["stream"], shapes),
         _ => {
             eprintln!("{USAGE}");
             2
@@ -95,6 +101,58 @@ fn dump(options: &BTreeMap<String, String>) -> i32 {
     });
     match ended {
         Ok(()) => 0,
+        Err(error) => {
+            eprintln!("command-replay: {error}");
+            2
+        }
+    }
+}
+
+/// The most shapes `shapes` prints of one selector.
+const SHAPES_SHOWN: usize = 30;
+
+fn shapes(options: &BTreeMap<String, String>) -> i32 {
+    let mut counted: BTreeMap<(String, String), u64> = BTreeMap::new();
+    let ended = reader(options).and_then(|mut reader| {
+        while let Some(call) = reader.next_call()? {
+            let args: Vec<String> = call.args.iter().map(Value::shape).collect();
+            let answers: Vec<String> = (call.answers.iter())
+                .map(|(key, value)| format!(" -> {key}: {}", value.shape()))
+                .collect();
+            let shape = format!("{}{}", args.join(" "), answers.concat());
+            *counted
+                .entry((call.selector.to_string(), shape))
+                .or_default() += 1;
+        }
+        Ok(reader.truncated().cloned())
+    });
+    let mut by_selector: BTreeMap<String, Vec<(u64, String)>> = BTreeMap::new();
+    for ((selector, shape), count) in counted {
+        by_selector
+            .entry(selector)
+            .or_default()
+            .push((count, shape));
+    }
+    let mut stdout = std::io::stdout().lock();
+    for (selector, mut shapes) in by_selector {
+        shapes.sort_unstable_by(|a, b| b.cmp(a));
+        let total: u64 = shapes.iter().map(|(count, _)| count).sum();
+        let _ = writeln!(stdout, "{selector}: {total} calls, {} shapes", shapes.len());
+        let more = shapes.len().saturating_sub(SHAPES_SHOWN);
+        for (count, shape) in shapes.into_iter().take(SHAPES_SHOWN) {
+            let _ = writeln!(stdout, "  {count} {shape}");
+        }
+        if more > 0 {
+            let _ = writeln!(stdout, "  ... {more} more shapes");
+        }
+    }
+    match ended {
+        Ok(cut) => {
+            if let Some((segment, offset)) = cut {
+                let _ = writeln!(stdout, "cut {} {offset}", segment.display());
+            }
+            0
+        }
         Err(error) => {
             eprintln!("command-replay: {error}");
             2
