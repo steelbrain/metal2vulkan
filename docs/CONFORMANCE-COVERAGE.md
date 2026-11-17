@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1277 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3662 |
+| ledger rows (a case whose gap is recorded) | 3783 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -5187,9 +5187,48 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
@@ -5207,10 +5246,49 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
@@ -5229,10 +5307,53 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
 | `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
 | `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are RADV's. Metal's compiler folds the attachment's blend and its format… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the RTX 3090 (NVIDIA 620.70.06), and the same as the RTX 5… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
+| `half-output-blends-rgba32f` | Metal's stored blend result and ours differ at this site; the row's count and bound are this run's on the Iris Xe of RPL-P (Mesa 26.2.6 ANV). Metal's compiler f… |
 | `pixel-downscales-1000x1080` | The digest of a linear-filtered downscale's output, which differs wherever the site's `head` and `tail` elements do: the case samples through the device's own f… |
 | `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
 | `pixel-downscales-1000x1080` | A linear-filtered downscale through the device's own sampler: the site's elements differ by at most 0.031 codes of 1/255 (0.000123). `device-sampling` records t… |
