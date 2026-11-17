@@ -335,7 +335,7 @@ class Run:
         out = w.stdout + w.stderr
         (self.rdir / f"{name}.log").write_text(out)
         rec = self.record(jid)
-        if rec:
+        if rec and rec.get("started_at") and rec.get("ended_at"):
             peak = rec.get("usage", {}).get("peak_mem_bytes", 0) / 2**30
             took = (rec.get("ended_at", 0) - rec.get("started_at", 0)) / 60000
             killed = rec.get("exit_code") == 137 and peak >= 0.95 * ram
@@ -392,7 +392,7 @@ class Run:
         if code != 0 or not rec:
             return None, f"the build ({label}, job {rec and rec.get('id')}) failed: exit {code}"
         if node == self.build_node["node"]:
-            self.build_info = dict(node=node, job=rec["id"], minutes=round((rec["ended_at"] - rec["started_at"]) / 60000, 2))
+            self.build_info = dict(node=node, job=rec["id"])
         made = self.carry(node, rec)
         return made, None if made else f"the archive of job {rec['id']} could not be copied"
 
@@ -445,36 +445,44 @@ class Run:
 
         def from_builder():
             built.wait()
-            return box["made"]
+            return box.get("made", (None, "the build did not finish"))
 
         threads = []
 
-        def start(fn, *args):
-            t = threading.Thread(target=fn, args=args)
+        def start(legs, fn, *args):
+            def chain():
+                try:
+                    fn(*args)
+                except Exception as error:  # a chain's own failure fails its legs, not the run
+                    log(f"{fn.__name__}: {error!r}")
+                    self.fail(legs, f"the runner failed: {error!r}")
+            t = threading.Thread(target=chain)
             t.start()
             threads.append(t)
 
         def builder_chain():
-            box["made"] = self.linux_build(b, "build") if by_node else (None, "no GPU leg on Linux")
-            built.set()
+            try:
+                box["made"] = self.linux_build(b, "build") if by_node else (None, "no GPU leg on Linux")
+            finally:
+                built.set()
             if b in by_node:
                 self.gpu_node(b, by_node[b], from_builder)
             if lavapipe:
                 self.lavapipe(lavapipe[0])
 
         lavapipe = [leg for leg in self.legs if leg.id == "lavapipe"]
-        start(builder_chain)
+        start(by_node.get(b, []) + lavapipe, builder_chain)
         cpu = self.nodes[b]["cpu_model"]
         for node, legs in sorted(by_node.items()):
             if node == b:
                 continue
             if self.build_node.get("portable") or self.nodes[node]["cpu_model"] == cpu:
-                start(self.gpu_node, node, legs, from_builder)
+                start(legs, self.gpu_node, node, legs, from_builder)
             else:
-                start(self.gpu_node, node, legs, lambda node=node: self.linux_build(node, f"build-{node}"))
+                start(legs, self.gpu_node, node, legs, lambda node=node: self.linux_build(node, f"build-{node}"))
         for leg in self.legs:
             if leg.id != "lavapipe" and self.nodes[leg.node]["os"] == "windows":
-                start(self.windows, leg)
+                start([leg], self.windows, leg)
         for t in threads:
             t.join()
 
