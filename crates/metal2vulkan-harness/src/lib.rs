@@ -27,15 +27,28 @@
 //!     [--warmup 5] [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
 //! ```
 //!
-//! The command prints, per workload and runtime: the GPU time of a run (`GPUEndTime - GPUStartTime`) at the
-//! 10th, 50th and 90th percentiles, the encoding thread's wall time per dispatch from the command
-//! buffer's creation through `commit`'s return, and the process's CPU time per dispatch from
-//! there to the wait's return (unix only), each the median of the timed runs; and the runtime's
-//! gauges after the 100th and 200th timed runs. Beside each row it prints a line
-//! `M2V-MATRIX time harness-<runtime>/<workload> <median GPU us>` for the matrix's runner. Per
-//! creation workload and runtime it prints the wall time of `newBufferWithLength:options:` at the
-//! same percentiles and the gauges, and `M2V-MATRIX time harness-<runtime>/<create_SIZE> <median
-//! us>`.
+//! Before a workload's timed runs, the command warms it up: at least `--warmup` runs and half a
+//! second, then until the medians of its last two windows of 10 runs are within 3% of each other,
+//! for at most five seconds, so that an integrated GPU's clock has risen before it is timed.
+//!
+//! The command prints, per workload and runtime: the warm-up's runs (marked `~` where the time
+//! did not settle), the GPU time of a run (`GPUEndTime - GPUStartTime`) at the 10th, 50th and
+//! 90th percentiles of the timed runs, the encoding thread's wall time per dispatch from the
+//! command buffer's creation through `commit`'s return, and the process's CPU time per dispatch
+//! from there to the wait's return (unix only), each the median of the timed runs; and the
+//! runtime's gauges after the 100th and 200th timed runs. Per creation workload and runtime it
+//! prints the warm-up, the wall time of `newBufferWithLength:options:` at the same percentiles,
+//! and the gauges. Beside each row it prints lines for the matrix's runner (docs/VALIDATION.md,
+//! "The matrix"):
+//!
+//! ```text
+//! M2V-MATRIX time harness-<runtime>/<workload> <median us of at least 5 timed runs>
+//! M2V-MATRIX gauge harness-<runtime>/<workload>/<gauge>@100 <value>
+//! M2V-MATRIX gauge harness-<runtime>/<workload>/<gauge>@200 <value>
+//! ```
+//!
+//! and once every workload has run, where the runtime's gauges outlive its device,
+//! `M2V-MATRIX gauge harness-<runtime>/device/<gauge>@drop <value>` read after the device dropped.
 
 use std::ptr::NonNull;
 
@@ -92,7 +105,14 @@ pub trait Device: Sized {
     /// The runtime's live gauges by name: how many of each thing it holds now. No Metal
     /// counterpart.
     fn gauges(&self) -> Vec<(&'static str, u64)>;
+
+    /// What reads the gauges once the device is dropped, where they outlive it; `None` where
+    /// they end with it. No Metal counterpart.
+    fn gauges_after_drop(&self) -> Option<GaugeReader>;
 }
+
+/// A reader of a runtime's gauges that outlives its device ([`Device::gauges_after_drop`]).
+pub type GaugeReader = Box<dyn Fn() -> Vec<(&'static str, u64)>>;
 
 /// The compute calls of `MTLDevice`: its libraries, pipelines and queues, and the types of the
 /// objects they make.

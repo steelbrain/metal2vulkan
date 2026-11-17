@@ -6,7 +6,7 @@ use crate::plan::{
     Binding, BufferPlan, Comparison, Dispatch, Expect, Grid, Output, Plan, Source, Values,
 };
 use crate::rt::Ranges;
-use crate::run::{compare_outputs, percentile, zeroed, Report};
+use crate::run::{compare_outputs, percentile, settled, warm_up, zeroed, Report, Runs};
 use crate::{Buffer, Storage};
 use std::path::Path;
 use std::ptr::NonNull;
@@ -323,4 +323,36 @@ fn ranges_place_at_the_lowest_free_range_and_merge_what_is_given_back() {
     assert_eq!(free.take(2048), None);
     assert_eq!(free.take(1024), Some(0));
     assert_eq!(free.take(1), None);
+}
+
+#[test]
+fn a_time_settles_once_its_last_two_windows_agree_within_three_percent() {
+    let ramp: Vec<f64> = (0..20).map(|run| 200.0 - run as f64 * 5.0).collect();
+    assert!(!settled(&ramp), "a falling time has not settled");
+    let mut times = ramp;
+    times.extend([100.0; 20]);
+    assert!(settled(&times));
+    times.extend([
+        100.0, 103.0, 99.0, 102.0, 101.0, 100.0, 98.0, 102.0, 100.0, 101.0,
+    ]);
+    assert!(settled(&times), "within 3%");
+    times.extend([110.0; 10]);
+    assert!(!settled(&times), "10% apart");
+    assert!(!settled(&[100.0; 19]), "two windows are 20 runs");
+}
+
+#[test]
+fn without_settling_a_warm_up_runs_its_least_count() {
+    let mut count = 0;
+    let runs = Runs {
+        warmup: 7,
+        settle: false,
+        timed: 0,
+    };
+    let warmup = warm_up(runs, || {
+        count += 1;
+        Ok(1.0)
+    })
+    .unwrap();
+    assert_eq!((warmup.runs, warmup.settled, count), (7, false, 7));
 }

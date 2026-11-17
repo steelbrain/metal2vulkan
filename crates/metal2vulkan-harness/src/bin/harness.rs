@@ -19,7 +19,8 @@
 use metal2vulkan_harness::authored::Create;
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
-    compare_outputs, percentile, Buffers, CreateReport, Harness, Report, Runs, Session,
+    compare_outputs, percentile, Buffers, CreateReport, Harness, Report, Runs, Session, Warmup,
+    LEAST_TIMED,
 };
 use metal2vulkan_harness::{authored, description, old, rt, Result};
 use std::path::PathBuf;
@@ -53,6 +54,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
         runtimes: Vec::new(),
         runs: Runs {
             warmup: 5,
+            settle: true,
             timed: 200,
         },
         only: None,
@@ -154,15 +156,16 @@ fn run_all(args: &Args) -> Result<bool> {
         sessions.push((runtime.as_str(), session));
     }
     println!(
-        "warmup runs {}, timed runs {}",
+        "warmup runs at least {} and until the time settles, timed runs {}",
         args.runs.warmup, args.runs.timed
     );
     if !workloads.is_empty() {
         println!(
-            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>18} {:>15}  gauges @100 -> @200",
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15}  gauges @100 -> @200",
             "workload",
             "runtime",
             "dispatches",
+            "warmup",
             "gpu_us_p10",
             "gpu_us_p50",
             "gpu_us_p90",
@@ -195,8 +198,8 @@ fn run_all(args: &Args) -> Result<bool> {
     }
     if !creates.is_empty() {
         println!(
-            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11}  gauges @100 -> @200",
-            "create", "runtime", "bytes", "us_p10", "us_p50", "us_p90",
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11}  gauges @100 -> @200",
+            "create", "runtime", "bytes", "warmup", "us_p10", "us_p50", "us_p90",
         );
     }
     for create in &creates {
@@ -215,7 +218,42 @@ fn run_all(args: &Args) -> Result<bool> {
             }
         }
     }
+    for (runtime, session) in sessions {
+        if let Some(gauges) = session.finish() {
+            let list: Vec<String> = (gauges.iter())
+                .map(|(gauge, value)| format!("{gauge} {value}"))
+                .collect();
+            println!(
+                "runtime {runtime}: after the device dropped: {}",
+                list.join(", ")
+            );
+            for (gauge, value) in gauges {
+                println!("M2V-MATRIX gauge harness-{runtime}/device/{gauge}@drop {value}");
+            }
+        }
+    }
     Ok(matched)
+}
+
+/// The column of `warmup`: its runs, marked where the time did not settle.
+fn warmup(warmup: &Warmup) -> String {
+    let unsettled = if warmup.settled { "" } else { "~" };
+    format!("{unsettled}{}", warmup.runs)
+}
+
+/// The matrix lines of a workload's gauges at the timed runs they were read after, and of its
+/// time where it timed at least [`LEAST_TIMED`] runs.
+fn matrix(runtime: &str, name: &str, times: &[f64], gauges: &[(u32, Vec<(&'static str, u64)>)]) {
+    if times.len() >= LEAST_TIMED {
+        if let Some(median) = percentile(times, 50) {
+            println!("M2V-MATRIX time harness-{runtime}/{name} {median:.3}");
+        }
+    }
+    for (point, values) in gauges {
+        for (gauge, value) in values {
+            println!("M2V-MATRIX gauge harness-{runtime}/{name}/{gauge}@{point} {value}");
+        }
+    }
 }
 
 /// The gauges after the 100th and the 200th timed runs, each marked where it grew between them.
@@ -236,27 +274,23 @@ fn gauges(gauges: &[(u32, Vec<(&'static str, u64)>)]) -> String {
     }
 }
 
-/// `report`'s row, and its matrix line where it timed a creation.
+/// `report`'s row, and its matrix lines.
 fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
     let us = |p| percentile(&report.create_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     println!(
-        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11}  {}",
+        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11}  {}",
         create.name,
         create.length,
+        warmup(&report.warmup),
         us(10),
         us(50),
         us(90),
         gauges(&report.gauges),
     );
-    if let Some(median) = percentile(&report.create_us, 50) {
-        println!(
-            "M2V-MATRIX time harness-{runtime}/{} {median:.3}",
-            create.name
-        );
-    }
+    matrix(runtime, create.name, &report.create_us, &report.gauges);
 }
 
-/// `report`'s row, and its matrix line where it timed a run.
+/// `report`'s row, and its matrix lines.
 fn print(runtime: &str, name: &str, report: &Report) {
     let gpu = |p| percentile(&report.gpu_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     let per_dispatch = |values: &[f64]| {
@@ -265,8 +299,9 @@ fn print(runtime: &str, name: &str, report: &Report) {
         })
     };
     println!(
-        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>18} {:>15}  {}",
+        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15}  {}",
         report.dispatches,
+        warmup(&report.warmup),
         gpu(10),
         gpu(50),
         gpu(90),
@@ -274,7 +309,5 @@ fn print(runtime: &str, name: &str, report: &Report) {
         per_dispatch(&report.cpu_ns),
         gauges(&report.gauges),
     );
-    if let Some(median) = percentile(&report.gpu_us, 50) {
-        println!("M2V-MATRIX time harness-{runtime}/{name} {median:.3}");
-    }
+    matrix(runtime, name, &report.gpu_us, &report.gauges);
 }

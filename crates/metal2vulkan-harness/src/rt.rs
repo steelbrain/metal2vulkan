@@ -228,9 +228,19 @@ impl crate::Device for Device {
     /// Its live buffers, and its live `VkDeviceMemory` blocks: those the harness holds, those
     /// its pool keeps ready or idle, and its own.
     fn gauges(&self) -> Vec<(&'static str, u64)> {
-        let gauges = self.device.counters().gauges();
-        vec![("buffers", gauges.buffers), ("blocks", gauges.blocks)]
+        named(self.device.counters().gauges())
     }
+
+    /// The same gauges through the device's counters, which stay readable once it is torn down.
+    fn gauges_after_drop(&self) -> Option<crate::GaugeReader> {
+        let counters = self.device.counters();
+        Some(Box::new(move || named(counters.gauges())))
+    }
+}
+
+/// The gauges the harness reports, by name.
+fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
+    vec![("buffers", gauges.buffers), ("blocks", gauges.blocks)]
 }
 
 impl crate::Buffer for Buffer {

@@ -42,6 +42,11 @@ impl crate::Device for runtime::Device {
             ("dedicated_blocks", counts.dedicated_memory_blocks_live),
         ]
     }
+
+    /// `None`: its counts end with the device.
+    fn gauges_after_drop(&self) -> Option<crate::GaugeReader> {
+        None
+    }
 }
 
 impl crate::ComputeDevice for runtime::Device {

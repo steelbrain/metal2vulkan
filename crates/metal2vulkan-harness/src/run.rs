@@ -7,7 +7,7 @@ use crate::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The kernel of the authored library that moves bytes for the harness, 16 a thread.
 const COPY_FUNCTION: &str = "copy_words";
@@ -16,13 +16,83 @@ const COPY_FUNCTION: &str = "copy_words";
 /// `maxComputeWorkGroupCount[0]` Vulkan allows.
 const COPY_GROUPS: u64 = 65535;
 
-/// How many runs follow the checked first one: `warmup` untimed, then `timed`.
+/// How many runs follow the checked first one: untimed ones, then `timed`.
 #[derive(Clone, Copy, Debug)]
 pub struct Runs {
-    /// Untimed runs.
+    /// The fewest untimed runs.
     pub warmup: u32,
+    /// Whether the untimed runs go on until the time settles ([`warm_up`]).
+    pub settle: bool,
     /// Timed runs.
     pub timed: u32,
+}
+
+/// The runs of a settling window.
+const WINDOW: usize = 10;
+
+/// The largest difference between the medians of the last two windows, as a share of the larger,
+/// at which the time has settled.
+const SETTLED: f64 = 0.03;
+
+/// The shortest settling warm-up: an integrated GPU raises its clock over hundreds of
+/// milliseconds of load.
+const SETTLE_LEAST: Duration = Duration::from_millis(500);
+
+/// The longest settling warm-up; the timed runs start then, settled or not.
+const SETTLE_MOST: Duration = Duration::from_secs(5);
+
+/// The fewest timed runs whose median is a workload's time.
+pub const LEAST_TIMED: usize = 5;
+
+/// The untimed runs before a workload's timed ones.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Warmup {
+    /// How many ran.
+    pub runs: u32,
+    /// Whether the time settled: the medians of the last two windows of [`WINDOW`] runs within
+    /// 3% of each other.
+    pub settled: bool,
+}
+
+/// The untimed runs of `run`, which returns a run's time: `runs.warmup` of them, and where
+/// `runs.settle`, as many more as the time takes to settle, for at least half a second, and at
+/// most five seconds.
+pub fn warm_up(runs: Runs, mut run: impl FnMut() -> Result<f64>) -> Result<Warmup> {
+    let started = Instant::now();
+    let mut times = Vec::new();
+    loop {
+        let least = times.len() >= runs.warmup as usize;
+        if least && !runs.settle {
+            return Ok(Warmup {
+                runs: runs.warmup,
+                settled: false,
+            });
+        }
+        let elapsed = started.elapsed();
+        if least && elapsed >= SETTLE_LEAST && settled(&times) {
+            return Ok(Warmup {
+                runs: times.len() as u32,
+                settled: true,
+            });
+        }
+        if least && elapsed >= SETTLE_MOST {
+            return Ok(Warmup {
+                runs: times.len() as u32,
+                settled: false,
+            });
+        }
+        times.push(run()?);
+    }
+}
+
+/// Whether the medians of the last two windows of `times` are within [`SETTLED`] of each other.
+pub(crate) fn settled(times: &[f64]) -> bool {
+    let Some(start) = times.len().checked_sub(2 * WINDOW) else {
+        return false;
+    };
+    let window = |at: usize| percentile(&times[at..at + WINDOW], 50).unwrap_or(0.0);
+    let (before, last) = (window(start), window(start + WINDOW));
+    (last - before).abs() <= SETTLED * last.max(before)
 }
 
 /// What the timed runs of a plan measured.
@@ -42,6 +112,8 @@ pub struct Report {
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
     /// The contents of the plan's outputs after the first run, in its order.
     pub outputs: Vec<Vec<u8>>,
+    /// The untimed runs.
+    pub warmup: Warmup,
 }
 
 /// `Ok` where `other`'s outputs of `plan` match `reference`'s, each by its comparison.
@@ -68,6 +140,10 @@ pub trait Session {
     /// last one left: one checked whole, then `runs`. Each one is checked to start zero (every
     /// 4 KiB), then written all over before its release.
     fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport>;
+
+    /// Drops the session, its device last; the device's gauges after that, where the runtime's
+    /// gauges outlive the device.
+    fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>>;
 }
 
 /// What the timed creations of buffers measured.
@@ -78,6 +154,8 @@ pub struct CreateReport {
     /// The device's gauges after the 100th and the 200th timed creation, where there were that
     /// many.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
+    /// The untimed creations.
+    pub warmup: Warmup,
 }
 
 /// The `p`th percentile of `values` by nearest rank; `None` for no values.
@@ -285,14 +363,16 @@ impl<D: ComputeDevice> Session for Harness<D> {
             let buffer = &plan.buffers[output.buffer];
             outputs.push(self.read(&made.buffers[output.buffer], buffer.storage, buffer.length)?);
         }
-        for _ in 0..runs.warmup {
+        let warmup = warm_up(runs, || {
             let command_buffer = self.encode(plan, &made)?;
             command_buffer.commit()?;
             command_buffer.wait_until_completed()?;
-        }
+            Ok((command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?) * 1e6)
+        })?;
         let mut report = Report {
             dispatches: plan.dispatches.len(),
             outputs,
+            warmup,
             ..Report::default()
         };
         for run in 1..=runs.timed {
@@ -318,6 +398,12 @@ impl<D: ComputeDevice> Session for Harness<D> {
     fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport> {
         create(&self.device, length, runs)
     }
+
+    fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>> {
+        let reader = self.device.gauges_after_drop();
+        drop(self);
+        reader.map(|read| read())
+    }
 }
 
 /// A device whose runtime makes buffers but runs no compute work: its creation workloads alone.
@@ -339,26 +425,37 @@ impl<D: Device> Session for Buffers<D> {
     fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport> {
         create(&self.0, length, runs)
     }
+
+    fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>> {
+        let reader = self.0.gauges_after_drop();
+        drop(self);
+        reader.map(|read| read())
+    }
 }
 
 /// [`Session::create`] on `device`.
 fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport> {
     // The range the first creation takes: a buffer of the length, written, released.
     scribble(&device.new_buffer(length, Storage::Shared)?, length)?;
-    let mut report = CreateReport::default();
-    for run in 0..=runs.warmup + runs.timed {
+    // A creation's time, its buffer checked zero at every `stride`th byte, then written all over
+    // and released.
+    let once = |stride| -> Result<f64> {
         let started = Instant::now();
         let buffer = device.new_buffer(length, Storage::Shared)?;
         let created = started.elapsed();
-        zeroed(&buffer, length, if run == 0 { 4 } else { 4096 })?;
+        zeroed(&buffer, length, stride)?;
         scribble(&buffer, length)?;
-        drop(buffer);
-        if run > runs.warmup {
-            report.create_us.push(created.as_secs_f64() * 1e6);
-            let timed = run - runs.warmup;
-            if timed == 100 || timed == 200 {
-                report.gauges.push((timed, device.gauges()));
-            }
+        Ok(created.as_secs_f64() * 1e6)
+    };
+    once(4)?;
+    let mut report = CreateReport {
+        warmup: warm_up(runs, || once(4096))?,
+        ..CreateReport::default()
+    };
+    for run in 1..=runs.timed {
+        report.create_us.push(once(4096)?);
+        if run == 100 || run == 200 {
+            report.gauges.push((run, device.gauges()));
         }
     }
     Ok(report)

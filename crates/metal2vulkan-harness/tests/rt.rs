@@ -1,7 +1,7 @@
 //! The new runtime's buffers through the harness, on the device the cfg names
-//! (docs/VALIDATION.md): every creation workload's buffers start zero, a range given back is the
-//! next one taken, buffers alive at once lie apart, and a buffer longer than a pooled block takes
-//! a block of its own.
+//! (docs/VALIDATION.md): every creation workload's buffers start zero and every gauge reads zero
+//! once the device is dropped, a range given back is the next one taken, buffers alive at once lie
+//! apart, and a buffer longer than a pooled block takes a block of its own.
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
 
 use metal2vulkan_harness::run::{Buffers, Runs, Session};
@@ -12,6 +12,7 @@ fn every_creation_workload_starts_zero_on_the_new_runtime() {
     let mut session = Buffers(rt::system_default().unwrap());
     let runs = Runs {
         warmup: 0,
+        settle: false,
         timed: 1,
     };
     for create in authored::CREATES {
@@ -20,6 +21,9 @@ fn every_creation_workload_starts_zero_on_the_new_runtime() {
             (session.create(create.length, runs)).unwrap_or_else(|why| panic!("{name}: {why}"));
         assert_eq!(report.create_us.len(), 1, "{name}");
     }
+    // Every gauge reads zero once the device is dropped.
+    let gauges = Box::new(session).finish().unwrap();
+    assert!(gauges.iter().all(|(_, value)| *value == 0), "{gauges:?}");
 }
 
 #[test]

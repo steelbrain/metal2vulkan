@@ -11,6 +11,7 @@ fn every_authored_workload_matches_its_reference_on_the_old_runtime() {
     let mut harness = Harness::new(old::system_default().unwrap(), &air).unwrap();
     let runs = Runs {
         warmup: 0,
+        settle: false,
         timed: 1,
     };
     for workload in authored::WORKLOADS {

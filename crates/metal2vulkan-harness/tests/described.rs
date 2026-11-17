@@ -76,6 +76,7 @@ fn described_workloads_match_between_two_runs_of_the_old_runtime() {
     let mut sessions = [0, 1].map(|_| Harness::new(old::system_default().unwrap(), &air).unwrap());
     let runs = Runs {
         warmup: 1,
+        settle: false,
         timed: 2,
     };
     for workload in &described {
