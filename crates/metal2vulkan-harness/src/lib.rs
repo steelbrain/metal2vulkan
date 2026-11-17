@@ -8,28 +8,34 @@
 //! file.
 //!
 //! A workload is a [`plan::Plan`]: its buffers and their starting contents, the dispatches of one
-//! run, and the contents its buffers must hold after the first run. [`run::Harness::run`] makes its
-//! objects, checks the first run, then times the rest. The authored workloads ([`authored`]) are
-//! MSL kernels committed as public fixtures (`crates/metal2vulkan-validation/fixtures/public/
-//! harness/workloads.metal`, compiled by `scripts/regen-air-fixtures --dir harness`); their
-//! library is the fixture's LLVM text, assembled by `llvm-as` from `PATH`.
+//! run, the contents its buffers must hold after the first run, and the buffers runtimes compare.
+//! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
+//! workloads ([`authored`]) are MSL kernels committed as public fixtures
+//! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
+//! `scripts/regen-air-fixtures --dir harness`), each with a CPU reference; their library is the
+//! fixture's LLVM text, assembled by `llvm-as` from `PATH`, which also holds the harness's own
+//! copy kernel. Described workloads ([`description`]) are kernels of metallibs in a directory,
+//! named by a description file; both are the command's arguments, and nothing in the repository
+//! names them. They have no CPU reference: each runtime's outputs must match the first
+//! runtime's.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-harness -- --runtime old [--runs 200] [--warmup 5] \
-//!     [--only bandwidth,alu]
+//! cargo run --release -p metal2vulkan-harness -- --runtime old[,RUNTIME...] [--runs 200] \
+//!     [--warmup 5] [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
 //! ```
 //!
-//! The command prints, per workload: the GPU time of a run (`GPUEndTime - GPUStartTime`) at the
+//! The command prints, per workload and runtime: the GPU time of a run (`GPUEndTime - GPUStartTime`) at the
 //! 10th, 50th and 90th percentiles, the encoding thread's wall time per dispatch from the command
 //! buffer's creation through `commit`'s return, and the process's CPU time per dispatch from
 //! there to the wait's return (unix only), each the median of the timed runs; and the runtime's
-//! gauges after the 100th and 200th timed runs. For each workload it also prints a line
+//! gauges after the 100th and 200th timed runs. Beside each row it prints a line
 //! `M2V-MATRIX time harness-<runtime>/<workload> <median GPU us>` for the matrix's runner.
 
 use std::ptr::NonNull;
 
 pub mod authored;
 mod clocks;
+pub mod description;
 pub mod old;
 pub mod plan;
 pub mod run;

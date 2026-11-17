@@ -1,10 +1,12 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
-use crate::plan::{Binding, BufferPlan, Grid, Plan};
+use crate::plan::{Binding, BufferPlan, Grid, Plan, Source};
 use crate::{
-    clocks, Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoder, Device, Library, Result,
-    Storage,
+    clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, Device, Library,
+    Result, Storage,
 };
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Instant;
 
 /// The kernel of the authored library that moves bytes for the harness, 16 a thread.
@@ -38,6 +40,29 @@ pub struct Report {
     pub cpu_ns: Vec<f64>,
     /// The device's gauges after the 100th and the 200th timed run, where there were that many.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
+    /// The contents of the plan's outputs after the first run, in its order.
+    pub outputs: Vec<Vec<u8>>,
+}
+
+/// `Ok` where `other`'s outputs of `plan` match `reference`'s, each by its comparison.
+pub fn compare_outputs(plan: &Plan, reference: &Report, other: &Report) -> Result<()> {
+    let pairs = reference.outputs.iter().zip(&other.outputs);
+    for (output, (want, got)) in plan.outputs.iter().zip(pairs) {
+        let buffer = output.buffer;
+        (output.comparison.values(want).compare(got))
+            .map_err(|why| format!("{}: buffer {buffer}: {why}", plan.name))?;
+    }
+    Ok(())
+}
+
+/// A runtime's device with the harness on it, without its types, so that runtimes of different
+/// types run each workload in turn.
+pub trait Session {
+    /// The device's `name`.
+    fn device_name(&self) -> String;
+
+    /// `plan`'s first run, checked against its expectations and its outputs kept, then `runs`.
+    fn run(&mut self, plan: &Plan, runs: Runs) -> Result<Report>;
 }
 
 /// The `p`th percentile of `values` by nearest rank; `None` for no values.
@@ -48,11 +73,14 @@ pub fn percentile(values: &[f64], p: u32) -> Option<f64> {
     sorted.get(rank - 1).copied()
 }
 
-/// The harness on a device: its own queue and copy kernel.
-pub struct Harness<'d, D: Device> {
-    device: &'d D,
+/// The harness on a device: its own queue, the authored library and its copy kernel, and the
+/// metallibs the plans named so far.
+pub struct Harness<D: Device> {
     queue: D::CommandQueue,
     copy: D::ComputePipelineState,
+    authored: D::Library,
+    metallibs: HashMap<PathBuf, D::Library>,
+    device: D,
 }
 
 /// A plan's objects on the device.
@@ -63,68 +91,46 @@ struct Made<D: Device> {
     state_of: Vec<usize>,
 }
 
-impl<'d, D: Device> Harness<'d, D> {
-    /// The harness on `device`, its copy kernel from `library`, the authored workloads'.
-    pub fn new(device: &'d D, library: &D::Library) -> Result<Self> {
-        let copy = device.new_compute_pipeline_state(&library.new_function(COPY_FUNCTION)?)?;
+impl<D: Device> Harness<D> {
+    /// The harness on `device`, with the authored library of the AIR `authored`
+    /// ([`authored::library_air`](crate::authored::library_air)).
+    pub fn new(device: D, authored: &[u8]) -> Result<Self> {
+        let authored = device.new_library(Code::Air(authored))?;
+        let copy = device.new_compute_pipeline_state(&authored.new_function(COPY_FUNCTION)?)?;
         Ok(Harness {
-            device,
             queue: device.new_command_queue()?,
             copy,
+            authored,
+            metallibs: HashMap::new(),
+            device,
         })
     }
 
-    /// `plan`'s kernels from `library`: its first run, checked against its expectations, then
-    /// `runs`.
-    pub fn run(&self, library: &D::Library, plan: &Plan, runs: Runs) -> Result<Report> {
-        plan.validate()?;
-        let made = self.make(library, plan)?;
-        self.fill(&plan.buffers, &made.buffers)?;
-        let first = self.encode(plan, &made)?;
-        first.commit()?;
-        first.wait_until_completed()?;
-        for expect in &plan.expect {
-            let storage = plan.buffers[expect.buffer].storage;
-            let bytes = self.read(
-                &made.buffers[expect.buffer],
-                storage,
-                expect.values.length(),
-            )?;
-            let buffer = expect.buffer;
-            (expect.values.compare(&bytes))
-                .map_err(|why| format!("{}: buffer {buffer}: {why}", plan.name))?;
-        }
-        for _ in 0..runs.warmup {
-            let command_buffer = self.encode(plan, &made)?;
-            command_buffer.commit()?;
-            command_buffer.wait_until_completed()?;
-        }
-        let mut report = Report {
-            dispatches: plan.dispatches.len(),
-            ..Report::default()
-        };
-        for run in 1..=runs.timed {
-            let cpu = clocks::process_cpu_nanos();
-            let started = Instant::now();
-            let command_buffer = self.encode(plan, &made)?;
-            command_buffer.commit()?;
-            let encoded = started.elapsed();
-            command_buffer.wait_until_completed()?;
-            if let (Some(before), Some(after)) = (cpu, clocks::process_cpu_nanos()) {
-                report.cpu_ns.push(after.saturating_sub(before) as f64);
-            }
-            report.encode_ns.push(encoded.as_nanos() as f64);
-            let gpu = command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?;
-            report.gpu_us.push(gpu * 1e6);
-            if run == 100 || run == 200 {
-                report.gauges.push((run, self.device.gauges()));
+    /// Makes the library `source` names, where it is a metallib no plan named before.
+    fn load(&mut self, source: &Source) -> Result<()> {
+        if let Source::Metallib(path) = source {
+            if !self.metallibs.contains_key(path) {
+                let bytes =
+                    std::fs::read(path).map_err(|why| format!("read {}: {why}", path.display()))?;
+                let library = self.device.new_library(Code::Metallib(&bytes))?;
+                self.metallibs.insert(path.clone(), library);
             }
         }
-        Ok(report)
+        Ok(())
     }
 
-    /// `plan`'s pipeline states, one per kernel, and its buffers.
-    fn make(&self, library: &D::Library, plan: &Plan) -> Result<Made<D>> {
+    /// The library `source` names, which [`load`](Self::load) made.
+    fn library(&self, source: &Source) -> &D::Library {
+        match source {
+            Source::Authored => &self.authored,
+            Source::Metallib(path) => &self.metallibs[path],
+        }
+    }
+
+    /// `plan`'s pipeline states, one per kernel, from its library, which
+    /// [`load`](Self::load) made, and its buffers.
+    fn make(&self, plan: &Plan) -> Result<Made<D>> {
+        let library = self.library(&plan.library);
         let mut functions: Vec<&str> = Vec::new();
         let mut states = Vec::new();
         let mut state_of = Vec::with_capacity(plan.dispatches.len());
@@ -232,6 +238,66 @@ impl<'d, D: Device> Harness<'d, D> {
         command_buffer.commit()?;
         command_buffer.wait_until_completed()?;
         bytes(&stage, length)
+    }
+}
+
+impl<D: Device> Session for Harness<D> {
+    fn device_name(&self) -> String {
+        self.device.name()
+    }
+
+    fn run(&mut self, plan: &Plan, runs: Runs) -> Result<Report> {
+        plan.validate()?;
+        self.load(&plan.library)?;
+        let made = self.make(plan)?;
+        self.fill(&plan.buffers, &made.buffers)?;
+        let first = self.encode(plan, &made)?;
+        first.commit()?;
+        first.wait_until_completed()?;
+        for expect in &plan.expect {
+            let storage = plan.buffers[expect.buffer].storage;
+            let bytes = self.read(
+                &made.buffers[expect.buffer],
+                storage,
+                expect.values.length(),
+            )?;
+            let buffer = expect.buffer;
+            (expect.values.compare(&bytes))
+                .map_err(|why| format!("{}: buffer {buffer}: {why}", plan.name))?;
+        }
+        let mut outputs = Vec::with_capacity(plan.outputs.len());
+        for output in &plan.outputs {
+            let buffer = &plan.buffers[output.buffer];
+            outputs.push(self.read(&made.buffers[output.buffer], buffer.storage, buffer.length)?);
+        }
+        for _ in 0..runs.warmup {
+            let command_buffer = self.encode(plan, &made)?;
+            command_buffer.commit()?;
+            command_buffer.wait_until_completed()?;
+        }
+        let mut report = Report {
+            dispatches: plan.dispatches.len(),
+            outputs,
+            ..Report::default()
+        };
+        for run in 1..=runs.timed {
+            let cpu = clocks::process_cpu_nanos();
+            let started = Instant::now();
+            let command_buffer = self.encode(plan, &made)?;
+            command_buffer.commit()?;
+            let encoded = started.elapsed();
+            command_buffer.wait_until_completed()?;
+            if let (Some(before), Some(after)) = (cpu, clocks::process_cpu_nanos()) {
+                report.cpu_ns.push(after.saturating_sub(before) as f64);
+            }
+            report.encode_ns.push(encoded.as_nanos() as f64);
+            let gpu = command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?;
+            report.gpu_us.push(gpu * 1e6);
+            if run == 100 || run == 200 {
+                report.gauges.push((run, self.device.gauges()));
+            }
+        }
+        Ok(report)
     }
 }
 

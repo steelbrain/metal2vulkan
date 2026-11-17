@@ -1,19 +1,34 @@
-//! A workload as data: what [`Harness::run`](crate::run::Harness::run) makes, the calls of one run, and what
-//! the first run must leave in the buffers.
+//! A workload as data: what a [`Session`](crate::run::Session) makes, the calls of one run, what
+//! the first run must leave in the buffers, and which buffers runtimes compare.
 
 use crate::{Result, Size, Storage};
+use std::path::PathBuf;
 
 /// One workload.
 #[derive(Clone, Debug)]
 pub struct Plan {
     /// Its name in reports.
     pub name: String,
-    /// The buffers it makes, in order; dispatches and expectations name them by index.
+    /// The library its kernels are in.
+    pub library: Source,
+    /// The buffers it makes, in order; dispatches, expectations and outputs name them by index.
     pub buffers: Vec<BufferPlan>,
     /// The dispatches of one run, in order, all in one compute encoder of one command buffer.
     pub dispatches: Vec<Dispatch>,
-    /// What the first run must leave in its buffers.
+    /// What the first run must leave in its buffers: a CPU reference.
     pub expect: Vec<Expect>,
+    /// The buffers whose contents after the first run each runtime's must match the first
+    /// runtime's, for a workload with no CPU reference.
+    pub outputs: Vec<Output>,
+}
+
+/// Where a plan's kernels are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// The authored workloads' library (`crate::authored`).
+    Authored,
+    /// A metallib file.
+    Metallib(PathBuf),
 }
 
 /// One buffer of a plan.
@@ -100,13 +115,52 @@ pub struct Expect {
     pub values: Values,
 }
 
+/// A buffer whose contents after the first run runtimes compare.
+#[derive(Clone, Copy, Debug)]
+pub struct Output {
+    /// The plan's buffer.
+    pub buffer: usize,
+    /// How its contents compare.
+    pub comparison: Comparison,
+}
+
+/// How two runtimes' contents of a buffer compare.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Comparison {
+    /// Each 32-bit word exactly.
+    Exact,
+    /// Each 32-bit word as a `float`, within `tolerance`; NaN matches NaN.
+    Floats {
+        /// The largest difference allowed.
+        tolerance: f32,
+    },
+}
+
+impl Comparison {
+    /// The values `bytes` (little-endian) hold, as this comparison reads them.
+    pub fn values(self, bytes: &[u8]) -> Values {
+        let words = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|w| u32::from_le_bytes(*w));
+        match self {
+            Comparison::Exact => Values::Words(words.collect()),
+            Comparison::Floats { tolerance } => Values::Floats {
+                values: words.map(f32::from_bits).collect(),
+                tolerance,
+            },
+        }
+    }
+}
+
 /// Expected contents.
 #[derive(Clone, Debug)]
 pub enum Values {
     /// 32-bit words, each exactly.
     Words(Vec<u32>),
-    /// `float`s, each within `tolerance` of its value: the device's own arithmetic may differ
-    /// from the CPU's in its last bits.
+    /// `float`s, each within `tolerance` of its value, a NaN matching a NaN: the device's own
+    /// arithmetic may differ from the CPU's, or another runtime's code, in its last bits.
     Floats {
         /// The values.
         values: Vec<f32>,
@@ -147,8 +201,9 @@ impl Values {
             }
             Values::Floats { values, tolerance } => {
                 for (index, (got, &want)) in words.map(f32::from_bits).zip(values).enumerate() {
-                    // False for a NaN on either side, which then differs.
-                    let within = (got - want).abs() <= *tolerance;
+                    // The difference is false for a NaN on either side.
+                    let within =
+                        (got - want).abs() <= *tolerance || (got.is_nan() && want.is_nan());
                     if !within {
                         note(index, format!("{got}"), format!("{want} +- {tolerance}"));
                     }
@@ -217,6 +272,29 @@ impl Plan {
                 .into());
             }
         }
+        for output in &self.outputs {
+            if !known(output.buffer) {
+                return Err(format!(
+                    "{name}: an output names buffer {}, which the plan lacks",
+                    output.buffer
+                )
+                .into());
+            }
+        }
         Ok(())
     }
+}
+
+/// `count` words of SplitMix64 from `seed`, the low half of each output: the harness's inputs.
+pub fn seeded_words(seed: u64, count: usize) -> Vec<u32> {
+    let mut state = seed;
+    (0..count)
+        .map(|_| {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            (z ^ (z >> 31)) as u32
+        })
+        .collect()
 }

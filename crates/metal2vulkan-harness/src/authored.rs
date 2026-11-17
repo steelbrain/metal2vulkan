@@ -2,7 +2,9 @@
 //! inputs made here from a fixed seed, and the CPU reference of their results. Every result is
 //! exact on any device but the ALU workload's, whose `float` chains are held to a tolerance.
 
-use crate::plan::{Binding, BufferPlan, Dispatch, Expect, Grid, Plan, Values};
+use crate::plan::{
+    seeded_words as words, Binding, BufferPlan, Dispatch, Expect, Grid, Plan, Source, Values,
+};
 use crate::{Result, Storage};
 
 /// An authored workload: its name, and the builder of its plan. A plan holds its inputs and
@@ -60,6 +62,7 @@ fn bandwidth() -> Plan {
     let output = input.iter().map(|x| (x * 2.0 + 1.0).to_bits()).collect();
     Plan {
         name: "bandwidth".to_owned(),
+        library: Source::Authored,
         buffers: vec![private(float_bytes(&input)), unset(16 * VECTORS)],
         dispatches: vec![Dispatch {
             function: "scale_offset".to_owned(),
@@ -74,6 +77,7 @@ fn bandwidth() -> Plan {
             buffer: 1,
             values: Values::Words(output),
         }],
+        outputs: Vec::new(),
     }
 }
 
@@ -95,6 +99,7 @@ fn alu() -> Plan {
         .collect();
     Plan {
         name: "alu".to_owned(),
+        library: Source::Authored,
         buffers: vec![unset(4 * THREADS as u64)],
         dispatches: vec![Dispatch {
             function: "fma_chains".to_owned(),
@@ -108,6 +113,7 @@ fn alu() -> Plan {
                 tolerance: 1e-4,
             },
         }],
+        outputs: Vec::new(),
     }
 }
 
@@ -126,6 +132,7 @@ fn threadgroup_scan() -> Plan {
     }
     Plan {
         name: "threadgroup_scan".to_owned(),
+        library: Source::Authored,
         buffers: vec![private(word_bytes(&input)), unset(4 * WORDS as u64)],
         dispatches: vec![Dispatch {
             function: "block_scan".to_owned(),
@@ -136,6 +143,7 @@ fn threadgroup_scan() -> Plan {
             buffer: 1,
             values: Values::Words(output),
         }],
+        outputs: Vec::new(),
     }
 }
 
@@ -152,6 +160,7 @@ fn simd_reduce() -> Plan {
     let shape = |count: u32, chunk: u32| word_bytes(&[count, chunk]);
     Plan {
         name: "simd_reduce".to_owned(),
+        library: Source::Authored,
         buffers: vec![
             private(word_bytes(&input)),
             unset(4 * GROUPS as u64),
@@ -183,6 +192,7 @@ fn simd_reduce() -> Plan {
                 values: Values::Words(vec![total, 0, 0, 0]),
             },
         ],
+        outputs: Vec::new(),
     }
 }
 
@@ -219,6 +229,7 @@ fn image_filter() -> Plan {
     let size = word_bytes(&[WIDTH as u32, HEIGHT as u32]);
     Plan {
         name: "image_filter".to_owned(),
+        library: Source::Authored,
         buffers: vec![private(float_bytes(&input)), unset(4 * input.len() as u64)],
         dispatches: vec![Dispatch {
             function: "binomial3x3".to_owned(),
@@ -232,6 +243,7 @@ fn image_filter() -> Plan {
             buffer: 1,
             values: Values::Words(output),
         }],
+        outputs: Vec::new(),
     }
 }
 
@@ -264,27 +276,15 @@ fn dispatch_chain() -> Plan {
         .collect();
     Plan {
         name: "dispatch_chain".to_owned(),
+        library: Source::Authored,
         buffers: vec![private(word_bytes(&input))],
         dispatches,
         expect: vec![Expect {
             buffer: 0,
             values: Values::Words(output),
         }],
+        outputs: Vec::new(),
     }
-}
-
-/// `count` words of SplitMix64 from `seed`, the low half of each output.
-fn words(seed: u64, count: usize) -> Vec<u32> {
-    let mut state = seed;
-    (0..count)
-        .map(|_| {
-            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            (z ^ (z >> 31)) as u32
-        })
-        .collect()
 }
 
 fn word_bytes(words: &[u32]) -> Vec<u8> {

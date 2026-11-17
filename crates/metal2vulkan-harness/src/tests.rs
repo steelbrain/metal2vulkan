@@ -1,9 +1,13 @@
 //! The harness's CPU-side parts: its statistics, its comparisons and its plans.
 
 use crate::authored::WORKLOADS;
-use crate::plan::{Binding, BufferPlan, Dispatch, Expect, Grid, Plan, Values};
-use crate::run::percentile;
+use crate::description;
+use crate::plan::{
+    Binding, BufferPlan, Comparison, Dispatch, Expect, Grid, Output, Plan, Source, Values,
+};
+use crate::run::{compare_outputs, percentile, Report};
 use crate::Storage;
+use std::path::Path;
 
 #[test]
 fn percentiles_take_the_nearest_rank() {
@@ -37,11 +41,43 @@ fn floats_differ_past_their_tolerance_and_at_a_nan() {
     assert!(want.compare(&floats([1.2, 1.8])).is_ok());
     assert!(want.compare(&floats([1.3, 2.0])).is_err());
     assert!(want.compare(&floats([f32::NAN, 2.0])).is_err());
+    let nan = Values::Floats {
+        values: vec![f32::NAN],
+        tolerance: 0.0,
+    };
+    assert!(nan.compare(&le(&[f32::NAN.to_bits()])).is_ok());
+    assert!(nan.compare(&le(&[0])).is_err());
+}
+
+#[test]
+fn outputs_compare_by_their_comparison() {
+    let mut plan = one_buffer_plan(16, None, 0);
+    plan.outputs = vec![Output {
+        buffer: 0,
+        comparison: Comparison::Exact,
+    }];
+    let report = |words: &[u32]| Report {
+        outputs: vec![le(words)],
+        ..Report::default()
+    };
+    let reference = report(&[1, 2, 3, 4]);
+    assert!(compare_outputs(&plan, &reference, &report(&[1, 2, 3, 4])).is_ok());
+    let why = compare_outputs(&plan, &reference, &report(&[1, 2, 3, 5])).unwrap_err();
+    assert_eq!(
+        why.to_string(),
+        "probe: buffer 0: 1 values differ; the first, [3], is 0x5, not 0x4"
+    );
+    plan.outputs[0].comparison = Comparison::Floats { tolerance: 0.5 };
+    let floats = |values: [f32; 4]| report(&values.map(f32::to_bits));
+    let reference = floats([1.0, 2.0, 3.0, 4.0]);
+    assert!(compare_outputs(&plan, &reference, &floats([1.0, 2.0, 3.0, 4.25])).is_ok());
+    assert!(compare_outputs(&plan, &reference, &floats([1.0, 2.0, 3.0, 5.0])).is_err());
 }
 
 fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan {
     Plan {
         name: "probe".to_owned(),
+        library: Source::Authored,
         buffers: vec![BufferPlan {
             length,
             storage: Storage::Private,
@@ -60,6 +96,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
             buffer: 0,
             values: Values::Words(vec![0; 4]),
         }],
+        outputs: Vec::new(),
     }
 }
 
@@ -82,4 +119,159 @@ fn every_authored_plan_validates() {
         assert_eq!(plan.name, workload.name);
         plan.validate().unwrap();
     }
+}
+
+const DESCRIPTION: &str = "\
+# Two workloads.
+workload first kernels.metallib
+buffer 16 shared hex 000102030405060708090a0b0c0d0e0f
+buffer 32 private words 1   # trailing comment
+set-buffer 0 0
+set-buffer 1 1 16
+set-bytes 2 4 zero
+dispatch k threads 64 2 1 32 2 1 repeat 3
+set-bytes 2 4 unit 2
+dispatch k threadgroups 2 1 1 32 1 1
+check 1 float 0.5
+
+workload second other.metallib
+buffer 16 private zero
+set-buffer 0 0
+dispatch m threadgroups 1 1 1 16 1 1
+check 0 exact
+";
+
+#[test]
+fn a_description_makes_its_plans() {
+    let described = description::parse(DESCRIPTION, Path::new("/dir")).unwrap();
+    let plans: Vec<Plan> = described
+        .iter()
+        .map(|workload| workload.plan().unwrap())
+        .collect();
+    let [first, second] = plans.as_slice() else {
+        panic!("two plans, not {}", plans.len());
+    };
+    assert_eq!(first.name, "first");
+    assert_eq!(
+        first.library,
+        Source::Metallib("/dir/kernels.metallib".into())
+    );
+    assert_eq!(first.buffers[0].storage, Storage::Shared);
+    assert_eq!(first.buffers[0].contents, Some((0..16).collect()));
+    assert_eq!(first.buffers[1].storage, Storage::Private);
+    let words: Vec<u8> = (crate::plan::seeded_words(1, 8).iter())
+        .flat_map(|word| word.to_le_bytes())
+        .collect();
+    assert_eq!(first.buffers[1].contents, Some(words));
+    // `repeat 3`: three dispatches, the bindings before the first alone; then the fourth's own.
+    assert_eq!(first.dispatches.len(), 4);
+    let bindings: Vec<usize> = first.dispatches.iter().map(|d| d.bindings.len()).collect();
+    assert_eq!(bindings, [3, 0, 0, 1]);
+    assert!(matches!(
+        first.dispatches[0].bindings[1],
+        Binding::Buffer {
+            index: 1,
+            buffer: 1,
+            offset: 16
+        }
+    ));
+    assert!(matches!(
+        first.dispatches[2].grid,
+        Grid::Threads {
+            threads: [64, 2, 1],
+            per_group: [32, 2, 1]
+        }
+    ));
+    match &first.dispatches[3].bindings[0] {
+        Binding::Bytes { index: 2, bytes } => {
+            let unit = f32::from_le_bytes(bytes[..4].try_into().unwrap());
+            assert!((0.0..1.0).contains(&unit), "{unit}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        first.outputs[0].comparison,
+        Comparison::Floats { tolerance: 0.5 }
+    );
+    assert_eq!(
+        second.library,
+        Source::Metallib("/dir/other.metallib".into())
+    );
+    assert_eq!(second.outputs[0].comparison, Comparison::Exact);
+}
+
+/// The error of the description `text`.
+fn refused(text: &str) -> String {
+    description::parse(text, Path::new("/dir"))
+        .unwrap_err()
+        .to_string()
+}
+
+/// [`refused`] of `body` after a workload's first two lines.
+fn refusal(body: &str) -> String {
+    refused(&format!(
+        "workload w k.metallib\nbuffer 16 private zero\n{body}"
+    ))
+}
+
+#[test]
+fn a_faulty_description_is_refused_naming_its_line() {
+    let dispatch = "set-buffer 0 0\ndispatch k threadgroups 1 1 1 16 1 1";
+    assert_eq!(
+        refused("buffer 16 private zero"),
+        "line 1: buffer before a workload"
+    );
+    assert_eq!(
+        refused("workload w"),
+        "line 1: workload takes NAME METALLIB"
+    );
+    assert_eq!(
+        refusal("buffer 16 managed zero"),
+        "line 3: storage managed is neither shared nor private"
+    );
+    assert_eq!(
+        refusal("buffer 16 shared hex 00ff"),
+        "line 3: the fill has 2 bytes, not 16"
+    );
+    assert_eq!(
+        refusal("buffer 16 shared words x"),
+        "line 3: x is not a whole number"
+    );
+    assert_eq!(
+        refusal("buffer 16 shared noise 1"),
+        "line 3: fill noise 1 is not zero, words, unit or hex"
+    );
+    assert_eq!(
+        refusal("set-bytes 0 6 words 1"),
+        "line 3: a fill of words needs a multiple of 4 bytes, not 6"
+    );
+    assert_eq!(
+        refusal("dispatch k threadgroups 1 1 1 16 1"),
+        "line 3: dispatch takes six sizes"
+    );
+    assert_eq!(
+        refusal("dispatch k waves 1 1 1 16 1 1"),
+        "line 3: dispatch kind waves is neither threadgroups nor threads"
+    );
+    assert_eq!(
+        refusal(&format!("{dispatch} repeat 0")),
+        "line 4: repeat 0 dispatches nothing"
+    );
+    assert_eq!(
+        refusal("check 0 close"),
+        "line 3: check 0 close is no directive"
+    );
+    assert_eq!(refusal("set-buffer 0 0"), "workload w has no dispatch");
+    assert_eq!(
+        refusal(&format!("{dispatch}\nset-buffer 1 0")),
+        "workload w sets a binding after its last dispatch"
+    );
+    assert_eq!(
+        refusal(&format!("{dispatch}\nworkload w k.metallib")),
+        "line 5: a second workload w"
+    );
+    assert_eq!(
+        refusal("set-buffer 0 3\ndispatch k threadgroups 1 1 1 16 1 1"),
+        "w: dispatch 0 binds buffer 3, which the plan lacks"
+    );
 }
