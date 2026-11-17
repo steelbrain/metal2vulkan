@@ -105,8 +105,8 @@ pub struct Report {
     /// Each run's encoding thread's wall time from the command buffer's creation through
     /// `commit`'s return, in nanoseconds.
     pub encode_ns: Vec<f64>,
-    /// Each run's process CPU time from before the command buffer's creation through the wait's
-    /// return, in nanoseconds; empty where the host has no such clock.
+    /// Each run's process CPU time from before its command buffer's creation through the return
+    /// of the wait for the run before it, in nanoseconds; empty where the host has no such clock.
     pub cpu_ns: Vec<f64>,
     /// The device's gauges after the 100th and the 200th timed run, where there were that many.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
@@ -198,6 +198,25 @@ impl<D: ComputeDevice> Harness<D> {
             metallibs: HashMap::new(),
             device,
         })
+    }
+
+    /// Commits a run of `plan`, then waits for `in_flight`, the run before it, which the new one
+    /// replaces: that run's GPU time in microseconds, and the new run's encoding time, from its
+    /// command buffer's creation through `commit`'s return.
+    fn next(
+        &self,
+        plan: &Plan,
+        made: &Made<D>,
+        in_flight: &mut D::CommandBuffer,
+    ) -> Result<(f64, Duration)> {
+        let started = Instant::now();
+        let command_buffer = self.encode(plan, made)?;
+        command_buffer.commit()?;
+        let encoded = started.elapsed();
+        let before = std::mem::replace(in_flight, command_buffer);
+        before.wait_until_completed()?;
+        let gpu = before.gpu_end_time()? - before.gpu_start_time()?;
+        Ok((gpu * 1e6, encoded))
     }
 
     /// Makes the library `source` names, where it is a metallib no plan named before.
@@ -365,12 +384,12 @@ impl<D: ComputeDevice> Session for Harness<D> {
             let buffer = &plan.buffers[output.buffer];
             outputs.push(self.read(&made.buffers[output.buffer], buffer.storage, buffer.length)?);
         }
-        let warmup = warm_up(runs, || {
-            let command_buffer = self.encode(plan, &made)?;
-            command_buffer.commit()?;
-            command_buffer.wait_until_completed()?;
-            Ok((command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?) * 1e6)
-        })?;
+        // The runs after the first keep two command buffers in flight: each is committed while
+        // the GPU runs the one before it, so the GPU does not idle between runs and its clock
+        // holds, as it does under a program that keeps it busy.
+        let mut in_flight = self.encode(plan, &made)?;
+        in_flight.commit()?;
+        let warmup = warm_up(runs, || Ok(self.next(plan, &made, &mut in_flight)?.0))?;
         let mut report = Report {
             dispatches: plan.dispatches.len(),
             outputs,
@@ -379,21 +398,17 @@ impl<D: ComputeDevice> Session for Harness<D> {
         };
         for run in 1..=runs.timed {
             let cpu = clocks::process_cpu_nanos();
-            let started = Instant::now();
-            let command_buffer = self.encode(plan, &made)?;
-            command_buffer.commit()?;
-            let encoded = started.elapsed();
-            command_buffer.wait_until_completed()?;
+            let (gpu_us, encoded) = self.next(plan, &made, &mut in_flight)?;
             if let (Some(before), Some(after)) = (cpu, clocks::process_cpu_nanos()) {
                 report.cpu_ns.push(after.saturating_sub(before) as f64);
             }
             report.encode_ns.push(encoded.as_nanos() as f64);
-            let gpu = command_buffer.gpu_end_time()? - command_buffer.gpu_start_time()?;
-            report.gpu_us.push(gpu * 1e6);
+            report.gpu_us.push(gpu_us);
             if run == 100 || run == 200 {
                 report.gauges.push((run, self.device.gauges()));
             }
         }
+        in_flight.wait_until_completed()?;
         Ok(report)
     }
 

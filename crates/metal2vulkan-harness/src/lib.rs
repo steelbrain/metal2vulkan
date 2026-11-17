@@ -27,17 +27,20 @@
 //!     [--warmup 5] [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
 //! ```
 //!
-//! Before a workload's timed runs, the command warms it up: at least `--warmup` runs and half a
-//! second, then until the medians of its last two windows of 10 runs are within 3% of each other,
-//! for at most five seconds, so that an integrated GPU's clock has risen before it is timed.
+//! After a workload's first run, two of its command buffers are in flight: each run is committed
+//! while the GPU runs the one before it, so the GPU does not idle between runs. Before the timed
+//! runs, the command warms the workload up: at least `--warmup` runs and half a second, then
+//! until the medians of its last two windows of 10 runs are within 3% of each other, for at most
+//! five seconds, so that an integrated GPU's clock has risen before it is timed.
 //!
 //! The command prints, per workload and runtime: the warm-up's runs (marked `~` where the time
 //! did not settle), the GPU time of a run (`GPUEndTime - GPUStartTime`) at the 10th, 50th and
 //! 90th percentiles of the timed runs, the encoding thread's wall time per dispatch from the
 //! command buffer's creation through `commit`'s return, and the process's CPU time per dispatch
-//! from there to the wait's return (unix only), each the median of the timed runs; and the
-//! runtime's gauges after the 100th and 200th timed runs. Per creation workload and runtime it
-//! prints the warm-up, the wall time of `newBufferWithLength:options:` at the same percentiles,
+//! from there to the return of the wait for the run before (unix only), each the median of the
+//! timed runs; and the runtime's gauges after the 100th and 200th timed runs. Per creation
+//! workload and runtime it prints the warm-up, the wall time of `newBufferWithLength:options:` at
+//! the same percentiles,
 //! and the gauges. Beside each row it prints lines for the matrix's runner (docs/VALIDATION.md,
 //! "The matrix"):
 //!
