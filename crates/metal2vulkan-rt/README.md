@@ -9,13 +9,19 @@ device's counters, and `floor`, the check of a Vulkan device against the floor b
 ## Instance and device
 
 - `Instance::new` loads the Vulkan loader and creates the instance at the floor's version, with
-  the floor's instance extensions and the window-system extensions the consumer names.
+  the floor's instance extensions and each extension the consumer names that the loader offers:
+  the window system's, and any other it uses. `Instance::extensions` lists those enabled.
   `Instance::physical_devices` lists the physical devices in the loader's order.
 - `Device::new` checks a physical device against the floor and makes one `VkDevice`. Every
   command queue, every guest process and the compositor share it. It takes the floor's queue
   family, the first that does graphics and compute: one queue for the runtime, and a second for
   presenting where the family has one. Where it has one queue, presenting shares the runtime's
-  queue and its lock. `DeviceOptions` carries what the consumer adds: its `BlockMappings` hook.
+  queue and its lock. `DeviceOptions` carries what the consumer adds: its `BlockMappings` hook,
+  and the device extensions it uses beyond the floor's. Each `DeviceExtension` names one and,
+  with `DeviceExtension::with_features`, its feature structure: the members the consumer needs,
+  and a test of the device's answer. The device enables it where it lists the extension and its
+  answer passes, and passes over it otherwise; `Device::extensions` lists those enabled, the
+  floor's first. The consumer names an extension's dependencies too.
 - `Device::raw` gives the instance, physical device, device and queue family handles, and
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock.
   The runtime keeps owning every handle.

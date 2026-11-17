@@ -1,10 +1,10 @@
 //! The instance, the device and its counters: that the handles cross threads, and, under a device
-//! cfg, that every device of the cfg's kind opens, presents on the queue its family offers, and is
-//! torn down with its gauges at zero.
+//! cfg, that every device of the cfg's kind opens, presents on the queue its family offers, is torn
+//! down with its gauges at zero, and enables the consumer's extensions it offers.
 
 use crate::{
-    BlockId, BlockInfo, BlockMappings, Buffer, Counters, Device, DeviceOptions, Gauges, Instance,
-    Metrics, PhysicalDevice,
+    BlockId, BlockInfo, BlockMappings, Buffer, Counters, Device, DeviceExtension, DeviceOptions,
+    Gauges, Instance, Metrics, PhysicalDevice,
 };
 
 #[test]
@@ -14,6 +14,7 @@ fn the_handles_cross_threads() {
     send_sync::<PhysicalDevice>();
     send_sync::<Device>();
     send_sync::<DeviceOptions>();
+    send_sync::<DeviceExtension>();
     send_sync::<Counters>();
     send_sync::<BlockId>();
     send_sync::<BlockInfo>();
@@ -170,4 +171,92 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
         .expect("a device after the instance's handle dropped");
     drop(physical);
     drop(device);
+}
+
+/// The consumer's extensions: the instance and every device of the cfg's kind enable each one they
+/// offer, once, after the floor's, and pass over the rest. `VK_EXT_swapchain_maintenance1` goes
+/// with its feature structure, and only where the instance has its dependency.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[test]
+fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
+    use crate::floor;
+    use crate::tests::devices_of_the_cfgs_kind;
+    use ash::vk;
+    use std::ffi::CStr;
+
+    let missing: &CStr = c"VK_M2V_no_such_extension";
+    let surface = [
+        ash::khr::get_surface_capabilities2::NAME,
+        ash::ext::surface_maintenance1::NAME,
+    ];
+    let instance = Instance::new(&[
+        surface[0],
+        missing,
+        surface[1],
+        floor::INSTANCE_EXTENSIONS[0],
+        surface[0],
+    ])
+    .expect("an instance at the floor");
+    let (entry, vk_instance) = instance.raw();
+    // SAFETY: the loader is loaded.
+    let offered = unsafe { entry.enumerate_instance_extension_properties(None) }
+        .expect("the instance extensions");
+    let offers = |name: &CStr| {
+        offered
+            .iter()
+            .any(|properties| properties.extension_name_as_c_str() == Ok(name))
+    };
+    let mut expected: Vec<&CStr> = floor::INSTANCE_EXTENSIONS.to_vec();
+    expected.extend(surface.iter().copied().filter(|&name| offers(name)));
+    let enabled: Vec<&CStr> = instance.extensions().iter().map(|n| n.as_c_str()).collect();
+    assert_eq!(enabled, expected, "the instance's extensions");
+    let maintenance = enabled.contains(&ash::ext::surface_maintenance1::NAME);
+
+    let devices = devices_of_the_cfgs_kind(&instance);
+    assert!(
+        !devices.is_empty(),
+        "the loader lists no device of this cfg's kind"
+    );
+    for (name, physical) in &devices {
+        // SAFETY: `physical` is one of `instance`'s.
+        let listed = unsafe { vk_instance.enumerate_device_extension_properties(physical.raw()) }
+            .expect("the device extensions");
+        let lists = |name: &CStr| {
+            listed
+                .iter()
+                .any(|properties| properties.extension_name_as_c_str() == Ok(name))
+        };
+        let mut answer = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
+        let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut answer);
+        // SAFETY: as above; `answer` lives through the call.
+        unsafe { vk_instance.get_physical_device_features2(physical.raw(), &mut features) };
+        let swapchain = ash::ext::swapchain_maintenance1::NAME;
+        let offered = lists(swapchain) && answer.swapchain_maintenance1 == vk::TRUE;
+
+        let mut asked = vec![
+            DeviceExtension::new(missing),
+            DeviceExtension::new(floor::DEVICE_EXTENSIONS[0]),
+        ];
+        if maintenance {
+            asked.push(DeviceExtension::with_features(
+                swapchain,
+                vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default()
+                    .swapchain_maintenance1(true),
+                |answer| answer.swapchain_maintenance1 == vk::TRUE,
+            ));
+        }
+        let options = DeviceOptions {
+            extensions: asked,
+            ..DeviceOptions::default()
+        };
+        let device =
+            Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let mut expected: Vec<&CStr> = floor::DEVICE_EXTENSIONS.to_vec();
+        if maintenance && offered {
+            expected.push(swapchain);
+        }
+        let enabled: Vec<&CStr> = device.extensions().iter().map(|n| n.as_c_str()).collect();
+        assert_eq!(enabled, expected, "{name}: the device's extensions");
+        println!("extensions: {name}: {enabled:?}");
+    }
 }

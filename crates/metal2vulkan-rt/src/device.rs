@@ -3,13 +3,14 @@
 
 use crate::counters::Counters;
 use crate::error::Error;
+use crate::extension::{self, DeviceExtension};
 use crate::fill::Filler;
 use crate::floor;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, MemoryClass, Pool, BLOCK_LEN};
 use ash::vk;
 use std::collections::HashMap;
-use std::ffi::c_char;
+use std::ffi::{c_char, CString};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 
@@ -42,6 +43,7 @@ pub(crate) struct Core {
     physical: vk::PhysicalDevice,
     pub(crate) device: ash::Device,
     family: u32,
+    extensions: Vec<CString>,
     pub(crate) queues: Queues,
     memory_types: floor::MemoryTypes,
     unified_memory: bool,
@@ -68,6 +70,9 @@ pub struct DeviceOptions {
     /// The consumer's hook before the runtime frees a block it handed out. `None` where the
     /// consumer keeps no mapping of its own, so a block is freed at once.
     pub block_mappings: Option<Arc<dyn BlockMappings>>,
+    /// Device extensions the consumer uses beyond the floor's, each enabled where the device
+    /// offers it and the features the consumer needs ([`Device::extensions`]).
+    pub extensions: Vec<DeviceExtension>,
 }
 
 /// Takes a lock. A panic while another thread held it leaves what it guards usable (a queue, the
@@ -80,8 +85,9 @@ impl Device {
     /// `MTLCreateSystemDefaultDevice`, for the physical device the consumer chose.
     ///
     /// Checks the floor ([`floor::check`]), then makes one `VkDevice` with the floor's features
-    /// and extensions and each of the four query-decided features the device has, and chooses its
-    /// memory types on it ([`floor::memory_types`]). It takes one queue of the floor's queue
+    /// and extensions, each of the four query-decided features the device has, and each of the
+    /// consumer's extensions ([`DeviceOptions::extensions`]) the device offers with the features
+    /// the consumer needs, and chooses its memory types on it ([`floor::memory_types`]). It takes one queue of the floor's queue
     /// family for the runtime and, where that family has a second queue, a queue for presenting;
     /// where it has one, presenting shares the runtime's queue and its lock. It starts the
     /// block-maker thread, which makes one block of each memory class ready.
@@ -120,19 +126,32 @@ impl Device {
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
             .push_next(&mut workgroup_layout);
-        let extensions: Vec<*const c_char> = capabilities
-            .extensions
-            .iter()
-            .map(|name| name.as_ptr())
-            .collect();
-        let info = vk::DeviceCreateInfo::default()
+        // SAFETY: as for the floor check.
+        let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
+            .map_err(Error::vulkan("vkEnumerateDeviceExtensionProperties"))?;
+        // SAFETY: as for the floor check.
+        let (extensions, mut links) = unsafe {
+            extension::choose(
+                vk_instance,
+                raw,
+                &listed,
+                capabilities.extensions,
+                &options.extensions,
+            )
+        };
+        let pointers: Vec<*const c_char> = extensions.iter().map(|name| name.as_ptr()).collect();
+        let mut info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_info))
-            .enabled_extension_names(&extensions)
+            .enabled_extension_names(&pointers)
             .push_next(&mut features);
+        // SAFETY: `info.p_next` heads the floor's chain, and the links live through the call.
+        info.p_next = unsafe { extension::chain(info.p_next, &mut links) };
         // SAFETY: `info` and everything it points to live through the call; the floor checked
-        // that the device offers every feature and extension it enables.
+        // that the device offers every feature and extension of its own it enables, and
+        // `extension::choose` that it offers each of the consumer's and its features.
         let device = unsafe { vk_instance.create_device(raw, &info, None) }
             .map_err(Error::vulkan("vkCreateDevice"))?;
+        drop(links);
         let counters = Counters::new();
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
@@ -174,6 +193,7 @@ impl Device {
             physical: raw,
             device,
             family,
+            extensions,
             queues: Queues { runtime, present },
             memory_types,
             unified_memory,
@@ -201,6 +221,12 @@ impl Device {
     /// across its bus, as on a Mac with a discrete GPU.
     pub fn has_unified_memory(&self) -> bool {
         self.shared.core.unified_memory
+    }
+
+    /// No Metal counterpart: the device extensions enabled: the floor's first, then each of the
+    /// consumer's ([`DeviceOptions::extensions`]) the device offers with its features.
+    pub fn extensions(&self) -> &[CString] {
+        &self.shared.core.extensions
     }
 
     /// No Metal counterpart: the memory types the device's buffers are allocated from, as the
