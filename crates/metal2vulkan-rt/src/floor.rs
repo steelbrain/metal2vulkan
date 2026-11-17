@@ -1,6 +1,6 @@
 //! The floor: the Vulkan version, extensions, features, limits, queue family and memory types the
-//! runtime requires of every device, and the four features it uses only where a device reports
-//! them.
+//! runtime requires of every device, and the optional features it uses only where a device reports
+//! them, each choosing one of two forms.
 //!
 //! [`PhysicalDevice::check`](crate::PhysicalDevice::check) queries a physical device and decides;
 //! the decision is a pure function of what it read, so a test can hand it any set of answers.
@@ -26,9 +26,25 @@ pub const DEVICE_EXTENSIONS: &[&CStr] = &[
     ash::khr::workgroup_memory_explicit_layout::NAME,
 ];
 
-/// The translator's name for each extension of [`DEVICE_EXTENSIONS`] that its shaders may use.
-pub(crate) const SHADER_EXTENSIONS: &[VkExtension] =
-    &[VkExtension::KhrWorkgroupMemoryExplicitLayout];
+/// The device extensions device creation enables where the device lists them, each for the
+/// optional features of its own: the SIMD groups' reconvergence modes.
+pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
+    ash::khr::shader_maximal_reconvergence::NAME,
+    ash::khr::shader_subgroup_uniform_control_flow::NAME,
+];
+
+/// The translator's name for an extension device creation enables that its shaders may use.
+fn shader_extension(name: &CStr) -> Option<VkExtension> {
+    if name == ash::khr::workgroup_memory_explicit_layout::NAME {
+        Some(VkExtension::KhrWorkgroupMemoryExplicitLayout)
+    } else if name == ash::khr::shader_maximal_reconvergence::NAME {
+        Some(VkExtension::KhrShaderMaximalReconvergence)
+    } else if name == ash::khr::shader_subgroup_uniform_control_flow::NAME {
+        Some(VkExtension::KhrShaderSubgroupUniformControlFlow)
+    } else {
+        None
+    }
+}
 
 /// Slots in the sampled-texture array: the most sampled textures alive at once.
 pub(crate) const SAMPLED_IMAGES: u32 = 65_536;
@@ -124,6 +140,14 @@ pub struct Features {
     /// `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR`, of
     /// `VK_KHR_workgroup_memory_explicit_layout`.
     pub workgroup_layout: vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR<'static>,
+    /// `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR`, of
+    /// `VK_KHR_shader_maximal_reconvergence`: read and enabled only where the device lists it.
+    pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>,
+    /// `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR`, of
+    /// `VK_KHR_shader_subgroup_uniform_control_flow`: read and enabled only where the device lists
+    /// it.
+    pub subgroup_uniform_control_flow:
+        vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -150,6 +174,12 @@ macro_rules! feature {
     };
     (@structure workgroup_layout) => {
         "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR"
+    };
+    (@structure maximal_reconvergence) => {
+        "VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR"
+    };
+    (@structure subgroup_uniform_control_flow) => {
+        "VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR"
     };
     (@translator) => {
         None
@@ -213,12 +243,16 @@ pub(crate) const OPTIONAL: &[Feature] = &[
     feature!(vulkan12.shader_buffer_int64_atomics => ShaderBufferInt64Atomics),
     feature!(vulkan12.shader_shared_int64_atomics => ShaderSharedInt64Atomics),
     feature!(core.shader_float64 => ShaderFloat64),
+    // The SIMD groups' reconvergence: maximal where the device offers it, else subgroup-uniform
+    // control flow where it offers that.
+    feature!(maximal_reconvergence.shader_maximal_reconvergence => ShaderMaximalReconvergence),
+    feature!(subgroup_uniform_control_flow.shader_subgroup_uniform_control_flow => ShaderSubgroupUniformControlFlow),
 ];
 
-/// What the translator's shaders may use of what device creation enables with `features`: each
-/// enabled feature the translator names, and [`SHADER_EXTENSIONS`].
-pub(crate) fn shader_enables(features: &Features) -> EnableSet {
-    let mut features = *features;
+/// What the translator's shaders may use of what device creation enables: each enabled feature of
+/// `capabilities` the translator names, and each enabled extension it names.
+pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
+    let mut features = capabilities.features;
     let mut enables = EnableSet::new();
     for feature in REQUIRED.iter().chain(OPTIONAL) {
         if let Some(name) = feature.translator {
@@ -227,7 +261,12 @@ pub(crate) fn shader_enables(features: &Features) -> EnableSet {
             }
         }
     }
-    enables.extensions.extend(SHADER_EXTENSIONS);
+    enables.extensions.extend(
+        capabilities
+            .extensions
+            .iter()
+            .filter_map(|&name| shader_extension(name)),
+    );
     enables
 }
 
@@ -328,11 +367,12 @@ impl fmt::Display for BelowFloor {
 
 impl std::error::Error for BelowFloor {}
 
-/// What a device above the floor offers: the four answers that choose between two forms, and what
+/// What a device above the floor offers: the answers that choose between two forms, and what
 /// device creation enables.
 ///
 /// Metal's counterparts are per-family capabilities (`supportsFamily`), and for storage reads
-/// `readWriteTextureSupport`; here each is one Vulkan feature.
+/// `readWriteTextureSupport`; here each is one Vulkan feature. The SIMD groups' other answers
+/// (subgroup sizes, stages and operations) are properties the translator reads itself.
 pub struct Capabilities {
     /// `shaderFloat16`: `half` arithmetic in 16 bits.
     pub float16: bool,
@@ -346,11 +386,17 @@ pub struct Capabilities {
     pub shared_int64_atomics: bool,
     /// `shaderFloat64`: 64-bit floats.
     pub float64: bool,
+    /// `shaderMaximalReconvergence`: SIMD groups reconverge maximally, as Metal's do.
+    pub maximal_reconvergence: bool,
+    /// `shaderSubgroupUniformControlFlow`: SIMD groups reconverge where control flow is uniform,
+    /// the mode where maximal reconvergence is not offered.
+    pub subgroup_uniform_control_flow: bool,
     /// The features device creation enables: every one the floor requires, and each of the
     /// optional ones the device reports.
     pub features: Features,
-    /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`].
-    pub extensions: &'static [&'static CStr],
+    /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
+    /// [`OPTIONAL_EXTENSIONS`] the device lists.
+    pub extensions: Vec<&'static CStr>,
     /// The first queue family with graphics and compute, whose timestamps the floor checked.
     pub queue_family: u32,
     /// The device's memory types and heaps, for device creation to choose from.
@@ -432,10 +478,16 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
             .collect();
         // An extension's feature structure may be read only from a device that lists the
         // extension; on another, its features stay false.
-        let workgroup_layout_listed = queried
-            .extensions
-            .iter()
-            .any(|name| name.as_c_str() == ash::khr::workgroup_memory_explicit_layout::NAME);
+        let listed = |extension: &CStr| {
+            queried
+                .extensions
+                .iter()
+                .any(|name| name.as_c_str() == extension)
+        };
+        let workgroup_layout_listed = listed(ash::khr::workgroup_memory_explicit_layout::NAME);
+        let maximal_reconvergence_listed = listed(ash::khr::shader_maximal_reconvergence::NAME);
+        let uniform_control_flow_listed =
+            listed(ash::khr::shader_subgroup_uniform_control_flow::NAME);
 
         let Features {
             core,
@@ -443,6 +495,8 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
             vulkan12,
             vulkan13,
             workgroup_layout,
+            maximal_reconvergence,
+            subgroup_uniform_control_flow,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -451,12 +505,20 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
         if workgroup_layout_listed {
             features = features.push_next(&mut *workgroup_layout);
         }
+        if maximal_reconvergence_listed {
+            features = features.push_next(&mut *maximal_reconvergence);
+        }
+        if uniform_control_flow_listed {
+            features = features.push_next(&mut *subgroup_uniform_control_flow);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
         vulkan12.p_next = std::ptr::null_mut();
         vulkan13.p_next = std::ptr::null_mut();
         workgroup_layout.p_next = std::ptr::null_mut();
+        maximal_reconvergence.p_next = std::ptr::null_mut();
+        subgroup_uniform_control_flow.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -535,8 +597,23 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
         buffer_int64_atomics: features.vulkan12.shader_buffer_int64_atomics == vk::TRUE,
         shared_int64_atomics: features.vulkan12.shader_shared_int64_atomics == vk::TRUE,
         float64: features.core.shader_float64 == vk::TRUE,
+        maximal_reconvergence: features.maximal_reconvergence.shader_maximal_reconvergence
+            == vk::TRUE,
+        subgroup_uniform_control_flow: features
+            .subgroup_uniform_control_flow
+            .shader_subgroup_uniform_control_flow
+            == vk::TRUE,
         features,
-        extensions: DEVICE_EXTENSIONS,
+        extensions: DEVICE_EXTENSIONS
+            .iter()
+            .chain(OPTIONAL_EXTENSIONS.iter().filter(|&&extension| {
+                device
+                    .extensions
+                    .iter()
+                    .any(|name| name.as_c_str() == extension)
+            }))
+            .copied()
+            .collect(),
         queue_family,
         memory: device.memory,
     })

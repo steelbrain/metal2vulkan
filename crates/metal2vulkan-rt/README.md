@@ -179,10 +179,14 @@ that touch blocks first.
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through
   arithmetic defined for every value and never later than its `gpu_end_time`. The parameter ring
   and an indirect dispatch's arguments are read only by the GPU: the runtime writes the ring and
-  never reads it back, and never reads the arguments. One device serves
-  every guest process and shaders use raw device addresses, so a guest shader can reach any guest
-  process's memory on the device; the runtime does not isolate processes from each other, and
-  the old runtime did not either.
+  never reads it back, and never reads the arguments.
+- Guest processes are not isolated from each other. One device serves every guest process, and
+  shaders use raw device addresses, so a guest shader can read and write any memory on the
+  device: other processes' buffers and textures, and the host's own resources there. The runtime
+  does not isolate processes, and the old runtime does not either: measured, one guest process
+  read and overwrote another's Shared buffer, Private buffer and texture through addresses and
+  resource IDs it made up, with no fault. The consumer treats every byte on the device as
+  guest-writable and keeps nothing there that it parses or trusts.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
@@ -282,6 +286,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_surface` | instance | presenting |
 | `VK_KHR_swapchain` | device | presenting |
 | `VK_KHR_workgroup_memory_explicit_layout` | device | threadgroup memory laid out as Metal lays it |
+| `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
+| `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
 
 ### Features
 
@@ -360,9 +366,16 @@ only for a created device, so `PhysicalDevice::check` finds a type with each set
 
 ### Chosen by a query
 
-Four features choose between two forms by the device's answer, and no other feature does.
-`floor::Capabilities` holds each answer, and the features to enable: the floor's, and each
-optional one the device has.
+Five features choose between two forms by the device's answer, and no other feature does: 16-bit
+floats, storage-image reads without a format, 64-bit atomics, 64-bit floats and SIMD groups.
+`floor::Capabilities` holds each answer the floor reads, and the features and extensions to
+enable: the floor's, and each optional one the device has.
+
+| Feature | Queries | Used for |
+|---|---|---|
+| SIMD groups | `minSubgroupSize`, `maxSubgroupSize` and `requiredSubgroupSizeStages` (`VkPhysicalDeviceVulkan13Properties`); `subgroupSupportedStages` and `subgroupSupportedOperations` (`VkPhysicalDeviceVulkan11Properties`); `shaderMaximalReconvergence` (`VK_KHR_shader_maximal_reconvergence`) and `shaderSubgroupUniformControlFlow` (`VK_KHR_shader_subgroup_uniform_control_flow`) | the translator's choice of how a kernel's SIMD groups run (its tier), and their reconvergence mode: maximal where offered, else subgroup-uniform control flow where offered |
+
+The other four are one feature each:
 
 | Optional feature | Structure | Used for |
 |---|---|---|
@@ -371,6 +384,8 @@ optional one the device has.
 | `shaderBufferInt64Atomics` | `VkPhysicalDeviceVulkan12Features` | 64-bit atomics on buffers |
 | `shaderSharedInt64Atomics` | `VkPhysicalDeviceVulkan12Features` | 64-bit atomics on threadgroup memory |
 | `shaderFloat64` | `VkPhysicalDeviceFeatures` | 64-bit floats |
+| `shaderMaximalReconvergence` | `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR` | SIMD groups that reconverge as Metal's do |
+| `shaderSubgroupUniformControlFlow` | `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR` | SIMD groups' reconvergence where maximal reconvergence is not offered |
 
 The test `tests::floor` holds these tables equal to the code, checks that each missing item is
 named, and, under `--cfg m2v_gpu` or `--cfg m2v_cpu_icd`, checks every device the machine's

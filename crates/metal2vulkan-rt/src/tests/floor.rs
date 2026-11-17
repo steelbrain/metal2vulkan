@@ -1,11 +1,12 @@
-//! The floor's check: each missing item is named, the four optional features decide
+//! The floor's check: each missing item is named, the optional features decide
 //! `Capabilities`, memory types are chosen by flags and by what buffers can use, the README states
 //! what the code checks, and, under a device cfg, every device the loader lists is above the floor.
 
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
-    Queried, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL, PRIVATE_MEMORY,
-    REQUIRED, RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, VERSION,
+    Queried, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL,
+    OPTIONAL_EXTENSIONS, PRIVATE_MEMORY, REQUIRED, RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS,
+    VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -142,6 +143,8 @@ fn a_device_at_the_floor_is_above_it() {
     assert!(!capabilities.buffer_int64_atomics);
     assert!(!capabilities.shared_int64_atomics);
     assert!(!capabilities.float64);
+    assert!(!capabilities.maximal_reconvergence);
+    assert!(!capabilities.subgroup_uniform_control_flow);
     assert_eq!(capabilities.extensions, DEVICE_EXTENSIONS);
     assert_eq!(capabilities.queue_family, 0);
     assert_eq!(
@@ -668,10 +671,23 @@ fn every_missing_item_is_named_at_once() {
     );
 }
 
+/// An optional extension is enabled where the device lists it, after the floor's.
 #[test]
-fn the_four_optional_features_decide_the_capabilities() {
+fn an_optional_extension_is_enabled_where_listed() {
+    for &extension in OPTIONAL_EXTENSIONS {
+        let mut device = at_the_floor();
+        device.extensions.push(extension.to_owned());
+        let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+        let mut expected = DEVICE_EXTENSIONS.to_vec();
+        expected.push(extension);
+        assert_eq!(capabilities.extensions, expected);
+    }
+}
+
+#[test]
+fn the_optional_features_decide_the_capabilities() {
     type Set = fn(&mut Features);
-    let cases: [(Set, &str); 5] = [
+    let cases: [(Set, &str); 7] = [
         (|f| f.vulkan12.shader_float16 = vk::TRUE, "float16"),
         (
             |f| f.core.shader_storage_image_read_without_format = vk::TRUE,
@@ -686,6 +702,17 @@ fn the_four_optional_features_decide_the_capabilities() {
             "shared_int64_atomics",
         ),
         (|f| f.core.shader_float64 = vk::TRUE, "float64"),
+        (
+            |f| f.maximal_reconvergence.shader_maximal_reconvergence = vk::TRUE,
+            "maximal_reconvergence",
+        ),
+        (
+            |f| {
+                f.subgroup_uniform_control_flow
+                    .shader_subgroup_uniform_control_flow = vk::TRUE
+            },
+            "subgroup_uniform_control_flow",
+        ),
     ];
     assert_eq!(
         cases.len(),
@@ -705,6 +732,11 @@ fn the_four_optional_features_decide_the_capabilities() {
             ("buffer_int64_atomics", capabilities.buffer_int64_atomics),
             ("shared_int64_atomics", capabilities.shared_int64_atomics),
             ("float64", capabilities.float64),
+            ("maximal_reconvergence", capabilities.maximal_reconvergence),
+            (
+                "subgroup_uniform_control_flow",
+                capabilities.subgroup_uniform_control_flow,
+            ),
         ];
         for (name, value) in answers {
             assert_eq!(
@@ -776,6 +808,11 @@ fn the_readme_states_the_floor() {
         .iter()
         .map(|name| (name, "instance"))
         .chain(DEVICE_EXTENSIONS.iter().map(|name| (name, "device")))
+        .chain(
+            OPTIONAL_EXTENSIONS
+                .iter()
+                .map(|name| (name, "device, where listed")),
+        )
         .map(|(name, place)| (name.to_string_lossy().into_owned(), place.to_string()))
         .collect();
     assert_eq!(stated, code, "the README's extensions");

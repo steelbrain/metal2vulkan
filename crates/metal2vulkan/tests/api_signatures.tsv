@@ -1092,6 +1092,7 @@ const	metal2vulkan-rt::BLOCK_LEN	pub const BLOCK_LEN: u64
 const	metal2vulkan-rt::floor::BUFFER_USAGE	pub const BUFFER_USAGE: vk::BufferUsageFlags
 const	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	pub const DEVICE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	pub const INSTANCE_EXTENSIONS: &[&CStr]
+const	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	pub const OPTIONAL_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::VERSION	pub const VERSION: u32
 const	metal2vulkan-runtime::DEFAULT_CAPACITY	pub const DEFAULT_CAPACITY: u64
 const	metal2vulkan-runtime::DEFAULT_MEMORY_CAPACITY	pub const DEFAULT_MEMORY_CAPACITY: u64
@@ -1187,6 +1188,7 @@ const-value	metal2vulkan-rt::BLOCK_LEN	256 <<20
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::khr::workgroup_memory_explicit_layout::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
+const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME]
 const-value	metal2vulkan-rt::floor::VERSION	vk::API_VERSION_1_3
 const-value	metal2vulkan-runtime::DEFAULT_CAPACITY	25 <<30
 const-value	metal2vulkan-runtime::DEFAULT_MEMORY_CAPACITY	256 <<20
@@ -2249,15 +2251,19 @@ field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::Physic
 field	metal2vulkan-rt::RawDevice.queue_family_index	pub queue_family_index: u32
 field	metal2vulkan-rt::floor::BelowFloor.missing	pub missing: Vec<Missing>
 field	metal2vulkan-rt::floor::Capabilities.buffer_int64_atomics	pub buffer_int64_atomics: bool
-field	metal2vulkan-rt::floor::Capabilities.extensions	pub extensions: &'static [&'static CStr]
+field	metal2vulkan-rt::floor::Capabilities.extensions	pub extensions: Vec<&'static CStr>
 field	metal2vulkan-rt::floor::Capabilities.features	pub features: Features
 field	metal2vulkan-rt::floor::Capabilities.float16	pub float16: bool
 field	metal2vulkan-rt::floor::Capabilities.float64	pub float64: bool
+field	metal2vulkan-rt::floor::Capabilities.maximal_reconvergence	pub maximal_reconvergence: bool
 field	metal2vulkan-rt::floor::Capabilities.memory	pub memory: vk::PhysicalDeviceMemoryProperties
 field	metal2vulkan-rt::floor::Capabilities.queue_family	pub queue_family: u32
 field	metal2vulkan-rt::floor::Capabilities.shared_int64_atomics	pub shared_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.storage_read_without_format	pub storage_read_without_format: bool
+field	metal2vulkan-rt::floor::Capabilities.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: bool
 field	metal2vulkan-rt::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
+field	metal2vulkan-rt::floor::Features.maximal_reconvergence	pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>
+field	metal2vulkan-rt::floor::Features.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.vulkan11	pub vulkan11: vk::PhysicalDeviceVulkan11Features<'static>
 field	metal2vulkan-rt::floor::Features.vulkan12	pub vulkan12: vk::PhysicalDeviceVulkan12Features<'static>
 field	metal2vulkan-rt::floor::Features.vulkan13	pub vulkan13: vk::PhysicalDeviceVulkan13Features<'static>

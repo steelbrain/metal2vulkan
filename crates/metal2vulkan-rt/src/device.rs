@@ -201,7 +201,7 @@ impl Device {
     /// `MTLCreateSystemDefaultDevice`, for the physical device the consumer chose.
     ///
     /// Checks the floor ([`PhysicalDevice::check`]), then makes one `VkDevice` with the floor's
-    /// features and extensions, each of the four query-decided features the device has, and each
+    /// features and extensions, each of the optional features and extensions the device has, and each
     /// of the consumer's extensions ([`DeviceOptions::extensions`]) the device offers with the
     /// features the consumer needs, and chooses its memory types on it. It takes one queue of the floor's queue
     /// family for the runtime and, where that family has a second queue, a queue for presenting;
@@ -218,7 +218,7 @@ impl Device {
         let raw = physical.raw();
         let capabilities = physical.check().map_err(Error::BelowFloor)?;
         // SAFETY: `raw` is the instance's, which was made at the floor's version.
-        let translator = unsafe { translator(vk_instance, raw, &capabilities.features) }?;
+        let translator = unsafe { translator(vk_instance, raw, &capabilities) }?;
         let family = capabilities.queue_family;
         // SAFETY: as above.
         let families = unsafe { vk_instance.get_physical_device_queue_family_properties(raw) };
@@ -237,6 +237,8 @@ impl Device {
             mut vulkan12,
             mut vulkan13,
             mut workgroup_layout,
+            mut maximal_reconvergence,
+            mut subgroup_uniform_control_flow,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -244,6 +246,14 @@ impl Device {
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
             .push_next(&mut workgroup_layout);
+        // An optional extension's structure goes in only where the extension is enabled.
+        let enabled = |name: &std::ffi::CStr| capabilities.extensions.contains(&name);
+        if enabled(ash::khr::shader_maximal_reconvergence::NAME) {
+            features = features.push_next(&mut maximal_reconvergence);
+        }
+        if enabled(ash::khr::shader_subgroup_uniform_control_flow::NAME) {
+            features = features.push_next(&mut subgroup_uniform_control_flow);
+        }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
             .map_err(Error::vulkan("vkEnumerateDeviceExtensionProperties"))?;
@@ -253,7 +263,7 @@ impl Device {
                 vk_instance,
                 raw,
                 &listed,
-                capabilities.extensions,
+                &capabilities.extensions,
                 &options.extensions,
             )
         };
@@ -647,7 +657,7 @@ fn finish(runner: Option<Runner>, core: &Arc<Core>, deadline: Option<Instant>) -
 /// # Safety
 ///
 /// `device` was made with `capabilities.features`, and `family` is its queues' family.
-/// The translator for `raw` with what device creation enables with `features`, under the identity
+/// The translator for `raw` with what device creation enables of `capabilities`, under the identity
 /// domains: a buffer argument is the guest's address of the buffer, a push field, and a texture or
 /// a sampler its resource ID. It is decided by the device's Vulkan queries alone
 /// (`Device::from_queries`): no driver or GPU identity, and no fact measured on one, applies.
@@ -658,13 +668,13 @@ fn finish(runner: Option<Runner>, core: &Arc<Core>, deadline: Option<Instant>) -
 unsafe fn translator(
     instance: &ash::Instance,
     raw: vk::PhysicalDevice,
-    features: &floor::Features,
+    capabilities: &floor::Capabilities,
 ) -> Result<metal2vulkan::device::Device, Error> {
     // SAFETY: the caller's contract.
     let described =
         unsafe { DeviceDescription::query(instance, raw, ApiVersion::from_packed(floor::VERSION)) };
     let description = described
-        .and_then(|description| description.with_enabled(&floor::shader_enables(features)))
+        .and_then(|description| description.with_enabled(&floor::shader_enables(capabilities)))
         .map_err(Error::Translation)?;
     let mut policy = DevicePolicy::default();
     policy.pointer_domain = PointerDomain::Identity;
