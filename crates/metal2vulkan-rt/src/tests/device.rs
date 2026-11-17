@@ -38,7 +38,15 @@ fn the_runtime_takes_the_first_family_that_does_graphics_and_compute() {
         (vec![], None),
     ];
     for (families, expected) in cases {
-        assert_eq!(queue_plan(&families), expected, "{families:?}");
+        let shown: Vec<(u32, u32)> = families
+            .iter()
+            .map(|family| (family.queue_flags.as_raw(), family.queue_count))
+            .collect();
+        assert_eq!(
+            queue_plan(&families),
+            expected,
+            "flags and counts {shown:x?}"
+        );
     }
 }
 
@@ -97,9 +105,9 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
             family
                 .queue_flags
                 .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE),
-            "{name}: family {} is {:?}",
+            "{name}: family {} has flags {:#x}",
             raw.queue_family_index,
-            family.queue_flags
+            family.queue_flags.as_raw()
         );
         let own = family.queue_count >= 2;
         // SAFETY: the device was made with this family's first queue, and its second where `own`.
