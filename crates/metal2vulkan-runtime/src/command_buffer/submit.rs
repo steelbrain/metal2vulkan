@@ -1689,8 +1689,7 @@ impl CommandBufferShared {
         // A last batch's signals name its command buffer, which another queue's command buffer
         // that waits for one completes after; its transition to `Completed` lets them go
         // (`follow.rs`).
-        let follow = (last && !kept.is_empty())
-            .then(|| Arc::new(Follow::new(self.queue.id(), Arc::as_ptr(self) as usize)));
+        let follow = (last && !kept.is_empty()).then(|| Arc::new(Follow::new(self.queue.id())));
         for (event, signal, value) in &kept {
             event.keep(
                 *signal,

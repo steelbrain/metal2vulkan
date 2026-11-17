@@ -6726,22 +6726,24 @@ impl CommandBufferShared {
     /// queue's context: behind a gate its submission handlers open where they have not run
     /// ([`gate_for_handlers`](Self::gate_for_handlers)), plainly otherwise, with one look for a
     /// thread to run it either way. The caller keeps no other reference: once the transition
-    /// ran, the command buffer may go, with its device, on the handler thread.
+    /// ran, the command buffer may go, with its device, on the handler thread. Its place there
+    /// (`Contexts::post`).
     fn post_finished_transition(
         contexts: &Contexts<Item>,
         buffer: Hold<CommandBufferShared>,
         result: Result<(), CommandBufferError>,
-    ) {
+    ) -> u64 {
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         let serves = contexts::serves_here();
         let (gate, queue) = (buffer.gate_for_handlers(contexts), buffer.queue.id());
         let item = Item::Transition(Transition::finished(buffer, result));
-        match gate {
+        let at = match gate {
             Some(gate) => contexts.post_gated(queue, item, gate),
             None => contexts.post(queue, item),
-        }
+        };
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         completion::trace::finished_posted(gate.is_some(), contexts::serves_here() - serves);
+        at
     }
 
     /// Its batch `index` failed at its submission (a host step's recording or the `vkQueueSubmit`
@@ -6880,10 +6882,13 @@ impl CommandBufferShared {
             to: To::Scheduled,
             plain,
             where_seen: plain,
+            may_block: !plain,
         });
         match shared.contexts.run_alone(self.queue.id(), item) {
             Ok(()) => shared.counts.scheduled_where_submitted(),
-            Err(item) => shared.contexts.post(self.queue.id(), item),
+            Err(item) => {
+                shared.contexts.post(self.queue.id(), item);
+            }
         }
     }
 
@@ -6960,9 +6965,9 @@ impl CommandBufferShared {
     ) {
         let contexts = buffer.device.shared().contexts.clone();
         let own = (lock(&buffer.state).release.as_ref()).map(|release| Arc::clone(&release.follow));
-        CommandBufferShared::post_finished_transition(&contexts, buffer, result);
+        let at = CommandBufferShared::post_finished_transition(&contexts, buffer, result);
         if let Some(own) = own {
-            own.posted();
+            own.posted(at);
         }
     }
 
@@ -6978,11 +6983,11 @@ impl CommandBufferShared {
     /// [`post_finished`](Self::post_finished) posts it.
     ///
     /// Where the transition of a command buffer of another queue whose GPU signal it waited for has
-    /// not run up to its completed handlers and leads its context (no item there runs before it),
-    /// its own is posted behind a gate that transition opens there (`Follow::follow`), its place in
-    /// its own context kept: Metal's completion follows the GPU's (`completion.rs`, "After what it
-    /// waited for"). Behind any other item there, Metal runs the other queue's transitions on, and
-    /// so does this.
+    /// not run up to its completed handlers and leads its context (nothing there before it may
+    /// block, `Run::may_block`), its own is posted behind a gate that transition opens there
+    /// (`Follow::follow`), its place in its own context kept: Metal's completion follows the GPU's
+    /// (`completion.rs`, "After what it waited for"). Behind an item there that may block, Metal
+    /// runs the other queue's transitions on, and so does this.
     ///
     /// The waiter takes no handle of the device here, and lets each transition's hold go short of
     /// its command buffer's last reference ([`Transition::run`]): the device's last handle never
@@ -7002,8 +7007,8 @@ impl CommandBufferShared {
             (signallers, own)
         };
         // Its own transition is posted, or runs, below: another queue's command buffer that waited
-        // for its signal may follow it from then on.
-        let posted = || own.iter().for_each(|own| own.posted());
+        // for its signal may follow it once it was posted, at its place.
+        let posted = |at| own.iter().for_each(|own| own.posted(at));
         if !signallers.is_empty() {
             // Closed by this thread until the item is posted behind it.
             let gate = contexts.gate();
@@ -7016,8 +7021,7 @@ impl CommandBufferShared {
             }
             buffer.finish_after_handlers(&contexts, gate);
             let item = Item::Transition(Transition::finished(buffer, result));
-            contexts.post_behind(queue, item, gate);
-            posted();
+            posted(contexts.post_behind(queue, item, gate));
             contexts.open(queue, gate);
             return;
         }
@@ -7038,8 +7042,9 @@ impl CommandBufferShared {
             (seen_first(&state), state.scheduled_owed)
         };
         if owed {
-            CommandBufferShared::post_finished_transition(&contexts, buffer, result);
-            posted();
+            posted(CommandBufferShared::post_finished_transition(
+                &contexts, buffer, result,
+            ));
             return;
         }
         let item = match serving && own.is_none() && seen_first {
@@ -7061,8 +7066,7 @@ impl CommandBufferShared {
             }
             None => item,
         };
-        contexts.post(queue, item.whole());
-        posted();
+        posted(contexts.post(queue, item.whole()));
     }
 
     /// Finish the command buffer with `result` (or the failure of a batch): take the device's
@@ -7514,6 +7518,11 @@ pub(crate) struct Transition {
     /// ([`CommandBuffer::add_completion_seen_handler`]): plain, a transition to `Completed`
     /// with no completed handler, or one that runs to its completion-seen handlers ([`To::Seen`]).
     where_seen: bool,
+    /// It may block a thread that runs it, or wait for the program before it runs
+    /// (`Run::may_block`): it runs a scheduled or completed handler of its command buffer's, or
+    /// waits for a submission handler. Another queue's transition waits behind one that does
+    /// neither (`follow.rs`).
+    may_block: bool,
 }
 
 /// The status a transition goes to.
@@ -7543,18 +7552,22 @@ pub(crate) struct Rest {
 impl Transition {
     /// The transition of the command buffer `buffer` holds to `Completed` or `Error`, with
     /// `result`: it runs where seen where it has no completed handler, and is plain where it has
-    /// no completion-seen handler either (none is added after the commit).
+    /// no completion-seen handler either (none is added after the commit). It may block where it
+    /// has a completed handler, or a scheduled or submission handler not run yet, whose step it
+    /// may run or wait for ([`run_scheduled`](CommandBufferShared::run_scheduled)).
     fn finished(buffer: Hold<CommandBufferShared>, result: Result<(), CommandBufferError>) -> Self {
-        let (where_seen, plain) = {
+        let (where_seen, plain, may_block) = {
             let state = lock(&buffer.state);
             let where_seen = state.completed.is_empty();
-            (where_seen, where_seen && state.seen.is_empty())
+            let may_block = !(where_seen && plain_transition(&state));
+            (where_seen, where_seen && state.seen.is_empty(), may_block)
         };
         Transition {
             buffer,
             to: To::Finished(result),
             plain,
             where_seen,
+            may_block,
         }
     }
 
@@ -7572,6 +7585,7 @@ impl Transition {
             to: To::Seen(result),
             plain: false,
             where_seen: true,
+            may_block: false,
         }
     }
 
@@ -7601,6 +7615,7 @@ impl Transition {
                     to: To::Rest(rest),
                     plain: false,
                     where_seen: false,
+                    may_block: true,
                 });
                 (buffer.device.shared().contexts).post(buffer.queue.id(), rest);
             }
@@ -7675,22 +7690,9 @@ impl Item {
                 to: To::Finished(result),
                 plain: false,
                 where_seen: false,
+                may_block: true,
             }),
             item => item,
-        }
-    }
-
-    /// Whether it is the transition to `Completed` or `Error` of the command buffer at the address
-    /// `buffer` (`follow.rs`). A command buffer whose transition runs to its completion-seen
-    /// handlers where seen ([`To::Seen`]) has no [`Follow`]: no other queue's command buffer
-    /// looks for its transition.
-    fn finishes(&self, buffer: usize) -> bool {
-        match self {
-            Item::Transition(transition) => {
-                let at = Arc::as_ptr(&transition.buffer) as usize;
-                matches!(transition.to, To::Finished(_)) && at == buffer
-            }
-            Item::Release(_) | Item::Submissions(_) => false,
         }
     }
 }
@@ -7723,6 +7725,13 @@ impl Run for Item {
         match self {
             Item::Transition(transition) => transition.where_seen,
             Item::Release(_) | Item::Submissions(_) => false,
+        }
+    }
+
+    fn may_block(&self) -> bool {
+        match self {
+            Item::Transition(transition) => transition.may_block,
+            Item::Release(_) | Item::Submissions(_) => true,
         }
     }
 }

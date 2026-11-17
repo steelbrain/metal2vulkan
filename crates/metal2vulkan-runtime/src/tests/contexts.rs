@@ -13,9 +13,14 @@ use std::time::{Duration, Instant};
 /// The longest any step here may take.
 const WAIT: Duration = Duration::from_secs(20);
 
+/// Lines whose every item may block.
+fn blocking_lines<I>() -> Lines<I> {
+    Lines::new(|_| true)
+}
+
 #[test]
 fn a_line_runs_one_item_at_a_time_in_order_and_others_go_on() {
-    let mut lines = Lines::default();
+    let mut lines = blocking_lines();
     lines.push(1, "a1");
     lines.push(1, "a2");
     lines.push(2, "b1");
@@ -42,18 +47,18 @@ fn a_line_runs_one_item_at_a_time_in_order_and_others_go_on() {
 #[test]
 fn a_line_is_taken_whole_where_it_runs_nowhere_and_holds_only_plain_items() {
     let plain = |item: &&str| !item.ends_with('!');
-    let mut lines = Lines::default();
+    let mut lines = blocking_lines();
     // An idle line: taken, with nothing before.
-    assert_eq!(lines.take_plain(1, plain), Some(VecDeque::new()));
+    assert_eq!(lines.take_plain(1, plain, false), Some(VecDeque::new()));
     lines.push(1, "a1");
     assert!(!lines.is_ready());
-    assert_eq!(lines.take_plain(1, plain), None);
+    assert_eq!(lines.take_plain(1, plain, false), None);
     lines.done(1);
     // A line holding plain items, on no thread: taken with them, in order.
     lines.push(1, "a2");
     assert_eq!(lines.ready(), 1);
     assert_eq!(
-        lines.take_plain(1, plain),
+        lines.take_plain(1, plain, false),
         Some(VecDeque::from(["a1", "a2"]))
     );
     assert!(!lines.is_ready());
@@ -62,10 +67,10 @@ fn a_line_is_taken_whole_where_it_runs_nowhere_and_holds_only_plain_items() {
     // A line holding an item that is not plain stays as it is.
     lines.push(2, "b1!");
     lines.push(2, "b2");
-    assert_eq!(lines.take_plain(2, plain), None);
+    assert_eq!(lines.take_plain(2, plain, false), None);
     assert_eq!(lines.take(), Some((2, "b1!")));
     // So does a line a thread runs.
-    assert_eq!(lines.take_plain(2, plain), None);
+    assert_eq!(lines.take_plain(2, plain, false), None);
     lines.done(2);
     assert_eq!(lines.take(), Some((2, "b2")));
     lines.done(2);
@@ -76,25 +81,25 @@ fn a_line_is_taken_whole_where_it_runs_nowhere_and_holds_only_plain_items() {
 /// items pushed meanwhile wait for its end.
 #[test]
 fn an_idle_line_alone_is_taken_for_the_calling_thread() {
-    let mut lines = Lines::default();
-    assert!(lines.take_idle(1));
+    let mut lines = blocking_lines();
+    assert!(lines.take_idle(1, false));
     lines.push(1, "a1");
     assert!(!lines.is_ready());
-    assert!(!lines.take_idle(1));
+    assert!(!lines.take_idle(1, false));
     lines.done(1);
     // A line holding an item, plain or not, stays as it is.
     assert_eq!(lines.ready(), 1);
-    assert!(!lines.take_idle(1));
+    assert!(!lines.take_idle(1, false));
     assert_eq!(lines.take(), Some((1, "a1")));
     // So does a line a thread runs.
-    assert!(!lines.take_idle(1));
+    assert!(!lines.take_idle(1, false));
     lines.done(1);
     assert!(lines.is_empty());
 }
 
 #[test]
 fn ready_lines_are_taken_in_the_order_they_became_ready() {
-    let mut lines = Lines::default();
+    let mut lines = blocking_lines();
     for queue in [3, 1, 2] {
         lines.push(queue, queue);
     }
@@ -108,7 +113,7 @@ fn ready_lines_are_taken_in_the_order_they_became_ready() {
 #[test]
 fn an_item_behind_a_gate_holds_its_line_until_every_closing_is_opened() {
     let plain = |_: &&str| true;
-    let mut lines = Lines::default();
+    let mut lines = blocking_lines();
     lines.push(1, "a1");
     lines.close_new(7);
     assert!(lines.close(7), "closed again while closed");
@@ -121,7 +126,7 @@ fn an_item_behind_a_gate_holds_its_line_until_every_closing_is_opened() {
     assert_eq!(lines.take(), Some((2, "b1")));
     lines.done(2);
     assert_eq!(lines.take(), None);
-    assert_eq!(lines.take_plain(1, plain), None);
+    assert_eq!(lines.take_plain(1, plain, false), None);
     lines.open(1, 7);
     assert_eq!(lines.take(), None, "one closing is left");
     lines.open(1, 7);
@@ -148,28 +153,104 @@ fn an_item_behind_a_gate_holds_its_line_until_every_closing_is_opened() {
     assert!(lines.is_empty());
 }
 
-/// An item leads its line where it is the first and no thread runs the line, or where it was
-/// pushed, a thread runs the line and no item left is it (the thread runs it); one not pushed yet
-/// leads no running line.
+/// An item leads its line where it is the first, run by a thread or not, or, where no item that
+/// may block was pushed there before it, at any place; behind an item that may block, it leads
+/// only once that ran. Each item takes the next place, whatever its line.
 #[test]
 fn an_item_leads_its_line_with_nothing_before_it() {
-    let mut lines = Lines::default();
-    let leads =
-        |lines: &Lines<&str>, name: &str, posted| lines.leads(1, |item| *item == name, posted);
-    assert!(!leads(&lines, "a2", true), "no line");
-    lines.push(1, "a1");
-    assert!(leads(&lines, "a1", true));
+    let mut lines = blocking_lines();
+    assert!(!lines.leads(1, 1), "no line");
+    let a1 = lines.push(1, "a1");
+    assert_eq!(a1, 1);
+    assert!(lines.leads(1, a1));
     assert_eq!(lines.take(), Some((1, "a1")));
-    // a1 runs: it leads; a2, not pushed yet, does not.
-    assert!(leads(&lines, "a1", true));
-    assert!(!leads(&lines, "a2", false));
-    lines.push(1, "a2");
-    assert!(!leads(&lines, "a2", true), "a2 waits behind a1");
+    // a1 runs: it leads.
+    assert!(lines.leads(1, a1));
+    let b1 = lines.push(2, "b1");
+    let a2 = lines.push(1, "a2");
+    assert_eq!((b1, a2), (2, 3));
+    assert!(!lines.leads(1, a2), "a2 waits behind a1, which may block");
     lines.done(1);
-    assert!(leads(&lines, "a2", true));
+    assert!(lines.leads(1, a2));
+    assert_eq!(lines.take(), Some((2, "b1")));
     assert_eq!(lines.take(), Some((1, "a2")));
-    assert!(leads(&lines, "a2", true));
+    assert!(lines.leads(1, a2));
     lines.done(1);
+    lines.done(2);
+    assert!(lines.is_empty());
+}
+
+/// An item leads its line behind items that may not block, waiting there or run by a thread,
+/// however many: not behind one that may, waiting or run, before it; one that may after it
+/// changes nothing. A line taken whole or held idle for what may not block is led past too.
+#[test]
+fn an_item_leads_its_line_behind_what_may_not_block() {
+    let mut lines: Lines<&str> = Lines::new(|item| item.ends_with('!'));
+    lines.push(1, "a1");
+    let a2 = lines.push(1, "a2");
+    let a3 = lines.push(1, "a3!");
+    let a4 = lines.push(1, "a4");
+    let a5 = lines.push(1, "a5!");
+    assert!(lines.leads(1, a2), "behind a1, which may not block");
+    assert!(lines.leads(1, a3), "itself may block: led past a1 and a2");
+    assert!(!lines.leads(1, a4), "behind a3, which may block");
+    assert_eq!(lines.take(), Some((1, "a1")));
+    // a1 runs.
+    assert!(lines.leads(1, a2) && lines.leads(1, a3));
+    lines.done(1);
+    assert_eq!(lines.take(), Some((1, "a2")));
+    lines.done(1);
+    assert_eq!(lines.take(), Some((1, "a3!")));
+    // a3 runs, and may block: a4 waits behind it.
+    assert!(!lines.leads(1, a4));
+    lines.done(1);
+    assert!(lines.leads(1, a4), "a5 after it changes nothing");
+    assert!(lines.leads(1, a5), "behind a4, which may not block");
+    assert_eq!(lines.take(), Some((1, "a4")));
+    assert!(lines.leads(1, a5), "behind a4 running, which may not block");
+    lines.done(1);
+    assert_eq!(lines.take(), Some((1, "a5!")));
+    lines.done(1);
+    assert!(lines.is_empty());
+    // A line taken whole for what may not block, and for what may.
+    let plain = |_: &&str| true;
+    lines.push(2, "b1");
+    assert_eq!(
+        lines.take_plain(2, plain, false),
+        Some(VecDeque::from(["b1"]))
+    );
+    let b2 = lines.push(2, "b2");
+    assert!(lines.leads(2, b2), "the thread runs what may not block");
+    lines.done(2);
+    lines.push(2, "b3!");
+    assert_eq!(
+        lines.take_plain(2, plain, false),
+        Some(VecDeque::from(["b2", "b3!"]))
+    );
+    let b4 = lines.push(2, "b4");
+    assert!(!lines.leads(2, b4), "the thread runs b3, which may block");
+    lines.done(2);
+    assert_eq!(lines.take(), Some((2, "b4")));
+    lines.done(2);
+    assert_eq!(lines.take_plain(2, plain, true), Some(VecDeque::new()));
+    let b5 = lines.push(2, "b5");
+    assert!(!lines.leads(2, b5), "the thread runs what may block");
+    lines.done(2);
+    assert_eq!(lines.take(), Some((2, "b5")));
+    lines.done(2);
+    // A line held idle, for what may not block and for what may.
+    for blocks in [false, true] {
+        assert!(lines.take_idle(3, blocks));
+        let c = lines.push(3, "c");
+        assert_eq!(
+            lines.leads(3, c),
+            !blocks,
+            "held for what may block: {blocks}"
+        );
+        lines.done(3);
+        assert_eq!(lines.take(), Some((3, "c")));
+        lines.done(3);
+    }
     assert!(lines.is_empty());
 }
 
@@ -417,7 +498,6 @@ fn a_plain_item_runs_alone_only_where_its_context_is_idle() {
 /// waits for the test to go on, as a transition's hold opens its command buffer's gate as it goes
 /// (`Run::Held`). Plain, so a thread that runs its context itself may run it.
 struct Ends {
-    name: &'static str,
     told: Option<Tell>,
 }
 
@@ -452,14 +532,14 @@ impl Run for Ends {
 }
 
 /// An [`Ends`] that tells, with the test's ends of its channels: told as it ends, and the go-on.
-fn telling(name: &'static str) -> (Ends, mpsc::Receiver<()>, mpsc::Sender<()>) {
+fn telling() -> (Ends, mpsc::Receiver<()>, mpsc::Sender<()>) {
     let (ended, ends) = mpsc::channel();
     let (go_on, goes_on) = mpsc::channel();
     let told = Some(Tell {
         ended,
         go_on: goes_on,
     });
-    (Ends { name, told }, ends, go_on)
+    (Ends { told }, ends, go_on)
 }
 
 /// An item's context is done with it before what it still holds goes (`Run::Held`), on the
@@ -472,20 +552,18 @@ fn telling(name: &'static str) -> (Ends, mpsc::Receiver<()>, mpsc::Sender<()>) {
 #[test]
 fn an_item_s_context_is_done_with_it_before_what_it_held_goes() {
     let contexts: Contexts<Ends> = Contexts::start(1).unwrap();
-    let leads =
-        |queue, name: &'static str| contexts.leads(queue, |item: &Ends| item.name == name, true);
-    let quiet = |name| Ends { name, told: None };
-    let (first, ends, go_on) = telling("first");
+    let quiet = || Ends { told: None };
+    let (first, ends, go_on) = telling();
     contexts.post(1, first);
     ends.recv_timeout(WAIT).unwrap();
-    contexts.post(1, quiet("next"));
+    let next = contexts.post(1, quiet());
     assert!(
-        leads(1, "next"),
+        contexts.leads(1, next),
         "the pool's thread holds the context still"
     );
     for (queue, alone) in [(2, false), (3, true)] {
-        let (item, ends, item_goes_on) = telling("here");
-        let (earlier, earlier_ends, earlier_goes_on) = telling("earlier");
+        let (item, ends, item_goes_on) = telling();
+        let (earlier, earlier_ends, earlier_goes_on) = telling();
         let here = {
             let contexts = contexts.clone();
             std::thread::spawn(move || match alone {
@@ -501,9 +579,9 @@ fn an_item_s_context_is_done_with_it_before_what_it_held_goes() {
             earlier_goes_on.send(()).unwrap();
         }
         ends.recv_timeout(WAIT).unwrap();
-        contexts.post(queue, quiet("next"));
+        let next = contexts.post(queue, quiet());
         assert!(
-            leads(queue, "next"),
+            contexts.leads(queue, next),
             "the thread that ran it holds the context still (alone: {alone})"
         );
         item_goes_on.send(()).unwrap();

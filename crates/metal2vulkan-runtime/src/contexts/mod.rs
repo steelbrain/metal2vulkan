@@ -20,8 +20,9 @@
 //!   no queue's handlers. A transition to `Completed` of a command buffer that waited on the GPU
 //!   for another queue's command buffer may be posted behind a gate ([`Contexts::gate`],
 //!   [`Contexts::post_behind`]), its place in its context kept, until that command buffer's
-//!   transition, which leads its own context ([`Contexts::leads`]), reaches its handlers
-//!   (`command_buffer/follow.rs`): a gate holds no thread.
+//!   transition, which nothing that may block precedes in its own context ([`Contexts::leads`],
+//!   [`Run::may_block`]), reaches its handlers (`command_buffer/follow.rs`): a gate holds no
+//!   thread.
 //! - **Done with an item before what it held goes.** The thread that ran an item marks its context
 //!   done with it, and only then lets go of what the item still holds ([`Run::Held`]): a
 //!   transition's hold of its command buffer, whose going lets that command buffer's waiters
@@ -135,6 +136,15 @@ pub(crate) trait Run: Send + 'static {
     fn runs_where_seen(&self) -> bool {
         self.plain()
     }
+
+    /// Whether the item may block a thread that runs it, or wait for the program before it runs:
+    /// it runs a handler of the program's other than its completion-seen handlers, which never
+    /// block, or waits for one (a scheduled, submission or completed handler). Every item may by
+    /// default. A transition of another queue waits behind one that may not
+    /// (`command_buffer/follow.rs`).
+    fn may_block(&self) -> bool {
+        true
+    }
 }
 
 /// One device's handler threads. A clone is another handle of the same pool, which holds nothing
@@ -225,7 +235,7 @@ impl<I: Run> Contexts<I> {
     pub(crate) fn start(limit: usize) -> Result<Contexts<I>, Error> {
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
-                lines: Lines::default(),
+                lines: Lines::new(|item: &I| item.may_block()),
                 gates: 0,
                 free: 1,
                 parked: 0,
@@ -259,11 +269,12 @@ impl<I: Run> Contexts<I> {
     }
 
     /// Append `item` to the context of logical queue `queue`; start a thread when a context is
-    /// ready that no free thread will take, below the cap.
-    pub(crate) fn post(&self, queue: u64, item: I) {
+    /// ready that no free thread will take, below the cap. Its place there ([`Lines::push`]).
+    pub(crate) fn post(&self, queue: u64, item: I) -> u64 {
         let mut state = lock(&self.shared.state);
-        state.lines.push(queue, item);
+        let place = state.lines.push(queue, item);
         self.serve(state);
+        place
     }
 
     /// Run `item` in the context of logical queue `queue` on this thread, after the items that
@@ -276,7 +287,11 @@ impl<I: Run> Contexts<I> {
         if !may_run(&item) {
             return Err(item);
         }
-        let Some(before) = lock(&self.shared.state).lines.take_plain(queue, may_run) else {
+        let blocks = item.may_block();
+        let taken = lock(&self.shared.state)
+            .lines
+            .take_plain(queue, may_run, blocks);
+        let Some(before) = taken else {
             return Err(item);
         };
         let earlier: Vec<I::Held> = before.into_iter().map(Run::run).collect();
@@ -301,22 +316,24 @@ impl<I: Run> Contexts<I> {
 
     /// Append `item` to the context of logical queue `queue` behind the gate `token`
     /// ([`Contexts::gate`]): the item keeps its place in its context, and it and the items after it
-    /// run once the gate is open.
-    pub(crate) fn post_behind(&self, queue: u64, item: I, token: u64) {
+    /// run once the gate is open. Its place there ([`Lines::push`]).
+    pub(crate) fn post_behind(&self, queue: u64, item: I, token: u64) -> u64 {
         let mut state = lock(&self.shared.state);
-        state.lines.push_behind(queue, item, token);
+        let place = state.lines.push_behind(queue, item, token);
         self.serve(state);
+        place
     }
 
     /// Append `item` to the context of logical queue `queue` behind the gate `token`
     /// ([`Contexts::gate`]) and open the caller's closing of it, under one lock: one look for a
     /// thread to run it ([`post_behind`](Self::post_behind) and [`open`](Self::open) make one
-    /// each). It runs in its turn once the gate's other closings opened.
-    pub(crate) fn post_gated(&self, queue: u64, item: I, token: u64) {
+    /// each). It runs in its turn once the gate's other closings opened. Its place there.
+    pub(crate) fn post_gated(&self, queue: u64, item: I, token: u64) -> u64 {
         let mut state = lock(&self.shared.state);
-        state.lines.push_behind(queue, item, token);
+        let place = state.lines.push_behind(queue, item, token);
         state.lines.open(queue, token);
         self.serve(state);
+        place
     }
 
     /// Close the gate `token` once more, where it is not open yet: whether it was not.
@@ -332,10 +349,11 @@ impl<I: Run> Contexts<I> {
         self.serve(state);
     }
 
-    /// Whether the item `is` picks out leads the context of `queue`: no item of the context runs
-    /// before it ([`Lines::leads`]; `posted` where the caller knows it was posted there).
-    pub(crate) fn leads(&self, queue: u64, is: impl Fn(&I) -> bool, posted: bool) -> bool {
-        lock(&self.shared.state).lines.leads(queue, is, posted)
+    /// Whether the item posted at the place `at` in the context of `queue`, which the caller knows
+    /// is not done, leads it: nothing there that may block runs before it ([`Lines::leads`],
+    /// [`Run::may_block`]).
+    pub(crate) fn leads(&self, queue: u64, at: u64) -> bool {
+        lock(&self.shared.state).lines.leads(queue, at)
     }
 
     /// Hold the context of logical queue `queue`, which holds no item and runs on no thread (a
@@ -343,7 +361,8 @@ impl<I: Run> Contexts<I> {
     /// there waits until [`release`](Self::release). False where it held an item or ran, changing
     /// nothing.
     pub(crate) fn hold(&self, queue: u64) -> bool {
-        lock(&self.shared.state).lines.take_idle(queue)
+        // What it waits for may run the program's handlers.
+        lock(&self.shared.state).lines.take_idle(queue, true)
     }
 
     /// Let the context [`hold`](Self::hold) held run what was posted there meanwhile, in order.
@@ -358,7 +377,8 @@ impl<I: Run> Contexts<I> {
     /// this thread meanwhile, so the items posted to it wait for `item`, then run on the pool's
     /// threads. Else give `item` back, changing nothing.
     pub(crate) fn run_alone(&self, queue: u64, item: I) -> Result<(), I> {
-        if !item.plain() || !lock(&self.shared.state).lines.take_idle(queue) {
+        let blocks = item.may_block();
+        if !item.plain() || !lock(&self.shared.state).lines.take_idle(queue, blocks) {
             return Err(item);
         }
         let held = item.run();

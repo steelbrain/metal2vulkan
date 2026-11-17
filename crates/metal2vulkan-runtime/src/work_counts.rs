@@ -6863,7 +6863,8 @@ pub struct WorkCounts {
     pub batches_held_for_another_queue: u64,
     /// Command buffers whose transition to `Completed` waited, its place in its queue's context
     /// kept, for the transition of another queue's command buffer whose GPU signal it waited for
-    /// to reach its handlers, where that transition led its own context
+    /// to reach its handlers, where nothing that may block (a handler of the program's other than
+    /// its completion-seen handlers) came before that transition in its own context
     /// (`CommandBufferShared::finish_here`): Metal's completion follows the GPU's.
     pub command_buffers_completed_after_another_queue: u64,
     /// Completion-seen handlers run (`CommandBuffer::add_completion_seen_handler`), each as its

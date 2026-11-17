@@ -328,7 +328,8 @@ fn a_handler_thread_held_off_the_cpu_after_a_wait_returned_keeps_the_order() {
 /// behind it, as Metal's does; B, which waited on the GPU for A's signal, still completes and runs
 /// its completion-seen handler, A short of `Completed`: Metal runs another queue's transitions
 /// while one queue's handler blocks, so B's waits for A's only where A's leads its context
-/// (`WorkCounts::command_buffers_completed_after_another_queue`), never behind another item.
+/// (`WorkCounts::command_buffers_completed_after_another_queue`), never behind an item that may
+/// block.
 #[test]
 fn a_blocked_handler_of_the_signaller_s_queue_holds_back_the_signaller_and_not_the_waiter() {
     let device = device();

@@ -1704,8 +1704,11 @@ struct KeptSignalWait {
     /// Whether `X`'s group went while `B` still ran (at `A`'s completion turn); `None` where no
     /// group went before `B` completed and the wait gave up.
     sent_while_b_ran: Option<bool>,
-    /// From `X`'s completed handler to `Y`'s.
-    y_after_x: Option<std::time::Duration>,
+    /// `X`'s status as `Y`'s completed handler ran; `None` where it never ran.
+    x_at_y: Option<CommandBufferStatus>,
+    /// `Y`'s GPU start less `X`'s GPU end, in seconds, where the device's own timestamps placed
+    /// both (it announced neither `UncalibratedGpuTimes` nor `GpuTimesFromHost`).
+    gpu_gap: Option<f64>,
     /// The groups from `Y`'s take-in by what sent them ([`group_ends`]).
     ends: [u64; 9],
 }
@@ -1765,16 +1768,6 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
             blit.end_encoding().unwrap();
             command_buffer
         };
-        let completed_at = |command_buffer: &CommandBuffer| {
-            let at = Arc::new(Mutex::new(None));
-            let seen = Arc::clone(&at);
-            command_buffer
-                .add_completed_handler(Box::new(move |_: &CommandBuffer| {
-                    *seen.lock().unwrap() = Some(std::time::Instant::now());
-                }))
-                .unwrap();
-            at
-        };
         // `A`, then `B` behind it, each submitted as it is taken in: two submissions in flight.
         let running = long();
         running.commit().unwrap();
@@ -1790,7 +1783,10 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
         blit.fill_buffer(&buffers[0], 0..BYTES, 1).unwrap();
         blit.end_encoding().unwrap();
         x.encode_signal_event(EventRef::from(&event), 1).unwrap();
-        let x_completed = completed_at(&x);
+        // A completed handler, which may block: `X`'s transition runs on its queue's handler
+        // thread, which `Y`'s waits for.
+        x.add_completed_handler(Box::new(|_: &CommandBuffer| {}))
+            .unwrap();
         x.commit().unwrap();
         taken_in(&device);
         x.wait_until_scheduled().unwrap();
@@ -1801,7 +1797,14 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
         let mut blit = y.blit_command_encoder().unwrap();
         blit.fill_buffer(&buffers[1], 0..BYTES, 2).unwrap();
         blit.end_encoding().unwrap();
-        let y_completed = completed_at(&y);
+        let x_at_y: Arc<Mutex<Option<CommandBufferStatus>>> = Arc::default();
+        {
+            let (x, seen) = (x.clone(), Arc::clone(&x_at_y));
+            y.add_completed_handler(Box::new(move |_: &CommandBuffer| {
+                *seen.lock().unwrap() = Some(x.status());
+            }))
+            .unwrap();
+        }
         y.commit().unwrap();
         taken_in(&device);
         let taken = device.work_counts();
@@ -1838,9 +1841,13 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
                 .count();
             assert_eq!(wrong, 0, "buffer {at}: bytes off its fill");
         }
-        let y_after_x = (*y_completed.lock().unwrap())
-            .zip(*x_completed.lock().unwrap())
-            .and_then(|(y, x)| y.checked_duration_since(x));
+        // Read before the notices: a device announces how it times command buffers as it first
+        // times one.
+        let times = (x.gpu_end_time().ok()).zip(y.gpu_start_time().ok());
+        let timed = !messages.announced(Degradation::UncalibratedGpuTimes)
+            && !messages.announced(Degradation::GpuTimesFromHost);
+        // A wait returns once the command buffer's completed handlers ran.
+        let x_at_y = *x_at_y.lock().unwrap();
         KeptSignalWait {
             device: device.name().to_owned(),
             merging,
@@ -1849,7 +1856,8 @@ fn behind_a_kept_signal(stretch: usize) -> KeptSignalWait {
             kept,
             a_ran,
             sent_while_b_ran,
-            y_after_x,
+            x_at_y,
+            gpu_gap: (times.filter(|_| timed)).map(|(x_end, y_start)| y_start - x_end),
             ends: group_ends(&taken, &device.work_counts()),
         }
     };
@@ -1886,9 +1894,21 @@ fn a_shared_event_wait_for_a_kept_group_s_signal_ends_at_the_next_completion_tur
         stretch *= 2;
         eprintln!("GROUPED-KEPT-SIGNAL: A ended before Y was taken in: A {stretch} times as long");
     };
+    // `Y` completes after `X`, whose signal its work waited for: `X` reads `Completed` in `Y`'s
+    // completed handler, the runtime's host threads however slow (its `command_buffer/follow.rs`).
+    // Which of the two handlers starts first is not checked: they run on two threads, in no
+    // guaranteed order, as on Metal, where an M3 Max under macOS 27.0.1 started the waiter's
+    // completed handler first in up to 6% of rounds with a plain event and 0.1% with a shared one
+    // (a probe of the same shape: a fill signalling an event, another queue's fill waiting for
+    // it, 2000 rounds a row).
+    assert_eq!(
+        seen.x_at_y,
+        Some(CommandBufferStatus::Completed),
+        "Y completed while X, whose signal it waits for, read short of Completed: {seen:?}"
+    );
     assert!(
-        seen.y_after_x.is_some(),
-        "Y completed before X, whose signal it waits for: {seen:?}"
+        seen.gpu_gap.is_none_or(|gap| gap >= 0.0),
+        "Y's GPU work began before X's, whose signal it waits for, ended: {seen:?}"
     );
     if !seen.grouping {
         assert_eq!(
