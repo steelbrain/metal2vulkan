@@ -885,9 +885,19 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   it, the least for each invocation walking a 1 KiB window, the most for each workgroup walking
   4 KiB; RADV on the Radeon 780M 0.93 and 0.97 for the uniform reads). Both may hold: a slot
   with a per-lane read then keeps its storage view, one with indexed reads all uniform takes the
-  texel view, and one read at constant offsets alone keeps its uniform buffer. `Unchecked`, never fatal, with no fact, where the device writes no timestamps
-  the host reads or refuses any part of it. It holds 4 KiB and 64 KiB of the device's memory and
-  64 KiB of host pages while it runs. Until it answers, pipelines compile with the profile of the
+  texel view, and one read at constant offsets alone keeps its uniform buffer. `Unchecked`, never
+  fatal, with no fact, where the device writes no timestamps the host reads or refuses any part of
+  it. Measured on six devices (jobs m3-max-38378, 38379, 38380, 38382, 38389 and 38359): the
+  RTX 3090 and the RTX 2080 take `UniformBufferPerLaneReadsSerialize` alone (per-lane 0.073 and
+  0.102; the texel buffer 2.20 to 2.26 and 2.26 to 2.72 times the uniform buffer over imported
+  pages); the Iris Xe of RPL-P takes `ExternalUniformReadsSkipACache` alone (per-lane 4.84; the
+  texel buffer 0.22 to 0.76); the Radeon 780M, the RX 7900 XTX and lavapipe take neither (the
+  texel buffer 0.93 to 1.00, 0.99 to 1.41 and 0.86 to 1.84). It holds 4 KiB and 64 KiB of the
+  device's memory and 64 KiB of host pages while it runs. A cold run took 28 ms (RX 7900 XTX),
+  75 ms (Radeon 780M), 101 ms (RTX 3090), 134 ms (Iris Xe) and 136 ms (RTX 2080) from its
+  thread's start to its answer, 268 ms on lavapipe, of which its 24 arms' medians times its eight
+  rounds are 7.9, 17.0, 8.9, 43.2 and 12.5 ms of GPU time; a warm one reads its record and runs no
+  check. Until it answers, pipelines compile with the profile of the
   device's identity alone (a uniform view stays a uniform buffer); once it answers with a fact,
   every compile from then on takes the profile with those facts measured
   (`Device::compile_device`), whose fingerprint, and so every shader cache key, differs; a
