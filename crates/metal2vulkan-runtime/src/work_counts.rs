@@ -387,6 +387,8 @@ pub(crate) struct Counters {
     submit_check_calls: AtomicU64,
     check_steps_aside: AtomicU64,
     check_aside_nanos: AtomicU64,
+    view_check_stand_bys: AtomicU64,
+    view_check_stand_by_nanos: AtomicU64,
     check_queue_submissions: AtomicU64,
     queue_sharing_untimed: AtomicU64,
     slot_wait_nanos: AtomicU64,
@@ -4030,6 +4032,14 @@ impl Counters {
         self.check_aside_nanos.fetch_add(nanos, Ordering::Relaxed);
     }
 
+    /// A step of the device's view check stood by for `waited` until the device's work was quiet
+    /// (`view_check.rs`).
+    pub(crate) fn view_check_stood_by(&self, waited: std::time::Duration) {
+        self.view_check_stand_bys.fetch_add(1, Ordering::Relaxed);
+        let nanos = u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX);
+        (self.view_check_stand_by_nanos).fetch_add(nanos, Ordering::Relaxed);
+    }
+
     /// A device that could share `VkQueue`s does not: its command buffers write no timestamps it
     /// reads (`queue_switch_check::timed`).
     pub(crate) fn queue_sharing_untimed(&self) {
@@ -6653,6 +6663,13 @@ pub struct DeviceCheckWork {
     pub steps_aside: u64,
     /// The nanoseconds those steps waited, in all.
     pub aside_nanos: u64,
+    /// Steps of the device's view check (a kernel's making, a timed dispatch) that stood by for
+    /// the device's work before they went on: until no batch committed waited for its submission,
+    /// none submitted was in flight and no use of a `VkQueue` had been under way for a while
+    /// (`view_check.rs`).
+    pub view_check_stand_bys: u64,
+    /// The nanoseconds those steps stood by, in all.
+    pub view_check_stand_by_nanos: u64,
 }
 
 /// What a device's commit path did so far (`Device::work_counts`), for the lanes: not part of the
@@ -12725,6 +12742,9 @@ impl Device {
                     queue_submissions: counters.check_queue_submissions.load(Ordering::Relaxed),
                     steps_aside: counters.check_steps_aside.load(Ordering::Relaxed),
                     aside_nanos: counters.check_aside_nanos.load(Ordering::Relaxed),
+                    view_check_stand_bys: counters.view_check_stand_bys.load(Ordering::Relaxed),
+                    view_check_stand_by_nanos: (counters.view_check_stand_by_nanos)
+                        .load(Ordering::Relaxed),
                 }
             },
             queue_sharing_untimed: counters.queue_sharing_untimed.load(Ordering::Relaxed),

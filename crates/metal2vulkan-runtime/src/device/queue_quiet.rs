@@ -53,6 +53,20 @@ impl QueueQuiet {
         self.in_use.fetch_add(1, Ordering::AcqRel);
     }
 
+    /// How long no use has been under way: `None` while one is, the time since the last one ended
+    /// otherwise, [`Duration::MAX`] before the first.
+    pub(crate) fn unused_for(&self) -> Option<Duration> {
+        if self.in_use.load(Ordering::Acquire) > 0 {
+            return None;
+        }
+        match self.ended_at.load(Ordering::Acquire) {
+            0 => Some(Duration::MAX),
+            ended_at => Some(Duration::from_nanos(
+                gpu_time::host_nanos().saturating_sub(ended_at),
+            )),
+        }
+    }
+
     /// A use that [began](Self::began) ends.
     pub(crate) fn ended(&self) {
         self.ended_at

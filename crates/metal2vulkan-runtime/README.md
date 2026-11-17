@@ -870,7 +870,12 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `Device::view_check_report`: the device's view check, which decides the two view cost facts
   translation takes (`DeviceDescription::measured`) from the device's own timings, never from its
   driver or GPU identity. It starts as the device is made, on a thread of its own, and no call
-  waits for it but `settle_view_check`. Eight kernels of 256 workgroups of 64 invocations each read
+  waits for it but `settle_view_check`. The device's work never waits on it: before each kernel's
+  making it stands by until no command buffer committed waits for its submission, none is in
+  flight and no `VkQueue` has been used for 20 ms since its start, and before each timed dispatch
+  for 1 ms, so a device whose work never pauses that long gets its answer once it does
+  (`WorkCounts::device_checks`, `view_check_stand_bys`); it stands by for no one while
+  `settle_view_check` waits. Eight kernels of 256 workgroups of 64 invocations each read
   a 1 KiB and a 4 KiB window 256 times through a uniform buffer, a storage buffer and a uniform
   texel buffer, every invocation the same vector at each step, each its own, or two fixed ones;
   the window lies in the device's memory, and the uniform and per-lane reads through the uniform

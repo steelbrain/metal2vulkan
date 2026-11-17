@@ -107,7 +107,7 @@ use staging::Role;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use submit::{Internal, OwnTimeline};
 
 /// A Metal device (`MTLDevice`) on a Vulkan device. Cheap to clone (a retain); `Send + Sync`.
@@ -895,6 +895,20 @@ impl DeviceShared {
             set => set,
         };
         self.queues[queue].calls.slow(bound)
+    }
+
+    /// How long the device's work has been quiet, for a step of its view check that the work
+    /// must never wait on (`view_check.rs`): `None` while a batch committed waits for its
+    /// submission, a batch submitted is not seen complete on its `VkQueue`, or a use of one of
+    /// its `VkQueue`s is under way; else the time since the last such use ended
+    /// (`queue_quiet.rs`).
+    pub(crate) fn work_quiet_for(&self) -> Option<Duration> {
+        let in_flight =
+            (self.queues.iter()).any(|slot| slot.completed_value() < slot.submitted_value());
+        if in_flight || !self.scheduler.holds_none() {
+            return None;
+        }
+        self.queue_quiet.unused_for()
     }
 }
 

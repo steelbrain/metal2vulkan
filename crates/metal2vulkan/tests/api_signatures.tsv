@@ -2213,6 +2213,8 @@ field	metal2vulkan-runtime::DegradeNotice.reason	pub reason: String
 field	metal2vulkan-runtime::DeviceCheckWork.aside_nanos	pub aside_nanos: u64
 field	metal2vulkan-runtime::DeviceCheckWork.queue_submissions	pub queue_submissions: u64
 field	metal2vulkan-runtime::DeviceCheckWork.steps_aside	pub steps_aside: u64
+field	metal2vulkan-runtime::DeviceCheckWork.view_check_stand_by_nanos	pub view_check_stand_by_nanos: u64
+field	metal2vulkan-runtime::DeviceCheckWork.view_check_stand_bys	pub view_check_stand_bys: u64
 field	metal2vulkan-runtime::DeviceCheckWork.vk_buffer_bindings	pub vk_buffer_bindings: u64
 field	metal2vulkan-runtime::DeviceCheckWork.vk_buffer_views_destroyed	pub vk_buffer_views_destroyed: u64
 field	metal2vulkan-runtime::DeviceCheckWork.vk_buffers_destroyed	pub vk_buffers_destroyed: u64

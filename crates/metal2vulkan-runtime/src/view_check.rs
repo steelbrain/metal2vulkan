@@ -63,12 +63,30 @@
 //!   runtime's ([`record_name`]): its medians, from which the facts are worked out again as it is
 //!   read. A device of the same driver and release reads it as it is made and runs no check. An
 //!   unchecked answer is kept nowhere.
+//! - **Never beside the device's work.** It runs from the device's making, where a program's
+//!   first work begins, and its steps are ones that work could wait on: a kernel's making holds
+//!   the driver for as long as it compiles, and a timed dispatch is an internal submission, which
+//!   holds the device's internal lock and its first `VkQueue` until the GPU ran it
+//!   (`Device::submit_internal`). Beside the runtime lane on the RTX 5080 Laptop GPU, its kernels'
+//!   making took 833 ms in all, and another queue's command buffer committed meanwhile read
+//!   `Scheduled` 103.2 ms after its commit. So before each kernel's making and each timed
+//!   dispatch it stands by ([`stand_by`]) until the device's work is quiet
+//!   (`DeviceShared::work_quiet_for`): no batch committed waits for its submission, none
+//!   submitted is in flight, and no use of a `VkQueue` has been under way for [`COMPILE_QUIET`]
+//!   before a making (one cannot stop once begun) or [`ARM_QUIET`] before a dispatch, counted
+//!   from no earlier than the check's start (a program's first work comes right after the
+//!   device's making). A device
+//!   whose work never pauses that long gets its answer once it does; until then translation takes
+//!   no fact. It stands by for no one while a call waits for its answer
+//!   (`Device::settle_view_check`). Counted: `WorkCounts::device_checks`
+//!   (`view_check_stand_bys`, `view_check_stand_by_nanos`).
 //! - **Out of the device's way, and its thread**, as the tiling-cost check's
-//!   (`tiling_check.rs`): it steps aside before each round for the device's allocations and frees
-//!   on other threads (`step_aside.rs`), at once while a call waits for its answer; each round's
-//!   Vulkan work runs inside a section of the exit guard; it holds its device through the registry
-//!   of the runtime's holds (`device/holds.rs`), reading the stop before each round; and its
-//!   submissions are counted as the checks' (`WorkCounts::device_checks`).
+//!   (`tiling_check.rs`): it steps aside before each kernel's making and each round for the
+//!   device's allocations and frees on other threads (`step_aside.rs`), at once while a call waits
+//!   for its answer; each kernel's making and each round's Vulkan work runs inside a section of
+//!   the exit guard of its own; it holds its device through the registry of the runtime's holds
+//!   (`device/holds.rs`), reading the stop before each round and as it stands by. Its dispatches
+//!   are internal submissions, counted as the device's (`WorkCounts::internal_submissions`).
 
 use crate::buffer::Buffer;
 use crate::device::holds::Holder;
@@ -520,7 +538,7 @@ fn run(weak: WeakDevice) {
     let Some(device) = weak.hold() else {
         return;
     };
-    let Some(measured) = measure(&device) else {
+    let Some(measured) = measure(&device, began) else {
         // The process is exiting, or the program let the device go: nothing is kept.
         return;
     };
@@ -544,9 +562,9 @@ fn run(weak: WeakDevice) {
     }
 }
 
-/// The run's medians; why not, where it measured none; `None` where the process is exiting or the
-/// program's last drop stopped the device's holds.
-fn measure(device: &Device) -> Option<Result<Medians, String>> {
+/// The run's medians, the check begun at `began`; why not, where it measured none; `None` where
+/// the process is exiting or the program's last drop stopped the device's holds.
+fn measure(device: &Device, began: Instant) -> Option<Result<Medians, String>> {
     let shared = device.shared();
     let clock = match (shared.timing.clock(), shared.timing.answers_from_host()) {
         (Some(clock), false) => *clock,
@@ -561,23 +579,45 @@ fn measure(device: &Device) -> Option<Result<Medians, String>> {
                    its messages)";
         return Some(Err(why.to_owned()));
     }
+    stand_by(device, COMPILE_QUIET, began, false)?;
     let made = {
         let _busy = exit_guard::enter()?;
         Kernels::new(device)
     };
-    let kernels = match made {
+    let mut kernels = match made {
         Ok(kernels) => kernels,
         Err(why) => return Some(Err(why)),
     };
-    let measured = rounds(device, &clock, &kernels);
+    for at in 0..KERNELS.len() {
+        step_aside(device);
+        stand_by(device, COMPILE_QUIET, began, false)?;
+        let _busy = exit_guard::enter()?;
+        if let Err(error) = kernels.make_kernel(at) {
+            return Some(Err(format!("its kernels were not made: {error}")));
+        }
+    }
+    let sets = {
+        let _busy = exit_guard::enter()?;
+        kernels.make_sets()
+    };
+    if let Err(error) = sets {
+        return Some(Err(format!("its kernels' sets were not made: {error}")));
+    }
+    let measured = rounds(device, &clock, &kernels, began);
     let busy = exit_guard::enter();
     drop(kernels);
     drop(busy);
     measured
 }
 
-/// The rounds of every arm over `kernels`, as [`measure`] answers them.
-fn rounds(device: &Device, clock: &GpuClock, kernels: &Kernels) -> Option<Result<Medians, String>> {
+/// The rounds of every arm over `kernels`, the check begun at `began`, as [`measure`] answers
+/// them.
+fn rounds(
+    device: &Device,
+    clock: &GpuClock,
+    kernels: &Kernels,
+    began: Instant,
+) -> Option<Result<Medians, String>> {
     let stamps = {
         let _busy = exit_guard::enter()?;
         Stamps::new(device)
@@ -590,6 +630,8 @@ fn rounds(device: &Device, clock: &GpuClock, kernels: &Kernels) -> Option<Result
         .filter(|(_, arm)| !arm.host || kernels.host.is_some())
         .collect();
     let mut times: Vec<Vec<u64>> = vec![Vec::new(); ARMS];
+    // When the check's own last dispatch ended: no use of a queue since is the device's.
+    let mut own_end = None;
     for round in 0..=ROUNDS {
         if !device.holds_go_on(Holder::ViewCheck) {
             return None;
@@ -601,6 +643,12 @@ fn rounds(device: &Device, clock: &GpuClock, kernels: &Kernels) -> Option<Result
         }
         for turn in 0..arms.len() {
             let (at, arm) = arms[(turn + round) % arms.len()];
+            stand_by(
+                device,
+                ARM_QUIET,
+                own_end.unwrap_or(began),
+                own_end.is_some(),
+            )?;
             let _busy = exit_guard::enter()?;
             let timed = stamps.time(device, clock, |raw, command_buffer| {
                 // SAFETY: the internal command buffer is recording outside a render pass and only
@@ -608,6 +656,7 @@ fn rounds(device: &Device, clock: &GpuClock, kernels: &Kernels) -> Option<Result
                 // rounds, and every submission is waited for.
                 unsafe { kernels.record(raw, command_buffer, arm) }
             });
+            own_end = Some(Instant::now());
             match timed {
                 Ok(nanos) if round > 0 => times[at].push(nanos),
                 Ok(_) => {}
@@ -622,9 +671,58 @@ fn rounds(device: &Device, clock: &GpuClock, kernels: &Kernels) -> Option<Result
     Some(Ok(Medians(medians)))
 }
 
-/// Before a round, step aside for the device's allocations and frees on other threads
-/// (`step_aside.rs`): not while the program's last drop stops the check or a call waits for its
-/// answer. Counted where it waited.
+/// How long no use of the device's `VkQueue`s may have been under way before a kernel's making,
+/// which cannot stop once begun: as long as the device's allocations and frees must have been
+/// quiet before a check's step (`step_aside::QUIET`).
+const COMPILE_QUIET: Duration = crate::step_aside::QUIET;
+
+/// The same before a timed dispatch: the gap that ends a burst of submissions
+/// (`queue_quiet::SETTLE`).
+const ARM_QUIET: Duration = crate::device::queue_quiet::SETTLE;
+
+/// How often a stand-by looks again.
+const LOOK_EVERY: Duration = Duration::from_micros(250);
+
+/// Before a step the device's work could wait on, stand by until that work is quiet (the module
+/// docs): no batch committed waits for its submission, none submitted is in flight, and no use of
+/// a `VkQueue` has been under way for `quiet` since `since` (the check's start, or the end of its
+/// own last dispatch), or, where `own` (`since` ended the check's own dispatch), since then, where
+/// that was the last use. A device that has used no `VkQueue` yet is quiet only from the check's
+/// start: its program's first work comes right after its making. Not while a call waits for the
+/// answer. `None` where the program's last drop stops the device's holds. Counted where it
+/// waited.
+fn stand_by(device: &Device, quiet: Duration, since: Instant, own: bool) -> Option<()> {
+    let shared = device.shared();
+    let check = device.view_check();
+    let began = Instant::now();
+    let mut stood = false;
+    loop {
+        if shared.holds.stopping() {
+            return None;
+        }
+        if check.awaited() {
+            break;
+        }
+        let pause = match shared.work_quiet_for() {
+            Some(unused) if own && unused + LOOK_EVERY >= since.elapsed() => break,
+            Some(unused) => match quiet.checked_sub(unused.min(since.elapsed())) {
+                None | Some(Duration::ZERO) => break,
+                Some(left) => left,
+            },
+            None => LOOK_EVERY,
+        };
+        stood = true;
+        std::thread::sleep(pause.min(LOOK_EVERY));
+    }
+    if stood {
+        shared.counts.view_check_stood_by(began.elapsed());
+    }
+    Some(())
+}
+
+/// Before a kernel's making or a round, step aside for the device's allocations and frees on
+/// other threads (`step_aside.rs`): not while the program's last drop stops the check or a call
+/// waits for its answer. Counted where it waited.
 fn step_aside(device: &Device) {
     let shared = device.shared();
     let activity = shared.allocations.allocations.activity();
@@ -676,7 +774,7 @@ impl Kernels {
         let out = (device.scratch_buffer(OUT_BYTES))
             .map_err(|error| format!("its out buffer was refused: {error}"))?;
         let host = crate::in_place_check::pointer_pages(device, HOST_BYTES).ok();
-        let mut kernels = Kernels {
+        Ok(Kernels {
             device: device.clone(),
             window,
             out,
@@ -688,71 +786,75 @@ impl Kernels {
             pool: vk::DescriptorPool::null(),
             views: Vec::new(),
             sets: Vec::new(),
-        };
-        kernels
-            .make()
-            .map_err(|error| format!("its kernels were not made: {error}"))?;
-        Ok(kernels)
+        })
     }
 
-    /// Make every object; those made before a failure go with the drop.
-    fn make(&mut self) -> Result<(), Error> {
+    /// Make the module, layouts and pipeline of the kernel at `at` of [`KERNELS`], the kernels
+    /// before it made; inside a section of the exit guard. Those made before a failure go with the
+    /// drop.
+    fn make_kernel(&mut self, at: usize) -> Result<(), Error> {
         let raw: &ash::Device = self.device.shared().vk();
         let compile = self.device.compile_device();
-        for (view, reads) in KERNELS {
-            let module =
-                view_check_module(compile, view, reads).map_err(crate::device::device_error)?;
-            let info = vk::ShaderModuleCreateInfo::default().code(&module.spirv);
-            // SAFETY: the code is live SPIR-V words for the call.
-            let made = unsafe { raw.create_shader_module(&info, None) }.map_err(vulkan)?;
-            self.modules.push(made);
-            let ty = descriptor_type(view).map_err(|why| internal(&why))?;
-            let bindings = [
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(ViewCheckModule::WINDOW_BINDING)
-                    .descriptor_type(ty)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::COMPUTE),
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(ViewCheckModule::OUT_BINDING)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::COMPUTE),
-            ];
-            let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-            // SAFETY: `info` and its array are live for the call.
-            let set_layout =
-                unsafe { raw.create_descriptor_set_layout(&info, None) }.map_err(vulkan)?;
-            self.set_layouts.push(set_layout);
-            let ranges = [vk::PushConstantRange::default()
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .offset(0)
-                .size(ViewCheckModule::PUSH_BYTES)];
-            let set_layouts = [set_layout];
-            let info = vk::PipelineLayoutCreateInfo::default()
-                .set_layouts(&set_layouts)
-                .push_constant_ranges(&ranges);
-            // SAFETY: `info` and its arrays are live for the call.
-            let layout = unsafe { raw.create_pipeline_layout(&info, None) }.map_err(vulkan)?;
-            self.layouts.push(layout);
-            let stage = vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::COMPUTE)
-                .module(made)
-                .name(c"main");
-            let info = vk::ComputePipelineCreateInfo::default()
-                .stage(stage)
-                .layout(layout);
-            // SAFETY: every pointer in `info` outlives the call; no pipeline cache.
-            let pipelines =
-                unsafe { raw.create_compute_pipelines(vk::PipelineCache::null(), &[info], None) };
-            let pipelines = pipelines.map_err(|(_, error)| vulkan(error))?;
-            let pipeline = (pipelines.first().copied())
-                .ok_or_else(|| internal("the driver made no pipeline"))?;
-            self.pipelines.push(pipeline);
-            (self.device.shared()).name_pipeline(pipeline, || {
-                format!("metal2vulkan: view check {view:?} {reads:?}")
-            });
-        }
+        let (view, reads) = KERNELS[at];
+        let module =
+            view_check_module(compile, view, reads).map_err(crate::device::device_error)?;
+        let info = vk::ShaderModuleCreateInfo::default().code(&module.spirv);
+        // SAFETY: the code is live SPIR-V words for the call.
+        let made = unsafe { raw.create_shader_module(&info, None) }.map_err(vulkan)?;
+        self.modules.push(made);
+        let ty = descriptor_type(view).map_err(|why| internal(&why))?;
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(ViewCheckModule::WINDOW_BINDING)
+                .descriptor_type(ty)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(ViewCheckModule::OUT_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        ];
+        let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        // SAFETY: `info` and its array are live for the call.
+        let set_layout =
+            unsafe { raw.create_descriptor_set_layout(&info, None) }.map_err(vulkan)?;
+        self.set_layouts.push(set_layout);
+        let ranges = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .offset(0)
+            .size(ViewCheckModule::PUSH_BYTES)];
+        let set_layouts = [set_layout];
+        let info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&set_layouts)
+            .push_constant_ranges(&ranges);
+        // SAFETY: `info` and its arrays are live for the call.
+        let layout = unsafe { raw.create_pipeline_layout(&info, None) }.map_err(vulkan)?;
+        self.layouts.push(layout);
+        let stage = vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(made)
+            .name(c"main");
+        let info = vk::ComputePipelineCreateInfo::default()
+            .stage(stage)
+            .layout(layout);
+        // SAFETY: every pointer in `info` outlives the call; no pipeline cache.
+        let pipelines =
+            unsafe { raw.create_compute_pipelines(vk::PipelineCache::null(), &[info], None) };
+        let pipelines = pipelines.map_err(|(_, error)| vulkan(error))?;
+        let pipeline =
+            (pipelines.first().copied()).ok_or_else(|| internal("the driver made no pipeline"))?;
+        self.pipelines.push(pipeline);
+        (self.device.shared()).name_pipeline(pipeline, || {
+            format!("metal2vulkan: view check {view:?} {reads:?}")
+        });
+        Ok(())
+    }
+
+    /// Make the descriptor pool, the texel views and every kernel's two sets, every kernel made;
+    /// inside a section of the exit guard. Those made before a failure go with the drop.
+    fn make_sets(&mut self) -> Result<(), Error> {
+        let raw: &ash::Device = self.device.shared().vk();
         let sets = 2 * KERNELS.len() as u32;
         let sizes = [
             vk::DescriptorPoolSize {
