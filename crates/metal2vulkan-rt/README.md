@@ -357,6 +357,12 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
   One that emulated its SIMD groups only in place of the 32-lane pin is translated again pinned,
   and every other is refused (`Error::Translation`: `Feature::StageSize`, `Needs::StageBound`)
   where Metal makes it.
+- A loop asks the driver nothing about unrolling unless its AIR does (`#pragma unroll`,
+  `#pragma nounroll`) or the translator wrote the loop itself (`DontUnroll`), so the driver's
+  choice decides, and it can differ from Metal's compiler's. RADV (Mesa 26.2.6) unrolls a
+  128-iteration loop of one 16-byte device read fully. On an RX 7900 XTX, with neighbouring
+  threads 976 bytes apart in a 64 KiB table, that loop took 207 to 209 µs unrolled against 105 to
+  113 µs rolled; over 16 KiB and 256 KiB tables the unrolled loop was 7 to 17% faster.
 
 ## One path for every device
 
