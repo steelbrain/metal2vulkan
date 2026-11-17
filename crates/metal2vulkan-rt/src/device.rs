@@ -394,10 +394,12 @@ impl Device {
     /// that need a runtime thread return [`Error::Quiesced`]: taking a block, a command buffer,
     /// an enqueue or commit, a zeroed Private buffer, and a listener.
     ///
-    /// Safe in an `atexit` handler on whichever thread calls `exit()`: it joins a thread only once
-    /// that thread has ended, reads no thread-local that `exit()` tears down, and takes no lock a
-    /// consumer's thread can hold. A second call returns at once, with the first call's answer,
-    /// or false while the first is still running.
+    /// The consumer calls it before `exit()`. It can also run in an `atexit` handler on whichever
+    /// thread calls `exit()`: it joins a thread only once that thread has ended, reads no
+    /// thread-local that `exit()` tears down, and takes no lock a consumer's thread can hold. Such
+    /// a handler runs before the driver's own exit teardown only where it was registered after the
+    /// driver loaded, after `Device::new`. A second call returns at once, with the first call's
+    /// answer, or false while the first is still running.
     pub fn quiesce(&self, timeout: Duration) -> bool {
         self.shared.halt(Instant::now().checked_add(timeout), true)
     }
