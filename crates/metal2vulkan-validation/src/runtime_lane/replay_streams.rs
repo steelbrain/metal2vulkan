@@ -6,8 +6,9 @@
 //!   player relocates it to the runtime's, and the kernel's output is the case's Metal output.
 //!   Two plays on two devices report the same.
 //! - A command buffer waiting on an event the CPU signals later does not stop another queue's.
-//! - Textures are made at their recorded resource IDs, and read back as written.
-//! - The guest RAM copies and a device copy's fill land where their runs say.
+//! - Textures made from descriptor records read back as written.
+//! - A render pass its setter records describe clears a drawable the stream never saw made.
+//! - The copies from the guest's RAM and a device copy's fill land where their pieces say.
 //!
 //! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
 //! their own beside the stream's.
@@ -38,6 +39,14 @@ fn addressed(address: u64, length: u64) -> [(&'static str, Value); 2] {
 
 fn sha(bytes: &[u8]) -> Value {
     Value::List(vec![Value::Bytes(Sha256::digest(bytes).to_vec())])
+}
+
+/// A recorder struct's map of unsigned fields.
+fn uints(fields: &[(&str, u64)]) -> Value {
+    let fields = fields
+        .iter()
+        .map(|&(key, value)| (key.into(), Value::Uint(value)));
+    Value::Map(fields.collect())
 }
 
 /// A stream `build` writes, in `dir`.
@@ -139,14 +148,9 @@ fn pointer_chain(w: &mut StreamWriter<File>) -> std::io::Result<()> {
         Value::Uint(2),
     ];
     w.call("setBytes:length:atIndex:", 11, 0, &steps, &[])?;
-    w.call(
-        "useResource:usage:",
-        11,
-        0,
-        &[Value::Object(8), Value::Uint(1)],
-        &[],
-    )?;
-    let grid = Value::List(vec![Value::Uint(4), Value::Uint(1), Value::Uint(1)]);
+    let node = Value::Map(vec![("Buffer".into(), Value::Object(8))]);
+    w.call("useResource:usage:", 11, 0, &[node, Value::Uint(1)], &[])?;
+    let grid = uints(&[("width", 4), ("height", 1), ("depth", 1)]);
     let args = [grid.clone(), grid];
     w.call("dispatchThreads:threadsPerThreadgroup:", 11, 0, &args, &[])?;
     w.call("endEncoding", 11, 0, &[], &[])?;
@@ -229,7 +233,7 @@ fn a_command_buffer_held_on_an_event_does_not_stop_another_queue() {
             }
             let blit = command_buffer + 1;
             w.call("blitCommandEncoder", command_buffer, blit, &[], &[])?;
-            let range = Value::List(vec![Value::Uint(0), Value::Uint(16)]);
+            let range = uints(&[("location", 0), ("length", 16)]);
             let args = [Value::Object(buffer), range, Value::Uint(fill)];
             w.call("fillBuffer:range:value:", blit, 0, &args, &[])?;
             w.call("endEncoding", blit, 0, &[], &[])?;
@@ -262,78 +266,155 @@ fn a_command_buffer_held_on_an_event_does_not_stop_another_queue() {
     });
 }
 
-/// Two Shared textures made at recorded resource IDs 77 and 5 have them, and one reads back the
-/// texels `replaceRegion` gave it.
+/// A texture of a 2D descriptor whose setter records set its usage and options, and one of a
+/// descriptor record placed at resource index 77, each read back as `replaceRegion` wrote it.
 #[test]
-fn textures_are_made_at_their_recorded_resource_ids() {
-    let dir = ScratchDir::new("replay-texture-ids").unwrap();
+fn textures_are_made_from_descriptor_records() {
+    let dir = ScratchDir::new("replay-texture-descriptors").unwrap();
     let texels: Vec<u8> = (0..64).collect();
     let path = written(&dir, |w| {
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
-        // RGBA8Unorm, 4 by 4, shader-read, Shared.
-        let descriptor = Value::Map(
-            [
-                ("pixelFormat", 70),
-                ("width", 4),
-                ("height", 4),
-                ("usage", 1),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.into(), Value::Uint(value)))
-            .collect(),
-        );
-        for (id, resource_id) in [(2, 77), (3, 5)] {
-            let answer = [("gpuResourceID", Value::Uint(resource_id))];
-            w.call(
-                "newTextureWithDescriptor:",
-                1,
-                id,
-                std::slice::from_ref(&descriptor),
-                &answer,
-            )?;
+        // RGBA8Unorm, 4 by 4, not mipmapped.
+        let two_d = [70, 4, 4].map(Value::Uint);
+        let two_d = [&two_d[..], &[Value::Bool(false)]].concat();
+        let selector = "MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:\
+                        mipmapped:";
+        w.call(selector, 0, 2, &two_d, &[])?;
+        w.call("setUsage:", 2, 0, &[Value::Uint(1)], &[])?;
+        w.call("setResourceOptions:", 2, 0, &[Value::Uint(0)], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 3, &[Value::Object(2)], &[])?;
+        let Value::Map(mut fields) = uints(&[
+            ("pixelFormat", 70),
+            ("width", 4),
+            ("height", 4),
+            ("usage", 1),
+            ("resourceOptions", 0),
+        ]) else {
+            unreachable!("a map");
+        };
+        let index = Value::List(vec![Value::Uint(77), Value::Bool(true)]);
+        fields.push(("resourceIndex".into(), index));
+        fields.push(("rotation".into(), Value::Nil));
+        w.call("m2v.textureDescriptor", 0, 4, &[Value::Map(fields)], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 5, &[Value::Object(4)], &[])?;
+        let region = Value::Map(vec![
+            ("origin".into(), uints(&[("x", 0), ("y", 0), ("z", 0)])),
+            (
+                "size".into(),
+                uints(&[("width", 4), ("height", 4), ("depth", 1)]),
+            ),
+        ]);
+        for texture in [3, 5] {
+            let args = [
+                region.clone(),
+                Value::Uint(0),
+                Value::Bytes(texels.clone()),
+                Value::Uint(16),
+            ];
+            let selector = "replaceRegion:mipmapLevel:withBytes:bytesPerRow:";
+            w.call(selector, texture, 0, &args, &[])?;
         }
-        let region = Value::List([0, 0, 0, 4, 4, 1].map(Value::Uint).to_vec());
-        let args = [
-            region,
-            Value::Uint(0),
-            Value::Bytes(texels.clone()),
-            Value::Uint(16),
-        ];
-        w.call(
-            "replaceRegion:mipmapLevel:withBytes:bytesPerRow:",
-            2,
-            0,
-            &args,
-            &[],
-        )?;
+        let textures = [Value::Object(3), Value::Object(5)];
+        let sums = [sha(&texels), sha(&texels)].map(|sum| match sum {
+            Value::List(mut one) => one.remove(0),
+            _ => unreachable!("a list"),
+        });
         w.call(
             "m2v.check",
             0,
             0,
-            &[Value::Object(2)],
-            &[("sha256", sha(&texels))],
+            &textures,
+            &[("sha256", Value::List(sums.to_vec()))],
         )
     });
     on_device_with(at_plan, |device| {
-        let report = play("texture-ids", device, &path);
-        assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+        let report = play("texture-descriptors", device, &path);
+        assert_eq!(report.checks.len(), 2);
+        for check in &report.checks {
+            assert_eq!(Some(check.sha256), check.recorded, "#{}", check.object);
+        }
     });
 }
 
-/// The guest RAM copies and a device copy's fill land their bytes where their runs say, in order
-/// with a fill before them, and a copy back to guest RAM runs: the buffer reads back as laid out.
+/// A drawable the stream never saw made (a `newTextureWithDescriptor:` of an inline descriptor,
+/// answered `m2v.drawable`) is a texture of its descriptor, and a render pass whose setter
+/// records clear it to green and store it leaves it green.
 #[test]
-fn guest_ram_copies_land_where_their_runs_say() {
+fn a_pass_from_setter_records_clears_a_drawable() {
+    let dir = ScratchDir::new("replay-pass").unwrap();
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // RGBA8Unorm, 4 by 4, shader-read and render-target, Private.
+        let drawable = uints(&[
+            ("textureType", 2),
+            ("pixelFormat", 70),
+            ("width", 4),
+            ("height", 4),
+            ("usage", 5),
+            ("storageMode", 2),
+        ]);
+        let answer = [("m2v.drawable", Value::Bool(true))];
+        w.call("newTextureWithDescriptor:", 0, 3, &[drawable], &answer)?;
+        w.call("MTLRenderPassDescriptor.new", 0, 4, &[], &[])?;
+        let pass = Value::Map(vec![
+            ("visibilityResultBuffer".into(), Value::Nil),
+            ("renderTargetWidth".into(), Value::Uint(4)),
+            ("renderTargetHeight".into(), Value::Uint(4)),
+        ]);
+        w.call("m2v.setPass", 4, 0, &[pass], &[])?;
+        let clear = Value::Map(
+            [("red", 0.0), ("green", 1.0), ("blue", 0.0), ("alpha", 1.0)]
+                .map(|(key, value)| (key.into(), Value::F64(value)))
+                .to_vec(),
+        );
+        let Value::Map(mut color) = uints(&[("level", 0), ("loadAction", 2), ("storeAction", 1)])
+        else {
+            unreachable!("a map");
+        };
+        color.push(("texture".into(), Value::Object(3)));
+        color.push(("resolveTexture".into(), Value::Nil));
+        color.push(("clearColor".into(), clear));
+        let args = [Value::Uint(0), Value::Map(color)];
+        w.call("m2v.setColorAttachment", 4, 0, &args, &[])?;
+        w.call("commandBuffer", 2, 5, &[], &[])?;
+        let pass = [Value::Object(4)];
+        w.call("renderCommandEncoderWithDescriptor:", 5, 6, &pass, &[])?;
+        w.call("endEncoding", 6, 0, &[], &[])?;
+        w.call("commit", 5, 0, &[], &[])?;
+        w.call("m2v.present", 0, 0, &[Value::Object(3)], &[])?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(3)],
+            &[("sha256", sha(&green))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("pass", device, &path);
+        assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+        assert_eq!(report.frames.len(), 1);
+        assert!(report.total["render_passes"] >= 1, "{:?}", report.total);
+    });
+}
+
+/// The copies from the guest's RAM and a device copy's fill land their bytes where their pieces
+/// say, in order with a fill before them, and a copy back to guest RAM runs: the buffer reads back
+/// as laid out.
+#[test]
+fn guest_ram_copies_land_where_their_pieces_say() {
     let dir = ScratchDir::new("replay-guest-ram").unwrap();
     let mut expected = vec![0u8; 64];
     expected[8..24].copy_from_slice(&(1..=16).collect::<Vec<u8>>());
     expected[32..40].copy_from_slice(&(105..=112).collect::<Vec<u8>>());
     expected[40..44].copy_from_slice(&(101..=104).collect::<Vec<u8>>());
-    expected[60..64].copy_from_slice(&[0xaa; 4]);
-    let run = |start: u64, length: u64| {
-        Value::List(vec![Value::Uint(start), Value::Uint(start + length)])
+    let piece = |at: u64, data: Vec<u8>| Value::List(vec![Value::Uint(at), Value::Bytes(data)]);
+    let placed = |at: u64, start: u64, length: u64| {
+        let run = Value::List(vec![Value::Uint(start), Value::Uint(start + length)]);
+        Value::List(vec![Value::Uint(at), run])
     };
-    let placed = |at: u64, run: Value| Value::List(vec![Value::Uint(at), run]);
     let path = written(&dir, |w| {
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
         w.call("newCommandQueue", 1, 2, &[], &[])?;
@@ -341,26 +422,19 @@ fn guest_ram_copies_land_where_their_runs_say() {
         w.call("newBufferWithLength:options:", 1, 3, &shared, &[])?;
         w.call("commandBuffer", 2, 4, &[], &[])?;
         w.call("blitCommandEncoder", 4, 5, &[], &[])?;
-        let range = Value::List(vec![Value::Uint(0), Value::Uint(64)]);
+        let range = uints(&[("location", 0), ("length", 64)]);
         let fill = [Value::Object(3), range, Value::Uint(0)];
         w.call("fillBuffer:range:value:", 5, 0, &fill, &[])?;
-        let runs = Value::List(vec![run(0x1000, 8), run(0x2000, 8)]);
-        let data = Value::Bytes((1..=16).collect());
-        let args = [runs, Value::Object(3), Value::Uint(8), data];
+        let pieces = Value::List(vec![piece(8, (1..=16).collect())]);
+        let args = [Value::Object(3), pieces];
         w.call("m2v.copyFromGuestRam", 5, 0, &args, &[])?;
-        let runs = Value::List(vec![placed(40, run(0x3000, 4)), placed(32, run(0x4000, 8))]);
-        let args = [runs, Value::Object(3), Value::Bytes((101..=112).collect())];
-        w.call("m2v.copyFromGuestRamAt", 5, 0, &args, &[])?;
-        let args = [
-            Value::Bytes(vec![0xaa; 4]),
-            Value::Object(3),
-            Value::Uint(60),
-        ];
-        w.call("m2v.copyBytes:toBuffer:offset:", 5, 0, &args, &[])?;
-        let runs = Value::List(vec![
-            placed(0, run(0x5000, 16)),
-            placed(48, run(0x6000, 16)),
+        let pieces = Value::List(vec![
+            piece(40, (101..=104).collect()),
+            piece(32, (105..=112).collect()),
         ]);
+        let args = [Value::Object(3), pieces];
+        w.call("m2v.copyFromGuestRamAt", 5, 0, &args, &[])?;
+        let runs = Value::List(vec![placed(0, 0x5000, 16), placed(48, 0x6000, 16)]);
         w.call("m2v.copyToGuestRam", 5, 0, &[Value::Object(3), runs], &[])?;
         w.call("endEncoding", 5, 0, &[], &[])?;
         w.call("commit", 4, 0, &[], &[])?;
@@ -375,7 +449,7 @@ fn guest_ram_copies_land_where_their_runs_say() {
     on_device_with(at_plan, |device| {
         let report = play("guest-ram", device, &path);
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
-        assert_eq!(report.total["written_bytes"], 16 + 12 + 4);
+        assert_eq!(report.total["written_bytes"], 16 + 12);
         assert_eq!(report.total["relocated_words"], 0);
     });
 }

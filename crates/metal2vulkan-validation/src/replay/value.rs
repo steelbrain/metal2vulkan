@@ -54,6 +54,22 @@ impl Value {
         }
     }
 
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// A number: an `f64`, or an `f32` widened.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::F64(v) => Some(*v),
+            Value::F32(v) => Some(f64::from(*v)),
+            _ => None,
+        }
+    }
+
     /// The object's id; `None` for nil and for every other kind.
     pub fn as_object(&self) -> Option<u64> {
         match self {

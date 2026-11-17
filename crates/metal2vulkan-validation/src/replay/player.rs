@@ -1,6 +1,6 @@
 //! The player (`docs/REPLAY-STREAM.md`, section 10): it reads a stream's calls in order and drives a
-//! runtime through a [`Backend`], relocating what it uploads, reproducing resource IDs, waiting for
-//! the command buffers that can complete (never for one an event wait holds), and reporting the
+//! runtime through a [`Backend`], relocating what it uploads, waiting for the command buffers
+//! that can complete (never for one an event wait holds), and reporting the
 //! runtime's counters per group of command buffers waited for, per frame and in total, with the
 //! checksums the stream asks for.
 
@@ -10,7 +10,6 @@ use super::value::{Hash, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
-use std::ops::Range;
 use std::sync::Arc;
 
 /// A runtime's counters, cumulative, by name.
@@ -28,18 +27,16 @@ const OWN: [&str; 3] = [RELOCATED_WORDS, MISALIGNED_WORDS, WRITTEN_BYTES];
 pub struct Made {
     /// The address the runtime gave the object's range.
     pub address: Option<u64>,
-    /// The object's resource ID.
-    pub resource_id: Option<u64>,
 }
 
 /// One runtime behind the player. Objects are named by their stream ids; the player resolves blobs
 /// and relocates before a call reaches the backend, and handles `m2v.write`, `m2v.check`,
-/// `m2v.present`, `release` of a device, and the program's waits itself. An upload
-/// (`m2v.copyBytes:toBuffer:offset:` and the guest RAM copies) reaches it with its data relocated
-/// ([`upload`] says where the data lands).
+/// `m2v.present`, `release` of a device, and the program's waits itself. A copy from the guest's
+/// RAM reaches it with its data relocated ([`upload`] says where the data lands), and a record of
+/// the host's own plumbing as the plain Metal call it stands for ([`plain`]).
 pub trait Backend {
     /// Run `call`: make its result, or run its receiver's method, or drop the object `release`
-    /// names. A call that makes an object at a recorded `gpuResourceID` answer makes it at that ID.
+    /// names.
     fn call(&mut self, call: &Call) -> Result<Made, PlayError>;
     /// Put `bytes` at `offset` of the memory of block, buffer or surface `target`.
     fn write(&mut self, target: u64, offset: u64, bytes: &[u8]) -> Result<(), PlayError>;
@@ -67,12 +64,6 @@ pub enum PlayError {
     },
     /// The stream contradicts itself (an object it never made, a wait nothing can meet).
     Invalid(String),
-    /// The runtime made an object at another resource ID than the recorded one.
-    ResourceId {
-        object: u64,
-        recorded: u64,
-        made: Option<u64>,
-    },
 }
 
 impl fmt::Display for PlayError {
@@ -82,14 +73,6 @@ impl fmt::Display for PlayError {
             PlayError::Refused { selector, why } => write!(f, "refused {selector}: {why}"),
             PlayError::Runtime { selector, error } => write!(f, "{selector}: {error}"),
             PlayError::Invalid(why) => write!(f, "invalid stream: {why}"),
-            PlayError::ResourceId {
-                object,
-                recorded,
-                made,
-            } => write!(
-                f,
-                "#{object}: made at resource ID {made:?}, recorded {recorded}"
-            ),
         }
     }
 }
@@ -227,82 +210,84 @@ fn invalid(why: impl Into<String>) -> PlayError {
     PlayError::Invalid(why.into())
 }
 
-/// Where an upload's data lands: in `target`, from argument `data`, each piece of the data at the
-/// target's offset paired with it.
+/// Where an upload's data lands: in `target`, each piece (the `pieces` argument's entry of that
+/// index) from the target's byte paired with it.
 pub(super) struct Upload {
     pub target: u64,
-    pub data: usize,
-    pub pieces: Vec<(u64, Range<usize>)>,
+    pub pieces: Vec<(u64, usize)>,
 }
 
-/// The guest RAM runs of a copy that names a byte of its buffer for each (`[at, [start, end]]`):
-/// each byte and its run's length. The runs' addresses are the host's, which nothing reads.
+/// The argument of an upload that lists its pieces, `[[byte, data], ...]`.
+const PIECES: usize = 1;
+
+/// The data of piece `entry` of an upload's `args` ([`upload`] checked it is bytes).
+pub(super) fn piece(args: &[Value], entry: usize) -> &[u8] {
+    match &args[PIECES].as_list().expect("an upload's pieces")[entry] {
+        Value::List(pair) => pair[1].as_bytes().expect("a piece's bytes"),
+        _ => unreachable!("an upload's piece"),
+    }
+}
+
+/// The guest RAM runs of a copy back to it, each `[byte, [start, end]]`: each byte of the buffer
+/// and its run's length. The runs' addresses are the host's, which nothing reads.
 pub(super) fn placed_runs(runs: &Value) -> Option<Vec<(u64, u64)>> {
     let placed = |run: &Value| match run.as_list()? {
-        [at, run] => Some((at.as_uint()?, run_length(run)?)),
+        [at, run] => match run.as_uints().as_deref() {
+            Some(&[start, end]) if start <= end => Some((at.as_uint()?, end - start)),
+            _ => None,
+        },
         _ => None,
     };
     runs.as_list()?.iter().map(placed).collect()
 }
 
-/// The length of a guest RAM run, `[start, end]`.
-fn run_length(run: &Value) -> Option<u64> {
-    match run.as_uints().as_deref() {
-        Some(&[start, end]) if start <= end => Some(end - start),
-        _ => None,
+/// Where the data of `call` lands, where it is a copy from the guest's RAM
+/// (`m2v.copyFromGuestRam`, `m2v.copyFromGuestRamAt`; `docs/REPLAY-STREAM.md`, section 7):
+/// `[buffer, [[byte, data], ...]]`, the data resolved bytes.
+pub(super) fn upload(call: &Call) -> Result<Option<Upload>, PlayError> {
+    if !matches!(
+        &*call.selector,
+        "m2v.copyFromGuestRam" | "m2v.copyFromGuestRamAt"
+    ) {
+        return Ok(None);
     }
+    let bad = |what: &str| invalid(format!("{}: {what}", call.selector));
+    let target = call.args.first().and_then(Value::as_object);
+    let target = target.ok_or_else(|| bad("argument 0 is no buffer"))?;
+    let entries = call.args.get(PIECES).and_then(Value::as_list);
+    let entries = entries.ok_or_else(|| bad("argument 1 is no list of pieces"))?;
+    let pieces = entries
+        .iter()
+        .enumerate()
+        .map(|(entry, pair)| match pair.as_list() {
+            Some([at, Value::Bytes(_)]) => at.as_uint().map(|at| (at, entry)),
+            _ => None,
+        });
+    let pieces: Option<Vec<_>> = pieces.collect();
+    let pieces = pieces.ok_or_else(|| bad("a piece is no [byte, data]"))?;
+    Ok(Some(Upload { target, pieces }))
 }
 
-/// Where the data of `call` lands, where it is an upload (`docs/REPLAY-STREAM.md`, section 7):
-/// `m2v.copyBytes:toBuffer:offset:` (`[data, buffer, offset]`), `m2v.copyFromGuestRam` (`[runs,
-/// buffer, offset, data]`) and `m2v.copyFromGuestRamAt` (`[placed runs, buffer, data]`). Its data
-/// is resolved bytes.
-pub(super) fn upload(call: &Call) -> Result<Option<Upload>, PlayError> {
-    let args = &call.args;
-    let bad = |what: &str| invalid(format!("{}: {what}", call.selector));
-    let data_at = match &*call.selector {
-        "m2v.copyBytes:toBuffer:offset:" => 0,
-        "m2v.copyFromGuestRam" => 3,
-        "m2v.copyFromGuestRamAt" => 2,
-        _ => return Ok(None),
-    };
-    let target = args.get(1).and_then(Value::as_object);
-    let target = target.ok_or_else(|| bad("argument 1 is no buffer"))?;
-    let Some(Value::Bytes(data)) = args.get(data_at) else {
-        return Err(bad("no data"));
-    };
-    let length = data.len() as u64;
-    // Each run's byte of the buffer and its length; a copy to one place is one run.
-    let runs = match &*call.selector {
-        "m2v.copyFromGuestRamAt" => args.first().and_then(placed_runs),
-        selector => {
-            let at = args.get(2).and_then(Value::as_uint);
-            let run = match selector {
-                "m2v.copyFromGuestRam" => args.first().and_then(Value::as_list).and_then(|runs| {
-                    (runs.iter()).try_fold(0u64, |sum, run| sum.checked_add(run_length(run)?))
-                }),
-                _ => Some(length),
-            };
-            at.zip(run).map(|placed| vec![placed])
+/// The plain Metal call a record of the host's own plumbing stands for
+/// (`docs/REPLAY-STREAM.md`, section 4): a buffer the host made exportable, or whose texture
+/// rows may keep bytes between them, is `newBufferWithLength:options:`; a queue it kept apart,
+/// `newCommandQueue`. None for an exported buffer the host did not make (result 0): the program
+/// then made its buffer by a later call.
+fn plain(mut call: Call) -> Option<Call> {
+    match &*call.selector {
+        "m2v.newBufferOfLengthPaddingUnobserved"
+        | "m2v.newExportableBufferOfLength"
+        | "m2v.newDmaBufBufferOfLengthPaddingUnobserved" => {
+            if call.result == 0 {
+                return None;
+            }
+            call.selector = Arc::from("newBufferWithLength:options:");
+            call.args.truncate(2);
         }
-    };
-    let runs = runs.ok_or_else(|| bad("its runs or its offset do not parse"))?;
-    let mut pieces = Vec::with_capacity(runs.len());
-    let mut from = 0u64;
-    for (at, run) in runs {
-        let to = from.checked_add(run).filter(|&to| to <= length);
-        let to = to.ok_or_else(|| bad("runs past its data"))?;
-        pieces.push((at, from as usize..to as usize));
-        from = to;
+        "m2v.newCommandQueueUnshared" => call.selector = Arc::from("newCommandQueue"),
+        _ => {}
     }
-    if from != length {
-        return Err(bad("data past its runs"));
-    }
-    Ok(Some(Upload {
-        target,
-        data: data_at,
-        pieces,
-    }))
+    Some(call)
 }
 
 /// The program's waits for a command buffer, as a stream records them: names of records, not
@@ -406,6 +391,8 @@ impl<'b, B: Backend> Player<'b, B> {
                 Ok(())
             }
             "commit" | "m2v.commitPart" => self.commit(call.receiver),
+            // A split or part of result 0 is one the host did not cut.
+            "m2v.split" | "m2v.part" if call.result == 0 => Ok(()),
             "m2v.split" => {
                 let queue = self.queue_of(call.receiver)?;
                 self.commit(call.receiver)?;
@@ -415,7 +402,10 @@ impl<'b, B: Backend> Player<'b, B> {
                 let queue = self.queue_of(call.receiver)?;
                 self.part(queue, call.result)
             }
-            "m2v.setCompletionJoinsNext:" | "m2v.holdsNoPredication" | "m2v.rebind" => Ok(()),
+            "m2v.setCompletionJoinsNext"
+            | "m2v.holdsNoPredication"
+            | "m2v.rebindNoCopy"
+            | "m2v.fold" => Ok(()),
             WAIT_COMPLETED | WAIT_SCHEDULED => {
                 self.drain()?;
                 match self.committed.contains(&call.receiver) {
@@ -482,9 +472,6 @@ impl<'b, B: Backend> Player<'b, B> {
 
     /// Make `part`, a command buffer of `queue`.
     fn part(&mut self, queue: u64, part: u64) -> Result<(), PlayError> {
-        if part == 0 {
-            return Err(invalid("a part that makes no command buffer"));
-        }
         let call = own_call("commandBuffer", queue, part);
         self.backend.call(&call)?;
         self.made(&call, part);
@@ -493,6 +480,9 @@ impl<'b, B: Backend> Player<'b, B> {
 
     /// A call the backend runs, its blobs and addresses resolved, and what it made recorded.
     fn make(&mut self, stream: &mut StreamReader, call: Call) -> Result<(), PlayError> {
+        let Some(call) = plain(call) else {
+            return Ok(());
+        };
         let mut relocated = 0;
         let mut args = Vec::with_capacity(call.args.len());
         for arg in &call.args {
@@ -531,15 +521,6 @@ impl<'b, B: Backend> Player<'b, B> {
                 .insert(object, address, length, base)
                 .map_err(PlayError::Invalid)?;
         }
-        if let Some(recorded) = resolved.answer("gpuResourceID").and_then(Value::as_uint) {
-            if made.resource_id != Some(recorded) {
-                return Err(PlayError::ResourceId {
-                    object,
-                    recorded,
-                    made: made.resource_id,
-                });
-            }
-        }
         Ok(())
     }
 
@@ -549,15 +530,22 @@ impl<'b, B: Backend> Player<'b, B> {
         let Some(upload) = upload(&call)? else {
             return Ok(call);
         };
-        let Some(Value::Bytes(data)) = call.args.get_mut(upload.data) else {
-            unreachable!("an upload's data is bytes");
+        let relocated = self.addresses.holds(upload.target);
+        let Some(Value::List(entries)) = call.args.get_mut(PIECES) else {
+            unreachable!("an upload's pieces");
         };
-        if self.addresses.holds(upload.target) {
-            for (offset, piece) in &upload.pieces {
-                self.relocate(&mut data[piece.clone()], *offset);
+        for (at, entry) in upload.pieces {
+            let Value::List(pair) = &mut entries[entry] else {
+                unreachable!("an upload's piece");
+            };
+            let Value::Bytes(data) = &mut pair[1] else {
+                unreachable!("a piece's bytes");
+            };
+            if relocated {
+                self.relocate(data, at);
             }
+            *self.own.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         }
-        *self.own.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         Ok(call)
     }
 
