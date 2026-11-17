@@ -5,15 +5,42 @@
 use crate::plan::{Binding, BufferPlan, Dispatch, Expect, Grid, Plan, Values};
 use crate::{Result, Storage};
 
-/// The authored workloads by name, each with the builder of its plan. A plan holds its inputs and
+/// An authored workload: its name, and the builder of its plan. A plan holds its inputs and
 /// expected results (up to 128 MiB), so each is built when it runs.
-pub const WORKLOADS: [(&str, fn() -> Plan); 6] = [
-    ("bandwidth", bandwidth),
-    ("alu", alu),
-    ("threadgroup_scan", threadgroup_scan),
-    ("simd_reduce", simd_reduce),
-    ("image_filter", image_filter),
-    ("dispatch_chain", dispatch_chain),
+#[derive(Clone, Copy, Debug)]
+pub struct Workload {
+    /// Its name in reports and in `--only`.
+    pub name: &'static str,
+    /// Its plan's builder.
+    pub plan: fn() -> Plan,
+}
+
+/// The authored workloads.
+pub const WORKLOADS: [Workload; 6] = [
+    Workload {
+        name: "bandwidth",
+        plan: bandwidth,
+    },
+    Workload {
+        name: "alu",
+        plan: alu,
+    },
+    Workload {
+        name: "threadgroup_scan",
+        plan: threadgroup_scan,
+    },
+    Workload {
+        name: "simd_reduce",
+        plan: simd_reduce,
+    },
+    Workload {
+        name: "image_filter",
+        plan: image_filter,
+    },
+    Workload {
+        name: "dispatch_chain",
+        plan: dispatch_chain,
+    },
 ];
 
 /// The authored library's AIR bitcode: the fixture's LLVM text, assembled by `llvm-as`.

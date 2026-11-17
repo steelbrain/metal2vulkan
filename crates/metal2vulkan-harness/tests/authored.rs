@@ -15,9 +15,10 @@ fn every_authored_workload_matches_its_reference_on_the_old_runtime() {
         warmup: 0,
         timed: 1,
     };
-    for (name, build) in authored::WORKLOADS {
-        let report =
-            (harness.run(&library, &build(), runs)).unwrap_or_else(|why| panic!("{name}: {why}"));
+    for workload in authored::WORKLOADS {
+        let name = workload.name;
+        let report = (harness.run(&library, &(workload.plan)(), runs))
+            .unwrap_or_else(|why| panic!("{name}: {why}"));
         assert_eq!(report.gpu_us.len(), 1, "{name}");
     }
 }

@@ -57,8 +57,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
             "--only" => {
                 let names: Vec<String> = value()?.split(',').map(str::to_owned).collect();
                 for name in &names {
-                    if !authored::WORKLOADS.iter().any(|(known, _)| known == name) {
-                        let known = authored::WORKLOADS.map(|(known, _)| known).join(", ");
+                    if !authored::WORKLOADS.iter().any(|known| known.name == name) {
+                        let known = authored::WORKLOADS.map(|known| known.name).join(", ");
                         return Err(
                             format!("no workload {name}; the workloads are: {known}").into()
                         );
@@ -97,11 +97,12 @@ fn run_all<D: Device>(device: &D, args: &Args) -> Result<bool> {
         "cpu_ns/dispatch",
     );
     let mut matched = true;
-    for (name, build) in authored::WORKLOADS {
+    for workload in authored::WORKLOADS {
+        let name = workload.name;
         if (args.only.as_ref()).is_some_and(|only| !only.iter().any(|selected| selected == name)) {
             continue;
         }
-        match harness.run(&library, &build(), args.runs) {
+        match harness.run(&library, &(workload.plan)(), args.runs) {
             Ok(report) => print(runtime, name, &report),
             Err(why) => {
                 println!("{name}: FAILED: {why}");

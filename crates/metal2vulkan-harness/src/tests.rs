@@ -77,9 +77,9 @@ fn a_plan_with_a_part_length_or_a_missing_buffer_is_refused() {
 /// Each authored plan is whole: its builder's inputs, kernels and references agree in shape.
 #[test]
 fn every_authored_plan_validates() {
-    for (name, build) in WORKLOADS {
-        let plan = build();
-        assert_eq!(plan.name, name);
+    for workload in WORKLOADS {
+        let plan = (workload.plan)();
+        assert_eq!(plan.name, workload.name);
         plan.validate().unwrap();
     }
 }
