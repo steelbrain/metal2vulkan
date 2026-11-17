@@ -215,21 +215,47 @@ class HarnessBudgetTests(unittest.TestCase):
             self.assertEqual(self.budget("10de:1e87", times),
                              (["harness budget frame: new 103.5 us over old 100.0 us is 1.035, past 1.03"], []))
 
-    def test_a_listed_row_fails_only_past_its_ceiling_and_is_named_below_it(self):
+    def test_a_listed_row_fails_only_past_its_ceiling_with_its_allowance_and_is_named_below_it(self):
         ceilings = {"10de:1e87": {"frame": 2.114, "alu": 1.2, "bandwidth": 1.1}}
         times = {"harness-old/frame": 100.0, "harness-new/frame": 211.0,
-                 "harness-old/alu": 100.0, "harness-new/alu": 121.0,
+                 "harness-old/alu": 100.0, "harness-new/alu": 124.0,
                  "harness-old/bandwidth": 100.0, "harness-new/bandwidth": 101.0}
         with mock.patch.object(results, "HARNESS_CEILINGS", ceilings):
             problems, parked = self.budget("10de:1e87", times)
-            self.assertEqual(problems, ["harness budget alu: new 121.0 us over old 100.0 us is 1.210, past its "
-                                        "ceiling 1.2"])
+            self.assertEqual(problems, ["harness budget alu: new 124.0 us over old 100.0 us is 1.240, past its "
+                                        "ceiling 1.2 with its allowance, 1.236"])
             self.assertEqual(parked, [
                 "harness budget bandwidth: new 101.0 us over old 100.0 us is 1.010, within 1.03: its ceiling "
                 "1.1 leaves the list",
                 "harness budget frame: new 211.0 us over old 100.0 us is 2.110, its ceiling 2.114"])
             # Another GPU's ceilings are not this one's.
             self.assertEqual(len(self.budget("1002:744c", times)[0]), 2)
+
+    def test_a_ceiling_s_allowance_is_the_budget_s_three_percent(self):
+        # 2 times 1.03 and 206 over 100 are the same double.
+        with mock.patch.object(results, "HARNESS_CEILINGS", {"a": {"t": 2.0}}):
+            at = {"harness-old/t": 100.0, "harness-new/t": 206.0}
+            past = {"harness-old/t": 100.0, "harness-new/t": 206.1}
+            self.assertEqual(self.budget("a", at)[0], [])
+            self.assertEqual(self.budget("a", past)[0], [
+                "harness budget t: new 206.1 us over old 100.0 us is 2.061, past its ceiling 2.0 with its "
+                "allowance, 2.060"])
+
+    def test_a_row_the_old_runtime_failed_is_named_and_fails_nothing_and_the_new_runtime_s_fails(self):
+        old = ("burst_2000x5: FAILED: old: the command buffer ended Error: Some(GpuRecoveryVictim)\n"
+               "M2V-FAILED harness-old/burst_2000x5\n    M2V-MATRIX time harness-old/alu 100")
+        new = "    M2V-MATRIX time harness-new/burst_2000x5 50\n    M2V-MATRIX time harness-new/alu 101"
+        leg = results.parse_job(job(("8086:3e9b", "harness-old", 1, old), ("8086:3e9b", "harness-new", 0, new)))
+        leg = leg["8086:3e9b"]
+        records, problems = results.leg_records(leg)
+        self.assertEqual(problems + results.leg_problems(leg, records, None), [])
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(results.harness_budget("8086:3e9b", leg),
+                             ([], ["harness budget burst_2000x5: old failed, not compared"]))
+        failed = "burst_2000x5: FAILED: new: why\nM2V-FAILED harness-new/burst_2000x5"
+        leg = results.parse_job(job(("8086:3e9b", "harness-new", 1, failed)))["8086:3e9b"]
+        self.assertEqual(results.leg_problems(leg, results.leg_records(leg)[0], None),
+                         ["suite harness-new exited 1, 1 failed: harness-new/burst_2000x5"])
 
     def test_the_old_runtime_s_parked_records_are_still_the_budget_s_reference(self):
         prefix = results.PARKED_RECORDS[0]

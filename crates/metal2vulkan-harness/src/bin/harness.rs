@@ -20,7 +20,7 @@ use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
     percentile, run_each, steady, CreateReport, Harness, Report, Runs, Session, Warmup,
 };
-use metal2vulkan_harness::{authored, description, old, rt, Result, Waits};
+use metal2vulkan_harness::{authored, description, old, rt, Error, Failed, Result, Waits};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -209,6 +209,7 @@ fn run_all(args: &Args) -> Result<bool> {
             }
             Err(why) => {
                 println!("{name}: FAILED: {why}");
+                failed(&why, &sessions, name);
                 matched = false;
             }
         }
@@ -246,7 +247,14 @@ fn run_all(args: &Args) -> Result<bool> {
     }
     for create in &creates {
         let reports = (sessions.iter_mut())
-            .map(|(_, session)| session.create(create.length, args.runs))
+            .map(|(runtime, session)| {
+                (session.create(create.length, args.runs)).map_err(|why| -> Error {
+                    Box::new(Failed {
+                        runtime: runtime.to_string(),
+                        why,
+                    })
+                })
+            })
             .collect::<Result<Vec<CreateReport>>>();
         match reports {
             Ok(reports) => {
@@ -256,6 +264,7 @@ fn run_all(args: &Args) -> Result<bool> {
             }
             Err(why) => {
                 println!("{}: FAILED: {why}", create.name);
+                failed(&why, &sessions, create.name);
                 matched = false;
             }
         }
@@ -275,6 +284,20 @@ fn run_all(args: &Args) -> Result<bool> {
         }
     }
     Ok(matched)
+}
+
+/// The matrix's line of a workload that failed, `M2V-FAILED harness-<runtime>/<workload>`: for
+/// the runtime it failed on ([`Failed`]), or for each runtime of the command where the failure
+/// names none (a plan that could not be made, or outputs that differ between runtimes).
+fn failed(why: &Error, sessions: &[(&str, Box<dyn Session>)], name: &str) {
+    match why.downcast_ref::<Failed>() {
+        Some(failed) => println!("M2V-FAILED harness-{}/{name}", failed.runtime),
+        None => {
+            for (runtime, _) in sessions {
+                println!("M2V-FAILED harness-{runtime}/{name}");
+            }
+        }
+    }
 }
 
 /// The column of a workload's [`steady`] time.

@@ -3,7 +3,7 @@
 use crate::plan::{Binding, BufferPlan, Constant, Filter, Grid, Plan, Source, TexturePlan};
 use crate::{
     clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputeDevice,
-    Device, Library, Refused, Result, Storage, Waits,
+    Device, Failed, Library, Refused, Result, Storage, Waits,
 };
 use std::collections::HashMap;
 use std::ops::Range;
@@ -221,17 +221,21 @@ pub trait Session {
 }
 
 /// `plan` on each session in turn: its report, or its runtime's typed refusal. An error where a
-/// session failed, or where the outputs of the sessions that ran it differ.
+/// session failed ([`Failed`], naming its runtime), or where the outputs of the sessions that ran
+/// it differ.
 pub fn run_each(
     plan: &Plan,
     sessions: &mut [(&str, Box<dyn Session>)],
     runs: Runs,
 ) -> Result<Vec<std::result::Result<Report, Box<Refused>>>> {
     let mut each = Vec::with_capacity(sessions.len());
-    for (_, session) in sessions.iter_mut() {
+    for (runtime, session) in sessions.iter_mut() {
         each.push(match session.run(plan, runs) {
             Ok(report) => Ok(report),
-            Err(why) => Err(why.downcast::<Refused>()?),
+            Err(why) => Err(why.downcast::<Refused>().map_err(|why| Failed {
+                runtime: runtime.to_string(),
+                why,
+            })?),
         });
     }
     let mut ran = each.iter().filter_map(|run| run.as_ref().ok());

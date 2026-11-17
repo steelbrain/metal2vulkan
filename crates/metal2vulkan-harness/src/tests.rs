@@ -11,7 +11,7 @@ use crate::run::{
     compare_outputs, copy_dispatches, parts, percentile, run_each, settled, steady, warm_up,
     zeroed, CreateReport, Report, Runs, Session,
 };
-use crate::{Buffer, Refused, Result, Storage, Waits};
+use crate::{Buffer, Failed, Refused, Result, Storage, Waits};
 use metal2vulkan_rt::{Error as RtError, Gap, Limit};
 use std::path::Path;
 use std::ptr::NonNull;
@@ -573,8 +573,16 @@ fn a_refusal_is_reported_beside_the_runs_and_a_failure_is_not() {
     assert_eq!(each[1].as_ref().unwrap_err().to_string(), "a known gap");
     sessions[2].1 = answers(&[1, 2, 3, 5], None);
     assert!(run_each(&plan, &mut sessions, runs).is_err());
+    // Outputs that differ name no runtime.
+    let differ = run_each(&plan, &mut sessions, runs).unwrap_err();
+    assert!(differ.downcast_ref::<Failed>().is_none());
     sessions[2].1 = answers(&[], Some(fail));
-    assert!(run_each(&plan, &mut sessions, runs).is_err());
+    let failed = run_each(&plan, &mut sessions, runs).unwrap_err();
+    let failed = failed.downcast_ref::<Failed>().unwrap();
+    assert_eq!(
+        (failed.runtime.as_str(), failed.why.to_string().as_str()),
+        ("c", "a failure")
+    );
 }
 
 /// The copy kernel's dispatches cover the bytes once, in order, each of whole threadgroups.

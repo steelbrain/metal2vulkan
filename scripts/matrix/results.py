@@ -52,7 +52,9 @@ PARKED_TESTS = {
 #: Record keys, by prefix, whose gauge @100-to-@200 flatness and cross-GPU time outliers are parked
 #: for the same reason (a gauge's @drop still fails): the old runtime frees idle memory blocks at
 #: times of its own, and its frame timing on the UHD 630 swings by half between runs of unchanged
-#: code (1.58x at a68d520bee, 1.47x at 9af29fbb20).
+#: code (1.58x at a68d520bee, 1.47x at 9af29fbb20). A harness workload's failure on the old
+#: runtime (`M2V-FAILED harness-old/<row>`, one burst_2000x5 run on the UHD 630 ended in a GPU
+#: recovery at 8b15f6574b) is parked too: harness_budget names its row as not compared.
 PARKED_RECORDS = ("harness-old/",)
 
 #: The phrase that opens the subject of a commit allowed to change the old runtime's output: until
@@ -79,6 +81,8 @@ NEXTEST_FAILED = re.compile(
 # libtest (doctests): `test result: ok. 12 passed; 0 failed; 1 ignored; ...`.
 LIBTEST_RESULT = re.compile(r"^test result: \w+\. (\d+) passed; (\d+) failed")
 LIBTEST_FAILED = re.compile(r"^test (.+) \.\.\. FAILED\s*$")
+# The harness command's line for a workload that failed on one runtime.
+HARNESS_FAILED = re.compile(r"^\s*M2V-FAILED (\S+)\s*$")
 
 
 def empty_records():
@@ -111,7 +115,7 @@ def parse_suite(lines):
             run += int(m.group(1)) + int(m.group(2))
             passed += int(m.group(1))
             continue
-        m = NEXTEST_FAILED.match(line) or LIBTEST_FAILED.match(line)
+        m = NEXTEST_FAILED.match(line) or LIBTEST_FAILED.match(line) or HARNESS_FAILED.match(line)
         if m:
             name = m.group(m.lastindex)
             if name not in failed:
@@ -205,10 +209,11 @@ def leg_parked(leg, records):
 def leg_problems(leg, records, base):
     """What fails a leg: a suite that failed, a record's own problem, and the rules against the
     base leg's records (BASE None: no base, so only the rules that need none). A suite whose every
-    failed test is parked (PARKED_TESTS) has not failed."""
+    failed test is parked (PARKED_TESTS, or a harness workload of PARKED_RECORDS) has not failed."""
     problems = []
     for name, suite in leg["suites"].items():
-        failed = [test for test in suite["failed"] if test not in PARKED_TESTS]
+        failed = [test for test in suite["failed"]
+                  if test not in PARKED_TESTS and not test.startswith(PARKED_RECORDS)]
         if failed or (suite["exit"] != 0 and not suite["failed"]):
             shown = ", ".join(failed[:5]) + (" ..." if len(failed) > 5 else "")
             problems.append(f"suite {name} exited {suite['exit']}"
@@ -301,10 +306,16 @@ def harness_budget(leg_id, leg):
     (`harness-new/<row>` and `harness-old/<row>`) against its ceiling in HARNESS_CEILINGS, or
     against HARNESS_BUDGET where none is listed. Returns (problems, parked): a row past its ceiling
     or the budget is a problem, and so is a row whose time was recorded more than once (twice by a
-    suite, or by two suites), which has no one time to judge; a listed row within its ceiling is
-    named, with its ceiling, and one within the budget as leaving the list."""
+    suite, or by two suites), which has no one time to judge. A listed row passes up to its ceiling
+    times HARNESS_BUDGET, the noise allowance parity gets, and is named with its ceiling; one within
+    the budget is named as leaving the list. A row whose run failed on the old runtime
+    (`M2V-FAILED harness-old/<row>`) is named as not compared and fails nothing here (PARKED_RECORDS);
+    one that failed on the new runtime fails its suite (leg_problems)."""
     problems, parked = [], []
     suites = leg["suites"].values()
+    for row in sorted({test[len(HARNESS_OLD):] for suite in suites for test in suite["failed"]
+                       if test.startswith(HARNESS_OLD)}):
+        parked.append(f"harness budget {row}: old failed, not compared")
     times = leg_records(leg)[0]["time"]
     keys = [key for suite in suites for key in suite["records"]["time"]]
     twice = ({key for key in keys if keys.count(key) > 1}
@@ -324,8 +335,9 @@ def harness_budget(leg_id, leg):
         if row not in ceilings:
             if ratio > HARNESS_BUDGET:
                 problems.append(f"{line}, past {HARNESS_BUDGET}")
-        elif ratio > ceilings[row]:
-            problems.append(f"{line}, past its ceiling {ceilings[row]}")
+        elif ratio > ceilings[row] * HARNESS_BUDGET:
+            problems.append(f"{line}, past its ceiling {ceilings[row]} with its allowance, "
+                            f"{ceilings[row] * HARNESS_BUDGET:.3f}")
         elif ratio > HARNESS_BUDGET:
             parked.append(f"{line}, its ceiling {ceilings[row]}")
         else:

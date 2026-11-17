@@ -78,6 +78,8 @@
 //!
 //! and once every workload has run, where the runtime's gauges outlive its device,
 //! `M2V-MATRIX gauge harness-<runtime>/device/<gauge>@drop <value>` read after the device dropped.
+//! A workload that fails prints `M2V-FAILED harness-<runtime>/<workload>` beside its `FAILED`
+//! line, for the runtime it failed on ([`Failed`]), or for each runtime where it names none.
 
 use std::ptr::NonNull;
 
@@ -108,6 +110,23 @@ impl std::fmt::Display for Refused {
 }
 
 impl std::error::Error for Refused {}
+
+/// A workload's failure on one runtime, other than a refusal: the runtime's name and why.
+#[derive(Debug)]
+pub struct Failed {
+    /// The runtime's name (`old` or `new`).
+    pub runtime: String,
+    /// Why it failed.
+    pub why: Error,
+}
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.runtime, self.why)
+    }
+}
+
+impl std::error::Error for Failed {}
 
 /// A runtime's first-use waits so far: encoding calls that waited while the `VkPipeline` they
 /// needed was made ([`Device::first_use_waits`]).

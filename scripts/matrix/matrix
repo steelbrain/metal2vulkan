@@ -50,8 +50,10 @@ TREE = STATE / "tree"
 NOTES = "refs/notes/matrix"
 ARCHIVE = "m2v-matrix-gpu.tar.zst"
 HARNESS = "m2v-matrix-harness"
-#: The runtimes the harness command times (`harness --runtime NAME`).
+#: The runtimes the harness command times (`harness --runtime NAME`), each its own suite of the leg,
+#: `harness-NAME`, so that a failure names its runtime.
 HARNESS_RUNTIMES = ("old", "new")
+HARNESS_SUITES = tuple(f"harness-{runtime}" for runtime in HARNESS_RUNTIMES)
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
 #: (RAM GiB, minutes) of each job kind before a run of it was measured; the minutes stay its floor.
@@ -235,11 +237,7 @@ def gpu_script(short, setup, legs, mirror, rev, suite, last):
         file, body = ARCHIVE, f"""cargo nextest run --archive-file "$F" --workspace-remap "$S" {NEXTEST_OUT} 2>&1 | awk "$KEEP"
     exit ${{PIPESTATUS[0]}}"""
     else:
-        file, body = HARNESS, f"""rc=0
-    for runtime in {" ".join(HARNESS_RUNTIMES)}; do
-      CARGO_MANIFEST_DIR="$S/crates/metal2vulkan-harness" "$F" --runtime $runtime || rc=1
-    done
-    exit $rc"""
+        file, body = HARNESS, harness_runs('"$S/crates/metal2vulkan-harness"', '"$F"', '$1')
     tidy = """rm -rf "$S"
 m="${mirror}"; rm -rf "$m" "${{m%.git}}.lock" "${{m%.git}}.worktrees.lock"
 find "$POTLUCK_HOME/mirrors" -maxdepth 1 -name 'm2v-matrix-*' -mmin +720 -exec rm -rf {{}} +""".format(mirror=mirror) if last else ""
@@ -257,7 +255,7 @@ leg() {{
     {body}
   )
   rc=$?
-  echo "M2V-SUITE $1 {suite} exit $rc"
+  {'echo "M2V-SUITE $1 rt exit $rc"' if suite == "rt" else ""}
   [ $rc -eq 0 ] || all=1
 }}
 {runs}
@@ -265,6 +263,19 @@ rm -f "$F"
 {tidy}
 exit $all
 """
+
+
+def harness_runs(manifest_dir, command, leg):
+    """The harness command once per runtime (HARNESS_RUNTIMES), each run its own suite of leg LEG
+    (HARNESS_SUITES); the shell's status is 1 where one failed."""
+    return f"""rc=0
+    for runtime in {" ".join(HARNESS_RUNTIMES)}; do
+      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime
+      r=$?
+      echo "M2V-SUITE {leg} harness-$runtime exit $r"
+      [ $r -eq 0 ] || rc=1
+    done
+    exit $rc"""
 
 
 def lavapipe_script(setup):
@@ -335,15 +346,15 @@ def winrun_script(leg, suite):
         body = f"""cargo nextest run -p metal2vulkan-rt --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
 rc=${{PIPESTATUS[0]}}"""
     else:
-        body = f"""rc=0
-for runtime in {" ".join(HARNESS_RUNTIMES)}; do
-  CARGO_MANIFEST_DIR="$PWD/crates/metal2vulkan-harness" target/gpucfg/release/harness --runtime $runtime || rc=1
-done"""
+        body = f"""(
+{harness_runs('"$PWD/crates/metal2vulkan-harness"', "target/gpucfg/release/harness", leg.id)}
+)
+rc=$?"""
     return windows_head() + f"""KEEP='{KEEP}'
 echo "M2V-LEG {leg.id} begin"
 {DEVICE_LINES.format(leg=leg.id)}
 {body}
-echo "M2V-SUITE {leg.id} {suite} exit $rc"
+{f'echo "M2V-SUITE {leg.id} rt exit $rc"' if suite == "rt" else ""}
 exit $rc
 """
 
@@ -536,6 +547,10 @@ class Run:
                 continue
             leg.parsed["device"].update(parsed[leg.id]["device"])
             leg.parsed["suites"].update(parsed[leg.id]["suites"])
+            missing = [name for name in HARNESS_SUITES if name not in parsed[leg.id]["suites"]]
+            if suite == "harness" and missing:
+                self.fail([leg], f"harness: job {rec and rec.get('id')} reported no suite {', '.join(missing)} "
+                                 f"of leg {leg.id} (exit {code})")
 
     def windows(self, leg):
         code, out, rec = self.job("winbuild", leg.node, winbuild_script(self.harness), f"winbuild-{leg.id}",
