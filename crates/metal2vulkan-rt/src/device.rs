@@ -362,12 +362,10 @@ impl Device {
             properties.properties.limits.timestamp_period,
             families[family as usize].timestamp_valid_bits,
         );
-        let limits = properties.properties.limits;
+        let limits = &properties.properties.limits;
         let limits = ComputeLimits {
             max_group_count: limits.max_compute_work_group_count,
             max_group_size: limits.max_compute_work_group_size,
-            max_invocations: limits.max_compute_work_group_invocations,
-            max_subgroups: vulkan13.max_compute_workgroup_subgroups,
             max_shared_memory: limits.max_compute_shared_memory_size,
         };
         let max_block_len = vulkan11
@@ -871,10 +869,6 @@ pub(crate) struct ComputeLimits {
     pub(crate) max_group_count: [u32; 3],
     /// `maxComputeWorkGroupSize`.
     pub(crate) max_group_size: [u32; 3],
-    /// `maxComputeWorkGroupInvocations`.
-    pub(crate) max_invocations: u32,
-    /// `maxComputeWorkgroupSubgroups`.
-    pub(crate) max_subgroups: u32,
     /// `maxComputeSharedMemorySize`.
     pub(crate) max_shared_memory: u32,
 }
