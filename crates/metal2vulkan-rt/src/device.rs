@@ -649,7 +649,8 @@ fn finish(runner: Option<Runner>, core: &Arc<Core>, deadline: Option<Instant>) -
 /// `device` was made with `capabilities.features`, and `family` is its queues' family.
 /// The translator for `raw` with what device creation enables with `features`, under the identity
 /// domains: a buffer argument is the guest's address of the buffer, a push field, and a texture or
-/// a sampler its resource ID.
+/// a sampler its resource ID. It is decided by the device's Vulkan queries alone
+/// (`Device::from_queries`): no driver or GPU identity, and no fact measured on one, applies.
 ///
 /// # Safety
 ///
@@ -668,7 +669,7 @@ unsafe fn translator(
     let mut policy = DevicePolicy::default();
     policy.pointer_domain = PointerDomain::Identity;
     policy.handle_domain = HandleDomain::Identity;
-    metal2vulkan::device::Device::new(description, policy).map_err(Error::Translation)
+    metal2vulkan::device::Device::from_queries(description, policy).map_err(Error::Translation)
 }
 
 unsafe fn objects(
