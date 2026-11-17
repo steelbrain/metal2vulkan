@@ -764,7 +764,7 @@ pub struct AccessPlan {
     /// Memory-plan slots reached under the identity domains from their address as it is, which
     /// the binder holds to a multiple of their argument's alignment ([`address_alignment`],
     /// `RuntimeFact::AddressAlignment`), and whose window the analysis bounds to at most 2 GiB
-    /// ([`DIRECT_WINDOW`]): no access rounds the address (`psb::prepare_direct`), and `uvec2` and
+    /// (`DIRECT_WINDOW`): no access rounds the address (`psb::prepare_direct`), and `uvec2` and
     /// `uvec4` units are taken at offsets proven multiples of their size. Every other
     /// device-address slot is reached from the word below each access (`psb::prepare_at`).
     pub aligned: BTreeSet<usize>,
