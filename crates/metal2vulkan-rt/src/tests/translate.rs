@@ -924,31 +924,17 @@ mod on_device {
     /// one row's load of a word before the other row's store to it: the translator keeps that
     /// order with barriers that order only pairs meeting across rows, and states it
     /// (`RuntimeFact::RowLockstep`). Every device creates the state and runs the three shapes;
-    /// where the device pins a subgroup of 32 its plain module, the Direct tier, states the fact,
-    /// and where its emulated module states it and a shape ran on it, the reaper made that
-    /// module. Every answer is Metal's (M3 Max, macOS 27.0.1): each thread writes the sum of the
-    /// x below min(16, width), 120 or 66.
+    /// the plain module states the fact exactly where its local size is flattened (the Direct and
+    /// Cluster32 tiers, which state `LocalSizeConstraint`), and where the emulated module states
+    /// it and a shape ran on it, the reaper made that module. Every answer is Metal's (M3 Max,
+    /// macOS 27.0.1): each thread writes the sum of the x below min(16, width), 120 or 66.
     #[test]
     fn every_device_runs_a_kernel_whose_lockstep_orders_rows() {
-        use ash::vk;
-
         let Some(descriptor) = descriptor("row_lockstep_tree") else {
             return;
         };
         const GROUPS: u32 = 4;
         each_device("compute_row_lockstep", |name, _, device| {
-            let raw = device.raw();
-            let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
-            let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut vulkan13);
-            // SAFETY: the physical device is the instance's, a Vulkan 1.3 one.
-            unsafe {
-                raw.instance
-                    .get_physical_device_properties2(raw.physical_device, &mut properties)
-            };
-            let pinnable = vulkan13
-                .required_subgroup_size_stages
-                .contains(vk::ShaderStageFlags::COMPUTE)
-                && (vulkan13.min_subgroup_size..=vulkan13.max_subgroup_size).contains(&32);
             let state = state(name, &device, &descriptor);
             let multiples = state.inner.whole.interface.multiples.clone();
             let queue = device.new_command_queue(4).expect("a queue");
@@ -983,14 +969,18 @@ mod on_device {
                     on_emulated.push(format!("{width} x {rows}"));
                 }
             }
-            let [plain, emulated] = facts_read(name, &device, &descriptor);
+            let [plain_facts, emulated] = facts_read(name, &device, &descriptor);
+            let flat = (plain_facts.iter())
+                .any(|fact| matches!(fact, RuntimeFact::LocalSizeConstraint { .. }));
             let (plain, emulated) = (
-                plain.contains(&RuntimeFact::RowLockstep),
+                plain_facts.contains(&RuntimeFact::RowLockstep),
                 emulated.contains(&RuntimeFact::RowLockstep),
             );
-            if pinnable {
-                assert!(plain, "{name}: the Direct tier's module states RowLockstep");
-            }
+            assert_eq!(
+                plain, flat,
+                "{name}: RowLockstep where the plain module's local size is flattened: \
+                 {plain_facts:?}"
+            );
             if emulated && !on_emulated.is_empty() {
                 assert!(
                     emulated_made(&state),
@@ -998,8 +988,9 @@ mod on_device {
                 );
             }
             println!(
-                "{name}: sums checked in 16 x 2, 32 x 1 and 12 x 2; RowLockstep stated by the \
-                 plain module {plain}, by the emulated module {emulated}, which ran {on_emulated:?}"
+                "{name}: sums checked in 16 x 2, 32 x 1 and 12 x 2; plain module flattened \
+                 {flat} ({plain_facts:?}); RowLockstep stated by the plain module {plain}, by the \
+                 emulated module {emulated}, which ran {on_emulated:?}"
             );
         });
     }
