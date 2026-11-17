@@ -463,10 +463,11 @@ impl Lane {
     }
 
     /// End an exchange: in the emulated tier a workgroup barrier, so no lane publishes over the
-    /// scratch before every lane has read it.
+    /// scratch before every lane has read it, unless the scratch alternates two regions
+    /// (`workgroup::Emu::close`).
     pub(super) fn close(&self, fb: &mut FunctionBuilder<'_>, ex: Exchange) -> BResult<()> {
         match (ex, &self.emu) {
-            (Exchange::Workgroup(_), Some(e)) => e.barrier(fb),
+            (Exchange::Workgroup(_), Some(e)) => e.close(fb),
             _ => Ok(()),
         }
     }

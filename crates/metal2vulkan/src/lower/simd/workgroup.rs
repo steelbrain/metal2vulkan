@@ -9,7 +9,15 @@
 //! **Exchange.** An operation that reads other lanes publishes the values it moves: each lane
 //! stores its words at `scratch[lin · W + i]`, a workgroup barrier makes them visible, each lane
 //! reads the words of the lanes it needs, and a second workgroup barrier keeps the next exchange
-//! from overwriting them before every lane has read. `W` is the widest exchange of the function
+//! from overwriting them before every lane has read. Under the identity domains the scratch holds
+//! two such regions, which the exchanges and votes take in turn by a per-invocation turn that
+//! flips at each ([`Declared::turn`]; every invocation executes the same exchanges, so the turn is
+//! workgroup uniform): an exchange writes the region the one before it did not, every lane read
+//! that region's last words before the barrier that opened the exchange in between, and that
+//! barrier orders those reads before this exchange's writes, so no exchange closes with a barrier
+//! (in Vulkan's memory model a control barrier's release in one invocation synchronizes with its
+//! acquire in every other, and a read that happens before a write is location-ordered before it,
+//! so it does not see it). `W` is the widest exchange of the function
 //! (words per lane: one per lane of each value it moves; Metal moves no 64-bit value between
 //! lanes, so a 64-bit form is not lowered), and the scratch is a `u32` array of `W · ⌈N / 32⌉ · 32`
 //! words, `N = sx·sy·sz` the threadgroup's threads (the local-size specialization constants), so
@@ -56,7 +64,8 @@
 //!   superset of the simdgroup's threads; a simdgroup-scope fence orders at workgroup scope for
 //!   the same reason (`sync::barrier`).
 //!
-//! **Memory.** The scratch takes `4 · W · 32` bytes per simdgroup beside the kernel's own
+//! **Memory.** The scratch takes `4 · W · 32` bytes per simdgroup, twice that with two regions,
+//! beside the kernel's own
 //! threadgroup memory, the arena the module declares ([`arena_bytes`]: whole words and at least
 //! `MIN_ARENA_BYTES`). [`check`] refuses a kernel whose static arena and one simdgroup's scratch
 //! exceed `maxComputeSharedMemorySize` (`ThreadgroupMemorySize`), and the function depends on
@@ -292,9 +301,10 @@ const TILE_READS: u32 = 8 * 3;
 const CELL_SELECT_WORDS: u32 = 16;
 
 /// The scratch bytes one simdgroup of a function publishing `words` per lane takes
-/// (`4 · words · 32`).
-pub fn bytes_per_simdgroup(words: u32) -> u64 {
-    4 * u64::from(words) * u64::from(SIMD_WIDTH)
+/// (`4 · words · 32`), in each of two regions with `alternating` ([`Declared::turn`]).
+pub fn bytes_per_simdgroup(words: u32, alternating: bool) -> u64 {
+    let regions = if alternating { 2 } else { 1 };
+    regions * 4 * u64::from(words) * u64::from(SIMD_WIDTH)
 }
 
 /// The threadgroup memory beside the scratch when the module's arena, whose static part is
@@ -398,10 +408,11 @@ pub fn check(
     if predication.is_some() {
         words = words.max(1);
     }
+    let identity = crate::lower::access::identity(cx.profile);
     let fact = if words == 0 {
         None
     } else {
-        let per_simdgroup = bytes_per_simdgroup(words);
+        let per_simdgroup = bytes_per_simdgroup(words, identity);
         // The arena the module declares (`access::local::use_arena` checked its static part) and
         // its typed threadgroup objects.
         let arena = crate::lower::access::local::static_workgroup_bytes(cx);
@@ -420,7 +431,8 @@ pub fn check(
         cx.families.simd.implementation_defined = false;
     }
     cx.families.simd.exchange_words = words;
-    cx.families.simd.guarded_barriers = crate::lower::access::identity(cx.profile);
+    cx.families.simd.guarded_barriers = identity;
+    cx.families.simd.alternating = identity;
     cx.families.simd.predication = predication;
     if let Some(fact) = fact {
         cx.facts.insert(fact);
@@ -469,6 +481,10 @@ pub struct Declared {
     /// (`SimdPlan::guarded_barriers`) and the function exchanges values: each exchange and vote
     /// barrier runs only where it holds, a branch the specialization decides.
     pub several: Option<ConstId>,
+    /// Where the plan alternates the scratch's two regions (`SimdPlan::alternating`) and the
+    /// function exchanges values: the invocation's turn, a `Private` `u32` from 0, the region the
+    /// next exchange or vote writes; each flips it ([`Emu::take_turn`]).
+    pub turn: Option<GlobalId>,
 }
 
 fn u32_ty(mb: &mut ModuleBuilder) -> BResult<TypeId> {
@@ -489,7 +505,8 @@ fn konst(mb: &mut ModuleBuilder, v: u32) -> BResult<ConstId> {
 /// Declare the thread count and, for a function that exchanges `words` per lane, the scratch
 /// in `Workgroup` memory: one slot per lane of `(N + 31) & ~31`, a `u32` or, for more than one
 /// word, a `u32[words]`, so a word's pointer is one access chain at the lane and the constant
-/// word with no slot arithmetic; with `guarded` the condition `1 < N` its barriers run under. The
+/// word with no slot arithmetic; with `guarded` the condition `1 < N` its barriers run under; with
+/// `alternating` two such regions, the region the outer index, and the turn that picks one. The
 /// local-size constants are the dispatch family's for the `stage` (`SpecKey::dispatch_keys`,
 /// default 1).
 pub fn declare(
@@ -497,6 +514,7 @@ pub fn declare(
     stage: Stage,
     words: u32,
     guarded: bool,
+    alternating: bool,
 ) -> BResult<Declared> {
     let u32_ = u32_ty(mb)?;
     let [sx, sy, sz] = SpecKey::dispatch_keys(stage)
@@ -509,6 +527,7 @@ pub fn declare(
             threads,
             scratch: None,
             several: None,
+            turn: None,
         });
     }
     let several = if guarded {
@@ -532,16 +551,30 @@ pub fn declare(
             stride: None,
         })?
     };
-    let ty = mb.ty(Type::Array {
+    let region = mb.ty(Type::Array {
         elem: slot,
         len: padded,
         stride: None,
     })?;
+    let (ty, turn) = if alternating {
+        let two = konst(mb, 2)?;
+        let ty = mb.ty(Type::Array {
+            elem: region,
+            len: two,
+            stride: None,
+        })?;
+        let zero = konst(mb, 0)?;
+        let turn = mb.plain_global(StorageClass::Private, u32_, Some(zero))?;
+        (ty, Some(turn))
+    } else {
+        (region, None)
+    };
     let scratch = mb.plain_global(StorageClass::Workgroup, ty, None)?;
     Ok(Declared {
         threads,
         scratch: Some(scratch),
         several,
+        turn,
     })
 }
 
@@ -561,13 +594,21 @@ pub struct Emu {
     active: Option<SValue>,
     /// `1 < N`, where the plan guards the tier's barriers ([`Declared::several`]).
     several: Option<SValue>,
+    /// The turn, where the scratch holds two regions ([`Declared::turn`]).
+    turn: Option<GlobalId>,
 }
 
-/// Words published by [`Emu::publish`]: each value's first word and type, and the index in
-/// `layout` of the published active flag, if any.
+/// The scratch region an exchange or vote writes and reads: the turn it took
+/// ([`Emu::take_turn`]), or `None` where the scratch is one region.
+#[derive(Clone, Copy, Debug)]
+struct Region(Option<SValue>);
+
+/// Words published by [`Emu::publish`]: each value's first word and type, the index in `layout`
+/// of the published active flag, if any, and the region they are in.
 pub struct Published {
     layout: Vec<(u32, TypeId)>,
     active: Option<usize>,
+    region: Region,
 }
 
 /// The exchange state of the plan's emulated tier.
@@ -587,6 +628,7 @@ pub(super) fn emu(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
     Ok(Emu {
         n,
         several,
+        turn: d.turn,
         scratch: d.scratch,
         stride: cx.plan.families.simd.exchange_words,
         coherence: memory_model::coherence(cx.plan),
@@ -602,9 +644,10 @@ pub(super) fn emu(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
 /// Whether `live` holds for some invocation of the workgroup: every invocation clears the vote
 /// word, a workgroup barrier, each sets it where `live` holds, a barrier, each reads it, and a
 /// barrier keeps the next exchange or vote from writing it before every invocation has read. The
-/// word is the scratch's first in the emulated tier, and the kernel's own vote word elsewhere
-/// (`simd::Declared::vote`); it is only reached by atomics, which the barriers order. The result is
-/// workgroup uniform; the caller is in workgroup-uniform control flow.
+/// word is the scratch's first in the emulated tier (in the region the vote takes, where the
+/// scratch alternates two, which needs no third barrier: [`Emu::close`]), and the kernel's own
+/// vote word elsewhere (`simd::Declared::vote`); it is only reached by atomics, which the barriers
+/// order. The result is workgroup uniform; the caller is in workgroup-uniform control flow.
 pub fn vote(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, live: SValue) -> BResult<SValue> {
     if let Some(word) = cx.decl.families.simd.vote {
         let flags = MemFlags {
@@ -619,17 +662,23 @@ pub fn vote(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, live: SValue) -> 
         let zero = k(fb, 0)?;
         let one = k(fb, 1)?;
         let p = fb.module().global_value(word)?;
-        return vote_at(fb, p, (sem, None), live, (zero, one));
+        let x = vote_at(fb, p, (sem, None), live, (zero, one))?;
+        guarded_barrier(fb, sem, None)?;
+        return fb.binary(BinOp::INotEqual, x, zero);
     }
     let e = emu(cx, fb)?;
     let zero = k(fb, 0)?;
     let one = k(fb, 1)?;
-    let p = e.word_ptr(fb, zero, 0)?;
-    vote_at(fb, p, (e.sem, e.several), live, (zero, one))
+    let r = e.take_turn(fb)?;
+    let p = e.word_ptr(fb, r, zero, 0)?;
+    let x = vote_at(fb, p, (e.sem, e.several), live, (zero, one))?;
+    e.close(fb)?;
+    fb.binary(BinOp::INotEqual, x, zero)
 }
 
-/// [`vote`] in the word at `p`, with workgroup barriers of semantics `sem`, each under `several`
-/// where it is given ([`guarded_barrier`]).
+/// The word at `p` once every invocation has cleared it and set it where `live` holds ([`vote`]),
+/// with workgroup barriers of semantics `sem`, each under `several` where it is given
+/// ([`guarded_barrier`]). The caller ends the vote.
 fn vote_at(
     fb: &mut FunctionBuilder<'_>,
     p: SValue,
@@ -649,9 +698,7 @@ fn vote_at(
         bit,
     )?;
     guarded_barrier(fb, sem, several)?;
-    let x = fb.atomic_load(p, Scope::Workgroup, relaxed)?;
-    guarded_barrier(fb, sem, several)?;
-    fb.binary(BinOp::INotEqual, x, zero)
+    fb.atomic_load(p, Scope::Workgroup, relaxed)
 }
 
 /// A workgroup barrier of semantics `sem`, and with `several` (`1 < N`, a specialization
@@ -686,8 +733,39 @@ impl Emu {
         guarded_barrier(fb, self.sem, self.several)
     }
 
-    /// A pointer to word `i` of lane `lane`'s slot: the slot's element `i` ([`declare`]).
-    fn word_ptr(&self, fb: &mut FunctionBuilder<'_>, lane: SValue, i: u32) -> BResult<SValue> {
+    /// End an exchange or vote once every lane has read: a workgroup barrier, so the next one does
+    /// not write the words before every lane has read them, except where the scratch alternates
+    /// two regions: the next writes the other region, and the barrier that opens it orders these
+    /// reads before the one after it writes this region again (the module documentation).
+    pub fn close(&self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+        match self.turn {
+            Some(_) => Ok(()),
+            None => self.barrier(fb),
+        }
+    }
+
+    /// The region an exchange or vote that starts here writes: where the scratch alternates two,
+    /// the invocation's turn, which flips for the next one.
+    fn take_turn(&self, fb: &mut FunctionBuilder<'_>) -> BResult<Region> {
+        let Some(var) = self.turn else {
+            return Ok(Region(None));
+        };
+        let p = fb.module().global_value(var)?;
+        let t = fb.load(p, MemAccess::default())?;
+        let next = bin_k(fb, BinOp::BitwiseXor, t, 1)?;
+        fb.store(p, next, MemAccess::default())?;
+        Ok(Region(Some(t)))
+    }
+
+    /// A pointer to word `i` of lane `lane`'s slot in region `r`: the slot's element `i`
+    /// ([`declare`]).
+    fn word_ptr(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        r: Region,
+        lane: SValue,
+        i: u32,
+    ) -> BResult<SValue> {
         let Some(g) = self.scratch else {
             return Err(dangling());
         };
@@ -695,36 +773,38 @@ impl Emu {
             return Err(dangling());
         }
         let base = fb.module().global_value(g)?;
-        if self.stride == 1 {
-            fb.access_chain(base, &[lane])
-        } else {
-            let i = k(fb, i)?;
-            fb.access_chain(base, &[lane, i])
+        let mut index: Vec<SValue> = r.0.into_iter().collect();
+        index.push(lane);
+        if self.stride > 1 {
+            index.push(k(fb, i)?);
         }
+        fb.access_chain(base, &index)
     }
 
-    /// Store the words of `vals` in order at the calling lane's slot from word 0 (no active
-    /// flag, no barrier).
-    fn put(&self, fb: &mut FunctionBuilder<'_>, lin: SValue, vals: &[SValue]) -> BResult<()> {
+    /// Take a turn and store the words of `vals` in order at the calling lane's slot of its
+    /// region from word 0 (no active flag, no barrier).
+    fn put(&self, fb: &mut FunctionBuilder<'_>, lin: SValue, vals: &[SValue]) -> BResult<Region> {
+        let r = self.take_turn(fb)?;
         let access = self.coherence.access(fb, MemAccess::default(), true)?;
         let mut at = 0u32;
         for v in vals {
             for w in to_words(fb, *v)? {
-                let p = self.word_ptr(fb, lin, at)?;
+                let p = self.word_ptr(fb, r, lin, at)?;
                 fb.store(p, w, access)?;
                 at += 1;
             }
         }
-        Ok(())
+        Ok(r)
     }
 
-    /// The simdgroup's word of each of `conds`: bit `j` of word `c` is set where Metal lane `j`
-    /// (of the lanes that execute this) holds `conds[c]`. Every lane stores `vals` at its slot
-    /// from word 0 and atomically clears the `conds.len()` words after them, a workgroup barrier,
-    /// each lane atomically ORs its bit into those words of the simdgroup's first lane `base`, a
-    /// barrier, and each lane loads them. OR is commutative, so every lane of the simdgroup reads
-    /// the same words whatever the order of the atomics. The caller may read `vals` from any lane
-    /// of the threadgroup that stored them and closes the exchange with [`Emu::barrier`].
+    /// The simdgroup's word of each of `conds`, and the region of the exchange: bit `j` of word
+    /// `c` is set where Metal lane `j` (of the lanes that execute this) holds `conds[c]`. Every
+    /// lane stores `vals` at its slot from word 0 and atomically clears the `conds.len()` words
+    /// after them, a workgroup barrier, each lane atomically ORs its bit into those words of the
+    /// simdgroup's first lane `base`, a barrier, and each lane loads them. OR is commutative, so
+    /// every lane of the simdgroup reads the same words whatever the order of the atomics. The
+    /// caller may read `vals` in the region from any lane of the threadgroup that stored them and
+    /// ends the exchange with [`Emu::close`].
     fn gather_bits(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -732,21 +812,18 @@ impl Emu {
         base: SValue,
         vals: &[SValue],
         conds: &[SValue],
-    ) -> BResult<Vec<SValue>> {
+    ) -> BResult<(Vec<SValue>, Region)> {
         let lin = ln.l;
-        let access = self.coherence.access(fb, MemAccess::default(), true)?;
+        let r = self.put(fb, lin, vals)?;
         let mut at = 0u32;
         for v in vals {
-            for w in to_words(fb, *v)? {
-                let p = self.word_ptr(fb, lin, at)?;
-                fb.store(p, w, access)?;
-                at += 1;
-            }
+            let ty = fb.value_ty(*v)?;
+            at += word_count(fb, ty)?;
         }
         let zero = k(fb, 0)?;
         let relaxed = Semantics::RELAXED;
         for c in 0..conds.len() as u32 {
-            let p = self.word_ptr(fb, lin, at + c)?;
+            let p = self.word_ptr(fb, r, lin, at + c)?;
             fb.atomic_store(p, Scope::Workgroup, relaxed, zero)?;
         }
         self.barrier(fb)?;
@@ -756,7 +833,7 @@ impl Emu {
         let mut ptrs = Vec::with_capacity(conds.len());
         for (c, cond) in conds.iter().enumerate() {
             let b = fb.select(*cond, bit, zero)?;
-            let p = self.word_ptr(fb, base, at + c as u32)?;
+            let p = self.word_ptr(fb, r, base, at + c as u32)?;
             fb.atomic(
                 crate::spirv::ir::AtomicOp::Or,
                 p,
@@ -771,22 +848,29 @@ impl Emu {
         for p in ptrs {
             words.push(fb.atomic_load(p, Scope::Workgroup, relaxed)?);
         }
-        Ok(words)
+        Ok((words, r))
     }
 
-    /// The value of type `ty` lane `lane` stored from word 0 of its slot.
-    fn get(&self, fb: &mut FunctionBuilder<'_>, lane: SValue, ty: TypeId) -> BResult<SValue> {
-        self.load_value(fb, lane, 0, ty)
+    /// The value of type `ty` lane `lane` stored from word 0 of its slot in region `r`.
+    fn get(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        r: Region,
+        lane: SValue,
+        ty: TypeId,
+    ) -> BResult<SValue> {
+        self.load_value(fb, r, lane, 0, ty)
     }
 
-    /// Store the calling lane's `vals` (and its active flag, in a divergent block) to its slot,
-    /// then a workgroup barrier.
+    /// Take a turn and store the calling lane's `vals` (and its active flag, in a divergent
+    /// block) to its slot of the region, then a workgroup barrier.
     pub fn publish(
         &self,
         fb: &mut FunctionBuilder<'_>,
         lin: SValue,
         vals: &[SValue],
     ) -> BResult<Published> {
+        let region = self.take_turn(fb)?;
         let mut layout = Vec::with_capacity(vals.len() + 1);
         let mut at = 0u32;
         let access = self.coherence.access(fb, MemAccess::default(), true)?;
@@ -800,7 +884,7 @@ impl Emu {
                 if at >= self.stride {
                     return Err(dangling());
                 }
-                let p = self.word_ptr(fb, lin, at)?;
+                let p = self.word_ptr(fb, region, lin, at)?;
                 fb.store(p, w, access)?;
                 at += 1;
             }
@@ -809,6 +893,7 @@ impl Emu {
         Ok(Published {
             layout,
             active: flag.map(|(i, _)| i),
+            region,
         })
     }
 
@@ -843,7 +928,7 @@ impl Emu {
     ) -> BResult<SValue> {
         let (first, ty) = p.layout.get(i).copied().ok_or_else(dangling)?;
         let (at, on) = self.source(fb, lin, p, src)?;
-        let x = self.load_value(fb, at, first, ty)?;
+        let x = self.load_value(fb, p.region, at, first, ty)?;
         let zero = zero_cell(fb, x)?;
         fb.select(on, x, zero)
     }
@@ -880,7 +965,7 @@ impl Emu {
     ) -> BResult<(SValue, SValue)> {
         let (first, ty) = p.layout.get(i).copied().ok_or_else(dangling)?;
         let (src, on) = self.source(fb, lin, p, src)?;
-        let x = self.load_value(fb, src, first, ty)?;
+        let x = self.load_value(fb, p.region, src, first, ty)?;
         Ok((x, on))
     }
 
@@ -899,17 +984,19 @@ impl Emu {
             return Ok((at, inside));
         };
         let (first, ty) = p.layout.get(ai).copied().ok_or_else(dangling)?;
-        let a = self.load_value(fb, at, first, ty)?;
+        let a = self.load_value(fb, p.region, at, first, ty)?;
         let no = bool_k(fb, false)?;
         let on = fb.select(inside, a, no)?;
         let at = fb.select(on, src, lin)?;
         Ok((at, on))
     }
 
-    /// The value of type `ty` whose words start at word `first` of lane `lane`'s slot.
+    /// The value of type `ty` whose words start at word `first` of lane `lane`'s slot in region
+    /// `r`.
     fn load_value(
         &self,
         fb: &mut FunctionBuilder<'_>,
+        r: Region,
         lane: SValue,
         first: u32,
         ty: TypeId,
@@ -918,7 +1005,7 @@ impl Emu {
         let count = word_count(fb, ty)?;
         let mut words = Vec::with_capacity(count as usize);
         for j in 0..count {
-            let ptr = self.word_ptr(fb, lane, first + j)?;
+            let ptr = self.word_ptr(fb, r, lane, first + j)?;
             words.push(fb.load(ptr, access)?);
         }
         from_words(fb, ty, &words)
@@ -1214,8 +1301,8 @@ fn word(
         Some(a) if act => vec![set, a],
         _ => vec![set],
     };
-    let words = e.gather_bits(fb, ln, base, &[], &conds)?;
-    e.barrier(fb)?;
+    let (words, _) = e.gather_bits(fb, ln, base, &[], &conds)?;
+    e.close(fb)?;
     let w = nth(&words, 0)?;
     Ok((w, (conds.len() == 2).then(|| nth(&words, 1)).transpose()?))
 }
@@ -1285,15 +1372,15 @@ fn tree_fold(
     let zero = k(fb, 0)?;
     let mut acc = match e.active {
         Some(a) if ordered => {
-            let words = e.gather_bits(fb, ln, base, &[x], &[a])?;
+            let (words, r) = e.gather_bits(fb, ln, base, &[x], &[a])?;
             let act = nth(&words, 0)?;
             let first = fb.glsl(GlslOp::FindILsb, &[act])?;
             let first = bin_k(fb, BinOp::BitwiseAnd, first, SIMD_WIDTH - 1)?;
             let at = fb.binary(BinOp::BitwiseOr, base, first)?;
             let some = fb.binary(BinOp::INotEqual, act, zero)?;
             let src = fb.select(some, at, lin)?;
-            let y = e.get(fb, src, ty)?;
-            e.barrier(fb)?;
+            let y = e.get(fb, r, src, ty)?;
+            e.close(fb)?;
             fb.select(a, x, y)?
         }
         Some(a) => {
@@ -1303,7 +1390,7 @@ fn tree_fold(
         None => x,
     };
     for d in distances() {
-        e.put(fb, lin, &[acc])?;
+        let r = e.put(fb, lin, &[acc])?;
         e.barrier(fb)?;
         let sib = bin_k(fb, BinOp::BitwiseXor, lin, d)?;
         let sib = if d > 1 {
@@ -1313,8 +1400,8 @@ fn tree_fold(
         };
         let there = e.exists(fb, sib)?;
         let src = fb.select(there, sib, lin)?;
-        let y = e.get(fb, src, ty)?;
-        e.barrier(fb)?;
+        let y = e.get(fb, r, src, ty)?;
+        e.close(fb)?;
         let r = if ordered {
             let bit = bin_k(fb, BinOp::BitwiseAnd, lin, d)?;
             let upper = fb.binary(BinOp::INotEqual, bit, zero)?;
@@ -1374,15 +1461,15 @@ fn tree_scan(
                  d: u32,
                  skip: u32|
      -> BResult<(SValue, SValue)> {
-        e.put(fb, lin, &[acc])?;
+        let r = e.put(fb, lin, &[acc])?;
         e.barrier(fb)?;
         let need = k(fb, d + skip)?;
         let ok = fb.binary(BinOp::UGreaterThanEqual, m, need)?;
         let dv = k(fb, d)?;
         let from = fb.binary(BinOp::ISub, lin, dv)?;
         let src = fb.select(ok, from, lin)?;
-        let y = e.get(fb, src, ty)?;
-        e.barrier(fb)?;
+        let y = e.get(fb, r, src, ty)?;
+        e.close(fb)?;
         Ok((y, ok))
     };
     // After an exclusive scan's shift, lane `m` holds lane `m - 1`'s operand, so the lane `d`
@@ -1402,8 +1489,8 @@ fn tree_scan(
             let zero = k(fb, 0)?;
             let some = match e.active {
                 Some(a) => {
-                    let words = e.gather_bits(fb, ln, base, &[], &[a])?;
-                    e.barrier(fb)?;
+                    let (words, _) = e.gather_bits(fb, ln, base, &[], &[a])?;
+                    e.close(fb)?;
                     let one = k(fb, 1)?;
                     let bit = fb.binary(BinOp::ShiftLeftLogical, one, m)?;
                     let lower = fb.binary(BinOp::ISub, bit, one)?;
@@ -1534,7 +1621,7 @@ pub(super) fn simd_op(
             Some(a) => {
                 let x = v()?;
                 let ty = fb.value_ty(x)?;
-                let words = e.gather_bits(fb, ln, base, &[x], &[a])?;
+                let (words, r) = e.gather_bits(fb, ln, base, &[x], &[a])?;
                 let act = nth(&words, 0)?;
                 // No active lane: the calling lane, which is then not live, reads its own.
                 let first = fb.glsl(GlslOp::FindILsb, &[act])?;
@@ -1542,16 +1629,16 @@ pub(super) fn simd_op(
                 let at = fb.binary(BinOp::BitwiseOr, base, first)?;
                 let some = fb.binary(BinOp::INotEqual, act, zero)?;
                 let src = fb.select(some, at, lin)?;
-                let x = e.get(fb, src, ty)?;
-                e.barrier(fb)?;
+                let x = e.get(fb, r, src, ty)?;
+                e.close(fb)?;
                 Ok(x)
             }
             None => one(fb, ln, v()?, base),
         },
         G::IsFirst => match e.active {
             Some(a) => {
-                let words = e.gather_bits(fb, ln, base, &[], &[a])?;
-                e.barrier(fb)?;
+                let (words, _) = e.gather_bits(fb, ln, base, &[], &[a])?;
+                e.close(fb)?;
                 let first = fb.glsl(GlslOp::FindILsb, &[nth(&words, 0)?])?;
                 fb.binary(BinOp::IEqual, first, m)
             }
@@ -1762,6 +1849,7 @@ mod tests {
         };
         assert_eq!(group_words(&plan(GroupOp::Ballot, ballot, 1)), 1);
         assert_eq!(group_words(&plan(GroupOp::IsFirst, Held::Bool, 1)), 0);
-        assert_eq!(bytes_per_simdgroup(TILE_WORDS), 512);
+        assert_eq!(bytes_per_simdgroup(TILE_WORDS, false), 512);
+        assert_eq!(bytes_per_simdgroup(TILE_WORDS, true), 1024);
     }
 }

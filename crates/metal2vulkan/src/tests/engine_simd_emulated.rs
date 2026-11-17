@@ -22,7 +22,9 @@
 //! dispatch with a partial simdgroup asks for the kernel's emulated-simdgroups variant, which gives
 //! the same reading at 1 to 32 threads. Every run takes Vulkan's barrier rule
 //! (`BarrierRule::Vulkan`): an invocation that returned while others wait at a workgroup barrier
-//! traps. No GPU is used.
+//! traps. Under the identity domains every one of those kernels gives the same readings with its
+//! exchanges and votes taking the scratch's two regions in turn and closing with no barrier. No GPU
+//! is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -31,12 +33,12 @@ use std::collections::BTreeMap;
 use crate::bind::{BindState, BoundBuffer, Dispatch, StageTable};
 use crate::budget::Budget;
 use crate::cache::VariantKey;
-use crate::device::profile::DeviceProfile;
+use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
 use crate::device::subgroup::{OpBits, SimdClass, SubgroupRequirement, Tier};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, Error, Feature};
 use crate::library::Library;
-use crate::lower::dispatch::LocalSizeForm;
+use crate::lower::dispatch::{region_bytes, LocalSizeForm};
 use crate::lower::select::Plan;
 use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::interface::PushLoc;
@@ -101,9 +103,24 @@ fn assemble_text(tag: &str, text: &str) -> Option<Vec<u8>> {
     assemble_file(&path, tag)
 }
 
+/// The policy of the identity domains: the guest's own addresses and handles.
+fn identity() -> DevicePolicy {
+    DevicePolicy {
+        pointer_domain: PointerDomain::Identity,
+        handle_domain: HandleDomain::Identity,
+        ..DevicePolicy::default()
+    }
+}
+
+/// The device address of buffer `index` under the identity domains.
+fn guest_base(index: u32) -> u64 {
+    (u64::from(index) + 1) << 32
+}
+
 /// Every word of buffer 0 after one workgroup of local size `local` ran `m` (planned as `plan`)
 /// with `lanes`-wide subgroups, identical in both scheduling orders. Buffer 1, when the kernel
-/// binds it, holds `constant`.
+/// binds it, holds `constant`. Under the identity domains each buffer is at its
+/// [`guest_base`], which the push block carries.
 fn run_all(
     plan: &Plan,
     m: &TypedModule,
@@ -116,33 +133,39 @@ fn run_all(
         spec.insert(SpecKey::LocalSize(a), u64::from(v));
     }
     let n: u32 = local.iter().product();
-    let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+    spec.insert(SpecKey::FlatLocalSize, u64::from(n));
+    let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+    let mut addressed = false;
     for f in &plan.push.fields {
-        assert!(matches!(f.loc, PushLoc::Push { .. }), "{f:?}");
-        // Zero residuals: each buffer is bound at its start.
-        assert!(
-            matches!(f.field, PushField::SlotBindOffset(_)),
-            "unexpected push field {f:?}"
-        );
+        let PushLoc::Push { offset } = f.loc else {
+            panic!("{f:?} spilled");
+        };
+        let o = offset as usize;
+        match f.field {
+            // Zero residuals: each buffer is bound at its start.
+            PushField::SlotBindOffset(_) => {}
+            PushField::SlotGuestBase(s) => {
+                push[o..o + 8].copy_from_slice(&guest_base(s.index).to_le_bytes());
+                addressed = true;
+            }
+            PushField::DispatchRegion => {
+                push[o..o + 32].copy_from_slice(&region_bytes([0; 3], local, local).expect("packs"))
+            }
+            _ => panic!("unexpected push field {f:?}"),
+        }
     }
-    let slot = |index| {
-        Some(ResourceSlot {
+    let buffer = |index, bytes| Buffer {
+        slot: (!addressed).then_some(ResourceSlot {
             stage: Stage::Kernel,
             kind: ResourceKind::Buffer,
             index,
-        })
+        }),
+        address: addressed.then(|| guest_base(index)),
+        bytes,
     };
-    let mut buffers = vec![Buffer {
-        slot: slot(0),
-        address: None,
-        bytes: vec![0; n as usize * 4],
-    }];
+    let mut buffers = vec![buffer(0, vec![0; n as usize * 4])];
     if let Some(c) = constant {
-        buffers.push(Buffer {
-            slot: slot(1),
-            address: None,
-            bytes: c.to_le_bytes().to_vec(),
-        });
+        buffers.push(buffer(1, c.to_le_bytes().to_vec()));
     }
     let res = Resources {
         buffers,
@@ -659,14 +682,26 @@ const SIMD_UNIFORM: [(&str, u32); 9] = [
 /// Plan `kernel` of `bc` on profile `stem`, check its emulated tier, and check the expectation
 /// at every width and local size.
 fn run_kernel(stem: &str, bc: &[u8], kernel: &str, words: Option<u32>) {
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    run_kernel_under(stem, DevicePolicy::default(), bc, kernel, words);
+}
+
+/// [`run_kernel`] on profile `stem` under `policy`, giving the kernel's plan.
+fn run_kernel_under(
+    stem: &str,
+    policy: DevicePolicy,
+    bc: &[u8],
+    kernel: &str,
+    words: Option<u32>,
+) -> Plan {
+    let p = profile(stem, policy).expect("profile");
     let (plan, m) = typed_module(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     check_emulated(stem, kernel, &plan, words);
     run_expected(stem, kernel, &plan, &m, &LOCALS);
+    plan
 }
 
 /// `plan` is `kernel`'s in the emulated tier: no subgroup requirement, the local size kept, and
-/// (when `words` is given) the scratch of `words` words per lane.
+/// (when `words` is given) the scratch of `words` words per lane, in each of its regions.
 fn check_emulated(stem: &str, kernel: &str, plan: &Plan, words: Option<u32>) {
     assert_eq!(plan.simd.1, Tier::Emulated, "{stem} {kernel}");
     assert_eq!(plan.subgroup, SubgroupRequirement::NONE, "{stem} {kernel}");
@@ -683,9 +718,10 @@ fn check_emulated(stem: &str, kernel: &str, plan: &Plan, words: Option<u32>) {
         _ => None,
     });
     if let Some(w) = words {
+        let regions = if plan.families.simd.alternating { 2 } else { 1 };
         assert_eq!(
             fact,
-            (w > 0).then_some(128 * w),
+            (w > 0).then_some(128 * w * regions),
             "{stem} {kernel}: the scratch"
         );
     }
@@ -1299,6 +1335,65 @@ fn simd_divergent_runs_predicated_on_lavapipe() {
 #[test]
 fn simd_divergent_runs_predicated_on_vk12_floor() {
     simd_divergent_runs_predicated("vk12-floor");
+}
+
+/// The `OpControlBarrier`s of `kernel` of `bc` compiled on profile `stem` under `policy`.
+fn barriers(stem: &str, policy: DevicePolicy, bc: &[u8], kernel: &str) -> usize {
+    let p = profile(stem, policy).expect("profile");
+    let a = compile(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
+    let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
+    spirv_dis(&words).matches("OpControlBarrier").count()
+}
+
+/// Under the identity domains the emulated tier's scratch holds two regions, which its exchanges
+/// and votes take in turn, so none closes with a barrier: every kernel of `simd_ops`,
+/// `simd_uniform` and `simd_divergent` (shuffles, reductions, prefix sums, votes, ballots, quad
+/// operations, vector and `half` values, exchanges in uniform and per-thread loops, after early
+/// returns and in branch arms) gives the same expectation as with one region, at every subgroup
+/// width in both scheduling orders, in full and partial threadgroups. At 8 lanes a simdgroup is
+/// four subgroups the interpreter runs apart, each to its next barrier, so a lane that wrote words
+/// another lane had still to read would show as a wrong word or a difference between the orders.
+/// Each kernel plans two regions (twice the scratch) and has no more barriers than under the
+/// default domains, which keep one region and close every exchange and vote with a barrier, and
+/// the kernels have fewer in all.
+#[test]
+fn identity_exchanges_take_two_scratch_regions_in_turn() {
+    const STEM: &str = "lavapipe";
+    let (Some(ops), Some(uniform), Some(divergent)) = (
+        assemble("simd_ops"),
+        assemble("simd_uniform"),
+        assemble("simd_divergent"),
+    ) else {
+        return;
+    };
+    let kernels = SIMD_OPS
+        .iter()
+        .chain(&SIMD_OPS_DIVERGENT)
+        .map(|k| (&ops, *k, None))
+        .chain(SIMD_UNIFORM.iter().map(|(k, w)| (&uniform, *k, Some(*w))))
+        .chain([(&uniform, "divergent_k", None)])
+        .chain(SIMD_DIVERGENT.iter().map(|k| (&divergent, *k, None)));
+    let (mut ones, mut twos) = (0, 0);
+    for (bc, kernel, words) in kernels {
+        let plan = run_kernel_under(STEM, identity(), bc, kernel, words);
+        assert!(plan.families.simd.alternating, "{kernel}: two regions");
+        let (one, two) = (
+            barriers(STEM, DevicePolicy::default(), bc, kernel),
+            barriers(STEM, identity(), bc, kernel),
+        );
+        eprintln!("{kernel}: {one} barriers with one region, {two} in turn");
+        assert!(
+            two <= one,
+            "{kernel}: {two} barriers in turn, {one} with one region"
+        );
+        ones += one;
+        twos += two;
+    }
+    eprintln!("all: {ones} barriers with one region, {twos} in turn");
+    assert!(
+        twos < ones,
+        "{twos} barriers in turn, {ones} with one region"
+    );
 }
 
 /// The tail of `a3_multi_level_break_tail`'s two-level break runs after the inner loop, once per
