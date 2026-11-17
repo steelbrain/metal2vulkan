@@ -11,9 +11,9 @@ using namespace metal;
 
 kernel void row_lockstep_tree(device uint *out [[buffer(0)]],
                               ushort x [[thread_position_in_threadgroup]],
-                              uint t [[thread_index_in_threadgroup]],
-                              uint g [[threadgroup_position_in_grid]],
-                              uint n [[threads_per_threadgroup]]) {
+                              ushort t [[thread_index_in_threadgroup]],
+                              ushort g [[threadgroup_position_in_grid]],
+                              ushort n [[threads_per_threadgroup]]) {
     threadgroup uint tg[64];
     for (uint i = t; i < 16u; i += n) {
         tg[i] = 0u;
@@ -27,5 +27,5 @@ kernel void row_lockstep_tree(device uint *out [[buffer(0)]],
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    out[g * n + t] = tg[0];
+    out[uint(g) * uint(n) + uint(t)] = tg[0];
 }
