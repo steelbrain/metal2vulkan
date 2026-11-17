@@ -139,19 +139,28 @@ impl Stamps {
     }
 }
 
-/// Records, at the start of a command buffer's first `VkCommandBuffer`, the reset of its two
-/// queries and its start timestamp. The reset reaches a query before every later command that
-/// names it, in submission order, so the end timestamp of a later segment finds it reset.
+/// Resets a slot's two queries on the host (`hostQueryReset`, in the floor), as a command buffer
+/// takes the slot: before any submission that names them, which a host reset happens before
+/// ("anything that happened-before" `vkQueueSubmit2` is in its first synchronization scope), so no
+/// command buffer the GPU runs resets a query.
+pub(crate) fn reset(device: &ash::Device, pool: vk::QueryPool, first: u32) {
+    // SAFETY: the device enables `hostQueryReset`; both queries are in the pool; the slot's
+    // previous command buffer retired, so no submitted command that names them is pending, and
+    // its readback finished before it gave the slot back.
+    unsafe { device.reset_query_pool(pool, first, 2) };
+}
+
+/// Records, at the start of a command buffer's first `VkCommandBuffer`, its start timestamp. Its
+/// two queries were reset on the host as it took its slot ([`reset`]).
 pub(crate) fn write_start(
     device: &ash::Device,
     command: vk::CommandBuffer,
     pool: vk::QueryPool,
     first: u32,
 ) {
-    // SAFETY: the buffer is recording outside any render pass; both queries are in the pool, and
-    // no pending work names them: their previous command buffer retired.
+    // SAFETY: the buffer is recording outside any render pass; the query is in the pool and was
+    // reset on the host before any submission of it.
     unsafe {
-        device.cmd_reset_query_pool(command, pool, first, 2);
         device.cmd_write_timestamp2(command, vk::PipelineStageFlags2::TOP_OF_PIPE, pool, first);
     }
 }
@@ -163,8 +172,8 @@ pub(crate) fn write_end(
     pool: vk::QueryPool,
     first: u32,
 ) {
-    // SAFETY: the buffer is recording, and the query is in the pool and reset earlier in
-    // submission order.
+    // SAFETY: the buffer is recording, and the query is in the pool and was reset on the host
+    // before any submission of it.
     unsafe {
         device.cmd_write_timestamp2(
             command,

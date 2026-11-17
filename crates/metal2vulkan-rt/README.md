@@ -292,7 +292,8 @@ made, with no lock, and never rewritten for layouts.
   duration of the command buffer, exact from two timestamp queries: one written where its first
   commands begin, one where its last segment ends, read once it completes, with no wait. Each
   queue has a pool of two queries per command buffer it may have made at once; a command
-  buffer's first `VkCommandBuffer` resets its pair. A command buffer with no commands, or whose
+  buffer's pair is reset on the host as it takes its slot (`hostQueryReset`), so no command
+  buffer the GPU runs resets a query. A command buffer with no commands, or whose
   last segment has none, records a `VkCommandBuffer` for its timestamps. One that ends with an
   error has GPU times of 0.
 - `Event` and `SharedEvent` are timeline semaphores whose values are Metal's values. A host set
@@ -622,6 +623,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `computeFullSubgroups` | `VkPhysicalDeviceVulkan13Features` | a kernel's subgroups required full, so each SIMD group is one subgroup |
 | `robustImageAccess` | `VkPhysicalDeviceVulkan13Features` | an image write or atomic out of range dropped and a read out of range zero, with no guard in the shader |
 | `timelineSemaphore` | `VkPhysicalDeviceVulkan12Features` | submission and completion |
+| `hostQueryReset` | `VkPhysicalDeviceVulkan12Features` | a command buffer's timestamp queries reset on the host as it takes its slot |
 | `synchronization2` | `VkPhysicalDeviceVulkan13Features` | barriers, layout changes and submission |
 | `dynamicRendering` | `VkPhysicalDeviceVulkan13Features` | render passes |
 

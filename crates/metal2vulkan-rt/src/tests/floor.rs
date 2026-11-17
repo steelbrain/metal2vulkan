@@ -72,6 +72,7 @@ fn at_the_floor() -> Queried {
     features.vulkan13.compute_full_subgroups = vk::TRUE;
     features.vulkan13.robust_image_access = vk::TRUE;
     features.vulkan12.timeline_semaphore = vk::TRUE;
+    features.vulkan12.host_query_reset = vk::TRUE;
     features.vulkan13.synchronization2 = vk::TRUE;
     features.vulkan13.dynamic_rendering = vk::TRUE;
     features.robustness2.null_descriptor = vk::TRUE;
@@ -338,6 +339,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan12.timeline_semaphore = vk::FALSE,
             feature(V12, "timelineSemaphore"),
+        ),
+        (
+            |f| f.vulkan12.host_query_reset = vk::FALSE,
+            feature(V12, "hostQueryReset"),
         ),
         (
             |f| f.vulkan13.subgroup_size_control = vk::FALSE,

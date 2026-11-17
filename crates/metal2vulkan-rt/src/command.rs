@@ -182,9 +182,10 @@ pub(crate) struct Pending {
 }
 
 impl CommandBuffer {
-    /// A new command buffer of `queue`, which gave it `slot`.
+    /// A new command buffer of `queue`, which gave it `slot`, whose queries it resets.
     pub(crate) fn new(queue: Arc<QueueInner>, device: Device, slot: u32) -> CommandBuffer {
         let stamps = (queue.stamps.pool, Stamps::first(slot));
+        times::reset(&device.core().device, stamps.0, stamps.1);
         CommandBuffer {
             inner: Arc::new(CbInner {
                 queue,
