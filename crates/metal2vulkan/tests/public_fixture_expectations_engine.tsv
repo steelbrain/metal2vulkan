@@ -3146,6 +3146,8 @@ engine/uni_argument_tables.air.ll	argument_table_select	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/uni_argument_tables.ll	argument_table_dispatch	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/uni_argument_tables.ll	argument_table_array_dispatch	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/uni_argument_tables.ll	argument_table_select	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unit_axes_walk.air.ll	unit_axes_walk	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/unit_axes_walk.ll	unit_axes_walk	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/unk_atomic_lanes.air.ll	unk_atomic_lanes	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Format; AnyOf[[Format { format: VK_FORMAT_R32_UINT, usage: StorageImageAtomic }]]}	ok	ok	ok	ok	ok	ok	ok
 engine/unk_atomic_lanes.ll	unk_atomic_lanes	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Format; AnyOf[[Format { format: VK_FORMAT_R32_UINT, usage: StorageImageAtomic }]]}	ok	ok	ok	ok	ok	ok	ok
 engine/unk_atomic_ops.air.ll	unk_atomic_ops	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{Format; AnyOf[[Format { format: VK_FORMAT_R32_UINT, usage: StorageImageAtomic }]]}	ok	ok	ok	ok	ok	ok	Unsupported{DescriptorCount; AnyOf[[Limit { limit: MaxPerStageDescriptorStorageImages, required: 6, available: 4 }]]}
