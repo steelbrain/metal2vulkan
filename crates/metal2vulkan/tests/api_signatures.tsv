@@ -468,6 +468,10 @@ assoc-const	metal2vulkan::device::ResolveMode::ALL	pub const ALL: [ResolveMode; 
 assoc-const	metal2vulkan::metal::DataType::ALL	pub const ALL: [DataType; 17]
 assoc-const	metal2vulkan::metal::TextureSwizzleChannels::DEFAULT	pub const DEFAULT: TextureSwizzleChannels
 assoc-const	metal2vulkan::metal::format::ExtendedRange::HEAP_READ	pub const HEAP_READ: [ExtendedRange; 7]
+assoc-const	metal2vulkan::metal::resource_word::TextureWord::BORDER_TEXELS	pub const BORDER_TEXELS: u32
+assoc-const	metal2vulkan::metal::resource_word::TextureWord::OUT_OF_BOUNDS_ALPHA_ONE	pub const OUT_OF_BOUNDS_ALPHA_ONE: u32
+assoc-const	metal2vulkan::metal::resource_word::TextureWord::PIXEL_FORMAT	pub const PIXEL_FORMAT: u32
+assoc-const	metal2vulkan::metal::resource_word::TextureWord::PIXEL_FORMAT_SHIFT	pub const PIXEL_FORMAT_SHIFT: u32
 assoc-const	metal2vulkan::metal::sampler::AddressModeMap::IDENTITY	pub const IDENTITY: AddressModeMap
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::ADDRESS	pub const ADDRESS: [u32; 3]
 assoc-const	metal2vulkan::metal::sampler::SamplerWord::ADDRESS_SHIFT	pub const ADDRESS_SHIFT: [u32; 3]
@@ -988,6 +992,10 @@ assoc-const-value	metal2vulkan::device::ResolveMode::ALL	[ResolveMode::SampleZer
 assoc-const-value	metal2vulkan::metal::DataType::ALL	[DataType::Float32, DataType::Float16, DataType::BFloat16, DataType::Int2, DataType::Int4, DataType::Int8, DataType::Int16, DataType::Int32, DataType::UInt2, DataType::UInt4, DataType::UInt8, DataType::UInt16, DataType::UInt32, DataType::Fp4E2M1, DataType::Fp8E4M3, DataType::Fp8E5M2, DataType::Fp8UE8M0]
 assoc-const-value	metal2vulkan::metal::TextureSwizzleChannels::DEFAULT	TextureSwizzleChannels
 assoc-const-value	metal2vulkan::metal::format::ExtendedRange::HEAP_READ	[ExtendedRange::Bgr10 { srgb: false }, ExtendedRange::Bgra10 { srgb: false }, ExtendedRange::R10X6, ExtendedRange::Rg10X12, ExtendedRange::R16Bfloat, ExtendedRange::Rg16Bfloat, ExtendedRange::Rgba16Bfloat]
+assoc-const-value	metal2vulkan::metal::resource_word::TextureWord::BORDER_TEXELS	0xfff
+assoc-const-value	metal2vulkan::metal::resource_word::TextureWord::OUT_OF_BOUNDS_ALPHA_ONE	1 <<12
+assoc-const-value	metal2vulkan::metal::resource_word::TextureWord::PIXEL_FORMAT	0xffff <<Self::PIXEL_FORMAT_SHIFT
+assoc-const-value	metal2vulkan::metal::resource_word::TextureWord::PIXEL_FORMAT_SHIFT	16
 assoc-const-value	metal2vulkan::metal::sampler::AddressModeMap::IDENTITY	AddressModeMap
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::ADDRESS	[0b111 <<Self::ADDRESS_SHIFT[0], 0b111 <<Self::ADDRESS_SHIFT[1], 0b111 <<Self::ADDRESS_SHIFT[2]]
 assoc-const-value	metal2vulkan::metal::sampler::SamplerWord::ADDRESS_SHIFT	[5, 8, 11]
@@ -10338,6 +10346,7 @@ method	metal2vulkan::metal::format::WordAttachment::of	pub fn of(pf: PixelFormat
 method	metal2vulkan::metal::format::WordAttachment::output_word	pub fn output_word(self, rgba: [f32; 4]) -> Option<u32>
 method	metal2vulkan::metal::format::WordAttachment::pack	pub fn pack(self, codes: [u32; 4]) -> u32
 method	metal2vulkan::metal::format::WordAttachment::word_format	pub fn word_format(self) -> vk::Format
+method	metal2vulkan::metal::resource_word::TextureWord::of	pub fn of(pixel_format: PixelFormat, swizzle: TextureSwizzleChannels) -> Option<TextureWord>
 method	metal2vulkan::metal::sampler::AddressModeMap::constexpr_mode	pub fn constexpr_mode(&self, from: SamplerAddressMode) -> Option<SamplerAddressMode>
 method	metal2vulkan::metal::sampler::AddressModeMap::is_identity	pub fn is_identity(&self) -> bool
 method	metal2vulkan::metal::sampler::AddressModeMap::mode	pub fn mode(&self, from: SamplerAddressMode) -> SamplerAddressMode
@@ -11133,6 +11142,7 @@ struct	metal2vulkan::metal::TextureSwizzleChannels	#[cfg_attr(feature = "serde",
 struct	metal2vulkan::metal::format::FormatMapping	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct FormatMapping
 struct	metal2vulkan::metal::format::WordField	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct WordField
 struct	metal2vulkan::metal::format::YCbCrFormat	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrFormat
+struct	metal2vulkan::metal::resource_word::TextureWord	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct TextureWord(pub u32)
 struct	metal2vulkan::metal::sampler::AddressModeMap	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct AddressModeMap
 struct	metal2vulkan::metal::sampler::SamplerUse	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct SamplerUse
 struct	metal2vulkan::metal::sampler::SamplerWord	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct SamplerWord(pub u32)

@@ -1,0 +1,396 @@
+# gpuResourceID high words (docs/RESOURCE-ID.md): one Metal descriptor per line, raw Metal values.
+# texture	pixelFormat	swizzleRed	swizzleGreen	swizzleBlue	swizzleAlpha	word
+# sampler	minFilter	magFilter	mipFilter	sAddressMode	tAddressMode	rAddressMode	borderColor	normalizedCoordinates	lodMinClamp	lodMaxClamp	lodAverage	maxAnisotropy	compareFunction	reductionMode	word
+# lodMinClamp and lodMaxClamp are a float's IEEE-754 bits; booleans are 0 or 1; words are hex.
+texture	1	2	3	4	5	0x00010800
+texture	10	2	3	4	5	0x000a1e04
+texture	11	2	3	4	5	0x000b1e04
+texture	12	2	3	4	5	0x000c1e04
+texture	13	2	3	4	5	0x000d1e04
+texture	14	2	3	4	5	0x000e1e04
+texture	20	2	3	4	5	0x00141e04
+texture	22	2	3	4	5	0x00161e04
+texture	23	2	3	4	5	0x00171e04
+texture	24	2	3	4	5	0x00181e04
+texture	25	2	3	4	5	0x00191e04
+texture	30	2	3	4	5	0x001e1e24
+texture	31	2	3	4	5	0x001f1e24
+texture	32	2	3	4	5	0x00201e24
+texture	33	2	3	4	5	0x00211e24
+texture	34	2	3	4	5	0x00221e24
+texture	40	2	3	4	5	0x00281f24
+texture	41	2	3	4	5	0x00290d24
+texture	42	2	3	4	5	0x002a0d24
+texture	43	2	3	4	5	0x002b0d24
+texture	53	2	3	4	5	0x00351e04
+texture	54	2	3	4	5	0x00361e04
+texture	55	2	3	4	5	0x00371e04
+texture	60	2	3	4	5	0x003c1e24
+texture	62	2	3	4	5	0x003e1e24
+texture	63	2	3	4	5	0x003f1e24
+texture	64	2	3	4	5	0x00401e24
+texture	65	2	3	4	5	0x00411e24
+texture	70	2	3	4	5	0x00460d24
+texture	71	2	3	4	5	0x00470d24
+texture	72	2	3	4	5	0x00480d24
+texture	73	2	3	4	5	0x00490d24
+texture	74	2	3	4	5	0x004a0d24
+texture	80	2	3	4	5	0x00500d24
+texture	81	2	3	4	5	0x00510d24
+texture	90	2	3	4	5	0x005a0d24
+texture	91	2	3	4	5	0x005b0d24
+texture	92	2	3	4	5	0x005c1f24
+texture	93	2	3	4	5	0x005d1f24
+texture	94	2	3	4	5	0x005e0d24
+texture	554	2	3	4	5	0x022a1f24
+texture	555	2	3	4	5	0x022b1f24
+texture	103	2	3	4	5	0x00671e24
+texture	104	2	3	4	5	0x00681e24
+texture	105	2	3	4	5	0x00691e24
+texture	110	2	3	4	5	0x006e0d24
+texture	112	2	3	4	5	0x00700d24
+texture	113	2	3	4	5	0x00710d24
+texture	114	2	3	4	5	0x00720d24
+texture	115	2	3	4	5	0x00730d24
+texture	552	2	3	4	5	0x02280d24
+texture	553	2	3	4	5	0x02290d24
+texture	123	2	3	4	5	0x007b0d24
+texture	124	2	3	4	5	0x007c0d24
+texture	125	2	3	4	5	0x007d0d24
+texture	130	2	3	4	5	0x00820d24
+texture	131	2	3	4	5	0x00830d24
+texture	132	2	3	4	5	0x00840d24
+texture	133	2	3	4	5	0x00850d24
+texture	134	2	3	4	5	0x00860d24
+texture	135	2	3	4	5	0x00870d24
+texture	140	2	3	4	5	0x008c1e04
+texture	141	2	3	4	5	0x008d1e04
+texture	142	2	3	4	5	0x008e1e24
+texture	143	2	3	4	5	0x008f1e24
+texture	150	2	3	4	5	0x00961f24
+texture	151	2	3	4	5	0x00971f24
+texture	152	2	3	4	5	0x00980d24
+texture	153	2	3	4	5	0x00990d24
+texture	160	2	3	4	5	0x00a01f24
+texture	161	2	3	4	5	0x00a11f24
+texture	162	2	3	4	5	0x00a21f24
+texture	163	2	3	4	5	0x00a31f24
+texture	164	2	3	4	5	0x00a40d24
+texture	165	2	3	4	5	0x00a50d24
+texture	166	2	3	4	5	0x00a60d24
+texture	167	2	3	4	5	0x00a70d24
+texture	170	2	3	4	5	0x00aa1e04
+texture	172	2	3	4	5	0x00ac1e04
+texture	174	2	3	4	5	0x00ae1e24
+texture	176	2	3	4	5	0x00b01e24
+texture	178	2	3	4	5	0x00b20d24
+texture	179	2	3	4	5	0x00b30d24
+texture	180	2	3	4	5	0x00b41f24
+texture	181	2	3	4	5	0x00b51f24
+texture	182	2	3	4	5	0x00b60d24
+texture	183	2	3	4	5	0x00b70d24
+texture	186	2	3	4	5	0x00ba0d24
+texture	187	2	3	4	5	0x00bb0d24
+texture	188	2	3	4	5	0x00bc0d24
+texture	189	2	3	4	5	0x00bd0d24
+texture	190	2	3	4	5	0x00be0d24
+texture	192	2	3	4	5	0x00c00d24
+texture	193	2	3	4	5	0x00c10d24
+texture	194	2	3	4	5	0x00c20d24
+texture	195	2	3	4	5	0x00c30d24
+texture	196	2	3	4	5	0x00c40d24
+texture	197	2	3	4	5	0x00c50d24
+texture	198	2	3	4	5	0x00c60d24
+texture	199	2	3	4	5	0x00c70d24
+texture	200	2	3	4	5	0x00c80d24
+texture	204	2	3	4	5	0x00cc0d24
+texture	205	2	3	4	5	0x00cd0d24
+texture	206	2	3	4	5	0x00ce0d24
+texture	207	2	3	4	5	0x00cf0d24
+texture	208	2	3	4	5	0x00d00d24
+texture	210	2	3	4	5	0x00d20d24
+texture	211	2	3	4	5	0x00d30d24
+texture	212	2	3	4	5	0x00d40d24
+texture	213	2	3	4	5	0x00d50d24
+texture	214	2	3	4	5	0x00d60d24
+texture	215	2	3	4	5	0x00d70d24
+texture	216	2	3	4	5	0x00d80d24
+texture	217	2	3	4	5	0x00d90d24
+texture	218	2	3	4	5	0x00da0d24
+texture	222	2	3	4	5	0x00de0d24
+texture	223	2	3	4	5	0x00df0d24
+texture	224	2	3	4	5	0x00e00d24
+texture	225	2	3	4	5	0x00e10d24
+texture	226	2	3	4	5	0x00e20d24
+texture	228	2	3	4	5	0x00e40d24
+texture	229	2	3	4	5	0x00e50d24
+texture	230	2	3	4	5	0x00e60d24
+texture	231	2	3	4	5	0x00e70d24
+texture	232	2	3	4	5	0x00e80d24
+texture	233	2	3	4	5	0x00e90d24
+texture	234	2	3	4	5	0x00ea0d24
+texture	235	2	3	4	5	0x00eb0d24
+texture	236	2	3	4	5	0x00ec0d24
+texture	240	2	3	4	5	0x00f01f24
+texture	241	2	3	4	5	0x00f11f24
+texture	250	2	3	4	5	0x00fa1f24
+texture	252	2	3	4	5	0x00fc1f24
+texture	253	2	3	4	5	0x00fd1f24
+texture	255	2	3	4	5	0x00ff1f24
+texture	260	2	3	4	5	0x01041f24
+texture	261	2	3	4	5	0x01051f24
+texture	262	2	3	4	5	0x01061f24
+texture	84	2	3	4	5	0x005409a4
+texture	550	2	3	4	5	0x02260d24
+texture	551	2	3	4	5	0x02270d24
+texture	500	2	3	4	5	0x01f41f24
+texture	502	2	3	4	5	0x01f61f24
+texture	503	2	3	4	5	0x01f71f24
+texture	505	2	3	4	5	0x01f91f24
+texture	506	2	3	4	5	0x01fa1f24
+texture	507	2	3	4	5	0x01fb1f24
+texture	508	2	3	4	5	0x01fc1f24
+texture	509	2	3	4	5	0x01fd1f24
+texture	510	2	3	4	5	0x01fe1f24
+texture	520	2	3	4	5	0x02081f24
+texture	522	2	3	4	5	0x020a1f24
+texture	523	2	3	4	5	0x020b1f24
+texture	525	2	3	4	5	0x020d1f24
+texture	526	2	3	4	5	0x020e1f24
+texture	527	2	3	4	5	0x020f1f24
+texture	528	2	3	4	5	0x02101f24
+texture	529	2	3	4	5	0x02111f24
+texture	530	2	3	4	5	0x02121f24
+texture	540	2	3	4	5	0x021c1f24
+texture	541	2	3	4	5	0x021d1f24
+texture	542	2	3	4	5	0x021e1f24
+texture	543	2	3	4	5	0x021f1f24
+texture	544	2	3	4	5	0x02201f24
+texture	545	2	3	4	5	0x02211f24
+texture	185	2	3	4	5	0x00b90d24
+texture	191	2	3	4	5	0x00bf0d24
+texture	203	2	3	4	5	0x00cb0d24
+texture	209	2	3	4	5	0x00d10d24
+texture	221	2	3	4	5	0x00dd0d24
+texture	227	2	3	4	5	0x00e30d24
+texture	26	2	3	4	5	0x001a1e04
+texture	44	2	3	4	5	0x002c0d24
+texture	66	2	3	4	5	0x00421e24
+texture	116	2	3	4	5	0x00740d24
+texture	300	2	3	4	5	0x012c1f24
+texture	301	2	3	4	5	0x012d1f24
+texture	302	2	3	4	5	0x012e1f24
+texture	303	2	3	4	5	0x012f1f24
+texture	304	2	3	4	5	0x01301f24
+texture	313	2	3	4	5	0x01391f24
+texture	314	2	3	4	5	0x013a1f24
+texture	315	2	3	4	5	0x013b1f24
+texture	323	2	3	4	5	0x01431f24
+texture	324	2	3	4	5	0x01441f24
+texture	325	2	3	4	5	0x01451f24
+texture	576	2	3	4	5	0x02401e04
+texture	577	2	3	4	5	0x02411e04
+texture	578	2	3	4	5	0x02421e24
+texture	579	2	3	4	5	0x02431e24
+texture	586	2	3	4	5	0x024a0d24
+texture	1	0	3	4	5	0x00010800
+texture	1	1	3	4	5	0x00010807
+texture	1	3	3	4	5	0x00010800
+texture	1	4	3	4	5	0x00010800
+texture	1	5	3	4	5	0x00010804
+texture	1	2	0	4	5	0x00010800
+texture	1	2	1	4	5	0x00010838
+texture	1	2	2	4	5	0x00010800
+texture	1	2	4	4	5	0x00010800
+texture	1	2	5	4	5	0x00010820
+texture	1	2	3	0	5	0x00010800
+texture	1	2	3	1	5	0x000109c0
+texture	1	2	3	2	5	0x00010800
+texture	1	2	3	3	5	0x00010800
+texture	1	2	3	5	5	0x00010900
+texture	1	2	3	4	0	0x00010000
+texture	1	2	3	4	1	0x00010e00
+texture	1	2	3	4	2	0x00010000
+texture	1	2	3	4	3	0x00010000
+texture	1	2	3	4	4	0x00010000
+texture	10	0	3	4	5	0x000a1e00
+texture	10	1	3	4	5	0x000a1e07
+texture	10	3	3	4	5	0x000a1e00
+texture	10	4	3	4	5	0x000a1e00
+texture	10	5	3	4	5	0x000a1e07
+texture	10	2	0	4	5	0x000a1e04
+texture	10	2	1	4	5	0x000a1e3c
+texture	10	2	2	4	5	0x000a1e24
+texture	10	2	4	4	5	0x000a1e04
+texture	10	2	5	4	5	0x000a1e3c
+texture	10	2	3	0	5	0x000a1e04
+texture	10	2	3	1	5	0x000a1fc4
+texture	10	2	3	2	5	0x000a1f04
+texture	10	2	3	3	5	0x000a1e04
+texture	10	2	3	5	5	0x000a1fc4
+texture	10	2	3	4	0	0x000a1004
+texture	10	2	3	4	1	0x000a1e04
+texture	10	2	3	4	2	0x000a1804
+texture	10	2	3	4	3	0x000a1004
+texture	10	2	3	4	4	0x000a1004
+texture	30	0	3	4	5	0x001e1e20
+texture	30	1	3	4	5	0x001e1e27
+texture	30	3	3	4	5	0x001e1e24
+texture	30	4	3	4	5	0x001e1e20
+texture	30	5	3	4	5	0x001e1e27
+texture	30	2	0	4	5	0x001e1e04
+texture	30	2	1	4	5	0x001e1e3c
+texture	30	2	2	4	5	0x001e1e24
+texture	30	2	4	4	5	0x001e1e04
+texture	30	2	5	4	5	0x001e1e3c
+texture	30	2	3	0	5	0x001e1e24
+texture	30	2	3	1	5	0x001e1fe4
+texture	30	2	3	2	5	0x001e1f24
+texture	30	2	3	3	5	0x001e1f24
+texture	30	2	3	5	5	0x001e1fe4
+texture	30	2	3	4	0	0x001e1024
+texture	30	2	3	4	1	0x001e1e24
+texture	30	2	3	4	2	0x001e1824
+texture	30	2	3	4	3	0x001e1824
+texture	30	2	3	4	4	0x001e1024
+texture	70	0	3	4	5	0x00460d20
+texture	70	1	3	4	5	0x00460d27
+texture	70	3	3	4	5	0x00460d24
+texture	70	4	3	4	5	0x00460d24
+texture	70	5	3	4	5	0x00460d26
+texture	70	2	0	4	5	0x00460d04
+texture	70	2	1	4	5	0x00460d3c
+texture	70	2	2	4	5	0x00460d24
+texture	70	2	4	4	5	0x00460d24
+texture	70	2	5	4	5	0x00460d34
+texture	70	2	3	0	5	0x00460c24
+texture	70	2	3	1	5	0x00460de4
+texture	70	2	3	2	5	0x00460d24
+texture	70	2	3	3	5	0x00460d24
+texture	70	2	3	5	5	0x00460da4
+texture	70	2	3	4	0	0x00460124
+texture	70	2	3	4	1	0x00460f24
+texture	70	2	3	4	2	0x00460924
+texture	70	2	3	4	3	0x00460924
+texture	70	2	3	4	4	0x00460924
+texture	80	0	3	4	5	0x00500d20
+texture	80	1	3	4	5	0x00500d27
+texture	80	3	3	4	5	0x00500d24
+texture	80	4	3	4	5	0x00500d24
+texture	80	5	3	4	5	0x00500d26
+texture	80	2	0	4	5	0x00500d04
+texture	80	2	1	4	5	0x00500d3c
+texture	80	2	2	4	5	0x00500d24
+texture	80	2	4	4	5	0x00500d24
+texture	80	2	5	4	5	0x00500d34
+texture	80	2	3	0	5	0x00500c24
+texture	80	2	3	1	5	0x00500de4
+texture	80	2	3	2	5	0x00500d24
+texture	80	2	3	3	5	0x00500d24
+texture	80	2	3	5	5	0x00500da4
+texture	80	2	3	4	0	0x00500124
+texture	80	2	3	4	1	0x00500f24
+texture	80	2	3	4	2	0x00500924
+texture	80	2	3	4	3	0x00500924
+texture	80	2	3	4	4	0x00500924
+texture	53	0	3	4	5	0x00351e00
+texture	53	1	3	4	5	0x00351e07
+texture	53	3	3	4	5	0x00351e00
+texture	53	4	3	4	5	0x00351e00
+texture	53	5	3	4	5	0x00351e07
+texture	53	2	0	4	5	0x00351e04
+texture	53	2	1	4	5	0x00351e3c
+texture	53	2	2	4	5	0x00351e24
+texture	53	2	4	4	5	0x00351e04
+texture	53	2	5	4	5	0x00351e3c
+texture	53	2	3	0	5	0x00351e04
+texture	53	2	3	1	5	0x00351fc4
+texture	53	2	3	2	5	0x00351f04
+texture	53	2	3	3	5	0x00351e04
+texture	53	2	3	5	5	0x00351fc4
+texture	53	2	3	4	0	0x00351004
+texture	53	2	3	4	1	0x00351e04
+texture	53	2	3	4	2	0x00351804
+texture	53	2	3	4	3	0x00351004
+texture	53	2	3	4	4	0x00351004
+texture	252	0	3	4	5	0x00fc1f20
+texture	252	1	3	4	5	0x00fc1f27
+texture	252	3	3	4	5	0x00fc1f24
+texture	252	4	3	4	5	0x00fc1f24
+texture	252	5	3	4	5	0x00fc1f27
+texture	252	2	0	4	5	0x00fc1f04
+texture	252	2	1	4	5	0x00fc1f3c
+texture	252	2	2	4	5	0x00fc1f24
+texture	252	2	4	4	5	0x00fc1f24
+texture	252	2	5	4	5	0x00fc1f3c
+texture	252	2	3	0	5	0x00fc1e24
+texture	252	2	3	1	5	0x00fc1fe4
+texture	252	2	3	2	5	0x00fc1f24
+texture	252	2	3	3	5	0x00fc1f24
+texture	252	2	3	5	5	0x00fc1fe4
+texture	252	2	3	4	0	0x00fc1124
+texture	252	2	3	4	1	0x00fc1f24
+texture	252	2	3	4	2	0x00fc1924
+texture	252	2	3	4	3	0x00fc1924
+texture	252	2	3	4	4	0x00fc1924
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000000
+sampler	1	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000002
+sampler	0	1	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000004
+sampler	2	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x40000000
+sampler	0	2	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x40000000
+sampler	0	0	1	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000008
+sampler	0	0	2	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000010
+sampler	0	0	0	1	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000020
+sampler	0	0	0	0	1	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000100
+sampler	0	0	0	0	0	1	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000800
+sampler	0	0	0	2	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000040
+sampler	0	0	0	0	2	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000200
+sampler	0	0	0	0	0	2	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00001000
+sampler	0	0	0	3	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000060
+sampler	0	0	0	0	3	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000300
+sampler	0	0	0	0	0	3	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00001800
+sampler	0	0	0	4	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000080
+sampler	0	0	0	0	4	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000400
+sampler	0	0	0	0	0	4	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00002000
+sampler	0	0	0	5	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x000000a0
+sampler	0	0	0	0	5	0	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00000500
+sampler	0	0	0	0	0	5	0	1	0x00000000	0x7f7fffff	0	1	0	0	0x00002800
+sampler	0	0	0	0	0	0	1	1	0x00000000	0x7f7fffff	0	1	0	0	0x00004000
+sampler	0	0	0	0	0	0	2	1	0x00000000	0x7f7fffff	0	1	0	0	0x00008000
+sampler	0	0	0	0	0	0	0	0	0x00000000	0x7f7fffff	0	1	0	0	0x00000001
+sampler	0	0	0	0	0	0	0	1	0x3e800000	0x7f7fffff	0	1	0	0	0x00000000
+sampler	0	0	0	0	0	0	0	1	0x3f000000	0x7f7fffff	0	1	0	0	0x00000000
+sampler	0	0	0	0	0	0	0	1	0x3f040000	0x7f7fffff	0	1	0	0	0x00400000
+sampler	0	0	0	0	0	0	0	1	0x3f080000	0x7f7fffff	0	1	0	0	0x00400000
+sampler	0	0	0	0	0	0	0	1	0x3f800000	0x7f7fffff	0	1	0	0	0x00400000
+sampler	0	0	0	0	0	0	0	1	0x3fb33333	0x7f7fffff	0	1	0	0	0x00400000
+sampler	0	0	0	0	0	0	0	1	0x3fcccccd	0x7f7fffff	0	1	0	0	0x00800000
+sampler	0	0	0	0	0	0	0	1	0x40300000	0x7f7fffff	0	1	0	0	0x00c00000
+sampler	0	0	0	0	0	0	0	1	0x41680000	0x7f7fffff	0	1	0	0	0x03800000
+sampler	0	0	0	0	0	0	0	1	0x4169999a	0x7f7fffff	0	1	0	0	0x03c00000
+sampler	0	0	0	0	0	0	0	1	0x41700000	0x7f7fffff	0	1	0	0	0x03c00000
+sampler	0	0	0	0	0	0	0	1	0x42c80000	0x7f7fffff	0	1	0	0	0x03c00000
+sampler	0	0	0	0	0	0	0	1	0x7f7fffff	0x7f7fffff	0	1	0	0	0x03c00000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x00000000	0	1	0	0	0x3c000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x3f000000	0	1	0	0	0x3c000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x3f040000	0	1	0	0	0x38000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x3f080000	0	1	0	0	0x38000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x4079999a	0	1	0	0	0x2c000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x41600000	0	1	0	0	0x04000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x4169999a	0	1	0	0	0x00000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x41700000	0	1	0	0	0x00000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x447a0000	0	1	0	0	0x00000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	1	1	0	0	0x00000000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	2	0	0	0x00200000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	3	0	0	0x00200000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	16	0	0	0x00200000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	1	0	0x00010000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	2	0	0x00020000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	3	0	0x00030000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	4	0	0x00040000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	5	0	0x00050000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	6	0	0x00060000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	7	0	0x00070000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	1	0x00080000
+sampler	0	0	0	0	0	0	0	1	0x00000000	0x7f7fffff	0	1	0	2	0x00100000
+sampler	1	2	2	2	3	5	2	0	0x40300000	0x41140000	1	8	6	2	0x58f6ab53

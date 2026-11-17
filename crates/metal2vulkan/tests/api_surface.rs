@@ -958,6 +958,7 @@ surface! {
         enum VertexStepFunction N;
         enum Winding E;
         mod format;
+        mod resource_word;
         mod sampler;
         mod state;
         mod vertex;
@@ -1006,6 +1007,9 @@ surface! {
         fn to_rotated_image;
         fn alpha_in_red;
         fn alpha_in_red_format;
+    }
+    "metal::resource_word" => metal2vulkan::metal::resource_word {
+        struct TextureWord E;
     }
     "metal::sampler" => metal2vulkan::metal::sampler {
         struct SamplerUse N;
@@ -2372,6 +2376,7 @@ fn scanned_modules() -> Vec<&'static str> {
         "cache",
         "metal",
         "metal::format",
+        "metal::resource_word",
         "metal::sampler",
         "metal::state",
         "metal::vertex",

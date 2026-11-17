@@ -444,6 +444,7 @@ impl TextureWriteRoundingMode {
 
 pub(crate) mod bicubic;
 pub mod format;
+pub mod resource_word;
 pub mod sampler;
 pub mod state;
 pub(crate) mod texel_format;
