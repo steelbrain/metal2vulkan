@@ -184,6 +184,7 @@ fn interface(
     let stage = &pipeline.stage;
     // Every argument is a pushed address or a specialization: no descriptor, no table the binder
     // builds, no constant data; the stage's flags are its subgroups'.
+    let stage_flags = vk::PipelineShaderStageCreateFlags::from_raw(stage.stage_flags.as_raw());
     let subgroups = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
         | vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE;
     if translated.needs_pointer_translation
@@ -200,7 +201,7 @@ fn interface(
             .iter()
             .any(|set| !set.bindings.is_empty())
         || stage.constant_blob.is_some()
-        || !subgroups.contains(stage.stage_flags)
+        || !subgroups.contains(stage_flags)
     {
         return Err(gap());
     }
@@ -325,7 +326,7 @@ fn interface(
         max_total_threads,
         multiples,
         required_subgroup_size: stage.required_subgroup_size,
-        stage_flags: stage.stage_flags,
+        stage_flags,
     })
 }
 
