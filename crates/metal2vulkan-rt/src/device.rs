@@ -559,6 +559,22 @@ impl Device {
         &self.shared.core
     }
 
+    /// Gives up this handle where it is not the last, which ends nothing; the last comes back,
+    /// for the caller to drop once it holds no lock, which ends the device on its thread. A call
+    /// that holds a handle while another thread may drop the consumer's last one gives its own up
+    /// first, so the consumer's drop is the last and the teardown runs where the contract says.
+    pub(crate) fn release(self) -> Option<Device> {
+        Arc::into_inner(self.shared).map(|shared| Device {
+            shared: Arc::new(shared),
+        })
+    }
+
+    /// For the device tests: how many handles of the device there are.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn handles(&self) -> usize {
+        Arc::strong_count(&self.shared)
+    }
+
     /// A block the consumer holds. Err: [`Error::NoSuchBlock`].
     pub(crate) fn block(&self, id: BlockId) -> Result<Arc<Block>, Error> {
         lock(&self.shared.claims)
@@ -638,9 +654,10 @@ impl Shared {
     }
 }
 
-/// Stops the runtime's threads and its GPU work: for [`Device::quiesce`] (`quiesce`, with its
-/// deadline) and for teardown. Only the first call stops anything; a later one answers at once.
-/// True once the GPU went idle and every thread ended by `deadline`.
+/// Stops the runtime's threads and its GPU work, and runs the consumer's unmap hook for every
+/// block still handed out, on this thread: for [`Device::quiesce`] (`quiesce`, with its deadline)
+/// and for teardown. Only the first call stops anything; a later one answers at once. True once
+/// the GPU went idle and every thread ended by `deadline`.
 fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: bool) -> bool {
     match core
         .halt
@@ -668,9 +685,9 @@ fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: 
     idle &= finish(complete, core, deadline) && core.done.drained();
     core.reaper.stop();
     idle &= finish(reaper, core, deadline);
-    if quiesce {
-        core.pool.unmap_all();
-    }
+    // The consumer's mappings go here, on the thread that stops the device, whichever thread
+    // later drops the core's last reference and frees the memory.
+    core.pool.unmap_all();
     let answer = if idle { HALTED_IDLE } else { HALTED_LATE };
     core.halt.store(answer, Ordering::Release);
     idle
@@ -899,7 +916,8 @@ impl Drop for Core {
     fn drop(&mut self) {
         self.wait_idle();
         // The runtime's threads have ended: the core is dropped only once none holds it, and with
-        // it every command buffer and upload, each of which held what it used.
+        // it every command buffer and upload, each of which held what it used. The teardown ran
+        // the consumer's unmap hook, so freeing runs none.
         for memory in self.pool.remaining() {
             memory::free(self, memory);
         }

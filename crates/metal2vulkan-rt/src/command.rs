@@ -326,9 +326,10 @@ impl CommandBuffer {
     /// Err: [`Refusal::Committed`]; [`Error::Quiesced`]; [`Error::Vulkan`] where ending the last
     /// segment's commands fails.
     pub fn commit(&self) -> Result<(), Error> {
-        // The handle keeps the device alive through the call; it is dropped once no lock is held.
-        let device = self.device()?;
-        let core = device.core();
+        // The core, not a handle: the command buffer gives its handle up before another thread
+        // can complete it, so a handler that drops the consumer's last handle ends the device on
+        // the reaper, never in this call.
+        let core = self.building(|building| Ok(Arc::clone(building.device.core())))?;
         let mut work = core.work.lock();
         if work.closed() {
             return Err(Error::Quiesced);
@@ -343,7 +344,12 @@ impl CommandBuffer {
             state.building = Some(building);
             return Err(error);
         }
-        let Building { gpu, handlers, .. } = building;
+        let Building {
+            device,
+            gpu,
+            handlers,
+            ..
+        } = building;
         state.times.kernel_start = times::host_time();
         let pending = Pending {
             seq: work.seq(),
@@ -358,11 +364,13 @@ impl CommandBuffer {
             .lost()
             .then_some(CommandBufferError::DeviceLost { in_flight: false }));
         drop(state);
+        // Where it is the last handle, the device ends below, once no lock is held.
+        let last = device.release();
         match ended {
             Some(error) => {
                 drop(work);
                 core.done
-                    .end_all(core, vec![(Arc::clone(&self.inner), pending, error)]);
+                    .end_all(&core, vec![(Arc::clone(&self.inner), pending, error)]);
             }
             None => {
                 work.commit(&self.inner, pending);
@@ -370,6 +378,8 @@ impl CommandBuffer {
                 core.work.wake();
             }
         }
+        drop(core);
+        drop(last);
         Ok(())
     }
 

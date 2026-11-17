@@ -43,12 +43,15 @@ A device is torn down when its last handle, and the last handle of every object 
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
 `CommandBufferError::NotRun`; the completion thread retires the rest as the GPU completes it and
-runs the handlers; the threads are joined and the GPU goes idle. Then every block is freed,
-`BlockMappings::unmap` first for each block the consumer was handed, and the `VkDevice` is
-destroyed. Teardown runs on the thread that drops the last handle, or, where that is a handler or
-a listener, on the reaper once the handler returns; every gauge reads zero only once
-the `VkDevice` is destroyed, so such a consumer waits for that before it drops its instance or
-exits. A physical device and a device each hold their instance. No thread of the runtime outlives its device, and nothing relies on a
+runs the handlers; the threads are joined and the GPU goes idle; `BlockMappings::unmap` runs for
+each block the consumer was handed. Teardown runs on the thread that drops the last handle, or,
+where that is a handler or a listener, on the reaper once the handler returns. A call that holds a
+handle of its own gives it up before another thread can drop the last: `commit` gives up the
+command buffer's before the command buffer can complete. Then every block is freed and the
+`VkDevice` destroyed, once the runtime's last internal reference is gone: on the thread that tore
+down, or where a call still held one as it returned, in that call, which runs no consumer code
+there. Every gauge reads zero only once the `VkDevice` is destroyed, so a consumer whose last
+handle dropped in a handler waits for that before it drops its instance or exits. A physical device and a device each hold their instance. No thread of the runtime outlives its device, and nothing relies on a
 static destructor or an `atexit` handler: the consumer drops every handle, or calls
 `Device::quiesce`, before the process exits, since a driver may unmap device memory inside
 `exit()`.
@@ -110,7 +113,7 @@ Before the runtime frees a block it handed out, it calls `BlockMappings::unmap(b
 returns once every mapping the consumer made of it is gone and none of its threads touches the
 block. The memory stays mapped and valid until then. It runs once per block: on the block-maker
 thread; in `Device::quiesce`, on the calling thread, for every block still handed out; or at
-teardown, on the thread that ends it, after the runtime's other threads are joined. It never calls
+teardown, on the thread that tears down, after the runtime's other threads are joined. It never calls
 into the runtime. Blocks the consumer never took are freed without it, and so is every block freed
 after a quiesce.
 

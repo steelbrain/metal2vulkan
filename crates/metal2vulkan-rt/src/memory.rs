@@ -270,9 +270,9 @@ impl Pool {
         }
     }
 
-    /// In [`Device::quiesce`](crate::Device::quiesce), once the block-maker thread is stopped:
-    /// calls the hook for every block handed out and not yet freed, on this thread. No block's
-    /// hook runs again: a block freed later is freed without it.
+    /// In [`Device::quiesce`](crate::Device::quiesce) and at teardown, once the runtime's other
+    /// threads are stopped: calls the hook for every block handed out and not yet freed, on this
+    /// thread. No block's hook runs again: a block freed later is freed without it.
     pub(crate) fn unmap_all(&self) {
         let mut handed: Vec<BlockId> = {
             let mut state = self.lock();

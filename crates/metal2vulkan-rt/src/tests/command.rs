@@ -14,7 +14,7 @@ pub(crate) mod on_device {
         Instance, MemoryClass, Refusal, SharedEvent, BLOCK_LEN,
     };
     use ash::vk;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex, OnceLock};
     use std::thread::{self, JoinHandle};
@@ -734,8 +734,9 @@ pub(crate) mod on_device {
     }
 
     /// The last handle dropped in a completed handler: the reaper runs the teardown once the
-    /// handler returns, so the block still held is unmapped and freed there, and every gauge
-    /// reads zero once the device is destroyed.
+    /// handler returns, so the block still held is unmapped there, and every gauge reads zero once
+    /// the device is destroyed. The handler's handle is the last: `commit` gave the command
+    /// buffer's up before the command buffer could complete.
     #[test]
     fn every_device_tears_down_from_a_completed_handler() {
         let instance = Instance::new(&[]).expect("an instance at the floor");
@@ -755,11 +756,21 @@ pub(crate) mod on_device {
             let queue = queue(&device);
             let command_buffer = queue.command_buffer().expect("a command buffer");
             drop(queue);
+            let handles = Arc::new(AtomicUsize::new(0));
+            let seen = Arc::clone(&handles);
             command_buffer
-                .add_completed_handler(move |_| drop(device))
+                .add_completed_handler(move |_| {
+                    seen.store(device.handles(), Ordering::SeqCst);
+                    drop(device);
+                })
                 .expect("a handler");
             command_buffer.commit().expect("a commit");
             finished(name, &command_buffer);
+            assert_eq!(
+                handles.load(Ordering::SeqCst),
+                1,
+                "{name}: the handler held the last handle"
+            );
             within("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop("handler_teardown", counters.gauges());
             assert_eq!(
