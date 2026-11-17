@@ -241,7 +241,15 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   burst's fourth, under `CommitOrder` after its twelfth. Measured on lavapipe (a host at load 7,
   where each of the twelve ran about 37 ms): under `Fair` the small one's GPU run started 37.5 ms
   after its commit, between the burst's first and second; under `CommitOrder`, 454.8 ms after,
-  behind all twelve. The default on every driver.
+  behind all twelve. On RADV on a Radeon 780M (PHOENIX; the `queue_share` example's `frames`, a
+  plain compositor queue committing one draw every 16 ms beside an application that keeps three
+  30 ms command buffers in flight, 5 s each, host load 1 to 3; a draw's latency is its commit to
+  its completed handler): under `CommitOrder` the compositor's p50 71.1 ms and max 89.4 ms, every
+  draw over 16 ms; under `Fair` p50 17.6 ms and max 56.7 ms, 175 of 313 over 16 ms, the
+  application's GPU busy 99.6% against 99.4%. With eight 4 ms command buffers in flight: p50
+  23.8 ms and max 36.8 ms, 311 over 16 ms, against p50 4.0 ms and max 17.7 ms, 1 over 16 ms, the
+  GPU idle 1.68% of the run against 0.08% (264.7 command buffers a second of 3.71 ms each against
+  283.4 of 3.52 ms). The default on every driver.
 - `pointer_domain`, `handle_domain`, `containment` and `isolation` choose how resources resolve and
   how guests are contained, not an answer of Metal's arithmetic or sampling.
 
