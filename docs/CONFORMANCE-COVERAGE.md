@@ -44,7 +44,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1277 |
 | distinct SDK items the Metal leg reaches, of any status | 822 |
 | of those, reached only where this cannot name the family | 3 |
-| ledger rows (a case whose gap is recorded) | 3610 |
+| ledger rows (a case whose gap is recorded) | 3662 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2373,6 +2373,23 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-interaction-format-srgb8` | Metal's stored sRGB code and ours differ at this site, and the row's count and bound are this run's. Two of the device's own answers meet in it. The device enco… |
 | `blend-sweep-operations` | Metal stores a negative zero where we store a positive one: the first differing element is Metal 0x80000000 against our 0x0, and all four of the site's elements… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
@@ -2414,6 +2431,23 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-r32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rg16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
@@ -2460,6 +2494,24 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rg32f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
+| `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are MoltenVK's on the Apple M3 Max. Metal's compiler folds the attachmen… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
 | `half-output-blends-rgba16f` | Metal's stored blend result and ours differ at this site, and the row's count and bound are this run's. Metal's compiler folds the attachment's blend and its fo… |
