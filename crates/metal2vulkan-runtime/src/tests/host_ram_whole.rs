@@ -23,8 +23,9 @@
 //! residency, the resident RAM takes two chunks and imports none, and its test fails.
 //!
 //! Where `/dev/udmabuf` cannot be opened, its limit is shorter than the RAM, the device imports no
-//! host memory, or the driver refused the RAM's dma-buf (the RAM not listed), the test says so and
-//! passes without running.
+//! host memory, its limits take chunks no longer than the cap (`maxStorageBufferRange`,
+//! `maxMemoryAllocationSize` or `maxBufferSize`: llvmpipe's 128 MiB storage range), or the driver
+//! refused the RAM's dma-buf (the RAM not listed), the test says so and passes without running.
 //!
 //! `whole_ram_bench` (ignored, release, run by name) holds a consumer's RAM of each of
 //! [`BENCH_BYTES`], on a device of its own: with one page a hole, every chunk imported by the
@@ -38,7 +39,7 @@
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
 use super::host_residency::{device_with, host_page, udmabuf, Scratch};
-use crate::host_ram::WHOLE_ID;
+use crate::host_ram::{listed_chunk_bytes, LONGEST_LISTED_CHUNK, WHOLE_ID};
 use crate::submit_check::{Check, Verdict};
 use crate::{
     Device, DmaBufChunk, DmaBufRequest, DmaBufSource, HostRam, KeepAlive, MessageSink,
@@ -180,6 +181,29 @@ fn listed_device(
     let device = device_with(&scratch.0, Some(sink));
     if device.shared().host_import.is_err() {
         eprintln!("{test}: the device imports no host memory here: not run");
+        return None;
+    }
+    // A RAM is imported whole only where the cap cuts its chunks shorter than the source's and
+    // the device's limits do (`host_ram::listed_chunks_of`): llvmpipe's 128 MiB
+    // `maxStorageBufferRange` cuts them first.
+    let allocation = device.compile_device().allocation();
+    let storage = device
+        .properties()
+        .description
+        .limits
+        .max_storage_buffer_range;
+    let limits = listed_chunk_bytes(
+        largest,
+        allocation.max_memory_allocation_size,
+        allocation.max_buffer_size,
+        u64::from(storage),
+    );
+    if limits <= LONGEST_LISTED_CHUNK {
+        eprintln!(
+            "{test}: the device's limits take chunks of {} MiB, within the {} MiB cap: not run",
+            limits >> 20,
+            LONGEST_LISTED_CHUNK >> 20
+        );
         return None;
     }
     (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
