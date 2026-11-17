@@ -5,8 +5,8 @@
 //!
 //! The traits below are the Metal compute subset the workloads call, one method per Metal call.
 //! A runtime implements them once: the old runtime in [`old`], which the cutover deletes with its
-//! file, and the new runtime in [`rt`]. The new runtime makes buffers only so far
-//! ([`Device`], not [`ComputeDevice`]), so it runs the creation workloads alone.
+//! file, and the new runtime in [`rt`]. A workload a runtime answers with a typed refusal (a
+//! known gap or a device limit, [`Refused`]) is reported by name as refused, not as a failure.
 //!
 //! A workload is a [`plan::Plan`]: its buffers and their starting contents, the dispatches of one
 //! run and how many go in each command buffer, the contents its buffers must hold after the first
@@ -55,11 +55,21 @@
 //!
 //! where the steady time ([`run::steady`], the table's `steady` column) is the lowest median of
 //! the timed runs' consecutive windows of 10, with at least 5 timed runs. After the plan
-//! workloads, per runtime, it prints how many `VkPipeline`s they created by the runtime's own
-//! count, as `M2V-MATRIX metric harness-<runtime>/<authored|described>/pipelines_created <n>`.
-//! Where the runtime counts its pipeline barriers ([`Device::barriers`]), each plan workload also
-//! prints `M2V-MATRIX metric harness-<runtime>/<workload>/barriers_per_run <n>`, the barriers it
-//! recorded per timed run;
+//! workloads, per runtime and set (`authored` or `described`), it prints how many `VkPipeline`s
+//! they created and how many workloads it refused, and where the runtime counts them, its
+//! first-use waits ([`Waits`]): the count, and their total and longest time in microseconds.
+//! Each plan workload also prints the runtime's own counts of its work ([`Device::counts`]) over
+//! one run after the timed ones, run alone:
+//!
+//! ```text
+//! M2V-MATRIX metric harness-<runtime>/<set>/pipelines_created <n>
+//! M2V-MATRIX metric harness-<runtime>/<set>/refused <n>
+//! M2V-MATRIX metric harness-<runtime>/<set>/first_use_waits <n>
+//! M2V-MATRIX time harness-<runtime>/<set>/first_use_wait_total <us>
+//! M2V-MATRIX time harness-<runtime>/<set>/first_use_wait_longest <us>
+//! M2V-MATRIX metric harness-<runtime>/<workload>/<count>_per_run <n>
+//! ```
+//!
 //! and once every workload has run, where the runtime's gauges outlive its device,
 //! `M2V-MATRIX gauge harness-<runtime>/device/<gauge>@drop <value>` read after the device dropped.
 
@@ -78,6 +88,32 @@ mod tests;
 
 /// A harness error: a runtime's own, boxed, or the harness's words.
 pub type Error = Box<dyn std::error::Error>;
+
+/// A runtime's typed refusal of a workload: a known gap or one of the device's limits, which the
+/// runtime answers instead of running it. The command reports the workload by name as refused,
+/// apart from its failures.
+#[derive(Debug)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// A runtime's first-use waits so far: encoding calls that waited while the `VkPipeline` they
+/// needed was made ([`Device::first_use_waits`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Waits {
+    /// How many.
+    pub count: u64,
+    /// Their total time, in nanoseconds.
+    pub nanos: u64,
+    /// The longest since the device was made, in nanoseconds.
+    pub longest_nanos: u64,
+}
 
 /// A harness result.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -127,9 +163,13 @@ pub trait Device: Sized {
     /// Metal counterpart.
     fn pipelines_created(&self) -> u64;
 
-    /// How many pipeline barriers the runtime has recorded on the device so far, by its own
-    /// count; `None` where it keeps no such total. No Metal counterpart.
-    fn barriers(&self) -> Option<u64>;
+    /// The runtime's own counts of its work on the device so far, by name: those it keeps one
+    /// total of among submissions, encoders, barriers and bytes copied. No Metal counterpart.
+    fn counts(&self) -> Vec<(&'static str, u64)>;
+
+    /// The runtime's first-use waits so far; `None` where it does not count them. No Metal
+    /// counterpart.
+    fn first_use_waits(&self) -> Option<Waits>;
 }
 
 /// A reader of a runtime's gauges that outlives its device ([`Device::gauges_after_drop`]).

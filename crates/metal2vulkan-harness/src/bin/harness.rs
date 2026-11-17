@@ -10,19 +10,17 @@
 //! twice. A workload's rows print once its first run matched its CPU reference on every runtime
 //! and every runtime's outputs matched the first runtime's. The creation workloads run after the
 //! authored ones (not with a description); their rows print once every buffer each runtime made
-//! started zero. The command exits 0 when every workload did, 1 when one did not or failed, and
-//! 2 when it could not start.
-//!
-//! The runtime `new` makes buffers only so far: it runs the creation workloads, and every other
-//! workload fails on it, so it is named with `--only create_4KiB,create_1MiB,create_64MiB`.
+//! started zero. A workload a runtime refuses with a typed refusal prints `REFUSED` and the
+//! refusal on that runtime's row, and the other runtimes' outputs are compared among
+//! themselves. The command exits 0 when every workload matched or was refused, 1 when one did
+//! not match or failed, and 2 when it could not start.
 
 use metal2vulkan_harness::authored::Create;
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
-    compare_outputs, percentile, steady, Buffers, CreateReport, Harness, Report, Runs, Session,
-    Warmup,
+    percentile, run_each, steady, CreateReport, Harness, Report, Runs, Session, Warmup,
 };
-use metal2vulkan_harness::{authored, description, old, rt, Result};
+use metal2vulkan_harness::{authored, description, old, rt, Result, Waits};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -88,7 +86,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
 fn session(name: &str, authored: &[u8]) -> Result<Box<dyn Session>> {
     match name {
         "old" => Ok(Box::new(Harness::new(old::system_default()?, authored)?)),
-        "new" => Ok(Box::new(Buffers(rt::system_default()?))),
+        "new" => Ok(Box::new(Harness::new(rt::system_default()?, authored)?)),
         other => Err(format!("no runtime {other}; the runtimes are: old, new").into()),
     }
 }
@@ -188,24 +186,22 @@ fn run_all(args: &Args) -> Result<bool> {
     } else {
         "authored"
     };
-    let pipelines_before: Vec<u64> = (sessions.iter())
-        .map(|(_, session)| session.pipelines_created())
+    let before: Vec<(u64, Option<Waits>)> = (sessions.iter())
+        .map(|(_, session)| (session.pipelines_created(), session.first_use_waits()))
         .collect();
+    let mut refused = vec![0u64; sessions.len()];
     let mut matched = true;
     for (name, plan) in &workloads {
-        let checked = plan().and_then(|plan| {
-            let reports = (sessions.iter_mut())
-                .map(|(_, session)| session.run(&plan, args.runs))
-                .collect::<Result<Vec<Report>>>()?;
-            for report in &reports[1..] {
-                compare_outputs(&plan, &reports[0], report)?;
-            }
-            Ok(reports)
-        });
-        match checked {
-            Ok(reports) => {
-                for ((runtime, _), report) in sessions.iter().zip(&reports) {
-                    print(runtime, name, report);
+        match plan().and_then(|plan| run_each(&plan, &mut sessions, args.runs)) {
+            Ok(runs) => {
+                for (at, ((runtime, _), run)) in sessions.iter().zip(&runs).enumerate() {
+                    match run {
+                        Ok(report) => print(runtime, name, report),
+                        Err(why) => {
+                            println!("{name:<17} {runtime:<8} REFUSED: {why}");
+                            refused[at] += 1;
+                        }
+                    }
                 }
             }
             Err(why) => {
@@ -215,10 +211,28 @@ fn run_all(args: &Args) -> Result<bool> {
         }
     }
     if !workloads.is_empty() {
-        for ((runtime, session), before) in sessions.iter().zip(pipelines_before) {
-            let made = session.pipelines_created() - before;
-            println!("runtime {runtime}: the {set} workloads created {made} pipelines");
+        for (((runtime, session), (pipelines, waits)), refused) in
+            sessions.iter().zip(before).zip(refused)
+        {
+            let made = session.pipelines_created() - pipelines;
+            println!(
+                "runtime {runtime}: the {set} workloads created {made} pipelines; it refused {refused} of them"
+            );
             println!("M2V-MATRIX metric harness-{runtime}/{set}/pipelines_created {made}");
+            println!("M2V-MATRIX metric harness-{runtime}/{set}/refused {refused}");
+            if let (Some(before), Some(after)) = (waits, session.first_use_waits()) {
+                let count = after.count - before.count;
+                let total = (after.nanos - before.nanos) as f64 / 1e3;
+                let longest = after.longest_nanos as f64 / 1e3;
+                println!(
+                    "runtime {runtime}: the {set} workloads waited {count} times while a pipeline was made, {total:.1} us in all; the longest wait since the device was made took {longest:.1} us"
+                );
+                println!("M2V-MATRIX metric harness-{runtime}/{set}/first_use_waits {count}");
+                println!("M2V-MATRIX time harness-{runtime}/{set}/first_use_wait_total {total:.3}");
+                println!(
+                    "M2V-MATRIX time harness-{runtime}/{set}/first_use_wait_longest {longest:.3}"
+                );
+            }
         }
     }
     if !creates.is_empty() {
@@ -340,7 +354,7 @@ fn print(runtime: &str, name: &str, report: &Report) {
         gauges(&report.gauges),
     );
     matrix(runtime, name, &report.gpu_us, &report.gauges);
-    if let Some(barriers) = report.barriers {
-        println!("M2V-MATRIX metric harness-{runtime}/{name}/barriers_per_run {barriers}");
+    for (count, value) in &report.counts {
+        println!("M2V-MATRIX metric harness-{runtime}/{name}/{count}_per_run {value}");
     }
 }

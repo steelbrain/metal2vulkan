@@ -5,9 +5,13 @@ use crate::description;
 use crate::plan::{
     Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Grid, Output, Plan, Source, Values,
 };
-use crate::rt::Ranges;
-use crate::run::{compare_outputs, percentile, settled, steady, warm_up, zeroed, Report, Runs};
-use crate::{Buffer, Storage};
+use crate::rt::{self, Ranges};
+use crate::run::{
+    compare_outputs, percentile, run_each, settled, steady, warm_up, zeroed, CreateReport, Report,
+    Runs, Session,
+};
+use crate::{Buffer, Refused, Result, Storage, Waits};
+use metal2vulkan_rt::{Error as RtError, Gap, Limit};
 use std::path::Path;
 use std::ptr::NonNull;
 
@@ -402,4 +406,90 @@ fn a_steady_time_is_the_lowest_median_of_windows_of_ten() {
     times[3] = 400.0;
     assert_eq!(steady(&times), Some(100.0));
     assert_eq!(percentile(&times, 50), Some(105.0));
+}
+
+/// The new runtime's known gaps and the device's limits are typed refusals; its other errors are
+/// failures.
+#[test]
+fn the_new_runtime_refuses_by_its_gaps_and_limits_alone() {
+    let refused = |error: RtError| rt::error(error).downcast::<Refused>().is_ok();
+    assert!(refused(RtError::Unsupported(Gap::KernelInput)));
+    assert!(refused(RtError::Limit(Limit::BlockIds)));
+    assert!(!refused(RtError::Quiesced));
+    assert_eq!(rt::size([4, 2, 1]).unwrap(), [4, 2, 1]);
+    assert!(rt::size([1 << 32, 1, 1]).unwrap_err().is::<Refused>());
+}
+
+/// A session that answers each plan with a report of `outputs`, or with `error`.
+struct Answers {
+    outputs: Vec<u8>,
+    error: Option<fn() -> crate::Error>,
+}
+
+impl Session for Answers {
+    fn device_name(&self) -> String {
+        "answers".to_owned()
+    }
+
+    fn run(&mut self, _: &Plan, _: Runs) -> Result<Report> {
+        match self.error {
+            Some(error) => Err(error()),
+            None => Ok(Report {
+                outputs: vec![self.outputs.clone()],
+                ..Report::default()
+            }),
+        }
+    }
+
+    fn create(&mut self, _: u64, _: Runs) -> Result<CreateReport> {
+        Ok(CreateReport::default())
+    }
+
+    fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>> {
+        None
+    }
+
+    fn pipelines_created(&self) -> u64 {
+        0
+    }
+
+    fn first_use_waits(&self) -> Option<Waits> {
+        None
+    }
+}
+
+/// A runtime's refusal leaves the others' outputs compared among themselves; a failure, or
+/// outputs that differ, is an error.
+#[test]
+fn a_refusal_is_reported_beside_the_runs_and_a_failure_is_not() {
+    let mut plan = one_buffer_plan(16, None, 0);
+    plan.outputs = vec![Output {
+        buffer: 0,
+        comparison: Comparison::Exact,
+    }];
+    let runs = Runs {
+        warmup: 0,
+        settle: false,
+        timed: 1,
+    };
+    let answers = |outputs: &[u32], error: Option<fn() -> crate::Error>| -> Box<dyn Session> {
+        Box::new(Answers {
+            outputs: le(outputs),
+            error,
+        })
+    };
+    let refuse: fn() -> crate::Error = || Box::new(Refused("a known gap".to_owned()));
+    let fail: fn() -> crate::Error = || "a failure".into();
+    let mut sessions = vec![
+        ("a", answers(&[1, 2, 3, 4], None)),
+        ("b", answers(&[], Some(refuse))),
+        ("c", answers(&[1, 2, 3, 4], None)),
+    ];
+    let each = run_each(&plan, &mut sessions, runs).unwrap();
+    assert!(each[0].is_ok() && each[2].is_ok());
+    assert_eq!(each[1].as_ref().unwrap_err().to_string(), "a known gap");
+    sessions[2].1 = answers(&[1, 2, 3, 5], None);
+    assert!(run_each(&plan, &mut sessions, runs).is_err());
+    sessions[2].1 = answers(&[], Some(fail));
+    assert!(run_each(&plan, &mut sessions, runs).is_err());
 }

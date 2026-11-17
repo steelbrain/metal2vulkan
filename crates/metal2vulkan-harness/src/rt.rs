@@ -9,10 +9,11 @@
 //! buffer's memory only then. So a buffer made after one of the same length was dropped takes
 //! the same range, which the runtime zeroes as `newBufferWithLength:options:` does.
 //!
-//! The runtime makes buffers only so far, so the command runs its creation workloads alone
-//! ([`run::Buffers`](crate::run::Buffers)).
+//! Its known gaps and the device's limits (`Error::Unsupported`, `Error::Limit`) are typed
+//! refusals ([`Refused`]); its other errors are failures.
 
-use crate::{Result, Storage};
+use crate::plan::{self, Constant};
+use crate::{Code, Refused, Result, Size, Storage, Waits};
 use ash::vk;
 use metal2vulkan_rt as rt;
 use std::cell::RefCell;
@@ -23,6 +24,28 @@ use std::rc::Rc;
 /// The alignment of each buffer's offset in its block: the largest
 /// `minStorageBufferOffsetAlignment` Vulkan allows.
 const ALIGN: u64 = 256;
+
+/// The command buffers a queue holds at once: `newCommandQueue`'s.
+const QUEUE_COMMAND_BUFFERS: u32 = 64;
+
+/// The runtime's `error` as the harness's: a known gap or a device limit is a typed refusal.
+pub(crate) fn error(error: rt::Error) -> crate::Error {
+    match error {
+        rt::Error::Unsupported(_) | rt::Error::Limit(_) => Box::new(Refused(error.to_string())),
+        error => Box::new(error),
+    }
+}
+
+/// A size as the runtime takes it; past 32 bits on an axis, a typed refusal.
+pub(crate) fn size(size: Size) -> Result<[u32; 3]> {
+    let [x, y, z] = size.map(u32::try_from);
+    match (x, y, z) {
+        (Ok(x), Ok(y), Ok(z)) => Ok([x, y, z]),
+        _ => Err(Box::new(Refused(format!(
+            "{size:?} is past the 32-bit sizes the runtime takes"
+        )))),
+    }
+}
 
 /// The new runtime's `MTLCreateSystemDefaultDevice`: the first physical device of the most
 /// preferred type (discrete, integrated, virtual, CPU, other) that opens, in the loader's order
@@ -107,7 +130,7 @@ impl Heap {
     /// A place for a buffer of `length` bytes in `class` memory.
     fn place(&mut self, class: rt::MemoryClass, length: u64) -> Result<Placed> {
         if length > rt::BLOCK_LEN {
-            let block = self.device.take_block(class, length)?.id;
+            let block = self.device.take_block(class, length).map_err(error)?.id;
             return Ok(Placed { block, range: None });
         }
         let span = length.next_multiple_of(ALIGN);
@@ -117,7 +140,7 @@ impl Heap {
         let (block, start) = match found {
             Some(found) => found,
             None => {
-                let info = self.device.take_block(class, span)?;
+                let info = self.device.take_block(class, span).map_err(error)?;
                 let mut free = Ranges::new(info.len);
                 let start =
                     (free.take(span)).ok_or("a new pooled block is shorter than a buffer")?;
@@ -220,7 +243,7 @@ impl crate::Device for Device {
             }),
             Err(why) => {
                 self.heap.borrow_mut().free(&placed);
-                Err(why.into())
+                Err(error(why))
             }
         }
     }
@@ -242,9 +265,137 @@ impl crate::Device for Device {
         self.device.counters().metrics().pipelines_created
     }
 
-    /// `Metrics::barriers`.
-    fn barriers(&self) -> Option<u64> {
-        Some(self.device.counters().metrics().barriers)
+    /// `Metrics`' submissions (`vkQueueSubmit2` calls), passes (encoders), barriers and bytes
+    /// copied.
+    fn counts(&self) -> Vec<(&'static str, u64)> {
+        let metrics = self.device.counters().metrics();
+        vec![
+            ("submissions", metrics.submissions),
+            ("passes", metrics.passes),
+            ("barriers", metrics.barriers),
+            ("bytes_copied", metrics.bytes_copied),
+        ]
+    }
+
+    /// `Metrics::first_use_waits`, with their time and the longest.
+    fn first_use_waits(&self) -> Option<Waits> {
+        let metrics = self.device.counters().metrics();
+        Some(Waits {
+            count: metrics.first_use_waits,
+            nanos: metrics.first_use_wait_nanos,
+            longest_nanos: metrics.first_use_wait_max_nanos,
+        })
+    }
+}
+
+/// A library is the translator's, as the runtime takes it; a function is its descriptor, with
+/// its constant values.
+impl crate::ComputeDevice for Device {
+    type Library = rt::Library;
+    type Function = rt::FunctionDescriptor;
+    type ComputePipelineState = rt::ComputePipelineState;
+    type CommandQueue = rt::CommandQueue;
+    type CommandBuffer = rt::CommandBuffer;
+    type ComputeCommandEncoder = rt::ComputeCommandEncoder;
+
+    fn new_library(&self, code: Code<'_>) -> Result<rt::Library> {
+        Ok(match code {
+            Code::Metallib(bytes) => rt::Library::from_metallib(bytes)?,
+            Code::Air(bytes) => rt::Library::from_air(bytes)?,
+        })
+    }
+
+    fn new_compute_pipeline_state(
+        &self,
+        function: &rt::FunctionDescriptor,
+    ) -> Result<rt::ComputePipelineState> {
+        let descriptor =
+            rt::ComputePipelineDescriptor::new(rt::StageSource::Function(function.clone()));
+        (self.device)
+            .new_compute_pipeline_state(&descriptor)
+            .map_err(error)
+    }
+
+    fn new_command_queue(&self) -> Result<rt::CommandQueue> {
+        (self.device)
+            .new_command_queue(QUEUE_COMMAND_BUFFERS)
+            .map_err(error)
+    }
+}
+
+impl crate::Library<Device> for rt::Library {
+    fn new_function(&self, name: &str, constants: &[Constant]) -> Result<rt::FunctionDescriptor> {
+        let mut descriptor = rt::FunctionDescriptor::new(self.function(name)?);
+        if !constants.is_empty() {
+            descriptor.constants = plan::values(constants)?;
+            descriptor.specialized = true;
+        }
+        Ok(descriptor)
+    }
+}
+
+impl crate::CommandQueue<Device> for rt::CommandQueue {
+    fn command_buffer(&self) -> Result<rt::CommandBuffer> {
+        rt::CommandQueue::command_buffer(self).map_err(error)
+    }
+}
+
+/// The runtime gives times in nanoseconds of its host clock; the harness takes seconds.
+impl crate::CommandBuffer<Device> for rt::CommandBuffer {
+    fn compute_command_encoder(&self) -> Result<rt::ComputeCommandEncoder> {
+        rt::CommandBuffer::compute_command_encoder(self, rt::DispatchType::Serial).map_err(error)
+    }
+
+    fn commit(&self) -> Result<()> {
+        rt::CommandBuffer::commit(self).map_err(error)
+    }
+
+    fn wait_until_completed(&self) -> Result<()> {
+        rt::CommandBuffer::wait_until_completed(self);
+        match self.status() {
+            rt::CommandBufferStatus::Completed => Ok(()),
+            status => {
+                Err(format!("the command buffer ended {status:?}: {:?}", self.error()).into())
+            }
+        }
+    }
+
+    fn gpu_start_time(&self) -> Result<f64> {
+        Ok(rt::CommandBuffer::gpu_start_time(self) as f64 / 1e9)
+    }
+
+    fn gpu_end_time(&self) -> Result<f64> {
+        Ok(rt::CommandBuffer::gpu_end_time(self) as f64 / 1e9)
+    }
+}
+
+impl crate::ComputeCommandEncoder<Device> for rt::ComputeCommandEncoder {
+    fn set_compute_pipeline_state(&mut self, state: &rt::ComputePipelineState) -> Result<()> {
+        rt::ComputeCommandEncoder::set_compute_pipeline_state(self, state).map_err(error)
+    }
+
+    fn set_buffer(&mut self, buffer: &Buffer, offset: u64, index: u32) -> Result<()> {
+        rt::ComputeCommandEncoder::set_buffer(self, Some(&buffer.buffer), offset, index)
+            .map_err(error)
+    }
+
+    fn set_bytes(&mut self, bytes: &[u8], index: u32) -> Result<()> {
+        rt::ComputeCommandEncoder::set_bytes(self, bytes, index).map_err(error)
+    }
+
+    fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<()> {
+        rt::ComputeCommandEncoder::dispatch_threadgroups(self, size(groups)?, size(threads)?)
+            .map_err(error)
+    }
+
+    fn dispatch_threads(&mut self, threads: Size, per_group: Size) -> Result<()> {
+        rt::ComputeCommandEncoder::dispatch_threads(self, size(threads)?, size(per_group)?)
+            .map_err(error)
+    }
+
+    fn end_encoding(self) -> Result<()> {
+        rt::ComputeCommandEncoder::end_encoding(self);
+        Ok(())
     }
 }
 

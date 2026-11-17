@@ -2,6 +2,8 @@
 //! the first run must leave in the buffers, and which buffers runtimes compare.
 
 use crate::{Result, Size, Storage};
+use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
+use metal2vulkan::metal::DataType;
 use std::path::PathBuf;
 
 /// One workload.
@@ -71,6 +73,17 @@ pub struct Constant {
     pub data_type: u32,
     /// Its bytes.
     pub value: Vec<u8>,
+}
+
+/// `constants` as the translator's `MTLFunctionConstantValues`, which both runtimes take.
+pub(crate) fn values(constants: &[Constant]) -> Result<FunctionConstantValues> {
+    let mut values = FunctionConstantValues::defaults();
+    for constant in constants {
+        let data_type = DataType::try_from(constant.data_type)?;
+        let value = FunctionConstantValue::new(data_type, constant.value.as_slice());
+        values = values.with_index(constant.index, value);
+    }
+    Ok(values)
 }
 
 /// A binding call.

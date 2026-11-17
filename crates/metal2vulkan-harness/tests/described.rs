@@ -1,5 +1,5 @@
-//! A description's workloads over a metallib run on the old runtime twice, from the same starting
-//! contents, and their outputs match; one of them matches its CPU reference too. The metallib is
+//! A description's workloads over a metallib run on the old runtime and on the new, from the same
+//! starting contents, and their outputs match; one of them matches its CPU reference too. The metallib is
 //! the authored fixture's kernels in a synthetic container, so the path a described workload takes
 //! runs without any kernel the repository does not own. Each function's bitcode is a module
 //! holding that kernel alone, as a metallib's is: the translator checks that a metallib function's
@@ -11,7 +11,7 @@ use metal2vulkan_devtools::scratch::Owned;
 use metal2vulkan_devtools::{fixtures_dir, llvm_assemble_text};
 use metal2vulkan_harness::plan::seeded_words;
 use metal2vulkan_harness::run::{compare_outputs, Harness, Runs, Session};
-use metal2vulkan_harness::{authored, description, old};
+use metal2vulkan_harness::{authored, description, old, rt};
 
 /// The description: each fill, both storage modes, a binding at an offset, bindings that stay
 /// set for the dispatches after, both dispatch calls, `repeat`, and both comparisons.
@@ -53,7 +53,7 @@ check 1 exact
 ";
 
 #[test]
-fn described_workloads_match_between_two_runs_of_the_old_runtime() {
+fn described_workloads_match_between_the_old_runtime_and_the_new() {
     let air = authored::library_air().unwrap();
     let ll = std::fs::read_to_string(fixtures_dir().join("harness/workloads.ll")).unwrap();
     let functions: Vec<MtlbFunction> = ["scale_offset", "lcg_step", "binomial3x3", "reduce_sum"]
@@ -73,7 +73,10 @@ fn described_workloads_match_between_two_runs_of_the_old_runtime() {
     )
     .unwrap();
     let described = description::parse(DESCRIPTION, scratch.path()).unwrap();
-    let mut sessions = [0, 1].map(|_| Harness::new(old::system_default().unwrap(), &air).unwrap());
+    let mut sessions: [Box<dyn Session>; 2] = [
+        Box::new(Harness::new(old::system_default().unwrap(), &air).unwrap()),
+        Box::new(Harness::new(rt::system_default().unwrap(), &air).unwrap()),
+    ];
     let runs = Runs {
         warmup: 1,
         settle: false,

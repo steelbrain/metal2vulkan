@@ -22,7 +22,8 @@ path = "src/bin/harness.rs"
 test = false
 
 [dependencies]
-# The translator, for the library of AIR bitcode the old runtime takes (`old.rs`).
+# The translator: the library of AIR bitcode the old runtime takes (`old.rs`), and the function
+# constant values both runtimes take (`plan.rs`).
 metal2vulkan = { path = "../metal2vulkan" }
 # The old runtime, behind the harness's traits in `old.rs` alone.
 metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }

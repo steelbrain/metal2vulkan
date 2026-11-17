@@ -3,7 +3,7 @@
 use crate::plan::{Binding, BufferPlan, Constant, Grid, Plan, Source};
 use crate::{
     clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputeDevice,
-    Device, Library, Result, Storage,
+    Device, Library, Refused, Result, Storage, Waits,
 };
 use std::collections::HashMap;
 use std::ops::Range;
@@ -119,9 +119,9 @@ pub struct Report {
     /// Each run's GPU time, from its first command buffer's `GPUStartTime` to its last's
     /// `GPUEndTime`, in microseconds.
     pub gpu_us: Vec<f64>,
-    /// The pipeline barriers the runtime recorded per timed run, where it counts them
-    /// ([`Device::barriers`]).
-    pub barriers: Option<u64>,
+    /// The runtime's counts of its work ([`Device::counts`]) over one run after the timed ones,
+    /// committed alone and waited for, so nothing else is in flight.
+    pub counts: Vec<(&'static str, u64)>,
     /// Each run's encoding thread's wall time from the command buffer's creation through
     /// `commit`'s return, in nanoseconds.
     pub encode_ns: Vec<f64>,
@@ -167,6 +167,32 @@ pub trait Session {
 
     /// The device's [`Device::pipelines_created`].
     fn pipelines_created(&self) -> u64;
+
+    /// The device's [`Device::first_use_waits`].
+    fn first_use_waits(&self) -> Option<Waits>;
+}
+
+/// `plan` on each session in turn: its report, or its runtime's typed refusal. An error where a
+/// session failed, or where the outputs of the sessions that ran it differ.
+pub fn run_each(
+    plan: &Plan,
+    sessions: &mut [(&str, Box<dyn Session>)],
+    runs: Runs,
+) -> Result<Vec<std::result::Result<Report, Box<Refused>>>> {
+    let mut each = Vec::with_capacity(sessions.len());
+    for (_, session) in sessions.iter_mut() {
+        each.push(match session.run(plan, runs) {
+            Ok(report) => Ok(report),
+            Err(why) => Err(why.downcast::<Refused>()?),
+        });
+    }
+    let mut ran = each.iter().filter_map(|run| run.as_ref().ok());
+    if let Some(first) = ran.next() {
+        for report in ran {
+            compare_outputs(plan, first, report)?;
+        }
+    }
+    Ok(each)
 }
 
 /// What the timed creations of buffers measured.
@@ -432,7 +458,6 @@ impl<D: ComputeDevice> Session for Harness<D> {
             warmup,
             ..Report::default()
         };
-        let barriers = self.device.barriers();
         for run in 1..=runs.timed {
             let cpu = clocks::process_cpu_nanos();
             let (gpu_us, encoded) = self.next(plan, &made, &mut in_flight)?;
@@ -445,12 +470,12 @@ impl<D: ComputeDevice> Session for Harness<D> {
                 report.gauges.push((run, self.device.gauges()));
             }
         }
-        // Each timed run commits one run, so the count over them divides evenly in a steady
-        // state.
-        if let (Some(before), Some(after)) = (barriers, self.device.barriers()) {
-            report.barriers = (after - before).checked_div(u64::from(runs.timed));
-        }
         wait_run::<D>(&in_flight)?;
+        let before = self.device.counts();
+        wait_run::<D>(&self.commit_run(plan, &made)?)?;
+        report.counts = (before.into_iter().zip(self.device.counts()))
+            .map(|((count, before), (_, after))| (count, after - before))
+            .collect();
         Ok(report)
     }
 
@@ -467,36 +492,9 @@ impl<D: ComputeDevice> Session for Harness<D> {
     fn pipelines_created(&self) -> u64 {
         self.device.pipelines_created()
     }
-}
 
-/// A device whose runtime makes buffers but runs no compute work: its creation workloads alone.
-pub struct Buffers<D: Device>(pub D);
-
-impl<D: Device> Session for Buffers<D> {
-    fn device_name(&self) -> String {
-        self.0.name()
-    }
-
-    fn run(&mut self, plan: &Plan, _: Runs) -> Result<Report> {
-        Err(format!(
-            "{}: the runtime makes buffers only, with no command queue",
-            plan.name
-        )
-        .into())
-    }
-
-    fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport> {
-        create(&self.0, length, runs)
-    }
-
-    fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>> {
-        let reader = self.0.gauges_after_drop();
-        drop(self);
-        reader.map(|read| read())
-    }
-
-    fn pipelines_created(&self) -> u64 {
-        self.0.pipelines_created()
+    fn first_use_waits(&self) -> Option<Waits> {
+        self.device.first_use_waits()
     }
 }
 

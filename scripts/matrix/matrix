@@ -49,7 +49,7 @@ NOTES = "refs/notes/matrix"
 ARCHIVE = "m2v-matrix-gpu.tar.zst"
 HARNESS = "m2v-matrix-harness"
 #: The runtimes the harness command times (`harness --runtime NAME`).
-HARNESS_RUNTIMES = ("old",)
+HARNESS_RUNTIMES = ("old", "new")
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
 #: (RAM GiB, minutes) of each job kind before a run of it was measured; the minutes stay its floor.

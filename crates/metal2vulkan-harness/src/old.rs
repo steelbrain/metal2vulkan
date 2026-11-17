@@ -2,10 +2,8 @@
 //! the same name. The cutover deletes this file, its `mod` line, the `--runtime old` arm of the
 //! command and the crate's dependency on the old runtime.
 
-use crate::plan::Constant;
+use crate::plan::{self, Constant};
 use crate::{Code, Result, Size, Storage};
-use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
-use metal2vulkan::metal::DataType;
 use metal2vulkan_runtime as runtime;
 use runtime::{CommandBufferStatus, PipelineOptions, ResourceOptions};
 use std::ptr::NonNull;
@@ -57,8 +55,14 @@ impl crate::Device for runtime::Device {
         self.work_counts().variant_pipelines_made
     }
 
-    /// `None`: it counts its barriers by kind, in no one total.
-    fn barriers(&self) -> Option<u64> {
+    /// Its `vkQueueSubmit` calls (`WorkCounts::queue_submissions`); it counts its barriers by
+    /// kind, in no one total.
+    fn counts(&self) -> Vec<(&'static str, u64)> {
+        vec![("submissions", self.work_counts().queue_submissions)]
+    }
+
+    /// `None`: it does not count them.
+    fn first_use_waits(&self) -> Option<crate::Waits> {
         None
     }
 }
@@ -104,13 +108,7 @@ impl crate::Library<runtime::Device> for runtime::Library {
         if constants.is_empty() {
             return Ok(self.new_function_with_name(name)?);
         }
-        let mut values = FunctionConstantValues::defaults();
-        for constant in constants {
-            let data_type = DataType::try_from(constant.data_type)?;
-            let value = FunctionConstantValue::new(data_type, constant.value.as_slice());
-            values = values.with_index(constant.index, value);
-        }
-        Ok(self.new_function_with_name_constant_values(name, &values)?)
+        Ok(self.new_function_with_name_constant_values(name, &plan::values(constants)?)?)
     }
 }
 
