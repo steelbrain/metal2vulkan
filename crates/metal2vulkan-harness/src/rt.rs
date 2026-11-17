@@ -248,9 +248,19 @@ impl crate::Device for Device {
     }
 }
 
-/// The gauges the harness reports, by name.
+/// The gauges the harness reports, by name: all of them, so the matrix's `@drop` check covers
+/// every kind of resource.
 fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
-    vec![("buffers", gauges.buffers), ("blocks", gauges.blocks)]
+    vec![
+        ("buffers", gauges.buffers),
+        ("textures", gauges.textures),
+        ("samplers", gauges.samplers),
+        ("pipelines", gauges.pipelines),
+        ("command_buffers", gauges.command_buffers),
+        ("descriptor_slots", gauges.descriptor_slots),
+        ("blocks", gauges.blocks),
+        ("events", gauges.events),
+    ]
 }
 
 impl crate::Buffer for Buffer {
