@@ -1436,7 +1436,11 @@ fn a_shadowed_color_beside_a_memoryless_scratch_blends_over_part_of_it() {
 /// share one barrier before them and one after; the keep, which reads the shadow its texture's
 /// copy in wrote, takes a barrier of its own. So the pass records as many pipeline barriers
 /// (`WorkCounts::commands_recorded`) whatever `n`, where a barrier before and one after each copy
-/// grew them by two a texture (counted after a first pass of the shape). The buffer holds each
+/// grew them by two a texture (counted after two first passes of the shape: the first takes the
+/// new resources' first work, which writes the command buffer's start stamp itself, and the second
+/// records the kept barrier command buffer that writes a start stamp, which each later command
+/// buffer with no first work takes again; `command_buffer/kept_barriers.rs`,
+/// `WorkCounts::stamped_buffers_kept`). The buffer holds each
 /// texture's texels inside its rectangle, as the draws read them, and every other byte as it
 /// was. Printed: `SHADOW-RUN`.
 #[test]
@@ -1497,11 +1501,12 @@ fn a_pass_s_copies_in_share_their_barriers() {
             run(&command_buffer);
             device.work_counts().commands_recorded.cmd_pipeline_barrier - before
         };
-        // A first pass makes what every pass of the shape needs (the textures' first moves, the
-        // pipelines' sets), then the counted passes.
+        // Two first passes make what every pass of the shape needs (the textures' first moves, the
+        // pipelines' sets, then the kept barrier command buffer that writes the start stamp of a
+        // command buffer with no first work), then the counted passes.
         let mut expected = bytes.clone();
         let mut barriers = Vec::new();
-        for n in [most, 1, most] {
+        for n in [most, most, 1, most] {
             barriers.push(pass(n));
             // Each band of the loaded texture's rows holds its texture's texels there.
             for k in 0..n {
@@ -1526,11 +1531,11 @@ fn a_pass_s_copies_in_share_their_barriers() {
             "SHADOW-RUN on {}: a pass reading 1 shadowed texture recorded {} pipeline barriers, \
              one reading {most} recorded {}",
             device.name(),
-            barriers[1],
             barriers[2],
+            barriers[3],
         );
         assert_eq!(
-            barriers[1], barriers[2],
+            barriers[2], barriers[3],
             "barriers of a pass of 1 and of {most} copies in"
         );
         drop((read, loaded, buffer));
