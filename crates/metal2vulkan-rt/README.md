@@ -285,11 +285,14 @@ made, with no lock, and never rewritten for layouts.
 - A command buffer's times are nanoseconds of one host clock, `host_time()`: `CLOCK_UPTIME_RAW`
   on macOS (the clock of `mach_absolute_time`), `CLOCK_MONOTONIC_RAW` elsewhere on Unix, and the
   performance counter on Windows. Metal gives seconds. `kernel_start_time` is the commit and
-  `kernel_end_time` the time it was scheduled. `gpu_end_time` is when the completion thread saw
-  the command buffer complete, less the GPU's ticks from its end timestamp to that of the last
-  command buffer seen complete with it, so each command buffer of a submission has its own end;
-  end times never decrease in completion order (those seen complete together move later as one
-  where they would begin before an end given earlier). `gpu_start_time` is that less the GPU's own
+  `kernel_end_time` the time it was scheduled. `gpu_end_time` is the command buffer's end
+  timestamp placed on the host clock by the device's one anchor: the host time the completion
+  thread saw a command buffer complete, with that one's end timestamp. Each command buffer of a
+  submission so has its own end, back to back with its neighbours. The anchor is late by the
+  thread's reaction; it moves earlier at once where a completion is seen sooner than it predicts,
+  so no end comes after the thread saw it, and later only by the least lateness of 64 passes,
+  which follows the GPU clock's drift against the host's. End times keep their completion order
+  but where the anchor moves earlier, by as much. `gpu_start_time` is the end less the GPU's own
   duration of the command buffer, exact from two timestamp queries: one written where its first
   commands begin, one where its last segment ends, read once it completes, with no wait. Each
   queue has a pool of two queries per command buffer it may have made at once; a command

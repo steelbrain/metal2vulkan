@@ -98,19 +98,79 @@ impl Ticks {
         }
     }
 
-    /// The GPU times of a command buffer seen complete at `seen` with others, from its two
-    /// timestamps and `last`, the end timestamp of the one of them that ended last: the end is
-    /// `seen` less the ticks from its end to `last`, and the start the end less the ticks between
-    /// its timestamps, each within the valid bits, which stays exact across the counter's wrap.
-    /// Any values give times no later than `seen`.
-    pub(crate) fn place(&self, seen: u64, last: u64, start: u64, end: u64) -> (u64, u64) {
-        let nanos = |from: u64, to: u64| {
-            let ticks = to.wrapping_sub(from) & self.mask;
-            // A float-to-integer cast saturates.
-            (ticks as f64 * self.period) as u64
+    /// Nanoseconds from timestamp `from` to the later `to`, within the valid bits, which stays
+    /// exact across the counter's wrap.
+    fn nanos(&self, from: u64, to: u64) -> f64 {
+        (to.wrapping_sub(from) & self.mask) as f64 * self.period
+    }
+
+    /// Nanoseconds the valid bits count before they wrap.
+    fn range(&self) -> f64 {
+        (self.mask as f64 + 1.0) * self.period
+    }
+}
+
+/// Passes of the completion thread after which the anchor moves later by the least lateness it
+/// saw in them, so it follows a GPU clock that runs slow against the host's.
+const WINDOW: u32 = 64;
+
+/// The GPU's clock placed on the host's, for the completion thread: the host time of one end
+/// timestamp, taken from when the thread saw that command buffer complete, which is late by
+/// however long the thread took. It moves earlier at once when a later completion is seen sooner
+/// than it predicts, so no end is placed after it was seen; it moves later only by the least
+/// lateness of [`WINDOW`] passes, so ends placed against it keep their order.
+#[derive(Default)]
+pub(crate) struct Anchor {
+    /// The host nanoseconds of `tick`, with their fraction; None until the first completion.
+    at: Option<(f64, u64)>,
+    /// The least lateness of the passes since the anchor last moved later.
+    least: f64,
+    passes: u32,
+}
+
+impl Anchor {
+    /// A pass of the thread saw command buffers complete at host time `seen`, the last of which
+    /// wrote the end timestamp `last`: the anchor moves to it.
+    pub(crate) fn see(&mut self, ticks: &Ticks, seen: u64, last: u64) {
+        let seen = seen as f64;
+        let predicted = self
+            .at
+            // Past half the counter's range, its ticks no longer tell the time between.
+            .filter(|&(host, _)| seen - host < ticks.range() / 2.0)
+            .map(|(host, tick)| host + ticks.nanos(tick, last))
+            .filter(|&predicted| predicted <= seen);
+        let Some(predicted) = predicted else {
+            *self = Anchor {
+                at: Some((seen, last)),
+                least: f64::INFINITY,
+                passes: 0,
+            };
+            return;
         };
-        let end_time = seen.saturating_sub(nanos(end, last));
-        (end_time.saturating_sub(nanos(start, end)), end_time)
+        self.least = self.least.min(seen - predicted);
+        self.passes += 1;
+        let mut host = predicted;
+        if self.passes == WINDOW {
+            host += self.least;
+            self.least = f64::INFINITY;
+            self.passes = 0;
+        }
+        self.at = Some((host, last));
+    }
+
+    /// The GPU times of a command buffer seen in the last pass, from its two timestamps: the end
+    /// the ticks from its end to the pass's last before the anchor, the start its own duration
+    /// before that. 0 and 0 before any pass.
+    pub(crate) fn place(&self, ticks: &Ticks, start: u64, end: u64) -> (u64, u64) {
+        let Some((host, tick)) = self.at else {
+            return (0, 0);
+        };
+        // A float-to-integer cast saturates at 0.
+        let end_time = (host - ticks.nanos(end, tick)) as u64;
+        (
+            end_time.saturating_sub(ticks.nanos(start, end) as u64),
+            end_time,
+        )
     }
 }
 

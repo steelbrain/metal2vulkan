@@ -482,12 +482,13 @@ impl CommandBuffer {
     }
 
     /// `GPUEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives seconds:
-    /// the host time at which the completion thread saw the command buffer complete, less the GPU's
-    /// ticks from its end timestamp to that of the last command buffer seen complete with it, so
-    /// each command buffer of a submission has its own end. End times never decrease in
-    /// completion order: where those seen complete together would begin before an end given
-    /// earlier, they all move later by the difference. 0 until it completes, and for one that
-    /// ended with an error.
+    /// its end timestamp placed on the host clock by the device's one anchor, the host time the
+    /// completion thread saw a command buffer complete and that one's end timestamp, so each
+    /// command buffer of a submission has its own end, back to back. The anchor moves earlier at
+    /// once where a completion is seen sooner than it predicts, so no end comes after the
+    /// completion thread saw it; it moves later only by the least lateness of 64 passes, which
+    /// follows the GPU clock's drift. End times keep their completion order but where the anchor
+    /// moves earlier, by as much. 0 until it completes, and for one that ended with an error.
     pub fn gpu_end_time(&self) -> u64 {
         self.state().times.gpu_end
     }

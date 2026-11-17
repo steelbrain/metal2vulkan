@@ -497,10 +497,11 @@ pub(crate) mod on_device {
         });
     }
 
-    /// Times, on the host clock: the kernel start at commit precedes the kernel end at submission;
-    /// each GPU start precedes its end, which falls between the first commit and the last
-    /// completion; a queue's GPU end times never decrease in completion order, through slots its
-    /// command buffers reuse, with or without commands.
+    /// Times, on the host clock: the kernel start at commit precedes the kernel end at scheduling;
+    /// each GPU start precedes its end, which falls after the first commit and no later than its
+    /// completed handler runs, through slots its command buffers reuse, with or without commands.
+    /// (Each command buffer of one submission starting no earlier than the one before ends is the
+    /// group test's.)
     #[test]
     fn every_device_times_command_buffers_on_the_host_clock() {
         each_device("command_times", |name, _, device| {
@@ -508,7 +509,7 @@ pub(crate) mod on_device {
             let buffer = arena.buffer();
             // Fewer slots than command buffers, so slots and their queries are reused.
             let queue = device.new_command_queue(4).expect("a queue");
-            let ends: Arc<Mutex<Vec<(usize, u64, u64)>>> = Arc::default();
+            let ends: Arc<Mutex<Vec<(usize, u64, u64, u64)>>> = Arc::default();
             let first = host_time();
             let mut committed = Vec::new();
             for index in 0..24 {
@@ -520,7 +521,8 @@ pub(crate) mod on_device {
                 let ends = Arc::clone(&ends);
                 command_buffer
                     .add_completed_handler(move |cb| {
-                        lock(&ends).push((index, cb.gpu_start_time(), cb.gpu_end_time()))
+                        let at = host_time();
+                        lock(&ends).push((index, cb.gpu_start_time(), cb.gpu_end_time(), at))
                     })
                     .expect("a completed handler");
                 command_buffer.commit().expect("a commit");
@@ -529,18 +531,14 @@ pub(crate) mod on_device {
             for command_buffer in &committed {
                 finished(name, command_buffer);
             }
-            let last = host_time();
             let ends = lock(&ends).clone();
-            let order: Vec<usize> = ends.iter().map(|(index, _, _)| *index).collect();
+            let order: Vec<usize> = ends.iter().map(|(index, ..)| *index).collect();
             assert_eq!(
                 order,
                 (0..24).collect::<Vec<_>>(),
                 "{name}: completion order"
             );
-            for pair in ends.windows(2) {
-                assert!(pair[0].2 <= pair[1].2, "{name}: ends decrease: {pair:?}");
-            }
-            for ((_, start, end), command_buffer) in ends.iter().zip(&committed) {
+            for ((_, start, end, handled), command_buffer) in ends.iter().zip(&committed) {
                 let (kernel_start, kernel_end) = (
                     command_buffer.kernel_start_time(),
                     command_buffer.kernel_end_time(),
@@ -549,7 +547,7 @@ pub(crate) mod on_device {
                     first <= kernel_start && kernel_start <= kernel_end,
                     "{name}"
                 );
-                assert!(0 < *start && start <= end && *end <= last, "{name}");
+                assert!(0 < *start && start <= end && end <= handled, "{name}");
                 assert!(first <= *end, "{name}");
                 assert_eq!(
                     (
