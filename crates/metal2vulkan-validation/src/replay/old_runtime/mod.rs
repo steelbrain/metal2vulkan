@@ -228,6 +228,11 @@ impl OldRuntime {
                 let buffer = device.new_buffer(uint(call, 0)?, options);
                 addressed(buffer.map_err(failed(call))?)
             }
+            "newBufferWithBytesNoCopy:length:options:deallocator:" => {
+                let options = options(call, uint(call, 2)?)?;
+                let buffer = device.new_buffer(uint(call, 1)?, options);
+                addressed(buffer.map_err(failed(call))?)
+            }
             "newBufferWithBytes:length:options:" => {
                 let bytes = data(call, 0)?;
                 let length = uint(call, 1)?;
@@ -267,14 +272,6 @@ impl OldRuntime {
                     address: Some(heap.gpu_address().0),
                 };
                 (Object::Heap(heap), made)
-            }
-            "m2v.newBufferInBlock:offset:length:options:" => {
-                let Object::Block(heap, _) = self.get(call, Self::id(call, 0)?)? else {
-                    return Err(refuse(call, "argument 0 is no block"));
-                };
-                let options = options(call, uint(call, 3)?)?;
-                let buffer = heap.new_buffer_at_offset(uint(call, 2)?, options, uint(call, 1)?);
-                addressed(buffer.map_err(failed(call))?)
             }
             "newLibraryWithData:error:" => {
                 let library = device.new_library_with_data(data(call, 0)?);
@@ -417,6 +414,14 @@ impl OldRuntime {
     /// A call of a heap or a block, and what it made.
     fn heap_call(&self, call: &Call, heap: &Heap) -> Result<(Object, Made), PlayError> {
         match &*call.selector {
+            "m2v.newBufferInBlock:offset:length:options:" => {
+                if Self::id(call, 0)? != call.receiver {
+                    return Err(refuse(call, "a block other than its receiver"));
+                }
+                let options = options(call, uint(call, 3)?)?;
+                let buffer = heap.new_buffer_at_offset(uint(call, 2)?, options, uint(call, 1)?);
+                Ok(addressed(buffer.map_err(failed(call))?))
+            }
             "newBufferWithLength:options:offset:" => {
                 let options = options(call, uint(call, 1)?)?;
                 let buffer = heap.new_buffer_at_offset(uint(call, 0)?, options, uint(call, 2)?);

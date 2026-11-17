@@ -361,7 +361,7 @@ fn uploads_are_relocated_and_counted() {
         let at = addressed(BLOCK + 0x100, 0x100);
         w.call(
             "m2v.newBufferInBlock:offset:length:options:",
-            1,
+            2,
             3,
             &inner,
             &at,

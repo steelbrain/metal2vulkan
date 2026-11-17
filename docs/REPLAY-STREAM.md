@@ -115,9 +115,9 @@ and the (name id, value) answer pairs.
 
 - **Blocks.** `m2v.newBlockWithLength:storageMode:` (receiver: the device; arguments: the length
   and the `MTLStorageMode`) makes a range the guest sub-allocates in, and answers `gpuAddress` and
-  `gpuLength`. A buffer in a block is `m2v.newBufferInBlock:offset:length:options:` (arguments: the
-  block, the offset, the length, the `MTLResourceOptions`), which answers `gpuAddress` and
-  `gpuLength`.
+  `gpuLength`. A buffer in a block is the block's `m2v.newBufferInBlock:offset:length:options:`
+  (arguments: the block, the offset, the length, the `MTLResourceOptions`), which answers
+  `gpuAddress` and `gpuLength`.
 - **Other buffers and heaps** answer `gpuAddress` and `gpuLength` where the host pinned them at an
   address: `newBufferWithDescriptor:`, `newHeapWithDescriptor:`, and a heap's
   `newBufferWithLength:options:offset:` (`[length, options, offset]`). An object the host made

@@ -121,7 +121,7 @@ fn pointer_chain(w: &mut StreamWriter<File>) -> std::io::Result<()> {
         let at = addressed(BLOCK + offset, 16);
         w.call(
             "m2v.newBufferInBlock:offset:length:options:",
-            1,
+            6,
             id,
             &args,
             &at,
