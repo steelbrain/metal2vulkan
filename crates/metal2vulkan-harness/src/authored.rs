@@ -45,6 +45,32 @@ pub const WORKLOADS: [Workload; 6] = [
     },
 ];
 
+/// A creation workload: `Shared` buffers of one length made and released in turn, so that each
+/// takes the range the last one left (`Session::create`).
+#[derive(Clone, Copy, Debug)]
+pub struct Create {
+    /// Its name in reports and in `--only`.
+    pub name: &'static str,
+    /// Each buffer's length in bytes.
+    pub length: u64,
+}
+
+/// The creation workloads.
+pub const CREATES: [Create; 3] = [
+    Create {
+        name: "create_4KiB",
+        length: 4 << 10,
+    },
+    Create {
+        name: "create_1MiB",
+        length: 1 << 20,
+    },
+    Create {
+        name: "create_64MiB",
+        length: 64 << 20,
+    },
+];
+
 /// The authored library's AIR bitcode: the fixture's LLVM text, assembled by `llvm-as`.
 pub fn library_air() -> Result<Vec<u8>> {
     let ll = metal2vulkan_devtools::fixtures_dir().join("harness/workloads.ll");

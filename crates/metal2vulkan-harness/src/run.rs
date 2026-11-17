@@ -63,6 +63,21 @@ pub trait Session {
 
     /// `plan`'s first run, checked against its expectations and its outputs kept, then `runs`.
     fn run(&mut self, plan: &Plan, runs: Runs) -> Result<Report>;
+
+    /// `Shared` buffers of `length` bytes made and released in turn, so each takes the range the
+    /// last one left: one checked whole, then `runs`. Each one is checked to start zero (every
+    /// 4 KiB), then written all over before its release.
+    fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport>;
+}
+
+/// What the timed creations of buffers measured.
+#[derive(Clone, Debug, Default)]
+pub struct CreateReport {
+    /// Each timed `newBufferWithLength:options:` call's wall time, in microseconds.
+    pub create_us: Vec<f64>,
+    /// The device's gauges after the 100th and the 200th timed creation, where there were that
+    /// many.
+    pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
 }
 
 /// The `p`th percentile of `values` by nearest rank; `None` for no values.
@@ -299,6 +314,28 @@ impl<D: Device> Session for Harness<D> {
         }
         Ok(report)
     }
+
+    fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport> {
+        // The range the first creation takes: a buffer of the length, written, released.
+        scribble(&self.device.new_buffer(length, Storage::Shared)?, length)?;
+        let mut report = CreateReport::default();
+        for run in 0..=runs.warmup + runs.timed {
+            let started = Instant::now();
+            let buffer = self.device.new_buffer(length, Storage::Shared)?;
+            let created = started.elapsed();
+            zeroed(&buffer, length, if run == 0 { 4 } else { 4096 })?;
+            scribble(&buffer, length)?;
+            drop(buffer);
+            if run > runs.warmup {
+                report.create_us.push(created.as_secs_f64() * 1e6);
+                let timed = run - runs.warmup;
+                if timed == 100 || timed == 200 {
+                    report.gauges.push((timed, self.device.gauges()));
+                }
+            }
+        }
+        Ok(report)
+    }
 }
 
 /// Dispatches of the copy kernel, already set on `encoder`, moving the first `length` bytes (a
@@ -318,6 +355,39 @@ fn copy<D: Device>(
         encoder.dispatch_threads([bytes / 16, 1, 1], [256, 1, 1])?;
         offset += bytes;
     }
+    Ok(())
+}
+
+/// `Ok` where the first `length` bytes of the `Shared` buffer `buffer` are zero at every
+/// `stride`th byte (a multiple of 4), which no GPU work writes now.
+pub(crate) fn zeroed(buffer: &impl Buffer, length: u64, stride: u64) -> Result<()> {
+    let contents = buffer.contents().ok_or("a Shared buffer has no contents")?;
+    for at in (0..length.saturating_sub(3)).step_by(stride as usize) {
+        // SAFETY: `contents` holds the buffer's bytes, at least `length` of them (the caller's
+        // length), and `at + 4` is within them; no command buffer writes them now.
+        let word = unsafe {
+            contents
+                .as_ptr()
+                .add(at as usize)
+                .cast::<u32>()
+                .read_unaligned()
+        };
+        if word != 0 {
+            return Err(
+                format!("a new buffer of {length} bytes holds {word:#x} at byte {at}").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The first `length` bytes of the `Shared` buffer `buffer`, which no GPU work uses now, all set
+/// to a byte other than zero.
+fn scribble(buffer: &impl Buffer, length: u64) -> Result<()> {
+    let contents = buffer.contents().ok_or("a Shared buffer has no contents")?;
+    // SAFETY: `contents` holds the buffer's bytes, at least `length` of them (the caller's
+    // length), and no command buffer uses them now.
+    unsafe { std::ptr::write_bytes(contents.as_ptr(), 0xa5, length as usize) };
     Ok(())
 }
 

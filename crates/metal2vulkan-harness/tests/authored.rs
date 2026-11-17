@@ -1,5 +1,5 @@
-//! Every authored workload's first run matches its CPU reference on the old runtime, on the
-//! device the cfg names (docs/VALIDATION.md).
+//! Every authored workload's first run matches its CPU reference on the old runtime, and every
+//! creation workload's buffers start zero, on the device the cfg names (docs/VALIDATION.md).
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
 
 use metal2vulkan_harness::run::{Harness, Runs, Session};
@@ -18,5 +18,11 @@ fn every_authored_workload_matches_its_reference_on_the_old_runtime() {
         let report =
             (harness.run(&(workload.plan)(), runs)).unwrap_or_else(|why| panic!("{name}: {why}"));
         assert_eq!(report.gpu_us.len(), 1, "{name}");
+    }
+    for create in authored::CREATES {
+        let name = create.name;
+        let report =
+            (harness.create(create.length, runs)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert_eq!(report.create_us.len(), 1, "{name}");
     }
 }

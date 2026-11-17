@@ -5,9 +5,10 @@ use crate::description;
 use crate::plan::{
     Binding, BufferPlan, Comparison, Dispatch, Expect, Grid, Output, Plan, Source, Values,
 };
-use crate::run::{compare_outputs, percentile, Report};
-use crate::Storage;
+use crate::run::{compare_outputs, percentile, zeroed, Report};
+use crate::{Buffer, Storage};
 use std::path::Path;
+use std::ptr::NonNull;
 
 #[test]
 fn percentiles_take_the_nearest_rank() {
@@ -274,4 +275,27 @@ fn a_faulty_description_is_refused_naming_its_line() {
         refusal("set-buffer 0 3\ndispatch k threadgroups 1 1 1 16 1 1"),
         "w: dispatch 0 binds buffer 3, which the plan lacks"
     );
+}
+
+/// A `Shared` buffer's bytes in host memory.
+struct HostBuffer(Vec<u32>);
+
+impl Buffer for HostBuffer {
+    fn contents(&self) -> Option<NonNull<u8>> {
+        NonNull::new(self.0.as_ptr().cast_mut().cast())
+    }
+}
+
+#[test]
+fn a_new_buffer_is_zero_only_where_every_word_read_is() {
+    let mut buffer = HostBuffer(vec![0; 4096]);
+    assert!(zeroed(&buffer, 16384, 4).is_ok());
+    buffer.0[1500] = 7;
+    let why = zeroed(&buffer, 16384, 4).unwrap_err().to_string();
+    assert_eq!(why, "a new buffer of 16384 bytes holds 0x7 at byte 6000");
+    // One word a page reads the first of each page only.
+    assert!(zeroed(&buffer, 16384, 4096).is_ok());
+    buffer.0[2048] = 1;
+    assert!(zeroed(&buffer, 16384, 4096).is_err());
+    assert!(zeroed(&HostBuffer(vec![9; 4]), 16, 4).is_err());
 }

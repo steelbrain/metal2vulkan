@@ -8,11 +8,16 @@
 //!
 //! Each workload runs on each runtime in turn, in the order named; a runtime named twice runs it
 //! twice. A workload's rows print once its first run matched its CPU reference on every runtime
-//! and every runtime's outputs matched the first runtime's. The command exits 0 when every
-//! workload did, 1 when one did not or failed, and 2 when it could not start.
+//! and every runtime's outputs matched the first runtime's. The creation workloads run after the
+//! authored ones (not with a description); their rows print once every buffer each runtime made
+//! started zero. The command exits 0 when every workload did, 1 when one did not or failed, and
+//! 2 when it could not start.
 
+use metal2vulkan_harness::authored::Create;
 use metal2vulkan_harness::plan::Plan;
-use metal2vulkan_harness::run::{compare_outputs, percentile, Harness, Report, Runs, Session};
+use metal2vulkan_harness::run::{
+    compare_outputs, percentile, CreateReport, Harness, Report, Runs, Session,
+};
 use metal2vulkan_harness::{authored, description, old, Result};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -84,52 +89,59 @@ fn session(name: &str, authored: &[u8]) -> Result<Box<dyn Session>> {
 /// is made when it runs.
 type Workload = (String, Box<dyn Fn() -> Result<Plan>>);
 
-/// The workloads the arguments select.
-fn workloads(args: &Args) -> Result<Vec<Workload>> {
-    let all: Vec<Workload> = match (&args.workloads, &args.description) {
+/// The workloads the arguments select, and the creation workloads (with the authored ones only).
+fn workloads(args: &Args) -> Result<(Vec<Workload>, Vec<Create>)> {
+    let (all, creates): (Vec<Workload>, Vec<Create>) = match (&args.workloads, &args.description) {
         (Some(directory), Some(file)) => {
             let text = std::fs::read_to_string(file)
                 .map_err(|why| format!("read {}: {why}", file.display()))?;
-            (description::parse(&text, directory)?.into_iter())
+            let described = (description::parse(&text, directory)?.into_iter())
                 .map(|described| {
                     let name = described.name.clone();
                     (name, Box::new(move || described.plan()) as Box<_>)
                 })
-                .collect()
+                .collect();
+            (described, Vec::new())
         }
-        _ => (authored::WORKLOADS.iter())
-            .map(|workload| {
-                let plan = workload.plan;
-                (
-                    workload.name.to_owned(),
-                    Box::new(move || Ok(plan())) as Box<_>,
-                )
-            })
-            .collect(),
+        _ => {
+            let authored = (authored::WORKLOADS.iter())
+                .map(|workload| {
+                    let plan = workload.plan;
+                    (
+                        workload.name.to_owned(),
+                        Box::new(move || Ok(plan())) as Box<_>,
+                    )
+                })
+                .collect();
+            (authored, authored::CREATES.to_vec())
+        }
     };
     let Some(only) = &args.only else {
-        return Ok(all);
+        return Ok((all, creates));
     };
-    if let Some(name) = only
-        .iter()
-        .find(|name| !all.iter().any(|(known, _)| known == *name))
-    {
-        let known: Vec<&str> = all.iter().map(|(known, _)| known.as_str()).collect();
+    let known: Vec<&str> = (all.iter().map(|(known, _)| known.as_str()))
+        .chain(creates.iter().map(|create| create.name))
+        .collect();
+    if let Some(name) = only.iter().find(|name| !known.contains(&name.as_str())) {
         return Err(format!(
             "no workload {name}; the workloads are: {}",
             known.join(", ")
         )
         .into());
     }
-    Ok(all
-        .into_iter()
-        .filter(|(name, _)| only.contains(name))
-        .collect())
+    Ok((
+        (all.into_iter())
+            .filter(|(name, _)| only.contains(name))
+            .collect(),
+        (creates.into_iter())
+            .filter(|create| only.iter().any(|name| name == create.name))
+            .collect(),
+    ))
 }
 
 /// Every selected workload on every runtime named; whether each matched.
 fn run_all(args: &Args) -> Result<bool> {
-    let workloads = workloads(args)?;
+    let (workloads, creates) = workloads(args)?;
     let air = authored::library_air()?;
     let mut sessions = Vec::with_capacity(args.runtimes.len());
     for runtime in &args.runtimes {
@@ -141,17 +153,19 @@ fn run_all(args: &Args) -> Result<bool> {
         "warmup runs {}, timed runs {}",
         args.runs.warmup, args.runs.timed
     );
-    println!(
-        "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>18} {:>15}  gauges @100 -> @200",
-        "workload",
-        "runtime",
-        "dispatches",
-        "gpu_us_p10",
-        "gpu_us_p50",
-        "gpu_us_p90",
-        "encode_ns/dispatch",
-        "cpu_ns/dispatch",
-    );
+    if !workloads.is_empty() {
+        println!(
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>18} {:>15}  gauges @100 -> @200",
+            "workload",
+            "runtime",
+            "dispatches",
+            "gpu_us_p10",
+            "gpu_us_p50",
+            "gpu_us_p90",
+            "encode_ns/dispatch",
+            "cpu_ns/dispatch",
+        );
+    }
     let mut matched = true;
     for (name, plan) in &workloads {
         let checked = plan().and_then(|plan| {
@@ -175,18 +189,34 @@ fn run_all(args: &Args) -> Result<bool> {
             }
         }
     }
+    if !creates.is_empty() {
+        println!(
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11}  gauges @100 -> @200",
+            "create", "runtime", "bytes", "us_p10", "us_p50", "us_p90",
+        );
+    }
+    for create in &creates {
+        let reports = (sessions.iter_mut())
+            .map(|(_, session)| session.create(create.length, args.runs))
+            .collect::<Result<Vec<CreateReport>>>();
+        match reports {
+            Ok(reports) => {
+                for ((runtime, _), report) in sessions.iter().zip(&reports) {
+                    print_create(runtime, create, report);
+                }
+            }
+            Err(why) => {
+                println!("{}: FAILED: {why}", create.name);
+                matched = false;
+            }
+        }
+    }
     Ok(matched)
 }
 
-/// `report`'s row, and its matrix line where it timed a run.
-fn print(runtime: &str, name: &str, report: &Report) {
-    let gpu = |p| percentile(&report.gpu_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
-    let per_dispatch = |values: &[f64]| {
-        percentile(values, 50).map_or("-".to_owned(), |ns| {
-            format!("{:.0}", ns / report.dispatches as f64)
-        })
-    };
-    let gauges = match report.gauges.as_slice() {
+/// The gauges after the 100th and the 200th timed runs, each marked where it grew between them.
+fn gauges(gauges: &[(u32, Vec<(&'static str, u64)>)]) -> String {
+    match gauges {
         [] => "-".to_owned(),
         [(_, only)] => (only.iter())
             .map(|(gauge, value)| format!("{gauge} {value}"))
@@ -199,15 +229,46 @@ fn print(runtime: &str, name: &str, report: &Report) {
             })
             .collect::<Vec<_>>()
             .join(", "),
+    }
+}
+
+/// `report`'s row, and its matrix line where it timed a creation.
+fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
+    let us = |p| percentile(&report.create_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
+    println!(
+        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11}  {}",
+        create.name,
+        create.length,
+        us(10),
+        us(50),
+        us(90),
+        gauges(&report.gauges),
+    );
+    if let Some(median) = percentile(&report.create_us, 50) {
+        println!(
+            "M2V-MATRIX time harness-{runtime}/{} {median:.3}",
+            create.name
+        );
+    }
+}
+
+/// `report`'s row, and its matrix line where it timed a run.
+fn print(runtime: &str, name: &str, report: &Report) {
+    let gpu = |p| percentile(&report.gpu_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
+    let per_dispatch = |values: &[f64]| {
+        percentile(values, 50).map_or("-".to_owned(), |ns| {
+            format!("{:.0}", ns / report.dispatches as f64)
+        })
     };
     println!(
-        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>18} {:>15}  {gauges}",
+        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>18} {:>15}  {}",
         report.dispatches,
         gpu(10),
         gpu(50),
         gpu(90),
         per_dispatch(&report.encode_ns),
         per_dispatch(&report.cpu_ns),
+        gauges(&report.gauges),
     );
     if let Some(median) = percentile(&report.gpu_us, 50) {
         println!("M2V-MATRIX time harness-{runtime}/{name} {median:.3}");

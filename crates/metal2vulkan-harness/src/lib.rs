@@ -17,7 +17,9 @@
 //! copy kernel. Described workloads ([`description`]) are kernels of metallibs in a directory,
 //! named by a description file; both are the command's arguments, and nothing in the repository
 //! names them. They have no CPU reference: each runtime's outputs must match the first
-//! runtime's.
+//! runtime's. The creation workloads ([`authored::CREATES`]) run with the authored ones: `Shared`
+//! buffers of 4 KiB, 1 MiB and 64 MiB, each made and released in turn over the range the last
+//! one left ([`run::Session::create`]), each checked to start zero.
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old[,RUNTIME...] [--runs 200] \
@@ -29,7 +31,10 @@
 //! buffer's creation through `commit`'s return, and the process's CPU time per dispatch from
 //! there to the wait's return (unix only), each the median of the timed runs; and the runtime's
 //! gauges after the 100th and 200th timed runs. Beside each row it prints a line
-//! `M2V-MATRIX time harness-<runtime>/<workload> <median GPU us>` for the matrix's runner.
+//! `M2V-MATRIX time harness-<runtime>/<workload> <median GPU us>` for the matrix's runner. Per
+//! creation workload and runtime it prints the wall time of `newBufferWithLength:options:` at the
+//! same percentiles and the gauges, and `M2V-MATRIX time harness-<runtime>/<create_SIZE> <median
+//! us>`.
 
 use std::ptr::NonNull;
 
