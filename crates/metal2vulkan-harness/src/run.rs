@@ -122,6 +122,8 @@ pub struct Report {
     /// The runtime's counts of its work ([`Device::counts`]) over one run after the timed ones,
     /// committed alone and waited for, so nothing else is in flight.
     pub counts: Vec<(&'static str, u64)>,
+    /// The runtime's submissions ([`Device::submissions`]) over that run.
+    pub submissions: u64,
     /// Each run's encoding thread's wall time from the command buffer's creation through
     /// `commit`'s return, in nanoseconds.
     pub encode_ns: Vec<f64>,
@@ -471,11 +473,12 @@ impl<D: ComputeDevice> Session for Harness<D> {
             }
         }
         wait_run::<D>(&in_flight)?;
-        let before = self.device.counts();
+        let (before, submissions) = (self.device.counts(), self.device.submissions());
         wait_run::<D>(&self.commit_run(plan, &made)?)?;
         report.counts = (before.into_iter().zip(self.device.counts()))
             .map(|((count, before), (_, after))| (count, after - before))
             .collect();
+        report.submissions = self.device.submissions() - submissions;
         Ok(report)
     }
 

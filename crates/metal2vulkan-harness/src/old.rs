@@ -55,10 +55,14 @@ impl crate::Device for runtime::Device {
         self.work_counts().variant_pipelines_made
     }
 
-    /// Its `vkQueueSubmit` calls (`WorkCounts::queue_submissions`); it counts its barriers by
-    /// kind, in no one total.
+    /// None: it counts its encoders and barriers by kind, in no one total.
     fn counts(&self) -> Vec<(&'static str, u64)> {
-        vec![("submissions", self.work_counts().queue_submissions)]
+        Vec::new()
+    }
+
+    /// `WorkCounts::queue_submissions`.
+    fn submissions(&self) -> u64 {
+        self.work_counts().queue_submissions
     }
 
     /// `None`: it does not count them.

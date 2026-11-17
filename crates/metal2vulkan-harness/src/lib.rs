@@ -59,7 +59,8 @@
 //! they created and how many workloads it refused, and where the runtime counts them, its
 //! first-use waits ([`Waits`]): the count, and their total and longest time in microseconds.
 //! Each plan workload also prints the runtime's own counts of its work ([`Device::counts`]) over
-//! one run after the timed ones, run alone:
+//! one run after the timed ones, run alone; the table shows that run's submissions
+//! ([`Device::submissions`]), which timing decides, so they are no matrix metric:
 //!
 //! ```text
 //! M2V-MATRIX metric harness-<runtime>/<set>/pipelines_created <n>
@@ -164,8 +165,14 @@ pub trait Device: Sized {
     fn pipelines_created(&self) -> u64;
 
     /// The runtime's own counts of its work on the device so far, by name: those it keeps one
-    /// total of among submissions, encoders, barriers and bytes copied. No Metal counterpart.
+    /// total of among encoders, barriers and bytes copied, which a run's commands alone decide.
+    /// No Metal counterpart.
     fn counts(&self) -> Vec<(&'static str, u64)>;
+
+    /// The runtime's `vkQueueSubmit` calls on the device so far. A run's share depends on how
+    /// many of its command buffers the runtime found ready together, which timing decides. No
+    /// Metal counterpart.
+    fn submissions(&self) -> u64;
 
     /// The runtime's first-use waits so far; `None` where it does not count them. No Metal
     /// counterpart.

@@ -265,16 +265,19 @@ impl crate::Device for Device {
         self.device.counters().metrics().pipelines_created
     }
 
-    /// `Metrics`' submissions (`vkQueueSubmit2` calls), passes (encoders), barriers and bytes
-    /// copied.
+    /// `Metrics`' passes (encoders), barriers and bytes copied.
     fn counts(&self) -> Vec<(&'static str, u64)> {
         let metrics = self.device.counters().metrics();
         vec![
-            ("submissions", metrics.submissions),
             ("passes", metrics.passes),
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),
         ]
+    }
+
+    /// `Metrics::submissions` (`vkQueueSubmit2` calls).
+    fn submissions(&self) -> u64 {
+        self.device.counters().metrics().submissions
     }
 
     /// `Metrics::first_use_waits`, with their time and the longest.

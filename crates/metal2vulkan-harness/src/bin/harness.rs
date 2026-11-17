@@ -168,7 +168,7 @@ fn run_all(args: &Args) -> Result<bool> {
     );
     if !workloads.is_empty() {
         println!(
-            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15}  gauges @100 -> @200",
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11}  gauges @100 -> @200",
             "workload",
             "runtime",
             "dispatches",
@@ -179,6 +179,7 @@ fn run_all(args: &Args) -> Result<bool> {
             "steady",
             "encode_ns/dispatch",
             "cpu_ns/dispatch",
+            "submits/run",
         );
     }
     let set = if args.description.is_some() {
@@ -342,7 +343,7 @@ fn print(runtime: &str, name: &str, report: &Report) {
         })
     };
     println!(
-        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15}  {}",
+        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11}  {}",
         report.dispatches,
         warmup(&report.warmup),
         gpu(10),
@@ -351,6 +352,7 @@ fn print(runtime: &str, name: &str, report: &Report) {
         time(&report.gpu_us),
         per_dispatch(&report.encode_ns),
         per_dispatch(&report.cpu_ns),
+        report.submissions,
         gauges(&report.gauges),
     );
     matrix(runtime, name, &report.gpu_us, &report.gauges);
