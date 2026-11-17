@@ -198,6 +198,10 @@ fn a_description_makes_its_plans() {
         second.library,
         Source::Metallib("/dir/other.metallib".into())
     );
+    assert_eq!(
+        second.buffers[0].contents, None,
+        "a zero buffer is left as made"
+    );
     assert_eq!(second.outputs[0].comparison, Comparison::Exact);
 }
 

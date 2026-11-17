@@ -17,10 +17,11 @@
 //! ```
 //!
 //! `FILL` is `zero`, `words SEED` (SplitMix64's words from SEED), `unit SEED` (`float`s in
-//! [0, 1) from the same words) or `hex HEX` (exactly LENGTH bytes). A buffer's length is a
-//! multiple of 16 and a `unit` or `words` fill's a multiple of 4. `repeat N` makes the dispatch
-//! N times, its bindings set before the first. Every runtime runs a workload from the same
-//! starting contents, and its outputs after the first run must match the first runtime's.
+//! [0, 1) from the same words) or `hex HEX` (exactly LENGTH bytes). A buffer filled `zero` is
+//! left as it was made, which Metal makes zero, so the harness holds no copy of it. A buffer's
+//! length is a multiple of 16 and a `unit` or `words` fill's a multiple of 4. `repeat N` makes the
+//! dispatch N times, its bindings set before the first. Every runtime runs a workload from the
+//! same starting contents, and its outputs after the first run must match the first runtime's.
 
 use crate::plan::{
     seeded_words, Binding, BufferPlan, Comparison, Dispatch, Grid, Output, Plan, Source,
@@ -163,7 +164,10 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
             Line::Buffer(BufferPlan {
                 length,
                 storage,
-                contents: Some(filled(length, fill)?),
+                contents: match fill {
+                    ["zero"] => None,
+                    fill => Some(filled(length, fill)?),
+                },
             })
         }
         ["set-buffer", index, buffer, offset @ ..] => {
