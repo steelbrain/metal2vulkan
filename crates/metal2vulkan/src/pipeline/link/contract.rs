@@ -62,7 +62,11 @@ pub fn stage_symbols(m: &TypedModule, io: &StageIo) -> Result<StageSymbols, Erro
                     (ExecModel::MeshEXT, IoDir::Output, Type::Array { elem, .. }) => *elem,
                     _ => g.pointee,
                 };
-                if !io_type_matches(m, pointee, *ty)? {
+                let width = match io.half_outputs.contains(key) {
+                    true => 16,
+                    false => 32,
+                };
+                if !io_type_matches(m, pointee, *ty, width)? {
                     return Err(invariant("a user interface variable of another type"));
                 }
                 declared += 1;
@@ -123,15 +127,21 @@ fn invariant(detail: &str) -> Error {
 
 /// Whether data type `ty` is the scalar or vector `want` declares (32-bit `float` or
 /// unsigned-integer lanes; signed-integer lanes for a color output to a signed-integer
-/// attachment).
-fn io_type_matches(m: &TypedModule, ty: TypeId, want: IoType) -> Result<bool, Error> {
+/// attachment), its `float` lanes `float_width` bits wide (16 for one of
+/// `StageIo::half_outputs`).
+fn io_type_matches(
+    m: &TypedModule,
+    ty: TypeId,
+    want: IoType,
+    float_width: u8,
+) -> Result<bool, Error> {
     let types = m.types();
     let (elem, lanes) = match types.get(ty)? {
         Type::Vector { elem, len } => (*elem, *len),
         _ => (ty, 1),
     };
     let numeric = match types.get(elem)? {
-        Type::Float { width: 32 } => IoNumeric::Float,
+        Type::Float { width } if *width == float_width => IoNumeric::Float,
         Type::Int {
             width: 32,
             signed: false,

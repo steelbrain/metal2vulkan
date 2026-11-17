@@ -111,6 +111,11 @@ impl DeviceProfile {
         self.facts.narrow_wrap
     }
 
+    /// Whether a `half` color output may be declared with 16-bit `float` lanes.
+    pub(crate) fn half_outputs(&self) -> HalfOutputs {
+        self.facts.half_outputs
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -543,6 +548,8 @@ pub(crate) struct ProfileFacts {
     pub(crate) reconvergence_note: ReconvergenceNote,
     /// Which narrow integer results clear the bits above their width.
     pub(crate) narrow_wrap: NarrowWrap,
+    /// Whether a `half` color output may be declared with 16-bit `float` lanes.
+    pub(crate) half_outputs: HalfOutputs,
 }
 
 impl ProfileFacts {
@@ -552,6 +559,7 @@ impl ProfileFacts {
         half_pair_note: HalfPairNote::Fused,
         reconvergence_note: ReconvergenceNote::Field,
         narrow_wrap: NarrowWrap::Every,
+        half_outputs: HalfOutputs::Sixteen,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -560,6 +568,7 @@ impl ProfileFacts {
         half_pair_note: HalfPairNote::Every,
         reconvergence_note: ReconvergenceNote::Noted,
         narrow_wrap: NarrowWrap::Read,
+        half_outputs: HalfOutputs::Widened,
     };
 }
 
@@ -575,6 +584,20 @@ pub(crate) enum NarrowWrap {
     /// the low bits (another wrapping operation, a truncation, a sign extension) leaves them
     /// unread. `Device::from_queries`' profile.
     Read,
+}
+
+/// How a `half` color output (a scalar or vector of AIR's `half`) reaches the device
+/// (`lower::stage_io`'s `half_variable`, `StageIo::half_outputs`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HalfOutputs {
+    /// Declared with 16-bit `float` lanes where the profile enables `storageInputOutput16` and
+    /// `shaderFloat16`, so the device receives the `half` as Metal's attachment does; 32-bit, the
+    /// `half` widened, elsewhere: `Device::new`'s profile.
+    Sixteen,
+    /// 32-bit on every device, the `half` widened to `float`, which holds every `half` exactly:
+    /// `storageInputOutput16` is not a query that may choose a second form.
+    /// `Device::from_queries`' profile.
+    Widened,
 }
 
 /// Whether a stage whose reconvergence is implementation-defined (`Reconvergence::ImplementationDefined`:

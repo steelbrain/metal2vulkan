@@ -85,7 +85,8 @@ impl Device {
     /// (`DriverWorkaround::ClippedCoverageNotMetals`, `DriverWorkaround::TessellatorNotMetals`),
     /// `InterpolateAtOffset` reads from the pixel's center as GLSL.std.450 states, and a thread's
     /// Function storage is the 16 KiB floor. A two-plane YCbCr texture's planes are read in place
-    /// on every device, whatever its type.
+    /// on every device, whatever its type. Every stage output is 32-bit: a `half` color output
+    /// reaches the device widened to `float`, whatever `storageInputOutput16` says.
     pub fn from_queries(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error> {
         Device::derived(desc.without_identity(), policy, |desc, policy| {
             let fields = ProfileFields {
