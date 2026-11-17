@@ -106,6 +106,11 @@ impl DeviceProfile {
         self.facts.reconvergence_note
     }
 
+    /// Which narrow integer results clear the bits above their width.
+    pub(crate) fn narrow_wrap(&self) -> NarrowWrap {
+        self.facts.narrow_wrap
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -536,6 +541,8 @@ pub(crate) struct ProfileFacts {
     pub(crate) half_pair_note: HalfPairNote,
     /// Whether a stage of implementation-defined reconvergence records it as a note.
     pub(crate) reconvergence_note: ReconvergenceNote,
+    /// Which narrow integer results clear the bits above their width.
+    pub(crate) narrow_wrap: NarrowWrap,
 }
 
 impl ProfileFacts {
@@ -544,6 +551,7 @@ impl ProfileFacts {
         stage_bound: StageBound::Defects,
         half_pair_note: HalfPairNote::Fused,
         reconvergence_note: ReconvergenceNote::Field,
+        narrow_wrap: NarrowWrap::Every,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -551,7 +559,22 @@ impl ProfileFacts {
         stage_bound: StageBound::Every,
         half_pair_note: HalfPairNote::Every,
         reconvergence_note: ReconvergenceNote::Noted,
+        narrow_wrap: NarrowWrap::Read,
     };
+}
+
+/// Which narrow integer results (an `i8` or `i16` held in a wider container) clear the container's
+/// bits above their width after an operation that can set them: an add, subtract, multiply or
+/// shift left not marked `nuw`, a signed divide or remainder, an arithmetic shift right
+/// (`lower::arith::ops::int_binary`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NarrowWrap {
+    /// Every such result: `Device::new`'s profile.
+    Every,
+    /// Only a result whose high bits a use reads (`lower::arith::demand`): a use that reads only
+    /// the low bits (another wrapping operation, a truncation, a sign extension) leaves them
+    /// unread. `Device::from_queries`' profile.
+    Read,
 }
 
 /// Whether a stage whose reconvergence is implementation-defined (`Reconvergence::ImplementationDefined`:

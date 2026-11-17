@@ -47,7 +47,7 @@ use crate::air::ir::{
 use crate::air::Entry;
 use crate::budget::{tree_bytes, Growth, Meter};
 use crate::device::function_storage;
-use crate::device::profile::Limits;
+use crate::device::profile::{Limits, NarrowWrap};
 use crate::device::requirements::{VkFeature, VkLimit};
 use crate::device::subgroup::{self, SimdClass, SubgroupRequirement, Tier};
 use crate::device::DeviceProfile;
@@ -1609,6 +1609,11 @@ fn select_body(
                 cross.insert(id, ty);
             }
         }
+    }
+    // The narrow results whose bits above their width no use reads, unmasked on a profile that
+    // masks only the read ones.
+    if cx.profile.narrow_wrap() == NarrowWrap::Read {
+        arith::demand::drop_unread_wraps(body, values, &mut strategy, m)?;
     }
     phis.sort();
     Ok(BodySelection {

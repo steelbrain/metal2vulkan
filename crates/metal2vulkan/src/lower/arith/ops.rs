@@ -163,39 +163,48 @@ pub fn sext(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
 /// An integer binary operator with the AIR instruction's `flags` on two held integers of form
 /// `f`. An add, sub, mul or shl marked `nuw` is not masked: a result that would carry above the
 /// width is poison, so every other result already fits it. (`nsw` alone says nothing of the
-/// zero-extended bits: `-1 + 1` carries out of them.)
+/// zero-extended bits: `-1 + 1` carries out of them.) Without `wrap` no result is masked: its
+/// bits within the width are the same, and no use reads those above it (`demand`).
 pub fn int_binary(
     fb: &mut FunctionBuilder<'_>,
     op: AirBin,
     flags: IntFlags,
     f: Form,
+    wrap: bool,
     a: Value,
     b: Value,
 ) -> BResult<Value> {
     let bin = |fb: &mut FunctionBuilder<'_>, o, x, y| fb.binary(o, x, y);
-    let wrap = |fb: &mut FunctionBuilder<'_>, r| {
+    let wrapped = |fb: &mut FunctionBuilder<'_>, r| {
+        if wrap {
+            mask(fb, f, r)
+        } else {
+            Ok(r)
+        }
+    };
+    let wrap_unsigned = |fb: &mut FunctionBuilder<'_>, r| {
         if flags.contains(IntFlags::NUW) {
             Ok(r)
         } else {
-            mask(fb, f, r)
+            wrapped(fb, r)
         }
     };
     match op {
         AirBin::Add => {
             let r = bin(fb, BinOp::IAdd, a, b)?;
-            wrap(fb, r)
+            wrap_unsigned(fb, r)
         }
         AirBin::Sub => {
             let r = bin(fb, BinOp::ISub, a, b)?;
-            wrap(fb, r)
+            wrap_unsigned(fb, r)
         }
         AirBin::Mul => {
             let r = bin(fb, BinOp::IMul, a, b)?;
-            wrap(fb, r)
+            wrap_unsigned(fb, r)
         }
         AirBin::Shl => {
             let r = bin(fb, BinOp::ShiftLeftLogical, a, b)?;
-            wrap(fb, r)
+            wrap_unsigned(fb, r)
         }
         AirBin::UDiv => bin(fb, BinOp::UDiv, a, b),
         AirBin::URem => bin(fb, BinOp::UMod, a, b),
@@ -211,12 +220,12 @@ pub fn int_binary(
                 BinOp::SRem
             };
             let r = bin(fb, o, x, y)?;
-            mask(fb, f, r)
+            wrapped(fb, r)
         }
         AirBin::AShr => {
             let x = sext(fb, f, a)?;
             let r = bin(fb, BinOp::ShiftRightArithmetic, x, b)?;
-            mask(fb, f, r)
+            wrapped(fb, r)
         }
         AirBin::FAdd | AirBin::FSub | AirBin::FMul | AirBin::FDiv | AirBin::FRem => {
             float_binary(fb, op, f, Contraction::Forbidden, a, b)

@@ -1225,17 +1225,19 @@ fn large_module_defects_are_keyed_on_anv() {
     }
 }
 
-/// The stage bound and two notes are facts of the profile, on every committed profile:
-/// `Device::new` bounds a stage only where its driver's identity names a stage-size defect
+/// The stage bound, two notes and the narrow wrap are facts of the profile, on every committed
+/// profile: `Device::new` bounds a stage only where its driver's identity names a stage-size defect
 /// (`StageBound::Defects`), notes the controlled `half` pair only where its driver fuses arithmetic
-/// into the narrowing (`HalfPairNote::Fused`) and records implementation-defined reconvergence as
-/// the stage's field alone (`ReconvergenceNote::Field`); `Device::from_queries` bounds every stage,
-/// notes every pair and notes the reconvergence (`Every`, `Every`, `Noted`). The facts key the
-/// fingerprint: a profile of the same fields with another fact is another profile.
+/// into the narrowing (`HalfPairNote::Fused`), records implementation-defined reconvergence as
+/// the stage's field alone (`ReconvergenceNote::Field`) and masks every narrow result
+/// (`NarrowWrap::Every`); `Device::from_queries` bounds every stage, notes every pair, notes the
+/// reconvergence and masks only the narrow results a use reads (`Every`, `Every`, `Noted`,
+/// `Read`). The facts key the fingerprint: a profile of the same fields with another fact is
+/// another profile.
 #[test]
 fn the_profiles_facts_follow_its_constructor() {
     use crate::device::profile::{
-        DeviceProfile, HalfPairNote, ProfileFacts, ReconvergenceNote, StageBound,
+        DeviceProfile, HalfPairNote, NarrowWrap, ProfileFacts, ReconvergenceNote, StageBound,
     };
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
@@ -1254,6 +1256,8 @@ fn the_profiles_facts_follow_its_constructor() {
         );
         let want = (ReconvergenceNote::Field, ReconvergenceNote::Noted);
         assert_eq!(notes, want, "{stem}");
+        let wraps = (old.profile().narrow_wrap(), queries.profile().narrow_wrap());
+        assert_eq!(wraps, (NarrowWrap::Every, NarrowWrap::Read), "{stem}");
         let fields = queries.profile().fields().clone();
         let facts = ProfileFacts {
             stage_bound: StageBound::Defects,

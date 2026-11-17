@@ -832,7 +832,7 @@ fn integer_operators_match_llvm_at_every_width() {
                 &format!("{op:?} i{bits}"),
                 &[f, f],
                 f,
-                &|fb, x| ops::int_binary(fb, op, IntFlags::NONE, f, x[0], x[1]),
+                &|fb, x| ops::int_binary(fb, op, IntFlags::NONE, f, true, x[0], x[1]),
                 &pairs(&vals, b),
                 &|c| Some(vec![llvm_int(op, bits, arg(c, 0), arg(c, 1))?]),
                 false,
@@ -871,9 +871,57 @@ fn nuw_operators_match_llvm_where_defined() {
                 &format!("{op:?} nuw i{bits}"),
                 &[f, f],
                 f,
-                &|fb, x| ops::int_binary(fb, op, IntFlags::NUW, f, x[0], x[1]),
+                &|fb, x| ops::int_binary(fb, op, IntFlags::NUW, f, true, x[0], x[1]),
                 &pairs(&vals, b),
                 &|c| Some(vec![llvm_nuw(op, bits, arg(c, 0), arg(c, 1))?]),
+                false,
+            );
+        }
+    }
+}
+
+/// An operator that wraps (add, sub, mul and shl not marked `nuw`, sdiv, srem, ashr), left
+/// unwrapped, answers LLVM's result in the bits within the width, and reads no operand's bits
+/// above it but a shift's amount: each operand it reads only within the width arrives with junk
+/// above the width, and its result is masked before it is compared.
+#[test]
+fn unwrapped_operators_keep_the_bits_within_the_width() {
+    let mut rng = Rng(0x6A09_E667_F3BC_C909);
+    for bits in [5, 8, 16, 40] {
+        let vals = int_values(bits, &mut rng, 6);
+        let mut shifts = vals.clone();
+        shifts.extend(0..u64::from(bits));
+        let f = int(bits);
+        let junk = 0xA5C3_96E1_5A3C_691E & !mask(bits) & ops::ones(f.container());
+        let wrapping = [
+            AirBin::Add,
+            AirBin::Sub,
+            AirBin::Mul,
+            AirBin::Shl,
+            AirBin::SDiv,
+            AirBin::SRem,
+            AirBin::AShr,
+        ];
+        for op in wrapping {
+            let shift = matches!(op, AirBin::Shl | AirBin::AShr);
+            let b: &[u64] = if shift { &shifts } else { &vals };
+            check(
+                &format!("{op:?} unwrapped i{bits}"),
+                &[f, f],
+                f,
+                &|fb, x| {
+                    let j = ops::splat(fb, f, junk)?;
+                    let p = fb.binary(BinOp::BitwiseXor, x[0], j)?;
+                    let q = if shift {
+                        x[1]
+                    } else {
+                        fb.binary(BinOp::BitwiseXor, x[1], j)?
+                    };
+                    let r = ops::int_binary(fb, op, IntFlags::NONE, f, false, p, q)?;
+                    ops::mask(fb, f, r)
+                },
+                &pairs(&vals, b),
+                &|c| Some(vec![llvm_int(op, bits, arg(c, 0), arg(c, 1))?]),
                 false,
             );
         }
@@ -893,7 +941,7 @@ fn integer_operators_on_vectors_work_per_lane() {
             &format!("{op:?} <4 x i8>"),
             &[f, f],
             f,
-            &|fb, x| ops::int_binary(fb, op, IntFlags::NONE, f, x[0], x[1]),
+            &|fb, x| ops::int_binary(fb, op, IntFlags::NONE, f, true, x[0], x[1]),
             &cases,
             &|c| {
                 (0..4)

@@ -68,6 +68,7 @@
 pub mod aggregate;
 pub mod chunk;
 pub mod color_write;
+pub mod demand;
 pub mod denormal;
 pub mod divide;
 pub mod exact_division;
@@ -180,11 +181,13 @@ pub fn materialize(fb: &mut FunctionBuilder<'_>, k: &LoweredConst) -> BResult<Op
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArithStrategy {
     /// An integer binary operator on held integers, with the instruction's wrap flags
-    /// ([`ops::int_binary`]).
+    /// ([`ops::int_binary`]); `wrap` is false where no use reads the bits a narrow result holds
+    /// above its width ([`demand`]), which then stay as the operation left them.
     Int {
         op: AirBin,
         flags: IntFlags,
         form: Form,
+        wrap: bool,
     },
     /// A binary operator on `i1` values.
     Bool {
@@ -1501,6 +1504,7 @@ fn select_in(
                     op: *op,
                     flags: *flags,
                     form: f,
+                    wrap: true,
                 },
                 // LLVM's `frem` on `float` is Metal's (measured on the M3 Max): with every
                 // fast-math flag its `fast::fmod`, as `air.fast_fmod` is lowered; otherwise
@@ -3131,9 +3135,14 @@ fn value(
             let p = nth(cx, xs, 0)?;
             chunk::bitcast(fb, *from, *to, p)?
         }
-        S::Int { op, flags, form } => {
+        S::Int {
+            op,
+            flags,
+            form,
+            wrap,
+        } => {
             let (p, q) = (a(cx, 0)?, a(cx, 1)?);
-            ops::int_binary(fb, *op, *flags, *form, p, q)?
+            ops::int_binary(fb, *op, *flags, *form, *wrap, p, q)?
         }
         S::Bool { op, form } => {
             let (p, q) = (a(cx, 0)?, a(cx, 1)?);
