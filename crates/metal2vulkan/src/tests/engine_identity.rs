@@ -1709,7 +1709,6 @@ fn device_address_loads(words: &[u32]) -> (usize, usize, usize) {
     const TYPE_POINTER: u32 = 32;
     const PHYSICAL_STORAGE_BUFFER: u32 = 5349;
     const CONVERT_U_TO_PTR: u32 = 120;
-    const BITCAST: u32 = 124;
     const ACCESS_CHAIN: u32 = 65;
     const LOAD: u32 = 61;
     const STORE: u32 = 62;
@@ -1739,12 +1738,6 @@ fn device_address_loads(words: &[u32]) -> (usize, usize, usize) {
         match op {
             CONVERT_U_TO_PTR => {
                 if let Some(&ro) = pointers.get(&i[1]) {
-                    bases.insert(i[2], ro);
-                }
-            }
-            // A place bitcast to another block's pointer is that block's base.
-            BITCAST => {
-                if let (Some(&ro), true) = (pointers.get(&i[1]), places.contains_key(&i[3])) {
                     bases.insert(i[2], ro);
                 }
             }

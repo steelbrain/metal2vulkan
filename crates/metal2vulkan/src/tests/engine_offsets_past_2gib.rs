@@ -4,7 +4,8 @@
 //! would place it. The CPU interpreter takes an access chain's index as signed, as SPIR-V does,
 //! and traps on an address that lies in no buffer. On it, `ob1_storage_buffer` loads and stores at
 //! word indices on both sides of 2^29 through slots whose bytes are two buffers, one at the bind
-//! address and one around 2 GiB past it.
+//! address and one around 2 GiB past it. The direct form, whose sign-extended offsets are exact
+//! below 2 GiB only, takes a window of at most 2 GiB.
 //!
 //! `llvm-as` assembles the fixture; without it the test skips visibly.
 
@@ -144,4 +145,30 @@ fn accesses_past_2_gib_land_at_their_own_words() {
             );
         }
     }
+}
+
+/// The direct form's choice (`lower::access::direct_window`): a `Bounded` window of exactly
+/// 2 GiB takes it, every byte offset in it below 2^31 so that its sign extension is exact; one a
+/// byte longer does not, nor does a `Whole` one.
+#[test]
+fn the_direct_form_takes_windows_of_at_most_2_gib() {
+    use crate::lower::access::direct_window;
+    use crate::pipeline::interface::Window;
+    for start in [0, -16, 64] {
+        assert!(
+            direct_window(Window::Bounded {
+                start,
+                len: 1 << 31
+            }),
+            "start {start}"
+        );
+        assert!(
+            !direct_window(Window::Bounded {
+                start,
+                len: (1 << 31) + 1
+            }),
+            "start {start}"
+        );
+    }
+    assert!(!direct_window(Window::Whole));
 }

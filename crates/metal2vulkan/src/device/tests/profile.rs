@@ -310,8 +310,8 @@ fn below_1_2_and_contradictory_policies_are_refused() {
 }
 
 /// The identity domains come as a pair (`InvalidDescriptor` for one alone) and need
-/// `bufferDeviceAddress`, `shaderInt64` and `storageBuffer8BitAccess`
-/// (`Unsupported{IdentityDomains}` naming the three, on a device without `shaderInt64`). What they lower is `tests::engine_identity`'s.
+/// `bufferDeviceAddress` and `shaderInt64` (`Unsupported{IdentityDomains}` naming both, on a
+/// device without `shaderInt64`). What they lower is `tests::engine_identity`'s.
 #[test]
 fn the_identity_domains_come_as_a_pair_on_a_device_with_addresses() {
     let identity = DevicePolicy {
@@ -343,13 +343,9 @@ fn the_identity_domains_come_as_a_pair_on_a_device_with_addresses() {
     match Device::new(profile("roadmap-2022"), identity) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::IdentityDomains);
-            let all = [
-                VkFeature::BufferDeviceAddress,
-                VkFeature::ShaderInt64,
-                VkFeature::StorageBuffer8BitAccess,
-            ];
-            let all = all.map(Capability::Feature).to_vec();
-            assert_eq!(u.needs, Needs::AnyOf(vec![all]));
+            let both = [VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64];
+            let both = both.map(Capability::Feature).to_vec();
+            assert_eq!(u.needs, Needs::AnyOf(vec![both]));
         }
         other => panic!("{other:?}"),
     }

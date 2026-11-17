@@ -1630,9 +1630,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
                         align,
                     });
                     // A word memory's base is a multiple of 4, and of 16 for its vector units.
-                    let bounded =
-                        matches!(window, Window::Bounded { len, .. } if *len <= DIRECT_WINDOW);
-                    if align >= 4 && start % 16 == 0 && bounded {
+                    if align >= 4 && start % 16 == 0 && direct_window(*window) {
                         cx.families.access.aligned.insert(i);
                     }
                 }
@@ -1699,11 +1697,17 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
 }
 
 /// The longest window a slot reached from its address as it is may have
-/// ([`AccessPlan::aligned`]): its accesses' byte offsets from the window's start index a byte
-/// array (`psb::prepare_direct`), and SPIR-V takes an access chain's index as signed, so a 32-bit
-/// one is exact below 2 GiB only. A slot no access bounds, or one with a longer window, keeps the
+/// ([`AccessPlan::aligned`]): each access's byte offset from the window's start is added to its
+/// address sign-extended from 32 bits (`psb::prepare_direct`), which is exact below 2 GiB only. A slot no access bounds, or one with a longer window, keeps the
 /// word memory's 64-bit address arithmetic, exact to 4 GiB.
 const DIRECT_WINDOW: u64 = 1 << 31;
+
+/// Whether a slot with `window` may be reached from its address as it is: the window is
+/// `Bounded` and at most [`DIRECT_WINDOW`] long, so every access's byte offset from its start is
+/// below 2^31 and its sign extension is exact.
+pub(crate) fn direct_window(window: Window) -> bool {
+    matches!(window, Window::Bounded { len, .. } if len <= DIRECT_WINDOW)
+}
 
 /// The alignment (2, 4, 8 or 16) the binder holds a device-address slot's address to under the
 /// identity domains: its argument's `air.arg_type_align_size`, at most 16. Metal's API validation

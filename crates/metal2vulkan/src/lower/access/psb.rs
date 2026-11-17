@@ -171,11 +171,13 @@ enum Reach {
     /// unit at that address plus its index times its size, in 64 bits.
     Rounded,
     /// From a slot's own device address under the identity domains ([`prepare_direct`]): each
-    /// unit at its byte offset in a byte array at that address, that element's pointer bitcast to
-    /// the unit's block ([`FunctionBuilder::device_byte_place`]). The device forms the address
-    /// from the 32-bit byte offset itself, with no shift (an array of the units would scale its
-    /// index in 64 bits), and a load of an unwritten slot keeps the block's `NonWritable`.
-    Bytes,
+    /// unit at that address plus its 32-bit byte offset sign-extended, in 64-bit integers, then
+    /// one `OpConvertUToPtr` to the unit's block (`NonWritable` for a load of an unwritten slot).
+    /// The offset is below 2^31, the window being at most `DIRECT_WINDOW`, so the sign extension
+    /// is exact. It is the integer form of an access chain's signed index, which a device adds as
+    /// it would that index: no shift of the offset in 64 bits, no zero-extended offset to split
+    /// into a scalar base and a vector one, and no pointer bitcast.
+    Direct,
 }
 
 /// Prepare an access of a static slot whose window starts at `start` at the `u32` displacement
@@ -233,7 +235,7 @@ pub fn prepare_direct(
     };
     Ok(PsbAccess {
         mem: PsbMem {
-            reach: Reach::Bytes,
+            reach: Reach::Direct,
             ..PsbMem::at(base)
         },
         off,
@@ -342,10 +344,13 @@ impl PsbMem {
                 let addr = fb.binary(BinOp::IAdd, self.base, d)?;
                 self.place(fb, addr, ty, load)
             }
-            Reach::Bytes => {
+            Reach::Direct => {
                 let shift = crate::memory::leaf::k32(fb, bytes.trailing_zeros())?;
                 let at = crate::memory::leaf::u32_op(fb, BinOp::ShiftLeftLogical, index, shift)?;
-                fb.device_byte_place(self.base, at, ty, load && self.read_only)
+                let u64_ = u64_ty(fb)?;
+                let d = fb.convert(ConvOp::SConvert, at, u64_)?;
+                let addr = fb.binary(BinOp::IAdd, self.base, d)?;
+                self.place(fb, addr, ty, load)
             }
         }
     }
