@@ -4,8 +4,8 @@
 
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
-    Queried, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL, REQUIRED,
-    RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, VERSION,
+    Queried, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL, PRIVATE_MEMORY,
+    REQUIRED, RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -27,7 +27,7 @@ fn memory(types: &[vk::MemoryPropertyFlags]) -> vk::PhysicalDeviceMemoryProperti
 
 const DEVICE_LOCAL: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
 
-/// A device with exactly the floor: Vulkan 1.3.0, the swapchain extension, every required feature,
+/// A device with exactly the floor: Vulkan 1.3.0, the floor's extensions, every required feature,
 /// every limit at its minimum, one queue family with graphics, compute and 36-bit timestamps, the
 /// two memory types the runtime allocates from after a device-local one, and no optional feature.
 fn at_the_floor() -> Queried {
@@ -59,6 +59,12 @@ fn at_the_floor() -> Queried {
     features.vulkan11.storage_buffer16_bit_access = vk::TRUE;
     features.vulkan12.storage_buffer8_bit_access = vk::TRUE;
     features.vulkan12.scalar_block_layout = vk::TRUE;
+    features.vulkan12.uniform_buffer_standard_layout = vk::TRUE;
+    let layout = &mut features.workgroup_layout;
+    layout.workgroup_memory_explicit_layout = vk::TRUE;
+    layout.workgroup_memory_explicit_layout_scalar_block_layout = vk::TRUE;
+    layout.workgroup_memory_explicit_layout8_bit_access = vk::TRUE;
+    layout.workgroup_memory_explicit_layout16_bit_access = vk::TRUE;
     features.vulkan12.vulkan_memory_model = vk::TRUE;
     features.vulkan12.vulkan_memory_model_device_scope = vk::TRUE;
     features.vulkan12.timeline_semaphore = vk::TRUE;
@@ -84,7 +90,10 @@ fn at_the_floor() -> Queried {
             .max_per_stage_update_after_bind_resources(65_536 + 4096 + 8)
             .max_update_after_bind_descriptors_in_all_pools(65_536 + 4096 + 4000),
         features,
-        extensions: vec![ash::khr::swapchain::NAME.to_owned()],
+        extensions: DEVICE_EXTENSIONS
+            .iter()
+            .map(|&name| name.to_owned())
+            .collect(),
         families: vec![vk::QueueFamilyProperties {
             queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
             queue_count: 1,
@@ -125,7 +134,7 @@ fn a_device_at_the_floor_is_above_it() {
     // Features beyond the floor are not enabled.
     device.features.core.geometry_shader = vk::TRUE;
     device.features.vulkan11.storage_input_output16 = vk::TRUE;
-    device.features.vulkan12.uniform_buffer_standard_layout = vk::TRUE;
+    device.features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
     device.features.vulkan13.robust_image_access = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
     assert!(!capabilities.float16);
@@ -137,7 +146,11 @@ fn a_device_at_the_floor_is_above_it() {
     assert_eq!(capabilities.queue_family, 0);
     assert_eq!(
         choose(&capabilities.memory, u32::MAX),
-        Ok(MemoryTypes { shared: 1, ring: 2 })
+        Ok(MemoryTypes {
+            private: 0,
+            shared: 1,
+            ring: 2
+        })
     );
     let enabled = &capabilities.features;
     for required in REQUIRED {
@@ -152,7 +165,7 @@ fn a_device_at_the_floor_is_above_it() {
     }
     assert_eq!(enabled.core.geometry_shader, vk::FALSE);
     assert_eq!(enabled.vulkan11.storage_input_output16, vk::FALSE);
-    assert_eq!(enabled.vulkan12.uniform_buffer_standard_layout, vk::FALSE);
+    assert_eq!(enabled.vulkan12.sampler_mirror_clamp_to_edge, vk::FALSE);
     assert_eq!(enabled.vulkan13.robust_image_access, vk::FALSE);
 }
 
@@ -162,8 +175,9 @@ fn each_missing_feature_is_named() {
     const V12: &str = "VkPhysicalDeviceVulkan12Features";
     const V13: &str = "VkPhysicalDeviceVulkan13Features";
     const CORE: &str = "VkPhysicalDeviceFeatures";
+    const LAYOUT: &str = "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 22] = [
+    let cases: [(Clear, Missing); 27] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -237,6 +251,35 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan12.scalar_block_layout = vk::FALSE,
             feature(V12, "scalarBlockLayout"),
+        ),
+        (
+            |f| f.vulkan12.uniform_buffer_standard_layout = vk::FALSE,
+            feature(V12, "uniformBufferStandardLayout"),
+        ),
+        (
+            |f| f.workgroup_layout.workgroup_memory_explicit_layout = vk::FALSE,
+            feature(LAYOUT, "workgroupMemoryExplicitLayout"),
+        ),
+        (
+            |f| {
+                f.workgroup_layout
+                    .workgroup_memory_explicit_layout_scalar_block_layout = vk::FALSE
+            },
+            feature(LAYOUT, "workgroupMemoryExplicitLayoutScalarBlockLayout"),
+        ),
+        (
+            |f| {
+                f.workgroup_layout
+                    .workgroup_memory_explicit_layout8_bit_access = vk::FALSE
+            },
+            feature(LAYOUT, "workgroupMemoryExplicitLayout8BitAccess"),
+        ),
+        (
+            |f| {
+                f.workgroup_layout
+                    .workgroup_memory_explicit_layout16_bit_access = vk::FALSE
+            },
+            feature(LAYOUT, "workgroupMemoryExplicitLayout16BitAccess"),
         ),
         (
             |f| f.vulkan12.vulkan_memory_model = vk::FALSE,
@@ -386,13 +429,14 @@ fn each_low_limit_is_named() {
 }
 
 #[test]
-fn a_missing_extension_is_named() {
-    let mut device = at_the_floor();
-    device.extensions.clear();
-    assert_eq!(
-        only_missing(&device),
-        Missing::Extension(ash::khr::swapchain::NAME)
-    );
+fn each_missing_extension_is_named() {
+    for &extension in DEVICE_EXTENSIONS {
+        let mut device = at_the_floor();
+        device
+            .extensions
+            .retain(|name| name.as_c_str() != extension);
+        assert_eq!(only_missing(&device), Missing::Extension(extension));
+    }
 }
 
 #[test]
@@ -476,6 +520,20 @@ fn each_missing_memory_type_is_named() {
         panic!("the device is above the floor");
     };
     assert_eq!(below.missing, [shared.clone(), ring.clone()]);
+    // Vulkan guarantees a device-local type; a device without one is named for it too.
+    device.memory = memory(&[SHARED_MEMORY]);
+    let Err(below) = decide(&device) else {
+        panic!("the device is above the floor");
+    };
+    assert_eq!(
+        below.missing,
+        [
+            Missing::MemoryType {
+                flags: "VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT".to_string(),
+            },
+            ring,
+        ]
+    );
     assert_eq!(
         shared.to_string(),
         "a memory type with VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
@@ -499,19 +557,43 @@ fn memory_types_are_the_first_with_their_flags_that_buffers_can_use() {
     ]);
     assert_eq!(
         choose(&device, u32::MAX),
-        Ok(MemoryTypes { shared: 2, ring: 4 })
+        Ok(MemoryTypes {
+            private: 0,
+            shared: 2,
+            ring: 4
+        })
     );
     assert_eq!(
-        choose(&device, !(1 << 2 | 1 << 4)),
-        Ok(MemoryTypes { shared: 3, ring: 5 })
+        choose(&device, !((1 << 2) | (1 << 4))),
+        Ok(MemoryTypes {
+            private: 0,
+            shared: 3,
+            ring: 5
+        })
     );
-    // One type with every flag serves both, as on a CPU device.
-    let both = memory(&[SHARED_MEMORY | RING_MEMORY]);
-    assert_eq!(choose(&both, 1), Ok(MemoryTypes { shared: 0, ring: 0 }));
+    // Private memory is the first device-local type buffers can use, whatever its other flags.
+    assert_eq!(
+        choose(&device, !(1 | (1 << 4))),
+        Ok(MemoryTypes {
+            private: 5,
+            shared: 2,
+            ring: 5
+        })
+    );
+    // One type with every flag serves all three, as on a CPU device.
+    let all = memory(&[SHARED_MEMORY | RING_MEMORY]);
+    assert_eq!(
+        choose(&all, 1),
+        Ok(MemoryTypes {
+            private: 0,
+            shared: 0,
+            ring: 0
+        })
+    );
     // Bits past the device's types choose nothing.
     assert_eq!(
         choose(&device, !0b11_1111).map_err(|missing| missing.len()),
-        Err(2)
+        Err(3)
     );
 }
 
@@ -523,7 +605,7 @@ fn memory_flags_are_named_as_vulkan_names_them() {
         named |= flag;
     }
     assert!(
-        named.contains(SHARED_MEMORY | RING_MEMORY),
+        named.contains(PRIVATE_MEMORY | SHARED_MEMORY | RING_MEMORY),
         "a flag the floor asks for has no name"
     );
     assert_eq!(
@@ -562,6 +644,7 @@ fn every_missing_item_is_named_at_once() {
         below.missing,
         [
             Missing::Extension(ash::khr::swapchain::NAME),
+            Missing::Extension(ash::khr::workgroup_memory_explicit_layout::NAME),
             feature("VkPhysicalDeviceFeatures", "shaderInt64"),
             feature("VkPhysicalDeviceVulkan13Features", "dynamicRendering"),
             Missing::Limit {
@@ -578,7 +661,7 @@ fn every_missing_item_is_named_at_once() {
     assert_eq!(
         below.to_string(),
         "the device is below the runtime's floor: it lacks VK_KHR_swapchain; \
-         VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
+         VK_KHR_workgroup_memory_explicit_layout; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
          maxPushConstantsSize 64, below 128; a queue family with graphics and compute; a memory \
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers"
@@ -742,7 +825,7 @@ fn the_readme_states_the_floor() {
             flags.join(" | ")
         })
         .collect();
-    let code: BTreeSet<String> = [SHARED_MEMORY, RING_MEMORY]
+    let code: BTreeSet<String> = [PRIVATE_MEMORY, SHARED_MEMORY, RING_MEMORY]
         .into_iter()
         .map(flag_names)
         .collect();
@@ -785,12 +868,14 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut vulkan11,
             mut vulkan12,
             mut vulkan13,
+            mut workgroup_layout,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
             .push_next(&mut vulkan11)
             .push_next(&mut vulkan12)
-            .push_next(&mut vulkan13);
+            .push_next(&mut vulkan13)
+            .push_next(&mut workgroup_layout);
         let extensions: Vec<*const c_char> = capabilities
             .extensions
             .iter()
@@ -877,14 +962,16 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         println!(
             "floor: {name} ({version}, {info}) is above the floor; float16 {}, storage reads \
              without format {}, 64-bit atomics on buffers {} and threadgroup memory {}, float64 \
-             {}; queue family {}; Shared memory type {} (flags {:#x}), ring memory type {} \
-             (flags {:#x})",
+             {}; queue family {}; Private memory type {} (flags {:#x}), Shared memory type {} \
+             (flags {:#x}), ring memory type {} (flags {:#x})",
             capabilities.float16,
             capabilities.storage_read_without_format,
             capabilities.buffer_int64_atomics,
             capabilities.shared_int64_atomics,
             capabilities.float64,
             capabilities.queue_family,
+            memory.private,
+            flags(memory.private),
             memory.shared,
             flags(memory.shared),
             memory.ring,

@@ -17,8 +17,12 @@ pub const VERSION: u32 = vk::API_VERSION_1_3;
 /// runtime's own device.
 pub const INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::surface::NAME];
 
-/// The device extensions the runtime requires and device creation enables.
-pub const DEVICE_EXTENSIONS: &[&CStr] = &[ash::khr::swapchain::NAME];
+/// The device extensions the runtime requires and device creation enables: presenting, and
+/// threadgroup memory laid out as Metal lays it.
+pub const DEVICE_EXTENSIONS: &[&CStr] = &[
+    ash::khr::swapchain::NAME,
+    ash::khr::workgroup_memory_explicit_layout::NAME,
+];
 
 /// Slots in the sampled-texture array: the most sampled textures alive at once.
 pub(crate) const SAMPLED_IMAGES: u32 = 65_536;
@@ -58,6 +62,10 @@ pub const BUFFER_USAGE: vk::BufferUsageFlags = vk::BufferUsageFlags::from_raw(
         | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw()
         | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw(),
 );
+
+/// The flags of the memory type Private storage lives in: memory the GPU reads at its own speed.
+/// Vulkan guarantees a buffer one such type.
+pub(crate) const PRIVATE_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
 
 /// The flags of the memory type Shared storage lives in: memory the host maps and reads at the
 /// speed of its own memory.
@@ -107,6 +115,9 @@ pub struct Features {
     pub vulkan12: vk::PhysicalDeviceVulkan12Features<'static>,
     /// `VkPhysicalDeviceVulkan13Features`.
     pub vulkan13: vk::PhysicalDeviceVulkan13Features<'static>,
+    /// `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR`, of
+    /// `VK_KHR_workgroup_memory_explicit_layout`.
+    pub workgroup_layout: vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, and the member.
@@ -128,6 +139,9 @@ macro_rules! feature {
     };
     (vulkan13 . $member:ident) => {
         feature!(@ "VkPhysicalDeviceVulkan13Features", vulkan13, $member)
+    };
+    (workgroup_layout . $member:ident) => {
+        feature!(@ "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR", workgroup_layout, $member)
     };
     (@ $structure:literal, $part:ident, $member:ident) => {
         Feature {
@@ -155,13 +169,19 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan12.shader_storage_image_array_non_uniform_indexing),
     feature!(core.shader_storage_image_write_without_format),
     // The translator's shaders: 8-, 16- and 64-bit integers, 8- and 16-bit values in buffers,
-    // scalar layout of buffer and push-constant blocks, and the Vulkan memory model with device
-    // scope for atomics and barriers.
+    // scalar and std430 layout of buffer, uniform and push-constant blocks, threadgroup memory
+    // laid out as Metal lays it, and the Vulkan memory model with device scope for atomics and
+    // barriers.
     feature!(core.shader_int16),
     feature!(vulkan12.shader_int8),
     feature!(vulkan11.storage_buffer16_bit_access),
     feature!(vulkan12.storage_buffer8_bit_access),
     feature!(vulkan12.scalar_block_layout),
+    feature!(vulkan12.uniform_buffer_standard_layout),
+    feature!(workgroup_layout.workgroup_memory_explicit_layout),
+    feature!(workgroup_layout.workgroup_memory_explicit_layout_scalar_block_layout),
+    feature!(workgroup_layout.workgroup_memory_explicit_layout8_bit_access),
+    feature!(workgroup_layout.workgroup_memory_explicit_layout16_bit_access),
     feature!(vulkan12.vulkan_memory_model),
     feature!(vulkan12.vulkan_memory_model_device_scope),
     // Submission, barriers and render passes.
@@ -309,10 +329,12 @@ pub struct Capabilities {
 /// The memory types the runtime allocates its buffers from, each the first memory type with its
 /// flags that a buffer of [`BUFFER_USAGE`] can use.
 ///
-/// Metal's counterparts are storage modes: `MTLStorageModeShared` memory, and the memory
-/// `setBytes:length:atIndex:` copies into.
+/// Metal's counterparts are storage modes: `MTLStorageModePrivate` and `MTLStorageModeShared`
+/// memory, and the memory `setBytes:length:atIndex:` copies into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryTypes {
+    /// Device-local: Private storage.
+    pub private: u32,
     /// Host-visible, host-coherent and host-cached: Shared storage.
     pub shared: u32,
     /// Device-local, host-visible and host-coherent: the parameter ring.
@@ -346,7 +368,7 @@ pub unsafe fn check(
 /// As [`check`].
 unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queried {
     // SAFETY: the caller's contract; each structure below is one Vulkan 1.3 defines, read only
-    // from a device of Vulkan 1.3 or later.
+    // from a device of Vulkan 1.3 or later, or one of an extension the device lists.
     unsafe {
         let version = instance
             .get_physical_device_properties(physical)
@@ -369,25 +391,6 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
         queried.limits = properties.properties.limits;
         queried.vulkan12.p_next = std::ptr::null_mut();
 
-        let Features {
-            core,
-            vulkan11,
-            vulkan12,
-            vulkan13,
-        } = &mut queried.features;
-        let mut features = vk::PhysicalDeviceFeatures2::default()
-            .push_next(&mut *vulkan11)
-            .push_next(&mut *vulkan12)
-            .push_next(&mut *vulkan13);
-        instance.get_physical_device_features2(physical, &mut features);
-        *core = features.features;
-        vulkan11.p_next = std::ptr::null_mut();
-        vulkan12.p_next = std::ptr::null_mut();
-        vulkan13.p_next = std::ptr::null_mut();
-
-        queried.families = instance.get_physical_device_queue_family_properties(physical);
-        queried.memory = instance.get_physical_device_memory_properties(physical);
-
         // A device whose extensions cannot be listed offers none the floor can rely on.
         queried.extensions = instance
             .enumerate_device_extension_properties(physical)
@@ -396,6 +399,36 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
             .filter_map(|extension| extension.extension_name_as_c_str().ok())
             .map(CStr::to_owned)
             .collect();
+        // An extension's feature structure may be read only from a device that lists the
+        // extension; on another, its features stay false.
+        let workgroup_layout_listed = queried
+            .extensions
+            .iter()
+            .any(|name| name.as_c_str() == ash::khr::workgroup_memory_explicit_layout::NAME);
+
+        let Features {
+            core,
+            vulkan11,
+            vulkan12,
+            vulkan13,
+            workgroup_layout,
+        } = &mut queried.features;
+        let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut *vulkan11)
+            .push_next(&mut *vulkan12)
+            .push_next(&mut *vulkan13);
+        if workgroup_layout_listed {
+            features = features.push_next(&mut *workgroup_layout);
+        }
+        instance.get_physical_device_features2(physical, &mut features);
+        *core = features.features;
+        vulkan11.p_next = std::ptr::null_mut();
+        vulkan12.p_next = std::ptr::null_mut();
+        vulkan13.p_next = std::ptr::null_mut();
+        workgroup_layout.p_next = std::ptr::null_mut();
+
+        queried.families = instance.get_physical_device_queue_family_properties(physical);
+        queried.memory = instance.get_physical_device_memory_properties(physical);
         queried
     }
 }
@@ -523,15 +556,29 @@ pub(crate) fn choose(
             .find(|(index, kind)| usable & (1 << index) != 0 && kind.property_flags.contains(flags))
             .map(|(index, _)| index)
     };
-    match (first(SHARED_MEMORY), first(RING_MEMORY)) {
-        (Some(shared), Some(ring)) => Ok(MemoryTypes { shared, ring }),
-        (shared, ring) => Err([(shared, SHARED_MEMORY), (ring, RING_MEMORY)]
-            .into_iter()
-            .filter(|(index, _)| index.is_none())
-            .map(|(_, flags)| Missing::MemoryType {
-                flags: flag_names(flags),
-            })
-            .collect()),
+    match (
+        first(PRIVATE_MEMORY),
+        first(SHARED_MEMORY),
+        first(RING_MEMORY),
+    ) {
+        (Some(private), Some(shared), Some(ring)) => Ok(MemoryTypes {
+            private,
+            shared,
+            ring,
+        }),
+        // Vulkan guarantees the device-local type, so only a device that breaks that rule is
+        // refused for it.
+        (private, shared, ring) => Err([
+            (private, PRIVATE_MEMORY),
+            (shared, SHARED_MEMORY),
+            (ring, RING_MEMORY),
+        ]
+        .into_iter()
+        .filter(|(index, _)| index.is_none())
+        .map(|(_, flags)| Missing::MemoryType {
+            flags: flag_names(flags),
+        })
+        .collect()),
     }
 }
 

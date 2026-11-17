@@ -70,12 +70,15 @@ fn new_counters_read_zero_from_every_clone() {
 
 /// Every device of the cfg's kind the loader lists opens (CPU devices under `m2v_cpu_icd`, the
 /// others under `m2v_gpu`; the legs pick one with `VK_DRIVER_FILES` and `MESA_VK_DEVICE_SELECT`).
-/// Its queue family does graphics and compute; the presenting queue is the family's second queue
-/// where it has one and the runtime's own where it has one, and it runs a submission from another
-/// thread. Dropped before its instance or after, the device is torn down with every gauge at zero.
+/// Its queue family does graphics and compute, and its memory types have the flags the floor asks
+/// of each; the presenting queue is the family's second queue where it has one and the runtime's
+/// own where it has one, and it runs a submission from another thread. Dropped before its instance
+/// or after, the device is torn down with every gauge at zero.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
+    use crate::floor::{PRIVATE_MEMORY, RING_MEMORY, SHARED_MEMORY};
+
     let instance = Instance::new(&[]).expect("an instance at the floor");
     let physicals = instance.physical_devices().expect("the physical devices");
     let mut opened = Vec::new();
@@ -115,6 +118,23 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
             raw.device
                 .get_device_queue(raw.queue_family_index, u32::from(own))
         };
+        // The memory types are the device's, with the flags the floor asks of each.
+        let memory_types = device.memory_types();
+        // SAFETY: as above.
+        let memory = unsafe { vk_instance.get_physical_device_memory_properties(physical.raw()) };
+        for (index, flags) in [
+            (memory_types.private, PRIVATE_MEMORY),
+            (memory_types.shared, SHARED_MEMORY),
+            (memory_types.ring, RING_MEMORY),
+        ] {
+            let kind = memory.memory_types_as_slice()[index as usize];
+            assert!(
+                kind.property_flags.contains(flags),
+                "{name}: memory type {index} has flags {:#x}, not {:#x}",
+                kind.property_flags.as_raw(),
+                flags.as_raw()
+            );
+        }
         assert_eq!(
             device.has_unified_memory(),
             matches!(
@@ -167,8 +187,9 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
         }
         assert_eq!(gauges, Gauges::default(), "{name}: gauges after teardown");
         println!(
-            "device: {name} opened; presenting on {} queue; unified memory {}",
+            "device: {name} opened; presenting on {} queue; memory types {:?}; unified memory {}",
             if own { "its own" } else { "the runtime's" },
+            memory_types,
             properties.device_type == vk::PhysicalDeviceType::INTEGRATED_GPU
                 || properties.device_type == vk::PhysicalDeviceType::CPU
         );

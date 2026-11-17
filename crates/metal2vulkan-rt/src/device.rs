@@ -28,6 +28,7 @@ struct Shared {
     device: ash::Device,
     family: u32,
     queues: Queues,
+    memory_types: floor::MemoryTypes,
     unified_memory: bool,
     counters: Counters,
 }
@@ -62,9 +63,10 @@ impl Device {
     /// `MTLCreateSystemDefaultDevice`, for the physical device the consumer chose.
     ///
     /// Checks the floor ([`floor::check`]), then makes one `VkDevice` with the floor's features
-    /// and extensions and each of the four query-decided features the device has. It takes one
-    /// graphics-and-compute queue for the runtime and, where that family has a second queue, a
-    /// queue for presenting; where it has one, presenting shares the runtime's queue and its lock.
+    /// and extensions and each of the four query-decided features the device has, and chooses its
+    /// memory types on it ([`floor::memory_types`]). It takes one graphics-and-compute queue for
+    /// the runtime and, where that family has a second queue, a queue for presenting; where it has
+    /// one, presenting shares the runtime's queue and its lock.
     ///
     /// Err: [`Error::BelowFloor`] with every item the device lacks;
     /// [`Error::NoGraphicsComputeQueue`]; [`Error::Vulkan`] where `vkCreateDevice` fails.
@@ -87,13 +89,17 @@ impl Device {
         // `floor::Features` fails to compile here until it is chained.
         let floor::Features {
             core,
+            mut vulkan11,
             mut vulkan12,
             mut vulkan13,
+            mut workgroup_layout,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
+            .push_next(&mut vulkan11)
             .push_next(&mut vulkan12)
-            .push_next(&mut vulkan13);
+            .push_next(&mut vulkan13)
+            .push_next(&mut workgroup_layout);
         let extensions: Vec<*const c_char> = capabilities
             .extensions
             .iter()
@@ -107,6 +113,15 @@ impl Device {
         // that the device offers every feature and extension it enables.
         let device = unsafe { vk_instance.create_device(raw, &info, None) }
             .map_err(Error::vulkan("vkCreateDevice"))?;
+        // SAFETY: the device was made from `raw` with `capabilities.features`.
+        let memory_types = match unsafe { floor::memory_types(&device, &capabilities) } {
+            Ok(memory_types) => memory_types,
+            Err(below) => {
+                // SAFETY: nothing has been made from the device.
+                unsafe { device.destroy_device(None) };
+                return Err(Error::BelowFloor(below));
+            }
+        };
 
         // SAFETY: the device was made with `count` queues of `family`.
         let runtime = Arc::new(Mutex::new(unsafe { device.get_device_queue(family, 0) }));
@@ -129,6 +144,7 @@ impl Device {
                 device,
                 family,
                 queues: Queues { runtime, present },
+                memory_types,
                 unified_memory,
                 counters: Counters::new(),
             }),
@@ -140,6 +156,12 @@ impl Device {
     /// across its bus, as on a Mac with a discrete GPU.
     pub fn has_unified_memory(&self) -> bool {
         self.shared.unified_memory
+    }
+
+    /// No Metal counterpart: the memory types the device's buffers are allocated from, as the
+    /// floor chose them on the device ([`floor::memory_types`]).
+    pub fn memory_types(&self) -> floor::MemoryTypes {
+        self.shared.memory_types
     }
 
     /// No Metal counterpart: the Vulkan handles, for the consumer's swapchain and presents. The

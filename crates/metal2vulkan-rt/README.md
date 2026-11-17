@@ -64,6 +64,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 |---|---|---|
 | `VK_KHR_surface` | instance | presenting |
 | `VK_KHR_swapchain` | device | presenting |
+| `VK_KHR_workgroup_memory_explicit_layout` | device | threadgroup memory laid out as Metal lays it |
 
 ### Features
 
@@ -86,6 +87,11 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `storageBuffer16BitAccess` | `VkPhysicalDeviceVulkan11Features` | 16-bit values in buffers |
 | `storageBuffer8BitAccess` | `VkPhysicalDeviceVulkan12Features` | 8-bit values in buffers |
 | `scalarBlockLayout` | `VkPhysicalDeviceVulkan12Features` | buffer and push-constant blocks laid out as Metal lays them, where std430 cannot |
+| `uniformBufferStandardLayout` | `VkPhysicalDeviceVulkan12Features` | uniform blocks in std430 layout |
+| `workgroupMemoryExplicitLayout` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | threadgroup blocks with an explicit layout |
+| `workgroupMemoryExplicitLayoutScalarBlockLayout` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | threadgroup blocks in scalar layout |
+| `workgroupMemoryExplicitLayout8BitAccess` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | 8-bit values in threadgroup blocks |
+| `workgroupMemoryExplicitLayout16BitAccess` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | 16-bit values in threadgroup blocks |
 | `vulkanMemoryModel` | `VkPhysicalDeviceVulkan12Features` | the translator's atomics and barriers |
 | `vulkanMemoryModelDeviceScope` | `VkPhysicalDeviceVulkan12Features` | atomics and barriers of device scope |
 | `timelineSemaphore` | `VkPhysicalDeviceVulkan12Features` | submission and completion |
@@ -122,14 +128,16 @@ Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's
 ### Queue family and memory types
 
 The runtime submits to the first queue family with `VK_QUEUE_GRAPHICS_BIT` and
-`VK_QUEUE_COMPUTE_BIT` (`floor::Capabilities::queue_family`). It allocates buffers from two memory
+`VK_QUEUE_COMPUTE_BIT` (`floor::Capabilities::queue_family`). It allocates buffers from three memory
 types, each the first with its flags that a buffer of `floor::BUFFER_USAGE` can use: every buffer
-usage Vulkan 1.3 defines, and device addresses. Vulkan answers which memory types a buffer can use
+usage Vulkan 1.3 defines, and device addresses. Vulkan guarantees such a buffer a device-local
+type, so of the three only Shared and the ring can be missing on a conforming device. Vulkan answers which memory types a buffer can use
 only for a created device, so `floor::check` finds a type with each set of flags, and
 `floor::memory_types` chooses on the device (`floor::MemoryTypes`).
 
 | Memory type | Flags | Used for |
 |---|---|---|
+| Private | `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` | Private storage, which only the GPU reads and writes |
 | Shared | `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`, `VK_MEMORY_PROPERTY_HOST_CACHED_BIT` | Shared storage, which the host maps and reads |
 | ring | `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`, `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT` | the parameter ring, which the host writes with no flush and the GPU reads |
 

@@ -1169,7 +1169,7 @@ const-value	metal2vulkan-air::tensor_ops::PREFIX	b"__tensorops_impl_matmul2d_op_
 const-value	metal2vulkan-air::tensor_ops::RESERVED_INDEX	u16::MAX
 const-value	metal2vulkan-air::tensor_ops::SECTION	b"air.externally_defined"
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
-const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME]
+const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::khr::workgroup_memory_explicit_layout::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
 const-value	metal2vulkan-rt::floor::VERSION	vk::API_VERSION_1_3
 const-value	metal2vulkan-runtime::DEFAULT_CAPACITY	25 <<30
@@ -1372,6 +1372,7 @@ enum	metal2vulkan-air::tensor_ops::Mode	#[derive(Clone, Copy, Debug, PartialEq, 
 enum	metal2vulkan-air::tensor_ops::OperandForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum OperandForm
 enum	metal2vulkan-air::tensor_ops::OperandIndex	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum OperandIndex
 enum	metal2vulkan-air::tensor_ops::TensorSpace	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TensorSpace
+enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
 enum	metal2vulkan-rt::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
 enum	metal2vulkan-runtime::AddressPlacement	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AddressPlacement
 enum	metal2vulkan-runtime::AppleOnly	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AppleOnly
@@ -2176,6 +2177,24 @@ field	metal2vulkan-air::tensor_ops::RunForm.left	pub left: OperandForm
 field	metal2vulkan-air::tensor_ops::RunForm.right	pub right: OperandForm
 field	metal2vulkan-air::tensor_ops::RunForm.single_thread	pub single_thread: bool
 field	metal2vulkan-air::tensor_ops::RunForm.v2	pub v2: bool
+field	metal2vulkan-rt::Gauges.blocks	pub blocks: u64
+field	metal2vulkan-rt::Gauges.buffers	pub buffers: u64
+field	metal2vulkan-rt::Gauges.command_buffers	pub command_buffers: u64
+field	metal2vulkan-rt::Gauges.descriptor_slots	pub descriptor_slots: u64
+field	metal2vulkan-rt::Gauges.events	pub events: u64
+field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
+field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
+field	metal2vulkan-rt::Gauges.textures	pub textures: u64
+field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
+field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
+field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
+field	metal2vulkan-rt::Metrics.passes	pub passes: u64
+field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
+field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
+field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device
+field	metal2vulkan-rt::RawDevice.instance	pub instance: &'a ash::Instance
+field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
+field	metal2vulkan-rt::RawDevice.queue_family_index	pub queue_family_index: u32
 field	metal2vulkan-rt::floor::BelowFloor.missing	pub missing: Vec<Missing>
 field	metal2vulkan-rt::floor::Capabilities.buffer_int64_atomics	pub buffer_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.extensions	pub extensions: &'static [&'static CStr]
@@ -2190,6 +2209,8 @@ field	metal2vulkan-rt::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
 field	metal2vulkan-rt::floor::Features.vulkan11	pub vulkan11: vk::PhysicalDeviceVulkan11Features<'static>
 field	metal2vulkan-rt::floor::Features.vulkan12	pub vulkan12: vk::PhysicalDeviceVulkan12Features<'static>
 field	metal2vulkan-rt::floor::Features.vulkan13	pub vulkan13: vk::PhysicalDeviceVulkan13Features<'static>
+field	metal2vulkan-rt::floor::Features.workgroup_layout	pub workgroup_layout: vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR<'static>
+field	metal2vulkan-rt::floor::MemoryTypes.private	pub private: u32
 field	metal2vulkan-rt::floor::MemoryTypes.ring	pub ring: u32
 field	metal2vulkan-rt::floor::MemoryTypes.shared	pub shared: u32
 field	metal2vulkan-runtime::AddressRange.length	pub length: u64
@@ -8660,6 +8681,18 @@ method	metal2vulkan-air::tensor_ops::OperandForm::is_cooperative	pub const fn is
 method	metal2vulkan-air::tensor_ops::OperandIndex::from_raw	pub fn from_raw(raw: u64) -> Option<OperandIndex>
 method	metal2vulkan-air::tensor_ops::RunForm::arity	pub fn arity(&self) -> usize
 method	metal2vulkan-air::tensor_ops::RunForm::operand_args	pub fn operand_args(&self) -> [usize; 3]
+method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
+method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
+method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
+method	metal2vulkan-rt::Device::has_unified_memory	pub fn has_unified_memory(&self) -> bool
+method	metal2vulkan-rt::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
+method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice) -> Result<Device, Error>
+method	metal2vulkan-rt::Device::raw	pub fn raw(&self) -> RawDevice<'_>
+method	metal2vulkan-rt::Device::with_present_queue	pub fn with_present_queue<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R
+method	metal2vulkan-rt::Instance::new	pub fn new(surface_extensions: &[&CStr]) -> Result<Instance, Error>
+method	metal2vulkan-rt::Instance::physical_devices	pub fn physical_devices(&self) -> Result<Vec<PhysicalDevice>, Error>
+method	metal2vulkan-rt::Instance::raw	pub fn raw(&self) -> (&ash::Entry, &ash::Instance)
+method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
 method	metal2vulkan-runtime::AddressModeMap::constexpr_mode	pub fn constexpr_mode(&self, from: SamplerAddressMode) -> Option<SamplerAddressMode>
 method	metal2vulkan-runtime::AddressModeMap::is_identity	pub fn is_identity(&self) -> bool
 method	metal2vulkan-runtime::AddressModeMap::mode	pub fn mode(&self, from: SamplerAddressMode) -> SamplerAddressMode
@@ -10671,6 +10704,13 @@ struct	metal2vulkan-air::ir::ValueId	#[derive(Clone, Copy, Debug, PartialEq, Eq,
 struct	metal2vulkan-air::ir::ValueIndex	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct ValueIndex
 struct	metal2vulkan-air::tensor_ops::Descriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Descriptor
 struct	metal2vulkan-air::tensor_ops::RunForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct RunForm
+struct	metal2vulkan-rt::Counters	#[derive(Clone)] pub struct Counters
+struct	metal2vulkan-rt::Device	#[derive(Clone)] pub struct Device
+struct	metal2vulkan-rt::Gauges	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Gauges
+struct	metal2vulkan-rt::Instance	#[derive(Clone)] pub struct Instance
+struct	metal2vulkan-rt::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Metrics
+struct	metal2vulkan-rt::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
+struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
 struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
 struct	metal2vulkan-rt::floor::Capabilities	pub struct Capabilities
 struct	metal2vulkan-rt::floor::Features	#[derive(Clone, Copy, Default)] pub struct Features
@@ -11210,6 +11250,8 @@ trait-impl	metal2vulkan-air::ir::BlockId impl NodeId	impl NodeId for BlockId
 trait-impl	metal2vulkan-air::ir::Body impl Graph	impl Graph for Body
 trait-impl	metal2vulkan-air::ir::DataLayout impl Default	impl Default for DataLayout
 trait-impl	metal2vulkan-air::tensor_ops::Descriptor impl fmt::Display	impl fmt::Display for Descriptor
+trait-impl	metal2vulkan-rt::Error impl fmt::Display	impl fmt::Display for Error
+trait-impl	metal2vulkan-rt::Error impl std::error::Error	impl std::error::Error for Error
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl std::error::Error	impl std::error::Error for BelowFloor
 trait-impl	metal2vulkan-rt::floor::Missing impl fmt::Display	impl fmt::Display for Missing
@@ -12514,6 +12556,10 @@ variant	metal2vulkan-air::tensor_ops::OperandIndex::Right	Right
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Device	Device
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Thread	Thread
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Threadgroup	Threadgroup
+variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)
+variant	metal2vulkan-rt::Error::Loader	Loader(ash::LoadingError)
+variant	metal2vulkan-rt::Error::NoGraphicsComputeQueue	NoGraphicsComputeQueue
+variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
 variant	metal2vulkan-rt::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-rt::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-rt::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }
