@@ -294,6 +294,7 @@ impl StreamReader {
     /// the way.
     pub fn next_call(&mut self) -> Result<Option<Call>, StreamError> {
         loop {
+            let last = self.at + 1 == self.segments.len();
             let Some(segment) = self.segments.get_mut(self.at) else {
                 return Ok(None);
             };
@@ -303,7 +304,6 @@ impl StreamReader {
                 self.offset = HEADER_LEN;
                 continue;
             }
-            let last = self.at + 1 == self.segments.len();
             let (kind, length, head) = match record_head(segment, start) {
                 Ok(Some(found)) => found,
                 Ok(None) => return self.cut(start, last),
