@@ -59,7 +59,7 @@ fn bitcode() -> Option<Vec<u8>> {
 
 /// Every committed profile `Device::from_queries` derives under the identity domains (those with
 /// `bufferDeviceAddress` and `shaderInt64`), by stem.
-fn identity_profiles() -> Vec<(String, DeviceProfile)> {
+pub(super) fn identity_profiles() -> Vec<(String, DeviceProfile)> {
     committed_profiles()
         .expect("profiles")
         .into_iter()
