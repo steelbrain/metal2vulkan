@@ -298,8 +298,8 @@ impl Device {
             .ok_or(Error::NoSuchBlock(id))
     }
 
-    /// For tests: runs `f` with the runtime's queue under its lock.
-    #[cfg(test)]
+    /// For the device tests: runs `f` with the runtime's queue under its lock.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn with_runtime_queue<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R {
         f(*lock(&self.shared.core.queues.runtime))
     }

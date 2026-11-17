@@ -263,8 +263,9 @@ mod on_device {
     }
 
     fn device_with(hook: &Arc<Hook>, physical: &crate::PhysicalDevice, name: &str) -> Device {
-        let mut options = DeviceOptions::default();
-        options.block_mappings = Some(Arc::clone(hook) as Arc<dyn BlockMappings>);
+        let options = DeviceOptions {
+            block_mappings: Some(Arc::clone(hook) as Arc<dyn BlockMappings>),
+        };
         Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"))
     }
 
