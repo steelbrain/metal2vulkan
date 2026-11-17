@@ -1048,7 +1048,7 @@ pub enum PushField {
     /// the identity domains every dispatch the host knows is a region: its first threadgroup in
     /// Metal's grid (0 unless the consumer splits the dispatch), Metal's threadgroup size, and
     /// Metal's `threads_per_grid`; an indirect dispatch states a zero grid, and its kernel takes
-    /// `NumWorkgroups` times its workgroup size. A flat variant reads its grid here too.
+    /// `NumWorkgroups` times its workgroup size.
     DispatchRegion,
     /// Device address (`u64`) of the region record a device-replay variant's dispatch reads its
     /// `DispatchRegion` value from: the replay's preprocess writes one record per replayed command

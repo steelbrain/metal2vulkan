@@ -470,11 +470,7 @@ impl<'a> EmitCx<'a> {
             PushField::SlotGuestBase(slot) if self.plan.families.access.replay => {
                 return access::replay_guest_base(self, fb, slot)
             }
-            // Under the identity domains a flat variant's region is pushed.
-            PushField::DispatchRegion
-                if self.plan.families.access.replay
-                    || (flat && !self.plan.families.access.identity) =>
-            {
+            PushField::DispatchRegion if self.plan.families.access.replay || flat => {
                 return access::replay_region(self, fb)
             }
             _ => {}

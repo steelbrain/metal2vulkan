@@ -71,8 +71,7 @@
 //! `threads_per_grid` in `region[1].xyz`, and its first threadgroup in `region[0].xyz`, so the
 //! pieces of a split read Metal's whole grid; an indirect dispatch states `region[1].xyz = 0` and
 //! takes the single-region form, its grid `NumWorkgroups · L`, which needs its workgroup size to be
-//! Metal's threadgroup size. So one pipeline runs every dispatch of a threadgroup size. A flat
-//! variant reads its grid from the same pushed field, not from a record.
+//! Metal's threadgroup size. So one pipeline runs every dispatch of a threadgroup size.
 //!
 //! **Partial object threadgroups** ([`DispatchPlan::partial_groups`]). Metal's `drawMeshThreads`
 //! with an object function launches the object threadgroups its threads fill, rounded up, the

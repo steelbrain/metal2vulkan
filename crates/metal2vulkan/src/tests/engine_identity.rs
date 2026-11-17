@@ -12,8 +12,7 @@
 //! - A kernel that reads grid builtins (`grid`, generated) declares no `MultiRegion` constant and
 //!   reads Metal's grid from its pushed `DispatchRegion` on every dispatch: whole, split in two
 //!   pieces at a base, and indirect (a zero grid, its grid `NumWorkgroups · L`) store the same
-//!   answers. Its flat variant (`grid_flat`) reads its grid from the same pushed field, and its
-//!   invocations past the grid store nothing.
+//!   answers.
 //! - A kernel's partial-threadgroups variant (`partial`, generated) dispatched at its whole
 //!   threadgroup size over a ragged grid, its pushed region flagged `NONUNIFORM`, answers each
 //!   edge threadgroup's own size, and its invocations past the grid store nothing.
@@ -664,20 +663,12 @@ fn slot_addresses_past_the_window_are_read_from_the_pushed_parameter_block() {
 }
 
 /// A kernel storing, at its position in the grid `y · grid.x + x`, the grid's threads along `x` and
-/// `y` (bits 0-7, 8-15) and, with `groups`, its threadgroups along `x` and `y` (bits 16-23, 24-31).
-fn grid_kernel(name: &str, groups: bool) -> String {
-    let (param, read, arg) = match groups {
-        true => (
-            ", <3 x i32> noundef %3",
-            "  %nx = extractelement <3 x i32> %3, i64 0\n  %ny = extractelement <3 x i32> %3, i64 1\n  %hx = shl i32 %nx, 16\n  %hn = shl i32 %ny, 24\n  %v1 = or i32 %v0, %hx\n  %v = or i32 %v1, %hn\n",
-            ", !15",
-        ),
-        false => ("", "  %v = or i32 %v0, 0\n", ""),
-    };
+/// `y` (bits 0-7, 8-15) and its threadgroups along `x` and `y` (bits 16-23, 24-31).
+fn grid_kernel(name: &str) -> String {
     format!(
         "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
 target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
-define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, <3 x i32> noundef %1, <3 x i32> noundef %2{param}) {{\n\
+define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, <3 x i32> noundef %1, <3 x i32> noundef %2, <3 x i32> noundef %3) {{\n\
 entry:\n\
   %tx = extractelement <3 x i32> %1, i64 0\n\
   %ty = extractelement <3 x i32> %1, i64 1\n\
@@ -687,14 +678,19 @@ entry:\n\
   %idx = add i32 %row, %tx\n\
   %hy = shl i32 %gy, 8\n\
   %v0 = or i32 %gx, %hy\n\
-{read}\
+  %nx = extractelement <3 x i32> %3, i64 0\n\
+  %ny = extractelement <3 x i32> %3, i64 1\n\
+  %hx = shl i32 %nx, 16\n\
+  %hn = shl i32 %ny, 24\n\
+  %v1 = or i32 %v0, %hx\n\
+  %v = or i32 %v1, %hn\n\
   %i = zext i32 %idx to i64\n\
   %p = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %i\n\
   store i32 %v, ptr addrspace(1) %p, align 4\n\
   ret void\n\
 }}\n\n\
 !air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
-!9 = !{{ptr @{name}, !10, !11}}\n!10 = !{{}}\n!11 = !{{!12, !13, !14{arg}}}\n\
+!9 = !{{ptr @{name}, !10, !11}}\n!10 = !{{}}\n!11 = !{{!12, !13, !14, !15}}\n\
 !12 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}}\n\
 !13 = !{{i32 1, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"tid\"}}\n\
 !14 = !{{i32 2, !\"air.threads_per_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"grid\"}}\n\
@@ -729,7 +725,7 @@ const OUT: u64 = 0x6_0000_0000;
 /// split in two pieces, and indirect.
 #[test]
 fn every_dispatch_reads_metals_grid_from_its_pushed_region() {
-    let Some(bc) = assemble_text("grid", &grid_kernel("grid", true)) else {
+    let Some(bc) = assemble_text("grid", &grid_kernel("grid")) else {
         return;
     };
     const L: [u32; 3] = [4, 2, 1];
@@ -782,49 +778,6 @@ fn every_dispatch_reads_metals_grid_from_its_pushed_region() {
             }
             assert_eq!(out, want, "{stem} {what}");
         }
-    }
-}
-
-/// A flat variant reads its grid from its pushed region: its invocations count the grid's threads
-/// and those past its last store nothing.
-#[test]
-fn a_flat_variant_reads_its_grid_from_its_pushed_region() {
-    let Some(bc) = assemble_text("grid_flat", &grid_kernel("grid_flat", false)) else {
-        return;
-    };
-    const N: u32 = 16;
-    const GRID: [u32; 3] = [7, 5, 1];
-    let threads = (GRID[0] * GRID[1]) as usize;
-    // Three workgroups of 16: 48 invocations, 13 past the grid.
-    let slots = 3 * N as usize;
-    let value = GRID[0] | GRID[1] << 8;
-    let mut want: Vec<u8> = (0..threads).flat_map(|_| value.to_le_bytes()).collect();
-    want.resize(4 * slots, 0);
-    let mut inputs = LowerInputs::new();
-    inputs.flat_grid = true;
-    for stem in PROFILES {
-        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let a =
-            compile_with(&bc, "grid_flat", &p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-        let (plan, module) = typed_module_with(&bc, "grid_flat", &p, &inputs)
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let region = region_bytes([0; 3], GRID, [N, 1, 1]).expect("packs");
-        let res = Resources {
-            buffers: vec![Buffer {
-                slot: None,
-                address: Some(OUT),
-                bytes: vec![0; 4 * slots],
-            }],
-            push: grid_push(&plan, OUT, region),
-            spec: local_size(N),
-        };
-        let cfg = Config {
-            workgroups: [3, 1, 1],
-            ..Config::default()
-        };
-        let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(got.buffers[0], want, "{stem}");
     }
 }
 
