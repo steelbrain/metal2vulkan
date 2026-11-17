@@ -43,8 +43,8 @@ pub use event::{Event, SharedEvent};
 pub use extension::DeviceExtension;
 pub use instance::{Instance, PhysicalDevice};
 pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass, BLOCK_LEN};
-/// `MTLLibrary` and `MTLFunction`: the translator's, read from AIR or a metallib.
-pub use metal2vulkan::library::{Function, Library};
+/// `MTLLibrary`: the translator's, read from AIR or a metallib.
+pub use metal2vulkan::library::Library;
 /// `MTLComputePipelineDescriptor`, its kernel, and a pipeline's precision notes: the
 /// translator's.
 pub use metal2vulkan::pipeline::{

@@ -12,6 +12,7 @@ use crate::device::{lock, Core};
 use crate::error::{Error, Gap};
 use crate::hazard::Access;
 use crate::reaper::{Free, Job};
+use crate::ring::CHUNK;
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::pipeline::{
@@ -81,9 +82,6 @@ pub(crate) enum Constant {
     Size(usize),
     /// The threadgroup's threads: the product of its size.
     Threads,
-    /// 1 where the kernel reads the grid from its dispatch region, 0 for an indirect dispatch,
-    /// whose grid is its threadgroup count.
-    Region,
     /// The length of the threadgroup memory argument at this position of
     /// [`Interface::threadgroups`].
     ThreadgroupLength(usize),
@@ -116,14 +114,12 @@ pub(crate) enum FieldValue {
     DispatchRegion,
 }
 
-/// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
-/// order of [`Interface::threadgroups`], and, for a kernel that reads its grid from its dispatch
-/// region, whether the dispatch is indirect.
+/// A `VkPipeline`'s specialization: the threadgroup size and the threadgroup memory lengths in the
+/// order of [`Interface::threadgroups`].
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Variant {
     pub(crate) size: [u32; 3],
     pub(crate) threadgroup_lengths: Vec<u32>,
-    pub(crate) indirect: bool,
 }
 
 impl crate::Device {
@@ -222,6 +218,7 @@ fn interface(
     let mut fields = Vec::new();
     let mut push_len = 0;
     let mut block_len = 0;
+    let mut block_address = None;
     for placement in &translated.push {
         if placement.stage != Stage::Kernel {
             return Err(gap());
@@ -231,25 +228,37 @@ fn interface(
             .map_or(0, |(offset, size)| offset + size);
         block_len = placement.argument_table_size;
         for placed in &placement.fields {
-            let value = match placed.field {
-                PushField::SlotGuestBase(SlotRef {
-                    stage: Stage::Kernel,
-                    class: SlotClass::Buffer,
-                    index,
-                }) => FieldValue::BufferAddress(index),
-                PushField::DispatchRegion => FieldValue::DispatchRegion,
-                _ => return Err(gap()),
-            };
             let place = match placed.loc {
                 PushLoc::Push { offset } => Place::Push(offset),
                 PushLoc::ArgumentTable { offset } => Place::Block(offset),
                 _ => return Err(gap()),
             };
+            let value = match (placed.field, place) {
+                (PushField::ArgumentTableAddress, Place::Push(offset)) => {
+                    block_address = Some(offset);
+                    continue;
+                }
+                (
+                    PushField::SlotGuestBase(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Buffer,
+                        index,
+                    }),
+                    _,
+                ) => FieldValue::BufferAddress(index),
+                (PushField::DispatchRegion, _) => FieldValue::DispatchRegion,
+                _ => return Err(gap()),
+            };
             fields.push(Field { place, value });
         }
     }
-    // A block needs its address in the window, a field the translator does not place yet.
-    if push_len > PUSH_BYTES || block_len > 0 {
+    // The block, where there is one, is in one ring chunk, and its address in the window.
+    let block_address = match (block_len, block_address) {
+        (0, None) => 0,
+        (1.., Some(at)) if u64::from(block_len) <= CHUNK => at,
+        _ => return Err(gap()),
+    };
+    if push_len > PUSH_BYTES {
         return Err(gap());
     }
     let threadgroups: Vec<u32> = translated
@@ -267,7 +276,6 @@ fn interface(
             SpecKey::LocalSize(Axis::Y) => Constant::Size(1),
             SpecKey::LocalSize(Axis::Z) => Constant::Size(2),
             SpecKey::FlatLocalSize => Constant::Threads,
-            SpecKey::MultiRegion => Constant::Region,
             SpecKey::TgLength(index) => Constant::ThreadgroupLength(
                 threadgroups
                     .iter()
@@ -288,7 +296,7 @@ fn interface(
         writes_unbound: translated.writes_unbound_resources,
         push_len,
         block_len,
-        block_address: 0,
+        block_address,
         fields,
         constants,
         threadgroups,
@@ -392,7 +400,6 @@ impl PipelineInner {
             .map(|&(_, set)| match set {
                 Constant::Size(axis) => variant.size[axis],
                 Constant::Threads => variant.size.iter().product(),
-                Constant::Region => u32::from(!variant.indirect),
                 Constant::ThreadgroupLength(at) => variant.threadgroup_lengths[at],
             })
             .flat_map(u32::to_ne_bytes)

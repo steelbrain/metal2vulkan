@@ -39,6 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 3 | 3 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -56,6 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 2 | 5 | 0 | 0 | 4 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 3 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -632,6 +634,14 @@ Columns:
 | `ThreadgroupShape` | A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds 1,024 by 1,024 by 64) | at the device's limit | `device`: the device's `maxComputeWorkGroupSize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)` | `-` |
 
+## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
+
+| Variant | What it blocks | Where | Basis | Sites | Reach |
+|---|---|---|---|---|---|
+| `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 1: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)` | `-` |
+| `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder binds buffers alone | 1: `crates/metal2vulkan-rt/src/pipeline.rs (gap)` | `-` |
+| `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis | every device (a public call's own check of its arguments) | `ours`: partial threadgroups are not built | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threads)` | `-` |
+
 ## Appendix: every site
 
 Each refusal's sites, with the function that builds it.
@@ -1134,4 +1144,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::GroupCount`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::ThreadgroupShape`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`
+- `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`
+- `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
+- `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threads)`
 

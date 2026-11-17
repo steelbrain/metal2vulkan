@@ -215,10 +215,42 @@ that touch blocks first.
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
   64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block
   is made when no chunk is free and kept for the device's life.
-- A pipeline state makes one `VkPipeline` per threadgroup size and threadgroup memory lengths, on
-  the encoding thread that first dispatches with it, which waits for it: nothing recorded depends
-  on when a compile finishes. The command buffer keeps each state it dispatches with until it
-  retires.
+- The command buffer keeps each pipeline state it dispatches with until it retires.
+
+## Compute pipeline states
+
+- `Device::new_compute_pipeline_state(&ComputePipelineDescriptor)` is
+  `newComputePipelineStateWithDescriptor:options:reflection:error:` without reflection. The
+  translator compiles the kernel on the calling thread, which waits for it, within its 20-second
+  budget, for what device creation enabled and under its identity domains: each buffer argument
+  is the guest address of the bound buffer plus its offset, pushed. A refusal of the translator is
+  `Error::Translation`.
+- The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
+  threadgroup (0), the threadgroup size packed as `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's
+  threads per grid; an indirect dispatch pushes a zero grid, and its kernel takes the grid from its
+  threadgroup count.
+- A state makes one `VkPipeline` per threadgroup size and threadgroup memory lengths, on the
+  encoding thread that first dispatches with them, which waits for it. Nothing the runtime records
+  depends on when a compile finishes: there is one recorded form, made after the wait. Each such
+  wait is counted in `Metrics::first_use_waits`, with its time in `first_use_wait_nanos` and the
+  longest in `first_use_wait_max_nanos`.
+- `ComputePipelineState::precision_notes` carries the translator's notes of where the kernel's
+  answers may differ from Metal's on this device, fixed when the state is made.
+
+### Known gaps of pipeline states
+
+- Each call translates anew: no cache returns a state made before, and no translation or
+  `VkPipeline` compile runs ahead of the call or the dispatch that needs it.
+- A kernel that reads anything the encoder does not supply yet, a texture, a sampler, a function
+  table, a `[[stage_in]]` fetch, constant data, or a stage that pins a subgroup size, is refused
+  (`Gap::KernelInput`). So is a state for indirect command buffers
+  (`Gap::IndirectCommandBuffers`).
+- `dispatch_threads` with a grid that is not a whole number of threadgroups on some axis is
+  refused (`Gap::PartialThreadgroups`): Metal's partial threadgroups are not built.
+- A kernel runs at the threadgroup size each dispatch gives. Every size makes its own
+  `VkPipeline`, even for a kernel that does not observe its size.
+- A dispatch of a size other than the descriptor's `requiredThreadsPerThreadgroup`, which Metal's
+  validation stops, runs at the size it gives.
 
 ## One path for every device
 

@@ -9,6 +9,7 @@ mod memory;
 mod null_descriptor;
 mod one_path;
 mod readback;
+mod translate;
 
 /// Every product source file under `src/`, the tests excepted, with its path under `src/`, in
 /// path order.

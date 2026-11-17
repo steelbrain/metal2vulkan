@@ -31,6 +31,10 @@ libc.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_Performance"] }
 
+[dev-dependencies]
+# The tests' fixture assembler and fixture directories. Path-only, so publishing drops it.
+metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
+
 # The device tests compile only under the validation crate's device cfgs (docs/VALIDATION.md).
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)"] }

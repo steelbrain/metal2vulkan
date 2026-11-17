@@ -1392,10 +1392,13 @@ enum	metal2vulkan-rt::CommandBufferError	#[derive(Clone, Copy, Debug, PartialEq,
 enum	metal2vulkan-rt::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum CommandBufferStatus
 enum	metal2vulkan-rt::DispatchType	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum DispatchType
 enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
+enum	metal2vulkan-rt::Gap	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Gap
 enum	metal2vulkan-rt::Limit	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Limit
 enum	metal2vulkan-rt::MemoryClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum MemoryClass
+enum	metal2vulkan-rt::PrecisionNote	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum PrecisionNote
 enum	metal2vulkan-rt::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Refusal
 enum	metal2vulkan-rt::Resource	#[derive(Clone, Copy)] #[non_exhaustive] pub enum Resource<'a>
+enum	metal2vulkan-rt::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
 enum	metal2vulkan-rt::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
 enum	metal2vulkan-runtime::AddressPlacement	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AddressPlacement
 enum	metal2vulkan-runtime::AppleOnly	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AppleOnly
@@ -2205,8 +2208,24 @@ field	metal2vulkan-rt::BlockInfo.contents	pub contents: Option<NonNull<u8>>
 field	metal2vulkan-rt::BlockInfo.gpu_address	pub gpu_address: u64
 field	metal2vulkan-rt::BlockInfo.id	pub id: BlockId
 field	metal2vulkan-rt::BlockInfo.len	pub len: u64
+field	metal2vulkan-rt::ComputePipelineDescriptor.buffers	pub buffers: BTreeMap<u32, metal::Mutability>
+field	metal2vulkan-rt::ComputePipelineDescriptor.kernel	pub kernel: StageSource
+field	metal2vulkan-rt::ComputePipelineDescriptor.max_call_stack_depth	pub max_call_stack_depth: u32
+field	metal2vulkan-rt::ComputePipelineDescriptor.max_total_threads_per_threadgroup	pub max_total_threads_per_threadgroup: Option<u32>
+field	metal2vulkan-rt::ComputePipelineDescriptor.needs_custom_border_color_samplers	pub needs_custom_border_color_samplers: bool
+field	metal2vulkan-rt::ComputePipelineDescriptor.open_cl_mode_enabled	pub open_cl_mode_enabled: bool
+field	metal2vulkan-rt::ComputePipelineDescriptor.required_threads_per_threadgroup	pub required_threads_per_threadgroup: Option<[u32; 3]>
+field	metal2vulkan-rt::ComputePipelineDescriptor.stage_input	pub stage_input: Option<StageInputDescriptor>
+field	metal2vulkan-rt::ComputePipelineDescriptor.support_adding_binary_functions	pub support_adding_binary_functions: bool
+field	metal2vulkan-rt::ComputePipelineDescriptor.support_indirect_command_buffers	pub support_indirect_command_buffers: bool
+field	metal2vulkan-rt::ComputePipelineDescriptor.threadgroup_size_is_multiple_of_execution_width	pub threadgroup_size_is_multiple_of_execution_width: bool
 field	metal2vulkan-rt::DeviceOptions.block_mappings	pub block_mappings: Option<Arc<dyn BlockMappings>>
 field	metal2vulkan-rt::DeviceOptions.extensions	pub extensions: Vec<DeviceExtension>
+field	metal2vulkan-rt::FunctionDescriptor.constants	pub constants: FunctionConstantValues
+field	metal2vulkan-rt::FunctionDescriptor.function	pub function: Function
+field	metal2vulkan-rt::FunctionDescriptor.libraries	pub libraries: DynamicLibraries
+field	metal2vulkan-rt::FunctionDescriptor.linked	pub linked: LinkedFunctions
+field	metal2vulkan-rt::FunctionDescriptor.specialized	pub specialized: bool
 field	metal2vulkan-rt::Gauges.blocks	pub blocks: u64
 field	metal2vulkan-rt::Gauges.buffers	pub buffers: u64
 field	metal2vulkan-rt::Gauges.command_buffers	pub command_buffers: u64
@@ -2218,6 +2237,9 @@ field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
 field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
 field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
+field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_nanos: u64
+field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u64
+field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
@@ -8326,6 +8348,13 @@ macro-template	metal2vulkan-air::metal_flags!	( $(#[$meta:meta])* $name:ident = 
 macro-template	metal2vulkan-air::vk_bit!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal in $flags:ident { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [$name] = &[$($name::$konst),*]; const NAMES: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn from_raw(raw: $raw) -> Option<$name> { let mut i = 0; while i < Self::KNOWN.len() { if Self::KNOWN[i].0 == raw { return Some(Self::KNOWN[i]); } i += 1; } None } pub const fn from_flags(flags: $flags) -> Option<$name> { Self::from_raw(flags.as_raw()) } pub const fn as_raw(self) -> $raw { self.0 } pub const fn flags(self) -> $flags { $flags::from_raw(self.0) } pub fn name(self) -> &'static str { Self::NAMES .iter() .find(|(v, _)| *v == self) .map(|(_, n)| *n) .expect("a single-bit value is always a named bit") } pub fn from_name(name: &str) -> Option<$name> { Self::NAMES .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::convert::TryFrom<$raw> for $name { type Error = $raw; fn try_from(raw: $raw) -> Result<$name, $raw> { $name::from_raw(raw).ok_or(raw) } } impl From<$name> for $raw { fn from(bit: $name) -> $raw { bit.0 } } impl From<$name> for $flags { fn from(bit: $name) -> $flags { bit.flags() } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { f.write_str(self.name()) } } };
 macro-template	metal2vulkan-air::vk_enum!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [$name] = &[$($name::$konst),*]; const NAMES: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub fn name(self) -> Option<&'static str> { Self::NAMES.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn is_known(self) -> bool { self.name().is_some() } pub fn from_name(name: &str) -> Option<$name> { Self::NAMES .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { match self.name() { Some(name) => f.write_str(name), None => write!(f, "{}({})", $vk, self.0), } } } };
 macro-template	metal2vulkan-air::vk_flags!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn empty() -> $name { $name(0) } pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub const fn is_empty(self) -> bool { self.0 == 0 } pub const fn contains(self, other: $name) -> bool { self.0 & other.0 == other.0 } pub const fn intersects(self, other: $name) -> bool { self.0 & other.0 != 0 } pub const fn union(self, other: $name) -> $name { $name(self.0 | other.0) } pub const fn intersection(self, other: $name) -> $name { $name(self.0 & other.0) } pub const fn difference(self, other: $name) -> $name { $name(self.0 & !other.0) } pub const fn known_bits() -> $name { let mut bits: $raw = 0; let mut i = 0; while i < Self::KNOWN.len() { let v = Self::KNOWN[i].0 .0; if v.count_ones() == 1 { bits |= v; } i += 1; } $name(bits) } pub fn name(self) -> Option<&'static str> { Self::KNOWN.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn from_name(name: &str) -> Option<$name> { Self::KNOWN .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::ops::BitOr for $name { type Output = $name; fn bitor(self, rhs: $name) -> $name { self.union(rhs) } } impl ::std::ops::BitOrAssign for $name { fn bitor_assign(&mut self, rhs: $name) { *self = self.union(rhs); } } impl ::std::ops::BitAnd for $name { type Output = $name; fn bitand(self, rhs: $name) -> $name { self.intersection(rhs) } } impl ::std::ops::BitAndAssign for $name { fn bitand_assign(&mut self, rhs: $name) { *self = self.intersection(rhs); } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { if let Some(name) = self.name() { return f.write_str(name); } let mut rest = self.0; let mut first = true; for (v, n) in Self::KNOWN { if v.0.count_ones() == 1 && rest & v.0 != 0 { if !first { f.write_str(" | ")?; } f.write_str(n)?; rest &= !v.0; first = false; } } if rest != 0 || first { if !first { f.write_str(" | ")?; } write!(f, "{:#x}", rest)?; } Ok(()) } } };
+macro-template	metal2vulkan-rt::exposures!	($($exposure:expr => [$($feature:ident),* $(,)?];)*) => { impl VkFeature { pub const ALL: &'static [VkFeature] = &[$($(VkFeature::$feature),*),*]; pub fn exposure(self) -> Exposure { match self { $($(VkFeature::$feature)|* => $exposure,)* } } } };
+macro-template	metal2vulkan-rt::id_type!	($(#[$doc:meta])* $name:ident) => { $(#[$doc])* #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct $name(pub u32); impl $name { pub const fn new(index: u32) -> $name { $name(index) } pub const fn index(self) -> usize { self.0 as usize } } };
+macro-template	metal2vulkan-rt::metal_enum!	( $(#[$meta:meta])* $name:ident = $metal:literal { $($(#[$vmeta:meta])* $variant:ident = $value:literal, $mname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(u32)] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] pub enum $name { $( #[doc = concat!("`", $mname, "`.")] $(#[$vmeta])* $variant = $value, )* } impl $name { pub const METAL_NAME: &'static str = $metal; pub const ALL: &'static [$name] = &[$($name::$variant),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn as_raw(self) -> u32 { self as u32 } pub const fn name(self) -> &'static str { match self { $($name::$variant => $mname,)* } } pub fn from_name(name: &str) -> Option<$name> { Self::ALL .iter() .copied() .find(|v| v.name() == name) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl From<$name> for u32 { fn from(value: $name) -> u32 { value.as_raw() } } impl TryFrom<u32> for $name { type Error = $crate::error::Error; fn try_from(value: u32) -> Result<$name, $crate::error::Error> { match value { $($value => Ok($name::$variant),)* _ => Err($crate::metal::unknown($metal, value)), } } } };
+macro-template	metal2vulkan-rt::metal_flags!	( $(#[$meta:meta])* $name:ident = $metal:literal { $($konst:ident = $value:literal, $mname:literal;)* } aliases { $($alias:literal => $target:ident;)* } dropped { $($dropped:literal;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))] pub struct $name(u32); impl $name { $( #[doc = concat!("`", $mname, "`.")] pub const $konst: $name = $name($value); )* pub const METAL_NAME: &'static str = $metal; pub const KNOWN: &'static [($name, &'static str)] = &[$(($name::$konst, $mname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const ALL_KNOWN: $name = $name(0 $(| $value)*); pub const DROPPED: u32 = 0 $(| $dropped)*; pub const fn empty() -> $name { $name(0) } pub const fn as_raw(self) -> u32 { self.0 } pub const fn is_empty(self) -> bool { self.0 == 0 } pub const fn without_dropped(self) -> $name { $name(self.0 & !Self::DROPPED) } pub const fn contains(self, other: $name) -> bool { self.0 & other.0 == other.0 } pub const fn intersects(self, other: $name) -> bool { self.0 & other.0 != 0 } pub const fn union(self, other: $name) -> $name { $name(self.0 | other.0) } pub const fn intersection(self, other: $name) -> $name { $name(self.0 & other.0) } pub const fn difference(self, other: $name) -> $name { $name(self.0 & !other.0) } pub fn from_name(name: &str) -> Option<$name> { Self::KNOWN .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl From<$name> for u32 { fn from(value: $name) -> u32 { value.as_raw() } } impl TryFrom<u32> for $name { type Error = $crate::error::Error; fn try_from(value: u32) -> Result<$name, $crate::error::Error> { if value & !($name::ALL_KNOWN.0 | $name::DROPPED) == 0 { Ok($name(value)) } else { Err($crate::metal::unknown($metal, value)) } } } impl ::std::ops::BitOr for $name { type Output = $name; fn bitor(self, rhs: $name) -> $name { self.union(rhs) } } impl ::std::ops::BitOrAssign for $name { fn bitor_assign(&mut self, rhs: $name) { *self = self.union(rhs); } } impl ::std::ops::BitAnd for $name { type Output = $name; fn bitand(self, rhs: $name) -> $name { self.intersection(rhs) } } impl ::std::ops::BitAndAssign for $name { fn bitand_assign(&mut self, rhs: $name) { *self = self.intersection(rhs); } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { if let Some((_, name)) = Self::KNOWN.iter().find(|(v, _)| v == self) { return f.write_str(name); } let mut rest = self.0; let mut first = true; for (v, n) in Self::KNOWN { if v.0.count_ones() == 1 && rest & v.0 != 0 { if !first { f.write_str(" | ")?; } f.write_str(n)?; rest &= !v.0; first = false; } } if rest != 0 || first { if !first { f.write_str(" | ")?; } write!(f, "{:#x}", rest)?; } Ok(()) } } };
+macro-template	metal2vulkan-rt::vk_bit!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal in $flags:ident { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [$name] = &[$($name::$konst),*]; const NAMES: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn from_raw(raw: $raw) -> Option<$name> { let mut i = 0; while i < Self::KNOWN.len() { if Self::KNOWN[i].0 == raw { return Some(Self::KNOWN[i]); } i += 1; } None } pub const fn from_flags(flags: $flags) -> Option<$name> { Self::from_raw(flags.as_raw()) } pub const fn as_raw(self) -> $raw { self.0 } pub const fn flags(self) -> $flags { $flags::from_raw(self.0) } pub fn name(self) -> &'static str { Self::NAMES .iter() .find(|(v, _)| *v == self) .map(|(_, n)| *n) .expect("a single-bit value is always a named bit") } pub fn from_name(name: &str) -> Option<$name> { Self::NAMES .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::convert::TryFrom<$raw> for $name { type Error = $raw; fn try_from(raw: $raw) -> Result<$name, $raw> { $name::from_raw(raw).ok_or(raw) } } impl From<$name> for $raw { fn from(bit: $name) -> $raw { bit.0 } } impl From<$name> for $flags { fn from(bit: $name) -> $flags { bit.flags() } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { f.write_str(self.name()) } } };
+macro-template	metal2vulkan-rt::vk_enum!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [$name] = &[$($name::$konst),*]; const NAMES: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub fn name(self) -> Option<&'static str> { Self::NAMES.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn is_known(self) -> bool { self.name().is_some() } pub fn from_name(name: &str) -> Option<$name> { Self::NAMES .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { match self.name() { Some(name) => f.write_str(name), None => write!(f, "{}({})", $vk, self.0), } } } };
+macro-template	metal2vulkan-rt::vk_flags!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn empty() -> $name { $name(0) } pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub const fn is_empty(self) -> bool { self.0 == 0 } pub const fn contains(self, other: $name) -> bool { self.0 & other.0 == other.0 } pub const fn intersects(self, other: $name) -> bool { self.0 & other.0 != 0 } pub const fn union(self, other: $name) -> $name { $name(self.0 | other.0) } pub const fn intersection(self, other: $name) -> $name { $name(self.0 & other.0) } pub const fn difference(self, other: $name) -> $name { $name(self.0 & !other.0) } pub const fn known_bits() -> $name { let mut bits: $raw = 0; let mut i = 0; while i < Self::KNOWN.len() { let v = Self::KNOWN[i].0 .0; if v.count_ones() == 1 { bits |= v; } i += 1; } $name(bits) } pub fn name(self) -> Option<&'static str> { Self::KNOWN.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn from_name(name: &str) -> Option<$name> { Self::KNOWN .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::ops::BitOr for $name { type Output = $name; fn bitor(self, rhs: $name) -> $name { self.union(rhs) } } impl ::std::ops::BitOrAssign for $name { fn bitor_assign(&mut self, rhs: $name) { *self = self.union(rhs); } } impl ::std::ops::BitAnd for $name { type Output = $name; fn bitand(self, rhs: $name) -> $name { self.intersection(rhs) } } impl ::std::ops::BitAndAssign for $name { fn bitand_assign(&mut self, rhs: $name) { *self = self.intersection(rhs); } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { if let Some(name) = self.name() { return f.write_str(name); } let mut rest = self.0; let mut first = true; for (v, n) in Self::KNOWN { if v.0.count_ones() == 1 && rest & v.0 != 0 { if !first { f.write_str(" | ")?; } f.write_str(n)?; rest &= !v.0; first = false; } } if rest != 0 || first { if !first { f.write_str(" | ")?; } write!(f, "{:#x}", rest)?; } Ok(()) } } };
 macro-template	metal2vulkan-runtime::commands!	( v1_0 { $($v0:ident $f0:ident $n0:literal ($($a0:ident: $t0:ty),*) $(-> $r0:ty)?;)* } v1_3 { $($v3:ident $f3:ident $n3:literal ($($a3:ident: $t3:ty),*) $(-> $r3:ty)?;)* } extension { $($ve:ident $fe:ident $ne:literal ($($ae:ident: $te:ty),*) $(-> $re:ty)?;)* } ) => { #[derive(Clone, Copy, PartialEq, Eq, Debug)] pub(crate) enum Command { $($v0,)* $($v3,)* $($ve,)* } impl Command { pub(crate) const ALL: &'static [Command] = &[ $(Command::$v0,)* $(Command::$v3,)* $(Command::$ve,)* ]; pub(crate) const COUNT: usize = Command::ALL.len(); pub(crate) fn name(self) -> &'static CStr { match self { $(Command::$v0 => $n0,)* $(Command::$v3 => $n3,)* $(Command::$ve => $ne,)* } } } #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub struct CommandsRecorded { $( #[doc = concat!("The calls of `", stringify!($v0), "`.")] pub $f0: u64, )* $( #[doc = concat!("The calls of `", stringify!($v3), "`.")] pub $f3: u64, )* $( #[doc = concat!("The calls of `", stringify!($ve), "`.")] pub $fe: u64, )* } impl CommandsRecorded { fn read(shards: &[Shard; SHARDS + 1]) -> CommandsRecorded { let sum = |command: Command| { let counts = shards.iter().map(|shard| &shard.0[command as usize]); counts.map(|count| count.load(Ordering::Relaxed)).sum() }; CommandsRecorded { $($f0: sum(Command::$v0),)* $($f3: sum(Command::$v3),)* $($fe: sum(Command::$ve),)* } } } struct Real { $($f0: [AtomicPtr<c_void>; SLOTS],)* $($f3: [AtomicPtr<c_void>; SLOTS],)* $($fe: [AtomicPtr<c_void>; SLOTS],)* } static REAL: Real = Real { $($f0: [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS],)* $($f3: [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS],)* $($fe: [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS],)* }; commands!(@thunks $($v0 $f0 $n0 ($($a0: $t0),*) $(-> $r0)?;)*); commands!(@thunks $($v3 $f3 $n3 ($($a3: $t3),*) $(-> $r3)?;)*); commands!(@thunks $($ve $fe $ne ($($ae: $te),*) $(-> $re)?;)*); pub(super) fn thunk<const S: usize>(command: Command) -> *const c_void { match command { $(Command::$v0 => $f0::<S> as *const c_void,)* $(Command::$v3 => $f3::<S> as *const c_void,)* $(Command::$ve => $fe::<S> as *const c_void,)* } } pub(super) fn store(index: usize, command: Command, real: *const c_void) { let real = real.cast_mut(); match command { $(Command::$v0 => REAL.$f0[index].store(real, Ordering::Release),)* $(Command::$v3 => REAL.$f3[index].store(real, Ordering::Release),)* $(Command::$ve => REAL.$fe[index].store(real, Ordering::Release),)* } } pub(super) fn real(index: usize, command: Command) -> *const c_void { let real = match command { $(Command::$v0 => REAL.$f0[index].load(Ordering::Acquire),)* $(Command::$v3 => REAL.$f3[index].load(Ordering::Acquire),)* $(Command::$ve => REAL.$fe[index].load(Ordering::Acquire),)* }; real.cast_const() } pub(super) fn clear(index: usize) { $(REAL.$f0[index].store(std::ptr::null_mut(), Ordering::Release);)* $(REAL.$f3[index].store(std::ptr::null_mut(), Ordering::Release);)* $(REAL.$fe[index].store(std::ptr::null_mut(), Ordering::Release);)* } pub(super) fn route_tables<const S: usize>( v1_0: &mut ash::DeviceFnV1_0, v1_3: &mut ash::DeviceFnV1_3, ) { $( store(S, Command::$v0, v1_0.$f0 as *const c_void); v1_0.$f0 = $f0::<S>; )* $( store(S, Command::$v3, v1_3.$f3 as *const c_void); v1_3.$f3 = $f3::<S>; )* } }; (@thunks $($v:ident $f:ident $n:literal ($($a:ident: $t:ty),*) $(-> $r:ty)?;)*) => { $( unsafe extern "system" fn $f<const S: usize>( command_buffer: vk::CommandBuffer, $($a: $t,)* ) $(-> $r)? { let at = held(); crate::shards::add(at, &COUNTS[S][at].0[Command::$v as usize], 1); let real = REAL.$f[S].load(Ordering::Acquire); if real.is_null() { missing($n); } unsafe { let real = std::mem::transmute::< *mut c_void, unsafe extern "system" fn(vk::CommandBuffer, $($t,)*) $(-> $r)?, >(real); real(command_buffer, $($a,)*) } } )* };
 macro-template	metal2vulkan-runtime::degradations!	( runtime { $( $(#[doc = $doc:literal])* $kind:ident = $code:literal, $category:ident, $cost:literal; )* } notes { $( $(#[doc = $note_doc:literal])* $note:ident = $note_code:literal; )* } ) => { #[non_exhaustive] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum Degradation { $($(#[doc = $doc])* $kind,)* $( #[doc = concat!( "A pipeline stage records [`PrecisionNote::", stringify!($note), "`]." )] $(#[doc = $note_doc])* $note, )* } impl Degradation { pub const ALL: &'static [Degradation] = &[$(Degradation::$kind,)* $(Degradation::$note,)*]; pub const fn code(self) -> &'static str { match self { $(Degradation::$kind => concat!("metal2vulkan-degrade-", $code),)* $(Degradation::$note => concat!("metal2vulkan-degrade-", $note_code),)* } } pub const fn category(self) -> DegradationCategory { match self { $(Degradation::$kind => DegradationCategory::$category,)* $(Degradation::$note => DegradationCategory::Precision,)* } } pub const fn cost(self) -> &'static str { match self { $(Degradation::$kind => $cost,)* $(Degradation::$note => NOTE_COST,)* } } pub const fn precision_note(self) -> Option<PrecisionNote> { match self { $(Degradation::$kind => None,)* $(Degradation::$note => Some(PrecisionNote::$note),)* } } pub const fn from_precision_note(note: PrecisionNote) -> Degradation { match note { $(PrecisionNote::$note => Degradation::$note,)* PrecisionNote::CappedLodBias => Degradation::CappedLodBias, } } } };
 macro-template	metal2vulkan-runtime::exposures!	($($exposure:expr => [$($feature:ident),* $(,)?];)*) => { impl VkFeature { pub const ALL: &'static [VkFeature] = &[$($(VkFeature::$feature),*),*]; pub fn exposure(self) -> Exposure { match self { $($(VkFeature::$feature)|* => $exposure,)* } } } };
@@ -8747,7 +8776,12 @@ method	metal2vulkan-rt::ComputeCommandEncoder::set_bytes	pub fn set_bytes(&mut s
 method	metal2vulkan-rt::ComputeCommandEncoder::set_compute_pipeline_state	pub fn set_compute_pipeline_state(&mut self, state: &ComputePipelineState) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_threadgroup_memory_length	pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::use_resource	pub fn use_resource(&mut self, resource: Resource<'_>, usage: ResourceUsage) -> Result<(), Error>
+method	metal2vulkan-rt::ComputePipelineDescriptor::new	pub fn new(kernel: StageSource) -> ComputePipelineDescriptor
+method	metal2vulkan-rt::ComputePipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error>
+method	metal2vulkan-rt::ComputePipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
+method	metal2vulkan-rt::ComputePipelineDescriptor::uses_direct_arguments	pub fn uses_direct_arguments(&self, budget: &crate::Budget) -> Result<bool, Error>
 method	metal2vulkan-rt::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
+method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> &[PrecisionNote]
 method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
@@ -8768,12 +8802,33 @@ method	metal2vulkan-rt::DeviceExtension::name	pub fn name(&self) -> &CStr
 method	metal2vulkan-rt::DeviceExtension::new	pub fn new(name: &CStr) -> DeviceExtension
 method	metal2vulkan-rt::DeviceExtension::with_features	pub fn with_features<T>(name: &CStr, wanted: T, needs: fn(&T) -> bool) -> DeviceExtension where T: vk::ExtendsPhysicalDeviceFeatures2 + vk::ExtendsDeviceCreateInfo + Copy + Default + Send + Sync + 'static,
 method	metal2vulkan-rt::Event::device	pub fn device(&self) -> &Device
+method	metal2vulkan-rt::FunctionDescriptor::needs_specialization	pub fn needs_specialization(&self, budget: &Budget, entries: &StageEntries) -> Result<bool, Error>
+method	metal2vulkan-rt::FunctionDescriptor::new	pub fn new(function: Function) -> FunctionDescriptor
+method	metal2vulkan-rt::FunctionDescriptor::with_libraries	pub fn with_libraries(mut self, libraries: DynamicLibraries) -> FunctionDescriptor
+method	metal2vulkan-rt::FunctionDescriptor::with_linked	pub fn with_linked(mut self, linked: LinkedFunctions) -> FunctionDescriptor
+method	metal2vulkan-rt::FunctionDescriptor::with_loaded_dependencies	pub fn with_loaded_dependencies(mut self, mut load: impl FnMut(&str) -> Option<DynamicLibrary>) -> FunctionDescriptor
+method	metal2vulkan-rt::FunctionDescriptor::with_specialized	pub fn with_specialized(mut self, specialized: bool) -> FunctionDescriptor
 method	metal2vulkan-rt::Instance::extensions	pub fn extensions(&self) -> &[CString]
 method	metal2vulkan-rt::Instance::new	pub fn new(extensions: &[&CStr]) -> Result<Instance, Error>
 method	metal2vulkan-rt::Instance::physical_devices	pub fn physical_devices(&self) -> Result<Vec<PhysicalDevice>, Error>
 method	metal2vulkan-rt::Instance::raw	pub fn raw(&self) -> (&ash::Entry, &ash::Instance)
+method	metal2vulkan-rt::Library::bytes	pub fn bytes(&self) -> &[u8]
+method	metal2vulkan-rt::Library::content_hash	pub fn content_hash(&self) -> &Hash256
+method	metal2vulkan-rt::Library::dependencies	pub fn dependencies(&self) -> impl Iterator<Item = &str>
+method	metal2vulkan-rt::Library::from_air	pub fn from_air(bytes: &[u8]) -> Result<Library, Error>
+method	metal2vulkan-rt::Library::from_metallib	pub fn from_metallib(bytes: &[u8]) -> Result<Library, Error>
+method	metal2vulkan-rt::Library::function	pub fn function(&self, name: &str) -> Result<Function, Error>
+method	metal2vulkan-rt::Library::function_at	pub fn function_at(&self, index: u32) -> Result<Function, Error>
+method	metal2vulkan-rt::Library::functions	pub fn functions(&self) -> impl Iterator<Item = FunctionInfo<'_>>
+method	metal2vulkan-rt::Library::install_name	pub fn install_name(&self) -> Option<&str>
+method	metal2vulkan-rt::Library::is_empty	pub fn is_empty(&self) -> bool
+method	metal2vulkan-rt::Library::len	pub fn len(&self) -> u32
+method	metal2vulkan-rt::Library::library_type	pub fn library_type(&self) -> LibraryType
+method	metal2vulkan-rt::Library::parse	pub fn parse(bytes: &[u8]) -> Result<Library, Error>
 method	metal2vulkan-rt::PhysicalDevice::check	pub fn check(&self) -> Result<floor::Capabilities, floor::BelowFloor>
 method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
+method	metal2vulkan-rt::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan-rt::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-rt::SharedEvent::as_event	pub fn as_event(&self) -> &Event
 method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&self, value: u64, listener: impl FnOnce(u64) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
@@ -10798,14 +10853,17 @@ struct	metal2vulkan-rt::Buffer	#[derive(Clone)] pub struct Buffer
 struct	metal2vulkan-rt::CommandBuffer	#[derive(Clone)] pub struct CommandBuffer
 struct	metal2vulkan-rt::CommandQueue	#[derive(Clone)] pub struct CommandQueue
 struct	metal2vulkan-rt::ComputeCommandEncoder	pub struct ComputeCommandEncoder
+struct	metal2vulkan-rt::ComputePipelineDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ComputePipelineDescriptor
 struct	metal2vulkan-rt::ComputePipelineState	#[derive(Clone)] pub struct ComputePipelineState
 struct	metal2vulkan-rt::Counters	#[derive(Clone)] pub struct Counters
 struct	metal2vulkan-rt::Device	#[derive(Clone)] pub struct Device
 struct	metal2vulkan-rt::DeviceExtension	#[derive(Clone)] pub struct DeviceExtension
 struct	metal2vulkan-rt::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
 struct	metal2vulkan-rt::Event	#[derive(Clone)] pub struct Event
+struct	metal2vulkan-rt::FunctionDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FunctionDescriptor
 struct	metal2vulkan-rt::Gauges	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Gauges
 struct	metal2vulkan-rt::Instance	#[derive(Clone)] pub struct Instance
+struct	metal2vulkan-rt::Library	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct Library(Arc<LibraryInner>)
 struct	metal2vulkan-rt::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Metrics
 struct	metal2vulkan-rt::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
 struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
@@ -11357,6 +11415,7 @@ trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Sync	unsafe impl Sync for Blo
 trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for ComputeCommandEncoder
 trait-impl	metal2vulkan-rt::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-rt::Error impl std::error::Error	impl std::error::Error for Error
+trait-impl	metal2vulkan-rt::Gap impl fmt::Display	impl fmt::Display for Gap
 trait-impl	metal2vulkan-rt::Limit impl fmt::Display	impl fmt::Display for Limit
 trait-impl	metal2vulkan-rt::Refusal impl fmt::Display	impl fmt::Display for Refusal
 trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsage
@@ -12682,7 +12741,12 @@ variant	metal2vulkan-rt::Error::NoSuchBlock	NoSuchBlock(BlockId)
 variant	metal2vulkan-rt::Error::Quiesced	Quiesced
 variant	metal2vulkan-rt::Error::Refused	Refused(Refusal)
 variant	metal2vulkan-rt::Error::Thread	Thread(io::Error)
+variant	metal2vulkan-rt::Error::Translation	Translation(metal2vulkan::error::Error)
+variant	metal2vulkan-rt::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
+variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
+variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
+variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
@@ -12690,6 +12754,83 @@ variant	metal2vulkan-rt::Limit::GroupCount	GroupCount { count: [u32; 3], max: [u
 variant	metal2vulkan-rt::Limit::ThreadgroupShape	ThreadgroupShape { size: [u32; 3], max: [u32; 3] }
 variant	metal2vulkan-rt::MemoryClass::Private	Private
 variant	metal2vulkan-rt::MemoryClass::Shared	Shared
+variant	metal2vulkan-rt::PrecisionNote::AnisotropicFilter	AnisotropicFilter
+variant	metal2vulkan-rt::PrecisionNote::ArgumentPixelSamplerScaling	ArgumentPixelSamplerScaling
+variant	metal2vulkan-rt::PrecisionNote::BicubicFilterArithmetic	BicubicFilterArithmetic
+variant	metal2vulkan-rt::PrecisionNote::BlendedWriteRounding	BlendedWriteRounding
+variant	metal2vulkan-rt::PrecisionNote::ClippedCoverageSplit	ClippedCoverageSplit
+variant	metal2vulkan-rt::PrecisionNote::ColorAttachmentGroups	ColorAttachmentGroups
+variant	metal2vulkan-rt::PrecisionNote::ComputedSampleDepth	ComputedSampleDepth
+variant	metal2vulkan-rt::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
+variant	metal2vulkan-rt::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint
+variant	metal2vulkan-rt::PrecisionNote::DeviceAlphaCoverage	DeviceAlphaCoverage
+variant	metal2vulkan-rt::PrecisionNote::DeviceAnisotropicFilter	DeviceAnisotropicFilter
+variant	metal2vulkan-rt::PrecisionNote::DeviceArithmetic	DeviceArithmetic
+variant	metal2vulkan-rt::PrecisionNote::DeviceColorConversion	DeviceColorConversion
+variant	metal2vulkan-rt::PrecisionNote::DeviceDenormals	DeviceDenormals
+variant	metal2vulkan-rt::PrecisionNote::DeviceInterpolation	DeviceInterpolation
+variant	metal2vulkan-rt::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
+variant	metal2vulkan-rt::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
+variant	metal2vulkan-rt::PrecisionNote::DevicePackConversion	DevicePackConversion
+variant	metal2vulkan-rt::PrecisionNote::DevicePointSize	DevicePointSize
+variant	metal2vulkan-rt::PrecisionNote::DeviceRayIntersection	DeviceRayIntersection
+variant	metal2vulkan-rt::PrecisionNote::DeviceSampleLevel	DeviceSampleLevel
+variant	metal2vulkan-rt::PrecisionNote::DeviceSampling	DeviceSampling
+variant	metal2vulkan-rt::PrecisionNote::DeviceSignedZeroInfNan	DeviceSignedZeroInfNan
+variant	metal2vulkan-rt::PrecisionNote::DeviceTexelConversion	DeviceTexelConversion
+variant	metal2vulkan-rt::PrecisionNote::DeviceTranscendentals	DeviceTranscendentals
+variant	metal2vulkan-rt::PrecisionNote::DeviceVertexConversion	DeviceVertexConversion
+variant	metal2vulkan-rt::PrecisionNote::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores
+variant	metal2vulkan-rt::PrecisionNote::ExtendedRangeBlendSource	ExtendedRangeBlendSource
+variant	metal2vulkan-rt::PrecisionNote::ExtendedRangeFloatBlendSource	ExtendedRangeFloatBlendSource
+variant	metal2vulkan-rt::PrecisionNote::ExtrapolatedInterpolation	ExtrapolatedInterpolation
+variant	metal2vulkan-rt::PrecisionNote::F16FmaDoubleRounding	F16FmaDoubleRounding
+variant	metal2vulkan-rt::PrecisionNote::F16IntConvDoubleRounding	F16IntConvDoubleRounding
+variant	metal2vulkan-rt::PrecisionNote::FastMathRewrites	FastMathRewrites
+variant	metal2vulkan-rt::PrecisionNote::FloatSampleFilter	FloatSampleFilter
+variant	metal2vulkan-rt::PrecisionNote::Fp8Value	Fp8Value
+variant	metal2vulkan-rt::PrecisionNote::FragmentSimdgroupGrouping	FragmentSimdgroupGrouping
+variant	metal2vulkan-rt::PrecisionNote::FunctionStorageAssumed	FunctionStorageAssumed
+variant	metal2vulkan-rt::PrecisionNote::GradFromBias	GradFromBias
+variant	metal2vulkan-rt::PrecisionNote::HalfOutputFastMathBlend	HalfOutputFastMathBlend
+variant	metal2vulkan-rt::PrecisionNote::HalfOutputPrecision	HalfOutputPrecision
+variant	metal2vulkan-rt::PrecisionNote::HalfSampleFilter	HalfSampleFilter
+variant	metal2vulkan-rt::PrecisionNote::HalfTexelConversion	HalfTexelConversion
+variant	metal2vulkan-rt::PrecisionNote::HelperBranchDropsSimdgroupStores	HelperBranchDropsSimdgroupStores
+variant	metal2vulkan-rt::PrecisionNote::LinkedSamplerNumbering	LinkedSamplerNumbering
+variant	metal2vulkan-rt::PrecisionNote::LoopedSampleOutputs	LoopedSampleOutputs
+variant	metal2vulkan-rt::PrecisionNote::MultisamplePosition	MultisamplePosition
+variant	metal2vulkan-rt::PrecisionNote::NativeDivision	NativeDivision
+variant	metal2vulkan-rt::PrecisionNote::NativeDot	NativeDot
+variant	metal2vulkan-rt::PrecisionNote::NativeFloat8	NativeFloat8
+variant	metal2vulkan-rt::PrecisionNote::NativeFma	NativeFma
+variant	metal2vulkan-rt::PrecisionNote::NativeHalfConversion	NativeHalfConversion
+variant	metal2vulkan-rt::PrecisionNote::NativeHalfQuantize	NativeHalfQuantize
+variant	metal2vulkan-rt::PrecisionNote::NativeLogicOperation	NativeLogicOperation
+variant	metal2vulkan-rt::PrecisionNote::NativeMinMax	NativeMinMax
+variant	metal2vulkan-rt::PrecisionNote::NativeMix	NativeMix
+variant	metal2vulkan-rt::PrecisionNote::NativeNanEncoding	NativeNanEncoding
+variant	metal2vulkan-rt::PrecisionNote::NativeTranscendentals	NativeTranscendentals
+variant	metal2vulkan-rt::PrecisionNote::NotMipmappedAnisotropicFilter	NotMipmappedAnisotropicFilter
+variant	metal2vulkan-rt::PrecisionNote::PixelSamplerScaling	PixelSamplerScaling
+variant	metal2vulkan-rt::PrecisionNote::QuadsCountedBeforeDiscard	QuadsCountedBeforeDiscard
+variant	metal2vulkan-rt::PrecisionNote::QuadsSplitByClipping	QuadsSplitByClipping
+variant	metal2vulkan-rt::PrecisionNote::RasterizationRateMap	RasterizationRateMap
+variant	metal2vulkan-rt::PrecisionNote::ReductionOrder	ReductionOrder
+variant	metal2vulkan-rt::PrecisionNote::RestrictedDepthRange	RestrictedDepthRange
+variant	metal2vulkan-rt::PrecisionNote::RotatedBlendRounding	RotatedBlendRounding
+variant	metal2vulkan-rt::PrecisionNote::SparseResidency	SparseResidency
+variant	metal2vulkan-rt::PrecisionNote::SrgbTexelDecode	SrgbTexelDecode
+variant	metal2vulkan-rt::PrecisionNote::TessellationFactorEdgeCases	TessellationFactorEdgeCases
+variant	metal2vulkan-rt::PrecisionNote::TessellationFactorInstance	TessellationFactorInstance
+variant	metal2vulkan-rt::PrecisionNote::TessellationFactorScale	TessellationFactorScale
+variant	metal2vulkan-rt::PrecisionNote::TessellationTriangleOrder	TessellationTriangleOrder
+variant	metal2vulkan-rt::PrecisionNote::TessellationWinding	TessellationWinding
+variant	metal2vulkan-rt::PrecisionNote::UnmeasuredFetchBlend	UnmeasuredFetchBlend
+variant	metal2vulkan-rt::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGroupSpeculation
+variant	metal2vulkan-rt::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
+variant	metal2vulkan-rt::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
+variant	metal2vulkan-rt::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan-rt::Refusal::BufferIndex	BufferIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-rt::Refusal::Committed	Committed
@@ -12702,6 +12843,8 @@ variant	metal2vulkan-rt::Refusal::NoPipeline	NoPipeline
 variant	metal2vulkan-rt::Refusal::OtherDevice	OtherDevice
 variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
 variant	metal2vulkan-rt::Resource::Buffer	Buffer(&'a Buffer)
+variant	metal2vulkan-rt::StageSource::Compiled	Compiled(CompiledFunction)
+variant	metal2vulkan-rt::StageSource::Function	Function(FunctionDescriptor)
 variant	metal2vulkan-rt::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-rt::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-rt::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }

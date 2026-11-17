@@ -5,7 +5,7 @@ use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::hazard::Access;
-use crate::pipeline::{ComputePipelineState, Constant, FieldValue, Place, Variant, PUSH_BYTES};
+use crate::pipeline::{ComputePipelineState, FieldValue, Place, Variant, PUSH_BYTES};
 use crate::record::{self, Reach};
 use crate::ring::CHUNK;
 use ash::vk;
@@ -119,10 +119,9 @@ pub struct ComputeCommandEncoder {
     threadgroup_lengths: Vec<(u32, u32)>,
     /// `use_resource` declarations, by resource id.
     declared: Vec<(u32, Access)>,
-    /// The threadgroup size, whether it was an indirect dispatch of a kernel that tells one apart,
-    /// and the `VkPipeline` of the last dispatch, while the state and the threadgroup memory
-    /// lengths are unchanged.
-    last: Option<([u32; 3], bool, vk::Pipeline)>,
+    /// The threadgroup size and `VkPipeline` of the last dispatch, while the state and the
+    /// threadgroup memory lengths are unchanged.
+    last: Option<([u32; 3], vk::Pipeline)>,
     /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
     /// Whether a dispatch of the encoder wrote anything.
@@ -452,15 +451,8 @@ impl ComputeCommandEncoder {
                 return Ok(());
             }
         }
-        // Only a kernel that reads its grid from the dispatch region tells an indirect dispatch
-        // apart.
-        let indirect = matches!(grid, Grid::Indirect(..))
-            && interface
-                .constants
-                .iter()
-                .any(|(_, set)| matches!(set, Constant::Region));
         let vk_pipeline = match self.last {
-            Some((last, last_indirect, made)) if last == size && last_indirect == indirect => made,
+            Some((last, made)) if last == size => made,
             _ => {
                 let variant = Variant {
                     size,
@@ -469,12 +461,11 @@ impl ComputeCommandEncoder {
                         .iter()
                         .map(|&index| self.threadgroup_length(index))
                         .collect(),
-                    indirect,
                 };
                 pipeline.inner.pipeline(&variant)?
             }
         };
-        self.last = Some((size, indirect, vk_pipeline));
+        self.last = Some((size, vk_pipeline));
         let serial = self.serial;
         let wrote = {
             let accesses = Accesses {
