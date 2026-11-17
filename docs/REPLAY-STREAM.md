@@ -229,6 +229,13 @@ and the (name id, value) answer pairs.
   command buffer takes in how the GPU fails the later one's encoders) and `m2v.rebindNoCopy`
   (`[bytes, deallocator]`, recorded `[nil, nil]`: a no-copy buffer moved to new host memory, whose
   bytes arrive as writes).
+- `m2v.privateBytes` (receiver: a buffer, which a `release` may already have ended; arguments
+  `[dispatch, {location, length}, before, after]`) holds the bytes of a Private buffer's range
+  before and after one dispatch of a compute pipeline made with linked functions: `dispatch` is
+  the dispatch's position in the stream (how many call records come before it, from 0), and
+  `before` and `after` are blobs that lie in the blob directory alone. It is recorded at the
+  command buffer's completion, so later in the stream than the dispatch. The player plays none of
+  them.
 - `m2v.present` (arguments: the texture over the guest surface shown) is recorded where the
   device's display shows a guest present, with or without a window. It ends a frame: the player
   waits for what can complete and closes the frame's counters; it reads nothing.

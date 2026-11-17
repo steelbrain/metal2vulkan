@@ -507,7 +507,8 @@ impl<'b, B: Backend> Player<'b, B> {
             "m2v.setCompletionJoinsNext"
             | "m2v.holdsNoPredication"
             | "m2v.rebindNoCopy"
-            | "m2v.fold" => Ok(()),
+            | "m2v.fold"
+            | "m2v.privateBytes" => Ok(()),
             WAIT_COMPLETED | WAIT_SCHEDULED => {
                 self.drain()?;
                 match self.committed.contains(&call.receiver) {

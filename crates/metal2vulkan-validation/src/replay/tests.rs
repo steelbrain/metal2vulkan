@@ -865,3 +865,39 @@ fn a_resource_id_the_runtime_gives_otherwise_is_reported() {
     );
     assert!(lines.contains(&"id #4 0x7 none".to_owned()), "{lines:?}");
 }
+
+/// An `m2v.privateBytes` record, later than its dispatch and on a buffer already released, with
+/// blobs that lie in no blob directory, plays nothing: the play goes on to the end.
+#[test]
+fn private_bytes_records_play_nothing() {
+    let mut kept = Kept::default();
+    let (_, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let private = [Value::Uint(256), Value::Uint(0x20)];
+        w.call("newBufferWithLength:options:", 1, 3, &private, &[])?;
+        w.call("commandBuffer", 2, 4, &[], &[])?;
+        w.call("computeCommandEncoder", 4, 5, &[], &[])?;
+        let threads = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, 5, 0, &[threads.clone(), threads], &[])?;
+        w.call("endEncoding", 5, 0, &[], &[])?;
+        w.call("commit", 4, 0, &[], &[])?;
+        w.call("release", 3, 0, &[], &[])?;
+        let range = map(&[("location", Value::Uint(0)), ("length", Value::Uint(256))]);
+        let args = [
+            Value::Uint(5),
+            range,
+            Value::Blob([1; 32]),
+            Value::Blob([2; 32]),
+        ];
+        w.call("m2v.privateBytes", 3, 0, &args, &[])?;
+        w.call("release", 1, 0, &[], &[])
+    });
+    ended.unwrap();
+    assert!(
+        !kept.calls.iter().any(|call| call.contains("privateBytes")),
+        "{:?}",
+        kept.calls
+    );
+}
