@@ -6,7 +6,7 @@ the current task.
 ## The project
 
 metal2vulkan runs Metal shaders and Metal programs on Vulkan. It is a Cargo workspace (a virtual
-manifest at the root) of seven crates under `crates/`:
+manifest at the root) of eight crates under `crates/`:
 
 | Crate | Published | What it is |
 |---|---|---|
@@ -17,6 +17,7 @@ manifest at the root) of seven crates under `crates/`:
 | `crates/metal2vulkan-validation` | no | Authored semantic cases, Metal and Vulkan execution, harvest, the corpus index and audits |
 | `crates/metal2vulkan-conformance` | no | The Metal conformance suite: one case run on Metal and on the runtime, recorded and compared field by field. Independent of the harvested corpus |
 | `crates/metal2vulkan-devtools` | no | The external-tool runner, fixture assemblers and fixture paths the tests share |
+| `crates/metal2vulkan-harness` | no | The runtimes' compute harness: one set of compute workloads through each runtime's Metal-shaped API on one GPU, checked against CPU references, then timed. The regression gate between the old runtime and the new |
 
 The three published crates share one version; `metal2vulkan` pins `metal2vulkan-air` exactly
 (`=0.x.y`). License: dual, `GPL-2.0-or-later OR LGPL-3.0-or-later`, at the recipient's choice. The
@@ -258,7 +259,7 @@ doctests, so they have their own line. The gate:
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
 cargo nextest run -p metal2vulkan-conformance --all-features
 cargo test --workspace --all-features --doc

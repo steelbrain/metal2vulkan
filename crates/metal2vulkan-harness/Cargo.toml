@@ -1,0 +1,39 @@
+[package]
+name = "metal2vulkan-harness"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "The runtimes' compute harness: one set of Metal compute workloads through each runtime's Metal-shaped API, checked and timed"
+# Dev-only: never published.
+publish = false
+autobins = false
+
+[lib]
+name = "metal2vulkan_harness"
+path = "src/lib.rs"
+
+# The harness's command (src/bin/harness.rs). It has no unit tests, so `test = false` keeps
+# `cargo test`, nextest and `clippy --all-targets` from building a test harness of it.
+[[bin]]
+name = "harness"
+path = "src/bin/harness.rs"
+test = false
+
+[dependencies]
+# The translator, for the library of AIR bitcode the old runtime takes (`old.rs`).
+metal2vulkan = { path = "../metal2vulkan" }
+# The old runtime, behind the harness's traits in `old.rs` alone.
+metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
+# The fixture directory and `llvm-as` of the authored workloads' library.
+metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
+
+# The process's CPU clock (`clocks.rs`).
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# The device test compiles only under the validation crate's GPU safety cfgs
+# (docs/VALIDATION.md): `--cfg m2v_gpu` (a real GPU) or `--cfg m2v_cpu_icd` (a CPU ICD).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)"] }

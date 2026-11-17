@@ -37,7 +37,8 @@ they bind people too.
 │   │   ├── fixtures/public/      #   our own synthetic fixtures (.ll, .air.ll, .metal, .spvasm)
 │   │   ├── profiles/             #   committed Khronos device profiles
 │   │   └── corpus/               #   authored cases and observations (local/ is private, ignored)
-│   └── metal2vulkan-devtools/    # unpublished: tool runner, fixture assemblers
+│   ├── metal2vulkan-devtools/    # unpublished: tool runner, fixture assemblers
+│   └── metal2vulkan-harness/     # unpublished: the runtimes' compute harness (crate docs)
 ├── docs/                         # guides and generated references
 ├── scripts/                      # developer utilities and generators
 ├── Cargo.toml                    # the virtual workspace
@@ -52,7 +53,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
 scripts/api-docs   # the translator's API reference; fails on a link to a hidden item
-cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools --all-features
+cargo nextest run -p metal2vulkan -p metal2vulkan-air -p metal2vulkan-rt -p metal2vulkan-runtime -p metal2vulkan-devtools -p metal2vulkan-harness --all-features
 cargo nextest run -p metal2vulkan-validation --all-features
 cargo test --workspace --all-features --doc
 ```
