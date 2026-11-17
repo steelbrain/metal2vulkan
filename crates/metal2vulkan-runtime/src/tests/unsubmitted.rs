@@ -363,3 +363,78 @@ fn a_command_buffer_that_signals_an_event_is_submitted() {
     );
     assert!(after.queue_submissions - before.queue_submissions >= ROUNDS);
 }
+
+/// The bytes of the `Private` buffer whose zeros wait in
+/// [`an_empty_command_buffer_leaves_a_new_buffer_s_zeros_waiting`].
+const ZEROS: u64 = 64 << 10;
+
+/// A new `Private` buffer's zeros wait for the device's next submission, and only the GPU reads
+/// them (`texture/first_move.rs`): an empty command buffer committed after the buffer was made
+/// is still taken with no submission (`WorkCounts::command_buffers_unsubmitted`), on a device
+/// with a fill queue or without one, and leaves the fill waiting
+/// (`WorkCounts::new_buffer_zero_fills` unmoved); the next command buffer, a copy of the buffer,
+/// takes it before its copy, which reads zeros. Before, on a device without a fill queue, the
+/// empty one carried the fill in a submission of its own: a macOS guest's WebGL page on the Iris
+/// Xe (ANV) made a buffer and committed an empty command buffer each frame, each such call of
+/// 300 us or more.
+#[test]
+fn an_empty_command_buffer_leaves_a_new_buffer_s_zeros_waiting() {
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    let readback = device.new_buffer(ZEROS, ResourceOptions::shared()).unwrap();
+    // The device's first work so far goes with a command buffer of work first.
+    let first = queue.command_buffer().unwrap();
+    let mut blit = first.blit_command_encoder().unwrap();
+    blit.fill_buffer(&readback, 0..ZEROS, 0xab).unwrap();
+    blit.end_encoding().unwrap();
+    first.commit().unwrap();
+    first.wait_until_completed().unwrap();
+    let before = device.work_counts();
+    let private = device
+        .new_buffer(ZEROS, ResourceOptions::private())
+        .unwrap();
+    let empty = queue.command_buffer().unwrap();
+    empty.commit().unwrap();
+    empty.wait_until_completed().unwrap();
+    assert_eq!(empty.status(), CommandBufferStatus::Completed);
+    let after = device.work_counts();
+    let copy = queue.command_buffer().unwrap();
+    let mut blit = copy.blit_command_encoder().unwrap();
+    blit.copy_from_buffer_to_buffer(&private, 0, &readback, 0, ZEROS)
+        .unwrap();
+    blit.end_encoding().unwrap();
+    copy.commit().unwrap();
+    copy.wait_until_completed().unwrap();
+    assert_eq!(copy.status(), CommandBufferStatus::Completed);
+    let copied = device.work_counts();
+    println!(
+        "an empty command buffer after a new buffer ({}): unsubmitted {}, queue submissions {}, \
+         zero fills {}; the copy after it: zero fills {}",
+        device.name(),
+        after.command_buffers_unsubmitted - before.command_buffers_unsubmitted,
+        after.queue_submissions - before.queue_submissions,
+        after.new_buffer_zero_fills - before.new_buffer_zero_fills,
+        copied.new_buffer_zero_fills - after.new_buffer_zero_fills,
+    );
+    assert_eq!(
+        after.command_buffers_unsubmitted - before.command_buffers_unsubmitted,
+        1,
+        "the empty command buffer was submitted"
+    );
+    assert_eq!(after.queue_submissions, before.queue_submissions);
+    assert_eq!(
+        after.new_buffer_zero_fills, before.new_buffer_zero_fills,
+        "the empty command buffer took the new buffer's zeros"
+    );
+    assert!(
+        copied.new_buffer_zero_fills > after.new_buffer_zero_fills,
+        "the copy took no zeros"
+    );
+    let contents = readback.contents().unwrap();
+    // SAFETY: the buffer is `Shared` and `ZEROS` bytes long, and no command uses it now.
+    let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), ZEROS as usize) };
+    assert!(
+        bytes.iter().all(|&byte| byte == 0),
+        "the copy read other than zeros"
+    );
+}

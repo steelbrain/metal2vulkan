@@ -210,7 +210,10 @@
 //! **No GPU work, no submission** ([`State::needs_no_gpu`]). A command buffer whose encoders
 //! recorded nothing and whose one batch waits for and signals no event and no binary semaphore (so
 //! presents no drawable) is taken, once it leads its logical queue's line, no group is held and
-//! no first work of the device's waits (`texture/first_move.rs`), with no `vkQueueSubmit`: its batch is watched at its `VkQueue`'s last submitted value, so it
+//! no first work of the device's waits but fills of the program's memory (`texture/first_move.rs`:
+//! a new `Private` buffer's zeros, which only the GPU reads, and which a later batch or internal
+//! submission takes before its commands), with no `vkQueueSubmit`: its batch is watched at its
+//! `VkQueue`'s last submitted value, so it
 //! completes in its queue's order, once the queue's work before it completed, or at once where the
 //! queue has none in flight (`Completion::watch_unsubmitted`). Everything else its last batch's
 //! taking does is done as for a submitted one: its kernel times, its scheduling (by a hang's
@@ -575,16 +578,16 @@ impl CommandBufferShared {
         let rebound = state.failing_at(device, index);
         // One that needs no GPU work goes with no submission, in its queue's order (the module
         // docs); behind a group held, it goes with the group as any batch that joins does, and
-        // where the device's first work waits, it carries it as any batch does: on a device with
-        // a fill queue, first work but the fills of the program's memory, which a batch whose
-        // commands name nothing leaves waiting (`texture/first_move.rs`, `FillTake::Reached`).
-        let fills_named_only = |key: ResourceKey| {
-            device.has_fill_queue() && crate::used_resources::owner_of(shared, key).is_some()
-        };
+        // where the device's first work waits, it carries it as any batch does, but the fills of
+        // the program's memory, which it leaves waiting: a later batch takes them before any of
+        // its commands (any batch on a device without a fill queue, one whose commands may reach
+        // them on a device with one: `texture/first_move.rs`, `FillTake`), and an internal
+        // submission takes every one.
+        let programs = |key: ResourceKey| crate::used_resources::owner_of(shared, key).is_some();
         if !rebound
             && !scheduler.group.holds()
             && state.needs_no_gpu()
-            && (shared.textures.first_moves).none_waiting_but(fills_named_only)
+            && (shared.textures.first_moves).none_waiting_but(programs)
         {
             let taken = self.take_unsubmitted(&mut state, index, last, scheduler);
             return Ok(Submitting::Submitted(taken));

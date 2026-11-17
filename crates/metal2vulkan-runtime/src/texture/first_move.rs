@@ -1815,15 +1815,17 @@ impl FirstMoves {
     }
 
     /// Whether a batch whose commands name nothing takes no work waiting: none waits but fills
-    /// of memory whose key `named_only` says only a batch that may reach it takes
-    /// ([`FillTake::Reached`]), and uploads, which only such a batch takes on any device
+    /// of memory whose key `programs` says the program's resources own, which a later batch takes
+    /// before any of its commands (any batch on a device without a fill queue, [`FillTake::Owned`];
+    /// one that may reach the memory on a device with one, [`FillTake::Reached`]) and an internal
+    /// submission takes, and uploads, which only a batch that may reach them takes on any device
     /// (`FirstFill::upload`). A command buffer that needs no GPU work then goes with no
-    /// submission, and one that finds work waiting carries it as before
+    /// submission, and one that finds other work waiting carries it as before
     /// (`command_buffer/submit.rs`).
-    pub(crate) fn none_waiting_but(&self, named_only: impl Fn(ResourceKey) -> bool) -> bool {
+    pub(crate) fn none_waiting_but(&self, programs: impl Fn(ResourceKey) -> bool) -> bool {
         lock(&self.waiting).iter().all(|entry| {
             matches!(entry, Waiting::Fill(_, fill)
-                if fill.upload.is_some() || fill.key.is_some_and(&named_only))
+                if fill.upload.is_some() || fill.key.is_some_and(&programs))
         })
     }
 
