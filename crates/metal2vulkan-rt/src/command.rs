@@ -494,7 +494,7 @@ pub(crate) fn retire(
         blocks,
     } = gpu;
     if let Some(recorder) = recorder {
-        core.recorders.give_back(&core.device, recorder);
+        core.recorders.give_back(core, recorder);
     }
     drop((segments, blocks));
     inner.queue.release();
@@ -515,7 +515,7 @@ impl Drop for CbInner {
         if let Some(Building { device, gpu, .. }) = state.building.take() {
             if let Some(recorder) = gpu.recorder {
                 let core = device.core();
-                core.recorders.give_back(&core.device, recorder);
+                core.recorders.give_back(core, recorder);
             }
             self.queue.release();
         }

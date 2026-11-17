@@ -4,6 +4,7 @@
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::Error;
+use crate::reaper::{Free, Job};
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
@@ -282,10 +283,11 @@ impl EventInner {
 
 impl Drop for EventInner {
     fn drop(&mut self) {
-        // SAFETY: no pending GPU work names the semaphore: every command buffer that waits on it
-        // or signals it holds the event until it retires, and the completion thread holds it
-        // while its signals are pending.
-        unsafe { self.core.device.destroy_semaphore(self.semaphore, None) };
-        self.core.counters.fall(Gauge::Events);
+        // No pending GPU work names the semaphore: every command buffer that waits on it or
+        // signals it holds the event until it retires, and the completion thread holds it while
+        // its signals are pending. The reaper destroys it, off the completion thread.
+        self.core
+            .reaper
+            .give(Job::Free(Free::Semaphore(self.semaphore)));
     }
 }

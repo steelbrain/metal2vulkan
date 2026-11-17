@@ -2,8 +2,9 @@
 //! command buffer (or upload) to the next once its work has completed.
 
 use crate::counters::{Counters, Metric};
-use crate::device::lock;
+use crate::device::{lock, Core};
 use crate::error::Error;
+use crate::reaper::{Free, Job};
 use ash::vk;
 use std::sync::Mutex;
 
@@ -112,19 +113,22 @@ impl Recorders {
     }
 
     /// Takes back a recorder whose work has completed, or that never submitted: its pool is reset
-    /// for the next one, or destroyed past [`IDLE_MAX`].
-    pub(crate) fn give_back(&self, device: &ash::Device, mut recorder: Recorder) {
+    /// for the next one, or, past [`IDLE_MAX`], given to the reaper to destroy.
+    pub(crate) fn give_back(&self, core: &Core, mut recorder: Recorder) {
         // SAFETY: no command buffer of the pool is pending. A failed reset (a lost device) leaves
         // the pool to be destroyed.
-        let reset =
-            unsafe { device.reset_command_pool(recorder.pool, vk::CommandPoolResetFlags::empty()) };
+        let reset = unsafe {
+            core.device
+                .reset_command_pool(recorder.pool, vk::CommandPoolResetFlags::empty())
+        };
         let mut idle = lock(&self.idle);
         if reset.is_ok() && idle.len() < IDLE_MAX {
             recorder.used = 0;
             idle.push(recorder);
         } else {
             drop(idle);
-            destroy(device, recorder);
+            core.reaper
+                .give(Job::Free(Free::CommandPool(recorder.pool)));
         }
     }
 
@@ -135,14 +139,8 @@ impl Recorders {
             .get_mut()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for recorder in idle.drain(..) {
-            destroy(device, recorder);
+            // SAFETY: the device is idle; destroying the pool frees its command buffers.
+            unsafe { device.destroy_command_pool(recorder.pool, None) };
         }
     }
-}
-
-/// Destroys a recorder's pool, which frees its command buffers.
-pub(crate) fn destroy(device: &ash::Device, recorder: Recorder) {
-    // SAFETY: no command buffer of the pool is pending: the device is idle, or the recorder's work
-    // completed.
-    unsafe { device.destroy_command_pool(recorder.pool, None) };
 }

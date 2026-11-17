@@ -21,6 +21,7 @@ pub mod floor;
 mod instance;
 mod memory;
 mod queue;
+mod reaper;
 mod record;
 mod submit;
 #[cfg(test)]

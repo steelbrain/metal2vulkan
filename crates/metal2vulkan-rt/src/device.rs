@@ -9,6 +9,7 @@ use crate::fill::Filler;
 use crate::floor;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, MemoryClass, Pool, BLOCK_LEN};
+use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
 use crate::submit::{self, Work};
 use ash::vk;
@@ -26,15 +27,16 @@ use std::time::{Duration, Instant};
 /// A cheap handle: clones share one device, and every object made from it holds a clone, except
 /// a committed command buffer. Blocks the consumer holds do not.
 ///
-/// The runtime runs three threads: the block-maker, the submit thread and the completion thread,
-/// which runs every handler and listener. The device is torn down when the last handle is
-/// dropped: the submit thread submits what is ready and ends what it holds with
-/// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun); the completion thread
-/// retires the rest as the GPU completes it; the threads are joined; then every block is freed,
-/// after [`BlockMappings::unmap`] for each the consumer was handed, and the `VkDevice` is
-/// destroyed; every gauge reads zero only then. Where the last handle drops in a handler or a
-/// listener, the completion thread finishes the teardown itself once the handler returns, and the
-/// consumer waits for the gauges to read zero before it drops its instance or exits. No thread of the
+/// The runtime runs four threads: the block-maker, the submit thread, the completion thread,
+/// which runs every handler and listener, and the reaper, which frees the semaphores and command
+/// pools the others give up, one at a time, so no driver free runs on the completion thread. The
+/// device is torn down when the last handle is dropped: the submit thread submits what is ready
+/// and ends what it holds with [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun);
+/// the completion thread retires the rest as the GPU completes it; the threads are joined; then
+/// every block is freed, after [`BlockMappings::unmap`] for each the consumer was handed, and the
+/// `VkDevice` is destroyed; every gauge reads zero only then. Where the last handle drops in a
+/// handler or a listener, the reaper runs the teardown once the handler returns, and the consumer
+/// waits for the gauges to read zero before it drops its instance or exits. No thread of the
 /// runtime outlives the teardown, and nothing relies on a static destructor or an `atexit`
 /// handler: the consumer drops every handle, or calls [`quiesce`](Device::quiesce), before the
 /// process exits (a driver may unmap device memory inside `exit()`).
@@ -57,11 +59,25 @@ struct Threads {
     blocks: Option<Runner>,
     submit: Option<Runner>,
     complete: Option<Runner>,
+    reaper: Option<Runner>,
 }
 
 struct Runner {
     handle: JoinHandle<()>,
     ended: Arc<Ended>,
+    role: Role,
+}
+
+/// What a runtime thread does.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// Not a runtime thread.
+    None,
+    Blocks,
+    Submit,
+    /// The completion thread: the only one that runs the consumer's code.
+    Complete,
+    Reaper,
 }
 
 /// Set as a runtime thread ends, so a stop can wait for it with a deadline.
@@ -82,10 +98,20 @@ impl Drop for Ending {
 }
 
 thread_local! {
-    /// The core a runtime thread serves, by address; 0 on every other thread. Constant and without
-    /// a destructor, so it reads the same while the thread's other thread-locals are torn down
-    /// (in `exit()`).
-    static SERVES: Cell<usize> = const { Cell::new(0) };
+    /// The core a runtime thread serves, by address, and its role; 0 and `Role::None` on every
+    /// other thread. Constant and without a destructor, so it reads the same while the thread's
+    /// other thread-locals are torn down (in `exit()`).
+    static SERVES: Cell<(usize, Role)> = const { Cell::new((0, Role::None)) };
+}
+
+/// The role of this thread for `core`.
+fn role(core: &Arc<Core>) -> Role {
+    let (serves, role) = SERVES.get();
+    if serves == Arc::as_ptr(core) as usize {
+        role
+    } else {
+        Role::None
+    }
 }
 
 /// The device itself: what the runtime's threads and every block hold.
@@ -107,6 +133,7 @@ pub(crate) struct Core {
     pub(crate) recorders: Recorders,
     pub(crate) work: Work,
     pub(crate) done: Done,
+    pub(crate) reaper: Reaper,
     /// Quiesced or torn down: calls that need a thread are refused.
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
@@ -272,6 +299,7 @@ impl Device {
             recorders: Recorders::new(family),
             work: Work::new(),
             done,
+            reaper: Reaper::new(),
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
         });
@@ -284,11 +312,13 @@ impl Device {
         };
         // A thread that does not start drops the device, which stops those that did.
         let core = &device.shared.core;
-        let blocks = spawn("m2v-blocks", core, memory::run)?;
+        let reaper = spawn("m2v-reaper", core, Role::Reaper, reaper::run)?;
+        lock(&device.shared.threads).reaper = Some(reaper);
+        let blocks = spawn("m2v-blocks", core, Role::Blocks, memory::run)?;
         lock(&device.shared.threads).blocks = Some(blocks);
-        let submit = spawn("m2v-submit", core, submit::run)?;
+        let submit = spawn("m2v-submit", core, Role::Submit, submit::run)?;
         lock(&device.shared.threads).submit = Some(submit);
-        let complete = spawn("m2v-complete", core, complete::run)?;
+        let complete = spawn("m2v-complete", core, Role::Complete, complete::run)?;
         lock(&device.shared.threads).complete = Some(complete);
         Ok(device)
     }
@@ -401,7 +431,13 @@ impl Device {
     /// driver loaded, after `Device::new`. A second call returns at once, with the first call's
     /// answer, or false while the first is still running.
     pub fn quiesce(&self, timeout: Duration) -> bool {
-        self.shared.halt(Instant::now().checked_add(timeout), true)
+        let threads = self.shared.take_threads();
+        halt(
+            &self.shared.core,
+            threads,
+            Instant::now().checked_add(timeout),
+            true,
+        )
     }
 
     /// No Metal counterpart: gives a block back.
@@ -446,8 +482,8 @@ impl Device {
     }
 }
 
-/// Starts a runtime thread that serves `core`.
-fn spawn(name: &str, core: &Arc<Core>, body: fn(Arc<Core>)) -> Result<Runner, Error> {
+/// Starts a runtime thread that serves `core` in `role`.
+fn spawn(name: &str, core: &Arc<Core>, role: Role, body: fn(Arc<Core>)) -> Result<Runner, Error> {
     let ended = Arc::new(Ended::default());
     let ending = Ending(Arc::clone(&ended));
     let core = Arc::clone(core);
@@ -455,11 +491,15 @@ fn spawn(name: &str, core: &Arc<Core>, body: fn(Arc<Core>)) -> Result<Runner, Er
         .name(name.to_string())
         .spawn(move || {
             let _ending = ending;
-            SERVES.set(Arc::as_ptr(&core) as usize);
+            SERVES.set((Arc::as_ptr(&core) as usize, role));
             body(core);
         })
         .map_err(Error::Thread)?;
-    Ok(Runner { handle, ended })
+    Ok(Runner {
+        handle,
+        ended,
+        role,
+    })
 }
 
 impl Ended {
@@ -488,56 +528,72 @@ impl Ended {
 }
 
 impl Shared {
-    /// Stops the runtime's threads and its GPU work: for [`Device::quiesce`] (`quiesce`, with its
-    /// deadline) and for teardown. Only the first call stops anything; a later one answers at
-    /// once. True once the GPU went idle and every thread ended by `deadline`.
-    fn halt(&self, deadline: Option<Instant>, quiesce: bool) -> bool {
-        let core = &self.core;
-        match core
-            .halt
-            .compare_exchange(RUNNING, HALTING, Ordering::AcqRel, Ordering::Acquire)
-        {
-            Ok(_) => {}
-            Err(halt) => return halt == HALTED_IDLE,
+    /// The runtime's threads, for the stop that waits for them.
+    fn take_threads(&self) -> Threads {
+        let mut threads = lock(&self.threads);
+        Threads {
+            blocks: threads.blocks.take(),
+            submit: threads.submit.take(),
+            complete: threads.complete.take(),
+            reaper: threads.reaper.take(),
         }
-        core.closed.store(true, Ordering::Release);
-        let (blocks, submit, complete) = {
-            let mut threads = lock(&self.threads);
-            (
-                threads.blocks.take(),
-                threads.submit.take(),
-                threads.complete.take(),
-            )
-        };
-        // Submission stops: what is ready goes, and what is held ends.
-        core.work.stop();
-        let mut idle = finish(submit, deadline);
-        core.pool.stop();
-        idle &= finish(blocks, deadline);
-        if quiesce {
-            idle &= core.wait_progress(core.work.progress(), deadline);
-        }
-        core.done.stop(core, deadline);
-        // Only the completion thread runs the consumer's code among the runtime's threads. Where
-        // this call runs on it (a handler or listener dropped the last handle, or quiesced), it
-        // ends itself once the call returns, and is not waited for.
-        let on_completion = SERVES.get() == Arc::as_ptr(core) as usize;
-        idle &= !on_completion && finish(complete, deadline) && core.done.drained();
-        if quiesce {
-            core.pool.unmap_all();
-        }
-        let answer = if idle { HALTED_IDLE } else { HALTED_LATE };
-        core.halt.store(answer, Ordering::Release);
-        idle
     }
 }
 
+/// Stops the runtime's threads and its GPU work: for [`Device::quiesce`] (`quiesce`, with its
+/// deadline) and for teardown. Only the first call stops anything; a later one answers at once.
+/// True once the GPU went idle and every thread ended by `deadline`.
+fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: bool) -> bool {
+    match core
+        .halt
+        .compare_exchange(RUNNING, HALTING, Ordering::AcqRel, Ordering::Acquire)
+    {
+        Ok(_) => {}
+        Err(halt) => return halt == HALTED_IDLE,
+    }
+    core.closed.store(true, Ordering::Release);
+    let Threads {
+        blocks,
+        submit,
+        complete,
+        reaper,
+    } = threads;
+    // Submission stops: what is ready goes, and what is held ends.
+    core.work.stop();
+    let mut idle = finish(submit, core, deadline);
+    core.pool.stop();
+    idle &= finish(blocks, core, deadline);
+    if quiesce {
+        idle &= core.wait_progress(core.work.progress(), deadline);
+    }
+    core.done.stop(core, deadline);
+    idle &= finish(complete, core, deadline) && core.done.drained();
+    core.reaper.stop();
+    idle &= finish(reaper, core, deadline);
+    if quiesce {
+        core.pool.unmap_all();
+    }
+    let answer = if idle { HALTED_IDLE } else { HALTED_LATE };
+    core.halt.store(answer, Ordering::Release);
+    idle
+}
+
 /// Waits for a thread to end, up to `deadline`, and joins it once it has; a thread past the
-/// deadline is left to end alone. True once it ended.
-fn finish(runner: Option<Runner>, deadline: Option<Instant>) -> bool {
-    let Some(Runner { handle, ended }) = runner else {
+/// deadline is left to end alone. True once it ended. A thread is never waited for by itself: the
+/// completion thread where a handler or listener quiesces, the reaper where it runs a teardown;
+/// it ends once the call returns.
+fn finish(runner: Option<Runner>, core: &Arc<Core>, deadline: Option<Instant>) -> bool {
+    let Some(Runner {
+        handle,
+        ended,
+        role: of,
+    }) = runner
+    else {
         return true;
     };
+    if role(core) == of {
+        return false;
+    }
     let done = ended.wait(deadline);
     if done {
         // A thread that panicked has ended all the same.
@@ -617,13 +673,25 @@ pub struct RawDevice<'a> {
 
 impl Drop for Shared {
     fn drop(&mut self) {
-        self.halt(None, false);
-        // The blocks the consumer still holds go back to the pool, for the core to free. No
-        // buffer of them is left: each holds a handle of the device.
-        self.claims
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
+        let threads = self.take_threads();
+        // The blocks the consumer still holds go back to the pool once the threads have stopped,
+        // for the core to free. No buffer of them is left: each holds a handle of the device.
+        let claims = std::mem::take(
+            self.claims
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        let teardown = move |core: &Arc<Core>| {
+            halt(core, threads, None, false);
+            drop(claims);
+        };
+        if role(&self.core) == Role::Complete {
+            // A handler or listener dropped the last handle: the reaper tears down, once the
+            // handler returns and the completion thread can end.
+            self.core.reaper.give(Job::Teardown(Box::new(teardown)));
+        } else {
+            teardown(&self.core);
+        }
     }
 }
 
@@ -636,6 +704,8 @@ impl Drop for Core {
             memory::free(self, memory);
         }
         self.recorders.destroy_all(&self.device);
+        // The reaper has ended; what it was given since is freed here.
+        self.reaper.drain(self);
         // SAFETY: the device is idle, and nothing made from it is left but these objects.
         let zero_source = unsafe {
             self.done.destroy(&self.device);

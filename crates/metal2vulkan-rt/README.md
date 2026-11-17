@@ -30,15 +30,17 @@ device against the floor below.
 
 ### Teardown
 
-The runtime runs three threads per device: the block-maker, the submit thread and the completion
-thread. A device is torn down when its last handle, and the last handle of every object made from
+The runtime runs four threads per device: the block-maker, the submit thread, the completion
+thread, and the reaper, which frees the semaphores and command pools the others give up, one at a
+time, so no driver free runs on the completion thread and a submission waits behind at most one.
+A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
 `CommandBufferError::NotRun`; the completion thread retires the rest as the GPU completes it and
 runs the handlers; the threads are joined and the GPU goes idle. Then every block is freed,
 `BlockMappings::unmap` first for each block the consumer was handed, and the `VkDevice` is
 destroyed. Teardown runs on the thread that drops the last handle, or, where that is a handler or
-a listener, on the completion thread once the handler returns; every gauge reads zero only once
+a listener, on the reaper once the handler returns; every gauge reads zero only once
 the `VkDevice` is destroyed, so such a consumer waits for that before it drops its instance or
 exits. A physical device and a device each hold their instance. No thread of the runtime outlives its device, and nothing relies on a
 static destructor or an `atexit` handler: the consumer drops every handle, or calls

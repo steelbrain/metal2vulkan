@@ -601,11 +601,25 @@ mod on_device {
         }
     }
 
-    /// The last handle dropped in a completed handler: the completion thread finishes the
-    /// teardown itself once the handler returns.
+    /// The last handle dropped in a completed handler: the reaper runs the teardown once the
+    /// handler returns, so the block still held is unmapped and freed there, and every gauge
+    /// reads zero once the device is destroyed.
     #[test]
     fn every_device_tears_down_from_a_completed_handler() {
-        each_device("handler_teardown", |name, _, device| {
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let options = DeviceOptions {
+                block_mappings: Some(hook.clone() as Arc<dyn BlockMappings>),
+                ..DeviceOptions::default()
+            };
+            let device = Device::new(physical, options).expect("a device");
+            let counters = device.counters();
+            let block = device
+                .take_block(MemoryClass::Shared, 1)
+                .expect("a Shared block");
             let queue = queue(&device);
             let command_buffer = queue.command_buffer().expect("a command buffer");
             drop(queue);
@@ -614,7 +628,14 @@ mod on_device {
                 .expect("a handler");
             command_buffer.commit().expect("a commit");
             finished(name, &command_buffer);
-        });
+            within("the teardown", || counters.gauges() == Gauges::default());
+            print_gauges_at_drop("handler_teardown", counters.gauges());
+            assert_eq!(
+                *lock(&hook.0),
+                [(block.id, Some("m2v-reaper".to_string()))],
+                "{name}: unmapped once, by the reaper"
+            );
+        }
     }
 
     /// At a loss: a host wait for a pending signal ends false; the command buffer in flight ends

@@ -139,7 +139,7 @@ impl Work {
                         blocks: Vec::new(),
                     },
                     Err(error) => {
-                        core.recorders.give_back(device, recorder);
+                        core.recorders.give_back(core, recorder);
                         return Err(error);
                     }
                 }
@@ -519,6 +519,6 @@ impl Upload {
     /// Recycles the upload's recorder and gives up its blocks: once its submission completed, or
     /// where it never went.
     pub(crate) fn retire(self, core: &Core) {
-        core.recorders.give_back(&core.device, self.recorder);
+        core.recorders.give_back(core, self.recorder);
     }
 }
