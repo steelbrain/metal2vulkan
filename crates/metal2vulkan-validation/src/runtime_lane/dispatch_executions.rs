@@ -576,10 +576,17 @@ fn a_copied_record_runs_its_released_state_s_program_on_the_gpu_alone() {
 /// commands run on the GPU alone, with a barrier between every two, and write what
 /// Metal computes. Without the set, none. A first execution without the set, not counted, records
 /// the queue's kept barrier command buffers ([`kept_recorded`]); the counted ones count a run that
-/// recorded none ([`own_barriers`]), so their barriers are the commands' and their encoder's own.
+/// recorded none ([`own_barriers`]), so their barriers are the commands' and their encoder's own,
+/// once the device's view check answered (`Device::settle_view_check`), whose timed dispatches
+/// each record a barrier (on the RX 7900 XTX the unset run counted 9, and the set one 15 where it
+/// takes at least 9 + 7).
 #[test]
 fn a_barrier_set_after_the_commit_records_the_commands_again() {
     on_device(|device, messages| {
+        assert!(
+            device.settle_view_check(super::WAIT),
+            "the view check answers"
+        );
         let queue = device.new_command_queue().unwrap();
         let mut taken = Vec::new();
         for (counted, set) in [(false, false), (true, false), (true, true)] {

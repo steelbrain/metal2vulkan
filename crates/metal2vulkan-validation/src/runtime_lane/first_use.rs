@@ -669,8 +669,11 @@ impl<'a> Calls<'a> {
             self.took.push((what, took));
             return made;
         }
-        if self.queue_lock && internal == 0 && read_mark(&self.mark) != 0 {
-            if self.queue_lock_wait.is_none() {
+        // After the queue lock's wait the busy work has ended, and a call is checked by the
+        // test's count of internal submissions alone, whatever it made (the type's docs).
+        let after_lock_wait = self.queue_lock_wait.is_some();
+        if self.queue_lock && (internal == 0 || after_lock_wait) && read_mark(&self.mark) != 0 {
+            if !after_lock_wait {
                 println!(
                     "FIRST-USE on {}: {what} waited {took:?} for lavapipe's queue lock, with no \
                      internal submission; the calls after it run with the busy work ended",

@@ -12,13 +12,19 @@
 //!   go of, and the new generation runs a check of its own.
 //! - **Behind no batch.** Its timed dispatch's submission (`Device::submit_internal_if_idle`) is
 //!   not made while a batch is in flight, and is once none is.
+//! - **Its own work alone.** That submission carries none of the program's work: a new texture's
+//!   first move queued for the staging queue stays queued for the program's next submission.
 //! - **Bounded.** A device whose work never pauses keeps the check standing by until its
 //!   stand-bys reach their most, where it ends unchecked and makes no further attempt; a quiet
 //!   device over the same cache, which kept nothing of it, runs the check and answers.
 
 use super::blit_holds::{options, Scratch, FILLED};
 use crate::device::holds::Holder;
-use crate::{CommandBufferStatus, Device, ResourceOptions, ViewVerdict};
+use crate::{
+    CommandBufferStatus, CpuCacheMode, Device, HazardTrackingMode, Region, ResourceOptions,
+    StorageMode, TextureDescriptor, ViewVerdict,
+};
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::time::{Duration, Instant};
 
 /// How long a test waits for the check: lavapipe runs its kernels on the CPU.
@@ -79,26 +85,33 @@ fn the_check_settles_with_its_medians_and_a_later_device_reads_its_record() {
 const STREAM: Duration = Duration::from_millis(900);
 const SETTLED: Duration = Duration::from_millis(300);
 
-/// The bytes of the buffer the program's work fills ([`Stream`]), and the fills of each of its
-/// command buffers: 512 MiB of fills a command buffer.
+/// The bytes of the buffer the program's work fills ([`Stream`]), and the fills of the command
+/// buffer by which it measures the device's rate first.
 const STREAM_BYTES: u64 = 16 << 20;
-const STREAM_FILLS: u8 = 32;
+const STREAM_FILLS: usize = 32;
 
-/// The command buffers the program's work keeps committed or in flight ([`Stream`]): enough
-/// queued work that a pause of the test's thread on a loaded host does not empty the queue for
-/// the check's quiet. On lavapipe beside 33 of the lane's tests, the queue's work drains on the
-/// same CPUs: with four command buffers of 64 MiB of fills each queued, the device's queues went
-/// unused for 26 to 57 ms with nothing in flight and nothing held, nine times in one stream, and
-/// the check rightly took each pause for a kernel's making (job m3-max-39574, a probe printing
-/// each stand-by's end); with 64 KiB a command buffer the same came of shorter pauses (26 ms,
-/// job m3-max-39472).
-const STREAM_DEPTH: usize = 4;
+/// How long each of the stream's command buffers lasts at the rate its first one measured, and
+/// the most fills one takes.
+const STREAM_EACH: Duration = Duration::from_millis(225);
+const STREAM_MOST_FILLS: usize = 8192;
+
+/// The command buffers the program's work keeps committed or in flight ([`Stream`]): eight of
+/// [`STREAM_EACH`], 1.8 s of queued work, which no pause of the test's thread shorter than that
+/// lets the queue drain for the check's quiet. On lavapipe the queue's work runs on the CPUs the
+/// lane's tests share: four command buffers of a fixed 512 MiB of fills each queued drained there
+/// beside other tests (kernels begun while the work went on, job m3-max-39758), as four of 64 MiB
+/// had (the device's queues unused for 26 to 57 ms with nothing in flight, job m3-max-39574).
+const STREAM_DEPTH: usize = 8;
 
 /// The program's work as a stream: command buffers of `queue`'s, each filling a buffer of
-/// [`STREAM_BYTES`] whole [`STREAM_FILLS`] times, [`STREAM_DEPTH`] of them committed or in flight.
+/// [`STREAM_BYTES`] whole `fills` times, [`STREAM_DEPTH`] of them committed or in flight.
 struct Stream {
     queue: crate::CommandQueue,
     target: crate::Buffer,
+    /// The fills of each command buffer: as many as last [`STREAM_EACH`] at the rate a first
+    /// command buffer of [`STREAM_FILLS`] measured, at least that many and at most
+    /// [`STREAM_MOST_FILLS`].
+    fills: usize,
     queued: std::collections::VecDeque<(crate::CommandBuffer, Instant)>,
     /// The longest a command buffer took from its commit to its completion.
     longest: Duration,
@@ -110,12 +123,19 @@ impl Stream {
         let target = device
             .new_buffer(STREAM_BYTES, ResourceOptions::private())
             .unwrap();
-        Stream {
+        let mut stream = Stream {
             queue,
             target,
+            fills: STREAM_FILLS,
             queued: std::collections::VecDeque::new(),
             longest: Duration::ZERO,
-        }
+        };
+        stream.next();
+        let one = stream.end_oldest();
+        let scaled = STREAM_EACH.as_secs_f64() / one.as_secs_f64().max(1e-6);
+        stream.fills =
+            ((STREAM_FILLS as f64 * scaled) as usize).clamp(STREAM_FILLS, STREAM_MOST_FILLS);
+        stream
     }
 
     /// Commit one more command buffer, first waiting for the oldest where [`STREAM_DEPTH`] are
@@ -126,8 +146,8 @@ impl Stream {
         }
         let command_buffer = self.queue.command_buffer().unwrap();
         let mut blit = command_buffer.blit_command_encoder().unwrap();
-        for value in 0..STREAM_FILLS {
-            blit.fill_buffer(&self.target, 0..STREAM_BYTES, value)
+        for fill in 0..self.fills {
+            blit.fill_buffer(&self.target, 0..STREAM_BYTES, fill as u8)
                 .unwrap();
         }
         blit.end_encoding().unwrap();
@@ -135,11 +155,16 @@ impl Stream {
         self.queued.push_back((command_buffer, Instant::now()));
     }
 
+    /// Wait for the oldest command buffer queued: its commit to its completion.
+    fn end_oldest(&mut self) -> Duration {
+        let (command_buffer, committed) = self.queued.pop_front().expect("one queued");
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        committed.elapsed()
+    }
+
     fn wait_oldest(&mut self) {
-        if let Some((command_buffer, committed)) = self.queued.pop_front() {
-            command_buffer.wait_until_completed_for(WAIT).unwrap();
-            self.longest = self.longest.max(committed.elapsed());
-        }
+        let took = self.end_oldest();
+        self.longest = self.longest.max(took);
     }
 
     /// Stop: wait for every command buffer queued; the longest commit to completion.
@@ -173,12 +198,13 @@ fn the_check_stands_by_while_the_device_s_work_goes_on() {
     }
     let (during, begun) = (device.work_counts(), check.kernels_begun());
     let pending = device.view_costs().verdict;
+    let fills = stream.fills;
     let longest = stream.end();
     let (settled, settled_begun) = settled.expect("the work went on past SETTLED");
     println!(
-        "the work's longest command buffer, commit to completion: {:.2} ms; kernels begun before \
-         SETTLED {settled_begun}, compute pipeline time by then {:.2} ms and by the work's end \
-         {:.2} ms",
+        "the work's command buffers of {fills} fills, the longest commit to completion: {:.2} \
+         ms; kernels begun before SETTLED {settled_begun}, compute pipeline time by then {:.2} \
+         ms and by the work's end {:.2} ms",
         longest.as_secs_f64() * 1e3,
         settled.compute_pipeline_create_nanos as f64 / 1e6,
         during.compute_pipeline_create_nanos as f64 / 1e6
@@ -315,6 +341,59 @@ fn an_idle_internal_submission_waits_for_no_batch_in_flight() {
     let before = device.work_counts().internal_submissions;
     assert!(idle_submission(&current), "made with no batch in flight");
     assert_eq!(device.work_counts().internal_submissions, before + 1);
+}
+
+/// The submission the view check times its dispatches by (`Device::submit_internal_if_idle`)
+/// carries none of the program's work: made while a new `Managed` texture's first move waits
+/// queued for the device's staging queue (`WorkCounts::staging_moves_queued`), it is one internal
+/// submission and submits nothing there (no staging submission or flush), waiting for nothing
+/// there on the GPU (`staging_gpu_waits`); the move stays queued for the program's next
+/// submission, and `get_bytes` reads the texture's zeros. A device that copies new textures
+/// otherwise (no staging queue, or a start on the host) prints so.
+#[test]
+fn an_idle_internal_submission_carries_none_of_the_program_s_queued_work() {
+    const SIDE: u64 = 64;
+    let scratch = Scratch::new("view-check-own");
+    let device = Device::system_default_with(&options(&scratch.0)).unwrap();
+    let name = device.name().to_owned();
+    let before = device.work_counts();
+    let mut descriptor = TextureDescriptor::texture_2d(PixelFormat::RGBA8Unorm, SIDE, SIDE, false);
+    descriptor.usage = TextureUsage::SHADER_READ;
+    descriptor.resource_options = ResourceOptions::new(
+        StorageMode::Managed,
+        CpuCacheMode::DefaultCache,
+        HazardTrackingMode::Default,
+    );
+    let texture = device.new_texture(&descriptor).unwrap();
+    let made = device.work_counts();
+    if made.staging_moves_queued == before.staging_moves_queued {
+        println!("{name}: a new Managed texture queues no move for a staging queue");
+        return;
+    }
+    assert!(
+        idle_submission(&device.current()),
+        "made with no batch in flight"
+    );
+    let after = device.work_counts();
+    assert_eq!(
+        (
+            after.internal_submissions - made.internal_submissions,
+            after.staging_submissions - made.staging_submissions,
+            after.staging_flushes - made.staging_flushes,
+            after.staging_gpu_waits - made.staging_gpu_waits,
+        ),
+        (1, 0, 0, 0),
+        "{name}: internal, staging submissions, flushes, GPU waits for the staging queue"
+    );
+    let mut bytes = vec![0xee; (4 * SIDE * SIDE) as usize];
+    let region = Region::new_2d(0, 0, SIDE, SIDE);
+    texture
+        .get_bytes(&mut bytes, 4 * SIDE, 0, region, 0, 0)
+        .unwrap();
+    assert!(
+        bytes.iter().all(|&b| b == 0),
+        "{name}: the new texture reads zero"
+    );
 }
 
 /// An internal submission of no work of `device`'s, made only where no batch is in flight, inside

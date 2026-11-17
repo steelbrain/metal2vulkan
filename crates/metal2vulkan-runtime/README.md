@@ -880,7 +880,9 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   making it stands by until no command buffer committed waits for its submission, none is in
   flight and no `VkQueue` has been used for 20 ms since its start, and before each timed dispatch
   for 1 ms; each timed dispatch is submitted only where no command buffer is in flight as it
-  goes, so it never runs behind the program's work, and stands by again where one is. Its
+  goes, so it never runs behind the program's work, and stands by again where one is. It
+  carries none of the program's work: the first work of new resources and the copies queued for
+  the staging queue wait for the program's own next submission. Its
   stand-bys take 10 s in all at most: a device whose work never pauses long enough within them
   ends the check `Unchecked`, with no further attempt (`WorkCounts::device_checks`,
   `view_check_stand_bys`); it stands by for no one while `settle_view_check` waits. Eight kernels of 256 workgroups of 64 invocations each read

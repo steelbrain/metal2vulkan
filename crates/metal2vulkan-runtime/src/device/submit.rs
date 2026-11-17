@@ -43,8 +43,9 @@ enum Reach {
     /// its commands do not name, after the staging queue's queued copies, the last binding of a
     /// no-copy buffer's dma-bufs and the batches on the other `VkQueue`s that did first work.
     Device,
-    /// A handle's own ([`Device::settle_mine`]): after the batches on the other `VkQueue`s that
-    /// did first work only where `after_other_queues`.
+    /// A handle's own ([`Device::settle_mine`]), or a device check's, whose work uses the
+    /// device's own objects alone ([`Device::submit_internal_if_idle`]): after the batches on the
+    /// other `VkQueue`s that did first work only where `after_other_queues`.
     Mine { after_other_queues: bool },
 }
 
@@ -214,22 +215,31 @@ impl Device {
         self.submit_internal_naming(|_| false, record)
     }
 
-    /// [`submit_internal`](Self::submit_internal), made only where no batch is in flight on any
-    /// of the device's `VkQueue`s (`DeviceShared::batch_in_flight`), as read once its place in the
-    /// first work's order is held (`texture/first_move.rs`): every batch takes that place before
-    /// its `vkQueueSubmit` and notes its submission before it lets go of it, so none is submitted
-    /// between the read and this submission, which runs behind none of the program's work and
-    /// holds the internal lock, while it waits for the GPU, for its own work alone. Whether it was
-    /// made: where a batch was in flight nothing was recorded, and the first work it took goes
-    /// back. For a device check's timed dispatch (`view_check.rs`), which the program's work must
-    /// never wait on.
+    /// An internal submission of `record`'s work alone, made only where no batch is in flight on
+    /// any of the device's `VkQueue`s (`DeviceShared::batch_in_flight`), as read once its place in
+    /// the first work's order is held (`texture/first_move.rs`): every batch takes that place
+    /// before its `vkQueueSubmit` and notes its submission before it lets go of it, so none is
+    /// submitted between the read and this submission, which runs behind none of the program's
+    /// work and holds the internal lock, while it waits for the GPU, for its own work alone. It
+    /// takes none of the program's first work and none of the copies queued for the staging queue,
+    /// which wait for the program's next submission, and waits for no other queue's work
+    /// ([`Reach::Mine`]): what `record` uses is the device's own, made with no first work (the
+    /// check's unzeroed buffers and imported host pages). Whether it was made: where a batch was
+    /// in flight nothing was recorded. For a device check's timed dispatch (`view_check.rs`),
+    /// which the program's work must never wait on, nor its calls pay for.
     pub(crate) fn submit_internal_if_idle(
         &self,
         record: impl FnOnce(&Vk, vk::CommandBuffer),
     ) -> Result<bool, Error> {
+        let none = Mine {
+            buffer: None,
+            image: None,
+        };
         self.submit_internal_taking(
-            |firsts| firsts.take(|_| false),
-            Reach::Device,
+            |firsts| firsts.take_mine(none),
+            Reach::Mine {
+                after_other_queues: false,
+            },
             When::Idle,
             record,
         )

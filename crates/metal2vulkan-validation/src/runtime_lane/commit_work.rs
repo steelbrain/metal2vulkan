@@ -145,12 +145,19 @@ fn empty_command_buffers_take_the_spare_command_pool() {
 /// (`spares.rs`): the device's begin-ahead thread began it once the command buffer before, which
 /// gave the pool back, completed (`WorkCounts::primaries_begun_ahead`), and the encoder begins
 /// none of its own (`WorkCounts::encoder_primaries_begun_ahead`). The fills still read correctly.
+/// The thread begins a pool after its command buffer's waiters returned (`begin_ahead.rs`), so
+/// each round starts once the begin of the pool the one before gave back was counted
+/// ([`begun_ahead_past`]): a begin counted late would be read as the round's own while its
+/// command buffer is still committed.
 #[test]
 fn a_first_encoder_takes_the_primary_its_spare_pool_began_ahead() {
     const ROUNDS: u8 = 4;
     on_device(|device, _| {
         let queue = device.new_command_queue().unwrap();
         let buffer = device.new_buffer(256, ResourceOptions::shared()).unwrap();
+        let warm = device.work_counts().primaries_begun_ahead;
+        finish(&fill(&queue, &buffer));
+        begun_ahead_past(device, warm, "the command buffer before the rounds");
         for round in 0..ROUNDS {
             let before = device.work_counts();
             let first = fill(&queue, &buffer);
@@ -158,15 +165,16 @@ fn a_first_encoder_takes_the_primary_its_spare_pool_began_ahead() {
             // Begun on the device's begin-ahead thread after the command buffer completed: read
             // from the counts, which count it once its pool is among the spares again (the
             // begin runs with the pool out of them), so the next command buffer takes that pool.
-            let deadline = std::time::Instant::now() + WAIT;
-            while device.work_counts().primaries_begun_ahead == before.primaries_begun_ahead {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "round {round}: no primary begun ahead after a command buffer completed"
-                );
-                std::thread::yield_now();
-            }
-            assert_eq!(first.status(), CommandBufferStatus::Completed);
+            begun_ahead_past(
+                device,
+                before.primaries_begun_ahead,
+                &format!("round {round}'s first command buffer"),
+            );
+            assert_eq!(
+                first.status(),
+                CommandBufferStatus::Completed,
+                "round {round}: a primary begun ahead before the command buffer completed"
+            );
             let begun = device.work_counts();
             let command_buffer = queue.command_buffer().unwrap();
             let mut blit = command_buffer.blit_command_encoder().unwrap();
@@ -184,8 +192,26 @@ fn a_first_encoder_takes_the_primary_its_spare_pool_began_ahead() {
                 bytes(&buffer).iter().all(|&b| b == round + 1),
                 "round {round}: the fill read back"
             );
+            begun_ahead_past(
+                device,
+                begun.primaries_begun_ahead,
+                &format!("round {round}'s second command buffer"),
+            );
         }
     });
+}
+
+/// Wait until `device` counted a primary begun ahead past `count`
+/// (`WorkCounts::primaries_begun_ahead`), the begin of the pool `what` gave back.
+fn begun_ahead_past(device: &Device, count: u64, what: &str) {
+    let deadline = std::time::Instant::now() + WAIT;
+    while device.work_counts().primaries_begun_ahead == count {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what}: no primary begun ahead after it completed"
+        );
+        std::thread::yield_now();
+    }
 }
 
 /// Empty command buffers one after another make no `vkQueueSubmit` (the module docs).

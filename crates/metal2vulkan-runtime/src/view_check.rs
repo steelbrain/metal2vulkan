@@ -84,7 +84,11 @@
 //!   where no batch is in flight as read with its place in the first work's order held
 //!   (`Device::submit_internal_if_idle`), which every batch takes before its `vkQueueSubmit`:
 //!   it runs behind none of the program's work, and where one went in flight it is not
-//!   submitted and stands by again. Its stand-bys take [`STAND_BY_MOST`] in all at most: a
+//!   submitted and stands by again. It carries none of the program's work either: the first
+//!   work of new resources and the copies queued for the staging queue wait for the program's
+//!   own next submission (a burst of 600 new `Managed` textures on the RX 7900 XTX took 91
+//!   staging submissions and 45 GPU waits from the check's dispatches, job m3-max-39702). Its
+//!   stand-bys take [`STAND_BY_MOST`] in all at most: a
 //!   device whose work never pauses that long within it ends the check there, unchecked, with no
 //!   further attempt (its next device or process checks again, as an unchecked answer is kept
 //!   nowhere); until an answer translation takes no fact. It stands by for no one while a call
