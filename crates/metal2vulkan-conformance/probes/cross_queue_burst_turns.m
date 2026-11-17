@@ -26,7 +26,18 @@
 // far below Metal's 5 s command buffer timeout; no fault, no untracked write, no wait that can
 // hang.
 //
-// WHAT IT MEASURED: not yet run.
+// WHAT IT MEASURED (MTL_DEBUG_LAYER unset; five rounds a case, one process a case):
+//
+//   M3 Max, macOS 27.0.1: B's GPU start 0.1-0.2 ms after its commit for compute and blit, 4.2-4.4
+//     ms for render, ahead of 56-62 of A's 64 command buffers (they began after B's end): the M3
+//     runs the second queue's command buffer among the first queue's burst.
+//   UHD 630, macOS 26.7.1: B's GPU start only after 60-63 of A's 64 had ended, 77-240 ms after
+//     its commit, compute, blit and render alike: the 630 runs the burst first.
+//   Not measured yet: same-queue and one-long on either, and every case on the Radeon Pro 5300M.
+//
+// A's queue allows BURST + 2 command buffers (`newCommandQueueWithMaxCommandBufferCount:`): at
+// the default 64, same-queue's B, made on A's queue while A's 64 were not yet committed, would
+// wait for a free one forever.
 //
 // Run with the case alone for the system default device, or with a part of a device's name
 // first to pick it among `MTLCopyAllDevices()` (an x86 Mac's two GPUs: `5300M`, `630`):
@@ -154,7 +165,7 @@ static void round_of(Probe *p, const char *which, uint32_t iters, int round) {
   BOOL same_queue = strcmp(which, "same-queue") == 0;
   BOOL one_long = strcmp(which, "one-long") == 0;
   const char *kind = same_queue || one_long ? "compute" : which;
-  id<MTLCommandQueue> queue_a = [p->device newCommandQueue];
+  id<MTLCommandQueue> queue_a = [p->device newCommandQueueWithMaxCommandBufferCount:BURST + 2];
   id<MTLCommandQueue> queue_b = same_queue ? queue_a : [p->device newCommandQueue];
   // A's queue warm, alone.
   id<MTLCommandBuffer> warm = spins(p, queue_a, iters, 1);

@@ -23,7 +23,16 @@
 // Shared and tracked (`MTLHazardTrackingModeTracked`), 32 MiB each; no fault, no untracked access,
 // no wait that can hang.
 //
-// WHAT IT MEASURED: not yet run.
+// WHAT IT MEASURED (MTL_DEBUG_LAYER unset; 20 rounds a case, one process a device):
+//
+//   case                     M3 Max, 27.0.1   Radeon Pro 5300M, 26.7.1   UHD 630, 26.7.1
+//   nocopy-two-one-encoder   part in 20       part in 20                 whole in 20
+//   nocopy-one-one-encoder   whole in 20      whole in 20                whole in 20
+//
+// Where the copy saw part of the fill, the rest of its 8.39M words held the bytes from before:
+// about 8.07M-8.11M of them the fill on the M3, 0.18M-0.30M on the 5300M. So Metal orders the
+// fill and the copy through one buffer on all three, and through two no-copy buffers over the
+// same pages on the 630 alone: the M3 and the 5300M ran the copy alongside the fill.
 //
 // Run with the case alone for the system default device, or with a part of a device's name first
 // to pick it among `MTLCopyAllDevices()` (an x86 Mac's two GPUs: `5300M`, `630`); `all` runs both
