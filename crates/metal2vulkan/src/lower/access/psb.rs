@@ -289,19 +289,6 @@ impl PsbMem {
         self.place(fb, addr, u32_, load)
     }
 
-    /// A `PhysicalStorageBuffer` place of a `pointee` at word `word` (a `u32` index) of the
-    /// memory: a typed alias of the words, which only a device address gives (a descriptor view
-    /// is one `u32` array). Atomics take it.
-    pub fn typed_ptr(
-        &self,
-        fb: &mut FunctionBuilder<'_>,
-        word: Value,
-        pointee: TypeId,
-    ) -> BResult<Value> {
-        let addr = self.word_address(fb, word)?;
-        fb.device_place(addr, pointee)
-    }
-
     /// The place of a `pointee` at `addr`: `NonWritable` for a load of read-only memory.
     fn place(
         &self,
