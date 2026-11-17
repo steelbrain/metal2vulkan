@@ -19,8 +19,10 @@
 //! GPU by the first batch on each `VkQueue` after it that the host submits before it saw the copy
 //! complete.
 //! Each test prints the path it saw (`STAGING-BATCH` lines).
+//!
+//! Each test counts once the device's view check answered ([`on_device`]).
 
-use super::host_memory::on_device;
+use super::host_memory;
 use super::read_buffer;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::{
@@ -31,6 +33,18 @@ use std::time::Duration;
 
 /// The longest a command buffer here may take.
 const WAIT: Duration = Duration::from_secs(60);
+
+/// [`host_memory::on_device`], once the device's view check answered
+/// (`Device::settle_view_check`). With no record of it in the scratch cache, the check runs from
+/// the device's making, and each of its timed dispatches is an internal submission, which moves
+/// the counts here: on the RX 7900 XTX all 192 of them landed in a burst of 600 new textures,
+/// which counted 192 internal submissions and 91 staging ones where it expects none.
+fn on_device(test: impl FnOnce(&Device)) {
+    host_memory::on_device(|device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
+        test(device);
+    });
+}
 
 /// The staging queue's bound on the copies queued for one submission (`STAGED_COPIES`).
 const STAGED_COPIES: usize = 4096;
