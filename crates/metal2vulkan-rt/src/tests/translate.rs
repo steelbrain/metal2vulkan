@@ -51,7 +51,7 @@ mod on_device {
     }
 
     /// The state of `descriptor` on `device`, printing what the translator gave where it is
-    /// refused.
+    /// refused: the plain module, and for a `Function` kernel its partial-threadgroups variant.
     fn state(
         name: &str,
         device: &Device,
@@ -60,21 +60,38 @@ mod on_device {
         device
             .new_compute_pipeline_state(descriptor)
             .unwrap_or_else(|error| {
-                let translated = device
-                    .core()
-                    .translator
-                    .compile_compute_pipeline(descriptor, &Budget::standard());
-                if let Ok(pipeline) = translated {
-                    eprintln!(
-                        "{name}: interface {:?}\nconstants {:?}\ndependencies {:?}\nsets {:?}\nflags {:?} subgroup {:?} blob {}",
-                        pipeline.interface,
-                        pipeline.stage.specialization.constants,
-                        pipeline.dependencies,
-                        pipeline.layout.sets,
-                        pipeline.stage.stage_flags,
-                        pipeline.stage.required_subgroup_size,
-                        pipeline.stage.constant_blob.is_some(),
-                    );
+                let translator = &device.core().translator;
+                let budget = Budget::standard();
+                let mut translated = vec![(
+                    "plain",
+                    translator.compile_compute_pipeline(descriptor, &budget),
+                )];
+                if let StageSource::Function(function) = &descriptor.kernel {
+                    let mut inputs = descriptor.lowering_inputs();
+                    inputs.partial_threadgroups = true;
+                    let variant = translator
+                        .compile_function(function, &inputs, &budget)
+                        .and_then(|compiled| {
+                            let mut variant = descriptor.clone();
+                            variant.kernel = StageSource::Compiled(compiled);
+                            translator.compile_compute_pipeline(&variant, &budget)
+                        });
+                    translated.push(("partial-threadgroups variant", variant));
+                }
+                for (which, pipeline) in translated {
+                    match pipeline {
+                        Ok(pipeline) => eprintln!(
+                            "{name}: {which}: interface {:?}\nconstants {:?}\ndependencies {:?}\nsets {:?}\nflags {:?} subgroup {:?} blob {}",
+                            pipeline.interface,
+                            pipeline.stage.specialization.constants,
+                            pipeline.dependencies,
+                            pipeline.layout.sets,
+                            pipeline.stage.stage_flags,
+                            pipeline.stage.required_subgroup_size,
+                            pipeline.stage.constant_blob.is_some(),
+                        ),
+                        Err(refused) => eprintln!("{name}: {which}: refused: {refused}"),
+                    }
                 }
                 panic!("{name}: {error}")
             })
@@ -523,10 +540,23 @@ mod on_device {
                 words(&outs[1], 0, 4 * threads),
             );
             let first = tiled.iter().zip(&shaped).position(|(a, b)| a != b);
-            assert_eq!(
-                first, None,
-                "{name}: the first word the shapes answer apart"
-            );
+            if let Some(word) = first {
+                let thread = word / 4;
+                let pair = &inputs[1][8 * thread..8 * thread + 8];
+                let (a, b) = (
+                    f32::from_le_bytes(pair[..4].try_into().expect("4 bytes")),
+                    f32::from_le_bytes(pair[4..].try_into().expect("4 bytes")),
+                );
+                panic!(
+                    "{name}: word {word} (thread {thread}, word {} of its 4) answers {:#010x} in a tile and {:#010x} at {SHAPE} by 1; the division's operands {a:e} ({:#010x}) / {b:e} ({:#010x}); the state's notes {:?}",
+                    word % 4,
+                    tiled[word],
+                    shaped[word],
+                    a.to_bits(),
+                    b.to_bits(),
+                    state.precision_notes()
+                );
+            }
             println!(
                 "{name}: precise kernel alike over {THREADS} threads in a tile and at {SHAPE} by 1; fast-math twin notes {:?}",
                 fast.precision_notes()
