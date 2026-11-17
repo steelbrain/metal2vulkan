@@ -63,6 +63,19 @@ pub enum Refusal {
     ///
     /// Basis: metal-measured (an Apple M3 Max: newBufferWithLength:0 answers nil).
     EmptyBuffer,
+    /// A buffer longer than [`MAX_BUFFER_LENGTH`](crate::MAX_BUFFER_LENGTH)
+    /// ([`Device::new_buffer`](crate::Device::new_buffer)): a shader reaches a buffer argument's
+    /// bytes by 32-bit offsets from its bind address. Metal answers nil past a device's
+    /// `maxBufferLength`, which the consumer states no larger than this.
+    ///
+    /// Basis: ours (this crate's cap: a buffer's every byte lies within 2^32 bytes of each bind
+    /// address in it).
+    BufferTooLong {
+        /// The buffer's length.
+        length: u64,
+        /// [`MAX_BUFFER_LENGTH`](crate::MAX_BUFFER_LENGTH).
+        max: u64,
+    },
     /// A buffer whose range leaves its block ([`Device::new_buffer`](crate::Device::new_buffer)).
     /// Metal answers nil for a buffer placed past the end of its heap.
     ///
@@ -558,6 +571,9 @@ impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Refusal::EmptyBuffer => f.write_str("Metal makes no buffer of length 0"),
+            Refusal::BufferTooLong { length, max } => {
+                write!(f, "a buffer of {length} bytes is longer than {max}")
+            }
             Refusal::BufferPastBlock {
                 offset,
                 length,

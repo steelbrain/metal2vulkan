@@ -69,7 +69,7 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus, Device, DeviceOptions,
-        Error, Gauges, Instance, Limit, MemoryClass, Refusal, BLOCK_LEN,
+        Error, Gauges, Instance, Limit, MemoryClass, Refusal, BLOCK_LEN, MAX_BUFFER_LENGTH,
     };
     use ash::vk;
     use std::collections::HashMap;
@@ -286,6 +286,68 @@ mod on_device {
         assert_eq!(unmapped, handed, "{name}: the blocks unmapped");
     }
 
+    /// A buffer of exactly [`MAX_BUFFER_LENGTH`] (4 GiB) is made in a Private block of that
+    /// length, and one a byte longer is refused with a typed refusal, before its range is looked
+    /// at; with the block released and the device dropped, every gauge is zero. A device whose
+    /// largest block or memory is smaller skips the 4 GiB buffer visibly.
+    #[test]
+    fn a_buffer_of_4_gib_is_made_and_a_longer_one_refused() {
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(
+            !devices.is_empty(),
+            "the loader lists no device of this cfg's kind"
+        );
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let counters = device.counters();
+            let block = match device.take_block(MemoryClass::Private, MAX_BUFFER_LENGTH) {
+                Ok(block) => block,
+                Err(
+                    error @ (Error::Limit(Limit::BlockLen { .. })
+                    | Error::Vulkan {
+                        result:
+                            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                            | vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+                        ..
+                    }),
+                ) => {
+                    eprintln!("SKIPPED: {name}: no Private block of 4 GiB: {error}");
+                    continue;
+                }
+                Err(error) => panic!("{name}: {error}"),
+            };
+            assert_eq!(block.len, MAX_BUFFER_LENGTH, "{name}");
+            let buffer = device
+                .new_buffer(block.id, 0, MAX_BUFFER_LENGTH, false)
+                .expect("a buffer of 4 GiB");
+            assert_eq!(
+                (buffer.gpu_address(), buffer.length()),
+                (block.gpu_address, MAX_BUFFER_LENGTH),
+                "{name}"
+            );
+            match device.new_buffer(block.id, 0, MAX_BUFFER_LENGTH + 1, false) {
+                Err(Error::Refused(Refusal::BufferTooLong { length, max })) => {
+                    assert_eq!((length, max), (MAX_BUFFER_LENGTH + 1, MAX_BUFFER_LENGTH))
+                }
+                other => panic!("{name}: a buffer of 4 GiB and a byte: {:?}", other.err()),
+            }
+            assert_eq!(
+                counters.gauges().buffers,
+                1,
+                "{name}: only the 4 GiB buffer"
+            );
+            drop(buffer);
+            device.release_block(block.id).expect("a release");
+            drop(device);
+            let gauges = counters.gauges();
+            print_gauges_at_drop("buffer_4_gib", gauges);
+            assert_eq!(gauges, Gauges::default(), "{name}: gauges after teardown");
+            println!("memory: {name}: a buffer of 4 GiB made, 4 GiB and a byte refused");
+        }
+    }
+
     /// Blocks of both classes are handed out zeroed, buffers view them, a zeroed buffer zeroes
     /// exactly its bytes, the refusals are Metal's, a released block lives until its last buffer
     /// is gone and is then freed through the hook while still mapped, and teardown frees the rest
@@ -426,6 +488,15 @@ mod on_device {
                 device.new_buffer(shared.id, 0, 0, false),
                 Err(Error::Refused(Refusal::EmptyBuffer))
             ));
+            // Past 4 GiB, whatever the block: the length is refused before the range.
+            for length in [MAX_BUFFER_LENGTH + 1, u64::MAX] {
+                match device.new_buffer(shared.id, 0, length, false) {
+                    Err(Error::Refused(Refusal::BufferTooLong { length: l, max })) => {
+                        assert_eq!((l, max), (length, MAX_BUFFER_LENGTH), "{name}")
+                    }
+                    other => panic!("{name}: a buffer of {length}: {:?}", other.err()),
+                }
+            }
             for (offset, length) in [(BLOCK_LEN - 4, 8), (u64::MAX, 2), (BLOCK_LEN, 1)] {
                 match device.new_buffer(shared.id, offset, length, false) {
                     Err(Error::Refused(Refusal::BufferPastBlock {

@@ -38,7 +38,7 @@ mod texture;
 mod times;
 
 pub use arrays::{IndexClass, IndexGrant, ResourceId};
-pub use buffer::Buffer;
+pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};
 pub use device::{Device, DeviceOptions, RawDevice};

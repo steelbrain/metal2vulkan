@@ -7,6 +7,12 @@ use crate::memory::{Block, BlockId, Mapping, MemoryClass};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+/// The longest buffer [`Device::new_buffer`] makes: 4 GiB. A shader reaches a buffer argument's
+/// bytes by 32-bit offsets from its bind address, so a byte of a longer buffer could lie where no
+/// access reaches it. Metal answers nil past a device's `maxBufferLength`; the consumer states
+/// one no larger than this.
+pub const MAX_BUFFER_LENGTH: u64 = 1 << 32;
+
 /// `MTLBuffer`: `length` bytes at `offset` in a block the consumer took, with no `VkBuffer` or
 /// memory of its own. Shaders reach it by its device address.
 ///
@@ -46,8 +52,9 @@ impl Device {
     /// holds the block until it completes. A buffer placed in a heap passes false: Metal does not
     /// zero heap memory.
     ///
-    /// Err: [`Refusal::EmptyBuffer`] for a length of 0 and [`Refusal::BufferPastBlock`] for a
-    /// range that leaves the block, where Metal answers nil; [`Error::NoSuchBlock`] for a block the
+    /// Err: [`Refusal::EmptyBuffer`] for a length of 0, [`Refusal::BufferTooLong`] for a length
+    /// past [`MAX_BUFFER_LENGTH`] and [`Refusal::BufferPastBlock`] for a range that leaves the
+    /// block, where Metal answers nil; [`Error::NoSuchBlock`] for a block the
     /// consumer does not hold; for a zeroed Private buffer, [`Error::Quiesced`], and
     /// [`Error::Vulkan`] where the upload's command buffer cannot be made.
     pub fn new_buffer(
@@ -59,6 +66,12 @@ impl Device {
     ) -> Result<Buffer, Error> {
         if length == 0 {
             return Err(Error::Refused(Refusal::EmptyBuffer));
+        }
+        if length > MAX_BUFFER_LENGTH {
+            return Err(Error::Refused(Refusal::BufferTooLong {
+                length,
+                max: MAX_BUFFER_LENGTH,
+            }));
         }
         let block = self.block(block)?;
         let block_len = block.memory.len;
