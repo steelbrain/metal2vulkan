@@ -299,9 +299,25 @@ impl<D: ComputeDevice> Harness<D> {
         }
     }
 
-    /// `plan`'s pipeline states, one per kernel, from its library, which
-    /// [`load`](Self::load) made, and its buffers.
+    /// `plan`'s textures and sampler states, its pipeline states, one per kernel, from its
+    /// library, which [`load`](Self::load) made, and its buffers. The textures come first: a
+    /// runtime that makes none refuses the plan for that before its kernels are translated.
     fn make(&self, plan: &Plan) -> Result<Made<D>> {
+        let textures = (plan.textures.iter())
+            .map(|texture| self.device.new_texture(texture.width, texture.height))
+            .collect::<Result<Vec<_>>>()?;
+        let mut samplers: Vec<(Filter, D::SamplerState)> = Vec::new();
+        for binding in plan
+            .dispatches
+            .iter()
+            .flat_map(|dispatch| &dispatch.bindings)
+        {
+            if let Binding::Sampler { filter, .. } = binding {
+                if !samplers.iter().any(|(made, _)| made == filter) {
+                    samplers.push((*filter, self.device.new_sampler_state(*filter)?));
+                }
+            }
+        }
         let library = self.library(&plan.library);
         // Each function and its constants' values, made once.
         let mut functions: Vec<(&str, &[Constant])> = Vec::new();
@@ -323,21 +339,6 @@ impl<D: ComputeDevice> Harness<D> {
         let buffers = (plan.buffers.iter())
             .map(|buffer| self.device.new_buffer(buffer.length, buffer.storage))
             .collect::<Result<Vec<_>>>()?;
-        let textures = (plan.textures.iter())
-            .map(|texture| self.device.new_texture(texture.width, texture.height))
-            .collect::<Result<Vec<_>>>()?;
-        let mut samplers: Vec<(Filter, D::SamplerState)> = Vec::new();
-        for binding in plan
-            .dispatches
-            .iter()
-            .flat_map(|dispatch| &dispatch.bindings)
-        {
-            if let Binding::Sampler { filter, .. } = binding {
-                if !samplers.iter().any(|(made, _)| made == filter) {
-                    samplers.push((*filter, self.device.new_sampler_state(*filter)?));
-                }
-            }
-        }
         Ok(Made {
             buffers,
             textures,
