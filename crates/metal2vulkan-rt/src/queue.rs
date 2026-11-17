@@ -116,14 +116,32 @@ impl CommandQueue {
         ))
     }
 
-    /// No Metal counterpart: ends every command buffer of the queue the submit thread holds or has
-    /// not yet submitted with [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun),
-    /// and runs their handlers, as a Mac drops a dead process's held command buffers. One enqueued
-    /// and not yet committed ends so at its commit. Segments already submitted still complete.
-    /// The queue stays usable.
+    /// No Metal counterpart: ends every command buffer of the queue the submit thread holds at an
+    /// event wait or has not yet scheduled with
+    /// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun), and runs their handlers,
+    /// as a Mac drops a dead process's held command buffers. One enqueued and not yet committed
+    /// ends so at its commit. Segments already submitted still complete, and so does a group of
+    /// scheduled command buffers the queue holds while two of its submissions run. Each ended
+    /// command buffer retires in the queue's order, behind its work held or in flight. The queue
+    /// stays usable.
     pub fn abandon(&self) {
         let core = self.device.core();
         core.work.abandon(core, &self.inner);
+    }
+
+    /// No Metal counterpart: the wait hint. Where `command_buffer`, of this queue, is committed and
+    /// not yet submitted, its group goes now, as a host wait for it sends it
+    /// ([`CommandBuffer::wait_until_completed`]): held in a group while two of the queue's
+    /// submissions run, or committed behind such a group, or at an event wait (then its group goes
+    /// as it is staged). For a consumer that learns of a wait the runtime does not see.
+    ///
+    /// Callable from any thread: it takes the submit side's lock briefly and waits for no GPU
+    /// work. A no-op for a command buffer already submitted, completed or ended, not yet
+    /// committed, or of another queue: it makes no submission.
+    pub fn send_now(&self, command_buffer: &CommandBuffer) {
+        if command_buffer.is_of(&self.inner) {
+            command_buffer.send();
+        }
     }
 
     /// No Metal counterpart: the device the queue was made on.

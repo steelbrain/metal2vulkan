@@ -48,7 +48,9 @@ pub enum CommandBufferStatus {
     Enqueued,
     /// `MTLCommandBufferStatusCommitted`: also while the submit thread holds a later segment.
     Committed,
-    /// `MTLCommandBufferStatusScheduled`: the last segment has passed `vkQueueSubmit2`.
+    /// `MTLCommandBufferStatusScheduled`: the last segment is in a submission: passed to
+    /// `vkQueueSubmit2`, or in a group its queue holds while two of its submissions run, which
+    /// goes with no other call.
     Scheduled,
     /// `MTLCommandBufferStatusCompleted`.
     Completed,
@@ -94,7 +96,7 @@ struct CbState {
     /// Until commit: what is recorded, and the device.
     building: Option<Building>,
     /// Ended while enqueued and not yet committed (an abandon, a loss or a quiesce): the commit
-    /// ends it with this error at once.
+    /// ends it with this error, behind its queue's work held or in flight.
     ended: Option<CommandBufferError>,
     times: Times,
     /// An encoder holds `building`.
@@ -376,23 +378,20 @@ impl CommandBuffer {
         };
         state.status = CommandBufferStatus::Committed;
         self.inner.changed.notify_all();
-        let ended = state.ended.or(work
-            .lost()
-            .then_some(CommandBufferError::DeviceLost { in_flight: false }));
+        let ended = state.ended;
         drop(state);
         // Where it is the last handle, the device ends below, once no lock is held.
         let last = device.release();
-        match ended {
-            Some(error) => {
-                drop(work);
-                core.done
-                    .end_all(&core, vec![(Arc::clone(&self.inner), pending, error)]);
-            }
-            None => {
-                work.commit(&self.inner, pending);
-                drop(work);
-                core.work.wake();
-            }
+        if work.lost() {
+            drop(work);
+            let error = ended.unwrap_or(CommandBufferError::DeviceLost { in_flight: false });
+            core.done
+                .end_all(&core, vec![(Arc::clone(&self.inner), pending, error)]);
+        } else {
+            // One ended while enqueued retires behind its queue's work held or in flight.
+            work.commit(&self.inner, pending, ended);
+            drop(work);
+            core.work.wake();
         }
         drop(core);
         drop(last);
@@ -400,9 +399,8 @@ impl CommandBuffer {
     }
 
     /// `waitUntilScheduled`: returns once the command buffer is scheduled, or has completed or
-    /// ended.
+    /// ended. It sends nothing: a command buffer held in a group is scheduled already.
     pub fn wait_until_scheduled(&self) {
-        self.send_if_held();
         let mut state = self.state();
         while !matches!(
             state.status,
@@ -415,24 +413,33 @@ impl CommandBuffer {
     }
 
     /// `waitUntilCompleted`: returns once the command buffer has completed or ended and its
-    /// handlers have run.
+    /// handlers have run. A command buffer held in a group goes at once, as
+    /// [`CommandQueue::send_now`](crate::CommandQueue::send_now) sends it.
     pub fn wait_until_completed(&self) {
-        self.send_if_held();
+        self.send();
         let mut state = self.state();
         while !state.finished {
             state = self.wait(state);
         }
     }
 
-    /// Before a host wait: a command buffer committed and not yet submitted goes at once, in a
-    /// batch the submit thread would otherwise keep while earlier submissions run.
-    fn send_if_held(&self) {
-        if self.state().status != CommandBufferStatus::Committed {
+    /// Before a host wait for it: where the command buffer is committed and not yet submitted,
+    /// its group goes at once (`Work::send`).
+    pub(crate) fn send(&self) {
+        if !matches!(
+            self.status(),
+            CommandBufferStatus::Committed | CommandBufferStatus::Scheduled
+        ) {
             return;
         }
         if let Some(core) = self.inner.queue.core() {
-            core.work.send();
+            core.work.send(&self.inner);
         }
+    }
+
+    /// Whether the command buffer is `queue`'s.
+    pub(crate) fn is_of(&self, queue: &QueueInner) -> bool {
+        self.inner.queue.is(queue)
     }
 
     fn wait<'a>(&self, state: MutexGuard<'a, CbState>) -> MutexGuard<'a, CbState> {
@@ -459,8 +466,8 @@ impl CommandBuffer {
     }
 
     /// `kernelEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives
-    /// seconds: the host time when the `vkQueueSubmit2` that passed the last segment returned; 0
-    /// before the command buffer is scheduled, and for one that ended without being scheduled.
+    /// seconds: the host time at which it was scheduled, its last segment joining a submission; 0
+    /// before then, and for one that ended without being scheduled.
     pub fn kernel_end_time(&self) -> u64 {
         self.state().times.kernel_end
     }
@@ -474,9 +481,10 @@ impl CommandBuffer {
     }
 
     /// `GPUEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives seconds:
-    /// the host time at which the completion thread saw the command buffer complete, so a queue's
-    /// end times never decrease in completion order. 0 until it completes, and for one that ended
-    /// with an error.
+    /// the host time at which the completion thread saw the command buffer complete, less the GPU's
+    /// ticks from its end timestamp to that of the last command buffer seen complete with it, so
+    /// each command buffer of a submission has its own end. End times never decrease in
+    /// completion order. 0 until it completes, and for one that ended with an error.
     pub fn gpu_end_time(&self) -> u64 {
         self.state().times.gpu_end
     }
@@ -728,7 +736,8 @@ impl Building {
 }
 
 impl CbInner {
-    /// The submit thread passed the last segment to `vkQueueSubmit2`, which returned at `now`.
+    /// The last segment joined a submission at `now`: passed to `vkQueueSubmit2` at once, or held
+    /// in its queue's group.
     pub(crate) fn scheduled(&self, now: u64) {
         let mut state = lock(&self.state);
         state.status = CommandBufferStatus::Scheduled;
@@ -740,6 +749,18 @@ impl CbInner {
     pub(crate) fn end_uncommitted(&self, error: CommandBufferError) {
         lock(&self.state).ended = Some(error);
     }
+
+    /// Its start and end timestamps, once it completed.
+    pub(crate) fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
+        // SAFETY: the queue's pool holds the command buffer's two queries.
+        unsafe {
+            readback::timestamps(
+                &core.device,
+                self.queue.stamps.pool,
+                Stamps::first(self.slot),
+            )
+        }
+    }
 }
 
 /// On the completion thread: runs the scheduled handlers of a command buffer just submitted.
@@ -750,29 +771,17 @@ pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
     }
 }
 
-/// On the completion thread: retires a command buffer that completed (`error` None), seen at host
-/// time `seen`, or ended, recycling its recorder and giving up its blocks and its place in the
-/// queue, then runs its handlers.
+/// On the completion thread: retires a command buffer that completed (`error` None), with its GPU
+/// times where they were read, or ended, recycling its recorder and giving up its blocks and its
+/// place in the queue, then runs its handlers.
 pub(crate) fn retire(
     core: &Core,
     inner: Arc<CbInner>,
     gpu: Gpu,
     handlers: Handlers,
     error: Option<CommandBufferError>,
-    seen: u64,
+    gpu_times: Option<(u64, u64)>,
 ) {
-    let gpu_times = match error {
-        // SAFETY: the queue's pool holds the command buffer's two queries.
-        None => unsafe {
-            readback::timestamps(
-                &core.device,
-                inner.queue.stamps.pool,
-                Stamps::first(inner.slot),
-            )
-        }
-        .map(|(start, end)| core.ticks.gpu_times(seen, start, end)),
-        Some(_) => None,
-    };
     {
         let mut state = lock(&inner.state);
         if let Some((start, end)) = gpu_times {

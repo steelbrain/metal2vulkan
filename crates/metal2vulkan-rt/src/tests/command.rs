@@ -613,6 +613,223 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A Private buffer of a whole block, for work that keeps the GPU busy.
+    fn private(device: &Device) -> Buffer {
+        let block = device
+            .take_block(MemoryClass::Private, 1)
+            .expect("a Private block");
+        device
+            .new_buffer(block.id, 0, BLOCK_LEN, false)
+            .expect("a buffer")
+    }
+
+    /// Commits a command buffer of `fills` fills of `buffer`: work that runs for a while.
+    fn busy(queue: &CommandQueue, buffer: &Buffer, fills: u32) -> CommandBuffer {
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let target = buffer.held_block().memory.buffer;
+        let (offset, size) = (buffer.offset(), buffer.length());
+        command_buffer
+            .record_for_test(&[buffer], |device, command| {
+                for word in 0..fills {
+                    // SAFETY: the command buffer is recording; the range is the buffer's, in
+                    // whole words.
+                    unsafe { device.cmd_fill_buffer(command, target, offset, size, word) };
+                }
+            })
+            .expect("fills");
+        command_buffer.commit().expect("a commit");
+        command_buffer
+    }
+
+    /// Runs `body` with two command buffers of busy work committed on `queue` and so in flight,
+    /// each of more fills each time, until `body` answers that it checked what it holds while
+    /// they ran: that the work did not end first.
+    fn behind_two(
+        name: &str,
+        device: &Device,
+        queue: &CommandQueue,
+        mut body: impl FnMut(&[CommandBuffer; 2], u64) -> bool,
+    ) {
+        let buffer = private(device);
+        let checked = [16, 64, 256, 1024].into_iter().any(|fills| {
+            let before = device.counters().metrics().submissions;
+            let running = [busy(queue, &buffer, fills), busy(queue, &buffer, fills)];
+            let checked = body(&running, before);
+            for command_buffer in &running {
+                finished(name, command_buffer);
+            }
+            checked
+        });
+        assert!(checked, "{name}: the busy work ended before every check");
+    }
+
+    /// A group is held only while two of its queue's submissions are not seen complete, and the
+    /// completion that leaves fewer sends it: a command buffer committed behind two running ones,
+    /// with no later commit and no host wait, runs once the first of them completes.
+    #[test]
+    fn every_device_sends_a_held_group_when_a_submission_completes() {
+        each_device("command_release", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            behind_two(name, &device, &queue, |_, before| {
+                let held = queue.command_buffer().expect("a command buffer");
+                fill(&held, &buffer, 7);
+                held.commit().expect("a commit");
+                within(name, || held.status() != CommandBufferStatus::Committed);
+                let submissions = device.counters().metrics().submissions - before;
+                within(name, || held.status() == CommandBufferStatus::Completed);
+                assert_eq!(word(&buffer), 7, "{name}");
+                let after = device.counters().metrics().submissions - before;
+                assert_eq!(after, 3, "{name}: one submission each");
+                // Scheduled while the two ran: it was held, then sent by a completion.
+                submissions == 2
+            });
+            drop((buffer, arena, queue, device));
+        });
+    }
+
+    /// The command buffers of one submission retire in commit order, each with its own status
+    /// and GPU times: a group held behind two running submissions takes a command buffer, one
+    /// ended by an abandon while enqueued and committed after it, and two more; they complete in
+    /// that order, the ended one `NotRun` with no times, the others each ending later than the
+    /// one before.
+    #[test]
+    fn every_device_retires_a_group_in_commit_order_with_an_ended_command_buffer() {
+        each_device("command_group_order", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffers = [arena.buffer(), arena.buffer(), arena.buffer()];
+            let work = private(&device);
+            let queue = queue(&device);
+            behind_two(name, &device, &queue, |_, before| {
+                let log = Log::default();
+                let first = queue.command_buffer().expect("a command buffer");
+                fill(&first, &buffers[0], 1);
+                log.handlers("1", &first);
+                first.commit().expect("a commit");
+                let ended = queue.command_buffer().expect("a command buffer");
+                log.handlers("2", &ended);
+                ended.enqueue().expect("an enqueue");
+                queue.abandon();
+                ended.commit().expect("a commit");
+                let rest: Vec<CommandBuffer> = (0..2)
+                    .map(|index| {
+                        let command_buffer = queue.command_buffer().expect("a command buffer");
+                        fill(&command_buffer, &buffers[1 + index], 3 + index as u32);
+                        // Long enough that each ends measurably after the one before.
+                        let target = work.held_block().memory.buffer;
+                        command_buffer
+                            .record_for_test(&[&work], |device, command| {
+                                // SAFETY: as `busy`'s.
+                                unsafe { device.cmd_fill_buffer(command, target, 0, BLOCK_LEN, 0) };
+                            })
+                            .expect("a fill");
+                        log.handlers(&(3 + index).to_string(), &command_buffer);
+                        command_buffer.commit().expect("a commit");
+                        command_buffer
+                    })
+                    .collect();
+                within(name, || rest[1].status() != CommandBufferStatus::Committed);
+                let submissions = device.counters().metrics().submissions - before;
+                for command_buffer in [&first, &ended].into_iter().chain(&rest) {
+                    finished(name, command_buffer);
+                }
+                let completed: Vec<String> = (log.lines().into_iter())
+                    .filter(|line| line.contains("completed"))
+                    .collect();
+                assert_eq!(
+                    completed,
+                    [
+                        "1 completed Completed None",
+                        "2 completed Error Some(NotRun)",
+                        "3 completed Completed None",
+                        "4 completed Completed None",
+                    ],
+                    "{name}"
+                );
+                assert_eq!(
+                    (word(&buffers[0]), word(&buffers[1]), word(&buffers[2])),
+                    (1, 3, 4),
+                    "{name}"
+                );
+                assert_eq!(
+                    (ended.gpu_start_time(), ended.gpu_end_time()),
+                    (0, 0),
+                    "{name}"
+                );
+                let times: Vec<(u64, u64)> = [&first, &rest[0], &rest[1]]
+                    .iter()
+                    .map(|cb| (cb.gpu_start_time(), cb.gpu_end_time()))
+                    .collect();
+                for &(start, end) in &times {
+                    assert!(0 < start && start <= end, "{name}: {times:?}");
+                }
+                assert!(
+                    times[0].1 < times[1].1 && times[1].1 < times[2].1,
+                    "{name}: each ends after the one before: {times:?}"
+                );
+                if submissions == 2 {
+                    // All three were held while the two ran, so they went as one submission.
+                    let after = device.counters().metrics().submissions - before;
+                    assert_eq!(after, 3, "{name}: one group");
+                }
+                submissions == 2
+            });
+            drop((buffers, work, arena, queue, device));
+        });
+    }
+
+    /// `send_now`, the wait hint, from another thread: a command buffer held in a group behind two
+    /// running submissions goes at once, and the call returns while they still run. A call for a
+    /// command buffer already submitted or completed, one not committed, or another queue's makes
+    /// no submission.
+    #[test]
+    fn every_device_sends_a_held_group_at_the_wait_hint() {
+        each_device("command_send_now", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let other = device.new_command_queue(4).expect("a queue");
+            behind_two(name, &device, &queue, |running, before| {
+                let held = queue.command_buffer().expect("a command buffer");
+                fill(&held, &buffer, 9);
+                held.commit().expect("a commit");
+                within(name, || held.status() != CommandBufferStatus::Committed);
+                let submissions = device.counters().metrics().submissions - before;
+                thread::scope(|scope| {
+                    scope
+                        .spawn(|| queue.send_now(&held))
+                        .join()
+                        .expect("the hint");
+                });
+                // Returned with the queue's work still running: it waited for none of it.
+                let checked =
+                    submissions == 2 && running[1].status() != CommandBufferStatus::Completed;
+                within(name, || {
+                    device.counters().metrics().submissions - before == 3
+                });
+                // The hint for one submitted makes no submission.
+                queue.send_now(&running[1]);
+                finished(name, &held);
+                assert_eq!(word(&buffer), 9, "{name}");
+                let uncommitted = queue.command_buffer().expect("a command buffer");
+                for stale in [&held, &running[0], &uncommitted] {
+                    queue.send_now(stale);
+                }
+                other.send_now(&held);
+                thread::sleep(Duration::from_millis(20));
+                assert_eq!(
+                    device.counters().metrics().submissions - before,
+                    3,
+                    "{name}: a stale hint makes no submission"
+                );
+                drop(uncommitted);
+                checked
+            });
+            drop((buffer, arena, queue, other, device));
+        });
+    }
+
     /// Abandon ends the queue's held and unsubmitted command buffers with NotRun and runs their
     /// handlers; the part already submitted ran, the rest never does, and the queue goes on.
     #[test]

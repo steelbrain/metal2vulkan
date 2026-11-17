@@ -6,7 +6,7 @@ use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Handlers, 
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
-use crate::submit::{Ended, Upload};
+use crate::submit::{Ended, Finished, Joined, Upload};
 use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
@@ -31,7 +31,7 @@ pub(crate) struct Done {
 }
 
 struct DoneState {
-    /// Command buffers just submitted, with their scheduled handlers.
+    /// Command buffers just scheduled, with their scheduled handlers.
     scheduled: Vec<(Arc<CbInner>, Vec<Handler>)>,
     /// Work submitted, by progress value: each retires once the progress semaphore reaches it.
     flight: VecDeque<Retiree>,
@@ -190,47 +190,44 @@ impl Done {
         state.waiting = Waiting::Not;
     }
 
-    /// From the submit thread: a batch passed to `vkQueueSubmit2` with progress `value`.
+    /// From the submit thread: command buffers scheduled as they joined a submission, with their
+    /// scheduled handlers, ahead of that submission.
+    pub(crate) fn scheduled(&self, core: &Core, joined: Vec<Joined>) {
+        if joined.is_empty() {
+            return;
+        }
+        let mut state = self.lock();
+        state.scheduled.extend(joined);
+        self.wake(&mut state, &core.device, false);
+    }
+
+    /// From the submit thread: a submission passed to `vkQueueSubmit2` with progress `value`.
+    /// Its command buffers retire in order once it completes, each ended one with its error.
     pub(crate) fn submitted(
         &self,
         core: &Core,
         value: u64,
         upload: Option<Upload>,
-        finished: Vec<(Arc<CbInner>, Pending)>,
+        finished: Vec<Finished>,
         watch: Vec<Arc<EventInner>>,
     ) {
         let mut state = self.lock();
-        let mut flight_only = watch.is_empty();
+        let flight_only = watch.is_empty();
         if let Some(upload) = upload {
             state.flight.push_back(Retiree {
                 value,
                 item: Item::Upload(upload),
             });
         }
-        for (cb, pending) in finished {
-            let Pending {
-                gpu,
-                handlers:
-                    Handlers {
-                        scheduled,
-                        completed,
-                    },
-                ..
-            } = pending;
-            if !scheduled.is_empty() {
-                flight_only = false;
-                state.scheduled.push((Arc::clone(&cb), scheduled));
-            }
+        for (cb, pending, error) in finished {
+            let Pending { gpu, handlers, .. } = pending;
             state.flight.push_back(Retiree {
                 value,
                 item: Item::Command {
                     cb,
                     gpu,
-                    handlers: Handlers {
-                        scheduled: Vec::new(),
-                        completed,
-                    },
-                    error: None,
+                    handlers,
+                    error,
                 },
             });
         }
@@ -303,16 +300,26 @@ pub(crate) fn lose(core: &Core) {
 }
 
 impl Retiree {
-    /// Retires it; `seen` is the host time its completion was seen.
-    fn retire(self, core: &Core, seen: u64) {
+    /// Retires it, a command buffer with its GPU times where it completed.
+    fn retire(self, core: &Core, times: Option<(u64, u64)>) {
         match self.item {
             Item::Command {
                 cb,
                 gpu,
                 handlers,
                 error,
-            } => command::retire(core, cb, gpu, handlers, error, seen),
+            } => command::retire(core, cb, gpu, handlers, error, times),
             Item::Upload(upload) => upload.retire(core),
+        }
+    }
+
+    /// A completed command buffer's two timestamps.
+    fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
+        match &self.item {
+            Item::Command {
+                cb, error: None, ..
+            } => cb.stamps(core),
+            _ => None,
         }
     }
 
@@ -329,6 +336,8 @@ impl Retiree {
 pub(crate) fn run(core: Arc<Core>) {
     let done = &core.done;
     let device = &core.device;
+    // The latest GPU end time given: none given later is earlier.
+    let mut latest: u64 = 0;
     let mut state = done.lock();
     loop {
         let scheduled = std::mem::take(&mut state.scheduled);
@@ -400,8 +409,20 @@ pub(crate) fn run(core: Arc<Core>) {
             for (cb, handlers) in scheduled {
                 command::run_scheduled(cb, handlers);
             }
-            for retiree in retire {
-                retiree.retire(&core, seen);
+            // Each completed command buffer's end is placed before `seen` by the ticks between its
+            // end timestamp and that of the last one seen complete in this pass, which ended
+            // last: every segment's end barrier orders the commands after it on the one queue.
+            let stamps: Vec<Option<(u64, u64)>> =
+                retire.iter().map(|retiree| retiree.stamps(&core)).collect();
+            let last = stamps.iter().rev().flatten().next().map(|&(_, end)| end);
+            for (retiree, stamps) in retire.into_iter().zip(stamps) {
+                let times = stamps.zip(last).map(|((start, end), last)| {
+                    let (start, end) = core.ticks.place(seen, last, start, end);
+                    let late = latest.saturating_sub(end);
+                    latest = latest.max(end + late);
+                    (start + late, end + late)
+                });
+                retiree.retire(&core, times);
             }
             for (listener, value) in fire {
                 listener(value);

@@ -1,13 +1,17 @@
-//! The submit thread: each queue's FIFO of command buffers, the holds at event waits, the upload
-//! that goes ahead of later commits, and the batches it passes to `vkQueueSubmit2`.
+//! The submit thread: each queue's FIFO of command buffers, the holds at event waits, the groups
+//! held while a queue's earlier submissions run, the upload that goes ahead of later commits, and
+//! the submissions it passes to `vkQueueSubmit2`.
 //!
-//! A batch ends at most [`GROUP`] command buffers. A full one goes at once; one the thread runs out
-//! of ready segments for goes at once too, unless [`IN_FLIGHT`] submissions are not yet seen
-//! complete: then it is kept, and takes what is committed meanwhile, until one of them completes,
-//! it fills, or something waits for it (a host wait on one of its command buffers, an upload to
-//! flush, the device stopping).
+//! Each queue groups on its own. While fewer than [`IN_FLIGHT`] of the queue's submissions are
+//! not seen complete, each of its command buffers goes at once, alone. While that many run, the
+//! ones committed meanwhile are held in one group of at most [`GROUP`], which goes when it fills,
+//! when a completion leaves fewer running (the completion thread wakes the thread as it retires),
+//! when the host is to wait for one of them ([`Work::send`]), or at teardown. A segment that
+//! signals an event ends its group, which goes at once; one that waits on a semaphore leads a new
+//! group, the one held going first. A group is one submission with one signal of the progress
+//! semaphore, which the completion thread follows in commit order.
 
-use crate::command::{CbInner, CommandBufferError, Pending, Segment};
+use crate::command::{CbInner, CommandBufferError, Handler, Pending, Segment};
 use crate::complete;
 use crate::counters::Metric;
 use crate::device::{lock, Core};
@@ -24,40 +28,37 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
-/// The command buffers one batch ends at most.
+/// The command buffers one submission ends at most.
 const GROUP: usize = 4;
 
-/// The submissions not yet seen complete at which a batch not full is kept.
+/// The submissions of a queue not yet seen complete at which its command buffers are held in a
+/// group.
 const IN_FLIGHT: usize = 2;
 
 /// The submit side: the FIFOs and the upload, and the submit thread's wake-up.
 pub(crate) struct Work {
     state: Mutex<WorkState>,
     changed: Condvar,
-    /// The thread keeps a batch: the completion thread wakes it as submissions complete.
+    /// A queue holds a group: the completion thread wakes the thread as submissions complete.
     keeping: AtomicBool,
 }
 
 pub(crate) struct WorkState {
-    /// The queues with command buffers enqueued or committed and not yet fully submitted.
+    /// The queues with command buffers enqueued, committed, held or in flight.
     fifos: Vec<Fifo>,
     /// The next command buffer's place in the commit order.
     next_seq: u64,
-    /// The progress value of the last batch submitted.
+    /// The next FIFO entry's place in its queue's order.
+    next_place: u64,
+    /// The progress value of the last submission.
     progress: u64,
-    /// The progress values of the submissions not yet seen complete, in order.
-    in_flight: VecDeque<u64>,
-    /// The batch staged and kept while [`IN_FLIGHT`] submissions are not seen complete.
-    kept: Option<Batch>,
     /// Zero fills recorded and not yet submitted.
     upload: Option<Upload>,
-    /// Something changed that may let a held segment go.
+    /// Something changed that may let a held segment or group go.
     dirty: bool,
-    /// The upload is to go at once, alone where no segment is ready ([`Work::flush`]).
+    /// The upload is to go at once, alone where no group goes ([`Work::flush`]).
     flush: bool,
-    /// The host waits for a command buffer committed: what is ready goes at once ([`Work::send`]).
-    send: bool,
-    /// The submit thread is to end: it submits what is ready, then ends what is held.
+    /// The submit thread is to end: what is held in groups goes, then what is held at waits ends.
     stop: bool,
     /// Quiesced or torn down: commits and uploads are refused.
     closed: bool,
@@ -67,17 +68,32 @@ pub(crate) struct WorkState {
 struct Fifo {
     queue: Arc<QueueInner>,
     entries: VecDeque<Entry>,
+    /// The group staged and not yet submitted.
+    group: Option<Batch>,
+    /// The progress values of the queue's submissions not yet seen complete, in order.
+    in_flight: VecDeque<u64>,
+    /// A host wait is to come for the command buffer at this place: a group from it or before
+    /// goes at once.
+    send_through: u64,
+    /// The progress value at which the last command buffer it ended with nothing held retires:
+    /// the next retires no earlier.
+    behind: u64,
 }
 
 struct Entry {
     cb: Arc<CbInner>,
+    /// Its place in its queue's order.
+    place: u64,
     /// None while enqueued and not committed.
     pending: Option<Pending>,
+    /// Ended before it was submitted: it retires with this error behind its queue's earlier
+    /// work.
+    error: Option<CommandBufferError>,
 }
 
 /// Commands recorded into one command buffer apart from any command buffer of the guest's (zero
-/// fills, and later transfers), submitted ahead of everything in the next batch, which keeps what
-/// they use until it retires.
+/// fills, and later transfers), submitted ahead of everything in the next submission, which keeps
+/// what they use until it retires.
 pub(crate) struct Upload {
     pub(crate) recorder: Recorder,
     command: vk::CommandBuffer,
@@ -105,14 +121,19 @@ impl Held {
     }
 }
 
-/// What one `vkQueueSubmit2` submits.
+/// One queue's group: what one `vkQueueSubmit2` submits of it.
 struct Batch {
-    value: u64,
-    upload: Option<Upload>,
+    /// The place of the first command buffer with a segment in it.
+    first: u64,
     segments: Vec<Staged>,
-    /// Command buffers whose last segment is in the batch.
-    finished: Vec<(Arc<CbInner>, Pending)>,
-    /// Events the batch signals that the completion thread is not yet watching.
+    /// Command buffers whose last segment is in it, and those that ended behind them, in the
+    /// queue's order.
+    finished: Vec<Finished>,
+    /// The command buffers whose last segment is in it.
+    count: usize,
+    /// It holds segments of its queue's head, whose last is not yet staged.
+    partial: bool,
+    /// Events it signals that the completion thread is not yet watching.
     watch: Vec<Arc<EventInner>>,
 }
 
@@ -124,8 +145,24 @@ struct Staged {
     signals: Vec<vk::SemaphoreSubmitInfo<'static>>,
 }
 
+/// A command buffer of a submission: with an error where it ended before it was submitted.
+pub(crate) type Finished = (Arc<CbInner>, Pending, Option<CommandBufferError>);
+
 /// An ended command buffer, with how it ended.
 pub(crate) type Ended = (Arc<CbInner>, Pending, CommandBufferError);
+
+/// A command buffer that joined a group, with its scheduled handlers.
+pub(crate) type Joined = (Arc<CbInner>, Vec<Handler>);
+
+/// What staging the next ready segment did.
+enum Step {
+    /// Nothing is ready.
+    Idle,
+    /// Something was staged or ended; no group goes yet.
+    Staged,
+    /// The group of the FIFO at this index goes now.
+    Goes(usize),
+}
 
 impl Work {
     pub(crate) fn new() -> Work {
@@ -133,13 +170,11 @@ impl Work {
             state: Mutex::new(WorkState {
                 fifos: Vec::new(),
                 next_seq: 0,
+                next_place: 0,
                 progress: 0,
-                in_flight: VecDeque::new(),
-                kept: None,
                 upload: None,
                 dirty: false,
                 flush: false,
-                send: false,
                 stop: false,
                 closed: false,
                 lost: false,
@@ -164,18 +199,38 @@ impl Work {
         self.wake();
     }
 
-    /// Submissions completed: where the thread keeps a batch, it may go.
+    /// Submissions completed: where a queue holds a group, it may go.
     pub(crate) fn completed(&self) {
         if self.keeping.load(Ordering::SeqCst) {
             self.poke();
         }
     }
 
-    /// The host waits for a command buffer committed and not yet submitted: what is ready goes
-    /// at once, a batch not full included.
-    pub(crate) fn send(&self) {
+    /// The host is to wait for `cb`: where it is committed and not yet submitted, the group it is
+    /// in goes at once, or, where it is not yet staged, the group held ahead of it and the one it
+    /// joins. Nothing for a command buffer submitted, ended or not committed. It takes the lock
+    /// briefly and waits for no GPU work.
+    pub(crate) fn send(&self, cb: &Arc<CbInner>) {
         let mut state = self.lock();
-        state.send = true;
+        let Some(fifo) = (state.fifos.iter_mut()).find(|fifo| fifo.queue.is(&cb.queue)) else {
+            return;
+        };
+        let held = (fifo.group.as_ref()).and_then(|group| {
+            (group.finished.iter())
+                .any(|(joined, _, error)| error.is_none() && Arc::ptr_eq(joined, cb))
+                .then_some(group.first)
+        });
+        let place = held.or_else(|| {
+            (fifo.entries.iter())
+                .find(|entry| {
+                    Arc::ptr_eq(&entry.cb, cb) && entry.pending.is_some() && entry.error.is_none()
+                })
+                .map(|entry| entry.place)
+        });
+        let Some(place) = place.filter(|&place| place > fifo.send_through) else {
+            return;
+        };
+        fifo.send_through = place;
         state.dirty = true;
         drop(state);
         self.wake();
@@ -250,32 +305,37 @@ impl Work {
         })
     }
 
-    /// Has the upload submitted at once, alone where no commit is ready: the progress value at
-    /// which everything recorded into uploads so far has completed and is visible to the host,
-    /// for [`Done::wait`](crate::complete::Done::wait).
+    /// Has the upload submitted at once, alone where no group goes: the progress value at which
+    /// everything recorded into uploads so far has completed and is visible to the host, for
+    /// [`Done::wait`](crate::complete::Done::wait).
     pub(crate) fn flush(&self) -> u64 {
         let mut state = self.lock();
         if state.upload.is_none() {
-            // Every upload so far went in a batch already submitted.
+            // Every upload so far went in a submission already made.
             return state.progress;
         }
         state.flush = true;
         state.dirty = true;
-        // The next batch submitted, the one kept included, takes the upload.
+        // The next submission takes the upload.
         let value = state.progress + 1;
         drop(state);
         self.wake();
         value
     }
 
-    /// Ends `queue`'s held and unsubmitted command buffers with `NotRun`.
+    /// Ends `queue`'s command buffers not yet in a submission or a group with `NotRun`. A group
+    /// it holds still goes: its command buffers are scheduled.
     pub(crate) fn abandon(&self, core: &Core, queue: &QueueInner) {
         let ended = {
             let mut state = self.lock();
-            match state.fifos.iter().position(|fifo| fifo.queue.is(queue)) {
-                Some(index) => {
-                    let fifo = state.fifos.swap_remove(index);
-                    end(fifo.entries, |_| CommandBufferError::NotRun)
+            match state.fifos.iter_mut().find(|fifo| fifo.queue.is(queue)) {
+                Some(fifo) => {
+                    let entries: Vec<Entry> = fifo.entries.drain(..).collect();
+                    let mut ended = Vec::new();
+                    for entry in entries {
+                        fifo.end(entry, CommandBufferError::NotRun, &mut ended);
+                    }
+                    ended
                 }
                 None => Vec::new(),
             }
@@ -300,7 +360,7 @@ impl Work {
         self.wake();
     }
 
-    /// The progress value of the last batch submitted.
+    /// The progress value of the last submission.
     pub(crate) fn progress(&self) -> u64 {
         self.lock().progress
     }
@@ -328,6 +388,10 @@ impl WorkState {
                 self.fifos.push(Fifo {
                     queue: Arc::clone(queue),
                     entries: VecDeque::new(),
+                    group: None,
+                    in_flight: VecDeque::new(),
+                    send_through: 0,
+                    behind: 0,
                 });
                 self.fifos.len() - 1
             }
@@ -335,39 +399,53 @@ impl WorkState {
         &mut self.fifos[index]
     }
 
+    /// Takes `cb`'s place at its queue's end.
+    fn push(&mut self, cb: &Arc<CbInner>) -> &mut Entry {
+        self.next_place += 1;
+        let place = self.next_place;
+        let entries = &mut self.fifo(&cb.queue).entries;
+        entries.push_back(Entry {
+            cb: Arc::clone(cb),
+            place,
+            pending: None,
+            error: None,
+        });
+        entries.back_mut().expect("an entry just pushed")
+    }
+
     /// Takes `cb`'s place in its queue's FIFO.
     pub(crate) fn enqueue(&mut self, cb: &Arc<CbInner>) {
-        self.fifo(&cb.queue).entries.push_back(Entry {
-            cb: Arc::clone(cb),
-            pending: None,
-        });
+        self.push(cb);
     }
 
     /// Hands `cb` to the submit thread: at its place where it was enqueued, else at its queue's
-    /// end.
-    pub(crate) fn commit(&mut self, cb: &Arc<CbInner>, pending: Pending) {
+    /// end. With `error` (it ended while enqueued, and its place went), at its queue's end, to
+    /// retire with that error behind the work held or in flight before it.
+    pub(crate) fn commit(
+        &mut self,
+        cb: &Arc<CbInner>,
+        pending: Pending,
+        error: Option<CommandBufferError>,
+    ) {
         self.dirty = true;
-        let fifo = self.fifo(&cb.queue);
-        match fifo
-            .entries
-            .iter_mut()
-            .find(|entry| Arc::ptr_eq(&entry.cb, cb))
-        {
-            Some(entry) => entry.pending = Some(pending),
-            None => fifo.entries.push_back(Entry {
-                cb: Arc::clone(cb),
-                pending: Some(pending),
-            }),
-        }
+        let enqueued = (self.fifo(&cb.queue).entries.iter_mut())
+            .find(|entry| Arc::ptr_eq(&entry.cb, cb) && entry.pending.is_none());
+        let entry = match enqueued {
+            Some(entry) => entry,
+            None => self.push(cb),
+        };
+        entry.pending = Some(pending);
+        entry.error = error;
     }
 
-    /// The FIFO whose head goes next: of the committed heads whose next segment is ready, the
-    /// earliest committed.
+    /// The FIFO whose head goes next: of the committed heads that are ended or whose next segment
+    /// is ready, the earliest committed.
     fn next_ready(&self) -> Option<usize> {
         let mut best: Option<(usize, u64)> = None;
         for (index, fifo) in self.fifos.iter().enumerate() {
             let Some(Entry {
                 pending: Some(pending),
+                error,
                 ..
             }) = fifo.entries.front()
             else {
@@ -376,68 +454,165 @@ impl WorkState {
             if best.is_some_and(|(_, seq)| seq < pending.seq) {
                 continue;
             }
-            if ready(&pending.gpu.segments[pending.next]) {
+            if error.is_some() || ready(&pending.gpu.segments[pending.next]) {
                 best = Some((index, pending.seq));
             }
         }
         best.map(|(index, _)| index)
     }
 
-    /// Takes the ready segments, in commit order, into the batch kept or a new one, until it ends
-    /// [`GROUP`] command buffers; None where it holds nothing and no upload is to be flushed.
-    fn stage(&mut self) -> Option<Batch> {
-        let mut batch = self.kept.take().unwrap_or_else(|| Batch {
-            value: self.progress + 1,
-            upload: None,
+    /// Forgets the submissions seen complete by `completed`, and the FIFOs left with nothing.
+    fn settle(&mut self, completed: u64) {
+        self.fifos.retain_mut(|fifo| {
+            while (fifo.in_flight.front()).is_some_and(|&value| value <= completed) {
+                fifo.in_flight.pop_front();
+            }
+            !(fifo.entries.is_empty() && fifo.group.is_none() && fifo.in_flight.is_empty())
+        });
+    }
+
+    /// Stages the next ready segment, in commit order, into its queue's group, or ends the next
+    /// ended command buffer behind its queue's work. A command buffer whose last segment joins a
+    /// group is scheduled at `now`, its scheduled handlers going to `joined`; one ended with
+    /// nothing held goes to `ended`.
+    fn step(&mut self, now: u64, joined: &mut Vec<Joined>, ended: &mut Vec<Ended>) -> Step {
+        let Some(index) = self.next_ready() else {
+            return Step::Idle;
+        };
+        let stop = self.stop;
+        let fifo = &mut self.fifos[index];
+        let Some(entry) = fifo.entries.front_mut() else {
+            return Step::Idle;
+        };
+        if let Some(error) = entry.error {
+            if let Some(entry) = fifo.entries.pop_front() {
+                fifo.end(entry, error, ended);
+            }
+            return Step::Staged;
+        }
+        let Some(pending) = entry.pending.as_mut() else {
+            return Step::Idle;
+        };
+        let segment = &pending.gpu.segments[pending.next];
+        // A segment that waits on a semaphore leads its group: a driver that merges a submission's
+        // entries gathers their waits ahead of the first one's commands.
+        let waits = (segment.waits.iter()).any(|(event, value)| lock(&event.state).floor < *value);
+        if waits && fifo.group.is_some() {
+            return Step::Goes(index);
+        }
+        let place = entry.place;
+        let group = fifo.group.get_or_insert_with(|| Batch {
+            first: place,
             segments: Vec::new(),
             finished: Vec::new(),
+            count: 0,
+            partial: false,
             watch: Vec::new(),
         });
-        while batch.finished.len() < GROUP {
-            let Some(index) = self.next_ready() else {
-                break;
+        let staged = stage(segment, &mut group.watch);
+        // An event's signal goes at once: nothing waits on it behind a held group.
+        let signals = !staged.signals.is_empty();
+        group.segments.push(staged);
+        pending.next += 1;
+        if pending.next < pending.gpu.segments.len() {
+            group.partial = true;
+            return if signals {
+                Step::Goes(index)
+            } else {
+                Step::Staged
             };
-            let fifo = &mut self.fifos[index];
-            let Some(Entry {
+        }
+        let Some(Entry {
+            cb,
+            pending: Some(mut pending),
+            ..
+        }) = fifo.entries.pop_front()
+        else {
+            return Step::Staged;
+        };
+        cb.scheduled(now);
+        let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+        if !scheduled.is_empty() {
+            joined.push((Arc::clone(&cb), scheduled));
+        }
+        group.finished.push((cb, pending, None));
+        group.partial = false;
+        group.count += 1;
+        let goes = signals
+            || stop
+            || group.count >= GROUP
+            || fifo.in_flight.len() < IN_FLIGHT
+            || fifo.send_through >= group.first;
+        match goes {
+            true => Step::Goes(index),
+            false => Step::Staged,
+        }
+    }
+
+    /// The FIFO at `index`'s group, given the next progress value and the upload: the submission
+    /// it makes.
+    fn close(&mut self, index: usize) -> Option<(u64, Option<Upload>, Batch)> {
+        let fifo = &mut self.fifos[index];
+        let mut batch = fifo.group.take()?;
+        self.progress += 1;
+        let value = self.progress;
+        fifo.in_flight.push_back(value);
+        if batch.partial {
+            if let Some(Entry {
                 pending: Some(pending),
                 ..
             }) = fifo.entries.front_mut()
-            else {
-                break;
-            };
-            (batch.segments).push(stage(&pending.gpu.segments[pending.next], &mut batch.watch));
-            pending.next += 1;
-            pending.value = batch.value;
-            if pending.next == pending.gpu.segments.len() {
-                if let Some(Entry {
-                    cb,
-                    pending: Some(pending),
-                }) = fifo.entries.pop_front()
-                {
-                    batch.finished.push((cb, pending));
-                }
-                if fifo.entries.is_empty() {
-                    self.fifos.swap_remove(index);
-                }
+            {
+                pending.value = value;
             }
         }
-        if batch.segments.is_empty() && !(self.flush && self.upload.is_some()) {
-            return None;
+        for (_, pending, _) in &mut batch.finished {
+            pending.value = value;
         }
-        Some(batch)
+        self.flush = false;
+        Some((value, self.upload.take(), batch))
     }
 
-    /// Whether `batch` goes now: it is full, or something waits for it, or fewer than
-    /// [`IN_FLIGHT`] submissions are not seen complete by `completed`.
-    fn goes(&mut self, batch: &Batch, completed: u64) -> bool {
-        while (self.in_flight.front()).is_some_and(|&value| value <= completed) {
-            self.in_flight.pop_front();
+    /// The first FIFO whose group goes at the end of a pass: unless its queue has [`IN_FLIGHT`]
+    /// submissions not seen complete and no host wait is to come for it.
+    fn unheld(&self) -> Option<usize> {
+        self.fifos.iter().position(|fifo| {
+            fifo.group.as_ref().is_some_and(|group| {
+                self.stop || fifo.in_flight.len() < IN_FLIGHT || fifo.send_through >= group.first
+            })
+        })
+    }
+}
+
+impl Fifo {
+    /// Ends `entry` with `error` (its own, where it has one): behind the group held, which it
+    /// joins to retire with; else once the queue's submissions in flight and the command buffers
+    /// it ended before complete, at once where none is. One not committed ends at its commit.
+    fn end(&mut self, entry: Entry, error: CommandBufferError, ended: &mut Vec<Ended>) {
+        let Entry {
+            cb,
+            pending,
+            error: own,
+            ..
+        } = entry;
+        let error = own.unwrap_or(error);
+        let Some(mut pending) = pending else {
+            cb.end_uncommitted(error);
+            return;
+        };
+        match &mut self.group {
+            Some(group) => {
+                // The head whose segments the group holds is ended now, if it was the head.
+                group.partial = false;
+                group.finished.push((cb, pending, Some(error)));
+            }
+            None => {
+                let in_flight = self.in_flight.back().copied().unwrap_or(0);
+                pending.value = pending.value.max(in_flight).max(self.behind);
+                self.behind = pending.value;
+                ended.push((cb, pending, error));
+            }
         }
-        batch.finished.len() >= GROUP
-            || self.flush
-            || self.send
-            || self.stop
-            || self.in_flight.len() < IN_FLIGHT
     }
 }
 
@@ -491,19 +666,23 @@ fn stage(segment: &Segment, watch: &mut Vec<Arc<EventInner>>) -> Staged {
 }
 
 /// Ends FIFO entries: a committed one now, one not yet committed at its commit; `error` answers
-/// for each, with its pending part where it is committed.
+/// for each without its own, with its pending part where it is committed.
 fn end(
     entries: VecDeque<Entry>,
     error: impl Fn(Option<&Pending>) -> CommandBufferError,
 ) -> Vec<Ended> {
     let mut ended = Vec::new();
-    for Entry { cb, pending } in entries {
+    for Entry {
+        cb,
+        pending,
+        error: own,
+        ..
+    } in entries
+    {
+        let error = own.unwrap_or_else(|| error(pending.as_ref()));
         match pending {
-            Some(pending) => {
-                let error = error(Some(&pending));
-                ended.push((cb, pending, error));
-            }
-            None => cb.end_uncommitted(error(None)),
+            Some(pending) => ended.push((cb, pending, error)),
+            None => cb.end_uncommitted(error),
         }
     }
     ended
@@ -515,22 +694,20 @@ pub(crate) fn run(core: Arc<Core>) {
     let mut state = work.lock();
     loop {
         if state.lost {
-            // A kept batch never reached the GPU: its command buffers end as not in flight.
-            let mut ended: Vec<Ended> = (state.kept.take().into_iter())
-                .flat_map(|batch| batch.finished)
-                .map(|(cb, mut pending)| {
-                    pending.value = 0;
-                    let error = CommandBufferError::DeviceLost { in_flight: false };
-                    (cb, pending, error)
-                })
-                .collect();
             let submitted = state.progress;
-            ended.extend(drain(&mut state, |pending| {
-                CommandBufferError::DeviceLost {
-                    in_flight: pending
-                        .is_some_and(|pending| (1..=submitted).contains(&pending.value)),
+            let error = |pending: Option<&Pending>| CommandBufferError::DeviceLost {
+                in_flight: pending.is_some_and(|pending| (1..=submitted).contains(&pending.value)),
+            };
+            let mut ended = Vec::new();
+            for fifo in state.fifos.drain(..) {
+                // A group held never reached the GPU: its command buffers end as in flight only
+                // where an earlier segment of theirs did.
+                for (cb, pending, own) in fifo.group.into_iter().flat_map(|group| group.finished) {
+                    let error = own.unwrap_or_else(|| error(Some(&pending)));
+                    ended.push((cb, pending, error));
                 }
-            }));
+                ended.extend(end(fifo.entries, error));
+            }
             let upload = state.upload.take();
             drop(state);
             if let Some(upload) = upload {
@@ -538,29 +715,13 @@ pub(crate) fn run(core: Arc<Core>) {
             }
             core.done.end_all(&core, ended);
             state = work.lock();
-        } else if let Some(mut batch) = state.stage() {
-            // Marked before the completed value is read: a completion the read misses sees the
-            // mark and wakes the thread.
-            work.keeping.store(true, Ordering::SeqCst);
-            if state.goes(&batch, core.done.completed()) {
-                work.keeping.store(false, Ordering::SeqCst);
-                if batch.finished.len() < GROUP {
-                    // Everything ready goes in it: no wait is left to answer.
-                    state.send = false;
-                }
-                state.flush = false;
-                batch.upload = state.upload.take();
-                state.progress = batch.value;
-                state.in_flight.push_back(batch.value);
-                drop(state);
-                submit(&core, batch);
-                state = work.lock();
-                continue;
-            }
-            state.kept = Some(batch);
+        } else {
+            state = pass(&core, state);
         }
         if state.stop {
-            let ended = drain(&mut state, |_| CommandBufferError::NotRun);
+            let ended: Vec<Ended> = (state.fifos.drain(..))
+                .flat_map(|fifo| end(fifo.entries, |_| CommandBufferError::NotRun))
+                .collect();
             let upload = state.upload.take();
             drop(state);
             if let Some(upload) = upload {
@@ -579,36 +740,90 @@ pub(crate) fn run(core: Arc<Core>) {
     }
 }
 
-/// Ends every FIFO's entries.
-fn drain(
-    state: &mut WorkState,
-    error: impl Fn(Option<&Pending>) -> CommandBufferError,
-) -> Vec<Ended> {
+/// One pass of the submit thread: stages what is ready in commit order, submits each group that
+/// goes as it closes, then each group its queue no longer holds, then an upload to flush alone.
+fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<'a, WorkState> {
+    let work = &core.work;
+    // Marked before the completed value is read: a completion the read misses sees the mark and
+    // wakes the thread.
+    work.keeping.store(true, Ordering::SeqCst);
+    state.settle(core.done.completed());
+    let mut joined: Vec<Joined> = Vec::new();
+    let mut ended: Vec<Ended> = Vec::new();
+    let mut sent = false;
+    loop {
+        let index = match state.step(times::host_time(), &mut joined, &mut ended) {
+            Step::Idle => match state.unheld() {
+                Some(index) => index,
+                None => break,
+            },
+            Step::Staged => continue,
+            Step::Goes(index) => index,
+        };
+        let Some((value, upload, batch)) = state.close(index) else {
+            continue;
+        };
+        drop(state);
+        // Scheduled handlers reach the completion thread before the submission they are in.
+        core.done.scheduled(core, std::mem::take(&mut joined));
+        core.done.end_all(core, std::mem::take(&mut ended));
+        submit(core, value, upload, batch);
+        sent = true;
+        state = work.lock();
+    }
+    if state.flush && !sent {
+        if let Some(upload) = state.upload.take() {
+            state.flush = false;
+            state.progress += 1;
+            let value = state.progress;
+            drop(state);
+            submit(core, value, Some(upload), Batch::empty());
+            state = work.lock();
+        }
+    }
+    if state.fifos.iter().all(|fifo| fifo.group.is_none()) {
+        work.keeping.store(false, Ordering::SeqCst);
+    }
+    if !joined.is_empty() || !ended.is_empty() {
+        drop(state);
+        core.done.scheduled(core, joined);
+        core.done.end_all(core, ended);
+        state = work.lock();
+    }
     state
-        .fifos
-        .drain(..)
-        .flat_map(|fifo| end(fifo.entries, &error))
-        .collect()
 }
 
-/// Submits a batch: the upload first, then each segment in order, the last signalling the
-/// progress value. Whatever was passed to `vkQueueSubmit2` goes to the completion thread as in
+impl Batch {
+    /// A submission of no command buffer's: an upload alone.
+    fn empty() -> Batch {
+        Batch {
+            first: 0,
+            segments: Vec::new(),
+            finished: Vec::new(),
+            count: 0,
+            partial: false,
+            watch: Vec::new(),
+        }
+    }
+}
+
+/// Submits a group: the upload first, then each segment in order, the last signalling the
+/// progress `value`. Whatever was passed to `vkQueueSubmit2` goes to the completion thread as in
 /// flight; a failed submission is taken as a loss.
-fn submit(core: &Core, batch: Batch) {
+fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
     let Batch {
-        value,
-        upload,
         mut segments,
         finished,
         watch,
+        ..
     } = batch;
     let device = &core.device;
     // What the upload wrote is visible to every command after it, and to the host once the
-    // batch completes.
+    // submission completes.
     let mut ok = upload.as_ref().is_none_or(|upload| {
         record::barrier(device, upload.command, Reach::Host);
         core.counters.count(Metric::Barriers);
-        // SAFETY: the upload's command buffer was recording under the work lock, which `stage`
+        // SAFETY: the upload's command buffer was recording under the work lock, which `close`
         // took it out under.
         unsafe { device.end_command_buffer(upload.command) }.is_ok()
     });
@@ -657,10 +872,6 @@ fn submit(core: &Core, batch: Batch) {
     }
     if !ok {
         complete::lose(core);
-    }
-    let now = times::host_time();
-    for (cb, _) in &finished {
-        cb.scheduled(now);
     }
     core.done.submitted(core, value, upload, finished, watch);
 }

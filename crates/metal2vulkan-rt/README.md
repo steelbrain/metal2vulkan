@@ -256,32 +256,45 @@ made, with no lock, and never rewritten for layouts.
   the host out. No segment starts with a barrier.
   `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
   thread and returns. A committed command buffer holds no device handle.
-- The submit thread passes what is ready to `vkQueueSubmit2` in the device's commit order,
-  ahead of it the upload of zero fills, and the last submit info signals the progress semaphore.
-  A submission ends at most four command buffers. A full one goes at once, and so does one the
-  thread runs out of ready work for, unless two submissions are not yet seen complete: then it is
-  kept, and takes what is committed meanwhile, until one of them completes, it fills, or a host
-  wait on one of its command buffers, an upload to flush or the device's teardown sends it.
-  Waiting for a place in the queue sends nothing. It holds a segment whose event waits are not met, and its queue's later command
-  buffers behind it, while the segments before it run, so the host can see a signal the command
-  buffer makes before its wait. Other queues go on. `Scheduled` means the last segment has passed
-  `vkQueueSubmit2`.
-- The completion thread retires command buffers as the progress semaphore reaches them: the
-  status, the blocks they kept, their recorders and their place in the queue, then the handlers.
-  Scheduled and completed handlers run on it, every device's in turn, so no handler waits for a
-  command buffer.
+- The submit thread passes what is ready to `vkQueueSubmit2` in the device's commit order, each
+  queue's command buffers in groups: a submission holds at most four command buffers of one
+  queue, ahead of them the upload of zero fills, and only its last submit info signals the
+  progress semaphore. While fewer than two of a queue's submissions are not yet seen complete,
+  each of its command buffers goes at once, alone. While two are, the ones committed meanwhile
+  are held in one group, each scheduled as it joins, and the group goes when it holds four, when
+  a completion leaves fewer than two in flight (the completion thread wakes the submit thread as
+  it retires; no commit or wait is needed), when the host is to wait for one of them
+  (`wait_until_completed`, or `CommandQueue::send_now`, the hint for a wait the runtime does not
+  see), or at teardown. Waiting for a place in the queue sends nothing. A segment that signals an
+  event ends its group, which goes at once; one that waits on an event's semaphore leads a new
+  group, the one held going first. The thread holds a segment whose event waits are not met, and
+  its queue's later command buffers behind it, while the segments before it run, so the host can
+  see a signal the command buffer makes before its wait. Other queues go on. `Scheduled` means
+  the last segment is in a submission: passed to `vkQueueSubmit2`, or in a group held.
+- The completion thread retires command buffers as the progress semaphore reaches them, a
+  submission's in commit order: the status, the blocks they kept, their recorders and their place
+  in the queue, then the handlers. Scheduled and completed handlers run on it, every device's in
+  turn, so no handler waits for a command buffer. A command buffer of a group is seen complete
+  with the group's last: up to the GPU time of the three after it late. Only a queue already two
+  submissions behind holds a group; one whose submissions have completed sends its next command
+  buffer alone. Without a wait or a hint, the lateness is bounded only while two submissions are
+  in flight, and the completion that leaves fewer sends the group. The worst case measured: four
+  command buffers of 29 ms each in one submission on an RX 550 (the harness row `long_4cb`), the
+  first seen complete 87 ms after it ended. A command buffer ended while its queue holds a group
+  joins it, and retires in its place.
 - A command buffer's times are nanoseconds of one host clock, `host_time()`: `CLOCK_UPTIME_RAW`
   on macOS (the clock of `mach_absolute_time`), `CLOCK_MONOTONIC_RAW` elsewhere on Unix, and the
   performance counter on Windows. Metal gives seconds. `kernel_start_time` is the commit and
-  `kernel_end_time` the return of the `vkQueueSubmit2` that passed the last segment.
-  `gpu_end_time` is when the completion thread saw the command buffer complete, so a queue's end
-  times never decrease in completion order; `gpu_start_time` is that less the GPU's own duration
-  of the command buffer, exact from two timestamp queries: one written where its first commands
-  begin, one where its last segment ends, read once it completes, with no wait. Each queue has a
-  pool of two queries per command buffer it may have made at once; a command buffer's first
-  `VkCommandBuffer` resets its pair. A command buffer with no commands, or whose last segment has
-  none, records a `VkCommandBuffer` for its timestamps. One that ends with an error has GPU times
-  of 0.
+  `kernel_end_time` the time it was scheduled. `gpu_end_time` is when the completion thread saw
+  the command buffer complete, less the GPU's ticks from its end timestamp to that of the last
+  command buffer seen complete with it, so each command buffer of a submission has its own end;
+  end times never decrease in completion order. `gpu_start_time` is that less the GPU's own
+  duration of the command buffer, exact from two timestamp queries: one written where its first
+  commands begin, one where its last segment ends, read once it completes, with no wait. Each
+  queue has a pool of two queries per command buffer it may have made at once; a command
+  buffer's first `VkCommandBuffer` resets its pair. A command buffer with no commands, or whose
+  last segment has none, records a `VkCommandBuffer` for its timestamps. One that ends with an
+  error has GPU times of 0.
 - `Event` and `SharedEvent` are timeline semaphores whose values are Metal's values. A host set
   (`SharedEvent::set_signaled_value`) raises a floor and never signals the semaphore; a wait the
   floor meets is submitted with no semaphore wait, and a GPU signal not above the highest value
@@ -289,9 +302,10 @@ made, with no lock, and never rewritten for layouts.
   `signaled_value` is the higher of the semaphore and the floor. `notify_listener` runs its
   listener on the completion thread when the value is reached, at a signal in the middle of a
   command buffer as well as at its end; `wait_until_signaled_value` wakes then too.
-- `CommandQueue::abandon` ends every command buffer of the queue that is held or not yet submitted
-  with `NotRun` and runs its handlers, as a Mac drops a dead process's held work. Segments already
-  submitted still complete; the queue stays usable.
+- `CommandQueue::abandon` ends every command buffer of the queue held at an event wait or not yet
+  scheduled with `NotRun` and runs its handlers, as a Mac drops a dead process's held work, each
+  retiring in the queue's order. Segments already submitted still complete, and so does a group
+  held; the queue stays usable.
 - At a loss of the device (or a failed submission, which the runtime takes as one), the submit
   thread ends what it holds, the completion thread ends what is in flight once the device is idle
   (at once on a lost device), host waits for pending signals end false, and every later commit

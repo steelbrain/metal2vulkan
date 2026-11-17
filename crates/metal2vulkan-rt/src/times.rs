@@ -98,15 +98,19 @@ impl Ticks {
         }
     }
 
-    /// The GPU times of a command buffer seen complete at `seen`, from its two timestamps: the
-    /// end is `seen`, and the start is the end less the ticks between the timestamps within the
-    /// valid bits, which stays exact across the counter's wrap. Any two values give times no
-    /// later than `seen`.
-    pub(crate) fn gpu_times(&self, seen: u64, start: u64, end: u64) -> (u64, u64) {
-        let ticks = end.wrapping_sub(start) & self.mask;
-        // A float-to-integer cast saturates.
-        let duration = (ticks as f64 * self.period) as u64;
-        (seen.saturating_sub(duration), seen)
+    /// The GPU times of a command buffer seen complete at `seen` with others, from its two
+    /// timestamps and `last`, the end timestamp of the one of them that ended last: the end is
+    /// `seen` less the ticks from its end to `last`, and the start the end less the ticks between
+    /// its timestamps, each within the valid bits, which stays exact across the counter's wrap.
+    /// Any values give times no later than `seen`.
+    pub(crate) fn place(&self, seen: u64, last: u64, start: u64, end: u64) -> (u64, u64) {
+        let nanos = |from: u64, to: u64| {
+            let ticks = to.wrapping_sub(from) & self.mask;
+            // A float-to-integer cast saturates.
+            (ticks as f64 * self.period) as u64
+        };
+        let end_time = seen.saturating_sub(nanos(end, last));
+        (end_time.saturating_sub(nanos(start, end)), end_time)
     }
 }
 
