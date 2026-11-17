@@ -433,9 +433,14 @@ fn inside(how: &str, device: &Device) {
         "{TEST} ({how}): the CPU's write before the commit, through the second"
     );
     // A fill through the first and a copy through the second of the bytes they share, either way
-    // round: in one encoder where the second lies in an import (ordered by the bytes they share),
-    // in two command buffers where it is a copy, which agrees with the pages at its commit and its
-    // completion only (Metal orders no two no-copy buffers over one allocation).
+    // round: in one encoder where the second is bound inside the first's import (ordered by the
+    // bytes they share), in two command buffers where it is a copy, which agrees with the pages at
+    // its commit and its completion only. Metal does not order a write and a read through two
+    // no-copy buffers over the same pages in one encoder: the conformance crate's
+    // `probes/nocopy_alias_one_encoder.m`, a fill through one and a copy through the other in one
+    // blit encoder, 20 rounds each, read part of the fill in every round on an Apple M3 Max (macOS
+    // 27.0.1) and a Radeon Pro 5300M (macOS 26.7.1), and the whole fill in every round on a UHD
+    // Graphics 630 (macOS 26.7.1); through one buffer, the whole fill on all three.
     let in_import = expected[0].0 == HostBacking::ImportedAsDmaBuf;
     let apart = match in_import {
         true => "in one encoder",
