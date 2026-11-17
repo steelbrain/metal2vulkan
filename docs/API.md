@@ -2152,7 +2152,7 @@ near-equivalent, it still answers, and says so. Each kind of degradation is a
 - **performance**: Metal's answer, at an extra cost (a copy, a staging or scratch resource, an
   extra pass, a slower variant);
 - **precision**: a recorded near-equivalent of Metal's answer, including every `PrecisionNote` a
-  pipeline stage records;
+  pipeline stage records and the one a sampler state carries (`capped-lod-bias`);
 - **validity**: Metal's answer exactly, through a use of the device its driver does not advertise
   but was measured to run as Metal does, so Vulkan's validation layer reports the use.
 
@@ -3385,7 +3385,9 @@ bound.
   the bias is NaN: a sample whose level with what the device adds has not reached the last level
   the sampler reads (a positive bias) or level 0 (a negative one) reads another level than Metal's,
   which adds the whole bias and then clamps the level into the texture's levels; what Metal samples
-  for a NaN bias is not measured.
+  for a NaN bias is not measured. The translator states the same difference as the sampler state's
+  static note, `PrecisionNote::CappedLodBias` (`DeviceLodBias::note`), which no pipeline stage
+  records.
 - `metal2vulkan-degrade-not-mipmapped-anisotropic-sampler` (precision).
   `NotMipmappedAnisotropicSampler`: A sampler state with anisotropy, no mip filter (`NotMipmapped`)
   and different minification and magnification filters, on a device that samples through Metal's
@@ -5949,8 +5951,9 @@ each item named states the rule in full.
     hand the device its bias as `mipLodBias` (`SamplerUse::lod_bias`), which Vulkan adds to an
     explicit level too. A bias past the device's `maxSamplerLodBias` adds that limit, and a NaN,
     or any bias where the device's portability subset withholds `samplerMipLodBias` (MoltenVK),
-    none, announced (`capped-lod-bias`). A device that presents an Apple silicon Mac samples
-    every level as with no bias, as an Apple M3 Max (Apple9) does.
+    none, announced (`capped-lod-bias`, the state's `PrecisionNote::CappedLodBias`). A device
+    that presents an Apple silicon Mac samples every level as with no bias, as an Apple M3 Max
+    (Apple9) does.
   - `maxThreadgroupMemoryLength` (`DeviceProperties::max_threadgroup_memory_length`) is the
     device's `maxComputeSharedMemorySize` up to 65536 bytes, which an AMD Radeon Pro 5300M and an
     Intel UHD 630 answer (the consumer's probes), where a device that presents an Apple silicon

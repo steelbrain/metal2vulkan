@@ -1526,6 +1526,7 @@ codec_enum! {
         UnorderedFetchWithinDraw,
         NativeLogicOperation,
         NativeFloat8,
+        CappedLodBias,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

@@ -2369,6 +2369,22 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     NativeFloat8,
+    /// A sampler state's `lodBias` that the device's samplers cannot add as it is, where the GPU
+    /// the device presents adds it to every sample's level
+    /// ([`SamplerUse::lod_bias`](crate::metal::sampler::SamplerUse::lod_bias), as a Mac with an
+    /// Intel or AMD GPU does): past the device's `maxSamplerLodBias` (an infinity included) its
+    /// samplers add that limit, of the bias's sign; a NaN bias, or one other than 0 where the
+    /// device's portability subset withholds `samplerMipLodBias` (MoltenVK), they add none
+    /// ([`DeviceLodBias`](crate::metal::sampler::DeviceLodBias)). The sampler state carries it,
+    /// fixed by its bias and the device's limit
+    /// ([`DeviceLodBias::note`](crate::metal::sampler::DeviceLodBias::note)); no pipeline stage
+    /// records it. **Residual:** a sample whose level with what the device adds has not reached
+    /// the last level the sampler reads (a positive bias) or level 0 (a negative one) reads
+    /// another level than Metal's, which adds the whole bias and then clamps the level into the
+    /// texture's levels; what Metal samples for a NaN bias is not measured.
+    ///
+    /// Validation derives no tolerance from it.
+    CappedLodBias,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

@@ -340,7 +340,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::HelperBranchDropsSimdgroupStores
         | N::UnorderedFetchWithinDraw
         | N::NativeLogicOperation
-        | N::NativeFloat8 => Allowance::Unbounded,
+        | N::NativeFloat8
+        | N::CappedLodBias => Allowance::Unbounded,
     }
 }
 

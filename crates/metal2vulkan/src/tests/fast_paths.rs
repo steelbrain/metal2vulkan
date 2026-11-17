@@ -228,6 +228,7 @@ fn notes() -> Vec<(&'static str, Ledger)> {
             NativeNanEncoding,
             NativeMinMax,
             UnorderedFetchWithinDraw,
+            CappedLodBias,
         ],
     }
 }

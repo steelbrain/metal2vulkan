@@ -9,9 +9,11 @@
 //!
 //! - **One closed vocabulary.** [`Degradation`] lists every kind once, with its code, category
 //!   and cost, in `degradations!`; its precision kinds include one per
-//!   [`PrecisionNote`], named alike, which the macro maps both
-//!   ways, so a note without a kind (or two kinds of one note) does not compile. docs/API.md's
-//!   catalogue lists every code, closed both ways by a test.
+//!   [`PrecisionNote`] a pipeline stage records, named alike, which the macro maps both
+//!   ways, so a note without a kind (or two kinds of one note) does not compile. The note a
+//!   sampler state carries, `CappedLodBias`, maps to the runtime kind of its name, which
+//!   announces it where the device makes the state. docs/API.md's catalogue lists every code,
+//!   closed both ways by a test.
 //! - **Codes are a contract.** `metal2vulkan-degrade-<kind>`, never renamed; a new degradation is
 //!   a new kind. A kind that no longer fires is removed, with its code.
 //! - **The payload.** The object degraded (the first one the device met), the reason (with that
@@ -226,7 +228,10 @@ macro_rules! degradations {
                 }
             }
 
-            /// The precision note the kind announces, for a note's kind.
+            /// The precision note the kind announces, for a note's kind: one a pipeline stage
+            /// records. [`Degradation::CappedLodBias`], which announces the note a sampler state
+            /// carries ([`PrecisionNote::CappedLodBias`]) where the device makes the state, is a
+            /// runtime kind and answers none.
             pub const fn precision_note(self) -> Option<PrecisionNote> {
                 match self {
                     $(Degradation::$kind => None,)*
@@ -238,6 +243,7 @@ macro_rules! degradations {
             pub const fn from_precision_note(note: PrecisionNote) -> Degradation {
                 match note {
                     $(PrecisionNote::$note => Degradation::$note,)*
+                    PrecisionNote::CappedLodBias => Degradation::CappedLodBias,
                 }
             }
         }
@@ -1290,7 +1296,8 @@ degradations! {
              coarser level than Metal's (one level coarser at 32 to 1 and beyond)";
         /// A sampler state whose `lodBias` the GPU of the Mac the device presents adds to every
         /// sample's level (`MacClass::IntelOrAmd`), where the device's samplers cannot add it as
-        /// it is (`metal2vulkan::metal::sampler::DeviceLodBias`): past the device's
+        /// it is (`metal2vulkan::metal::sampler::DeviceLodBias`, whose state carries
+        /// `PrecisionNote::CappedLodBias`): past the device's
         /// `maxSamplerLodBias` (an infinity included), a NaN, or a bias other than 0 where the
         /// device's portability subset withholds `samplerMipLodBias` (MoltenVK). Announced once,
         /// where the device makes the state; the payload names the bias and what the device's

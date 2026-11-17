@@ -17,6 +17,7 @@ use crate::metal::{
     CompareFunction, PixelFormat, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter,
     SamplerMipFilter, TextureSwizzle, TextureSwizzleChannels,
 };
+use crate::pipeline::PrecisionNote;
 use crate::vk;
 
 /// The modes a texture is sampled with (the runtime's extension
@@ -153,8 +154,7 @@ impl SamplerUse {
 /// a sampler's `mipLodBias` to every sample's level, an explicit level's included, and takes one
 /// of at most `maxSamplerLodBias` (`VUID-VkSamplerCreateInfo-mipLodBias-01069`), and a
 /// portability subset without `samplerMipLodBias` none but 0. Each variant but `Exact` is a
-/// near-equivalent, which the runtime announces as it makes the state
-/// (`Degradation::CappedLodBias`).
+/// near-equivalent, which the state carries as its static note ([`DeviceLodBias::note`]).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DeviceLodBias {
@@ -180,6 +180,18 @@ impl DeviceLodBias {
         match self {
             DeviceLodBias::Exact(bias) | DeviceLodBias::Capped(bias) => bias,
             DeviceLodBias::Withheld | DeviceLodBias::NotANumber => 0.0,
+        }
+    }
+
+    /// The precision note a sampler state of this bias carries, on a GPU that adds it
+    /// ([`SamplerUse::lod_bias`]): [`PrecisionNote::CappedLodBias`] for every variant but
+    /// `Exact`, whose bias the device adds as it is.
+    pub fn note(self) -> Option<PrecisionNote> {
+        match self {
+            DeviceLodBias::Exact(_) => None,
+            DeviceLodBias::Capped(_) | DeviceLodBias::Withheld | DeviceLodBias::NotANumber => {
+                Some(PrecisionNote::CappedLodBias)
+            }
         }
     }
 }
@@ -1510,6 +1522,31 @@ mod tests {
         }
         assert_eq!(device_lod_bias(0.0, p), Exact(0.0), "{stem}");
         assert_eq!(device_lod_bias(f32::NAN, p), NotANumber, "{stem}");
+    }
+
+    /// A sampler state's bias carries [`PrecisionNote::CappedLodBias`] exactly where the device
+    /// does not add it as it is, on every committed device: past its `maxSamplerLodBias`, a NaN,
+    /// and through a portability subset that withholds `samplerMipLodBias`; never within the
+    /// limit, nor for 0.
+    #[test]
+    fn the_device_lod_bias_carries_its_note_where_it_is_not_the_bias() {
+        let note = Some(PrecisionNote::CappedLodBias);
+        for (stem, d) in committed_descriptions() {
+            let dev = Device::new(d, DevicePolicy::default()).unwrap();
+            let p = dev.profile();
+            let withheld = (p.fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias);
+            let limit = f32::from_bits(p.fields().limits.max_sampler_lod_bias_bits).max(0.0);
+            assert_eq!(device_lod_bias(0.0, p).note(), None, "{stem}: 0");
+            assert_eq!(device_lod_bias(-0.0, p).note(), None, "{stem}: -0");
+            assert_eq!(device_lod_bias(f32::NAN, p).note(), note, "{stem}: NaN");
+            for b in [1.0, -1.0, limit, -limit] {
+                let want = if withheld && b != 0.0 { note } else { None };
+                assert_eq!(device_lod_bias(b, p).note(), want, "{stem}: bias {b}");
+            }
+            for b in [limit + 1.0, -limit - 1.0, f32::INFINITY, f32::NEG_INFINITY] {
+                assert_eq!(device_lod_bias(b, p).note(), note, "{stem}: bias {b}");
+            }
+        }
     }
 
     /// A sampler without a mip filter reads the base level, its minification filter exactly where
