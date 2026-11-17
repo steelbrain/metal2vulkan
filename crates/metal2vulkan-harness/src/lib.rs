@@ -12,7 +12,7 @@
 //! run and how many go in each command buffer, the contents its buffers must hold after the first
 //! run, and the buffers runtimes compare. Most workloads put a run in one command buffer; `frame`
 //! and `frame_5cb` are frames of one and of five command buffers of four small dispatches each,
-//! and the `burst_` workloads bursts of 160 and 2,000.
+//! the `burst_` workloads bursts of 160 and 2,000, and `long_4cb` four long command buffers.
 //! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
 //! workloads ([`authored`]) are MSL kernels committed as public fixtures
 //! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
@@ -46,8 +46,9 @@
 //! from there to the return of the wait for the run before (unix only), each the median of the
 //! timed runs; where the workload asks for it ([`plan::Plan::commit_to_complete`]), the time of
 //! each timed command buffer from just before its `commit` until its completed handler ran, at
-//! the 50th and 99th percentiles of all of them; and the runtime's gauges after the 100th and
-//! 200th timed runs. Per creation
+//! the 50th and 99th percentiles of all of them, and, for a run of several command buffers, on a
+//! line of its own at those percentiles by the command buffer's place in its run; and the
+//! runtime's gauges after the 100th and 200th timed runs. Per creation
 //! workload and runtime it prints the warm-up, the wall time of `newBufferWithLength:options:` at
 //! the same percentiles, and the gauges. Beside each row it prints lines for the matrix's runner
 //! (docs/VALIDATION.md, "The matrix"):
@@ -59,7 +60,10 @@
 //! ```
 //!
 //! where the steady time ([`run::steady`], the table's `steady` column) is the lowest median of
-//! the timed runs' consecutive windows of 10, with at least 5 timed runs. After the plan
+//! the timed runs' consecutive windows of 10, with at least 5 timed runs. A workload the device
+//! sizes ([`plan::Scaled`]) prints the size it ran at on a line of its own, and its matrix time
+//! is that time scaled to its base size, so its row keeps one scale whatever size it ran at. After
+//! the plan
 //! workloads, per runtime and set (`authored` or `described`), it prints how many `VkPipeline`s
 //! they created and how many workloads it refused, and where the runtime counts them, its
 //! first-use waits ([`Waits`]): the count, and their total and longest time in microseconds.

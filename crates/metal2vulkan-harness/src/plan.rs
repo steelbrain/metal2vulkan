@@ -36,6 +36,12 @@ pub struct Plan {
     ///
     /// [`Report::commit_us`]: crate::run::Report::commit_us
     pub commit_to_complete: bool,
+    /// Where set, the device decides the plan's size: this plan is the workload at its base size,
+    /// which the harness times first on the first runtime that runs it, then runs on every
+    /// runtime at the size [`Scaled`] chooses from that time ([`run::run_each`]).
+    ///
+    /// [`run::run_each`]: crate::run::run_each
+    pub scaled: Option<Scaled>,
     /// What the first run must leave in its buffers: a CPU reference.
     pub expect: Vec<Expect>,
     /// What the first run must leave in its textures: a CPU reference.
@@ -43,6 +49,37 @@ pub struct Plan {
     /// The buffers whose contents after the first run each runtime's must match the first
     /// runtime's, for a workload with no CPU reference.
     pub outputs: Vec<Output>,
+}
+
+/// A workload whose size follows the device: `build(size)` is the workload at `size` (a count of
+/// rounds, or anything its time grows in proportion to). Timed at `base`, it runs at `base`
+/// times the power of two, at most [`Scaled::MOST_DOUBLINGS`] doublings, that brings one command
+/// buffer's GPU time nearest `target_us` by ratio: a rule of the time it measured alone, the same
+/// on every device.
+#[derive(Clone, Copy, Debug)]
+pub struct Scaled {
+    /// The workload at a size.
+    pub build: fn(u32) -> Plan,
+    /// The size timed first.
+    pub base: u32,
+    /// The GPU time of one command buffer to size it to, in microseconds.
+    pub target_us: f64,
+}
+
+impl Scaled {
+    /// The most doublings of `base` [`Scaled::size`] takes.
+    pub const MOST_DOUBLINGS: u32 = 10;
+
+    /// The size for a command buffer that took `base_us` of GPU time at `base`: `base` times
+    /// 2^k, k the nearest whole number to log2(`target_us` / `base_us`) within 0 and
+    /// [`Scaled::MOST_DOUBLINGS`]; `base` where no time was measured (`base_us` not above 0).
+    pub fn size(&self, base_us: f64) -> u32 {
+        if base_us.is_nan() || base_us <= 0.0 {
+            return self.base;
+        }
+        let doublings = (self.target_us / base_us).log2().round();
+        self.base << (doublings.clamp(0.0, f64::from(Self::MOST_DOUBLINGS)) as u32)
+    }
 }
 
 /// Where a plan's kernels are.
@@ -416,6 +453,13 @@ impl Plan {
                 )
                 .into());
             }
+        }
+        if self.scaled.is_some() && !self.outputs.is_empty() {
+            return Err(format!(
+                "{name}: a scaled plan checks by its expectations alone: its runtimes can run it at \
+                 two sizes"
+            )
+            .into());
         }
         if self.dispatches.is_empty()
             || self.per_command_buffer == Some(0)

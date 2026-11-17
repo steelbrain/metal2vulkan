@@ -4,7 +4,7 @@ use crate::authored::WORKLOADS;
 use crate::description;
 use crate::plan::{
     Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Filter, Grid, Output, Plan,
-    Source, TextureExpect, TexturePlan, Values,
+    Scaled, Source, TextureExpect, TexturePlan, Values,
 };
 use crate::rt::{self, Ranges};
 use crate::run::{
@@ -110,6 +110,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -503,7 +504,8 @@ fn the_new_runtime_refuses_by_its_gaps_and_limits_alone() {
     assert!(rt::size([1 << 32, 1, 1]).unwrap_err().is::<Refused>());
 }
 
-/// A session that answers each plan with a report of `outputs`, or with `error`.
+/// A session that answers each plan with a report of `outputs`, or with `error`; its one run
+/// takes a tenth of a microsecond of GPU time a byte of the plan's buffers.
 struct Answers {
     outputs: Vec<u8>,
     error: Option<fn() -> crate::Error>,
@@ -514,11 +516,14 @@ impl Session for Answers {
         "answers".to_owned()
     }
 
-    fn run(&mut self, _: &Plan, _: Runs) -> Result<Report> {
+    fn run(&mut self, plan: &Plan, _: Runs) -> Result<Report> {
         match self.error {
             Some(error) => Err(error()),
             None => Ok(Report {
                 outputs: vec![self.outputs.clone()],
+                gpu_us: vec![
+                    plan.buffers.iter().map(|buffer| buffer.length).sum::<u64>() as f64 / 10.0,
+                ],
                 ..Report::default()
             }),
         }
@@ -538,6 +543,77 @@ impl Session for Answers {
 
     fn first_use_waits(&self) -> Option<Waits> {
         None
+    }
+}
+
+/// A scaled workload's size is its base doubled toward its target, by the time at the base.
+#[test]
+fn a_scaled_workload_doubles_its_base_toward_its_target() {
+    let scaled = Scaled {
+        build: |_| one_buffer_plan(16, None, 0),
+        base: 1024,
+        target_us: 10_000.0,
+    };
+    // A command buffer of 80 us at the base: 125 times short, 2^7 the nearest power of two.
+    assert_eq!(scaled.size(80.0), 1024 << 7);
+    // 3,640 us: 2.75 times short, nearer 2 than 4.
+    assert_eq!(scaled.size(3640.0), 2048);
+    // Longer than the target at the base, or no time measured: the base. At most ten doublings.
+    assert_eq!(scaled.size(12_450.0), 1024);
+    assert_eq!(scaled.size(0.0), 1024);
+    assert_eq!(scaled.size(0.5), 1024 << Scaled::MOST_DOUBLINGS);
+    let mut plan = one_buffer_plan(16, None, 0);
+    plan.scaled = Some(scaled);
+    assert!(plan.validate().is_ok());
+    plan.outputs = vec![Output {
+        buffer: 0,
+        comparison: Comparison::Exact,
+    }];
+    assert!(plan.validate().is_err());
+}
+
+/// A scaled workload is timed at its base on the first runtime, then every runtime runs it as
+/// its builder makes it at the size that time gives.
+#[test]
+fn a_scaled_workload_runs_at_the_size_its_base_time_gives() {
+    let runs = Runs {
+        warmup: 0,
+        settle: false,
+        timed: 1,
+    };
+    // A buffer of `size` bytes: 102.4 us at the base of 1,024, so 2^7 times that is nearest
+    // 10,000 us.
+    let build = |size| one_buffer_plan(u64::from(size), None, 0);
+    let mut plan = build(1024);
+    plan.scaled = Some(Scaled {
+        build,
+        base: 1024,
+        target_us: 10_000.0,
+    });
+    let answers = |error: Option<fn() -> crate::Error>| -> Box<dyn Session> {
+        Box::new(Answers {
+            outputs: Vec::new(),
+            error,
+        })
+    };
+    let refuse: fn() -> crate::Error = || Box::new(Refused("a known gap".to_owned()));
+    // The first refuses, so the second sizes it, and the third runs it at that size.
+    let mut sessions = vec![
+        ("a", answers(Some(refuse))),
+        ("b", answers(None)),
+        ("c", answers(None)),
+    ];
+    let each = run_each(&plan, &mut sessions, runs).unwrap();
+    assert!(each[0].is_err());
+    for report in &each[1..] {
+        let report = report.as_ref().unwrap();
+        let scaled = report.scaled_to.unwrap();
+        assert_eq!(
+            (scaled.base, scaled.base_us, scaled.size),
+            (1024, 102.4, 1024 << 7)
+        );
+        // The report is the run at that size.
+        assert_eq!(report.gpu_us, [13_107.2]);
     }
 }
 

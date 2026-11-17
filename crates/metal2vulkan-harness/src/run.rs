@@ -1,6 +1,6 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
-use crate::plan::{Binding, BufferPlan, Constant, Filter, Grid, Plan, Source, TexturePlan};
+use crate::plan::{Binding, BufferPlan, Constant, Filter, Grid, Plan, Scaled, Source, TexturePlan};
 use crate::{
     clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputeDevice,
     Device, Failed, Library, Refused, Result, Storage, Waits,
@@ -136,9 +136,13 @@ pub struct Report {
     /// of the wait for the run before it, in nanoseconds; empty where the host has no such clock.
     pub cpu_ns: Vec<f64>,
     /// Each timed command buffer's time from just before its `commit` until its completed
-    /// handler ran, in microseconds, in the order the handlers ran; empty unless the plan asks
-    /// for it ([`Plan::commit_to_complete`]).
-    pub commit_us: Vec<f64>,
+    /// handler ran, in microseconds, by its place in its run: one list per place, the first
+    /// committed first, each in the order the handlers ran. Empty unless the plan asks for it
+    /// ([`Plan::commit_to_complete`]).
+    pub commit_us: Vec<Vec<f64>>,
+    /// Where the plan is [`Scaled`], the size it ran at and the time that size came from
+    /// ([`run_each`]).
+    pub scaled_to: Option<ScaledTo>,
     /// The device's gauges after the 100th and the 200th timed run, where there were that many,
     /// read once the work committed by then completed: what the runs left behind.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
@@ -152,8 +156,9 @@ pub struct Report {
 /// report ([`Plan::commit_to_complete`]).
 #[derive(Default)]
 struct Completions {
-    /// The times reported, in microseconds, in the order the handlers ran.
-    times: Mutex<Vec<f64>>,
+    /// The times reported, each with its command buffer's place in its run, in microseconds, in
+    /// the order the handlers ran.
+    times: Mutex<Vec<(usize, f64)>>,
     /// Signalled at each report.
     reported: Condvar,
 }
@@ -162,17 +167,18 @@ struct Completions {
 const HANDLERS_RUN: Duration = Duration::from_secs(10);
 
 impl Completions {
-    /// Reports one command buffer's commit-to-complete time.
-    fn ran(&self, time: Duration) {
+    /// Reports the commit-to-complete time of the command buffer at `place` in its run.
+    fn ran(&self, place: usize, time: Duration) {
         let mut times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
-        times.push(time.as_secs_f64() * 1e6);
+        times.push((place, time.as_secs_f64() * 1e6));
         self.reported.notify_all();
     }
 
-    /// The times of the first `count` handlers to run, once they have: a completed handler may
-    /// run after the wait for its command buffer returns. An error where fewer have run within
-    /// [`HANDLERS_RUN`].
-    fn wait(&self, count: usize) -> Result<Vec<f64>> {
+    /// The times of `runs` runs of `places` command buffers each, by place, once their handlers
+    /// have run: a completed handler may run after the wait for its command buffer returns. An
+    /// error where fewer have run within [`HANDLERS_RUN`].
+    fn wait(&self, runs: usize, places: usize) -> Result<Vec<Vec<f64>>> {
+        let count = runs * places;
         let times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
         let (times, _) = (self.reported)
             .wait_timeout_while(times, HANDLERS_RUN, |times| times.len() < count)
@@ -180,7 +186,11 @@ impl Completions {
         if times.len() < count {
             return Err(format!("{} of {count} completed handlers ran", times.len()).into());
         }
-        Ok(times[..count].to_vec())
+        let mut by_place = vec![Vec::with_capacity(runs); places];
+        for &(place, us) in times.iter() {
+            by_place[place].push(us);
+        }
+        Ok(by_place)
     }
 }
 
@@ -220,17 +230,37 @@ pub trait Session {
     fn first_use_waits(&self) -> Option<Waits>;
 }
 
+/// The size a [`Scaled`] workload ran at, and the time it was sized from.
+#[derive(Clone, Copy, Debug)]
+pub struct ScaledTo {
+    /// The size timed first.
+    pub base: u32,
+    /// The GPU time of a command buffer at `base` on the first runtime that ran it, in
+    /// microseconds: the median run's over its command buffers, its dispatches timed in one
+    /// command buffer.
+    pub base_us: f64,
+    /// The size it ran at ([`Scaled::size`]).
+    pub size: u32,
+}
+
 /// `plan` on each session in turn: its report, or its runtime's typed refusal. An error where a
 /// session failed ([`Failed`], naming its runtime), or where the outputs of the sessions that ran
-/// it differ.
+/// it differ. A [`Scaled`] plan is timed at its base size on the first session that runs it, and
+/// every session runs it at the size that time gives ([`Report::scaled_to`]), so the runtimes
+/// time the same work.
 pub fn run_each(
     plan: &Plan,
     sessions: &mut [(&str, Box<dyn Session>)],
     runs: Runs,
 ) -> Result<Vec<std::result::Result<Report, Box<Refused>>>> {
     let mut each = Vec::with_capacity(sessions.len());
+    let mut sized = None;
     for (runtime, session) in sessions.iter_mut() {
-        each.push(match session.run(plan, runs) {
+        let ran = match plan.scaled {
+            None => session.run(plan, runs),
+            Some(scaled) => run_scaled(&mut **session, plan, scaled, &mut sized, runs),
+        };
+        each.push(match ran {
             Ok(report) => Ok(report),
             Err(why) => Err(why.downcast::<Refused>().map_err(|why| Failed {
                 runtime: runtime.to_string(),
@@ -245,6 +275,49 @@ pub fn run_each(
         }
     }
     Ok(each)
+}
+
+/// `plan`, a [`Scaled`] workload at its base size, on `session` at the size `sized` holds. Where
+/// no session sized it yet, this one times it at the base first and sizes it by a command
+/// buffer's GPU time there: the median of three runs over its command buffers, after a warm-up
+/// that goes on until the time settles, as [`warm_up`] does for the timed workloads, since a
+/// clock still rising reads the base long. The base is timed with all its dispatches in one
+/// command buffer: a run of several command buffers is timed from the first's `GPUStartTime` to
+/// the last's `GPUEndTime`, which can count less than their work where they complete together,
+/// while one command buffer's times bound its work alone.
+fn run_scaled(
+    session: &mut dyn Session,
+    plan: &Plan,
+    scaled: Scaled,
+    sized: &mut Option<ScaledTo>,
+    runs: Runs,
+) -> Result<Report> {
+    let to = match *sized {
+        Some(to) => to,
+        None => {
+            let timing = Runs {
+                warmup: 2,
+                settle: true,
+                timed: 3,
+            };
+            let as_one = Plan {
+                per_command_buffer: None,
+                commit_to_complete: false,
+                ..plan.clone()
+            };
+            let at_base = session.run(&as_one, timing)?;
+            let base_us =
+                percentile(&at_base.gpu_us, 50).unwrap_or(0.0) / plan.command_buffers() as f64;
+            *sized.insert(ScaledTo {
+                base: scaled.base,
+                base_us,
+                size: scaled.size(base_us),
+            })
+        }
+    };
+    let mut report = session.run(&(scaled.build)(to.size), runs)?;
+    report.scaled_to = Some(to);
+    Ok(report)
 }
 
 /// What the timed creations of buffers measured.
@@ -399,7 +472,7 @@ impl<D: ComputeDevice> Harness<D> {
 
     /// A run of `plan`, committed: its command buffers in order, `per_command_buffer`
     /// dispatches each (or all in one), with no wait between. Where `completions` is given, each
-    /// takes a completed handler that reports its commit-to-complete time there.
+    /// takes a completed handler that reports its commit-to-complete time there, with its place.
     fn commit_run(
         &self,
         plan: &Plan,
@@ -407,12 +480,13 @@ impl<D: ComputeDevice> Harness<D> {
         completions: Option<&Arc<Completions>>,
     ) -> Result<Vec<D::CommandBuffer>> {
         parts(0..plan.dispatches.len(), plan.per_command_buffer)
-            .map(|range| {
+            .enumerate()
+            .map(|(place, range)| {
                 let command_buffer = self.encode(plan, made, range)?;
                 if let Some(completions) = completions {
                     let (completions, committed) = (Arc::clone(completions), Instant::now());
                     command_buffer.add_completed_handler(Box::new(move || {
-                        completions.ran(committed.elapsed());
+                        completions.ran(place, committed.elapsed());
                     }))?;
                 }
                 command_buffer.commit()?;
@@ -671,8 +745,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
         }
         wait_run::<D>(&in_flight)?;
         if let Some(completions) = completions {
-            let count = runs.timed as usize * plan.command_buffers();
-            report.commit_us = completions.wait(count)?;
+            report.commit_us = completions.wait(runs.timed as usize, plan.command_buffers())?;
         }
         let (before, submissions) = (self.device.counts(), self.device.submissions());
         wait_run::<D>(&self.commit_run(plan, &made, None)?)?;

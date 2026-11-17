@@ -4,7 +4,7 @@
 
 use crate::plan::{
     seeded_words as words, Binding, BufferPlan, Constant, Dispatch, Expect, Filter, Grid, Plan,
-    Source, TextureExpect, TexturePlan, Values,
+    Scaled, Source, TextureExpect, TexturePlan, Values,
 };
 use crate::{Result, Storage};
 
@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 19] = [
+pub const WORKLOADS: [Workload; 20] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -51,6 +51,10 @@ pub const WORKLOADS: [Workload; 19] = [
     Workload {
         name: "frame_5cb",
         plan: frame_5cb,
+    },
+    Workload {
+        name: "long_4cb",
+        plan: long_4cb,
     },
     Workload {
         name: "burst_160",
@@ -163,35 +167,68 @@ fn bandwidth() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
 /// ALU-bound: 2^19 threads, each two dependent FMA chains of 1024 rounds (`fma_chains`). A
 /// thread starts from its index's low ten bits, so the reference runs the 1024 starts.
 fn alu() -> Plan {
+    fma_chains("alu", 1024, 1)
+}
+
+/// Four long command buffers committed together, each one `fma_chains` dispatch of 2^19 threads,
+/// and each command buffer's commit-to-complete time timed by its place in the run
+/// (`Plan::commit_to_complete`): whether the first completes when it ends or waits for the ones
+/// committed after it. GPUs differ about 150-fold in an `fma_chains` round, so no one length
+/// keeps every GPU's command buffers long: the device sizes it ([`Scaled`]), from 1024 rounds a
+/// dispatch doubled toward 10 ms of GPU time a command buffer.
+fn long_4cb() -> Plan {
+    Plan {
+        scaled: Some(Scaled {
+            build: long_4cb_at,
+            base: 1024,
+            target_us: 10_000.0,
+        }),
+        ..long_4cb_at(1024)
+    }
+}
+
+/// `long_4cb` at `rounds` rounds a dispatch.
+fn long_4cb_at(rounds: u32) -> Plan {
+    Plan {
+        commit_to_complete: true,
+        ..fma_chains("long_4cb", rounds, 4)
+    }
+}
+
+/// `command_buffers` command buffers committed together, each one `fma_chains` dispatch of 2^19
+/// threads, each thread two dependent FMA chains of `rounds` rounds. A thread starts from its
+/// index's low ten bits, so the reference runs the 1024 starts.
+fn fma_chains(name: &str, rounds: u32, command_buffers: usize) -> Plan {
     const THREADS: usize = 1 << 19;
-    const ROUNDS: u32 = 1024;
     let ends: Vec<f32> = (0..1024u32)
         .map(|start| {
             let mut a = (start & 31) as f32 / 32.0;
             let mut b = ((start >> 5) & 31) as f32 / 32.0;
-            for _ in 0..ROUNDS {
+            for _ in 0..rounds {
                 a = a.mul_add(0.9375, b * 0.0625);
                 b = b.mul_add(0.875, a * 0.125);
             }
             a + b
         })
         .collect();
+    let dispatch = Dispatch {
+        function: "fma_chains".to_owned(),
+        constants: Vec::new(),
+        bindings: vec![buffer(0, 0), bytes(1, rounds.to_le_bytes().to_vec())],
+        grid: Grid::groups_of_256(THREADS as u64 / 256),
+    };
     Plan {
-        name: "alu".to_owned(),
+        name: name.to_owned(),
         library: Source::Authored,
         buffers: vec![unset(4 * THREADS as u64)],
-        dispatches: vec![Dispatch {
-            function: "fma_chains".to_owned(),
-            constants: Vec::new(),
-            bindings: vec![buffer(0, 0), bytes(1, ROUNDS.to_le_bytes().to_vec())],
-            grid: Grid::groups_of_256(THREADS as u64 / 256),
-        }],
+        dispatches: vec![dispatch; command_buffers],
         expect: vec![Expect {
             buffer: 0,
             values: Values::Floats {
@@ -202,9 +239,10 @@ fn alu() -> Plan {
         textures: Vec::new(),
         expect_textures: Vec::new(),
         outputs: Vec::new(),
-        per_command_buffer: None,
+        per_command_buffer: (command_buffers > 1).then_some(1),
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -241,6 +279,7 @@ fn threadgroup_scan() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -297,6 +336,7 @@ fn simd_reduce() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -354,6 +394,7 @@ fn image_filter() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -400,6 +441,7 @@ fn dispatch_chain() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -527,6 +569,7 @@ fn lcg_frame(
         per_command_buffer: Some(per),
         per_encoder,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -570,6 +613,7 @@ fn wide_bindings() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -609,6 +653,7 @@ fn waves() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -656,6 +701,7 @@ fn vote_loop() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -700,6 +746,7 @@ fn narrow_ints() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -756,6 +803,7 @@ fn zero_products() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 
@@ -847,6 +895,7 @@ fn sampling_plan(
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        scaled: None,
     }
 }
 

@@ -362,8 +362,10 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
 /// `report`'s row, and its matrix lines.
 fn print(runtime: &str, name: &str, report: &Report) {
     let gpu = |p| percentile(&report.gpu_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
-    let commit =
-        |p| percentile(&report.commit_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
+    let us =
+        |values: &[f64], p| percentile(values, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
+    let every: Vec<f64> = report.commit_us.concat();
+    let commit = |p| us(&every, p);
     let per_dispatch = |values: &[f64]| {
         percentile(values, 50).map_or("-".to_owned(), |ns| {
             format!("{:.0}", ns / report.dispatches as f64)
@@ -384,7 +386,27 @@ fn print(runtime: &str, name: &str, report: &Report) {
         commit(99),
         gauges(&report.gauges),
     );
-    matrix(runtime, name, &report.gpu_us, &report.gauges);
+    if report.commit_us.len() > 1 {
+        let places: Vec<String> = (report.commit_us.iter().enumerate())
+            .map(|(place, times)| format!("#{} {} / {}", place + 1, us(times, 50), us(times, 99)))
+            .collect();
+        println!(
+            "{name:<17} {runtime:<8} c2c_us p50 / p99 by place in the run: {}",
+            places.join(", ")
+        );
+    }
+    match report.scaled_to {
+        None => matrix(runtime, name, &report.gpu_us, &report.gauges),
+        Some(scaled) => {
+            println!(
+                "{name:<17} {runtime:<8} sized to {} from {} at {:.1} us a command buffer; its matrix time is a run's at {}",
+                scaled.size, scaled.base, scaled.base_us, scaled.base
+            );
+            let at_base = f64::from(scaled.base) / f64::from(scaled.size);
+            let times: Vec<f64> = report.gpu_us.iter().map(|us| us * at_base).collect();
+            matrix(runtime, name, &times, &report.gauges);
+        }
+    }
     for (count, value) in &report.counts {
         println!("M2V-MATRIX metric harness-{runtime}/{name}/{count}_per_run {value}");
     }

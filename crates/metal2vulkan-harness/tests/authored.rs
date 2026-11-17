@@ -26,6 +26,10 @@ fn every_workload(session: &mut dyn Session) {
                     0
                 };
                 assert_eq!(report.commit_us.len(), handlers, "{name}");
+                assert!(
+                    report.commit_us.iter().all(|times| times.len() == 1),
+                    "{name}"
+                );
             }
             Err(why) => match why.downcast::<Refused>() {
                 Ok(refused) => println!("{name}: REFUSED: {refused}"),
