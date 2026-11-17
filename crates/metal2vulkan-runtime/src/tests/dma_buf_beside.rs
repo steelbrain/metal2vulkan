@@ -432,36 +432,57 @@ fn inside(how: &str, device: &Device) {
         bytes_of(&out, length) == later[offset..offset + length],
         "{TEST} ({how}): the CPU's write before the commit, through the second"
     );
-    // A fill through the first and a copy through the second of the bytes they share, in one
-    // encoder, either way round.
+    // A fill through the first and a copy through the second of the bytes they share, either way
+    // round: in one encoder where the second lies in an import (ordered by the bytes they share),
+    // in two command buffers where it is a copy, which agrees with the pages at its commit and its
+    // completion only (Metal orders no two no-copy buffers over one allocation).
+    let in_import = expected[0].0 == HostBacking::ImportedAsDmaBuf;
+    let apart = match in_import {
+        true => "in one encoder",
+        false => "in two command buffers",
+    };
+    let fill_then_read = |fill: &dyn Fn(&mut BlitCommandEncoder),
+                          copy: &dyn Fn(&mut BlitCommandEncoder)| {
+        if in_import {
+            blits(
+                &queue,
+                |blit| {
+                    fill(blit);
+                    copy(blit);
+                },
+                || {},
+            );
+        } else {
+            blits(&queue, fill, || {});
+            blits(&queue, copy, || {});
+        }
+    };
     let shared = 2 * page - 256;
     let out = scratch_buffer(device, shared);
-    blits(
-        &queue,
-        |blit| {
+    fill_then_read(
+        &|blit| {
             blit.fill_buffer(&first, offset as u64..(offset + shared) as u64, 0xa1)
                 .unwrap();
+        },
+        &|blit| {
             blit.copy_from_buffer_to_buffer(&second, 0, &out, 0, shared as u64)
                 .unwrap();
         },
-        || {},
     );
     assert!(
         bytes_of(&out, shared).iter().all(|&b| b == 0xa1),
-        "{TEST} ({how}): the first's fill read through the second in one encoder"
+        "{TEST} ({how}): the first's fill read through the second {apart}"
     );
-    blits(
-        &queue,
-        |blit| {
-            blit.fill_buffer(&second, 0..shared as u64, 0xb2).unwrap();
+    fill_then_read(
+        &|blit| blit.fill_buffer(&second, 0..shared as u64, 0xb2).unwrap(),
+        &|blit| {
             blit.copy_from_buffer_to_buffer(&first, offset as u64, &out, 0, shared as u64)
                 .unwrap();
         },
-        || {},
     );
     assert!(
         bytes_of(&out, shared).iter().all(|&b| b == 0xb2),
-        "{TEST} ({how}): the second's fill read through the first in one encoder"
+        "{TEST} ({how}): the second's fill read through the first {apart}"
     );
     // The first released, the second's fill still reaches the file's pages, and the third reads
     // it where they meet.
