@@ -377,8 +377,9 @@ fn derive_fields(
 }
 
 /// The driver workarounds of the driver `desc` names (`driver_id`), on its GPU (`vendor_id`, or its
-/// generation's `device_id`s) where the defect is the GPU's, and those of the measured table
-/// (`driver_facts::DEFECTS`), in order.
+/// generation's `device_id`s) where the defect is the GPU's, those of the measured table
+/// (`driver_facts::DEFECTS`), and those the consumer measured on the device itself
+/// ([`DeviceDescription::measured`]), in order.
 fn workarounds(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
     let mut found = by_identity(desc);
     // Every rasterizer but Apple's hands a clipped primitive's fragments their coverage by the
@@ -389,6 +390,7 @@ fn workarounds(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
         found.push(DriverWorkaround::TessellatorNotMetals);
     }
     found.extend(super::driver_facts::defects(desc));
+    found.extend(desc.measured.iter().copied());
     found.sort();
     found.dedup();
     found

@@ -999,8 +999,16 @@ pub fn param_value(
 /// `Bounded` window whose descriptor range fits `maxUniformBufferRange`, when the profile's
 /// containment encoding emits no check and the slot has no lane read; a storage view otherwise.
 /// The uniform view is a uniform texel buffer ([`texel_view`]) where the profile has
-/// `DriverWorkaround::ExternalUniformReadsSkipACache` and the window is at most
-/// [`views::TEXEL_WINDOW_BYTES`] long, a uniform buffer otherwise.
+/// `DriverWorkaround::ExternalUniformReadsSkipACache`, the slot has an indexed read
+/// ([`SlotPlan::indexed_read`]) and the window is at most [`views::TEXEL_WINDOW_BYTES`] long, a
+/// uniform buffer otherwise: a slot read at constant offsets alone keeps its uniform buffer, whose
+/// words a driver may load ahead into registers (ANV pushes such ranges: Mesa's
+/// `brw_nir_analyze_ubo_ranges`; read, not measured), as no texel fetch can be.
+///
+/// Both view facts compose: a lane read keeps its storage view whatever the texel fact, so on a
+/// profile taking both, a slot with a per-lane read is a storage view, one whose indexed reads
+/// are all uniform among the active lanes a uniform texel buffer (within the bound), and one read
+/// at constant offsets alone a uniform buffer.
 ///
 /// Under the in-shader encoding a uniform view could not be contained: the bound range may be
 /// shorter than the view's declared size (the binder clamps it to the padded allocation), a uniform
@@ -1031,9 +1039,9 @@ pub fn view_kind(p: &DeviceProfile, s: &SlotPlan) -> ViewKind {
         _ => None,
     };
     match (uniform, s.window) {
-        (Some(bytes), Some(window)) => {
-            texel_view(p, window).unwrap_or_else(|| uniform_view(p, bytes))
-        }
+        (Some(bytes), Some(window)) => (s.indexed_read.then(|| texel_view(p, window)))
+            .flatten()
+            .unwrap_or_else(|| uniform_view(p, bytes)),
         _ => ViewKind::Storage,
     }
 }

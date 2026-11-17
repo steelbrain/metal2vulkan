@@ -65,6 +65,10 @@ fn note_render_artifact_encoded() {
 /// Where one creation's (or one later variant's) compiles look, and its budget.
 pub(crate) struct Sources<'a> {
     device: &'a Device,
+    /// The compile device every compile and link of these sources takes: the device's as they
+    /// were made (`Device::compile_device`), so a view check answering meanwhile changes none of
+    /// one creation's or variant's compiles (`view_check.rs`).
+    compile: &'a metal2vulkan::device::Device,
     /// The creation's options: its archives and budget; `None` for a variant a dispatch or
     /// draw needs after creation, which no archive holds and which compiles under the standard
     /// budget.
@@ -86,6 +90,7 @@ impl<'a> Sources<'a> {
     ) -> Sources<'a> {
         Sources {
             device,
+            compile: device.compile_device(),
             options: Some(options),
             used,
             refusal_kept: Cell::new(false),
@@ -96,6 +101,7 @@ impl<'a> Sources<'a> {
     pub(crate) fn later(device: &'a Device) -> Sources<'a> {
         Sources {
             device,
+            compile: device.compile_device(),
             options: None,
             used: None,
             refusal_kept: Cell::new(false),
@@ -104,6 +110,11 @@ impl<'a> Sources<'a> {
 
     pub(crate) fn device(&self) -> &'a Device {
         self.device
+    }
+
+    /// The compile device of every compile and link of these sources.
+    pub(crate) fn compile(&self) -> &'a metal2vulkan::device::Device {
+        self.compile
     }
 
     /// Whether a refusal the memo kept answered one of its asks of a function
@@ -151,7 +162,7 @@ impl<'a> Sources<'a> {
         (key, entries): (&FunctionCompileKey, Option<&StageEntries>),
         budget: &Budget,
     ) -> Result<CompiledFunction, metal2vulkan::error::Error> {
-        let compile = self.device.compile_device();
+        let compile = self.compile;
         let shared = self.device.shared();
         let cache = &shared.shader_cache;
         let compiled = match self.found_function(key) {
@@ -193,7 +204,7 @@ impl<'a> Sources<'a> {
     /// `None` where none holds it, translating nothing. A render creation that holds the keys a
     /// variant's record names links what this finds (`ShaderCache::variant_pipeline`).
     pub(crate) fn found_function(&self, key: &FunctionCompileKey) -> Option<CompiledFunction> {
-        let compile = self.device.compile_device();
+        let compile = self.compile;
         let shared = self.device.shared();
         let cache = &shared.shader_cache;
         let compiled = match cache.memo.function(key) {
@@ -235,7 +246,7 @@ impl<'a> Sources<'a> {
         descriptor: &Kernel,
         budget: &Budget,
     ) -> Result<Remembered<ComputePipeline, Variant>, metal2vulkan::error::Error> {
-        let compile = self.device.compile_device();
+        let compile = self.compile;
         let cache = &self.device.shared().shader_cache;
         let key = match descriptor {
             Kernel::Compute(descriptor) => compile.compute_pipeline_key(descriptor),
@@ -280,7 +291,7 @@ impl<'a> Sources<'a> {
         &self,
         key: &PipelineKey,
     ) -> Option<Remembered<RenderPipeline, RenderVariant>> {
-        let compile = self.device.compile_device();
+        let compile = self.compile;
         let cache = &self.device.shared().shader_cache;
         let found = match cache.memo.render(key) {
             Some(found) => found,
@@ -332,7 +343,7 @@ impl<'a> Sources<'a> {
         pipeline: RenderPipeline,
         stage_keys: &[FunctionCompileKey],
     ) -> Arc<RenderPipeline> {
-        let compile = self.device.compile_device();
+        let compile = self.compile;
         let cache = &self.device.shared().shader_cache;
         let pipeline = Arc::new(pipeline);
         let functions_held = !stage_keys.is_empty()

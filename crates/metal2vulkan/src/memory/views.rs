@@ -14,8 +14,9 @@
 //! - [`ViewKind::UniformTexel`]: a uniform texel buffer (`UniformConstant`, an image of `Dim`
 //!   `Buffer`, `Sampled` 1, `u32` texels) that the binder views as `R32G32B32A32_UINT`, read with
 //!   `OpImageFetch`; a word is one lane of a fetched texel. A slot takes it in place of a uniform
-//!   buffer only where its profile has `DriverWorkaround::ExternalUniformReadsSkipACache` and its
-//!   window is at most [`TEXEL_WINDOW_BYTES`] long (`lower::access::view_kind`).
+//!   buffer only where its profile has `DriverWorkaround::ExternalUniformReadsSkipACache`, the
+//!   slot has an indexed read (`SlotPlan::indexed_read`) and its window is at most
+//!   [`TEXEL_WINDOW_BYTES`] long (`lower::access::view_kind`).
 //!
 //! Uniform views exist only for read-only slots with a `Bounded` window whose descriptor range
 //! fits `maxUniformBufferRange` ([`uniform_range`]), a texel one's also `maxTexelBufferElements`

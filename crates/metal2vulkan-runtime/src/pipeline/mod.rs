@@ -2242,7 +2242,7 @@ impl Variant {
         descriptor: &Kernel,
         key: &VariantKey,
     ) -> Result<(Remembered<ComputePipeline, Variant>, Kernel), metal2vulkan::error::Error> {
-        let compile = sources.device().compile_device();
+        let compile = sources.compile();
         let budget = sources.budget();
         // The kernel's specialized entry is the device's, as a render stage's is: a sibling
         // pipeline of the same kernel at the same call-stack depth decodes and specializes

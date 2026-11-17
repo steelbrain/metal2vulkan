@@ -353,6 +353,14 @@ println!("  Metal properties: {:?}", device.metal_properties());
   includes it, so an artifact never serves another device. Facts that follow the machine's memory
   (`DeviceDescription::allocation`: `maxMemoryAllocationSize`, `maxBufferSize`) are not profile
   fields, so two machines that differ only there share artifacts.
+- `DeviceDescription::measured`: the driver workarounds you measured on the device itself, which
+  the profile takes beside those its driver's identity names. Two cost facts come from such a
+  measurement alone, never from an identity: `DriverWorkaround::UniformBufferPerLaneReadsSerialize`
+  (a uniform buffer read at an address that differs between lanes costs many times a storage
+  buffer's) and `DriverWorkaround::ExternalUniformReadsSkipACache` (uniform reads of imported memory
+  are faster through a uniform texel buffer). The runtime's view check measures both
+  (`crates/metal2vulkan-runtime/README.md`); `bind::view_check_module` gives its kernels. The set is
+  a profile field, so the fingerprint and every cache key follow it.
 - `profile().spirv_validation()`: the `spirv-val` environments and relaxations every module for
   the device is valid under. The command line runs exactly these.
 - The profile's facts: `enabled()`, `limits()`, `images()`, `fragment()`, `descriptors()`, the
@@ -1463,8 +1471,11 @@ for dependency in &pipeline.dependencies {
   dynamic buffer an entry point uses through more than one variable.
 - A buffer slot's uniform view is a `Uniform` block (`DescriptorView::UniformWords`, or
   `UniformVec4` without `uniformBufferStandardLayout`), but on a profile that takes
-  `DriverWorkaround::ExternalUniformReadsSkipACache` (ANV on the Iris Xe RPL-P) a slot whose window
-  is `Bounded` and at most 4 KiB long takes a uniform texel buffer instead
+  `DriverWorkaround::ExternalUniformReadsSkipACache` (measured: `DeviceDescription::measured`; on
+  the Iris Xe RPL-P under ANV the runtime's view check finds it) a slot with an indexed read whose
+  window is `Bounded` and at most 4 KiB long takes a uniform texel buffer instead; a slot read at
+  constant offsets alone keeps its `Uniform` block, whose words a driver may load ahead into
+  registers as it cannot a texel fetch
   (`DescriptorView::UniformTexel`: a `UniformConstant` image of `Dim` `Buffer`, `Sampled` 1, `u32`
   texels, read with `OpImageFetch`), its binding `VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER`. Write a
   view of the planned range in `R32G32B32A32_UINT`, from the range's buffer, offset and length,

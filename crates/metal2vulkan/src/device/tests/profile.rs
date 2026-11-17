@@ -365,8 +365,7 @@ fn streamed_fingerprint_equals_the_hash_of_the_rendering() {
 /// its allocation sizes, as two captures of one GPU under its two `deviceID`s do
 /// (`amd-780m-hawkpoint-radv` and `amd-780m-radv`, the Radeon 780M of Hawk Point and of Phoenix).
 /// `intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`, one GPU family on one driver, differ by
-/// workarounds measured on the Iris Xe alone (`DriverWorkaround::PushReadsLengthenThreadPayload`,
-/// `DriverWorkaround::ExternalUniformReadsSkipACache`).
+/// a workaround measured on the Iris Xe alone (`DriverWorkaround::PushReadsLengthenThreadPayload`).
 #[test]
 fn fingerprints_distinguish_committed_profiles() {
     let translated = |stem: &str| {
@@ -1138,32 +1137,62 @@ fn large_module_defects_are_keyed_on_anv() {
     }
 }
 
-/// `DriverWorkaround::ExternalUniformReadsSkipACache` is keyed on ANV on the Iris Xe of RPL-P, the
-/// GPU it was measured on: that committed profile alone carries it, ANV on the UHD 770 of RPL-S
-/// does not, and the Iris Xe's description under RADV's driver loses it.
+/// The two view facts (`DriverWorkaround::UniformBufferPerLaneReadsSerialize` and
+/// `DriverWorkaround::ExternalUniformReadsSkipACache`) come from the description's measured set
+/// alone: no committed profile carries either by its identity, the GPUs they were first measured
+/// on included (the RTX 5080 Laptop GPU's and the Iris Xe's captures, the RTX 3090's and the
+/// RTX 2080's IDs), and any description that measured one carries it, its fingerprint another.
 #[test]
-fn external_uniform_reads_fact_is_the_iris_xes_alone() {
+fn view_facts_come_from_the_measured_set_alone() {
     use crate::device::profile::DriverWorkaround;
-    let fact = DriverWorkaround::ExternalUniformReadsSkipACache;
-    let takes = |desc: &DeviceDescription| {
-        Device::new(desc.clone(), DevicePolicy::default())
-            .unwrap()
-            .profile()
-            .workarounds()
-            .contains(&fact)
+    let facts = [
+        DriverWorkaround::UniformBufferPerLaneReadsSerialize,
+        DriverWorkaround::ExternalUniformReadsSkipACache,
+    ];
+    let device =
+        |desc: &DeviceDescription| Device::new(desc.clone(), DevicePolicy::default()).unwrap();
+    let carried = |desc: &DeviceDescription| {
+        let device = device(desc);
+        facts.map(|fact| device.profile().workarounds().contains(&fact))
     };
-    let mut carriers = Vec::new();
-    for (stem, text) in committed_profiles() {
-        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        if takes(&desc) {
-            carriers.push(stem);
-        }
+    let mut nvidia = profile("nvidia-rtx5080-laptop");
+    let mut identities = vec![nvidia.clone(), profile("intel-irisxe-rplp-anv")];
+    for id in [0x2204, 0x1e87] {
+        nvidia.device_id = id;
+        identities.push(nvidia.clone());
     }
-    assert_eq!(carriers, ["intel-irisxe-rplp-anv"]);
-    assert!(!takes(&profile("intel-uhd770-rpls-anv")));
-    let mut desc = profile("intel-irisxe-rplp-anv");
-    desc.driver_id = Some(vk::DriverId::MESA_RADV);
-    assert!(!takes(&desc));
+    let committed = committed_profiles()
+        .into_iter()
+        .map(|(_, text)| DeviceDescription::from_khronos_json(&text, None).unwrap());
+    for desc in identities.into_iter().chain(committed) {
+        assert_eq!(carried(&desc), [false, false], "{}", desc.device_name);
+        let unmeasured = device(&desc).profile_fingerprint();
+        let mut fingerprints = vec![unmeasured];
+        for (at, fact) in facts.into_iter().enumerate() {
+            let mut measured = desc.clone();
+            measured.measured.insert(fact);
+            let mut expected = [false, false];
+            expected[at] = true;
+            assert_eq!(
+                carried(&measured),
+                expected,
+                "{}: {fact:?}",
+                desc.device_name
+            );
+            fingerprints.push(device(&measured).profile_fingerprint());
+        }
+        let mut both = desc.clone();
+        both.measured.extend(facts);
+        assert_eq!(carried(&both), [true, true]);
+        fingerprints.push(device(&both).profile_fingerprint());
+        let distinct: std::collections::BTreeSet<_> = fingerprints.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            4,
+            "{}: each verdict its own fingerprint",
+            desc.device_name
+        );
+    }
 }
 
 /// `DriverWorkaround::OppositeZeroProductsMerged` is keyed on ANV, whatever its GPU and release:
@@ -1314,54 +1343,5 @@ fn nvidia_keeps_dont_inline_calls_on_its_measured_gpu() {
     }
     assert!(!carries(&profile("nvidia-pascal-linux")));
     assert!(!carries(&profile("amd-780m-radv")));
-    assert!(!carries(&profile("moltenvk-m3")));
-}
-
-/// `DriverWorkaround::UniformBufferPerLaneReadsSerialize`, a cost fact, is keyed on the GPUs
-/// measured with it: NVIDIA's driver on the RTX 3090, the RTX 2080 and the RTX 5080 Laptop GPU, at
-/// every release. Another GPU of the vendor (the desktop RTX 50's committed profile, Pascal's),
-/// another vendor's ID, another driver (NVK), and AMD's and Apple's committed profiles do not carry
-/// it.
-#[test]
-fn nvidia_serializes_per_lane_uniform_reads_on_its_measured_gpus() {
-    use crate::device::driver_facts::{NVIDIA_RTX_2080, NVIDIA_RTX_3090};
-    use crate::device::profile::DriverWorkaround;
-    let fact = DriverWorkaround::UniformBufferPerLaneReadsSerialize;
-    let carries = |desc: &DeviceDescription| {
-        Device::new(desc.clone(), DevicePolicy::default())
-            .unwrap()
-            .profile()
-            .fields()
-            .workarounds
-            .contains(&fact)
-    };
-    let mut desc = profile("nvidia-rtx5080-laptop");
-    assert_eq!(desc.driver_id, Some(vk::DriverId::NVIDIA_PROPRIETARY));
-    assert!(
-        carries(&desc),
-        "on the RTX 5080 Laptop GPU, where it was measured"
-    );
-    for id in [NVIDIA_RTX_3090, NVIDIA_RTX_2080] {
-        desc.device_id = id;
-        assert!(carries(&desc), "on {id:#x}, where it was measured");
-    }
-    desc.driver_version += 1 << 6;
-    assert!(carries(&desc), "at another release");
-    desc.vendor_id = 0x1002;
-    assert!(!carries(&desc), "on another vendor's ID");
-    desc.vendor_id = 0x10de;
-    desc.driver_id = Some(vk::DriverId::MESA_NVK);
-    assert!(!carries(&desc), "under NVK");
-    for (stem, text) in committed_profiles() {
-        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        assert_eq!(
-            carries(&desc),
-            stem == "nvidia-rtx5080-laptop",
-            "{stem}: the RTX 5080 Laptop GPU's is the one committed profile of a measured GPU"
-        );
-    }
-    assert!(!carries(&profile("nvidia-pascal-linux")));
-    assert!(!carries(&profile("amd-780m-radv")));
-    assert!(!carries(&profile("amd-rdna3-radv")));
     assert!(!carries(&profile("moltenvk-m3")));
 }

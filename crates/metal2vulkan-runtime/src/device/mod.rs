@@ -1743,9 +1743,19 @@ impl Device {
         WeakDevice(Arc::downgrade(shared), Arc::clone(&shared.holds))
     }
 
-    /// The compile-and-plan device this device compiles and plans for. No Metal counterpart.
+    /// The compile-and-plan device this device compiles and plans for now. No Metal counterpart.
+    /// Its profile is the device description's until the device's view check answers with a fact
+    /// (`view_check.rs`); from then on, the description's with the check's facts measured
+    /// ([`Device::view_costs`]), whose profile fingerprint differs. Read it once for one compile
+    /// and its link.
     pub fn compile_device(&self) -> &metal2vulkan::device::Device {
-        &self.invariant().compile
+        let invariant = self.invariant();
+        (invariant.views.measured()).unwrap_or(&invariant.compile)
+    }
+
+    /// The device's view check (`view_check.rs`).
+    pub(crate) fn view_check(&self) -> &crate::view_check::ViewCheck {
+        &self.invariant().views
     }
 
     /// What the Vulkan device enabled, in the compile layer's vocabulary. No Metal counterpart.
@@ -2158,6 +2168,10 @@ pub(super) struct Parts {
     /// Its check of the first move over host pages fails whatever the moves did
     /// (`DeviceOptions::fail_in_place_check`).
     pub(super) fail_in_place_check: bool,
+    /// In the runtime's own tests, its view check's facts, fixed (`DeviceOptions::view_facts`).
+    #[cfg(test)]
+    pub(super) view_facts:
+        Option<std::collections::BTreeSet<metal2vulkan::device::DriverWorkaround>>,
     /// Its submission check of merged submissions holds without its answer
     /// (`DeviceOptions::assume_submissions_merge`).
     pub(super) assume_submissions_merge: bool,
@@ -2275,6 +2289,8 @@ impl Device {
             load_no_dynamic_library_file,
             pipeline_records,
             fail_in_place_check,
+            #[cfg(test)]
+            view_facts,
             assume_submissions_merge,
             pending_audit,
             encoder_trail,
@@ -3119,12 +3135,17 @@ impl Device {
         // The device's line: a new one for a device made now, else the line this generation
         // recovers, whose address space, resource IDs, identifiers and counts it goes on with
         // (`line.rs`).
+        let views = Arc::new(crate::view_check::ViewCheck::new(
+            properties.description.clone(),
+            *compile.policy(),
+        ));
         let invariant = line::Invariant {
             properties,
             compile,
             enabled,
             extensions,
             cache_directory: shader_cache.directory_root(),
+            views,
         };
         let line = match recovering {
             Some(line) => line,
@@ -3411,6 +3432,13 @@ impl Device {
         // Its submission checks' verdicts, where a record holds them; else the checks start
         // (`submit_check.rs`).
         device.recall_submit_checks();
+        // Its view check's facts, where a record holds them; else the check starts
+        // (`view_check.rs`). In the runtime's own tests, the options' facts.
+        #[cfg(test)]
+        let forced = view_facts;
+        #[cfg(not(test))]
+        let forced = None;
+        device.recall_view_check(forced);
         device.degrade_argument_buffers_unread();
         device.degrade_float_tininess();
         Ok(device)

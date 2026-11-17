@@ -189,6 +189,7 @@ pub(crate) mod texel_rows;
 pub(crate) mod tile_map;
 pub(crate) mod tiled_texels;
 pub(crate) mod two_plane_texels;
+pub(crate) mod view_check;
 pub(crate) mod visibility_combine;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
@@ -311,6 +312,7 @@ pub use state::{
     TextureShape, TileThreadgroupArgument, TileThreadgroupMemory, UsedClass, UsedResource,
     UsedShape, VertexAmplification, ViewMapping, ZERO_OFFSET_CLASS, ZERO_OFFSET_TOLD,
 };
+pub use view_check::{view_check_module, CheckReads, CheckView, ViewCheckModule};
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.
 pub use dynamic_views::{dynamic_views_module, DynamicViewsModule};

@@ -90,6 +90,9 @@ pub(crate) struct Invariant {
     /// The shader cache's directory (`Device::shader_cache_directory`); `None` where it keeps
     /// none.
     pub(crate) cache_directory: Option<PathBuf>,
+    /// The view check (`view_check.rs`): its answer, and the compile device of its measured
+    /// facts once it holds any, which every compile then takes (`Device::compile_device`).
+    pub(crate) views: Arc<crate::view_check::ViewCheck>,
 }
 
 /// How the line makes its next `VkDevice`: what the first was made of (`create.rs`). None for a

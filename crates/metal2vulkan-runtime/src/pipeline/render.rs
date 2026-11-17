@@ -3030,7 +3030,7 @@ impl RenderVariant {
         entries: &StageEntries,
         descriptor_key: &PipelineKey,
     ) -> Result<CompiledVariant, metal2vulkan::error::Error> {
-        let compile = sources.device().compile_device();
+        let compile = sources.compile();
         let budget = sources.budget();
         // The pipeline a creation of a descriptor of the same key learned for `key`, found
         // without asking its keys again; else its stages' functions, found by the keys that
@@ -3125,7 +3125,7 @@ impl RenderVariant {
         key: &VariantKey,
         record: Option<(&PipelineKey, &VariantStages)>,
     ) -> Result<CompiledVariant, metal2vulkan::error::Error> {
-        let compile = sources.device().compile_device();
+        let compile = sources.compile();
         let budget = sources.budget();
         let pipeline = compile.compile_render_variant(&linked, key, &budget)?;
         // The stages the link was given, whichever way they arrived: the ones this creation

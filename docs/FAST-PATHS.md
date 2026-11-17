@@ -719,12 +719,14 @@ driver's. Each is open work.
   shadow wherever its first byte lies off a multiple of 4096 of the memory, or its image is larger
   than the bytes the placement holds from there.
 - **On ANV, constants read through a uniform buffer over imported memory take longer than over
-  the device's own** (`DriverWorkaround::ExternalUniformReadsSkipACache`, the Iris Xe RPL-P):
+  the device's own** (`DriverWorkaround::ExternalUniformReadsSkipACache`, which the runtime's view
+  check finds on the Iris Xe RPL-P):
   Mesa gives memory the device marks external (a host allocation, a dma-buf) the cache state of a
   displayable surface, and a uniform buffer read of it misses the data port's L1. A uniform view
-  whose window the translation bounds to at most 4 KiB reads through a uniform texel buffer there,
-  as fast as over device memory (`DescriptorView::UniformTexel`, `docs/API.md` section 5). Every
-  other uniform view keeps its uniform buffer: large constant working sets over imported memory
+  with an indexed read whose window the translation bounds to at most 4 KiB reads through a uniform
+  texel buffer there, as fast as over device memory (`DescriptorView::UniformTexel`, `docs/API.md`
+  section 5). Every other uniform view keeps its uniform buffer (one read at constant offsets
+  alone, whose words the driver may load ahead into registers, among them): large constant working sets over imported memory
   still run at 1.1 to 2.2 times their time over device memory on ANV (a uniform buffer over a host
   allocation or a udmabuf against one over device memory, 16 MiB windows, job m3-max-37729); only
   memory the device does not mark external reads at full speed there. The binds that keep the

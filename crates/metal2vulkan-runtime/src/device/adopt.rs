@@ -370,6 +370,8 @@ impl Device {
             load_no_dynamic_library_file: raw.load_no_dynamic_library_file,
             pipeline_records: raw.pipeline_records,
             fail_in_place_check: false,
+            #[cfg(test)]
+            view_facts: Some(std::collections::BTreeSet::new()),
             assume_submissions_merge: false,
             // On where `METAL2VULKAN_PENDING_AUDIT` is set (`assemble`).
             pending_audit: false,

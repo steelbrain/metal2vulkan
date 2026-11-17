@@ -558,7 +558,8 @@ after it, and 0 of 80 with the device dropped first
 - **Constants over imported memory.** On ANV on the Iris Xe RPL-P a uniform buffer read of memory
   the device marks external (a no-copy buffer's host pages, a dma-buf) misses a cache: a kernel
   whose invocations read one word of a 1 KiB window took 2.0 to 2.5 times as long there as over
-  device memory, and 5.2 to 5.5 times where each read its own. There a `constant` slot whose
+  device memory, and 5.2 to 5.5 times where each read its own. Where the device's view check
+  finds that (`ExternalUniformReadsSkipACache`), a `constant` slot with an indexed read whose
   window the translation bounds to at most 4 KiB reads through a uniform texel buffer instead,
   measured at 0.98 to 1.04 times the time over device memory: the runtime makes a view of the
   bound range for each bind, counted in `WorkCounts::uniform_texels_bound`. A longer window keeps its uniform buffer and
@@ -861,6 +862,30 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   `Device::settle_in_place_checks` starts the check and says when its verdicts are known (a zero
   timeout waits for nothing). `Buffer::tiled_texture_placement` answers it for
   `new_tiled_texture`'s arguments.
+- `Device::settle_view_check`, `Device::view_costs` (with `ViewCosts` and `ViewVerdict`) and
+  `Device::view_check_report`: the device's view check, which decides the two view cost facts
+  translation takes (`DeviceDescription::measured`) from the device's own timings, never from its
+  driver or GPU identity. It starts as the device is made, on a thread of its own, and no call
+  waits for it but `settle_view_check`. Eight kernels of 256 workgroups of 64 invocations each read
+  a 1 KiB and a 4 KiB window 256 times through a uniform buffer, a storage buffer and a uniform
+  texel buffer, every invocation the same vector at each step, each its own, or two fixed ones;
+  the window lies in the device's memory, and the uniform reads run again over host pages the
+  device imported by their pointer. Seven rounds after a warm-up, the arms interleaved, medians of
+  timestamps. `UniformBufferPerLaneReadsSerialize` where the storage buffer's per-lane reads took
+  less than 0.3 of the uniform buffer's at both windows (NVIDIA's measured 0.011 to 0.107, RADV's
+  0.96 to 1.00); `ExternalUniformReadsSkipACache` where the texel buffer's uniform reads over the
+  imported pages took less than 0.7 of the uniform buffer's there (ANV on the Iris Xe of RPL-P
+  0.40 to 0.49). Both may hold: a slot with a per-lane read then keeps its storage view, one with
+  indexed reads all uniform takes the texel view, and one read at constant offsets alone keeps its
+  uniform buffer. `Unchecked`, never fatal, with no fact, where the device writes no timestamps
+  the host reads or refuses any part of it. It holds 4 KiB and 64 KiB of the device's memory and
+  64 KiB of host pages while it runs. Until it answers, pipelines compile with the profile of the
+  device's identity alone (a uniform view stays a uniform buffer); once it answers with a fact,
+  every compile from then on takes the profile with those facts measured
+  (`Device::compile_device`), whose fingerprint, and so every shader cache key, differs; a
+  pipeline made before keeps its form. Its medians are kept in the shader cache's directory for the
+  driver, its release and the runtime's, so a later device of the same reads them as it is made
+  and compiles with its facts from its first pipeline.
 - `Device::settle_tiling_cost_check`, `Device::tiling_cost` (with `TilingCost` and
   `TilingVerdict`) and `Device::tiling_cost_check_report`: whether the device's GPU pays more for
   a texture in place over host pages (a linear image) than for a `Private` one (optimal), measured

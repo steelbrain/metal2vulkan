@@ -63,11 +63,14 @@ pub(crate) enum Holder {
     /// The check of what linear images cost against optimal ones, between its rounds
     /// (`tiling_check.rs`).
     TilingCheck,
+    /// The check of what a `constant` window's views cost, between its rounds
+    /// (`view_check.rs`).
+    ViewCheck,
 }
 
 /// The holders: one test hold each ([`Holds::held`]).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-const HOLDERS: usize = Holder::TilingCheck as usize + 1;
+const HOLDERS: usize = Holder::ViewCheck as usize + 1;
 
 /// A device's registry of its handles and the runtime's own holds (the module docs).
 #[derive(Default)]

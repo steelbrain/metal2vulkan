@@ -638,14 +638,14 @@ impl Arms {
 }
 
 /// The check's query pool of two timestamps, which each timed command buffer resets and writes.
-struct Stamps {
+pub(crate) struct Stamps {
     device: Device,
     pool: vk::QueryPool,
 }
 
 impl Stamps {
     /// The pool on `device`; inside a section of the exit guard.
-    fn new(device: &Device) -> Result<Stamps, Error> {
+    pub(crate) fn new(device: &Device) -> Result<Stamps, Error> {
         let raw: &ash::Device = device.shared().vk();
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
@@ -662,7 +662,7 @@ impl Stamps {
     /// submission of `device`'s waited for: the pool's queries reset, a barrier of every stage
     /// behind the work before, the first timestamp at the top of the pipe, the work, the second
     /// at its bottom; inside a section of the exit guard.
-    fn time(
+    pub(crate) fn time(
         &self,
         device: &Device,
         clock: &GpuClock,

@@ -1195,11 +1195,17 @@ pub struct FormatTable {
 /// and Metal's differs from, which a module records as the precision note it names; or a measured
 /// cost of the driver's that chooses between two exact encodings. Each variant comes with a test.
 /// The profile derives them from the description's driver identity (`driver_id`, with the vendor
-/// where the defect is the GPU's), never from a shader.
+/// where the defect is the GPU's), never from a shader, and takes those the consumer measured on
+/// the device itself ([`DeviceDescription::measured`]): the two view costs
+/// [`UniformBufferPerLaneReadsSerialize`](Self::UniformBufferPerLaneReadsSerialize) and
+/// [`ExternalUniformReadsSkipACache`](Self::ExternalUniformReadsSkipACache) come from such a
+/// measurement alone (the runtime's view check), never from an identity.
 ///
 /// [`Needs::DriverDefect`]: crate::error::Needs::DriverDefect
+/// [`DeviceDescription::measured`]: crate::device::DeviceDescription::measured
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DriverWorkaround {
     /// The driver's `robustBufferAccess` does not keep a storage buffer's atomic inside the
     /// buffer: SwiftShader (`VK_DRIVER_ID_GOOGLE_SWIFTSHADER`) masks an atomic by the texel's
@@ -1604,44 +1610,46 @@ pub enum DriverWorkaround {
     PushReadsLengthenThreadPayload,
     /// A uniform-buffer read whose address differs between the lanes that run it together takes
     /// many times as long as the same read of a storage buffer, while one address for every lane
-    /// is read faster through the uniform buffer. A measured cost fact (`device::driver_facts`)
-    /// that chooses between two exact encodings of a `constant` slot.
-    /// Measured with a bare Vulkan program (256 workgroups of 64 invocations, each adding 64 or
-    /// 1024 `uvec4` reads of a window of 1, 4, 16 or 32 KiB of device-local memory, the uniform
-    /// block declared at the window's size; median of 15 dispatches) on NVIDIA's driver
-    /// (`VK_DRIVER_ID_NVIDIA_PROPRIETARY`): with each invocation reading its own word, or walking
-    /// the window per invocation, the storage buffer took 0.011 to 0.16 of the uniform buffer's
-    /// time on the GeForce RTX 3090 (Ampere, 620.70.06, job m3-max-37848), 0.026 to 0.18 on the
-    /// RTX 2080 (Turing, 620.70.06, job m3-max-37839) and 0.012 to 0.12 on the RTX 5080 Laptop GPU
-    /// (Blackwell, 615.71.09, job m3-max-37858), and a uniform texel buffer took 0.37 to 3.1 times
-    /// the storage buffer's; with every invocation reading one word the storage buffer took 0.96
-    /// to 1.68 times the uniform buffer's. Its rows name those three GPUs, the GPUs measured.
-    /// RADV on the Radeon 780M and the RX 7900 XTX read each invocation's own word through a
-    /// uniform texel buffer in 0.96 to 1.00 of the uniform buffer's time (jobs m3-max-37803 and
-    /// m3-max-37788), so AMD has no such fact. There a `constant` slot with a read whose address
-    /// may differ between the lanes that run it together (`memory::plan`'s lane reads) keeps its
-    /// storage view in place of a uniform view (`lower::access::view_kind`); a slot read at
-    /// uniform addresses alone keeps its uniform view. Compute was measured; the graphics stages
-    /// take the rule too, expected to read alike, not measured. It changes no answer.
+    /// is read faster through the uniform buffer: a measured cost fact that chooses between two
+    /// exact encodings of a `constant` slot. Never keyed on an identity: the profile takes it where
+    /// the description's [`measured`](crate::device::DeviceDescription::measured) set holds it,
+    /// which the runtime's view check decides on each driver (its storage view's time over its
+    /// uniform buffer's for per-lane reads below 0.3). Measured with a bare Vulkan program (256
+    /// workgroups of 64 invocations, each adding 64 or 1024 `uvec4` reads of a window of 1 to
+    /// 32 KiB of device-local memory; median of 15 dispatches): with each invocation reading its
+    /// own word, or walking the window per invocation, the storage buffer took 0.011 to 0.16 of the
+    /// uniform buffer's time on NVIDIA's driver on the GeForce RTX 3090 (620.70.06, job
+    /// m3-max-37848), 0.026 to 0.18 on the RTX 2080 (620.70.06, m3-max-37839) and 0.012 to 0.12 on
+    /// the RTX 5080 Laptop GPU (615.71.09, m3-max-37858); with every invocation reading one word,
+    /// 0.96 to 1.68 times it. RADV on the Radeon 780M and the RX 7900 XTX read each invocation's
+    /// own word through either at 0.96 to 1.00 of the other (jobs m3-max-37803 and m3-max-37788).
+    /// Where the profile takes it, a `constant` slot with a read whose address may differ between
+    /// the lanes that run it together (`memory::plan`'s lane reads) keeps its storage view in
+    /// place of a uniform view (`lower::access::view_kind`); a slot read at uniform addresses alone
+    /// keeps its uniform view. Compute was measured; the graphics stages take the rule too,
+    /// expected to read alike, not measured. It changes no answer.
     UniformBufferPerLaneReadsSerialize,
-    /// Uniform-buffer reads of external memory skip a cache the same reads of the device's own
-    /// memory use: a measured cost fact (`device::driver_facts`) that chooses between two exact
-    /// encodings of a uniform view. ANV (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, on
-    /// the Iris Xe of RPL-P gives the surface of memory imported or exported (a host allocation, a
-    /// dma-buf, an opaque fd) the memory object control state of a displayable surface, which
-    /// leaves out the data port's L1 cache that a uniform-buffer surface of the device's own memory
-    /// is given (Mesa's `isl_mocs` and `anv_device.c`, Linux i915's Gen12 MOCS table; read, not
-    /// measured). Measured (jobs m3-max-37703, m3-max-37729 and m3-max-37780): a kernel reading a
-    /// 1 KiB window through a uniform buffer over a host allocation or a udmabuf took 2.0 to 2.5
-    /// times as long as over the device's own memory with every invocation reading one word, and
-    /// 5.2 to 5.5 times with each reading its own, on every memory type the imports allow; the
-    /// same reads through a uniform texel buffer, whose sampler reads keep their caches, took 0.98
-    /// to 1.04 times as long as over the device's own memory, and for windows of up to 4 KiB no
-    /// longer than the uniform buffer there. Keyed on the driver and that GPU alone. There a
-    /// uniform view of a window of at most `memory::views::TEXEL_WINDOW_BYTES` is a uniform texel
-    /// buffer of `R32G32B32A32_UINT` texels read with `OpImageFetch` (`DescriptorView::UniformTexel`,
-    /// `lower::access::view_kind`), and a longer window keeps its uniform buffer. It changes no
-    /// answer.
+    /// Uniform-buffer reads of external memory skip a cache that the same reads through a uniform
+    /// texel buffer keep: a measured cost fact that chooses between two exact encodings of a
+    /// uniform view. Never keyed on an identity: the profile takes it where the description's
+    /// [`measured`](crate::device::DeviceDescription::measured) set holds it, which the runtime's
+    /// view check decides on each driver (a uniform texel buffer's time over a uniform buffer's,
+    /// every invocation reading one word of imported host memory, below 0.7). ANV, Mesa 26.2.6, on
+    /// the Iris Xe of RPL-P gives imported and exported memory the memory object control state of
+    /// a displayable surface, which leaves out the data port's L1 cache a uniform buffer of the
+    /// device's own memory is given (Mesa's `isl_mocs`, Linux i915's Gen12 MOCS table; read, not
+    /// measured). Measured there (jobs m3-max-37703, m3-max-37729 and m3-max-37780): a uniform
+    /// buffer over a host allocation or a udmabuf took 2.0 to 2.5 times as long as over the
+    /// device's own memory with every invocation reading one word of a 1 KiB window, and 5.2 to
+    /// 5.5 times with each reading its own; a uniform texel buffer 0.98 to 1.04 times, and for
+    /// windows of up to 4 KiB no longer than the uniform buffer there. Where the profile takes it,
+    /// the uniform view of a slot with an indexed read (`memory::plan`'s indexed reads) whose
+    /// window is at most `memory::views::TEXEL_WINDOW_BYTES` is a uniform texel buffer of
+    /// `R32G32B32A32_UINT` texels read with `OpImageFetch` (`DescriptorView::UniformTexel`,
+    /// `lower::access::view_kind`); a slot read at constant offsets alone, whose words a driver may
+    /// load ahead into registers as no texel fetch can be, and a longer window keep the uniform
+    /// buffer. With [`UniformBufferPerLaneReadsSerialize`](Self::UniformBufferPerLaneReadsSerialize)
+    /// too, a slot with a per-lane read keeps its storage view first. It changes no answer.
     ExternalUniformReadsSkipACache,
 }
 

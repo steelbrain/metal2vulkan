@@ -372,27 +372,12 @@ pub struct DeviceOptions {
     /// `Device::queue_switch_check_report`) on a device whose queues the limits changed. No Metal
     /// counterpart: a Vulkan-side option, for tests and tools that make many devices.
     pub queue_limits: Option<QueueLimits>,
-    /// In the runtime's own tests, the identity (driver, vendor and device ID) each device's
-    /// compile device takes in place of the device's own, its features, limits and formats the
-    /// device's: a test's stand-in for a device whose driver facts it runs on another
-    /// (`tests/uniform_texels.rs`). `None`, the device's own.
+    /// In the runtime's own tests, the view check's facts (`view_check.rs`): `Some` fixes them,
+    /// with no check run, so a test's compiles take one profile from the device's first pipeline
+    /// to its last (none by default: a uniform view stays a uniform buffer, as on a device whose
+    /// check found no fact); `None` runs the check as a device outside the tests does.
     #[cfg(test)]
-    pub(crate) compile_as: Option<(metal2vulkan::vk::DriverId, u32, u32)>,
-}
-
-/// In the runtime's own tests, `description` under the identity `identity` names
-/// (`DeviceOptions::compile_as`): the description a device's compile device is made from.
-#[cfg(test)]
-fn compiled_as(
-    mut description: DeviceDescription,
-    identity: Option<(metal2vulkan::vk::DriverId, u32, u32)>,
-) -> DeviceDescription {
-    if let Some((driver, vendor, device)) = identity {
-        description.driver_id = Some(driver);
-        description.vendor_id = vendor;
-        description.device_id = device;
-    }
-    description
+    pub(crate) view_facts: Option<BTreeSet<metal2vulkan::device::DriverWorkaround>>,
 }
 
 /// The most `VkQueue`s a device takes for its command queues ([`DeviceOptions::queue_limits`]).
@@ -450,7 +435,7 @@ impl std::fmt::Debug for DeviceOptions {
             reserved_queues,
             queue_limits,
             #[cfg(test)]
-            compile_as,
+            view_facts,
         } = self;
         let mut out = f.debug_struct("DeviceOptions");
         out.field("policy", policy)
@@ -496,7 +481,7 @@ impl std::fmt::Debug for DeviceOptions {
             .field("reserved_queues", reserved_queues)
             .field("queue_limits", queue_limits);
         #[cfg(test)]
-        out.field("compile_as", compile_as);
+        out.field("view_facts", view_facts);
         out.finish()
     }
 }
@@ -537,7 +522,7 @@ impl Default for DeviceOptions {
             reserved_queues: Default::default(),
             queue_limits: default_queue_limits(),
             #[cfg(test)]
-            compile_as: None,
+            view_facts: Some(BTreeSet::new()),
         }
     }
 }
@@ -2333,11 +2318,8 @@ pub(super) fn create_on(
     if !generated_commands {
         enabled.generated_commands = None;
     }
-    let compiled = enabled.clone();
-    #[cfg(test)]
-    let compiled = compiled_as(compiled, options.compile_as);
     let compile =
-        metal2vulkan::device::Device::new(compiled, options.policy).map_err(device_error)?;
+        metal2vulkan::device::Device::new(enabled.clone(), options.policy).map_err(device_error)?;
     // SAFETY: as above.
     let listed: BTreeSet<CString> =
         unsafe { instance.raw.enumerate_device_extension_properties(physical) }
@@ -2613,6 +2595,8 @@ pub(super) fn create_on(
         load_no_dynamic_library_file: options.load_no_dynamic_library_file,
         pipeline_records: options.pipeline_records.clone(),
         fail_in_place_check: options.fail_in_place_check,
+        #[cfg(test)]
+        view_facts: options.view_facts.clone(),
         assume_submissions_merge: options.assume_submissions_merge,
         pending_audit: options.pending_audit,
         encoder_trail: options.encoder_trail,
@@ -2833,7 +2817,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         reserved_queues,
         queue_limits,
         #[cfg(test)]
-        compile_as,
+        view_facts,
     } = a;
     let same = *policy == b.policy
         && *layers == b.layers
@@ -2865,7 +2849,7 @@ fn same_options(a: &DeviceOptions, b: &DeviceOptions) -> bool {
         && *reserved_queues == b.reserved_queues
         && *queue_limits == b.queue_limits;
     #[cfg(test)]
-    let same = same && *compile_as == b.compile_as;
+    let same = same && *view_facts == b.view_facts;
     same
 }
 

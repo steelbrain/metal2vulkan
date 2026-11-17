@@ -17,7 +17,9 @@
 //! runtime's device checks measure it on each device, once per driver and release (whether its
 //! submissions that signal nothing merge, whether a held host-pointer import adds to each
 //! submission's cost: the runtime's `submit_check.rs`; textures in place over host pages,
-//! `in_place_check.rs`; the GPU's idling between `VkQueue`s, `queue_switch_check.rs`).
+//! `in_place_check.rs`; the GPU's idling between `VkQueue`s, `queue_switch_check.rs`; what a
+//! `constant` window's reads cost through each view, `view_check.rs`, whose verdicts reach
+//! translation as the description's measured workarounds, [`DeviceDescription::measured`]).
 
 use crate::device::description::APPLE_VENDOR_ID;
 use crate::device::profile::DriverWorkaround;
@@ -743,9 +745,6 @@ const NVIDIA_VENDOR_ID: u32 = 0x10de;
 /// The `deviceID` of the GeForce RTX 3090.
 pub(crate) const NVIDIA_RTX_3090: u32 = 0x2204;
 
-/// The `deviceID` of the GeForce RTX 2080 (Turing TU104).
-pub(crate) const NVIDIA_RTX_2080: u32 = 0x1e87;
-
 /// The `deviceID` of the GeForce RTX 5080 Laptop GPU (the committed capture
 /// `nvidia-rtx5080-laptop`).
 pub(crate) const NVIDIA_RTX_5080_LAPTOP: u32 = 0x2c19;
@@ -898,27 +897,6 @@ const fn moltenvk_on_apple<F>(fact: F) -> Measured<F> {
 ///   commonest bind, takes, and its general form, which one binding a storage view elsewhere takes
 ///   at once; with the general form alone, every state's first command at offset 0 made a second
 ///   pipeline.
-/// - `UniformBufferPerLaneReadsSerialize`: NVIDIA's 620.70.06 on the RTX 3090 (job m3-max-37848)
-///   and the RTX 2080 (job m3-max-37839) and 615.71.09 on the RTX 5080 Laptop GPU (job
-///   m3-max-37858) read a 1 to 32 KiB window of device-local memory, each invocation its own word
-///   or its own walk (256 workgroups of 64 invocations, 64 and 1024 `uvec4` reads each, the
-///   uniform block declared at the window's size), through a storage buffer in 0.011 to 0.18 of
-///   a uniform buffer's time, and with every invocation reading one word in 0.96 to 1.68 times
-///   it. A cost fact: it only chooses between two exact encodings. RADV on the Radeon 780M and
-///   the RX 7900 XTX is not listed (jobs m3-max-37803 and m3-max-37788: a uniform texel buffer
-///   read each invocation's own word in 0.96 to 1.00 of the uniform buffer's time); the rows name
-///   the three GPUs measured.
-/// - `ExternalUniformReadsSkipACache`: ANV, Mesa 26.2.6 on the Iris Xe of RPL-P, read a 1 KiB
-///   window through a uniform buffer over a host allocation or a udmabuf 2.0 to 2.5 times as long
-///   as over its own memory with every invocation reading one word, and 5.2 to 5.5 times with each
-///   reading its own (256 workgroups of 64 invocations, 64 and 1024 reads each; jobs m3-max-37703,
-///   m3-max-37729 and m3-max-37780), and through a uniform texel buffer 0.98 to 1.04 times as
-///   long. Over its own memory the texel buffer took 0.14 to 0.997 of the uniform buffer's time
-///   for windows of 1 and 4 KiB in each of four patterns (the same word, a word each, a walk per
-///   workgroup and one per invocation), one pattern 1.031 at 16 KiB, and the per-invocation
-///   patterns 2.8 to 4.2 times from 32 KiB (jobs m3-max-37753 and m3-max-37780): the bound
-///   (`memory::views::TEXEL_WINDOW_BYTES`) is 4 KiB. A cost fact: it only chooses between two
-///   exact encodings, and the row names the GPU measured.
 pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     Measured {
         fact: DriverWorkaround::BothBarycentricFormsRejected,
@@ -990,23 +968,6 @@ pub(crate) const DEFECTS: &[Measured<DriverWorkaround>] = &[
     ),
     mesa_on(
         DriverWorkaround::PushReadsLengthenThreadPayload,
-        DriverId::INTEL_OPEN_SOURCE_MESA,
-        (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
-    ),
-    nvidia_on(
-        DriverWorkaround::UniformBufferPerLaneReadsSerialize,
-        NVIDIA_RTX_3090,
-    ),
-    nvidia_on(
-        DriverWorkaround::UniformBufferPerLaneReadsSerialize,
-        NVIDIA_RTX_2080,
-    ),
-    nvidia_on(
-        DriverWorkaround::UniformBufferPerLaneReadsSerialize,
-        NVIDIA_RTX_5080_LAPTOP,
-    ),
-    mesa_on(
-        DriverWorkaround::ExternalUniformReadsSkipACache,
         DriverId::INTEL_OPEN_SOURCE_MESA,
         (INTEL_VENDOR_ID, INTEL_IRIS_XE_RPL_P),
     ),

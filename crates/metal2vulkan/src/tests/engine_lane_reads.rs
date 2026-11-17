@@ -2,7 +2,8 @@
 //! a `constant` slot a uniform view could read keeps its storage view where some read reaches it
 //! at an address that may differ between the lanes that run it together, and keeps its uniform
 //! view where every read is at a uniform address; a profile without the fact gives every such slot
-//! its uniform view.
+//! its uniform view. The fact comes from the description's measured set alone (the runtime's view
+//! check), never from the GPU's identity.
 //!
 //! The kernels read a `constant` table of 64 words (`air.buffer_size` 256, a `Bounded` window):
 //! `lane_table` at the thread's position, `loop_table` in a loop over a bound read from the table,
@@ -13,7 +14,6 @@
 
 use std::path::Path;
 
-use crate::device::driver_facts::{NVIDIA_RTX_2080, NVIDIA_RTX_3090};
 use crate::device::profile::{DeviceProfile, DriverWorkaround};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::pipeline::interface::{BufferForm, DescriptorView, SlotInterface};
@@ -90,8 +90,9 @@ fn assemble() -> Option<Vec<u8>> {
     }
 }
 
-/// The profile of the committed capture `stem`, under the device ID `id` where one is given.
-fn profile(stem: &str, id: Option<u32>) -> DeviceProfile {
+/// The profile of the committed capture `stem`, under the device ID `id` where one is given, its
+/// description's measured set `measured`.
+fn profile(stem: &str, id: Option<u32>, measured: &[DriverWorkaround]) -> DeviceProfile {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
@@ -100,6 +101,7 @@ fn profile(stem: &str, id: Option<u32>) -> DeviceProfile {
     if let Some(id) = id {
         desc.device_id = id;
     }
+    desc.measured.extend(measured.iter().copied());
     Device::new(desc, DevicePolicy::default())
         .expect("device")
         .profile()
@@ -121,23 +123,19 @@ fn table_form(bc: &[u8], entry: &str, p: &DeviceProfile, what: &str) -> BufferFo
     }
 }
 
-/// On the three NVIDIA GPUs measured with the fact, the table read at the thread's position keeps
-/// its storage view; the loop's counter after an early return, and a constant offset, keep the
-/// uniform view.
+/// Where the description measured the fact, NVIDIA's capture or RADV's, the table read at the
+/// thread's position keeps its storage view; the loop's counter after an early return, and a
+/// constant offset, keep the uniform view.
 #[test]
-fn a_per_lane_constant_read_keeps_its_storage_view_where_the_fact_holds() {
+fn a_per_lane_constant_read_keeps_its_storage_view_where_the_fact_was_measured() {
     let Some(bc) = assemble() else {
         return;
     };
     let fact = DriverWorkaround::UniformBufferPerLaneReadsSerialize;
     let storage = BufferForm::Descriptor(DescriptorView::Storage);
     let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
-    for (what, id) in [
-        ("rtx5080-laptop", None),
-        ("rtx3090", Some(NVIDIA_RTX_3090)),
-        ("rtx2080", Some(NVIDIA_RTX_2080)),
-    ] {
-        let p = profile("nvidia-rtx5080-laptop", id);
+    for what in ["nvidia-rtx5080-laptop", "amd-780m-radv"] {
+        let p = profile(what, None, &[fact]);
         assert!(p.workarounds().contains(&fact), "{what}");
         assert_eq!(table_form(&bc, "lane_table", &p, what), storage, "{what}");
         assert_eq!(table_form(&bc, "loop_table", &p, what), uniform, "{what}");
@@ -145,21 +143,61 @@ fn a_per_lane_constant_read_keeps_its_storage_view_where_the_fact_holds() {
     }
 }
 
-/// The negative control: on RADV, which has no such fact, every kernel's table is a uniform view,
-/// the one read at the thread's position too.
+/// The identity decides nothing: NVIDIA's captures under the IDs of the three GPUs the fact was
+/// first measured on (the RTX 5080 Laptop GPU, the RTX 3090 and the RTX 2080), with nothing
+/// measured, give every kernel's table its uniform view; and so does RADV, the negative control.
 #[test]
-fn without_the_fact_a_per_lane_constant_read_keeps_its_uniform_view() {
+fn without_the_measured_fact_a_per_lane_constant_read_keeps_its_uniform_view() {
     let Some(bc) = assemble() else {
         return;
     };
     let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
-    for stem in ["amd-780m-radv", "amd-rdna3-radv"] {
-        let p = profile(stem, None);
+    for (stem, id) in [
+        ("nvidia-rtx5080-laptop", None),
+        ("nvidia-rtx5080-laptop", Some(0x2204)),
+        ("nvidia-rtx5080-laptop", Some(0x1e87)),
+        ("amd-780m-radv", None),
+        ("amd-rdna3-radv", None),
+    ] {
+        let p = profile(stem, id, &[]);
         assert!(!p
             .workarounds()
             .contains(&DriverWorkaround::UniformBufferPerLaneReadsSerialize));
         for entry in ["lane_table", "loop_table", "field_table"] {
-            assert_eq!(table_form(&bc, entry, &p, stem), uniform, "{stem} {entry}");
+            assert_eq!(
+                table_form(&bc, entry, &p, stem),
+                uniform,
+                "{stem} {id:?} {entry}"
+            );
         }
     }
+}
+
+/// Both view facts compose: the table read at the thread's position keeps its storage view (the
+/// lane read first), the loop's indexed reads, uniform among the active lanes, take the uniform
+/// texel buffer, and the constant offset alone keeps the uniform buffer.
+#[test]
+fn both_view_facts_compose() {
+    let Some(bc) = assemble() else {
+        return;
+    };
+    let both = [
+        DriverWorkaround::UniformBufferPerLaneReadsSerialize,
+        DriverWorkaround::ExternalUniformReadsSkipACache,
+    ];
+    let p = profile("nvidia-rtx5080-laptop", None, &both);
+    let what = "both";
+    let form = |entry| table_form(&bc, entry, &p, what);
+    assert_eq!(
+        form("lane_table"),
+        BufferForm::Descriptor(DescriptorView::Storage)
+    );
+    assert_eq!(
+        form("loop_table"),
+        BufferForm::Descriptor(DescriptorView::UniformTexel)
+    );
+    assert_eq!(
+        form("field_table"),
+        BufferForm::Descriptor(DescriptorView::UniformWords)
+    );
 }

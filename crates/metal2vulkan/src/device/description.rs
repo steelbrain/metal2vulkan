@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::device::profile::{FloatControls, Limits};
+use crate::device::profile::{DriverWorkaround, FloatControls, Limits};
 use crate::device::requirements::{ApiVersion, FormatUsage, VkExtension, VkFeature};
 use crate::vk;
 
@@ -82,6 +82,15 @@ pub struct DeviceDescription {
     /// `maxBufferLength` and the runtime's heap sizes read them from the `Device`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub allocation: AllocationLimits,
+    /// The driver workarounds the consumer measured on this device itself, which the profile
+    /// takes beside those its driver's identity names: the cost facts no identity decides,
+    /// [`DriverWorkaround::UniformBufferPerLaneReadsSerialize`] and
+    /// [`DriverWorkaround::ExternalUniformReadsSkipACache`], which the runtime's view check
+    /// measures once per driver and release. A profile field (its workarounds), so its fingerprint
+    /// and every cache key follow it. Empty unless the consumer fills it (`new`, `query` and
+    /// `from_khronos_json` leave it so).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub measured: BTreeSet<DriverWorkaround>,
 }
 
 /// A device's allocation sizes, [`DeviceDescription::allocation`]: device facts that size
@@ -186,6 +195,7 @@ impl DeviceDescription {
             khr_format_feature_flags2: false,
             generated_commands: None,
             allocation: AllocationLimits::default(),
+            measured: BTreeSet::new(),
         }
     }
 

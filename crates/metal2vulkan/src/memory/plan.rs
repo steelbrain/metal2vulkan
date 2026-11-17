@@ -106,6 +106,13 @@ pub struct SlotPlan {
     /// read (`constant`, read-only, no atomic, a `Bounded` window): such a slot keeps its storage
     /// view (`lower::access::view_kind`). False on every other profile and slot.
     pub lane_read: bool,
+    /// Some read reaches the slot at an index the translation computes
+    /// ([`Provenance::indexed_constant_reads`]), on a profile taking
+    /// `DriverWorkaround::ExternalUniformReadsSkipACache`, for a slot a uniform view could read:
+    /// only such a slot's uniform view may take its texel form (`lower::access::texel_view`). A
+    /// slot read at constant offsets alone (a struct's fields) has none. False on every other
+    /// profile and slot.
+    pub indexed_read: bool,
 }
 
 /// An object in an arena.
@@ -1005,6 +1012,7 @@ impl Planner<'_> {
                         window: escaped_window(window::window(eu.extent, None, dynamic), eu),
                         guest_base: eu.escapes || eu.cross_compare,
                         lane_read: false,
+                        indexed_read: false,
                     });
                 }
                 continue;
@@ -1032,20 +1040,25 @@ impl Planner<'_> {
                 window: escaped_window(window::window(u.extent, arg.buffer_size, dynamic), &u),
                 guest_base: u.escapes || u.cross_compare,
                 lane_read: false,
+                indexed_read: false,
             });
         }
         Ok(slots)
     }
 
-    /// `slots` with [`SlotPlan::lane_read`] marked, on a profile taking
-    /// `DriverWorkaround::UniformBufferPerLaneReadsSerialize`: a slot a uniform view could read
-    /// with an indexed read ([`Provenance::indexed_constant_reads`]) whose pointer is not uniform
-    /// among the active lanes. The analysis runs once, only where such a slot has an indexed read
-    /// (a slot read at constant offsets alone, a struct's fields, has none), and its bytes are
-    /// released before return.
+    /// `slots` with [`SlotPlan::indexed_read`] and [`SlotPlan::lane_read`] marked: on a profile
+    /// taking `DriverWorkaround::ExternalUniformReadsSkipACache`, a slot a uniform view could read
+    /// with an indexed read ([`Provenance::indexed_constant_reads`]) is an indexed read's; on one
+    /// taking `DriverWorkaround::UniformBufferPerLaneReadsSerialize`, such a slot whose indexed
+    /// read's pointer is not uniform among the active lanes is a lane read's. The analysis runs
+    /// once, only on the latter profile and only where such a slot has an indexed read (a slot read
+    /// at constant offsets alone, a struct's fields, has none), and its bytes are released before
+    /// return.
     fn lane_reads(&self, mut slots: Vec<SlotPlan>, m: &mut Meter) -> Result<Vec<SlotPlan>, Error> {
-        let fact = DriverWorkaround::UniformBufferPerLaneReadsSerialize;
-        if !self.p.workarounds().contains(&fact) {
+        let workarounds = self.p.workarounds();
+        let lanes = workarounds.contains(&DriverWorkaround::UniformBufferPerLaneReadsSerialize);
+        let texels = workarounds.contains(&DriverWorkaround::ExternalUniformReadsSkipACache);
+        if !lanes && !texels {
             return Ok(slots);
         }
         let candidate = |s: &SlotPlan, r: Root| {
@@ -1065,12 +1078,12 @@ impl Planner<'_> {
         let mut any = false;
         for &(r, _) in reads {
             m.tick(1)?;
-            if slots.iter().any(|s| candidate(s, r)) {
+            if let Some(s) = slots.iter_mut().find(|s| candidate(s, r)) {
+                s.indexed_read = texels;
                 any = true;
-                break;
             }
         }
-        if !any {
+        if !any || !lanes {
             return Ok(slots);
         }
         let body = self

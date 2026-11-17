@@ -1,25 +1,64 @@
 //! A buffer slot's uniform view in its texel form (`DescriptorView::UniformTexel`,
-//! `uniform_texels.rs`), on lavapipe under a compile device of the Iris Xe of RPL-P's identity
-//! (`DeviceOptions::compile_as`), whose profile takes
-//! `DriverWorkaround::ExternalUniformReadsSkipACache`: a kernel whose `constant` window is at most
-//! 4 KiB reads it through a uniform texel buffer view made for each bind, and every read is the
-//! bound bytes', at bind offsets the texel alignment divides (0, 16, 256) and does not (4, 260:
-//! the residual pushed), from `set*Bytes` data, and for bytes written before the dispatch was
-//! encoded, after it and before the commit, and by a blit before it. A window of 4100 bytes keeps
-//! its uniform buffer. The counts are the evidence that each path ran
+//! `uniform_texels.rs`), on lavapipe under a device whose view check's facts the test fixes
+//! (`DeviceOptions::view_facts`) to `DriverWorkaround::ExternalUniformReadsSkipACache`: a kernel
+//! whose `constant` window is at most 4 KiB, read at an index (`tid` and `tid + 1023`, the one
+//! thread's `tid` 0), reads it through a uniform texel buffer view made for each bind, and every
+//! read is the bound bytes', at bind offsets the texel alignment divides (0, 16, 256) and does
+//! not (4, 260: the residual pushed), from `set*Bytes` data, and for bytes written before the
+//! dispatch was encoded, after it and before the commit, and by a blit before it. A window of
+//! 4100 bytes keeps its uniform buffer. The counts are the evidence that each path ran
 //! (`WorkCounts::uniform_texels_bound`, `uniform_buffers_bound_to_16k`).
 //!
-//! A device test on the CPU ICD alone (`m2v_cpu_icd`): the identity is lavapipe's stand-in for the
-//! Iris, where the fact holds of the device itself. The functions are those of the owned fixture
-//! `validation/fixtures/public/engine/uniform_texel_windows.ll` (`llvm-as`).
+//! A device test on the CPU ICD alone (`m2v_cpu_icd`): lavapipe stands in for a device whose
+//! check found the fact. The kernels are [`WINDOWS`] (`llvm-as`).
 
 use super::blit_holds::{options, Scratch, WAIT};
 use crate::{Buffer, ComputePipelineState, Device, PipelineOptions, ResourceOptions, Size};
 use metal2vulkan::device::DriverWorkaround;
-use metal2vulkan::vk::DriverId;
 
-/// The Iris Xe of RPL-P's vendor and device ID, under ANV.
-const IRIS: (DriverId, u32, u32) = (DriverId::INTEL_OPEN_SOURCE_MESA, 0x8086, 0xa7a0);
+/// `utw_near` reads words `tid` and `tid + 1023` of a 4096-byte `constant` window into `out`;
+/// `utw_far` words `tid` and `tid + 1024` of a 4100-byte one.
+const WINDOWS: &str = r#"define void @utw_near(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1, i32 noundef %tid) {
+entry:
+  %a = zext i32 %tid to i64
+  %p = getelementptr inbounds [1024 x i32], ptr addrspace(2) %0, i64 0, i64 %a
+  %v = load i32, ptr addrspace(2) %p, align 4
+  store i32 %v, ptr addrspace(1) %1, align 4
+  %b = add nuw i64 %a, 1023
+  %q = getelementptr inbounds [1024 x i32], ptr addrspace(2) %0, i64 0, i64 %b
+  %w = load i32, ptr addrspace(2) %q, align 4
+  %o = getelementptr inbounds i32, ptr addrspace(1) %1, i64 1
+  store i32 %w, ptr addrspace(1) %o, align 4
+  ret void
+}
+define void @utw_far(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1, i32 noundef %tid) {
+entry:
+  %a = zext i32 %tid to i64
+  %p = getelementptr inbounds [1025 x i32], ptr addrspace(2) %0, i64 0, i64 %a
+  %v = load i32, ptr addrspace(2) %p, align 4
+  store i32 %v, ptr addrspace(1) %1, align 4
+  %b = add nuw i64 %a, 1024
+  %q = getelementptr inbounds [1025 x i32], ptr addrspace(2) %0, i64 0, i64 %b
+  %w = load i32, ptr addrspace(2) %q, align 4
+  %o = getelementptr inbounds i32, ptr addrspace(1) %1, i64 1
+  store i32 %w, ptr addrspace(1) %o, align 4
+  ret void
+}
+!air.kernel = !{!10, !20}
+!air.version = !{!17}
+!air.language_version = !{!18}
+!10 = !{ptr @utw_near, !11, !12}
+!11 = !{}
+!12 = !{!13, !14, !15}
+!13 = !{i32 0, !"air.buffer", !"air.buffer_size", i32 4096, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4096, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"Near", !"air.arg_name", !"c"}
+!14 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!15 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"tid"}
+!20 = !{ptr @utw_far, !11, !21}
+!21 = !{!22, !14, !15}
+!22 = !{i32 0, !"air.buffer", !"air.buffer_size", i32 4100, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4100, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"Far", !"air.arg_name", !"c"}
+!17 = !{i32 2, i32 8, i32 0}
+!18 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
 
 /// The constants' words: word `i` is `3 i + 1`, so each word read names its place.
 const WORDS: u32 = 4096;
@@ -28,23 +67,24 @@ fn word(i: u64) -> u32 {
     3 * i as u32 + 1
 }
 
-/// A device whose compile device takes the Iris's identity, and so its uniform texel buffers.
+/// A device whose view check's facts the test fixes to the texel fact, and so its uniform texel
+/// buffers.
 fn device(cache: &std::path::Path) -> Device {
     let mut options = options(cache);
-    options.compile_as = Some(IRIS);
+    let fact = DriverWorkaround::ExternalUniformReadsSkipACache;
+    options.view_facts = Some([fact].into());
     let device = Device::system_default_with(&options).unwrap();
     let workarounds = device.compile_device().profile().workarounds();
     assert!(
-        workarounds.contains(&DriverWorkaround::ExternalUniformReadsSkipACache),
+        workarounds.contains(&fact),
         "the compile device's profile takes the texel form: {workarounds:?}"
     );
     device
 }
 
-/// The compute state of `name`, a kernel of fixture `stem`.
-fn state(device: &Device, stem: &str, name: &str) -> ComputePipelineState {
-    let ll = metal2vulkan_devtools::engine_dir().join(format!("{stem}.ll"));
-    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
+/// The compute state of `name`, a kernel of [`WINDOWS`].
+fn state(device: &Device, name: &str) -> ComputePipelineState {
+    let bitcode = metal2vulkan_devtools::llvm_assemble_text(WINDOWS).unwrap();
     let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
     let function = device
         .new_library_with_compile_library(library)
@@ -136,7 +176,7 @@ fn dispatch(
 fn a_short_window_reads_through_a_texel_view_at_every_bind_offset() {
     let scratch = Scratch::new("uniform-texels-offsets");
     let device = device(&scratch.0);
-    let near = state(&device, "uniform_texel_windows", "utw_near");
+    let near = state(&device, "utw_near");
     let data = constants(256);
     let constants = holding(&device, &data);
     let offsets = [0, 4, 16, 256, 260];
@@ -176,7 +216,7 @@ fn a_short_window_reads_through_a_texel_view_at_every_bind_offset() {
 fn a_texel_view_reads_the_bytes_written_before_its_dispatch_runs() {
     let scratch = Scratch::new("uniform-texels-writes");
     let device = device(&scratch.0);
-    let near = state(&device, "uniform_texel_windows", "utw_near");
+    let near = state(&device, "utw_near");
     let queue = device.new_command_queue().unwrap();
     let data = constants(0);
     let constants = holding(&device, &data);
@@ -245,7 +285,7 @@ fn a_texel_view_reads_the_bytes_written_before_its_dispatch_runs() {
 fn a_window_past_the_bound_keeps_its_uniform_buffer() {
     let scratch = Scratch::new("uniform-texels-far");
     let device = device(&scratch.0);
-    let far = state(&device, "uniform_texel_windows", "utw_far");
+    let far = state(&device, "utw_far");
     let data = constants(256);
     let constants = holding(&device, &data);
     let offsets = [0, 4];
