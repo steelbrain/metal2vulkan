@@ -5749,8 +5749,6 @@ fn	metal2vulkan-air::intrinsics::undecoded_feature	pub fn undecoded_feature(name
 fn	metal2vulkan-air::specialize	pub fn specialize(d: Decoded, r: &SpecRequest, m: &mut Meter) -> Result<Entry, Error>
 fn	metal2vulkan-air::specialize_dynamic	pub fn specialize_dynamic(d: Decoded, r: &SpecRequest, (linked, dynamic): (&[LinkedModule], &DynamicLinks), m: &mut Meter) -> Result<Entry, Error>
 fn	metal2vulkan-air::specialize_linked	pub fn specialize_linked(d: Decoded, r: &SpecRequest, linked: &[LinkedModule], m: &mut Meter) -> Result<Entry, Error>
-fn	metal2vulkan-rt::floor::check	pub unsafe fn check(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Result<Capabilities, BelowFloor>
-fn	metal2vulkan-rt::floor::memory_types	pub unsafe fn memory_types(device: &ash::Device, capabilities: &Capabilities) -> Result<MemoryTypes, BelowFloor>
 fn	metal2vulkan-rt::host_time	pub fn host_time() -> u64
 fn	metal2vulkan-runtime::host_time	pub fn host_time() -> f64
 fn	metal2vulkan-runtime::process_exiting	pub fn process_exiting() -> bool
@@ -8753,6 +8751,7 @@ method	metal2vulkan-rt::Instance::extensions	pub fn extensions(&self) -> &[CStri
 method	metal2vulkan-rt::Instance::new	pub fn new(extensions: &[&CStr]) -> Result<Instance, Error>
 method	metal2vulkan-rt::Instance::physical_devices	pub fn physical_devices(&self) -> Result<Vec<PhysicalDevice>, Error>
 method	metal2vulkan-rt::Instance::raw	pub fn raw(&self) -> (&ash::Entry, &ash::Instance)
+method	metal2vulkan-rt::PhysicalDevice::check	pub fn check(&self) -> Result<floor::Capabilities, floor::BelowFloor>
 method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
 method	metal2vulkan-rt::SharedEvent::as_event	pub fn as_event(&self) -> &Event
 method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&self, value: u64, listener: impl FnOnce(u64) + Send + 'static) -> Result<(), Error>

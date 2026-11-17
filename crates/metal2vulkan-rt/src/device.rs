@@ -184,10 +184,10 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Device {
     /// `MTLCreateSystemDefaultDevice`, for the physical device the consumer chose.
     ///
-    /// Checks the floor ([`floor::check`]), then makes one `VkDevice` with the floor's features
-    /// and extensions, each of the four query-decided features the device has, and each of the
-    /// consumer's extensions ([`DeviceOptions::extensions`]) the device offers with the features
-    /// the consumer needs, and chooses its memory types on it ([`floor::memory_types`]). It takes one queue of the floor's queue
+    /// Checks the floor ([`PhysicalDevice::check`]), then makes one `VkDevice` with the floor's
+    /// features and extensions, each of the four query-decided features the device has, and each
+    /// of the consumer's extensions ([`DeviceOptions::extensions`]) the device offers with the
+    /// features the consumer needs, and chooses its memory types on it. It takes one queue of the floor's queue
     /// family for the runtime and, where that family has a second queue, a queue for presenting;
     /// where it has one, presenting shares the runtime's queue and its lock. It starts the
     /// block-maker thread, which makes one block of each memory class ready, the submit thread and
@@ -199,9 +199,7 @@ impl Device {
         let instance = physical.instance().clone();
         let vk_instance = instance.vk();
         let raw = physical.raw();
-        // SAFETY: `raw` is one of `instance`'s physical devices, and the instance was created at
-        // the floor's version.
-        let capabilities = unsafe { floor::check(vk_instance, raw) }.map_err(Error::BelowFloor)?;
+        let capabilities = physical.check().map_err(Error::BelowFloor)?;
         let family = capabilities.queue_family;
         // SAFETY: as above.
         let families = unsafe { vk_instance.get_physical_device_queue_family_properties(raw) };
@@ -349,7 +347,7 @@ impl Device {
     }
 
     /// No Metal counterpart: the memory types the device's buffers are allocated from, as the
-    /// floor chose them on the device ([`floor::memory_types`]).
+    /// floor chose them on the device.
     pub fn memory_types(&self) -> floor::MemoryTypes {
         self.shared.core.memory_types
     }

@@ -124,6 +124,15 @@ impl PhysicalDevice {
         self.raw
     }
 
+    /// No Metal counterpart (every Metal device runs every program its family supports): checks
+    /// the device against the runtime's floor. Returns what it offers above the floor, or every
+    /// item of the floor it lacks; for memory it checks only that a type with each set of flags
+    /// exists, and [`Device::new`](crate::Device::new) finishes the check on the created device.
+    pub fn check(&self) -> Result<floor::Capabilities, floor::BelowFloor> {
+        // SAFETY: the instance listed the device, and was created at the floor's version.
+        unsafe { floor::check(self.instance.vk(), self.raw) }
+    }
+
     /// The instance that listed it.
     pub(crate) fn instance(&self) -> &Instance {
         &self.instance

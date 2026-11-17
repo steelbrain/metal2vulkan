@@ -2,9 +2,10 @@
 //! runtime requires of every device, and the four features it uses only where a device reports
 //! them.
 //!
-//! [`check`] queries a physical device and decides; the decision is a pure function of what it
-//! read, so a test can hand it any set of answers. Which memory types a buffer can use Vulkan
-//! answers only for a created device, so [`memory_types`] makes that last choice on the device.
+//! [`PhysicalDevice::check`](crate::PhysicalDevice::check) queries a physical device and decides;
+//! the decision is a pure function of what it read, so a test can hand it any set of answers.
+//! Which memory types a buffer can use Vulkan answers only for a created device, so
+//! [`Device::new`](crate::Device::new) makes that last choice on the device.
 
 use ash::vk;
 use std::ffi::{CStr, CString};
@@ -322,7 +323,7 @@ pub struct Capabilities {
     pub extensions: &'static [&'static CStr],
     /// The first queue family with graphics and compute, whose timestamps the floor checked.
     pub queue_family: u32,
-    /// The device's memory types and heaps, for [`memory_types`] to choose from.
+    /// The device's memory types and heaps, for device creation to choose from.
     pub memory: vk::PhysicalDeviceMemoryProperties,
 }
 
@@ -353,7 +354,7 @@ pub struct MemoryTypes {
 ///
 /// `physical` is a physical device `instance` enumerated, and `instance` was created with an
 /// `apiVersion` of [`VERSION`] or later.
-pub unsafe fn check(
+pub(crate) unsafe fn check(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
 ) -> Result<Capabilities, BelowFloor> {
@@ -524,7 +525,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
 ///
 /// `device` was created from the physical device `capabilities` came from, with
 /// `capabilities.features` enabled.
-pub unsafe fn memory_types(
+pub(crate) unsafe fn memory_types(
     device: &ash::Device,
     capabilities: &Capabilities,
 ) -> Result<MemoryTypes, BelowFloor> {

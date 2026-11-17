@@ -198,11 +198,11 @@ The test `tests::one_path` reads the crate's sources and fails on the first thre
 ## Floor
 
 The runtime requires Vulkan 1.3 and every extension, feature, limit, queue family and memory type
-below, of the instance and of every device. `floor::check` decides for one physical device: it
-returns what the device offers above the floor (`floor::Capabilities`), or `floor::BelowFloor`, a
-typed refusal that names every item the device lacks (`floor::Missing`: the version, an
-extension, a feature, a limit, the queue family or a memory type). `floor::memory_types` makes the
-last choice on the created device.
+below, of the instance and of every device. `PhysicalDevice::check` decides for one physical
+device, with no unsafe call: it returns what the device offers above the floor
+(`floor::Capabilities`), or `floor::BelowFloor`, a typed refusal that names every item the device
+lacks (`floor::Missing`: the version, an extension, a feature, a limit, the queue family or a
+memory type). `Device::new` makes the last choice, of memory types, on the created device.
 
 ### Extensions
 
@@ -280,8 +280,8 @@ The runtime submits to the first queue family with `VK_QUEUE_GRAPHICS_BIT` and
 types, each the first with its flags that a buffer of `floor::BUFFER_USAGE` can use: every buffer
 usage Vulkan 1.3 defines, and device addresses. Vulkan guarantees such a buffer a device-local
 type, so of the three only Shared and the ring can be missing on a conforming device. Vulkan answers which memory types a buffer can use
-only for a created device, so `floor::check` finds a type with each set of flags, and
-`floor::memory_types` chooses on the device (`floor::MemoryTypes`).
+only for a created device, so `PhysicalDevice::check` finds a type with each set of flags, and
+`Device::new` chooses on the device (`Device::memory_types` answers `floor::MemoryTypes`).
 
 | Memory type | Flags | Used for |
 |---|---|---|
