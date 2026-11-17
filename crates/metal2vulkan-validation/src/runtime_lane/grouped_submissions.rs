@@ -456,13 +456,21 @@ struct Scenario {
 /// are read, waiting for `E` at `last`, completes: no host call reads a plain event's value), and
 /// the layer reports nothing.
 /// Its devices take their queue plan (`at_plan`): the work of the tests that call it
-/// changes placements under the lane's queue limits.
+/// changes placements under the lane's queue limits. Its queues take no turns on a `VkQueue` they
+/// share ([`QueueTurnPolicy::CommitOrder`]), so the steps found ready together go as the grouping
+/// sends them: under `Fair`, where the two queues share one (lavapipe, RADV, ANV), a queue's
+/// steps after the first are held for its turn wherever its expected run prices its work in
+/// flight past the turns' budget, which a GPU shared with other work lengthens (the warm fills
+/// took 10 to 450 ms from commit to completion beside the module's other tests on the Radeon
+/// 780M and the RX 7900 XTX), and held so they reach the scheduler one at a time and group
+/// nothing. The turns are `tests::queue_turns`' to test.
 fn event_scenario(completion: CompletionPolicy, steps: &[Step], last: u64) -> Scenario {
     let messages = Messages::default();
     let cache = ScratchCache::new().unwrap();
     let counted = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = completion;
+            options.policy.queue_turns = QueueTurnPolicy::CommitOrder;
             at_plan(options)
         })
         .unwrap();
@@ -988,6 +996,10 @@ const GROUP_RUN: std::time::Duration = std::time::Duration::from_millis(16);
 /// running work; after a command buffer of the queue's own ran [`PAST_GROUP_RUN`], alone again.
 /// Every command buffer completes with its own fill, and the layer reports nothing. Where the device
 /// groups nothing, or the two queues submit to different `VkQueue`s, no round's count is checked.
+/// The queues take no turns on the `VkQueue` they share ([`QueueTurnPolicy::CommitOrder`]), as in
+/// [`event_scenario`]: under `Fair` the small fills' queue is held for its turn wherever its
+/// expected run prices its work in flight past the turns' budget, and its fills then reach the
+/// scheduler one at a time.
 #[test]
 fn a_queue_s_batches_group_within_their_run() {
     let messages = Messages::default();
@@ -995,6 +1007,7 @@ fn a_queue_s_batches_group_within_their_run() {
     let (grouping, shared, rounds, past) = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = CompletionPolicy::Grouped;
+            options.policy.queue_turns = QueueTurnPolicy::CommitOrder;
             at_plan(options)
         })
         .unwrap();
