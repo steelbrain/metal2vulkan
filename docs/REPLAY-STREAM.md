@@ -336,10 +336,12 @@ and the (name id, value) answer pairs.
   - **As executed** (`executed`): the counters the runtime exposes. The old runtime's are the
     Vulkan commands it recorded (submissions, render passes, barriers, dispatches, draws, copies)
     and the pipelines it made. They differ between runtimes, and between plays on one runtime
-    where what it records depends on timing: the old runtime records a draw whose pipeline it is
-    still making in the background through the pipeline's general form, and keeps nothing of that
-    draw for a later encoder to draw again, so where a making lands moves commands from one group
-    or frame to another. Only the stream's counts are compared between plays.
+    where what it records depends on timing. The old runtime's commands depend on whether the
+    pipelines it makes in the background have landed: a draw whose own pipeline is still being
+    made records through the pipeline's general form and keeps nothing for a later encoder to
+    draw again. So a play with cold shader caches records more commands than a warm one, and warm
+    plays can move a few draws and barriers from one group or frame to another. Only the stream's
+    counts are compared between plays.
 
   Its own readbacks are not counted.
 - A selector, argument or descriptor key the runtime's backend does not implement is a typed
