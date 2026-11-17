@@ -642,6 +642,7 @@ pub(crate) struct Counters {
     managed_writes_undone: AtomicU64,
     managed_bytes_staged_in: AtomicU64,
     managed_bytes_copied_in_from_ram: AtomicU64,
+    managed_ranges_inlined: AtomicU64,
     managed_pages_alone_refused: AtomicU64,
     managed_pages_alone_over_imports: AtomicU64,
     managed_pages_alone_unwritable: AtomicU64,
@@ -5468,6 +5469,12 @@ impl Counters {
     /// guest RAM's chunk imports, was registered (`managed_copy.rs`).
     pub(crate) fn managed_copied_in_from_ram(&self, bytes: u64) {
         (self.managed_bytes_copied_in_from_ram).fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// A range `did_modify_range` named of a `Managed` buffer with a host copy was written into
+    /// its device copy inline, as a submission was recorded (`texture/first_move.rs`).
+    pub(crate) fn managed_range_inlined(&self) {
+        (self.managed_ranges_inlined).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A two-copy buffer's host copy was made its pages alone, no import of their own mapping
@@ -10926,6 +10933,12 @@ pub struct WorkCounts {
     /// that hold their pages, which no import of their own maps (`HostRam`): no CPU copy and no
     /// staging. Of `managed_bytes_copied_in`.
     pub managed_bytes_copied_in_from_ram: u64,
+    /// The ranges `did_modify_range` named of `Managed` buffers with a host copy (the runtime's
+    /// own, and those over the caller's pages) written into their device copies inline: at most
+    /// 16 KiB of whole words each, read from the host copy as the submission that copies them in
+    /// is recorded and written by `vkCmdUpdateBuffer`s in its command stream, with no copy from
+    /// the host copy (`managed.rs`). Counted as each is recorded.
+    pub managed_ranges_inlined: u64,
     /// Host copies of such buffers made (with the buffer, at a rebind, at a recovery) that are
     /// their pages alone, no import of their own mapping them, because the caller's gate refused
     /// their import, the device refused their pointer and no dma-buf of them served, or the import
@@ -13437,6 +13450,7 @@ impl Device {
             managed_bytes_staged_in: counters.managed_bytes_staged_in.load(Ordering::Relaxed),
             managed_bytes_copied_in_from_ram: (counters.managed_bytes_copied_in_from_ram)
                 .load(Ordering::Relaxed),
+            managed_ranges_inlined: counters.managed_ranges_inlined.load(Ordering::Relaxed),
             managed_pages_alone_refused: (counters.managed_pages_alone_refused)
                 .load(Ordering::Relaxed),
             managed_pages_alone_over_imports: (counters.managed_pages_alone_over_imports)

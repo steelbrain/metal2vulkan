@@ -52,6 +52,18 @@
 //!   the commit reaches no command buffer committed before it, the 5300M's answer. A range the
 //!   staging buffers find no memory for is copied in from the host copy as that submission runs,
 //!   as under the default.
+//! - **Small ranges inline.** Under the default, a range of at most [`INLINE_BYTES`] whose start
+//!   in the buffer's `VkBuffer` and length are multiples of 4, of a host copy that is mapped (the
+//!   runtime's own, or the caller's pages not detached), is not copied from the host copy: the
+//!   submission that takes it reads its bytes from the host copy as it is recorded and writes them
+//!   by `vkCmdUpdateBuffer`s of at most 65536 bytes each in its command stream
+//!   (`Buffer::upload_inline`, `WorkCounts::managed_ranges_inlined`), in the place and with the
+//!   barriers of the copy it stands for (`texture/first_move.rs`), a transfer for them as the
+//!   specification makes it. The same bytes as the copy, read a moment before the GPU would have
+//!   read them, after the commit: within the default's answer. A GPU copy reads the host copy
+//!   across the bus as the submission runs, where the bytes in the command stream come with the
+//!   commands. An unaligned range is copied as ever, never widened to whole words: the device
+//!   copy's neighbouring bytes may hold the GPU's writes, which the host copy does not.
 
 use super::buffer::{Buffer, WeakBuffer};
 use super::device::lock;
@@ -62,6 +74,23 @@ use super::ObjectId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::Mutex;
+
+/// The most bytes of a range `did_modify_range` names that the submission that takes it writes
+/// inline, from the host copy as it is recorded (`Buffer::upload_inline`, the module docs).
+pub(super) const INLINE_BYTES: u64 = 16 << 10;
+
+/// The bound of the ranges written inline on a device: [`INLINE_BYTES`].
+#[cfg(not(test))]
+pub(super) fn inline_bound(_: &super::Device) -> u64 {
+    INLINE_BYTES
+}
+
+/// The bound of the ranges written inline on `device`: a test's
+/// (`DeviceShared::managed_inline_bound`), [`INLINE_BYTES`] unless it set another.
+#[cfg(test)]
+pub(super) fn inline_bound(device: &super::Device) -> u64 {
+    (device.shared().managed_inline_bound).load(std::sync::atomic::Ordering::Relaxed)
+}
 
 impl Buffer {
     /// `didModifyRange:`: the CPU wrote `range` of a managed buffer; command buffers committed

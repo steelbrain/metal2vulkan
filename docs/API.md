@@ -620,7 +620,7 @@ of host-cached system memory, a cost of the range's bytes, and a write after it 
 command buffer committed before it, however late the GPU reaches it (docs/FAST-PATHS.md). Pages
 no import of their own maps are staged so at the commit under either, but where a guest RAM's
 chunk imports hold them all (`HostRam`): there the default copies them by the GPU from those
-imports, as from an import of their own (`WorkCounts::managed_bytes_copied_in_from_ram`). A CPU write that no `did_modify_range` names is not seen by the GPU. A blit encoder's `synchronize_resource` copies the GPU's copy out to the pages in its
+imports, as from an import of their own (`WorkCounts::managed_bytes_copied_in_from_ram`). Under the default, a range of at most 16 KiB whose start and length are whole words is not copied: the submission reads it from the host copy as it is recorded and writes it in its command stream (`vkCmdUpdateBuffer`, `WorkCounts::managed_ranges_inlined`). A CPU write that no `did_modify_range` names is not seen by the GPU. A blit encoder's `synchronize_resource` copies the GPU's copy out to the pages in its
 command buffer's order, which the CPU sees once the command buffer completed: the bytes the GPU's
 tracked writes reached since the buffer's last copy out, in the GPU's order across command buffers
 and queues, the range whole where those are not known (an untracked buffer, an exported one or one

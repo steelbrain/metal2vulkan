@@ -40,7 +40,9 @@
 //!   of a command buffer that may use the buffer (`managed.rs`), read from an import as the
 //!   submission below runs under the default `ManagedCopyInPolicy::AtSubmission`, or as the pages
 //!   hold it at the commit under `ManagedCopyInPolicy::AtCommit` (staged by the CPU,
-//!   [`CallerCopy::copy_in_now`]), and a rebind copies the new pages in whole:
+//!   [`CallerCopy::copy_in_now`]; under the default, a small range of whole words is read from the
+//!   pages as that submission is recorded and written inline, [`CallerCopy::inline_source`],
+//!   `managed.rs`), and a rebind copies the new pages in whole:
 //!   each by the device's next submission whose commands may use the buffer (or an internal one),
 //!   before any of its commands, after the commands before it on its `VkQueue`
 //!   (`texture/first_move.rs`'s `register_upload`), which the call does not wait for, so every
@@ -494,6 +496,39 @@ impl CallerCopy {
                 }
             }
             Side::Pages(_, true) => Ok(()),
+        }
+    }
+
+    /// Where an upload of `range` written inline reads the pages (`Buffer::upload_inline`): the
+    /// host address of its first byte, and what keeps the pages mapped while a submission may
+    /// read them (the import's pages, or the pages alone, whose release waits for it). `None`
+    /// while the pages are detached, or where the range passes what the copies in reach, which
+    /// then copy as ever.
+    pub(super) fn inline_source(
+        &self,
+        range: &Range<u64>,
+    ) -> Option<(NonNull<u8>, Box<dyn std::any::Any + Send + Sync>)> {
+        if range.end > self.reach {
+            return None;
+        }
+        match self.side() {
+            Side::Import(import) => {
+                if import.detached() || range.end > import.copy_reach() {
+                    return None;
+                }
+                let pages = import.host_pages()?;
+                let pointer = import.mapped_contents()?;
+                let at = pointer.as_ptr().wrapping_add(range.start as usize);
+                Some((NonNull::new(at)?, Box::new((import, pages))))
+            }
+            Side::Pages(pages, false) => {
+                if range.end > pages.reach {
+                    return None;
+                }
+                let at = pages.pointer.as_ptr().wrapping_add(range.start as usize);
+                Some((NonNull::new(at)?, Box::new(pages)))
+            }
+            Side::Pages(_, true) => None,
         }
     }
 

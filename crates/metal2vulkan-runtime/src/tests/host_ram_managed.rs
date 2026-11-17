@@ -8,8 +8,10 @@
 //!   hold them all (`managed_pages_in_ram_chunks`). Its copy in as it is made is the GPU's, from
 //!   those imports, the CPU staging nothing (`managed_bytes_copied_in_from_ram`,
 //!   `managed_bytes_staged_in`), and so is the copy in of a range `did_modify_range` names across
-//!   the chunks' end; under `ManagedCopyInPolicy::AtCommit` the CPU stages that range at the
-//!   commit instead. The GPU reads the CPU's bytes under both.
+//!   the chunks' end (under a test's bound of 0 for ranges written inline); under the default
+//!   bound that range, of four pages, is written inline instead (`managed_ranges_inlined`), and
+//!   under `ManagedCopyInPolicy::AtCommit` the CPU stages it at the commit. The GPU reads the
+//!   CPU's bytes under each.
 //! - **The bench across a chunk's end** (ignored, `MANAGED-RAM-COPY-IN`; run in release): what a
 //!   `did_modify_range` of 256 KiB, 4 MiB and 32 MiB across the end of the RAM's first chunk,
 //!   written by the CPU before each commit of a command buffer that reads the range's first and
@@ -103,14 +105,18 @@ fn import_both_chunks(device: &Device, start: u64) -> (Buffer, Buffer) {
     (in_chunk(start + 16 * page), in_chunk(start + 96 * MIB))
 }
 
-/// Copies in from the chunks (the module docs), under `copy_in`.
-fn copies_in_across_a_chunk_end(copy_in: ManagedCopyInPolicy) {
+/// Copies in from the chunks (the module docs), under `copy_in`; the named range written inline
+/// where `inline` (`managed::INLINE_BYTES`), else under a bound of 0, copied from the chunks.
+fn copies_in_across_a_chunk_end(copy_in: ManagedCopyInPolicy, inline: bool) {
     const LENGTH: u64 = 4 * MIB;
     let mut policy = DevicePolicy::default();
     policy.managed_copy_in = copy_in;
     let Some(device) = two_copy_device(policy) else {
         return;
     };
+    if !inline {
+        (device.shared().managed_inline_bound).store(0, std::sync::atomic::Ordering::Relaxed);
+    }
     let page = device.shared().host_import.as_ref().unwrap().page;
     let (ram, start, dropped) = new_ram();
     let used = device.use_host_ram(&ram).unwrap();
@@ -167,17 +173,23 @@ fn copies_in_across_a_chunk_end(copy_in: ManagedCopyInPolicy) {
         "the CPU's write across the chunks' end"
     );
     let after = device.work_counts();
-    let expected = match copy_in == ManagedCopyInPolicy::AtCommit {
-        true => (0, length),
-        false => (length, 0),
+    let inlined = inline
+        && copy_in == ManagedCopyInPolicy::AtSubmission
+        && length <= crate::managed::INLINE_BYTES;
+    let expected = match (copy_in == ManagedCopyInPolicy::AtCommit, inlined) {
+        (true, _) => (0, length, 0),
+        (false, true) => (0, 0, 1),
+        (false, false) => (length, 0, 0),
     };
     assert_eq!(
         (
             after.managed_bytes_copied_in_from_ram - first.managed_bytes_copied_in_from_ram,
             after.managed_bytes_staged_in - first.managed_bytes_staged_in,
+            after.managed_ranges_inlined - first.managed_ranges_inlined,
         ),
         expected,
-        "the named range copied in from the chunks' imports, or staged at the commit ({copy_in:?})"
+        "the named range copied in from the chunks' imports, written inline, or staged at the \
+         commit ({copy_in:?}, inline {inline})"
     );
     drop((buffer, chunks, used, ram, device));
     assert!(settles(&dropped), "the RAM's keep-alive did not go");
@@ -185,12 +197,17 @@ fn copies_in_across_a_chunk_end(copy_in: ManagedCopyInPolicy) {
 
 #[test]
 fn a_managed_buffer_across_a_chunk_end_copies_in_from_the_chunks_imports() {
-    copies_in_across_a_chunk_end(ManagedCopyInPolicy::AtSubmission);
+    copies_in_across_a_chunk_end(ManagedCopyInPolicy::AtSubmission, false);
+}
+
+#[test]
+fn a_managed_buffer_across_a_chunk_end_writes_a_small_named_range_inline() {
+    copies_in_across_a_chunk_end(ManagedCopyInPolicy::AtSubmission, true);
 }
 
 #[test]
 fn a_managed_buffer_across_a_chunk_end_is_staged_at_the_commit_under_at_commit() {
-    copies_in_across_a_chunk_end(ManagedCopyInPolicy::AtCommit);
+    copies_in_across_a_chunk_end(ManagedCopyInPolicy::AtCommit, true);
 }
 
 /// The median of `values`, in milliseconds.

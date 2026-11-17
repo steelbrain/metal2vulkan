@@ -658,6 +658,11 @@ pub(super) struct DeviceShared {
     /// shadow then lacks it and is sampled through a usage shadow.
     #[cfg(test)]
     pub(crate) sampled_costs_forced: AtomicBool,
+    /// The most bytes of a range `did_modify_range` names that is written inline
+    /// (`managed::inline_bound`): `managed::INLINE_BYTES`, but where a test sets another (0: none
+    /// is), for the tests and the bench of `tests/managed_inline.rs`.
+    #[cfg(test)]
+    pub(crate) managed_inline_bound: std::sync::atomic::AtomicU64,
     /// Its encoders record a command that writes a read twin, which they refuse otherwise: the
     /// negative control of the tests of `tests/read_twin_device.rs` (`read_twin::refuses_writes`).
     #[cfg(test)]
@@ -3313,6 +3318,8 @@ impl Device {
             storage_costs_forced: Default::default(),
             #[cfg(test)]
             sampled_costs_forced: Default::default(),
+            #[cfg(test)]
+            managed_inline_bound: crate::managed::INLINE_BYTES.into(),
             #[cfg(test)]
             read_twin_unguarded: Default::default(),
             #[cfg(test)]

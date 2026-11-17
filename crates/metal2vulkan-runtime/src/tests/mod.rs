@@ -529,6 +529,8 @@ mod managed;
 mod managed_copies_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod managed_copy_device;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod managed_inline;
 // A GPU hazard: it makes devices up to the driver's limit.
 #[cfg(all(m2v_gpu, m2v_gpu_hazards))]
 mod many_devices;

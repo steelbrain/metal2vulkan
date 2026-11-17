@@ -35,6 +35,7 @@ use super::fresh_pages;
 use super::generated_commands::PREPROCESS_BUFFER;
 use super::heap::{Heap, HeapType};
 use super::host_aliases::Alias;
+use super::host_bytes::HostBytes;
 use super::host_memory::{HeldBack, HostParts, KeepAlive, Release};
 use super::host_ram::RamOnDevice;
 use super::host_residency::{Again, Residency};
@@ -5045,6 +5046,9 @@ impl Buffer {
                     None => Ok(()),
                 }
             }
+            // A range of a few whole words written inline, read from the host copy as the
+            // submission that takes it is recorded (`managed.rs`).
+            _ if self.upload_inline(&range, commit) => return,
             // Copies from the host copy (or a guest RAM's chunk imports that hold it), which stage
             // nothing and go with this commit's batch; pages no import maps staged, a failed
             // submission past the bound failing the device, which the commit's own submission
@@ -5058,6 +5062,58 @@ impl Buffer {
         if staged.is_err() {
             let _ = self.upload(range, replaces);
         }
+    }
+
+    /// Write `range` of a buffer with a host copy ([`HostCopy`]) into its own bytes inline, taken
+    /// at the commit stamped `commit`, where it is at most `managed::INLINE_BYTES` of whole words
+    /// (its start in the buffer's `VkBuffer` and its length multiples of 4) and the host copy is
+    /// mapped: the device's next submission of a command buffer committed at or after that commit
+    /// that may reach the buffer reads the bytes from the host copy as it is recorded and writes
+    /// them before any of its commands, by `vkCmdUpdateBuffer`s in its command stream, as
+    /// [`upload`](Self::upload) would copy them, counted (`WorkCounts::managed_ranges_inlined`).
+    /// Whether it did; where not, the range is copied as ever. An unaligned range is copied: a
+    /// write widened to whole words would put the host copy's bytes over neighbours the GPU may
+    /// have written since.
+    fn upload_inline(&self, range: &Range<u64>, commit: u64) -> bool {
+        let s = self.s();
+        let device = &s.device;
+        let length = range.end - range.start;
+        let onto = self.at(range.start);
+        let words = onto.1.is_multiple_of(4) && length.is_multiple_of(4);
+        if length == 0 || length > super::managed::inline_bound(device) || !words {
+            return false;
+        }
+        let (from, keeps): (NonNull<u8>, Box<dyn Any + Send + Sync>) = match self.mirror() {
+            Some(HostCopy::Own(mirror)) => {
+                let Some(mapped) = mirror.placement.mapped else {
+                    return false;
+                };
+                // The host copy holds the buffer's bytes from its start, `range` among them.
+                let at = mapped.as_ptr().wrapping_add(range.start as usize);
+                let Some(at) = NonNull::new(at) else {
+                    return false;
+                };
+                (at, Box::new(Arc::clone(mirror)))
+            }
+            Some(HostCopy::Caller(caller)) => match caller.inline_source(range) {
+                Some(source) => source,
+                None => return false,
+            },
+            None => return false,
+        };
+        s.staged.store(true, Ordering::Relaxed);
+        let weak: Weak<BufferShared> = Arc::downgrade(s);
+        let keeper: Weak<dyn Filled> = weak;
+        let moves = &device.shared().textures.first_moves;
+        // SAFETY: `keeps` keeps the host copy mapped until the submission that reads the bytes
+        // completed (`FirstMoves::register_inline_upload`), and it holds the range; only the
+        // program's CPU, outside the runtime's Rust, writes it.
+        let from = unsafe { HostBytes::new(from, length as usize) };
+        moves.register_inline_upload(keeper, onto, from, keeps, commit);
+        if self.caller_copy().is_some() {
+            device.shared().counts.managed_copied(length, true);
+        }
+        true
     }
 
     /// Copy `range` of the bytes of `source` (a `VkBuffer`, and where the buffer's byte

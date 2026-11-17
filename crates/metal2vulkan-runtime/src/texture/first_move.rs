@@ -106,7 +106,9 @@
 //!   buffers' fills with zeros (one `vkCmdFillBuffer` each, counted:
 //!   `WorkCounts::new_buffer_zero_fills`; copies of the device's zeros for a range whose ends are
 //!   not multiples of 4, `FirstFill::zeros`), then their copies of staged bytes
-//!   after a barrier, then a
+//!   after a barrier (a `Managed` buffer's small upload written inline instead, its bytes read
+//!   from the host copy as the work is recorded: `vkCmdUpdateBuffer`s, transfers as the copies
+//!   are, [`FirstMoves::register_inline_upload`]), then a
 //!   barrier carrying each image's move (after the fills: an image placed in a new heap moves
 //!   after the heap's fill, so the fill never overwrites what the move wrote), then the images'
 //!   copies of zeros, then a barrier that makes them visible to every later command and to the
@@ -175,6 +177,7 @@ use super::super::device::lock;
 use super::super::error::{internal, vulkan, Error, MemoryKind};
 use super::super::exit_guard::{self, Call};
 use super::super::heap_sets::HeldSlots;
+use super::super::host_bytes::HostBytes;
 use super::super::image_barrier::{image_barrier, ImageDst};
 use super::super::memory::{Memory, MemoryClass, Placement};
 use super::super::owned_kernel::FirstUse;
@@ -904,7 +907,15 @@ pub(crate) struct FirstFill {
     /// fill ([`Taken::every_fill`]). An internal submission's take ([`FillTake::All`]) takes it
     /// too. `None` for every other fill.
     upload: Option<u64>,
+    /// Where an upload is written inline ([`FirstMoves::register_inline_upload`]): the host
+    /// address of its first byte, read as the submission that takes it is recorded and written by
+    /// `vkCmdUpdateBuffer`s in that submission's command stream, its one copy in `copies` naming
+    /// where and how many (its `source` and `src_offset` unused). `None` for every other fill.
+    inline: Option<HostBytes<'static>>,
 }
+
+/// The most bytes one `vkCmdUpdateBuffer` writes (`VUID-vkCmdUpdateBuffer-dataSize-00037`).
+const UPDATE_BYTES: usize = 65536;
 
 impl FirstFill {
     /// The fill, with the key of `keeper`'s memory ([`Filled::key`]).
@@ -936,6 +947,7 @@ impl FirstFill {
             key: None,
             owner: None,
             upload: None,
+            inline: None,
         }
     }
 
@@ -966,6 +978,7 @@ impl FirstFill {
                 key: None,
                 owner: None,
                 upload: None,
+                inline: None,
             });
         }
         let zeros = moves.zeros(device, 0)?;
@@ -1005,6 +1018,7 @@ impl FirstFill {
             key: None,
             owner: None,
             upload: None,
+            inline: None,
         }
     }
 
@@ -1024,6 +1038,7 @@ impl FirstFill {
             key: None,
             owner: None,
             upload: None,
+            inline: None,
         }
     }
 
@@ -1508,6 +1523,30 @@ impl FirstMoves {
             ..fill
         };
         self.register_fill_of_bytes(keeper, fill)
+    }
+
+    /// As [`register_upload`](Self::register_upload), of the bytes `from` written inline, which
+    /// `keeps` keeps mapped until the submission that takes them completed: that submission reads
+    /// them as it is recorded and writes them by `vkCmdUpdateBuffer`s in its command stream, in
+    /// the order and with the barriers of a copy (`FirstFill::inline`). The caller's contract:
+    /// `start` and `from`'s length are multiples of 4, and the bytes lie in the `VkBuffer`
+    /// `buffer`.
+    pub(crate) fn register_inline_upload(
+        &self,
+        keeper: Weak<dyn Filled>,
+        (buffer, start): (vk::Buffer, u64),
+        from: HostBytes<'static>,
+        keeps: Box<dyn Any + Send + Sync>,
+        commit: u64,
+    ) {
+        let (source, length) = ((vk::Buffer::null(), 0), from.len() as u64);
+        let fill = FirstFill::bytes(buffer, start, source, length, Keeps::HostCopy(keeps));
+        let fill = FirstFill {
+            upload: Some(commit),
+            inline: Some(from),
+            ..fill.keyed(&keeper)
+        };
+        self.register_fill_of_bytes(keeper, fill);
     }
 
     /// Register `fill`, a copy of bytes into `keeper`'s buffer: whether it staged them
@@ -2504,6 +2543,14 @@ unsafe fn record_fills(
             landed.clear();
         }
         landed.extend(ranges.map(|range| (fill.buffer, range)));
+        if let Some(from) = fill.inline {
+            // SAFETY: as above; the fill keeps the host copy `from` lies in mapped, and its copy's
+            // bytes lie in the buffer, its ends multiples of 4
+            // (`FirstMoves::register_inline_upload`).
+            unsafe { record_inline(device, command_buffer, fill, from) };
+            counts.managed_range_inlined();
+            continue;
+        }
         // SAFETY: as above; every copy lies within its source, the device's zeros (live and
         // `ZERO_BYTES` long) or a staging buffer the fill keeps, and within the buffer,
         // held, which has `TRANSFER_DST` usage as every buffer of the runtime's.
@@ -2511,6 +2558,38 @@ unsafe fn record_fills(
             device.cmd_copy_buffer(command_buffer, fill.source, fill.buffer, &fill.copies);
         }
         exit_guard::called(Call::CmdCopyBuffer);
+    }
+}
+
+/// Record `fill`'s upload written inline (`FirstFill::inline`): the bytes `from`, read now,
+/// onto its copy's range of its buffer, by one `vkCmdUpdateBuffer` of each [`UPDATE_BYTES`] of
+/// them, which the spec makes a transfer for barriers ("treated as a transfer operation for the
+/// purposes of synchronization barriers"), as the copy it stands for.
+///
+/// # Safety
+///
+/// As [`record_fills`]'; `from` is mapped host memory (the fill keeps its host copy), and the
+/// copy's `dst_offset` and `size` (`from`'s length) are multiples of 4 that lie in the buffer,
+/// which has `TRANSFER_DST` usage (`VUID-vkCmdUpdateBuffer-dstOffset-00036`, `-dataSize-00038`,
+/// `-dstBuffer-00034`).
+unsafe fn record_inline(
+    device: &Vk,
+    command_buffer: vk::CommandBuffer,
+    fill: &FirstFill,
+    from: HostBytes<'static>,
+) {
+    let Some(copy) = fill.copies.first() else {
+        return;
+    };
+    // Read once, by a copy: the program's CPU may write the host copy meanwhile.
+    let bytes = from.to_vec();
+    // Each piece at most `UPDATE_BYTES` (`VUID-vkCmdUpdateBuffer-dataSize-00037`), a multiple of
+    // 4 from a multiple of 4, never empty (`-dataSize-arraylength`).
+    for (index, piece) in bytes.chunks(UPDATE_BYTES).enumerate() {
+        let at = copy.dst_offset + (index * UPDATE_BYTES) as u64;
+        // SAFETY: the caller's contract; outside a render pass, recording.
+        unsafe { device.cmd_update_buffer(command_buffer, fill.buffer, at, piece) };
+        exit_guard::called(Call::CmdUpdateBuffer);
     }
 }
 
