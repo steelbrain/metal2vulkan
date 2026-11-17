@@ -16,7 +16,9 @@
 //!   answers. On `Device::from_queries`' profile it declares `MultiRegion`, default 0, and reads
 //!   its base from every region: at 0 the same dispatches store the same answers, and a ragged
 //!   grid split into a region of its threadgroup size and an edge region of fewer threads, at 1
-//!   with Metal's threadgroup size in the region, stores Metal's answers.
+//!   with Metal's threadgroup size in the region, stores Metal's answers. Through the binder on
+//!   that profile (`BindingPlan::instantiate_dispatch`) a ragged `dispatchThreads` grid's regions,
+//!   edges of fewer threads among them, set `MultiRegion` 1 and store Metal's answers.
 //! - A kernel's partial-threadgroups variant (`partial`, generated) dispatched at its whole
 //!   threadgroup size over a ragged grid, its pushed region flagged `NONUNIFORM`, answers each
 //!   edge threadgroup's own size, and its invocations past the grid store nothing.
@@ -57,10 +59,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::bind::{BindState, BoundBuffer, Dispatch, StageTable};
+use crate::budget::Budget;
 use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
+use crate::library::Library;
 use crate::lower::dispatch::{region_bytes, NONUNIFORM};
 use crate::lower::select::{LowerInputs, Plan};
 use crate::memory::handles::Lookup;
@@ -75,6 +80,7 @@ use crate::pipeline::testing::{
     compile, compile_kept, compile_with, engine_dir, link_and_validate, llvm_assemble, profile,
     typed_module_with, AssembleError,
 };
+use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
 use crate::spirv::interp::{
     run, run_with_images, BarrierRule, Buffer, Config, Image, Order, Resources,
 };
@@ -1335,6 +1341,103 @@ fn from_queries_reads_every_regions_base_and_its_size_by_multi_region() {
             }
             assert_eq!(out, want, "{stem} {what}");
         }
+    }
+}
+
+/// Through the binder on `Device::from_queries`' profile: a ragged `dispatchThreads` grid of
+/// [`grid_kernel`] is planned as edge regions of fewer threads than Metal's threadgroup, each with
+/// `MultiRegion` 1, and every region, run on the CPU interpreter with the push bytes, the
+/// specialization and the group counts the binder planned, stores Metal's answers for the grid.
+#[test]
+fn the_binders_edge_regions_set_multi_region_on_from_queries_and_store_metals_grid() {
+    let Some(bc) = assemble_text("grid", &grid_kernel("grid")) else {
+        return;
+    };
+    const L: [u32; 3] = [4, 2, 1];
+    const GRID: [u32; 3] = [7, 5, 1];
+    let threads = (GRID[0] * GRID[1]) as usize;
+    let groups = [GRID[0].div_ceil(L[0]), GRID[1].div_ceil(L[1])];
+    let value = GRID[0] | GRID[1] << 8 | groups[0] << 16 | groups[1] << 24;
+    let want: Vec<u8> = (0..threads).flat_map(|_| value.to_le_bytes()).collect();
+    for stem in PROFILES {
+        let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+        let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let lib = Library::from_air(&bc).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let f = lib
+            .function("grid")
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
+        let pipe = dev
+            .compile_compute_pipeline(&d, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let (_, _, module) =
+            compile_kept(&bc, "grid", dev.profile()).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let mut table = StageTable::default();
+        table.buffers.insert(
+            0,
+            BoundBuffer::Buffer {
+                length: 4 * threads as u64,
+                offset: 0,
+                gpu_address: OUT,
+                device_address: Some(OUT),
+                attribute_stride: None,
+            },
+        );
+        let mut state = BindState::default();
+        state.stages.insert(Stage::Kernel, table);
+        let plan = pipe
+            .plan(&dev, &state.shape())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let dispatch = Dispatch::Threads {
+            threads: GRID,
+            threads_per_group: L,
+        };
+        let commands = plan
+            .instantiate_dispatch(&state, &dispatch)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let keys: BTreeMap<u32, SpecKey> = (pipe.stage.specialization.constants.iter())
+            .map(|c| (c.id, c.key))
+            .collect();
+        let mut out = vec![0u8; 4 * threads];
+        let mut edges = 0;
+        for region in &commands.regions {
+            let mut spec = BTreeMap::new();
+            for e in &region.specialization.entries {
+                let at = e.offset as usize;
+                let mut v = [0u8; 8];
+                v[..e.size as usize]
+                    .copy_from_slice(&region.specialization.data[at..at + e.size as usize]);
+                spec.insert(keys[&e.constant_id], u64::from_le_bytes(v));
+            }
+            let local = [Axis::X, Axis::Y].map(|a| spec.get(&SpecKey::LocalSize(a)).copied());
+            if spec.get(&SpecKey::MultiRegion) == Some(&1)
+                && local != [Some(u64::from(L[0])), Some(u64::from(L[1]))]
+            {
+                edges += 1;
+            }
+            let mut push = Vec::new();
+            if let Some(w) = region.push_constants.first() {
+                push = vec![0u8; w.offset as usize + w.bytes.len()];
+                push[w.offset as usize..].copy_from_slice(&w.bytes);
+            }
+            let res = Resources {
+                buffers: vec![Buffer {
+                    slot: None,
+                    address: Some(OUT),
+                    bytes: out,
+                }],
+                push,
+                spec,
+            };
+            let cfg = Config {
+                workgroups: region.group_count,
+                ..Config::default()
+            };
+            let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
+            out = got.buffers.into_iter().next().expect("out");
+        }
+        assert!(edges > 0, "{stem}: an edge region of fewer threads");
+        assert_eq!(out, want, "{stem}");
     }
 }
 
