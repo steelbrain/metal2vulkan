@@ -133,7 +133,9 @@ pub struct Metrics {
     pub submissions: u64,
     /// Encoders recorded: compute, and later blit and render.
     pub passes: u64,
-    /// Pipeline-barrier commands recorded.
+    /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each
+    /// segment with commands and of each upload, and one before a dispatch at a hazard. A block's
+    /// zero fill, made apart from any command buffer, is not counted.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
     /// counted copy at commit where a device offers no linear image.

@@ -5,6 +5,7 @@
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::Error;
+use crate::record::{barrier, Reach};
 use ash::vk;
 use std::sync::{Mutex, PoisonError};
 
@@ -157,6 +158,7 @@ impl Filler {
                 .begin_command_buffer(command, &begin)
                 .map_err(Error::vulkan("vkBeginCommandBuffer"))?;
             record(device, command, objects.zeros, buffer, offset, end);
+            barrier(device, command, Reach::Commands);
             device
                 .end_command_buffer(command)
                 .map_err(Error::vulkan("vkEndCommandBuffer"))?;

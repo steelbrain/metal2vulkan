@@ -416,8 +416,7 @@ impl Building {
         }
     }
 
-    /// The current segment's command buffer, begun with its barrier. Commands after a signal go
-    /// in a new segment.
+    /// The current segment's command buffer. Commands after a signal go in a new segment.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     fn command(&mut self) -> Result<vk::CommandBuffer, Error> {
         if !self.last().signals.is_empty() {
@@ -433,7 +432,6 @@ impl Building {
         };
         let recorder = self.gpu.recorder.insert(recorder);
         let command = recorder.next(&core.device)?;
-        record::begin_barrier(&core.device, command, &core.counters);
         self.last().command = Some(command);
         Ok(command)
     }

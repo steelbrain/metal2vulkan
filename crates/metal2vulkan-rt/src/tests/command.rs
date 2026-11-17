@@ -192,8 +192,8 @@ mod on_device {
             assert!(at("second scheduled Scheduled") < at("second completed Completed None"));
             assert!(at("first completed Completed None") < at("second completed Completed None"));
             let after = device.counters().metrics();
-            // Each segment with commands has two barriers: one at its start, one at its end.
-            assert_eq!(after.barriers - before.barriers, 4, "{name}");
+            // Each segment with commands has one barrier, at its end.
+            assert_eq!(after.barriers - before.barriers, 2, "{name}");
             assert!(after.submissions > before.submissions, "{name}");
 
             // After commit, Metal refuses.

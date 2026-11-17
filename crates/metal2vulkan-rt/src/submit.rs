@@ -10,7 +10,7 @@ use crate::event::EventInner;
 use crate::fill;
 use crate::memory::Block;
 use crate::queue::QueueInner;
-use crate::record::Recorder;
+use crate::record::{self, Reach, Recorder};
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -458,11 +458,14 @@ fn submit(core: &Core, batch: Batch) {
         watch,
     } = batch;
     let device = &core.device;
-    // SAFETY: the upload's command buffer was recording under the work lock, which `stage` took
-    // it out under.
-    let mut ok = upload
-        .as_ref()
-        .is_none_or(|upload| unsafe { device.end_command_buffer(upload.command) }.is_ok());
+    // The upload's fills are visible to every command after it.
+    let mut ok = upload.as_ref().is_none_or(|upload| {
+        record::barrier(device, upload.command, Reach::Commands);
+        core.counters.count(Metric::Barriers);
+        // SAFETY: the upload's command buffer was recording under the work lock, which `stage`
+        // took it out under.
+        unsafe { device.end_command_buffer(upload.command) }.is_ok()
+    });
     if let Some(upload) = &upload {
         segments.insert(
             0,

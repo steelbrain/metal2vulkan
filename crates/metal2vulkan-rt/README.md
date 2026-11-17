@@ -80,8 +80,8 @@ in its memory.
   `contents` the block's mapping plus the offset, or `None` in a Private block. `zeroed` zeroes the
   range, as `newBufferWithLength:options:` does: through the mapping for Shared, before the call
   returns; in Private by a GPU fill of exactly the range, recorded into the upload, which goes
-  ahead of every command buffer committed after the call (each command buffer's commands start
-  with a barrier after every earlier submission) and holds the block until it completes. A buffer
+  ahead of every command buffer committed after the call and ends with a barrier that makes the
+  fills visible to every later command, and holds the block until it completes. A buffer
   placed in a heap passes false, since Metal does not zero heap memory. A length of 0 and a range
   past the block are refused, as Metal answers nil for both.
 
@@ -107,9 +107,10 @@ after a quiesce.
   `CommandQueue::command_buffer` waits, as Metal does, while `max` of the queue's command buffers
   are made and not yet completed.
 - A `CommandBuffer` records at once, with no replay log. Event waits and signals split it into
-  segments, one `VkCommandBuffer` each where it has commands; their commands start with a barrier
-  after every earlier submission and end with a barrier that makes their writes visible to the
-  host. `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
+  segments, one `VkCommandBuffer` each where it has commands. Each ends with one global memory
+  barrier: its writes are visible to every later command and to the host, and later commands run
+  after its own, as Metal orders a queue's command buffers. No segment starts with a barrier.
+  `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
   thread and returns. A committed command buffer holds no device handle.
 - The submit thread passes whatever is ready to one `vkQueueSubmit2`, in the device's commit
   order, ahead of it the upload of zero fills, and the last submit info signals the progress

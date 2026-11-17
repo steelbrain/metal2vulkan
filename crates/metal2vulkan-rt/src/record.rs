@@ -43,40 +43,56 @@ impl Recorder {
     }
 }
 
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-/// Records the barrier every segment of a Metal command buffer begins with: every write earlier in
-/// submission order (earlier command buffers, earlier segments, zero fills) is made visible to
-/// every command after it.
-pub(crate) fn begin_barrier(device: &ash::Device, buffer: vk::CommandBuffer, counters: &Counters) {
+/// What a barrier makes earlier writes visible to.
+#[derive(Clone, Copy)]
+pub(crate) enum Reach {
+    /// Every later command, in this submission and every later one on the queue.
+    Commands,
+    /// Every later command, and the host once it has waited for the work.
+    Host,
+}
+
+/// Records one global memory barrier: every write earlier in submission order is made visible
+/// to what `reach` names, and every later command waits for every earlier one. It is the only
+/// barrier the runtime records for buffers: none names a buffer or a range. The caller counts it
+/// where it is part of the queues' work.
+pub(crate) fn barrier(device: &ash::Device, buffer: vk::CommandBuffer, reach: Reach) {
+    let (stages, accesses) = match reach {
+        Reach::Commands => (
+            vk::PipelineStageFlags2::ALL_COMMANDS,
+            vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+        ),
+        Reach::Host => (
+            vk::PipelineStageFlags2::ALL_COMMANDS | vk::PipelineStageFlags2::HOST,
+            vk::AccessFlags2::MEMORY_READ
+                | vk::AccessFlags2::MEMORY_WRITE
+                | vk::AccessFlags2::HOST_READ
+                | vk::AccessFlags2::HOST_WRITE,
+        ),
+    };
     let barrier = [vk::MemoryBarrier2::default()
         .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
         .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)];
+        .dst_stage_mask(stages)
+        .dst_access_mask(accesses)];
     let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
     // SAFETY: the buffer is recording.
     unsafe { device.cmd_pipeline_barrier2(buffer, &dependency) };
-    counters.count(Metric::Barriers);
 }
 
-/// Ends a segment's command buffer, after the barrier that makes its writes visible to the host:
-/// Shared memory reads the GPU's writes once the command buffer completes or the host sees an
-/// event it signals.
+/// Ends a segment's command buffer after its one barrier, which reaches the host: Shared memory
+/// reads the GPU's writes once the command buffer completes or the host sees an event it signals,
+/// and a later command buffer's commands run after this one's, as Metal orders the command
+/// buffers of a queue. A segment begins with no barrier: the one ending each earlier segment,
+/// upload and fill covers it.
 pub(crate) fn end(
     device: &ash::Device,
     buffer: vk::CommandBuffer,
     counters: &Counters,
 ) -> Result<(), Error> {
-    let barrier = [vk::MemoryBarrier2::default()
-        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::HOST)
-        .dst_access_mask(vk::AccessFlags2::HOST_READ)];
-    let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
-    // SAFETY: the buffer is recording.
-    unsafe { device.cmd_pipeline_barrier2(buffer, &dependency) };
+    barrier(device, buffer, Reach::Host);
     counters.count(Metric::Barriers);
-    // SAFETY: as above.
+    // SAFETY: the buffer is recording.
     unsafe { device.end_command_buffer(buffer) }.map_err(Error::vulkan("vkEndCommandBuffer"))
 }
 
