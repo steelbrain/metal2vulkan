@@ -22,6 +22,7 @@ mod partition;
 mod stage_bound;
 #[cfg(test)]
 mod tests;
+mod unbound;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -2669,6 +2670,7 @@ struct Planned {
     before: reflection::UnspecializedReads,
     plan: Plan,
     kernel: KernelFacts,
+    unbound: unbound::Unbound,
 }
 
 /// What [`specialize_one`] makes: the AIR hash, the entry name, the specialized entry, and what
@@ -2789,8 +2791,8 @@ fn plan_one(
 }
 
 /// What [`plan_one`] reads of a request before it selects: the ordered entry, what its code read
-/// before specialization, the inputs it lowers under, its key, its memory plan and the partition
-/// it observes. A plan made again past the stage bound (`stage_bound`) selects from it again,
+/// before specialization, the inputs it lowers under, its key, its memory plan, the partition
+/// it observes, and what it reads and writes through anything but its bound slots. A plan made again past the stage bound (`stage_bound`) selects from it again,
 /// without decoding, specializing, ordering or analyzing the entry again.
 struct Analyzed {
     key: FunctionCompileKey,
@@ -2799,6 +2801,7 @@ struct Analyzed {
     inputs: LowerInputs,
     memory: crate::memory::plan::MemoryPlan,
     observed: Partition,
+    unbound: unbound::Unbound,
 }
 
 impl Analyzed {
@@ -2843,6 +2846,7 @@ impl Analyzed {
             before: self.before,
             plan,
             kernel,
+            unbound: self.unbound,
         }
     }
 }
@@ -2894,6 +2898,7 @@ fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Anal
         (&linked, &r.dynamic.key()),
     );
     let memory = crate::memory::plan::analyze_memory(&spec, p, m)?;
+    let unbound = unbound::unbound(&spec, &memory);
     Ok(Analyzed {
         key,
         spec,
@@ -2901,6 +2906,7 @@ fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Anal
         inputs,
         memory,
         observed,
+        unbound,
     })
 }
 
@@ -2941,6 +2947,7 @@ fn compile_bounded<K>(
             before,
             plan,
             kernel,
+            unbound,
         },
         crate::lower::emit::Emitted { mut module, merged },
     ) = stage_bound::emit(r, p, (word_cap, bounds), m)?;
@@ -3139,6 +3146,7 @@ fn compile_bounded<K>(
         (reaches_command_buffers, command_writes),
         (writes_textures, numbered_samplers),
         (own_pixel_textures, snapshot_textures, level_reads),
+        unbound,
     );
     let mut requirements = module.requirements.clone();
     // Pairs only the device's simdgroup lockstep orders.
@@ -3436,8 +3444,9 @@ fn emitted_census(
 /// store's atomics read the word they modify. A buffer slot at an index of `function_tables` holds
 /// a visible-function table read as its words. `reaches_command_buffers` is the canonical entry's
 /// `Entry::may_encode_indirect_commands`, `command_writes` its `Entry::command_writes`,
-/// `writes_textures` its `Entry::may_write_textures`, and
-/// `numbered_samplers` the samplers a pipeline state numbers for it (`numbered::samplers`).
+/// `writes_textures` its `Entry::may_write_textures`,
+/// `numbered_samplers` the samplers a pipeline state numbers for it (`numbered::samplers`), and
+/// `unbound` what it reads and writes through anything but its bound slots (`unbound`).
 fn stage_interface(
     plan: &Plan,
     symbols: crate::pipeline::link::contract::StageSymbols,
@@ -3451,6 +3460,7 @@ fn stage_interface(
         crate::spirv::requirements::Judged,
         Vec<crate::pipeline::interface::LevelReads>,
     ),
+    unbound: unbound::Unbound,
 ) -> StageInterface {
     use crate::pipeline::interface::{BufferKind, BufferSlot};
     use crate::pipeline::sym::PushField;
@@ -3513,6 +3523,8 @@ fn stage_interface(
         reaches_command_buffers,
         command_writes,
         writes_textures,
+        reads_unbound_resources: unbound.reads,
+        writes_unbound_resources: unbound.writes,
         numbered_samplers,
         own_pixel_textures,
         snapshot_textures: snapshots.slots,

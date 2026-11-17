@@ -5436,10 +5436,12 @@ field	metal2vulkan::pipeline::PipelineInterface.needs_pointer_translation	pub ne
 field	metal2vulkan::pipeline::PipelineInterface.numbered_samplers	pub numbered_samplers: Vec<(Stage, Vec<NumberedSampler>)>
 field	metal2vulkan::pipeline::PipelineInterface.push	pub push: Vec<PushPlacement>
 field	metal2vulkan::pipeline::PipelineInterface.reaches_command_buffers	pub reaches_command_buffers: bool
+field	metal2vulkan::pipeline::PipelineInterface.reads_unbound_resources	pub reads_unbound_resources: bool
 field	metal2vulkan::pipeline::PipelineInterface.slots	pub slots: BTreeMap<SlotRef, SlotInterface>
 field	metal2vulkan::pipeline::PipelineInterface.stage_in	pub stage_in: Vec<crate::pipeline::stage_io::StageInFetch>
 field	metal2vulkan::pipeline::PipelineInterface.texture_writing_stages	pub texture_writing_stages: Vec<Stage>
 field	metal2vulkan::pipeline::PipelineInterface.threadgroup	pub threadgroup: Vec<ThreadgroupArgument>
+field	metal2vulkan::pipeline::PipelineInterface.writes_unbound_resources	pub writes_unbound_resources: bool
 field	metal2vulkan::pipeline::PipelineLayout.push_constants	pub push_constants: Vec<PushConstantRange>
 field	metal2vulkan::pipeline::PipelineLayout.push_descriptor_eligible	pub push_descriptor_eligible: bool
 field	metal2vulkan::pipeline::PipelineLayout.sets	pub sets: Vec<DescriptorSetLayout>

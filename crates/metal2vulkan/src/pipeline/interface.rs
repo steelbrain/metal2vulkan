@@ -45,6 +45,16 @@ pub struct PipelineInterface {
     /// pipeline's stage order: a stage not listed writes no texture, which is proven.
     #[cfg_attr(feature = "serde", serde(default))]
     pub texture_writing_stages: Vec<Stage>,
+    /// Some stage's function may read a resource through something other than its bound slots
+    /// (`StageInterface::reads_unbound_resources`); `false` is proven of every function of the
+    /// pipeline.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub reads_unbound_resources: bool,
+    /// Some stage's function may write a resource through something other than its bound slots
+    /// (`StageInterface::writes_unbound_resources`); `false` is proven of every function of the
+    /// pipeline.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub writes_unbound_resources: bool,
     /// The samplers a pipeline state numbers for each of its Metal functions
     /// (`StageInterface::numbered_samplers`, [`NumberedSampler`]), each function's in Metal's
     /// order, the functions in the pipeline's stage order: what the runtime gives sampler
@@ -395,6 +405,22 @@ pub struct StageInterface {
     /// buffer a texture views are not texture writes.
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_textures: bool,
+    /// The function may read a resource through something other than its bound slots, of the
+    /// entry its function constants specialized; `false` only where it provably reads none so.
+    /// A bound slot is a buffer, texture or sampler argument, an element of a buffer-table
+    /// argument, or the words of an argument buffer bound at a buffer index. A read is through
+    /// something else where its pointer or texture may come from memory or an integer (an
+    /// argument buffer's buffers and textures, an address stored in a buffer, a resource ID), or
+    /// from an intrinsic call; an indirect command buffer's operations, ray tracing, and a call
+    /// the entry cannot see into count too. Metal requires such resources to be declared with
+    /// `useResource` or `useHeap`. Texture queries and null tests read no texel.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub reads_unbound_resources: bool,
+    /// The function may write a resource through something other than its bound slots, as
+    /// [`reads_unbound_resources`](Self::reads_unbound_resources) states for reads: a store, an
+    /// atomic, a texture write or atomic, or a copy into one. `false` is proven.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub writes_unbound_resources: bool,
     /// The samplers a pipeline state of the function numbers for it, of the entry its function
     /// constants specialized, in Metal's order ([`NumberedSampler`]): the runtime gives each a
     /// sampler resource ID as Metal's pipeline creation does.

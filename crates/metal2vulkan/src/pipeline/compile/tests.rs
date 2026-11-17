@@ -3021,6 +3021,56 @@ fn the_interface_states_whether_the_function_writes_textures() {
     }
 }
 
+/// The interface states whether the function reads or writes a resource through anything but
+/// its bound slots, from its AIR and memory plan. Through bound slots alone: textures selected
+/// between two arguments or between an argument and null, a texture array argument indexed at
+/// run time (`handles`), and atomics on a bound buffer (`rd_touch`, and a fragment function's
+/// `a3_rog_buffer_rmw`). Through an argument buffer's texture: a read (`argument_buffer_read`)
+/// and a write (`argument_buffer_array_write`), the argument buffer's own words being a bound
+/// slot. Through an address the function loads from a buffer: loads and stores
+/// (`ob2_loaded_pointer`) and an atomic, which reads and writes (`rd_tally_fragment`). A
+/// standalone kernel's pipeline states its function's.
+#[test]
+fn the_interface_states_what_the_function_reaches_beyond_its_bound_slots() {
+    let p =
+        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    for (stem, entry, reads, writes) in [
+        ("handles", "select_read", false, false),
+        ("handles", "select_null_write", false, false),
+        ("handles", "array_read", false, false),
+        ("resident_draws", "rd_touch", false, false),
+        ("a3_rog_buffer_rmw", "a3_rog_buffer_rmw", false, false),
+        ("handles", "argument_buffer_read", true, false),
+        ("handles", "argument_buffer_array_write", false, true),
+        ("ob2_loaded_pointer", "ob2_loaded_pointer", true, true),
+        ("resident_draws", "rd_tally_fragment", true, true),
+    ] {
+        let Some(bc) = fixture(stem) else {
+            return;
+        };
+        let a = crate::pipeline::testing::compile(&bc, entry, &p)
+            .unwrap_or_else(|e| panic!("{entry}: {e}"));
+        let facts = (
+            a.interface.reads_unbound_resources,
+            a.interface.writes_unbound_resources,
+        );
+        assert_eq!(facts, (reads, writes), "{entry}");
+        if a.interface.stage == crate::pipeline::sym::Stage::Kernel {
+            let linked = crate::pipeline::link::link(
+                &[&*a],
+                &crate::pipeline::link::LinkInputs::standalone(),
+                &p,
+            )
+            .unwrap_or_else(|e| panic!("{entry}: link: {e}"));
+            let linked_facts = (
+                linked.interface.reads_unbound_resources,
+                linked.interface.writes_unbound_resources,
+            );
+            assert_eq!(linked_facts, (reads, writes), "{entry}: pipeline");
+        }
+    }
+}
+
 /// A render pipeline whose fragment function reads `[[sample_id]]` and `[[point_coord]]`
 /// (`stage_io_fragment_point`) compiles at one sample and at four, where Vulkan's sample shading
 /// may move the point coordinate to the sample while Metal keeps it at the pixel's: there its

@@ -1646,6 +1646,8 @@ fn pipeline_interface(ifaces: &[&StageInterface]) -> PipelineInterface {
         if i.writes_textures {
             out.texture_writing_stages.push(i.stage);
         }
+        out.reads_unbound_resources |= i.reads_unbound_resources;
+        out.writes_unbound_resources |= i.writes_unbound_resources;
         out.numbered_samplers
             .push((i.stage, i.numbered_samplers.clone()));
         out.push.push(i.push.clone());

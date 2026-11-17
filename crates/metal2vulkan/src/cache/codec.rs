@@ -1140,8 +1140,8 @@ codec_struct! {
         stage, slots, threadgroup, push, descriptors, spec, needs_pointer_translation,
         needs_handle_translation, io, tessellation, writes_memory, mesh_records, mesh_corners,
         emulated_payload,
-        payload, reaches_command_buffers, command_writes, writes_textures, numbered_samplers,
-        own_pixel_textures,
+        payload, reaches_command_buffers, command_writes, writes_textures,
+        reads_unbound_resources, writes_unbound_resources, numbered_samplers, own_pixel_textures,
         snapshot_textures, snapshot_refusals, level_reads, private_bytes, sampler_arrays,
     }
     SamplerArray { slot, samplers }
@@ -1400,8 +1400,8 @@ codec_struct! {
     }
     PipelineInterface {
         slots, threadgroup, needs_pointer_translation, needs_handle_translation, push,
-        reaches_command_buffers, command_writes, texture_writing_stages, numbered_samplers,
-        stage_in,
+        reaches_command_buffers, command_writes, texture_writing_stages,
+        reads_unbound_resources, writes_unbound_resources, numbered_samplers, stage_in,
     }
     PipelineLayout { sets, push_constants, push_descriptor_eligible }
     DescriptorSetLayout { set, bindings, flags }

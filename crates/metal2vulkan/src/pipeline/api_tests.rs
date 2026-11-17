@@ -767,6 +767,8 @@ mod serde_round_trips {
                 kinds: CommandWrites::RENDER_COMMANDS,
             },
             texture_writing_stages: vec![Stage::Vertex, Stage::Fragment],
+            reads_unbound_resources: true,
+            writes_unbound_resources: false,
             numbered_samplers: vec![
                 (
                     Stage::Fragment,

@@ -1622,6 +1622,13 @@ for dependency in &pipeline.dependencies {
   records they reach: the indirect-command operations they may call, and the primitive types
   their draws may pass (a draw's constant type, or all five where it is not a constant). A clear
   bit is proven.
+- `interface.reads_unbound_resources` and `interface.writes_unbound_resources` say, provably,
+  whether a pipeline's functions may read or write a resource through anything but their bound
+  slots: through a pointer or texture they load from memory or make from an integer (an argument
+  buffer's resources, an address stored in a buffer, a resource ID), an indirect command buffer,
+  ray tracing, or a call the function cannot see into. Metal requires such resources to be
+  declared with `useResource` or `useHeap`. With each slot's `access`, they are what a compute
+  encoder needs to place a barrier only on a hazard.
 
 ### Plans
 
