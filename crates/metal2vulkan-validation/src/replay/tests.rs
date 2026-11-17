@@ -43,8 +43,9 @@ fn map(entries: &[(&str, Value)]) -> Value {
     )
 }
 
-/// Every kind of value, a map key and a selector used twice and a blob written twice come back as
-/// written; the names and the blob are each written once.
+/// Every kind of value (object 0, a property set to nil, among them), a map key and a selector used
+/// twice and a blob written twice come back as written; the names and the blob are each written
+/// once.
 #[test]
 fn a_stream_reads_back_what_was_written() {
     let dir = ScratchDir::new("replay-round-trip").unwrap();
@@ -59,6 +60,7 @@ fn a_stream_reads_back_what_was_written() {
         Value::F32(1.5),
         Value::F64(-0.25),
         Value::Object(9),
+        Value::Object(0),
         Value::Address(1 << 46),
         Value::Str("kernel_main".into()),
         Value::Bytes(vec![1, 2, 3]),

@@ -17,7 +17,8 @@ pub enum Value {
     Sint(i64),
     F32(f32),
     F64(f64),
-    /// An object, by its stream id (never 0: nil is [`Value::Nil`]).
+    /// An object, by its stream id; 0, which no object is, an object property set to nil (one
+    /// left unset is [`Value::Nil`]).
     Object(u64),
     /// A GPU address, which the player relocates.
     Address(u64),
@@ -349,10 +350,7 @@ impl<'a> Payload<'a> {
             }
             TAG_F32 => Value::F32(f32::from_le_bytes(self.take(4)?.try_into().unwrap())),
             TAG_F64 => Value::F64(f64::from_le_bytes(self.take(8)?.try_into().unwrap())),
-            TAG_OBJECT => match self.varint()? {
-                0 => return Err("object 0".into()),
-                id => Value::Object(id),
-            },
+            TAG_OBJECT => Value::Object(self.varint()?),
             TAG_ADDRESS => Value::Address(self.varint()?),
             TAG_STRING => {
                 let n = self.length()?;
