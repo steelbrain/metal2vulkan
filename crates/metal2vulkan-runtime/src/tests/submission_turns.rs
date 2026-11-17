@@ -71,7 +71,7 @@ use crate::{
     host_time, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DeviceKind,
     DeviceOptions, ResourceOptions,
 };
-use metal2vulkan::device::CompletionPolicy;
+use metal2vulkan::device::{CompletionPolicy, QueueTurnPolicy};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -561,11 +561,17 @@ type Noted = Arc<Mutex<Vec<(&'static str, u64)>>>;
 
 /// The module docs' check of a committing pass's end, under `completion`.
 fn a_committing_pass_ends_at_its_own(completion: CompletionPolicy) {
-    // Its two queues, each on the device's plan.
-    let options = DeviceOptions {
+    // Its two queues, each on the device's plan, taking no turns on a `VkQueue` they share
+    // (`QueueTurnPolicy::CommitOrder`): the check is of the wake the committing pass gives the
+    // scheduler's thread for the three batches it leaves, each ready. Under `Fair`, where the two
+    // queues share one (lavapipe, RADV, ANV), a later batch of a queue whose work is in flight there
+    // is held for its turn instead, and goes when the thread looks again after that, not at that
+    // wake.
+    let mut options = DeviceOptions {
         queue_limits: None,
         ..DeviceOptions::default()
     };
+    options.policy.queue_turns = QueueTurnPolicy::CommitOrder;
     let device = device_with(completion, options);
     let [first, second] = [(); 2].map(|()| device.new_command_queue().unwrap());
     let targets = [(); 2].map(|()| (device.new_buffer(FILL, ResourceOptions::private())).unwrap());

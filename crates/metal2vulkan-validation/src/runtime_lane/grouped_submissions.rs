@@ -69,7 +69,7 @@ use super::{
     ScratchCache, WAIT,
 };
 use crate::gpu::TEST_DEVICE;
-use metal2vulkan::device::CompletionPolicy;
+use metal2vulkan::device::{CompletionPolicy, QueueTurnPolicy};
 use metal2vulkan_runtime::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Degradation, DeviceOptions, EventRef,
     ResourceOptions, ShaderCacheOptions, WorkCounts,
@@ -321,8 +321,12 @@ const LARGE_FILL: u64 = 64 << 20;
 /// waits for is met, not at each batch that completes. The first fill waits for a gate the host
 /// raises once the checked command buffer is committed, so the scheduler holds the check before
 /// any fill completes; a wake at every completion while a head waits would count about one a
-/// fill. Under `CompletionPolicy::Exact`, so each fill is a submission of its own; every command
-/// buffer completes, and the layer reports nothing.
+/// fill. Under `CompletionPolicy::Exact`, so each fill is a submission of its own, and with the
+/// queues taking no turns on a `VkQueue` they share (`QueueTurnPolicy::CommitOrder`), so every
+/// fill is submitted as it is ready: under `Fair`, where the two queues share one (lavapipe, RADV,
+/// ANV), the fills' queue is held for its turn behind its own fills in flight, and each of those
+/// that completes wakes the thread to let the next go, the turns' own wakes, which
+/// `tests::queue_turns` covers. Every command buffer completes, and the layer reports nothing.
 #[test]
 fn completions_wake_the_scheduler_only_once_a_head_may_go() {
     let messages = Messages::default();
@@ -330,6 +334,7 @@ fn completions_wake_the_scheduler_only_once_a_head_may_go() {
     let (seen, wakes) = {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), |options| {
             options.policy.completion = CompletionPolicy::Exact;
+            options.policy.queue_turns = QueueTurnPolicy::CommitOrder;
             at_plan(options)
         })
         .unwrap();
