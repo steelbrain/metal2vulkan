@@ -281,9 +281,9 @@ pub(crate) fn run(core: Arc<Core>) {
     let device = &core.device;
     let mut state = done.lock();
     loop {
-        let scheduled: Vec<_> = state.scheduled.drain(..).collect();
-        let mut retire: Vec<Retiree> = state.ended.drain(..).collect();
-        let fired: Vec<Arc<EventInner>> = state.fire.drain(..).collect();
+        let scheduled = std::mem::take(&mut state.scheduled);
+        let mut retire = std::mem::take(&mut state.ended);
+        let fired = std::mem::take(&mut state.fire);
         let mut fire: Vec<(Listener, u64)> = Vec::new();
         let mut newly_lost = false;
         if state.lost {
@@ -421,8 +421,8 @@ pub(crate) fn run(core: Arc<Core>) {
             state = done.lock();
         }
     }
-    let watched: Vec<_> = state.watched.drain(..).collect();
-    let fired: Vec<_> = state.fire.drain(..).collect();
+    let watched = std::mem::take(&mut state.watched);
+    let fired = std::mem::take(&mut state.fire);
     drop(state);
     drop((watched, fired));
 }
