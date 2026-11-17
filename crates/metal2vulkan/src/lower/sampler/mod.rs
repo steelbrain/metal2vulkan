@@ -1264,6 +1264,25 @@ pub struct SamplerPlan {
     /// The sampling routines the samples call, each shape once (`routine::note`): the census counts
     /// each one's words once.
     pub routines: Vec<routine::Shape>,
+    /// Under the identity domains, each combined binding's image and sampler, set by [`finish`]
+    /// in place of its declaration ([`IdentitySampling`]).
+    pub identity: BTreeMap<BindingKey, IdentitySampling>,
+}
+
+/// Under the identity domains, a texture slot sampled through a runtime sampler slot: the slot's
+/// texture is the element of its class's set-1 array at the index its resource ID holds, as a
+/// read's is (`texture::identity_class`), and the sampler the element of the set-1 sampler array
+/// of its use at the index the sampler's resource ID holds (`docs/RESOURCE-ID.md`), each taken
+/// from its slot's push field: the use is plain, compare or integer, by the instruction and the
+/// texture's numeric type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdentitySampling {
+    /// The texture's image, sampled.
+    pub image: ImageDecl,
+    /// The set-1 class of [`IdentitySampling::image`].
+    pub class: crate::pipeline::sym::ImageHandleClass,
+    /// The sampler array's use.
+    pub use_: SamplerUse,
 }
 
 /// The image facts emission reads for a combined binding.
@@ -1325,6 +1344,8 @@ pub struct Declared {
     pub bicubic_line: Option<bicubic::routines::Line>,
     /// The in-place two-plane YCbCr linear samples' routines, when the module has one.
     pub linear_quad: Option<bicubic::routines::Quad>,
+    /// Under the identity domains, the set-1 sampler array of each use ([`IdentitySampling`]).
+    pub identity: BTreeMap<SamplerUse, GlobalId>,
 }
 
 /// Complete the sampler family's plan: declare each combined binding (its image from the
@@ -1335,6 +1356,7 @@ pub struct Declared {
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     let mut counts = DescriptorCounts::default();
     let mut decls = BTreeMap::new();
+    let mut identity = BTreeMap::new();
     for key in &cx.families.sampler.combined {
         let s = cx
             .families
@@ -1377,6 +1399,22 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             rows: false,
             parts: None,
         };
+        if crate::lower::access::identity(cx.profile) {
+            let refused = || Unsupported::not_implemented(Feature::IdentityDomains);
+            if !matches!(key.sampler, SamplerRef::Slot(_)) || key.unnormalized {
+                return Err(refused().into());
+            }
+            let class = crate::lower::texture::identity_class(&image).ok_or_else(refused)?;
+            identity.insert(
+                *key,
+                IdentitySampling {
+                    image,
+                    class,
+                    use_: SamplerUse::new(key.compare, texel != TexelClass::Float),
+                },
+            );
+            continue;
+        }
         let symbol = ResourceSlot {
             stage: cx.stage,
             kind: ResourceKind::CombinedTextureSampler(sampler),
@@ -1502,7 +1540,15 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .ok_or_else(|| invariant("a bicubic sample of an unplanned texture slot"))?;
         cx.facts.insert(RuntimeFact::BicubicTexels { slot: s.slot });
     }
+    // Under the identity domains a runtime sampler slot's resource ID is pushed, and the shader
+    // reads the sampler's word from it (`emit::sampler_word`): the consumer makes the device's
+    // sampler of the descriptor, its reduction included.
     for r in cx.families.sampler.slots.values() {
+        if crate::lower::access::identity(cx.profile) {
+            cx.push
+                .insert(crate::pipeline::sym::PushField::SlotGuestBase(r.slot));
+            continue;
+        }
         cx.facts
             .insert(RuntimeFact::SamplerReduction { slot: r.slot });
         if r.coordinates {
@@ -1511,6 +1557,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         }
     }
     cx.families.sampler.decls = decls;
+    cx.families.sampler.identity = identity;
     cx.families.sampler.separate = separate;
     cx.families.sampler.heap_decls = heap_decls;
     cx.families.sampler.heap_sampler_decls = heap_sampler_decls;
@@ -1704,9 +1751,32 @@ pub fn declare(
         };
         d.heap_arrays.insert(*key, g);
     }
+    // Under the identity domains one set-1 sampler array per use, and a slot's word is its pushed
+    // resource ID's (`emit::sampler_word`).
+    for use_ in plan.families.sampler.identity.values().map(|i| i.use_) {
+        if d.identity.contains_key(&use_) {
+            continue;
+        }
+        let sampler = mb.ty(SType::Sampler)?;
+        let array = mb.ty(SType::RuntimeArray {
+            elem: sampler,
+            stride: None,
+        })?;
+        let g = mb.resource(
+            ResourceSlot {
+                stage: plan.stage,
+                kind: ResourceKind::Heap(HandleClass::sampler(use_)),
+                index: 0,
+            },
+            StorageClass::UniformConstant,
+            array,
+        )?;
+        d.identity.insert(use_, g);
+    }
+    let identity = plan.families.access.identity;
     for (n, r) in &plan.families.sampler.slots {
         let fields = r.fields();
-        if fields != 0 {
+        if fields != 0 && !identity {
             let u = mb.ty(SType::Int {
                 width: 32,
                 signed: false,
@@ -1734,7 +1804,7 @@ pub fn declare(
             let c = mb.spec(SpecKey::SamplerAnisotropy(r.slot), u, ConstBits(0))?;
             d.degrees.insert(*n, mb.const_value(c)?);
         }
-        if r.nearest {
+        if r.nearest && !identity {
             let b = mb.ty(SType::Bool)?;
             let c = mb.spec(SpecKey::NearestPixelSampler(r.slot), b, ConstBits(0))?;
             d.nearest.insert(*n, mb.const_value(c)?);

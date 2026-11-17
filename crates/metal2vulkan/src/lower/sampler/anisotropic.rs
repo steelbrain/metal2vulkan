@@ -368,6 +368,13 @@ pub(super) fn select(
             // anisotropy. Elsewhere it is the plain sample, with no emulation in the module:
             // Metal's sample wherever the word states no anisotropy, the only words a function
             // compiled without the slot is bound with there.
+            // Under the identity domains no binder chooses the variant.
+            if reached && crate::lower::access::identity(cx.profile) {
+                return Err(crate::error::Unsupported::not_implemented(
+                    crate::error::Feature::IdentityDomains,
+                )
+                .into());
+            }
             if reached {
                 let slot = super::select::sampler_slot(cx.stage, n);
                 cx.facts

@@ -1260,6 +1260,12 @@ pub fn declare(
             }
             d.images.insert(*index, (g, decl.declare(mb)?));
         }
+        // And each sampled slot's class (`sampler::IdentitySampling`), which no read declares.
+        for i in plan.families.sampler.identity.values() {
+            if let std::collections::btree_map::Entry::Vacant(e) = d.heap.entry(i.class) {
+                e.insert(heap_array(mb, plan.stage, i.class, i.image)?);
+            }
+        }
     }
     let slots = (plan.families.texture.slots.iter()).filter(|_| !plan.families.access.identity);
     for (index, s) in slots {

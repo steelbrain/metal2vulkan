@@ -1249,21 +1249,48 @@ const IDENTITY_SAMPLED_IMAGES: u32 = 65_536;
 /// storage-capable texture.
 const IDENTITY_STORAGE_IMAGES: u32 = 4_096;
 
+/// Each sampler array of the identity domains' set 1: bindings 2, 3 and 4, one element per index a
+/// sampler's resource ID may hold (`docs/RESOURCE-ID.md`).
+const IDENTITY_SAMPLERS: u32 = 4_000;
+
 /// Set 1 under the identity domains: the same layout for every pipeline, so the consumer binds one
 /// set for every command. Binding 0 is the sampled-image array and binding 1 the storage-image
 /// array, each element the texture whose resource ID holds its index; every heap class the
 /// pipeline's stages declare is a variable of its descriptor type's binding, as the variables of
-/// one set and binding may be (Vulkan's "DescriptorSet and Binding Assignment"). Every stage sees
-/// both arrays, partially bound, updated after binding and while unused elements are pending: the
-/// floor's features.
+/// one set and binding may be (Vulkan's "DescriptorSet and Binding Assignment"). Bindings 2, 3 and
+/// 4 are the sampler arrays of the three uses, each element the device's sampler of that use made
+/// of the sampler whose resource ID holds its index: plain (2), with depth comparison (3), and for
+/// an integer texture (4), every filter nearest. Every stage sees every array, partially bound,
+/// updated after binding and while unused elements are pending: the floor's features.
 fn identity_set(
     heap: &BTreeMap<HandleClass, HeapDecl>,
     table: &mut LinkTable,
 ) -> Result<DescriptorSetLayout, Error> {
-    for h in heap.values() {
-        let binding = match h.ty {
-            vk::DescriptorType::SAMPLED_IMAGE => 0,
-            vk::DescriptorType::STORAGE_IMAGE => 1,
+    for (class, h) in heap {
+        let binding = match (h.ty, class) {
+            (vk::DescriptorType::SAMPLED_IMAGE, _) => 0,
+            (vk::DescriptorType::STORAGE_IMAGE, _) => 1,
+            (
+                vk::DescriptorType::SAMPLER,
+                HandleClass::Sampler {
+                    compare: false,
+                    integer: false,
+                },
+            ) => 2,
+            (
+                vk::DescriptorType::SAMPLER,
+                HandleClass::Sampler {
+                    compare: true,
+                    integer: false,
+                },
+            ) => 3,
+            (
+                vk::DescriptorType::SAMPLER,
+                HandleClass::Sampler {
+                    compare: false,
+                    integer: true,
+                },
+            ) => 4,
             _ => return Err(Unsupported::not_implemented(Feature::IdentityDomains).into()),
         };
         for slot in &h.slots {
@@ -1297,6 +1324,9 @@ fn identity_set(
                 vk::DescriptorType::STORAGE_IMAGE,
                 IDENTITY_STORAGE_IMAGES,
             ),
+            array(2, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),
+            array(3, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),
+            array(4, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),
         ],
         flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
     })

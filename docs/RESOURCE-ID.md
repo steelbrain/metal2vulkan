@@ -29,10 +29,11 @@ it is a typed refusal under these domains.
 ## The arrays
 
 Under the identity domains set 1 has one layout for every pipeline: binding 0 is the sampled-image
-array of 65,536 elements and binding 1 the storage-image array of 4,096, each partially bound,
-updated after binding and while unused elements are pending, and seen by every stage. Element `i`
-of each is the texture whose ID holds index `i`, so the consumer writes an element once, as it
-makes the texture, for every pipeline. Element 0 is a null descriptor (`nullDescriptor`): a nil
+array of 65,536 elements, binding 1 the storage-image array of 4,096, and bindings 2, 3 and 4 the
+sampler arrays of 4,000 elements each, every one partially bound, updated after binding and while
+unused elements are pending, and seen by every stage. Element `i` of each image array is the
+texture whose ID holds index `i`, so the consumer writes an element once, as it makes the texture,
+for every pipeline. Element 0 is a null descriptor (`nullDescriptor`): a nil
 texture sizes 0, reads and samples zero, and drops a store, as Metal answers for a nil texture, with
 no code in the shader. Each texture class a shader declares (its shape, numeric type and depth
 comparison, sampled, or storage without a format) is a variable of its descriptor type's binding.
@@ -41,7 +42,17 @@ A shader takes a texture slot's ID from the slot's push field (`PushField::SlotG
 argument buffer's texture's ID from the member's 8 bytes, with no table between. It indexes the
 arrays with the low word, answers `is_null_texture` by whether the index is 0, and,
 where it checks a `read` itself (a device without `robustImageAccess2`), takes an out-of-bounds
-alpha of 1 from bit 12 of the word. Samplers are not lowered under these domains yet.
+alpha of 1 from bit 12 of the word.
+
+Element `i` of each sampler array is a device sampler made of the sampler whose ID holds index `i`,
+one per use, which the shader picks by the instruction and the texture's numeric type: binding 2
+for a plain sample, 3 for a depth comparison, and 4 for a texture of an integer format, every
+filter nearest. The consumer makes each from the descriptor (its reduction mode and anisotropy
+included); it makes none of a descriptor whose min or mag filter is cubic. A shader takes a
+runtime sampler slot's ID from the slot's push field, samples through the element its low word
+indexes, and reads the word's fields where a sample depends on them (pixel coordinates, a nearest
+pixel sampler). A constexpr sampler and an argument buffer's sampler are not lowered under these
+domains yet.
 
 ## The texture word
 

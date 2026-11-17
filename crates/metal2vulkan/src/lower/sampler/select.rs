@@ -2451,8 +2451,13 @@ fn select_one(
     // texture's image holds Metal's unmapped value and its tile map answers exactly the texels
     // Metal counts.
     let texel_op = !matches!(op, SampleOp::Lod { .. } | SampleOp::QueryLevel { .. });
+    // Under the identity domains no texture is sparse (the consumer refuses a sparse texture), and
+    // the view's own components read the lanes its format lacks.
+    let identity = crate::lower::access::identity(cx.profile);
     let unmapped = match image {
-        ImageRef::Slot(index) if sparse_images && texel_op && !fetches && !shape.depth => {
+        ImageRef::Slot(index)
+            if sparse_images && !identity && texel_op && !fetches && !shape.depth =>
+        {
             let named_texels = matches!(op, SampleOp::PixelFetch { .. });
             if let Some(s) = cx.families.texture.slots.get_mut(&index) {
                 s.constant_lanes = true;
@@ -3010,6 +3015,11 @@ fn cubic_slot(
     cx: &mut SelectCx<'_>,
     n: u32,
 ) -> Result<Option<crate::air::abi::SamplerState>, Error> {
+    // Under the identity domains no binder chooses a variant: the consumer makes no device sampler
+    // of a cubic descriptor (`docs/RESOURCE-ID.md`).
+    if crate::lower::access::identity(cx.profile) {
+        return Ok(None);
+    }
     let slot = sampler_slot(cx.stage, n);
     cx.facts
         .insert(crate::pipeline::facts::RuntimeFact::CubicSampler { slot });

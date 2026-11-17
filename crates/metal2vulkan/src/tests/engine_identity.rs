@@ -30,7 +30,15 @@
 //!   only reads and a `constant` one) are loaded through `NonWritable` device-address places; a
 //!   written slot, and a `device` slot the AIR does not declare unaliased, are not. It passes L3
 //!   and computes its answer on the CPU interpreter.
-//! - A kernel that samples a texture (`engine/a2_dynamic_texel_offset`) is still refused as
+//! - A kernel sampling a texture slot through a runtime sampler slot (the harness's
+//!   `sample_down`) takes the texture and the sampler from set 1's arrays at the indices their
+//!   pushed resource IDs hold, the sampler from the plain array, with no descriptor, no
+//!   specialization constant and no fact of the bound sampler; it passes L3.
+//! - A kernel writing integer texels to a storage slot without a format (`ic`, generated)
+//!   saturates each lane to the channel widths the consumer pushes
+//!   (`PushField::TextureIntegerChannels`), with no fact, on the CPU interpreter.
+//! - A kernel that samples through a constexpr sampler (`engine/a2_dynamic_texel_offset`) is still
+//!   refused as
 //!   `Unsupported{IdentityDomains}`, not implemented, where the default domains compile it.
 //! - A kernel's emulated-simdgroup variant (`engine/gsm2_simd_products`'s `simd_float_products`)
 //!   opens every barrier of its exchanges under a branch on `1 < N`, which the default domains do
@@ -248,7 +256,184 @@ fn a_buffer_kernel_reads_each_slot_at_its_pushed_device_address() {
     }
 }
 
-/// A kernel that samples a texture is not lowered under the identity domains yet.
+/// The harness's sampling kernels (`fixtures/public/harness/workloads.ll`, our own), assembled.
+fn workloads() -> Option<Vec<u8>> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/fixtures/public/harness/workloads.ll");
+    assembled("workloads", llvm_assemble(&path))
+}
+
+/// A kernel sampling a texture slot through a runtime sampler slot (`sample_down`: a 2D `float`
+/// sample, a size query and a write) takes the sampled texture from set 1's sampled-image array
+/// and the sampler from its plain sampler array, each at the index its pushed resource ID holds,
+/// with no descriptor, no specialization constant and no fact of the bound sampler: the word the
+/// sample reads is the resource ID's. It passes L3 on each profile.
+#[test]
+fn a_runtime_sampler_is_the_set_1_element_its_resource_id_names() {
+    let Some(bc) = workloads() else {
+        return;
+    };
+    let mut profiles: Vec<(String, DeviceProfile)> = PROFILES
+        .iter()
+        .map(|stem| {
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            (stem.to_string(), p)
+        })
+        .collect();
+    profiles.push((
+        "moltenvk-m3 without robustImageAccess2".to_string(),
+        identity_without("moltenvk-m3", &[VkFeature::RobustImageAccess2]),
+    ));
+    for (stem, p) in &profiles {
+        let (a, plan, _) =
+            compile_kept(&bc, "sample_down", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert!(
+            (a.interface.spec.iter()).all(|c| matches!(c.key, SpecKey::LocalSize(_))),
+            "{stem}: {:?}",
+            a.interface.spec
+        );
+        assert!(
+            !plan.facts.iter().any(|f| matches!(
+                f,
+                RuntimeFact::SamplerCoordinates { .. }
+                    | RuntimeFact::SamplerReduction { .. }
+                    | RuntimeFact::CubicSampler { .. }
+            )),
+            "{stem}: {:?}",
+            plan.facts
+        );
+        let mut slots: Vec<_> = (plan.push.fields.iter())
+            .filter_map(|f| match f.field {
+                PushField::SlotGuestBase(s) => Some((s.class, s.index)),
+                _ => None,
+            })
+            .collect();
+        slots.sort();
+        assert_eq!(
+            slots,
+            [
+                (SlotClass::Texture, 0),
+                (SlotClass::Texture, 1),
+                (SlotClass::Sampler, 0)
+            ],
+            "{stem}"
+        );
+        let linked = link(&[&a], &LinkInputs::standalone(), p).unwrap_or_else(|e| panic!("{e}"));
+        let sets: Vec<_> = (linked.layout.sets.iter())
+            .map(|s| {
+                let b: Vec<_> = (s.bindings.iter())
+                    .map(|b| (b.binding, b.ty, b.count))
+                    .collect();
+                (s.set, b)
+            })
+            .collect();
+        assert_eq!(sets, [(0, vec![]), (1, identity_arrays())], "{stem}");
+        let mut used: Vec<u32> = (linked.table.bindings.values())
+            .filter(|(set, _)| *set == 1)
+            .map(|(_, binding)| *binding)
+            .collect();
+        used.sort();
+        // The sampled source, the written destination, and the plain sampler.
+        assert_eq!(used, [0, 1, 2], "{stem}");
+    }
+}
+
+/// A kernel writing `uint4(300, 70000, 5, 2^31)` to its `texture2d<uint, write>` slot 0 at its
+/// position, over a `2 × 1` grid.
+fn channels_kernel() -> String {
+    "define void @ic(ptr addrspace(1) %t, <2 x i32> noundef %tid) {\n\
+entry:\n\
+  tail call void @air.write_texture_2d.u.v4i32(ptr addrspace(1) %t, <2 x i32> %tid, <4 x i32> <i32 300, i32 70000, i32 5, i32 -2147483648>, i32 0, i32 2)\n\
+  ret void\n\
+}\n\n\
+declare void @air.write_texture_2d.u.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32>, i32, i32)\n\n\
+!air.kernel = !{!0}\n!air.version = !{!4}\n!air.language_version = !{!5}\n\
+!0 = !{ptr @ic, !1, !2}\n!1 = !{}\n!2 = !{!6, !3}\n\
+!6 = !{i32 0, !\"air.texture\", !\"air.location_index\", i32 0, i32 1, !\"air.write\", !\"air.arg_type_name\", !\"texture2d<uint, write>\", !\"air.arg_name\", !\"t\"}\n\
+!3 = !{i32 1, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint2\", !\"air.arg_name\", !\"tid\"}\n\
+!4 = !{i32 2, i32 8, i32 0}\n!5 = !{!\"Metal\", i32 4, i32 0, i32 0}\n"
+        .to_string()
+}
+
+/// An integer write to a storage slot without a format saturates each lane to the bound format's
+/// channel width, which the consumer pushes (`PushField::TextureIntegerChannels`, the push word
+/// of the contract, with no fact): into `RGBA8Uint` the kernel's 300, 70000 and 2^31 store 255
+/// and its 5 stays, and a word of 0 (32-bit channels) stores every lane as written.
+#[test]
+fn an_integer_write_saturates_to_the_pushed_channel_widths() {
+    let Some(bc) = assemble_text("ic", &channels_kernel()) else {
+        return;
+    };
+    const L: [u32; 3] = [2, 1, 1];
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, plan, module) =
+            compile_kept(&bc, "ic", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert!(
+            !(plan.facts.iter())
+                .any(|f| matches!(f, RuntimeFact::StorageTextureIntegerChannels { .. })),
+            "{stem}"
+        );
+        let linked = link(&[&a], &LinkInputs::standalone(), &p).unwrap_or_else(|e| panic!("{e}"));
+        let (storage, _) = (linked.table.bindings.iter())
+            .find(|(_, b)| **b == (1, 1))
+            .unwrap_or_else(|| panic!("{stem}: no storage class"));
+        let rgba8 = crate::metal::format::integer_channels_word(PixelFormat::RGBA8Uint);
+        for (word, want) in [
+            (rgba8, [255, 255, 5, 255]),
+            (0, [300, 70_000, 5, 0x8000_0000]),
+        ] {
+            let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+            for field in &plan.push.fields {
+                let PushLoc::Push { offset } = field.loc else {
+                    panic!("{stem}: {field:?} spilled");
+                };
+                let o = offset as usize;
+                match field.field {
+                    PushField::SlotGuestBase(_) => {
+                        push[o..o + 8].copy_from_slice(&resource_id(2, 0).to_le_bytes())
+                    }
+                    PushField::TextureIntegerChannels(_) => {
+                        push[o..o + 4].copy_from_slice(&word.to_le_bytes())
+                    }
+                    PushField::DispatchRegion => {
+                        let region = region_bytes([0; 3], L, L).expect("packs");
+                        push[o..o + 32].copy_from_slice(&region);
+                    }
+                    other => panic!("{stem}: unexpected push field {other:?}"),
+                }
+            }
+            let mut images: Vec<Image> = (0..2)
+                .map(|e| texture(*storage, e, [1, 1], |_, _| [0; 4], None))
+                .collect();
+            images.push(texture(*storage, 2, [2, 1], |_, _| [0; 4], None));
+            let res = Resources {
+                buffers: Vec::new(),
+                push,
+                spec: local_size3(L),
+            };
+            let (_, images) = run_with_images(&module, &Config::default(), res, images)
+                .unwrap_or_else(|e| panic!("{stem}: {e}"));
+            assert_eq!(images[2].texels, [want, want], "{stem}: word {word:#x}");
+        }
+    }
+}
+
+/// Set 1's fixed arrays under the identity domains: binding, descriptor type and count.
+fn identity_arrays() -> Vec<(u32, vk::DescriptorType, u32)> {
+    vec![
+        (0, vk::DescriptorType::SAMPLED_IMAGE, 65_536),
+        (1, vk::DescriptorType::STORAGE_IMAGE, 4_096),
+        (2, vk::DescriptorType::SAMPLER, 4_000),
+        (3, vk::DescriptorType::SAMPLER, 4_000),
+        (4, vk::DescriptorType::SAMPLER, 4_000),
+    ]
+}
+
+/// A kernel that samples a texture through a constexpr sampler is not lowered under the identity
+/// domains yet.
 #[test]
 fn a_sampling_kernel_is_refused_under_the_identity_domains() {
     let Some(bc) = assemble("a2_dynamic_texel_offset") else {
@@ -544,30 +729,10 @@ fn textures_at_their_resource_ids(ab: bool) {
                 (s.set, b)
             })
             .collect();
-        assert_eq!(
-            sets,
-            [
-                (0, vec![]),
-                (
-                    1,
-                    vec![
-                        (
-                            0,
-                            vk::DescriptorType::SAMPLED_IMAGE,
-                            65_536,
-                            BindingSource::IdentityArray
-                        ),
-                        (
-                            1,
-                            vk::DescriptorType::STORAGE_IMAGE,
-                            4_096,
-                            BindingSource::IdentityArray
-                        ),
-                    ]
-                )
-            ],
-            "{stem}"
-        );
+        let arrays: Vec<_> = (identity_arrays().into_iter())
+            .map(|(binding, ty, count)| (binding, ty, count, BindingSource::IdentityArray))
+            .collect();
+        assert_eq!(sets, [(0, vec![]), (1, arrays)], "{stem}");
         let class = |binding: u32| {
             let mut s = (linked.table.bindings.iter()).filter(|(_, b)| **b == (1, binding));
             let (slot, _) = s

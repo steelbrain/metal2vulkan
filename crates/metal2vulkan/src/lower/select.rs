@@ -1911,8 +1911,8 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 }
 
 /// Under the identity domains, the plans lowered so far: a kernel that reaches memory only
-/// through its buffer slots' device addresses and its textures' resource IDs, with no
-/// descriptor, no sampler, and no state of a bound texture but its resource ID's
+/// through its buffer slots' device addresses and its textures' and runtime samplers' resource
+/// IDs, with no descriptor and no state of a bound texture or sampler but its resource ID's
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). Its fields past the push window are a
 /// parameter block, whose address the window holds.
 fn identity_admits(plan: &Plan) -> Result<(), Error> {
@@ -1920,7 +1920,9 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
         (PushField::ArgumentTableAddress, loc) => matches!(loc, PushLoc::Push { .. }),
         (field, _) => matches!(
             field,
-            PushField::SlotGuestBase(_) | PushField::DispatchRegion
+            PushField::SlotGuestBase(_)
+                | PushField::DispatchRegion
+                | PushField::TextureIntegerChannels(_)
         ),
     });
     let addressed = plan
@@ -1954,19 +1956,28 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
         && t.heap_raw.is_empty()
         && !t.heap_half
         && t.slots.values().all(|s| s.identity_lowered());
-    // No sampler use: a read's decode through Metal's own texture unit (`metal_sampler`) is only
-    // a requirement.
+    // Samples only of a texture slot through a runtime sampler slot (`sampler::IdentitySampling`),
+    // every one's word read from the sampler's resource ID: no constexpr sampler, argument
+    // buffer's sampler, bicubic filter or specialization of a slot's state.
     let sampled = &plan.families.sampler;
-    let unsampled = *sampled
-        == sampler::SamplerPlan {
-            metal_sampler: sampled.metal_sampler,
-            ..Default::default()
-        };
+    let sampling = sampled
+        .combined
+        .iter()
+        .all(|k| sampled.identity.contains_key(k))
+        && sampled.decls.is_empty()
+        && sampled.heap.is_empty()
+        && sampled.heap_samplers.is_empty()
+        && sampled.arrays.is_empty()
+        && sampled.heap_arrays.is_empty()
+        && sampled.bicubic.is_empty()
+        && sampled.bicubic_routines.is_empty()
+        && !sampled.cubic_reach
+        && sampled.slots.values().all(|r| !r.min_level && !r.emulated);
     if plan.stage == Stage::Kernel
         && fields
         && addressed
         && textures
-        && unsampled
+        && sampling
         && !plan.facts.iter().any(identity_unsourced)
         && plan.descriptors == DescriptorCounts::default()
     {
@@ -2070,7 +2081,12 @@ pub(crate) fn any_of(tests: impl IntoIterator<Item = NoteTest>) -> Vec<NoteClaus
 /// bound format class (`NoteOn::Bound`) is no constant: its test reads `SpecKey::BoundTexelFormat`,
 /// which the runtime takes from the bound texture; nor is a sampler slot's bound word
 /// (`NoteOn::BoundSampler`), whose test reads `SpecKey::BoundSamplerWord`, which the plan gives.
+/// Under the identity domains every test is `None`, so every note is static (the owner's rule 1).
 fn declared(families: &FamilyPlans, t: NoteTest) -> Option<SpecTest> {
+    // Under the identity domains no constant or binder decides a note: each is static.
+    if families.access.identity {
+        return None;
+    }
     let key = match t.on {
         NoteOn::Unmeasured(index) => {
             let s = families.texture.slots.get(&index)?;

@@ -661,6 +661,10 @@ pub(super) fn sampled_image(
     source: Source,
 ) -> BResult<(SValue, CombinedImage, Option<SValue>)> {
     match source {
+        Source::Combined(key) if cx.plan.families.access.identity => {
+            let (si, image) = identity_sampled_image(cx, fb, key)?;
+            Ok((si, image, None))
+        }
         Source::Combined(key) => {
             let Some(&(binding, image)) = cx.decl.families.sampler.combined.get(&key) else {
                 return Err(cx.fail(format!("combined binding {key:?} is not declared")));
@@ -1291,13 +1295,18 @@ pub(super) fn pixel_coordinates(
 }
 
 /// The word of the runtime sampler `pixel` names: a slot's `SamplerState` specialization (masked by
-/// the fields the function reads), or an argument buffer's sampler table entry's.
+/// the fields the function reads), or under the identity domains its pushed resource ID's high
+/// word, whole; or an argument buffer's sampler table entry's.
 pub(crate) fn sampler_word(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     pixel: Pixel,
 ) -> BResult<SValue> {
     match pixel {
+        Pixel::Spec(n) if cx.plan.families.access.identity => {
+            let id = sampler_id(cx, fb, n)?;
+            fb.composite_extract(id, &[1])
+        }
         Pixel::Spec(n) => match cx.decl.families.sampler.words.get(&n).copied() {
             Some(w) => Ok(w),
             None => Err(cx.fail(format!("sampler slot {n} has no state word"))),
@@ -1305,6 +1314,61 @@ pub(crate) fn sampler_word(
         Pixel::Heap(handle) => heap_sampler_field(cx, fb, handle, EntryField::Flags),
         Pixel::None | Pixel::Always => Err(cx.fail("a constexpr sampler's word")),
     }
+}
+
+/// Under the identity domains, runtime sampler slot `n`'s resource ID (`uvec2`, the index in the
+/// low word and the word in the high one), from its push field.
+fn sampler_id(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, n: u32) -> BResult<SValue> {
+    let slot = super::select::sampler_slot(cx.plan.stage, n);
+    cx.push_field(fb, crate::pipeline::sym::PushField::SlotGuestBase(slot))
+}
+
+/// Under the identity domains, the sampled image of combined binding `key`
+/// ([`super::IdentitySampling`]): the texture slot's element of its class's set-1 array and the
+/// sampler slot's element of the set-1 sampler array of the use, each at the index its pushed
+/// resource ID holds, uniform over the call, joined by `OpSampledImage`.
+fn identity_sampled_image(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    key: super::BindingKey,
+) -> BResult<(SValue, CombinedImage)> {
+    let Some(i) = cx.plan.families.sampler.identity.get(&key).copied() else {
+        return Err(cx.fail(format!("combined binding {key:?} has no identity sampling")));
+    };
+    let crate::pipeline::sym::SamplerRef::Slot(n) = key.sampler else {
+        return Err(cx.fail("an identity sampling of a constexpr sampler"));
+    };
+    let slot = cx
+        .plan
+        .families
+        .texture
+        .slots
+        .get(&key.texture)
+        .map(|s| s.slot);
+    let images = cx.decl.families.texture.heap.get(&i.class).copied();
+    let samplers = cx.decl.families.sampler.identity.get(&i.use_).copied();
+    let (Some(slot), Some(images), Some(samplers)) = (slot, images, samplers) else {
+        return Err(cx.fail(format!("combined binding {key:?} is not declared")));
+    };
+    let id = cx.push_field(fb, crate::pipeline::sym::PushField::SlotGuestBase(slot))?;
+    let element = fb.composite_extract(id, &[0])?;
+    let base = fb.module().global_value(images)?;
+    let p = fb.access_chain(base, &[element])?;
+    let img = fb.load(p, MemAccess::default())?;
+    let id = sampler_id(cx, fb, n)?;
+    let element = fb.composite_extract(id, &[0])?;
+    let base = fb.module().global_value(samplers)?;
+    let p = fb.access_chain(base, &[element])?;
+    let sampler = fb.load(p, MemAccess::default())?;
+    let si = fb.sampled_image(img, sampler)?;
+    Ok((
+        si,
+        CombinedImage {
+            plane: super::plane_of(i.image.dim),
+            arrayed: i.image.arrayed,
+            texel: i.image.texel,
+        },
+    ))
 }
 
 /// Field `field` of the sampler table entry an argument buffer's sampler handle `handle` names: the
@@ -1399,6 +1463,13 @@ pub(super) fn centre(
             let Pixel::Spec(n) = s.pixel else {
                 return Err(cx.fail("a specialized texel centre without a runtime sampler slot"));
             };
+            // Under the identity domains the slot's word says whether it is a nearest pixel
+            // sampler, as an argument buffer's sampler's does.
+            if cx.plan.families.access.identity {
+                let mask = SamplerWord::nearest_pixel(image.texel != TexelClass::Float);
+                let word = sampler_word(cx, fb, s.pixel)?;
+                return Ok(Centre::TexelWhere(word_states(fb, word, mask)?));
+            }
             match cx.decl.families.sampler.nearest.get(&n).copied() {
                 Some(c) => Centre::TexelWhere(c),
                 None => return Err(cx.fail(format!("sampler slot {n} has no nearest constant"))),

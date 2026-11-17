@@ -1280,8 +1280,12 @@ fn declare_slot(
         if !crate::lower::access::identity(cx.profile) {
             facts.push(RuntimeFact::StorageTextureFormat { slot: s.slot });
         }
+        // Under the identity domains the push word is the contract: the consumer writes the bound
+        // texture's channel widths there, as for any slot's push field.
         if s.uses.int_channels {
-            facts.push(RuntimeFact::StorageTextureIntegerChannels { slot: s.slot });
+            if !crate::lower::access::identity(cx.profile) {
+                facts.push(RuntimeFact::StorageTextureIntegerChannels { slot: s.slot });
+            }
             push.push(PushField::TextureIntegerChannels(s.slot));
         }
         storage_format(cx, s, texel)?

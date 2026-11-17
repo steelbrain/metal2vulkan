@@ -127,12 +127,19 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   slot and a member of one class index one array. No binder chooses a variant there: a
   texture reads through the plain form whatever texture its ID names, its `float` or `half` reads
   take the device's sRGB decode with `PrecisionNote::SrgbTexelDecode`, and no texture is sparse
-  (the consumer refuses a sparse texture). So far they lower a kernel that reaches memory through
-  its buffer slots and reads, writes, sizes or tests for nil its texture slots and its argument
-  buffers' textures. Any other function is refused as `Unsupported{IdentityDomains}`: one that
-  samples, uses a texture buffer, a slot's levels or swizzle, a two-plane, extended-range or
-  sRGB-twin form, reads an argument buffer's texture through another numeric type or as raw
-  texels, or uses any other state of a texture beyond its ID.
+  (the consumer refuses a sparse texture). A texture slot sampled through a runtime sampler slot
+  samples set 1's element of the sampler arrays at the index of the sampler's pushed
+  `gpuResourceID`, joined to the texture's element by `OpSampledImage`, and reads the sampler's
+  word from that ID. An integer write to a storage slot without a format saturates to the channel
+  widths the consumer pushes (`PushField::TextureIntegerChannels`). Every precision note is
+  static there: no constant or binder decides one. So far they lower a kernel that reaches memory
+  through its buffer slots and reads, writes, sizes or tests for nil its texture slots and its
+  argument buffers' textures, and samples its texture slots through its runtime sampler slots.
+  Any other function is refused as `Unsupported{IdentityDomains}`: one that samples through a
+  constexpr or an argument buffer's sampler or samples an argument buffer's texture, emulates a
+  sampler's anisotropy or bicubic filter, uses a texture buffer, a slot's levels or swizzle, a
+  two-plane, extended-range or sRGB-twin form, reads an argument buffer's texture through another
+  numeric type or as raw texels, or uses any other state of a texture or sampler beyond its ID.
 - **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
   default; changes emitted code). On an integrated GPU or a CPU device a function that only
   samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes
