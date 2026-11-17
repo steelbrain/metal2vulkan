@@ -1927,34 +1927,12 @@ fn many_reference(queue: &CommandQueue, pipeline: &RenderPipelineState, width: u
 /// merge taking one scratch; where it is a shadow merged back (`shadow_merge.rs`), the passes
 /// form one run after the first, which merges in place: kept before the first and the second,
 /// and merged after the first and the last (`pass_runs.rs`); but where its merges go on the host
-/// ([`merges_on_host`]), each pass keeps every texel and merges for itself. Over host pages the
-/// device's in-place check is settled first, so that every pass takes the same verdicts.
-/// Either way the device's memory grows by less than an eighth of a scratch a pass while they are
-/// encoded.
+/// ([`merges_on_host`]), each pass keeps every texel and merges for itself: over host pages on
+/// the lane's devices, which take the exact answers (`HostPageTexturePolicy::Shadow`), under which
+/// no check runs and every verdict stays pending. Either way the device's memory grows by less
+/// than an eighth of a scratch a pass while they are encoded.
 fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
     on_device(|device, _| {
-        if over == ManyOver::HostPages {
-            assert!(
-                device.settle_in_place_checks(CHECK_WAIT),
-                "the check settles"
-            );
-            // The verdicts [`merges_on_host`] reads, and the check's notes on them.
-            let read: Vec<String> = (device.in_place_check_report().into_iter())
-                .filter(|line| !line.contains("rows on lines"))
-                .filter(|line| {
-                    line.split_once(": ").is_some_and(|(what, _)| {
-                        !what.contains(' ')
-                            || what.ends_with(" copies")
-                            || what.ends_with(" writes")
-                    })
-                })
-                .collect();
-            println!(
-                "LINEAR-ATTACHMENT in-place check on {}, texels in lines beside other bytes: {}",
-                device.name(),
-                read.join("; ")
-            );
-        }
         let queue = device.new_command_queue().unwrap();
         let pipeline = rects_beside(
             device,
@@ -2054,8 +2032,8 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
 }
 
 /// Whether the merges of a shadow over a no-copy buffer's host pages (`PagesClass::Pointer`) go
-/// on the host (`shadow_splice.rs`, **Merges**), by the device's settled check of such pages: they
-/// do where it failed, or did not answer, a copy's or a shader write's texels that share a line
+/// on the host (`shadow_splice.rs`, **Merges**), by the device's check of such pages: they do
+/// where it failed, or has not answered, a copy's or a shader write's texels that share a line
 /// with bytes beside them (`shadow_splice::splices`); such a texture joins no run of passes
 /// (`pass_runs.rs`). `None` where those passed but another class of host pages failed its copies
 /// and passed its reads: that failure carries to these pages' copies where both lay in memory of
