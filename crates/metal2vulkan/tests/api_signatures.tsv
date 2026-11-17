@@ -14289,6 +14289,7 @@ variant	metal2vulkan::device::GuestIsolation::Off	Off
 variant	metal2vulkan::device::GuestIsolation::On	On
 variant	metal2vulkan::device::HalfChainPolicy::AtExits	AtExits
 variant	metal2vulkan::device::HalfChainPolicy::EachOperation	EachOperation
+variant	metal2vulkan::device::HandleDomain::Identity	Identity
 variant	metal2vulkan::device::HandleDomain::Table	Table
 variant	metal2vulkan::device::HeapAnswerPolicy::Device	Device
 variant	metal2vulkan::device::HeapAnswerPolicy::Metal	Metal
@@ -14305,6 +14306,7 @@ variant	metal2vulkan::device::ManagedCopyInPolicy::AtCommit	AtCommit
 variant	metal2vulkan::device::ManagedCopyInPolicy::AtSubmission	AtSubmission
 variant	metal2vulkan::device::PipelineWaitPolicy::Bounded	Bounded
 variant	metal2vulkan::device::PipelineWaitPolicy::Exact	Exact
+variant	metal2vulkan::device::PointerDomain::Identity	Identity
 variant	metal2vulkan::device::PointerDomain::ResidentTable	ResidentTable
 variant	metal2vulkan::device::QueueSharingPolicy::Adaptive	Adaptive
 variant	metal2vulkan::device::QueueSharingPolicy::PerQueue	PerQueue
@@ -14994,6 +14996,7 @@ variant	metal2vulkan::error::Feature::GroupCount	GroupCount { axis: Option<Axis>
 variant	metal2vulkan::error::Feature::HandleAsPointer	HandleAsPointer
 variant	metal2vulkan::error::Feature::HeapTextureTiling	HeapTextureTiling { missing: LinearNeed }
 variant	metal2vulkan::error::Feature::HostMemory	HostMemory
+variant	metal2vulkan::error::Feature::IdentityDomains	IdentityDomains
 variant	metal2vulkan::error::Feature::ImageAtomics	ImageAtomics
 variant	metal2vulkan::error::Feature::Imageblocks	Imageblocks
 variant	metal2vulkan::error::Feature::ImplicitLodOutsideFragment	ImplicitLodOutsideFragment

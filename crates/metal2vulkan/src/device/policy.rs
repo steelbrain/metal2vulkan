@@ -29,9 +29,10 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DevicePolicy {
-    /// How pointer values resolve to resources (v1 ships `ResidentTable` only).
+    /// How pointer values resolve to resources: `ResidentTable`, or `Identity` with
+    /// `handle_domain` `Identity`.
     pub pointer_domain: PointerDomain,
-    /// How resource handles resolve (v1 ships `Table` only).
+    /// How resource handles resolve: `Table`, or `Identity` with `pointer_domain` `Identity`.
     pub handle_domain: HandleDomain,
     /// Whether accesses are contained to the resources the binder supplied.
     pub containment: ContainmentPolicy,

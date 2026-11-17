@@ -16,7 +16,8 @@ use crate::device::policy::{ContainmentPolicy, DevicePolicy};
 use crate::device::profile::{
     BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
     DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, GuestIsolation,
-    ImageCaps, Independence, LeafCaps, NanEncoding, ProfileFields, Robustness,
+    HandleDomain, ImageCaps, Independence, LeafCaps, NanEncoding, PointerDomain, ProfileFields,
+    Robustness,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -57,8 +58,10 @@ impl Device {
     /// Refuses a device below Vulkan 1.2 (`Unsupported{VulkanVersion}`), a description that lists
     /// a feature neither its version nor its listed extensions expose or a feature without the
     /// feature Vulkan requires enabled with it (`InvalidDescriptor`, the invariants
-    /// `device::enables` states), and a policy that turns containment off while guest isolation
-    /// is on (`InvalidDescriptor`).
+    /// `device::enables` states), a policy that turns containment off while guest isolation
+    /// is on (`InvalidDescriptor`), a policy that takes one identity domain without the other
+    /// (`InvalidDescriptor`), and the identity domains on a device without `bufferDeviceAddress`
+    /// and `shaderInt64` (`Unsupported{IdentityDomains}`).
     pub fn new(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error> {
         // The driver's measured deviations on its GPU, never its name.
         let deviations = super::driver_facts::deviations(&desc);
@@ -108,6 +111,7 @@ impl Device {
                 },
             ));
         }
+        identity_domains(&desc, &policy)?;
         let fields = derive_fields(&desc, &policy, &deviations);
         let profile = DeviceProfile::of(fields);
         let metal = MetalDeviceProperties::derive(&profile, &desc.allocation);
@@ -162,6 +166,26 @@ impl Device {
     pub fn allocation(&self) -> &AllocationLimits {
         &self.0.allocation
     }
+}
+
+/// The identity domains come as a pair, and need device addresses and 64-bit integers: a
+/// pointer is a 64-bit device address.
+fn identity_domains(desc: &DeviceDescription, policy: &DevicePolicy) -> Result<(), Error> {
+    let pointers = policy.pointer_domain == PointerDomain::Identity;
+    let handles = policy.handle_domain == HandleDomain::Identity;
+    if pointers != handles {
+        return Err(Error::InvalidDescriptor(
+            DescriptorError::DeviceDescription {
+                detail: "the identity pointer and handle domains are taken together".into(),
+            },
+        ));
+    }
+    let needs = [VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64];
+    if pointers && !needs.iter().all(|&f| desc.has(f)) {
+        let all = needs.iter().map(|&f| Capability::Feature(f)).collect();
+        return Err(Unsupported::needs_any_of(Feature::IdentityDomains, vec![all]).into());
+    }
+    Ok(())
 }
 
 fn derive_fields(

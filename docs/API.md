@@ -105,6 +105,13 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   rounding of each `half` operation
   on a device without `shaderFloat16` and Metal's filter of planes read in place (below), each listed in [FAST-PATHS.md](FAST-PATHS.md)
   with its bound and the measured cost of its exact form.
+- **The resident-table and handle-table domains** (`PointerDomain::ResidentTable`,
+  `HandleDomain::Table`, the default). The identity domains (`PointerDomain::Identity` with
+  `HandleDomain::Identity`, taken together) are the new runtime's form: pointers are device
+  addresses used directly and a texture's or sampler's handle is its `gpuResourceID`
+  ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`, and
+  they lower no function yet: a compile under them is refused as
+  `Unsupported{IdentityDomains}`.
 - **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
   default; changes emitted code). On an integrated GPU or a CPU device a function that only
   samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes

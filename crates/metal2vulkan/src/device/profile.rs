@@ -709,22 +709,34 @@ pub enum BufferAccess {
     Floor,
 }
 
-/// How pointer values are resolved to resources. v1 ships `ResidentTable` only.
+/// How pointer values are resolved to resources. A device takes `Identity` only with
+/// [`HandleDomain::Identity`], and the other two together.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PointerDomain {
     /// The sorted resident set of bound arguments and used resources.
     ResidentTable,
+    /// Pointers are device addresses used directly: a `device` or `constant` pointer is the
+    /// 64-bit Vulkan device address of the byte it names, as Metal's `gpuAddress` is. Needs
+    /// `bufferDeviceAddress` and `shaderInt64`. No function compiles under it yet: a compile is
+    /// refused as [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
+    Identity,
 }
 
-/// How resource handles are resolved. v1 ships `Table` only.
+/// How resource handles are resolved. A device takes `Identity` only with
+/// [`PointerDomain::Identity`], and the other two together.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HandleDomain {
     /// The handle table plus the set-1 heap.
     Table,
+    /// A texture's or sampler's handle is its `gpuResourceID`: the low 32 bits index the
+    /// pipeline's descriptor arrays and the high 32 bits are the word of its Metal descriptor
+    /// (`docs/RESOURCE-ID.md`). No function compiles under it yet: a compile is refused as
+    /// [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
+    Identity,
 }
 
 /// Out-of-bounds containment encoding.

@@ -2853,6 +2853,10 @@ impl Analyzed {
 
 /// [`plan_one`]'s reads before it selects ([`Analyzed`]).
 fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Analyzed, Error> {
+    // The identity domains lower no function yet.
+    if p.fields().pointer_domain == crate::device::PointerDomain::Identity {
+        return Err(Unsupported::not_implemented(Feature::IdentityDomains).into());
+    }
     let Specialized {
         air_hash,
         entry,

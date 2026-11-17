@@ -1,7 +1,10 @@
 //! `Device::new`, profile derivation, the fingerprint, and `requirements ⊆ profile`.
 
 use super::*;
-use crate::device::profile::{BufferAccess, Containment, GuestIsolation, Independence, Robustness};
+use crate::device::profile::{
+    BufferAccess, Containment, GuestIsolation, HandleDomain, Independence, PointerDomain,
+    Robustness,
+};
 use crate::device::requirements::{Requirements, StageCreateFlag, VkLimit, VkProperty};
 use crate::error::{Capability, Feature, Needs};
 
@@ -306,6 +309,71 @@ fn below_1_2_and_contradictory_policies_are_refused() {
     assert_eq!(dev.profile().fields().containment, Containment::UnsafeOff);
 }
 
+/// The identity domains come as a pair (`InvalidDescriptor` for one alone), need
+/// `bufferDeviceAddress` and `shaderInt64` (`Unsupported{IdentityDomains}` naming both, on a
+/// device without `shaderInt64`), and lower no function yet: a compile under them is
+/// `Unsupported{IdentityDomains}`, not implemented, where the same function compiles under the
+/// other domains.
+#[test]
+fn the_identity_domains_come_as_a_pair_on_a_device_with_addresses() {
+    let identity = DevicePolicy {
+        pointer_domain: PointerDomain::Identity,
+        handle_domain: HandleDomain::Identity,
+        ..DevicePolicy::default()
+    };
+    for half in [
+        DevicePolicy {
+            pointer_domain: PointerDomain::Identity,
+            ..DevicePolicy::default()
+        },
+        DevicePolicy {
+            handle_domain: HandleDomain::Identity,
+            ..DevicePolicy::default()
+        },
+    ] {
+        assert!(
+            matches!(
+                Device::new(profile("lavapipe"), half),
+                Err(Error::InvalidDescriptor(
+                    DescriptorError::DeviceDescription { .. }
+                ))
+            ),
+            "{half:?}"
+        );
+    }
+    // roadmap-2022 has device addresses but not shaderInt64.
+    match Device::new(profile("roadmap-2022"), identity) {
+        Err(Error::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::IdentityDomains);
+            let both = [VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64];
+            let both = both.map(Capability::Feature).to_vec();
+            assert_eq!(u.needs, Needs::AnyOf(vec![both]));
+        }
+        other => panic!("{other:?}"),
+    }
+    use crate::pipeline::testing::{compile, engine_dir, llvm_assemble, AssembleError};
+    let bc = match llvm_assemble(&engine_dir().join("a1_bool_from_float.ll")) {
+        Ok(bc) => bc,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(e) => panic!("{e:?}"),
+    };
+    let under = |policy| {
+        let dev = Device::new(profile("lavapipe"), policy).unwrap();
+        compile(&bc, "a1_bool_from_float", dev.profile())
+    };
+    assert!(under(DevicePolicy::default()).is_ok());
+    match under(identity) {
+        Err(Error::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::IdentityDomains);
+            assert_eq!(u.needs, Needs::NotImplemented);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn fingerprint_covers_every_policy_field() {
     let desc = profile("lavapipe");
@@ -323,6 +391,12 @@ fn fingerprint_covers_every_policy_field() {
     variants.push(("isolation", p));
     p.containment = ContainmentPolicy::UnsafeOff;
     variants.push(("containment", p));
+    let identity = DevicePolicy {
+        pointer_domain: PointerDomain::Identity,
+        handle_domain: HandleDomain::Identity,
+        ..base
+    };
+    variants.push(("domains", identity));
     let mut seen = vec![reference];
     for (name, p) in variants {
         let h = fp(p);
