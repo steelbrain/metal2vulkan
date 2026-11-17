@@ -1805,12 +1805,38 @@ pub(crate) struct QueuedDecode {
 /// device's next batch with work records before that work ([`Device::take_second_decodes`]).
 pub(crate) type SecondDecodes = Mutex<Vec<QueuedDecode>>;
 
+/// In the runtime's own device tests, a pause the next walk that finds passes noted takes
+/// ([`Device::pause_next_decode_walk`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) struct WalkPause {
+    paused: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+    most: std::time::Duration,
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl super::TextureState {
+    /// Take the pause a test set, where one is set: say so, and wait for its release.
+    fn pause_walk(&self) {
+        let pause = lock(&self.walk_pause).take();
+        if let Some(WalkPause {
+            paused,
+            release,
+            most,
+        }) = pause
+        {
+            let _ = paused.send(());
+            let _ = release.recv_timeout(most);
+        }
+    }
+}
+
 impl Device {
     /// Note that a decode pass whose kernel is not made was staged or queued, for the next walk
     /// ([`make_pending_decodes`](Self::make_pending_decodes)): after its registration, so a
     /// walk that reads the note finds the pass.
     pub(super) fn note_unmade_decode(&self) {
-        (self.shared().textures.decodes_unmade).store(true, Ordering::Release);
+        (self.shared().textures.decodes_noted).fetch_add(1, Ordering::AcqRel);
     }
 
     /// Make the kernels and sets of the decode passes staged for the device's next submission
@@ -1821,25 +1847,53 @@ impl Device {
     /// a lock other queues' submissions wait for, and no texture's making compiles. The passes
     /// are listed under their registries' locks and made once those are free, so a making that
     /// stages one never waits behind a compile. A pass staged after the walk began (its texture
-    /// made meanwhile) is left to a later submission, which takes none unmade. One atomic swap
-    /// where no unmade pass was staged since the last walk. Refused as a kernel's or its sets'
-    /// making is; the next walk tries again.
+    /// made meanwhile) is left to a later submission, which takes none unmade.
+    ///
+    /// Two atomic loads where every pass noted so far was seen made: the notes counted, and the
+    /// count a walk last saw through to every pass made. Else the walk makes each pass still
+    /// unmade, or waits for the making another thread began (`FirstUse::make`, the walk holding
+    /// no lock meanwhile), and only then raises the count it saw made. So no submission leaves a
+    /// pass noted before its walk unmade, whichever thread makes its kernel (another queue's
+    /// commit, the scheduler's, an internal submission's, the view check's): a commit waits at
+    /// most for the makings other threads began of the kernels it needs, one per decode, made
+    /// once per device. Refused as a kernel's or its sets' making is; the count stays, and the
+    /// next walk tries again.
     pub(crate) fn make_pending_decodes(&self) -> Result<(), Error> {
         let textures = &self.shared().textures;
-        if !textures.decodes_unmade.swap(false, Ordering::AcqRel) {
+        let noted = textures.decodes_noted.load(Ordering::Acquire);
+        if textures.decodes_walked.load(Ordering::Acquire) >= noted {
             return Ok(());
         }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        textures.pause_walk();
         let mut unmade = textures.first_moves.unmade_decodes();
         let queued = lock(&textures.second_decodes);
         unmade.extend(queued.iter().filter_map(|decode| decode.pass.unmade()));
         drop(queued);
         for kernel in unmade {
-            if let Err(error) = kernel.make(self) {
-                self.note_unmade_decode();
-                return Err(error);
-            }
+            kernel.make(self)?;
         }
+        (textures.decodes_walked).fetch_max(noted, Ordering::AcqRel);
         Ok(())
+    }
+
+    /// In the runtime's own device tests: the next walk that finds passes noted
+    /// ([`make_pending_decodes`](Self::make_pending_decodes)) stops right after it found them,
+    /// before it lists them, sends on the sender of the receiver given back, and goes on once
+    /// the sender given back sends or is dropped, or after `most`.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn pause_next_decode_walk(
+        &self,
+        most: std::time::Duration,
+    ) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+        let (paused, on_pause) = std::sync::mpsc::channel();
+        let (release, on_release) = std::sync::mpsc::channel();
+        *lock(&self.shared().textures.walk_pause) = Some(WalkPause {
+            paused,
+            release: on_release,
+            most,
+        });
+        (on_pause, release)
     }
 
     /// The decodes queued for second decoded twins (the module docs), taken for the batch now

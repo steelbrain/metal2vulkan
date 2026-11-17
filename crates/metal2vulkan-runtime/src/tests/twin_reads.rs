@@ -22,6 +22,10 @@
 //! - **A second twin**: an `ASTC_4x2_sRGB` texture, whose twin holds Metal's codes, read (nothing),
 //!   then viewed as `ASTC_4x2_LDR` (a second twin of 8-bit codes nearest Metal's values; nothing)
 //!   and read through the view.
+//!
+//! And a second twin's whole decode is recorded by the first batch with work committed after the
+//! view was made, while another thread's walk of the decodes to make is under way
+//! (`Device::make_pending_decodes`).
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::ycbcr_device::YCbCrSampler;
@@ -415,5 +419,41 @@ fn a_second_twin_announces_its_precision_at_its_first_read() {
         heard_of(&heard, Degradation::DecodedTexelPrecision),
         1,
         "the second twin's first read"
+    );
+}
+
+/// A second twin's whole decode, queued as its view is made with its kernel unmade, is recorded
+/// by the next batch with work, a read through the view, though another thread's walk found the
+/// decode first and has not made its kernel: the walk stops right after it found it
+/// (`Device::pause_next_decode_walk`; the first walk that finds it, of a commit on another
+/// thread or of a check of the device's) while this thread commits the read, whose own walk
+/// makes the kernel before its batch takes the queued decodes (`WorkCounts::second_twin_decodes`).
+#[test]
+fn a_view_s_decode_another_thread_s_walk_found_first_is_recorded_by_the_next_batch() {
+    let scratch = Scratch::new("twin-walk");
+    let heard = Heard::default();
+    let device = device(&scratch.0, &heard);
+    let kernels = Kernels::new(&device);
+    let t = written(&device, PixelFormat::ASTC4x2SRGB);
+    let (paused, release) = device.pause_next_decode_walk(WAIT);
+    let ldr = t.new_texture_view(PixelFormat::ASTC4x2LDR).unwrap();
+    let other = device.clone();
+    let walker = std::thread::spawn(move || {
+        let queue = other.new_command_queue().unwrap();
+        let command_buffer = queue.command_buffer().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+    });
+    paused
+        .recv_timeout(WAIT)
+        .expect("a walk on another thread found the view's decode and stopped");
+    let before = device.work_counts().second_twin_decodes;
+    read(&device, &kernels, Route::SlotRead, &ldr, true);
+    let recorded = device.work_counts().second_twin_decodes - before;
+    drop(release);
+    walker.join().unwrap();
+    assert_eq!(
+        recorded, 1,
+        "the read's batch recorded the view's whole decode"
     );
 }

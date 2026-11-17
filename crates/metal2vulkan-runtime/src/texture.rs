@@ -281,9 +281,15 @@ pub(super) struct TextureState {
     /// The decodes queued for ASTC carriers' second decoded twins, which the device's next batch
     /// with work records (`texture/decoded_twin.rs`).
     pub(super) second_decodes: decoded_twin::SecondDecodes,
-    /// Whether a decode pass whose kernel is not made was staged or queued since the last walk
-    /// that makes them (`Device::make_pending_decodes`).
-    pub(super) decodes_unmade: AtomicBool,
+    /// How many decode passes whose kernels were not made were staged or queued
+    /// (`Device::note_unmade_decode`), and how many of those notes a walk has seen through to
+    /// every pass made (`Device::make_pending_decodes`).
+    pub(super) decodes_noted: AtomicU64,
+    pub(super) decodes_walked: AtomicU64,
+    /// In the runtime's own device tests, the pause the next walk that finds passes noted takes
+    /// (`Device::pause_next_decode_walk`).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(super) walk_pause: Mutex<Option<decoded_twin::WalkPause>>,
     /// The multisampled depth textures held in the attachment layout between passes
     /// (`texture/held_depth.rs`).
     pub(crate) held: held_depth::HeldImages,
@@ -330,7 +336,10 @@ impl TextureState {
             ),
             twin_decodes: twin_decode::TwinDecodes::default(),
             second_decodes: Mutex::new(Vec::new()),
-            decodes_unmade: AtomicBool::new(false),
+            decodes_noted: AtomicU64::new(0),
+            decodes_walked: AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            walk_pause: Mutex::new(None),
             held: held_depth::HeldImages::default(),
         }
     }
