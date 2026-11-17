@@ -3338,9 +3338,11 @@ fn compile_bounded<K>(
         }
     }
     // Implementation-defined where a tangled instruction runs without maximal reconvergence
-    // (`lower::simd` chooses the entry's reconvergence mode), which the stage's note records.
+    // (`lower::simd` chooses the entry's reconvergence mode), which the stage's note records on a
+    // profile that notes it (`ReconvergenceNote::Noted`).
     let reconvergence = crate::lower::simd::reconvergence(&plan);
     if reconvergence == Reconvergence::ImplementationDefined
+        && p.reconvergence_note() == crate::device::profile::ReconvergenceNote::Noted
         && !precision.contains(&PrecisionNote::DeviceReconvergence)
     {
         precision.push(PrecisionNote::DeviceReconvergence);

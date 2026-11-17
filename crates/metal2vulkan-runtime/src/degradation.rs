@@ -12,8 +12,10 @@
 //!   [`PrecisionNote`] a pipeline stage records, named alike, which the macro maps both
 //!   ways, so a note without a kind (or two kinds of one note) does not compile. The note a
 //!   sampler state carries, `CappedLodBias`, maps to the runtime kind of its name, which
-//!   announces it where the device makes the state. docs/API.md's catalogue lists every code,
-//!   closed both ways by a test.
+//!   announces it where the device makes the state. `DeviceReconvergence`, which only a profile
+//!   `Device::from_queries` built records and so no stage of this runtime holds, maps to
+//!   `ImplementationDefinedReconvergence`, which this runtime announces from the stage's
+//!   reconvergence. docs/API.md's catalogue lists every code, closed both ways by a test.
 //! - **Codes are a contract.** `metal2vulkan-degrade-<kind>`, never renamed; a new degradation is
 //!   a new kind. A kind that no longer fires is removed, with its code.
 //! - **The payload.** The object degraded (the first one the device met), the reason (with that
@@ -244,6 +246,9 @@ macro_rules! degradations {
                 match note {
                     $(PrecisionNote::$note => Degradation::$note,)*
                     PrecisionNote::CappedLodBias => Degradation::CappedLodBias,
+                    PrecisionNote::DeviceReconvergence => {
+                        Degradation::ImplementationDefinedReconvergence
+                    }
                 }
             }
         }
@@ -2937,9 +2942,6 @@ degradations! {
         /// device's, where Metal reads `0x7FC00000`. Not bounded: a NaN in a sum makes the sum a
         /// NaN.
         NativeFloat8 = "native-float8";
-        /// Class: reconvergence. The stage's reconvergence after divergence is the device's, where
-        /// Metal's is maximal; announced beside `ImplementationDefinedReconvergence`.
-        DeviceReconvergence = "device-reconvergence";
     }
 }
 

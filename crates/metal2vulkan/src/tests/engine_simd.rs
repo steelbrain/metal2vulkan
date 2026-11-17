@@ -624,7 +624,8 @@ fn the_estimate_bounds_every_simd_kernel() {
 
 /// A kernel with a tangled instruction declares `MaximallyReconvergesKHR` where the profile has
 /// maximal reconvergence (reconvergence guaranteed), and records `ImplementationDefined` where it
-/// has neither mode.
+/// has neither mode: as its field alone through `Device::new`, and beside
+/// `PrecisionNote::DeviceReconvergence` through `Device::from_queries`.
 #[test]
 fn reconvergence_follows_the_profile() {
     let Some(bc) = assemble("simd_ops") else {
@@ -649,8 +650,16 @@ fn reconvergence_follows_the_profile() {
             && !text.contains("SubgroupUniformControlFlowKHR")
     );
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
-    // The stage records the device's reconvergence as a note.
+    // Through `Device::new`, the field alone, which the old runtime announces.
+    assert!(!a.precision.contains(&PrecisionNote::DeviceReconvergence));
+    // Through `Device::from_queries`, the stage records the device's reconvergence as a note.
+    let desc = crate::pipeline::testing::description("nvidia-pascal-linux").expect("description");
+    let queries = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let a = compile(&bc, "simd_vote_k", queries.profile()).expect("compile");
+    assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
     assert!(a.precision.contains(&PrecisionNote::DeviceReconvergence));
+    let a = compile(&bc, "simd_vote_k", &maximal).expect("compile");
+    assert!(!a.precision.contains(&PrecisionNote::DeviceReconvergence));
 }
 
 /// Float sums record the device's association order.
@@ -984,7 +993,8 @@ fn sixty_four_bit_group_operations_are_not_metal() {
 /// committed `moltenvk-m3` description with `shaderMaximalReconvergence` cleared), a kernel with a
 /// tangled instruction declares `SubgroupUniformControlFlowKHR`, requires that feature and its
 /// extensions, passes L3, and records `ImplementationDefined` (the mode does not define
-/// reconvergence after divergence).
+/// reconvergence after divergence): as its field alone through `Device::new`, and beside
+/// `PrecisionNote::DeviceReconvergence` through `Device::from_queries`.
 #[test]
 fn uniform_control_flow_mode_without_maximal_reconvergence() {
     let Some(bc) = assemble("simd_ops") else {
@@ -1002,6 +1012,7 @@ fn uniform_control_flow_mode_without_maximal_reconvergence() {
         "the description names shaderMaximalReconvergence"
     );
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
+    let queries = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
     let p = Device::new(desc, DevicePolicy::default())
         .expect("device")
         .profile()
@@ -1025,6 +1036,10 @@ fn uniform_control_flow_mode_without_maximal_reconvergence() {
         .requirements
         .extensions
         .contains(&VkExtension::KhrShaderSubgroupUniformControlFlow));
+    assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
+    // The field alone through `Device::new`; beside the note through `Device::from_queries`.
+    assert!(!a.precision.contains(&PrecisionNote::DeviceReconvergence));
+    let a = compile(&bc, "simd_vote_k", queries.profile()).expect("compile");
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
     assert!(a.precision.contains(&PrecisionNote::DeviceReconvergence));
 }

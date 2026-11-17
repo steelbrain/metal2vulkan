@@ -101,6 +101,11 @@ impl DeviceProfile {
         self.facts.half_pair_note
     }
 
+    /// Whether a stage of implementation-defined reconvergence records it as a note.
+    pub(crate) fn reconvergence_note(&self) -> ReconvergenceNote {
+        self.facts.reconvergence_note
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -529,6 +534,8 @@ pub(crate) struct ProfileFacts {
     pub(crate) stage_bound: StageBound,
     /// Where a `half` rounded through the conversion pair under the float controls is noted.
     pub(crate) half_pair_note: HalfPairNote,
+    /// Whether a stage of implementation-defined reconvergence records it as a note.
+    pub(crate) reconvergence_note: ReconvergenceNote,
 }
 
 impl ProfileFacts {
@@ -536,13 +543,27 @@ impl ProfileFacts {
     pub(crate) const ROWS: ProfileFacts = ProfileFacts {
         stage_bound: StageBound::Defects,
         half_pair_note: HalfPairNote::Fused,
+        reconvergence_note: ReconvergenceNote::Field,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
     pub(crate) const EVERY: ProfileFacts = ProfileFacts {
         stage_bound: StageBound::Every,
         half_pair_note: HalfPairNote::Every,
+        reconvergence_note: ReconvergenceNote::Noted,
     };
+}
+
+/// Whether a stage whose reconvergence is implementation-defined (`Reconvergence::ImplementationDefined`:
+/// a tangled instruction on a device without maximal reconvergence) records
+/// `PrecisionNote::DeviceReconvergence`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReconvergenceNote {
+    /// No note: the artifact's `reconvergence` field alone says it, which `metal2vulkan-runtime`
+    /// announces as `ImplementationDefinedReconvergence`: `Device::new`'s profile.
+    Field,
+    /// The note, beside the field, a static note of the stage: `Device::from_queries`' profile.
+    Noted,
 }
 
 /// Where a module records `PrecisionNote::NativeHalfConversion` for a `half` it rounds through the

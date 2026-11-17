@@ -2394,7 +2394,9 @@ pub enum PrecisionNote {
     /// may see other lanes active than Metal's. Under subgroup-uniform control flow
     /// (`shaderSubgroupUniformControlFlow`) the lanes reconverge where control flow is uniform.
     /// Static per stage: recorded for any tangled instruction in the entry, as the stage's
-    /// `reconvergence` is.
+    /// `reconvergence` is, on a device `Device::from_queries` made. A device `Device::new` made
+    /// records the field alone (`metal2vulkan-runtime` announces it as
+    /// `ImplementationDefinedReconvergence`).
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.

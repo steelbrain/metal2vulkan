@@ -5366,14 +5366,6 @@ bound.
   reads them, and records none. An `air.convert` from `f8e4m3fn` or `f8e5m2` and a
   simdgroup-matrix cell of those formats widen through the same type there and record none: their
   formats are OCP's own, and Metal on Apple M3 does not compile them.
-- `metal2vulkan-degrade-device-reconvergence` (precision). `PrecisionNote::DeviceReconvergence`: A
-  stage holds a simdgroup or quad operation, or a barrier whose lanes depend on reconvergence, on a
-  device without maximal reconvergence (`Reconvergence::ImplementationDefined`): after divergent
-  control flow the device decides which lanes run it together, where Metal's reconverge maximally,
-  so the operation may see other lanes active than Metal's. With
-  `shaderSubgroupUniformControlFlow` the lanes reconverge where control flow is uniform. Recorded
-  for any such instruction in the stage's entry; `metal2vulkan-runtime` also announces
-  `ImplementationDefinedReconvergence` there.
 - `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
   Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,

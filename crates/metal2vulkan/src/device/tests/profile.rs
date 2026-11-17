@@ -1225,15 +1225,18 @@ fn large_module_defects_are_keyed_on_anv() {
     }
 }
 
-/// The stage bound and the controlled `half` pair's note are facts of the profile, on every
-/// committed profile: `Device::new` bounds a stage only where its driver's identity names a
-/// stage-size defect (`StageBound::Defects`) and notes the pair only where its driver fuses
-/// arithmetic into the narrowing (`HalfPairNote::Fused`); `Device::from_queries` bounds every
-/// stage (`StageBound::Every`) and notes every pair (`HalfPairNote::Every`). The facts key the
+/// The stage bound and two notes are facts of the profile, on every committed profile:
+/// `Device::new` bounds a stage only where its driver's identity names a stage-size defect
+/// (`StageBound::Defects`), notes the controlled `half` pair only where its driver fuses arithmetic
+/// into the narrowing (`HalfPairNote::Fused`) and records implementation-defined reconvergence as
+/// the stage's field alone (`ReconvergenceNote::Field`); `Device::from_queries` bounds every stage,
+/// notes every pair and notes the reconvergence (`Every`, `Every`, `Noted`). The facts key the
 /// fingerprint: a profile of the same fields with another fact is another profile.
 #[test]
-fn the_stage_bound_and_the_half_note_are_facts_of_the_profile() {
-    use crate::device::profile::{DeviceProfile, HalfPairNote, ProfileFacts, StageBound};
+fn the_profiles_facts_follow_its_constructor() {
+    use crate::device::profile::{
+        DeviceProfile, HalfPairNote, ProfileFacts, ReconvergenceNote, StageBound,
+    };
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
         let old = Device::new(desc.clone(), DevicePolicy::default()).unwrap();
@@ -1245,6 +1248,12 @@ fn the_stage_bound_and_the_half_note_are_facts_of_the_profile() {
             queries.profile().half_pair_note(),
         );
         assert_eq!(notes, (HalfPairNote::Fused, HalfPairNote::Every), "{stem}");
+        let notes = (
+            old.profile().reconvergence_note(),
+            queries.profile().reconvergence_note(),
+        );
+        let want = (ReconvergenceNote::Field, ReconvergenceNote::Noted);
+        assert_eq!(notes, want, "{stem}");
         let fields = queries.profile().fields().clone();
         let facts = ProfileFacts {
             stage_bound: StageBound::Defects,
