@@ -57,7 +57,7 @@ KEEP = r"""f == 0 { print; if ($0 ~ /^ *Summary \[/) f = 1; next }
 /^ +[A-Z][A-Z-]* +\[ *[0-9.]+s\]/ { k = ($1 != "PASS") }
 k || /M2V-MATRIX / { print }"""
 NEXTEST_OUT = "--no-fail-fast --success-output final --failure-output final"
-DEVICE_LINES = (r"""vulkaninfo --summary 2>/dev/null | tr -d '\r' | sed -n 's/^[[:space:]]*\(deviceName\|driverName\|driverInfo\)[[:space:]]*= */M2V-DEVICE '"{leg}"' \1 /p'""")
+DEVICE_LINES = (r"""vulkaninfo --summary 2>/dev/null | tr -d '\r' | sed -n 's/^[[:space:]]*\(deviceName\|driverName\|driverInfo\|driverVersion\)[[:space:]]*= */M2V-DEVICE '"{leg}"' \1 /p'""")
 
 
 def log(msg):
@@ -73,6 +73,14 @@ def git(*args, cwd=REPO, check=True):
 
 def potluck(*args, cwd=None):
     return subprocess.run(["potluck", *args], cwd=cwd or TREE, capture_output=True, text=True, errors="replace")
+
+
+def dispatched(r):
+    """`potluck dispatch --json`'s reply: the job, or the error."""
+    try:
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return dict(error=(r.stderr or r.stdout).strip())
 
 
 def load(path, default):
@@ -310,15 +318,16 @@ class Run:
         with self.lock:
             ws = self.spaces.get(key) if key else None
         r = potluck(*args, *(["--workspace", ws, "--advance"] if ws else []), *cmd)
-        if r.returncode and ws:
-            log(f"{name}: workspace {ws} refused ({r.stderr.strip()[:200]}); a fresh one")
+        if ws and "job" not in dispatched(r):
+            log(f"{name}: workspace {ws} refused ({dispatched(r).get('error', '')[:200]}); a fresh one")
             potluck("release", ws)
             with self.lock:
                 self.spaces.pop(key, None)
             r = potluck(*args, *cmd)
-        if r.returncode:
-            return None, f"dispatch failed: {r.stderr.strip()[:500]}", None
-        jid = json.loads(r.stdout.strip().splitlines()[-1])["job"]
+        reply = dispatched(r)
+        if "job" not in reply:
+            return None, f"dispatch failed: {reply.get('error', '')[:500]}", None
+        jid = reply["job"]
         log(f"{name}: job {jid} on {node} ({ram} GiB, {minutes} min)")
         with self.lock:
             self.jobs.append(jid)
@@ -493,7 +502,8 @@ def leg_entry(run, leg):
     dev = parsed["device"]
     return dict(
         node=leg.node, gpu=leg.id if leg.id != "lavapipe" else None, job=leg.job,
-        device=dev.get("deviceName"), driver=" ".join(v for v in (dev.get("driverName"), dev.get("driverInfo")) if v) or None,
+        device=dev.get("deviceName"), driver=" ".join(v for v in (dev.get("driverName"), dev.get("driverInfo"))
+                                                if v) + (f" ({dev['driverVersion']})" if dev.get("driverVersion") else "") or None,
         started=leg.started and datetime.fromtimestamp(leg.started, timezone.utc).isoformat(timespec="seconds"),
         minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
