@@ -7,8 +7,8 @@ use crate::plan::{
 };
 use crate::rt::{self, Ranges};
 use crate::run::{
-    compare_outputs, percentile, run_each, settled, steady, warm_up, zeroed, CreateReport, Report,
-    Runs, Session,
+    compare_outputs, copy_dispatches, percentile, run_each, settled, steady, warm_up, zeroed,
+    CreateReport, Report, Runs, Session,
 };
 use crate::{Buffer, Refused, Result, Storage, Waits};
 use metal2vulkan_rt::{Error as RtError, Gap, Limit};
@@ -492,4 +492,24 @@ fn a_refusal_is_reported_beside_the_runs_and_a_failure_is_not() {
     assert!(run_each(&plan, &mut sessions, runs).is_err());
     sessions[2].1 = answers(&[], Some(fail));
     assert!(run_each(&plan, &mut sessions, runs).is_err());
+}
+
+/// The copy kernel's dispatches cover the bytes once, in order, each of whole threadgroups.
+#[test]
+fn the_copy_moves_every_byte_in_whole_threadgroups() {
+    for length in [16, 1024, 4096, 4112, 65535 * 4096, 65535 * 4096 + 4096 + 48] {
+        let dispatches = copy_dispatches(length);
+        let mut next = 0;
+        for &(offset, groups, threads) in &dispatches {
+            assert_eq!(offset, next, "{length}: {dispatches:?}");
+            assert!(
+                groups <= 65535 && (1..=256).contains(&threads),
+                "{dispatches:?}"
+            );
+            next += groups * threads * 16;
+        }
+        assert_eq!(next, length, "{length}: {dispatches:?}");
+    }
+    assert_eq!(copy_dispatches(1024), [(0, 1, 64)]);
+    assert_eq!(copy_dispatches(4112), [(0, 1, 256), (4096, 1, 1)]);
 }

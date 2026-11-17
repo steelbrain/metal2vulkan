@@ -539,23 +539,36 @@ fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport
 }
 
 /// Dispatches of the copy kernel, already set on `encoder`, moving the first `length` bytes (a
-/// multiple of 16) of `from` to `to`, in as many dispatches as the threadgroup count limit needs.
+/// multiple of 16) of `from` to `to` ([`copy_dispatches`]).
 fn copy<D: ComputeDevice>(
     encoder: &mut D::ComputeCommandEncoder,
     from: &D::Buffer,
     to: &D::Buffer,
     length: u64,
 ) -> Result<()> {
-    let most = COPY_GROUPS * 256 * 16;
-    let mut offset = 0;
-    while offset < length {
-        let bytes = (length - offset).min(most);
+    for (offset, groups, threads) in copy_dispatches(length) {
         encoder.set_buffer(from, offset, 0)?;
         encoder.set_buffer(to, offset, 1)?;
-        encoder.dispatch_threads([bytes / 16, 1, 1], [256, 1, 1])?;
-        offset += bytes;
+        encoder.dispatch_threadgroups([groups, 1, 1], [threads, 1, 1])?;
     }
     Ok(())
+}
+
+/// The copy kernel's dispatches for `length` bytes (a multiple of 16), 16 bytes a thread, each
+/// as `(offset, threadgroups, threads per threadgroup)`: whole threadgroups of 256 threads, as
+/// many dispatches as the threadgroup count limit needs, then one threadgroup of the threads left.
+/// No dispatch ends in a partial threadgroup, which not every runtime dispatches.
+pub(crate) fn copy_dispatches(length: u64) -> Vec<(u64, u64, u64)> {
+    let threads = length / 16;
+    let whole = threads / 256;
+    let mut dispatches: Vec<(u64, u64, u64)> = (0..whole)
+        .step_by(COPY_GROUPS as usize)
+        .map(|group| (group * 256 * 16, (whole - group).min(COPY_GROUPS), 256))
+        .collect();
+    if threads % 256 > 0 {
+        dispatches.push((whole * 256 * 16, 1, threads % 256));
+    }
+    dispatches
 }
 
 /// `Ok` where the first `length` bytes of the `Shared` buffer `buffer` are zero at every
