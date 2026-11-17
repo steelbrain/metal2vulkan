@@ -41,6 +41,7 @@ pub mod oracle_fuel;
 mod parity;
 pub mod pool;
 pub mod refusal;
+pub mod replay;
 pub mod requirement;
 pub mod runtime_lane;
 pub mod source;

@@ -1,0 +1,148 @@
+//! The address map and relocation (`docs/REPLAY-STREAM.md`, section 5): the recorded ranges of the
+//! live objects, each with the address the player's runtime gave its object, nested where one lies
+//! in another (a buffer in a block), and the rewrite of 8-byte words that fall in them.
+
+use std::collections::{BTreeMap, HashMap};
+
+/// One live range: its end, its object and the object's new address, and the ranges inside it.
+struct Range {
+    end: u64,
+    object: u64,
+    base: u64,
+    inner: BTreeMap<u64, Range>,
+}
+
+/// The live recorded ranges, by start, each level's ranges apart.
+#[derive(Default)]
+pub struct AddressMap {
+    top: BTreeMap<u64, Range>,
+    /// Each object's recorded range.
+    of: HashMap<u64, (u64, u64)>,
+}
+
+impl AddressMap {
+    /// Add `object`'s recorded range `[start, start + length)`, which the player's runtime put at
+    /// `base`. It lies inside a live range (one of the same bounds included: it is the inner one) or
+    /// apart from each, or holds live ranges whole; a range that meets another in part, or an
+    /// object with a live range, is refused.
+    pub fn insert(
+        &mut self,
+        object: u64,
+        start: u64,
+        length: u64,
+        base: u64,
+    ) -> Result<(), String> {
+        let end = start
+            .checked_add(length)
+            .filter(|_| length > 0)
+            .ok_or_else(|| format!("#{object}: no range at {start:#x} of {length:#x} bytes"))?;
+        if self.of.contains_key(&object) {
+            return Err(format!("#{object} has a live range already"));
+        }
+        let mut level = &mut self.top;
+        while let Some(at) = container(level, start, end) {
+            level = &mut level.get_mut(&at).expect("a live range").inner;
+        }
+        let below = level.range(..start).next_back();
+        let held: Vec<u64> = level.range(start..end).map(|(&at, _)| at).collect();
+        let parted = below.is_some_and(|(_, range)| range.end > start)
+            || held.iter().any(|at| level[at].end > end);
+        if parted {
+            return Err(format!(
+                "#{object}: {start:#x}..{end:#x} meets a live range in part"
+            ));
+        }
+        let inner = held
+            .into_iter()
+            .filter_map(|at| level.remove(&at).map(|range| (at, range)))
+            .collect();
+        level.insert(
+            start,
+            Range {
+                end,
+                object,
+                base,
+                inner,
+            },
+        );
+        self.of.insert(object, (start, end));
+        Ok(())
+    }
+
+    /// Remove `object`'s range, if it has one; the ranges inside it stay, at its level.
+    pub fn remove(&mut self, object: u64) {
+        let Some((start, end)) = self.of.remove(&object) else {
+            return;
+        };
+        let mut level = &mut self.top;
+        loop {
+            let found = level
+                .get(&start)
+                .is_some_and(|range| range.object == object);
+            if found {
+                let range = level.remove(&start).expect("found");
+                level.extend(range.inner);
+                return;
+            }
+            match container(level, start, end) {
+                Some(at) => level = &mut level.get_mut(&at).expect("a live range").inner,
+                None => return,
+            }
+        }
+    }
+
+    /// Whether `object` has a live range.
+    pub fn holds(&self, object: u64) -> bool {
+        self.of.contains_key(&object)
+    }
+
+    /// Where `value` goes: its innermost live range's new address plus its offset into the range.
+    pub fn relocated(&self, value: u64) -> Option<u64> {
+        let mut level = &self.top;
+        let mut found = None;
+        while let Some((&start, range)) = level.range(..=value).next_back() {
+            if value >= range.end {
+                break;
+            }
+            found = Some(range.base.wrapping_add(value - start));
+            level = &range.inner;
+        }
+        found
+    }
+
+    /// Rewrite each 8-byte word of `bytes` that starts at a multiple of 8 from the target's start
+    /// (`bytes` starts `offset` bytes into the target) and lies in a live range. Answers the words
+    /// rewritten, and the 8-byte values at 4 past a multiple of 8 that lie in a live range, which
+    /// stay as they are.
+    pub fn relocate(&self, bytes: &mut [u8], offset: u64) -> (u64, u64) {
+        if self.top.is_empty() {
+            return (0, 0);
+        }
+        let word = |at: usize, bytes: &[u8]| {
+            let at = bytes.get(at..at + 8)?;
+            Some(u64::from_le_bytes(at.try_into().expect("8 bytes")))
+        };
+        let misaligned_first = ((12 - offset % 8) % 8) as usize;
+        let misaligned = (misaligned_first..bytes.len())
+            .step_by(8)
+            .filter(|&at| word(at, bytes).and_then(|v| self.relocated(v)).is_some())
+            .count() as u64;
+        let first = ((8 - offset % 8) % 8) as usize;
+        let mut rewritten = 0;
+        let mut at = first;
+        while let Some(value) = word(at, bytes) {
+            if let Some(moved) = self.relocated(value) {
+                bytes[at..at + 8].copy_from_slice(&moved.to_le_bytes());
+                rewritten += 1;
+            }
+            at += 8;
+        }
+        (rewritten, misaligned)
+    }
+}
+
+/// The start of the range of `level` that holds `[start, end)` whole, if one does.
+fn container(level: &BTreeMap<u64, Range>, start: u64, end: u64) -> Option<u64> {
+    let (&at, range) = level.range(..=start).next_back()?;
+    (range.end >= end).then_some(at)
+}

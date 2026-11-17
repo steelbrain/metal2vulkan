@@ -855,6 +855,8 @@ mod render_state;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod renders;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod replay_streams;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod replayed_frames;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod replayed_textured;

@@ -436,8 +436,11 @@ re-record on that venue.
   inputs and records what it writes and how long it takes; `corpus-draw-ab compare --base DIR
   --change DIR --draws FILE --runs N` compares two builds. A draw skipped in both legs is not
   compared, and fails the comparison unless named in `--expected-skips`.
-- `command-replay` runs one recorded stretch of Metal commands through the runtime from a manifest
-  that names every object and byte.
+- `command-replay play` plays a replay stream ([REPLAY-STREAM.md](REPLAY-STREAM.md)) on a Vulkan
+  device through the old runtime and writes its report: the runtime's counters for each group of
+  command buffers it waited for, each frame and the whole play, the address words it relocated,
+  and a SHA-256 of each checked buffer or texture against the recorded one. `command-replay dump`
+  prints a stream's calls.
 - `format-scout` drives every Metal pixel format through the runtime's public API, one use at a
   time, and records what each use did.
 
