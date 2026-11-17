@@ -38,6 +38,10 @@ pub(crate) enum Free {
     CommandPool(vk::CommandPool),
     /// A dropped queue's timestamp queries.
     QueryPool(vk::QueryPool),
+    /// A pipeline of a dropped pipeline state; the pipelines gauge falls with it.
+    Pipeline(vk::Pipeline),
+    /// The shader module of a dropped pipeline state.
+    ShaderModule(vk::ShaderModule),
 }
 
 impl Reaper {
@@ -92,6 +96,13 @@ fn free(core: &Core, object: Free) {
             // SAFETY: every command buffer of the queue retired or never ran.
             unsafe { device.destroy_query_pool(pool, None) };
         }
+        Free::Pipeline(pipeline) => {
+            // SAFETY: every command buffer that used it retired: each kept its state until then.
+            unsafe { device.destroy_pipeline(pipeline, None) };
+            core.counters.fall(Gauge::Pipelines);
+        }
+        // SAFETY: its pipelines are made, and no more will be.
+        Free::ShaderModule(module) => unsafe { device.destroy_shader_module(module, None) },
     }
 }
 

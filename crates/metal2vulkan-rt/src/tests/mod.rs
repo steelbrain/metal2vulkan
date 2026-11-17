@@ -1,6 +1,10 @@
 mod command;
+mod compute;
 mod device;
 mod floor;
+mod hazard;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod kernels;
 mod memory;
 mod null_descriptor;
 mod one_path;

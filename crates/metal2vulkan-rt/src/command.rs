@@ -1,13 +1,17 @@
 //! Command buffers: recorded at once into segments that event waits and signals split, and their
 //! states from creation to retirement.
 
+use crate::counters::Metric;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::event::{Event, EventInner};
+use crate::hazard::Hazards;
 use crate::memory::Block;
+use crate::pipeline::ComputePipelineState;
 use crate::queue::QueueInner;
 use crate::readback;
-use crate::record::{self, Recorder};
+use crate::record::{self, Reach, Recorder};
+use crate::ring::Writes;
 use crate::times::{self, Stamps, Times};
 use ash::vk;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -91,16 +95,37 @@ struct CbState {
     /// ends it with this error at once.
     ended: Option<CommandBufferError>,
     times: Times,
+    /// An encoder holds `building`.
+    encoding: bool,
 }
 
-struct Building {
-    device: Device,
+impl CbState {
+    /// What is being recorded. Err: [`Refusal::Committed`]; [`Refusal::EncoderOpen`].
+    fn open(&mut self) -> Result<&mut Building, Error> {
+        if self.encoding {
+            return Err(Error::Refused(Refusal::EncoderOpen));
+        }
+        self.building
+            .as_mut()
+            .ok_or(Error::Refused(Refusal::Committed))
+    }
+}
+
+/// What a command buffer records until its commit; an open encoder holds it.
+pub(crate) struct Building {
+    pub(crate) device: Device,
     gpu: Gpu,
     handlers: Handlers,
     /// The queue's timestamp pool and the first of the command buffer's two queries.
     stamps: (vk::QueryPool, u32),
     /// Whether the start timestamp is recorded.
     started: bool,
+    /// A barrier owed before the next command: an encoder that wrote ended, a memory barrier was
+    /// asked for, or a dispatch wrote through an address outside its resources. The segment's
+    /// own end barrier pays it too.
+    owed: bool,
+    /// The pipeline bound in the current segment's command buffer.
+    bound: Option<vk::Pipeline>,
 }
 
 /// What the GPU uses: the recorder, the segments, and the blocks kept until retirement.
@@ -110,6 +135,10 @@ pub(crate) struct Gpu {
     /// Each block the commands use, once: a block released meanwhile is reused only after the
     /// command buffer retires.
     pub(crate) blocks: Vec<Arc<Block>>,
+    /// The pipeline states the commands use, once each, kept until the command buffer retires.
+    pub(crate) pipelines: Vec<ComputePipelineState>,
+    /// What the commands wrote into the parameter ring.
+    pub(crate) ring: Writes,
 }
 
 /// One submission's part of a command buffer: its waits, its commands and its signals.
@@ -156,6 +185,8 @@ impl CommandBuffer {
                             recorder: None,
                             segments: vec![Segment::default()],
                             blocks: Vec::new(),
+                            pipelines: Vec::new(),
+                            ring: Writes::default(),
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -163,9 +194,12 @@ impl CommandBuffer {
                         },
                         stamps,
                         started: false,
+                        owed: false,
+                        bound: None,
                     }),
                     ended: None,
                     times: Times::default(),
+                    encoding: false,
                 }),
                 changed: Condvar::new(),
             }),
@@ -176,14 +210,30 @@ impl CommandBuffer {
         lock(&self.inner.state)
     }
 
-    /// Runs `f` on what is being recorded. Err: [`Refusal::Committed`].
+    /// Runs `f` on what is being recorded. Err: [`Refusal::Committed`];
+    /// [`Refusal::EncoderOpen`].
     fn building<R>(&self, f: impl FnOnce(&mut Building) -> Result<R, Error>) -> Result<R, Error> {
         let mut state = self.state();
-        let building = state
+        f(state.open()?)
+    }
+
+    /// Takes what is being recorded for an encoder, until [`close_encoder`](Self::close_encoder).
+    /// Err: [`Refusal::Committed`]; [`Refusal::EncoderOpen`].
+    pub(crate) fn open_encoder(&self) -> Result<Building, Error> {
+        let mut state = self.state();
+        state.open()?;
+        state.encoding = true;
+        Ok(state
             .building
-            .as_mut()
-            .ok_or(Error::Refused(Refusal::Committed))?;
-        f(building)
+            .take()
+            .expect("an open command buffer is recording"))
+    }
+
+    /// Gives back what an encoder recorded into.
+    pub(crate) fn close_encoder(&self, building: Building) {
+        let mut state = self.state();
+        state.building = Some(building);
+        state.encoding = false;
     }
 
     /// The device, while the command buffer is not committed. Err: [`Refusal::Committed`].
@@ -259,9 +309,7 @@ impl CommandBuffer {
             return Err(Error::Quiesced);
         }
         let mut state = self.state();
-        if state.building.is_none() {
-            return Err(Error::Refused(Refusal::Committed));
-        }
+        state.open()?;
         if state.status == CommandBufferStatus::NotEnqueued {
             work.enqueue(&self.inner);
             state.status = CommandBufferStatus::Enqueued;
@@ -286,9 +334,11 @@ impl CommandBuffer {
             return Err(Error::Quiesced);
         }
         let mut state = self.state();
-        let Some(mut building) = state.building.take() else {
-            return Err(Error::Refused(Refusal::Committed));
-        };
+        state.open()?;
+        let mut building = state
+            .building
+            .take()
+            .expect("an open command buffer is recording");
         if let Err(error) = building.finish() {
             state.building = Some(building);
             return Err(error);
@@ -404,7 +454,7 @@ impl CommandBuffer {
             let command = building.command()?;
             f(&building.device.core().device, command);
             for buffer in buffers {
-                building.keep(buffer.block_for_test());
+                building.keep(buffer.held_block());
             }
             Ok(())
         })
@@ -455,6 +505,7 @@ impl Building {
             self.started = true;
         }
         self.last().command = Some(command);
+        self.bound = None;
         Ok(command)
     }
 
@@ -462,7 +513,14 @@ impl Building {
     fn close(&mut self) -> Result<(), Error> {
         let core = Arc::clone(self.device.core());
         match self.last().command {
-            Some(command) => record::end(&core.device, command, &core.counters),
+            Some(command) => {
+                // Its end barrier pays what is owed and starts the hazard sets again.
+                self.owed = false;
+                if let Some(recorder) = &mut self.gpu.recorder {
+                    recorder.hazards.clear();
+                }
+                record::end(&core.device, command, &core.counters)
+            }
             None => Ok(()),
         }
     }
@@ -494,23 +552,82 @@ impl Building {
         }
     }
 
-    /// The current segment's command buffer. Commands after a signal go in a new segment.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    fn command(&mut self) -> Result<vk::CommandBuffer, Error> {
+    /// The current segment's command buffer, with the barrier owed recorded first. Commands after
+    /// a signal go in a new segment.
+    pub(crate) fn command(&mut self) -> Result<vk::CommandBuffer, Error> {
         if !self.last().signals.is_empty() {
             self.split()?;
         }
-        match self.last().command {
-            Some(command) => Ok(command),
-            None => self.begin(),
+        let command = match self.last().command {
+            Some(command) => command,
+            None => self.begin()?,
+        };
+        if self.owed {
+            let core = self.device.core();
+            record::barrier(&core.device, command, Reach::Commands);
+            core.counters.count(Metric::Barriers);
+            self.owed = false;
+        }
+        Ok(command)
+    }
+
+    /// The hazard sets, once the command buffer records: they live with its recorder.
+    pub(crate) fn hazards(&mut self) -> &mut Hazards {
+        &mut self
+            .gpu
+            .recorder
+            .as_mut()
+            .expect("a command buffer that records has a recorder")
+            .hazards
+    }
+
+    /// Owes a barrier before the next command, and starts the hazard sets again: it orders
+    /// everything before it.
+    pub(crate) fn owe(&mut self) {
+        self.owed = true;
+        if let Some(recorder) = &mut self.gpu.recorder {
+            recorder.hazards.clear();
         }
     }
 
+    /// Owes a barrier where anything was read or written since the last one.
+    pub(crate) fn owe_if_touched(&mut self) {
+        if self
+            .gpu
+            .recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.hazards.touched())
+        {
+            self.owe();
+        }
+    }
+
+    /// Whether `pipeline` needs binding in the current command buffer; it is bound from now.
+    pub(crate) fn bind(&mut self, pipeline: vk::Pipeline) -> bool {
+        let needed = self.bound != Some(pipeline);
+        self.bound = Some(pipeline);
+        needed
+    }
+
+    /// Copies `bytes` into the parameter ring, returning their address.
+    pub(crate) fn write_ring(&mut self, bytes: &[u8]) -> Result<u64, Error> {
+        let core = Arc::clone(self.device.core());
+        self.gpu.ring.write(&core, bytes)
+    }
+
     /// Keeps `block` until the command buffer retires.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    fn keep(&mut self, block: &Arc<Block>) {
-        if !self.gpu.blocks.iter().any(|kept| Arc::ptr_eq(kept, block)) {
-            self.gpu.blocks.push(Arc::clone(block));
+    pub(crate) fn keep(&mut self, block: &Arc<Block>) {
+        let blocks = &mut self.gpu.blocks;
+        if !blocks.iter().rev().any(|kept| Arc::ptr_eq(kept, block)) {
+            blocks.push(Arc::clone(block));
+        }
+    }
+
+    /// Keeps `state` until the command buffer retires.
+    pub(crate) fn keep_pipeline(&mut self, state: &ComputePipelineState) {
+        let pipelines = &mut self.gpu.pipelines;
+        if !pipelines.iter().rev().any(|kept| kept.is(state)) {
+            pipelines.push(state.clone());
         }
     }
 }
@@ -578,11 +695,14 @@ pub(crate) fn retire(
         recorder,
         segments,
         blocks,
+        pipelines,
+        ring,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
-    drop((segments, blocks));
+    ring.give_back(core);
+    drop((segments, blocks, pipelines));
     inner.queue.release(inner.slot);
     let handle = CommandBuffer { inner };
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {
@@ -599,10 +719,11 @@ impl Drop for CbInner {
         // A command buffer never committed gives back its recorder and its place in the queue; a
         // committed one did so when it retired.
         if let Some(Building { device, gpu, .. }) = state.building.take() {
+            let core = device.core();
             if let Some(recorder) = gpu.recorder {
-                let core = device.core();
                 core.recorders.give_back(core, recorder);
             }
+            gpu.ring.give_back(core);
             self.queue.release(self.slot);
         }
     }

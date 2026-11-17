@@ -19,6 +19,8 @@ pub struct Buffer {
 
 struct Inner {
     device: Device,
+    /// Its resource id, for the hazard sets.
+    id: u32,
     block: Arc<Block>,
     offset: u64,
     length: u64,
@@ -27,7 +29,9 @@ struct Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        self.device.core().counters.fall(Gauge::Buffers);
+        let core = self.device.core();
+        core.ids.give_back(self.id);
+        core.counters.fall(Gauge::Buffers);
     }
 }
 
@@ -83,6 +87,7 @@ impl Device {
         Ok(Buffer {
             inner: Arc::new(Inner {
                 device: self.clone(),
+                id: self.core().ids.take(),
                 block,
                 offset,
                 length,
@@ -119,9 +124,18 @@ impl Buffer {
         self.inner.offset
     }
 
-    /// For the device tests: the block, for a command buffer to keep.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn block_for_test(&self) -> &Arc<Block> {
+    /// The block, for a command buffer to keep.
+    pub(crate) fn held_block(&self) -> &Arc<Block> {
         &self.inner.block
+    }
+
+    /// Its resource id, for the hazard sets.
+    pub(crate) fn id(&self) -> u32 {
+        self.inner.id
+    }
+
+    /// Whether `other` is the device this buffer was made on.
+    pub(crate) fn is_of(&self, core: &Arc<crate::device::Core>) -> bool {
+        Arc::ptr_eq(self.inner.device.core(), core)
     }
 }

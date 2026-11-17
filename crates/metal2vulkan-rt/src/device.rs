@@ -7,10 +7,13 @@ use crate::error::Error;
 use crate::extension::{self, DeviceExtension};
 use crate::fill::Filler;
 use crate::floor;
+use crate::hazard::Ids;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, MemoryClass, Pool, BLOCK_LEN};
+use crate::pipeline::PUSH_BYTES;
 use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
+use crate::ring::Ring;
 use crate::submit::{self, Work};
 use crate::times::Ticks;
 use ash::vk;
@@ -123,7 +126,7 @@ pub(crate) struct Core {
     family: u32,
     extensions: Vec<CString>,
     pub(crate) queues: Queues,
-    memory_types: floor::MemoryTypes,
+    pub(crate) memory_types: floor::MemoryTypes,
     unified_memory: bool,
     pub(crate) counters: Counters,
     /// What the device's timestamps count.
@@ -140,6 +143,14 @@ pub(crate) struct Core {
     /// Every queue's timestamp pool not yet destroyed: one whose queue outlives the device is
     /// destroyed with it.
     pub(crate) query_pools: Mutex<Vec<vk::QueryPool>>,
+    /// The one pipeline layout of every pipeline: the push window over every stage.
+    pub(crate) layout: vk::PipelineLayout,
+    /// The device's compute limits.
+    pub(crate) limits: ComputeLimits,
+    /// The parameter ring.
+    pub(crate) ring: Ring,
+    /// Resource ids, for the hazard sets.
+    pub(crate) ids: Ids,
     /// Quiesced or torn down: calls that need a thread are refused.
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
@@ -255,7 +266,7 @@ impl Device {
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
         let made = unsafe { objects(&device, &capabilities, family, &counters) };
-        let (memory_types, filler, done) = match made {
+        let (memory_types, filler, done, layout) = match made {
             Ok(made) => made,
             Err(error) => {
                 // SAFETY: nothing made from the device is left.
@@ -287,6 +298,11 @@ impl Device {
             properties.properties.limits.timestamp_period,
             families[family as usize].timestamp_valid_bits,
         );
+        let limits = &properties.properties.limits;
+        let limits = ComputeLimits {
+            max_group_count: limits.max_compute_work_group_count,
+            max_group_size: limits.max_compute_work_group_size,
+        };
         let max_block_len = vulkan11
             .max_memory_allocation_size
             .min(vulkan13.max_buffer_size);
@@ -310,6 +326,10 @@ impl Device {
             done,
             reaper: Reaper::new(),
             query_pools: Mutex::new(Vec::new()),
+            layout,
+            limits,
+            ring: Ring::new(),
+            ids: Ids::new(),
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
         });
@@ -623,7 +643,7 @@ unsafe fn objects(
     capabilities: &floor::Capabilities,
     family: u32,
     counters: &Counters,
-) -> Result<(floor::MemoryTypes, Filler, Done), Error> {
+) -> Result<(floor::MemoryTypes, Filler, Done, vk::PipelineLayout), Error> {
     // SAFETY: the caller's contract.
     let memory_types =
         unsafe { floor::memory_types(device, capabilities) }.map_err(Error::BelowFloor)?;
@@ -631,8 +651,28 @@ unsafe fn objects(
     // floor chose it for buffers of every usage.
     let mut filler = unsafe { Filler::new(device, family, memory_types.shared, counters) }?;
     // SAFETY: the device is live.
-    match unsafe { Done::new(device) } {
-        Ok(done) => Ok((memory_types, filler, done)),
+    let made = unsafe { Done::new(device) }.and_then(|mut done| {
+        let push = [vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::ALL,
+            offset: 0,
+            size: PUSH_BYTES,
+        }];
+        let info = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push);
+        // SAFETY: the device is live, and every device holds 128 bytes of push constants.
+        match unsafe { device.create_pipeline_layout(&info, None) } {
+            Ok(layout) => Ok((done, layout)),
+            Err(result) => {
+                // SAFETY: the completion objects are unused.
+                unsafe { done.destroy(device) };
+                Err(Error::Vulkan {
+                    call: "vkCreatePipelineLayout",
+                    result,
+                })
+            }
+        }
+    });
+    match made {
+        Ok((done, layout)) => Ok((memory_types, filler, done, layout)),
         Err(error) => {
             // SAFETY: the fill's objects are unused.
             if unsafe { filler.destroy(device) } {
@@ -641,6 +681,14 @@ unsafe fn objects(
             Err(error)
         }
     }
+}
+
+/// The device's compute limits a dispatch is checked against.
+pub(crate) struct ComputeLimits {
+    /// `maxComputeWorkGroupCount`.
+    pub(crate) max_group_count: [u32; 3],
+    /// `maxComputeWorkGroupSize`.
+    pub(crate) max_group_size: [u32; 3],
 }
 
 impl Core {
@@ -726,8 +774,14 @@ impl Drop for Core {
             // SAFETY: the device is idle.
             unsafe { self.device.destroy_query_pool(pool, None) };
         }
+        // SAFETY: the device is idle; nothing reads the ring.
+        let ring_blocks = unsafe { self.ring.destroy(&self.device) };
+        for _ in 0..ring_blocks {
+            self.counters.fall(Gauge::Blocks);
+        }
         // SAFETY: the device is idle, and nothing made from it is left but these objects.
         let zero_source = unsafe {
+            self.device.destroy_pipeline_layout(self.layout, None);
             self.done.destroy(&self.device);
             let zero_source = self.filler.destroy(&self.device);
             self.device.destroy_device(None);

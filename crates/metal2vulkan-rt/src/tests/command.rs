@@ -4,7 +4,7 @@
 //! loss; and a released block kept until its last command buffer retires.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use crate::device::lock;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
@@ -22,7 +22,7 @@ mod on_device {
     /// How long a test waits for what must happen.
     const PATIENCE: Duration = Duration::from_secs(60);
 
-    fn within(what: &str, mut done: impl FnMut() -> bool) {
+    pub(crate) fn within(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + PATIENCE;
         while !done() {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
@@ -44,7 +44,7 @@ mod on_device {
 
     /// Opens each device of the cfg's kind with `options`, runs `body`, which drops the device,
     /// and checks that every gauge reaches zero.
-    fn each_device(test: &str, mut body: impl FnMut(&str, &Instance, Device)) {
+    pub(crate) fn each_device(test: &str, mut body: impl FnMut(&str, &Instance, Device)) {
         let instance = Instance::new(&[]).expect("an instance at the floor");
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
@@ -59,14 +59,14 @@ mod on_device {
     }
 
     /// Buffers of 256 bytes in one Shared block, each zeroed.
-    struct Arena {
+    pub(crate) struct Arena {
         device: Device,
         block: BlockId,
         next: u64,
     }
 
     impl Arena {
-        fn new(device: &Device) -> Arena {
+        pub(crate) fn new(device: &Device) -> Arena {
             let block = device
                 .take_block(MemoryClass::Shared, 1)
                 .expect("a Shared block");
@@ -77,7 +77,7 @@ mod on_device {
             }
         }
 
-        fn buffer(&mut self) -> Buffer {
+        pub(crate) fn buffer(&mut self) -> Buffer {
             let buffer = self
                 .device
                 .new_buffer(self.block, self.next, 256, true)
@@ -89,7 +89,7 @@ mod on_device {
 
     /// Records a fill of `buffer` with `word`, keeping its block.
     fn fill(command_buffer: &CommandBuffer, buffer: &Buffer, word: u32) {
-        let target = buffer.block_for_test().memory.buffer;
+        let target = buffer.held_block().memory.buffer;
         let (offset, size) = (buffer.offset(), buffer.length());
         command_buffer
             .record_for_test(&[buffer], |device, command| {
@@ -101,14 +101,14 @@ mod on_device {
     }
 
     /// A buffer's first word, as the host reads it.
-    fn word(buffer: &Buffer) -> u32 {
+    pub(crate) fn word(buffer: &Buffer) -> u32 {
         let contents = buffer.contents().expect("a Shared buffer");
         // SAFETY: the buffer is alive and at least 4 bytes long.
         unsafe { contents.cast::<u32>().as_ptr().read_volatile() }
     }
 
     /// Waits for a command buffer to complete or end, and for its handlers.
-    fn finished(name: &str, command_buffer: &CommandBuffer) {
+    pub(crate) fn finished(name: &str, command_buffer: &CommandBuffer) {
         within(name, || {
             matches!(
                 command_buffer.status(),

@@ -70,17 +70,66 @@ pub enum Refusal {
     /// buffer", "Completed handler provided after commit call" and "Scheduled handler provided
     /// after commit call").
     Committed,
-    /// An event of another device in an encode call
-    /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event) or
-    /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event)).
+    /// An event, a buffer or a pipeline state of another device in an encode call
+    /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event),
+    /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event), or a
+    /// [`ComputeCommandEncoder`](crate::ComputeCommandEncoder) call).
     ///
-    /// Basis: ours (an event's semaphore belongs to the `VkDevice` that made it).
+    /// Basis: ours (an event's semaphore, a buffer's block and a pipeline belong to the
+    /// `VkDevice` that made them).
     OtherDevice,
     /// A queue that may hold no command buffer
     /// ([`Device::new_command_queue`](crate::Device::new_command_queue) with a count of 0).
     ///
     /// Basis: ours (its first `commandBuffer` call would wait forever).
     NoCommandBuffers,
+    /// A second encoder, an encode call, or a commit or enqueue, while an encoder of the command
+    /// buffer is open.
+    ///
+    /// Basis: metal-documented (a command buffer has one active encoder at a time, ended by
+    /// `endEncoding` before another is made or the command buffer is committed).
+    EncoderOpen,
+    /// A dispatch with no pipeline state set.
+    ///
+    /// Basis: metal-documented (a compute dispatch needs a compute pipeline state set first).
+    NoPipeline,
+    /// A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`,
+    /// `setBufferOffset`, `setThreadgroupMemoryLength`).
+    ///
+    /// Basis: metal-documented (the buffer argument table has 31 entries per stage).
+    BufferIndex {
+        /// The index asked for.
+        index: u32,
+    },
+    /// `setBufferOffset` at an index where no buffer is bound.
+    ///
+    /// Basis: ours (there is no buffer whose offset to change).
+    NoBufferAtIndex {
+        /// The index asked for.
+        index: u32,
+    },
+    /// A threadgroup of no threads, or of more than the pipeline state's
+    /// `maxTotalThreadsPerThreadgroup`.
+    ///
+    /// Basis: metal-documented (a threadgroup's threads total at most the state's
+    /// `maxTotalThreadsPerThreadgroup`).
+    ThreadgroupSize {
+        /// The threadgroup size asked for.
+        size: [u32; 3],
+        /// The state's `maxTotalThreadsPerThreadgroup`.
+        max: u32,
+    },
+    /// An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer
+    /// than 12 bytes (three 32-bit counts) in the buffer.
+    ///
+    /// Basis: ours (`vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset
+    /// inside the buffer).
+    IndirectOffset {
+        /// The offset asked for.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+    },
 }
 
 /// A limit a call ran into, with what it was asked.
@@ -104,6 +153,36 @@ pub enum Limit {
     ///
     /// Basis: ours (block numbers are 32 bits).
     BlockIds,
+    /// A dispatch of more threadgroups on an axis than the device's `maxComputeWorkGroupCount`.
+    /// Metal's grids go further.
+    ///
+    /// Basis: device (the device's `maxComputeWorkGroupCount`).
+    GroupCount {
+        /// The threadgroups asked for.
+        count: [u32; 3],
+        /// The device's most.
+        max: [u32; 3],
+    },
+    /// A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds
+    /// 1,024 by 1,024 by 64). Metal's go to 1,024 on every axis.
+    ///
+    /// Basis: device (the device's `maxComputeWorkGroupSize`).
+    ThreadgroupShape {
+        /// The threadgroup size asked for.
+        size: [u32; 3],
+        /// The device's most.
+        max: [u32; 3],
+    },
+    /// `setBytes` data longer than one parameter ring chunk. Metal documents the call for data
+    /// under 4 KB.
+    ///
+    /// Basis: ours (a ring chunk is 64 KiB).
+    BytesLength {
+        /// The length asked for.
+        len: u64,
+        /// The most one call takes.
+        max: u64,
+    },
 }
 
 impl Error {
@@ -143,10 +222,24 @@ impl fmt::Display for Refusal {
                 "a buffer of {length} bytes at offset {offset} leaves its block of {block_len} bytes"
             ),
             Refusal::Committed => f.write_str("the command buffer is already committed"),
-            Refusal::OtherDevice => f.write_str("the event is another device's"),
+            Refusal::OtherDevice => f.write_str("the object is another device's"),
             Refusal::NoCommandBuffers => {
                 f.write_str("a command queue must hold at least one command buffer")
             }
+            Refusal::EncoderOpen => f.write_str("an encoder of the command buffer is open"),
+            Refusal::NoPipeline => f.write_str("no compute pipeline state is set"),
+            Refusal::BufferIndex { index } => {
+                write!(f, "buffer index {index} is past the 31 entries")
+            }
+            Refusal::NoBufferAtIndex { index } => write!(f, "no buffer is bound at index {index}"),
+            Refusal::ThreadgroupSize { size, max } => write!(
+                f,
+                "a threadgroup of {size:?} threads is empty or past the state's {max}"
+            ),
+            Refusal::IndirectOffset { offset, length } => write!(
+                f,
+                "indirect arguments at offset {offset} of a {length}-byte buffer are misaligned or past its end"
+            ),
         }
     }
 }
@@ -159,6 +252,15 @@ impl fmt::Display for Limit {
                 "a block of {len} bytes is past the device's largest, {max} bytes"
             ),
             Limit::BlockIds => f.write_str("every block number has been used"),
+            Limit::GroupCount { count, max } => {
+                write!(f, "{count:?} threadgroups are past the device's {max:?}")
+            }
+            Limit::ThreadgroupShape { size, max } => {
+                write!(f, "a threadgroup of {size:?} is past the device's {max:?}")
+            }
+            Limit::BytesLength { len, max } => {
+                write!(f, "{len} bytes are past the most one call takes, {max}")
+            }
         }
     }
 }

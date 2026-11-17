@@ -9,8 +9,12 @@ use std::sync::Arc;
 pub(crate) enum Metric {
     /// [`Metrics::submissions`].
     Submissions,
+    /// [`Metrics::passes`].
+    Passes,
     /// [`Metrics::barriers`].
     Barriers,
+    /// [`Metrics::pipelines_created`].
+    PipelinesCreated,
     /// [`Metrics::blocks_made`].
     BlocksMade,
 }
@@ -20,6 +24,8 @@ pub(crate) enum Metric {
 pub(crate) enum Gauge {
     /// [`Gauges::buffers`].
     Buffers,
+    /// [`Gauges::pipelines`].
+    Pipelines,
     /// [`Gauges::blocks`].
     Blocks,
     /// [`Gauges::command_buffers`].
@@ -69,7 +75,9 @@ impl Counters {
         let a = &self.atomics;
         let atomic = match metric {
             Metric::Submissions => &a.submissions,
+            Metric::Passes => &a.passes,
             Metric::Barriers => &a.barriers,
+            Metric::PipelinesCreated => &a.pipelines_created,
             Metric::BlocksMade => &a.blocks_made,
         };
         atomic.fetch_add(1, Relaxed);
@@ -89,6 +97,7 @@ impl Counters {
         let a = &self.atomics;
         match gauge {
             Gauge::Buffers => &a.buffers,
+            Gauge::Pipelines => &a.pipelines,
             Gauge::Blocks => &a.blocks,
             Gauge::CommandBuffers => &a.command_buffers,
             Gauge::Events => &a.events,
@@ -134,16 +143,17 @@ pub struct Metrics {
     /// Encoders recorded: compute, and later blit and render.
     pub passes: u64,
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each
-    /// segment with commands and of each upload, and one before a dispatch at a hazard. A block's
-    /// zero fill, made apart from any command buffer, is not counted.
+    /// segment with commands and of each upload, one before a dispatch at a hazard, and one owed
+    /// by an encoder that wrote or a memory barrier call, recorded before the next command. A
+    /// block's zero fill, made apart from any command buffer, is not counted.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
     /// counted copy at commit where a device offers no linear image.
     pub bytes_copied: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
-    /// `VkDeviceMemory` allocations made: pooled and dedicated blocks, the zero source, and later
-    /// image blocks and the ring.
+    /// `VkDeviceMemory` allocations made: pooled and dedicated blocks, the zero source and the
+    /// parameter ring's blocks, and later image blocks.
     pub blocks_made: u64,
 }
 

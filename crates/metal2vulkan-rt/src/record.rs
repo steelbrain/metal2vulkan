@@ -4,6 +4,7 @@
 use crate::counters::{Counters, Metric};
 use crate::device::{lock, Core};
 use crate::error::Error;
+use crate::hazard::Hazards;
 use crate::reaper::{Free, Job};
 use ash::vk;
 use std::sync::Mutex;
@@ -12,11 +13,13 @@ use std::sync::Mutex;
 const IDLE_MAX: usize = 64;
 
 /// A command pool and the command buffers allocated from it so far, the first `used` of them
-/// recording or recorded.
+/// recording or recorded, and the hazard sets of the Metal command buffer recording with it,
+/// recycled with it so their table is not made again for each command buffer.
 pub(crate) struct Recorder {
     pool: vk::CommandPool,
     buffers: Vec<vk::CommandBuffer>,
     used: usize,
+    pub(crate) hazards: Hazards,
 }
 
 impl Recorder {
@@ -125,6 +128,7 @@ impl Recorders {
             pool,
             buffers: Vec::new(),
             used: 0,
+            hazards: Hazards::default(),
         })
     }
 
@@ -140,6 +144,7 @@ impl Recorders {
         let mut idle = lock(&self.idle);
         if reset.is_ok() && idle.len() < IDLE_MAX {
             recorder.used = 0;
+            recorder.hazards.clear();
             idle.push(recorder);
         } else {
             drop(idle);
