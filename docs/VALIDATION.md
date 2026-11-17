@@ -317,6 +317,15 @@ failed on the old runtime (`M2V-FAILED harness-old/<row>`, which the harness pri
 `FAILED` line) fails no leg either: the budget below names its row as not compared. The list goes with the old
 runtime.
 
+The harness's first-use records (`harness-new/<set>/first_use_*`: how many of the new runtime's
+first pipeline uses waited, and for how long) depend on the driver's shader cache, which outlives a
+run. So each runtime's harness run has a fresh empty cache directory (`MESA_SHADER_CACHE_DIR` for
+Mesa, `__GL_SHADER_DISK_CACHE_PATH` for NVIDIA; on the Windows host, `LOCALAPPDATA` and
+`USERPROFILE` point into it, which the Intel driver's cache follows) and its first uses compile
+cold: those records are judged. A short second run on the same directory follows (`--runs 5 --warmup 1 --no-settle`), and
+its first-use records are kept as `harness-new-warm/<set>/first_use_*`, the same first uses with
+the cache warm; they are parked.
+
 The harness budget compares the two runtimes rather than two commits, apart from the `time` rule
 and the parked records. On each GPU, a harness row timed on both runtimes in the leg
 (`harness-new/<row>` and `harness-old/<row>`) holds the new runtime's time to at most 1.03 times

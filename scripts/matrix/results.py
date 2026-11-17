@@ -54,8 +54,11 @@ PARKED_TESTS = {
 #: times of its own, and its frame timing on the UHD 630 swings by half between runs of unchanged
 #: code (1.58x at a68d520bee, 1.47x at 9af29fbb20). A harness workload's failure on the old
 #: runtime (`M2V-FAILED harness-old/<row>`, one burst_2000x5 run on the UHD 630 ended in a GPU
-#: recovery at 8b15f6574b) is parked too: harness_budget names its row as not compared.
-PARKED_RECORDS = ("harness-old/",)
+#: recovery at 8b15f6574b) is parked too: harness_budget names its row as not compared. The
+#: harness's warm first-use records (harness-new-warm/, the matrix's harness_runs) are parked as
+#: well: the cold ones, timed on a fresh driver cache, are the gated ones, and a warm one reads the
+#: entries the cold run just wrote, a fraction of a millisecond on Mesa.
+PARKED_RECORDS = ("harness-old/", "harness-new-warm/")
 
 #: The phrase that opens the subject of a commit allowed to change the old runtime's output: until
 #: the cutover, the translator's output through `Device::new` moves only in such a commit. Only the

@@ -54,6 +54,9 @@ HARNESS = "m2v-matrix-harness"
 #: `harness-NAME`, so that a failure names its runtime.
 HARNESS_RUNTIMES = ("old", "new")
 HARNESS_SUITES = tuple(f"harness-{runtime}" for runtime in HARNESS_RUNTIMES)
+#: The runtimes whose first-use waits the harness also times warm (harness_runs): those that
+#: count first-use waits. The old runtime counts none.
+HARNESS_WARM = ("new",)
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
 #: (RAM GiB, minutes) of each job kind before a run of it was measured; the minutes stay its floor.
@@ -265,13 +268,37 @@ exit $all
 """
 
 
-def harness_runs(manifest_dir, command, leg):
+def harness_runs(manifest_dir, command, leg, windows=False):
     """The harness command once per runtime (HARNESS_RUNTIMES), each run its own suite of leg LEG
-    (HARNESS_SUITES); the shell's status is 1 where one failed."""
+    (HARNESS_SUITES); the shell's status is 1 where one failed. Each runtime's run has a fresh
+    empty driver shader cache (Mesa's MESA_SHADER_CACHE_DIR, NVIDIA's
+    __GL_SHADER_DISK_CACHE_PATH; on WINDOWS, the Intel driver's, which follows LOCALAPPDATA and
+    USERPROFILE), so its first uses compile cold whatever ran on the node before.
+    For HARNESS_WARM, a short second run on the same cache follows, before the suite's line, and
+    its first-use records are kept under harness-<runtime>-warm/: the same first uses with the
+    driver's cache warm."""
+    warm = " ".join(HARNESS_WARM)
+    profile = unprofile = ""
+    if windows:
+        profile = r"""      mkdir -p "$cache/AppData/Local" && w=$(cygpath -w "$cache") || exit 3
+      saved_local=$LOCALAPPDATA saved_profile=$USERPROFILE
+      export LOCALAPPDATA="$w\AppData\Local" USERPROFILE="$w"
+"""
+        unprofile = '\n      export LOCALAPPDATA="$saved_local" USERPROFILE="$saved_profile"'
+    rename = r"s#^M2V-MATRIX \([a-z]*\) harness-$runtime/\([a-z]*\)/first_use_#M2V-MATRIX \1 harness-$runtime-warm/\2/first_use_#p"
     return f"""rc=0
     for runtime in {" ".join(HARNESS_RUNTIMES)}; do
-      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime
+      cache=$(mktemp -d) || exit 3
+      export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
+{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime
       r=$?
+      case " {warm} " in
+        *" $runtime "*)
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --runs 5 --warmup 1 --no-settle 2>&1 |
+            sed -n "{rename}" ;;
+      esac
+      unset MESA_SHADER_CACHE_DIR __GL_SHADER_DISK_CACHE_PATH{unprofile}
+      rm -rf "$cache"
       echo "M2V-SUITE {leg} harness-$runtime exit $r"
       [ $r -eq 0 ] || rc=1
     done
@@ -347,7 +374,7 @@ def winrun_script(leg, suite):
 rc=${{PIPESTATUS[0]}}"""
     else:
         body = f"""(
-{harness_runs('"$PWD/crates/metal2vulkan-harness"', "target/gpucfg/release/harness", leg.id)}
+{harness_runs('"$PWD/crates/metal2vulkan-harness"', "target/gpucfg/release/harness", leg.id, windows=True)}
 )
 rc=$?"""
     return windows_head() + f"""KEEP='{KEEP}'

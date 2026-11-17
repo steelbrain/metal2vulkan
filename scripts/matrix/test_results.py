@@ -165,6 +165,18 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(failing, {})
         self.assertEqual(list(parked), ["d"])
 
+    def test_a_warm_first_use_outlier_is_parked_and_a_cold_one_fails(self):
+        # The harness's second run on the cache its first wrote keeps its first-use records warm.
+        cold = "harness-new/authored/first_use_wait_total"
+        warm = "harness-new-warm/authored/first_use_wait_total"
+        bases = {leg: {cold: 5000, warm: 400} for leg in "abcd"}
+        times = {leg: {cold: 5000, warm: 400} for leg in "abc"}
+        times["d"] = {cold: 20000, warm: 4000}
+        failing, parked = results.time_outliers(times, bases)
+        self.assertEqual((list(failing), list(parked)), (["d"], ["d"]))
+        self.assertEqual([cold in line for line in failing["d"]], [True])
+        self.assertEqual([warm in line for line in parked["d"]], [True])
+
     def test_the_old_path_moving_fails_unless_a_commit_since_the_bless_is_its_fix(self):
         # The golden test's two panics, as its captured output prints them.
         changed = ("    tests/golden_hashes.tsv: output changed under an unchanged key: 333 cell(s) "
