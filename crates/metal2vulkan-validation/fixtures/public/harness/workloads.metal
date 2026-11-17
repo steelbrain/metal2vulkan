@@ -1,6 +1,7 @@
 // Owned fixture: the kernels of the harness's authored workloads (crates/metal2vulkan-harness), each
 // standing for a class of compute work: bandwidth-bound, ALU-bound, threadgroup memory with
-// barriers, SIMD reductions, 2D image-like indexing, and many tiny dispatches in a chain. Written
+// barriers, SIMD reductions, 2D image-like indexing, many tiny dispatches in a chain, narrow
+// integer arithmetic, and products by a constant zero of either sign. Written
 // from scratch for it; `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir harness` compiles
 // it. The harness holds a CPU reference of every result. No translator sweep reads this directory.
 #include <metal_stdlib>
@@ -118,4 +119,44 @@ kernel void lcg_step(device uint *words [[buffer(0)]],
                      constant uint &increment [[buffer(1)]],
                      uint index [[thread_position_in_grid]]) {
     words[index] = words[index] * 1664525u + increment;
+}
+
+// Narrow integers: 8- and 16-bit arithmetic, `rounds` steps a thread, from values made of the
+// thread's index. The translation holds each in a 32-bit container and clears the bits above its
+// width after every step that can set them. One 4-byte write a thread.
+kernel void narrow_mix(device uint *destination [[buffer(0)]],
+                       constant uint &rounds [[buffer(1)]],
+                       uint index [[thread_position_in_grid]]) {
+    ushort a = ushort(index * 40503u);
+    short b = short(index ^ 0x5a5au);
+    uchar c = uchar(index);
+    char d = char(index >> 3);
+    for (uint round = 0; round < rounds; ++round) {
+        a = ushort(a * ushort(25173) + ushort(13849));
+        b = short(b + short(a >> 3));
+        c = uchar(c * uchar(5) + uchar(b));
+        d = char(d + char(c) - char(round));
+    }
+    destination[index] = uint(a) ^ (uint(ushort(b)) << 16) ^ uint(c) ^ (uint(uchar(d)) << 8);
+}
+
+// Products by a constant zero of either sign, in precise arithmetic: `rounds` steps a thread, each
+// multiplying the running value by the function constants +0.0 and -0.0 in one block beside an
+// FMA, from values made of the thread's index. One 16-byte write a thread.
+constant float positive_zero [[function_constant(0)]];
+constant float negative_zero [[function_constant(1)]];
+
+#pragma METAL fp math_mode(safe)
+kernel void signed_zero_products(device float4 *destination [[buffer(0)]],
+                                 constant uint &rounds [[buffer(1)]],
+                                 uint index [[thread_position_in_grid]]) {
+    float4 a = float4(float(index & 63u), -float((index >> 6) & 63u), 0.5f, -0.25f);
+    float4 z = 0.0f;
+    for (uint round = 0; round < rounds; ++round) {
+        float4 p = a * positive_zero;
+        float4 n = a * negative_zero;
+        z = z + p - n;
+        a = fma(a, 0.96875f, 0.03125f);
+    }
+    destination[index] = a + z;
 }

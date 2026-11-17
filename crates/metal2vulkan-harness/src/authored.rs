@@ -3,7 +3,8 @@
 //! exact on any device but the ALU workload's, whose `float` chains are held to a tolerance.
 
 use crate::plan::{
-    seeded_words as words, Binding, BufferPlan, Dispatch, Expect, Grid, Plan, Source, Values,
+    seeded_words as words, Binding, BufferPlan, Constant, Dispatch, Expect, Grid, Plan, Source,
+    Values,
 };
 use crate::{Result, Storage};
 
@@ -18,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 7] = [
+pub const WORKLOADS: [Workload; 9] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -46,6 +47,14 @@ pub const WORKLOADS: [Workload; 7] = [
     Workload {
         name: "frame",
         plan: frame,
+    },
+    Workload {
+        name: "narrow_ints",
+        plan: narrow_ints,
+    },
+    Workload {
+        name: "zero_products",
+        plan: zero_products,
     },
 ];
 
@@ -392,6 +401,98 @@ fn frame() -> Plan {
         }],
         outputs: Vec::new(),
         per_command_buffer: Some(STEPS / COMMAND_BUFFERS),
+    }
+}
+
+/// Narrow integers: 2^19 threads, each 512 steps of 8- and 16-bit arithmetic (`narrow_mix`), every
+/// value held in a 32-bit container whose bits above its width the translation clears after each
+/// step that can set them. The reference runs each thread's steps in Rust's wrapping arithmetic.
+fn narrow_ints() -> Plan {
+    const THREADS: u32 = 1 << 19;
+    const ROUNDS: u32 = 512;
+    let output = (0..THREADS)
+        .map(|index| {
+            let mut a = index.wrapping_mul(40503) as u16;
+            let mut b = (index ^ 0x5a5a) as i16;
+            let mut c = index as u8;
+            let mut d = (index >> 3) as i8;
+            for round in 0..ROUNDS {
+                a = a.wrapping_mul(25173).wrapping_add(13849);
+                b = b.wrapping_add((a >> 3) as i16);
+                c = c.wrapping_mul(5).wrapping_add(b as u8);
+                d = d.wrapping_add(c as i8).wrapping_sub(round as i8);
+            }
+            u32::from(a) ^ (u32::from(b as u16) << 16) ^ u32::from(c) ^ (u32::from(d as u8) << 8)
+        })
+        .collect();
+    Plan {
+        name: "narrow_ints".to_owned(),
+        library: Source::Authored,
+        buffers: vec![unset(4 * u64::from(THREADS))],
+        dispatches: vec![Dispatch {
+            function: "narrow_mix".to_owned(),
+            constants: Vec::new(),
+            bindings: vec![buffer(0, 0), bytes(1, ROUNDS.to_le_bytes().to_vec())],
+            grid: Grid::groups_of_256(u64::from(THREADS) / 256),
+        }],
+        expect: vec![Expect {
+            buffer: 0,
+            values: Values::Words(output),
+        }],
+        outputs: Vec::new(),
+        per_command_buffer: None,
+    }
+}
+
+/// Products by a constant zero of either sign: 2^19 threads, each 512 steps that multiply a
+/// `float4` by the function constants +0.0 and -0.0 in one block beside an FMA
+/// (`signed_zero_products`, in precise arithmetic). The products' sum is a zero, so the result is
+/// the FMA chain's, held to a tolerance.
+fn zero_products() -> Plan {
+    const THREADS: u32 = 1 << 19;
+    const ROUNDS: u32 = 512;
+    let ends: Vec<[f32; 4]> = (0..4096u32)
+        .map(|index| {
+            let mut a = [
+                (index & 63) as f32,
+                -(((index >> 6) & 63) as f32),
+                0.5,
+                -0.25,
+            ];
+            for _ in 0..ROUNDS {
+                for x in &mut a {
+                    *x = x.mul_add(0.96875, 0.03125);
+                }
+            }
+            a
+        })
+        .collect();
+    let float = |index, value: f32| Constant {
+        index,
+        data_type: 3,
+        value: value.to_le_bytes().to_vec(),
+    };
+    Plan {
+        name: "zero_products".to_owned(),
+        library: Source::Authored,
+        buffers: vec![unset(16 * u64::from(THREADS))],
+        dispatches: vec![Dispatch {
+            function: "signed_zero_products".to_owned(),
+            constants: vec![float(0, 0.0), float(1, -0.0)],
+            bindings: vec![buffer(0, 0), bytes(1, ROUNDS.to_le_bytes().to_vec())],
+            grid: Grid::groups_of_256(u64::from(THREADS) / 256),
+        }],
+        expect: vec![Expect {
+            buffer: 0,
+            values: Values::Floats {
+                values: (0..THREADS)
+                    .flat_map(|thread| ends[(thread % 4096) as usize])
+                    .collect(),
+                tolerance: 1e-4,
+            },
+        }],
+        outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 
