@@ -258,7 +258,9 @@ pub struct LoweringInputs {
     /// [`call_threadgroups`](Self::call_threadgroups). Under
     /// `replay_bindings` the replay's preprocess writes the record per command
     /// (`ReplayVariant::flat`); otherwise the kernel binds as any other, and a preprocess writes
-    /// the record beside its dispatch's group counts. It needs device addresses, and refuses a
+    /// the record beside its dispatch's group counts. Under the identity domains a variant bound
+    /// as any other reads its grid from `PushField::DispatchRegion` instead, which the consumer
+    /// pushes with the dispatch. It needs device addresses, and refuses a
     /// stage-input region, a tile function and `emulated_simdgroups`
     /// (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).
     #[cfg_attr(feature = "serde", serde(default))]

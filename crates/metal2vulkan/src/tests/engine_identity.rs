@@ -9,6 +9,11 @@
 //!   (`ArgumentTableAddress`), the addresses that fit after it, and reads the rest from the block
 //!   at their placed offsets, with no descriptor; it passes L3 and computes its answer on the CPU
 //!   interpreter.
+//! - A kernel that reads grid builtins (`grid`, generated) declares no `MultiRegion` constant and
+//!   reads Metal's grid from its pushed `DispatchRegion` on every dispatch: whole, split in two
+//!   pieces at a base, and indirect (a zero grid, its grid `NumWorkgroups · L`) store the same
+//!   answers. Its flat variant (`grid_flat`) reads its grid from the same pushed field, and its
+//!   invocations past the grid store nothing.
 //! - A kernel that reads a texture (`engine/a2_dynamic_texel_offset`) is still refused as
 //!   `Unsupported{IdentityDomains}`, not implemented, where the default domains compile it.
 //!
@@ -21,10 +26,12 @@ use crate::device::profile::{HandleDomain, PointerDomain};
 use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, Needs};
 use crate::lower::dispatch::region_bytes;
+use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, SlotClass, SlotRef, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, compile_kept, engine_dir, link_and_validate, llvm_assemble, profile, AssembleError,
+    compile, compile_kept, compile_with, engine_dir, link_and_validate, llvm_assemble, profile,
+    typed_module_with, AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
@@ -75,11 +82,16 @@ fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
 
 /// The spec map of a dispatch of `group` threads a threadgroup, in one dimension.
 fn local_size(group: u32) -> BTreeMap<SpecKey, u64> {
+    local_size3([group, 1, 1])
+}
+
+/// The spec map of a dispatch of threadgroups of size `l`.
+fn local_size3(l: [u32; 3]) -> BTreeMap<SpecKey, u64> {
     BTreeMap::from([
-        (SpecKey::LocalSize(Axis::X), u64::from(group)),
-        (SpecKey::LocalSize(Axis::Y), 1),
-        (SpecKey::LocalSize(Axis::Z), 1),
-        (SpecKey::FlatLocalSize, u64::from(group)),
+        (SpecKey::LocalSize(Axis::X), u64::from(l[0])),
+        (SpecKey::LocalSize(Axis::Y), u64::from(l[1])),
+        (SpecKey::LocalSize(Axis::Z), u64::from(l[2])),
+        (SpecKey::FlatLocalSize, u64::from(l[0] * l[1] * l[2])),
     ])
 }
 
@@ -185,28 +197,23 @@ fn a_buffer_kernel_reads_each_slot_at_its_pushed_device_address() {
             expected.extend_from_slice(&want(i).to_le_bytes());
         }
         expected.extend_from_slice(&[0; 4]);
-        // The region read (`MultiRegion` 1) and not (0) give the same grid.
-        for multi in [0, 1] {
-            let mut spec = local_size(GROUP);
-            spec.insert(SpecKey::MultiRegion, multi);
-            let res = Resources {
-                buffers: vec![
-                    buffer(at[0], &bits),
-                    buffer(at[1], &halves),
-                    buffer(at[2], &out),
-                ],
-                push: push.clone(),
-                spec,
-            };
-            let cfg = Config {
-                workgroups: [GROUPS, 1, 1],
-                ..Config::default()
-            };
-            let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
-            assert_eq!(got.buffers[2], expected, "{stem} {multi}: out");
-            assert_eq!(got.buffers[0], bits, "{stem} {multi}: bits");
-            assert_eq!(got.buffers[1], halves, "{stem} {multi}: halves");
-        }
+        let res = Resources {
+            buffers: vec![
+                buffer(at[0], &bits),
+                buffer(at[1], &halves),
+                buffer(at[2], &out),
+            ],
+            push,
+            spec: local_size(GROUP),
+        };
+        let cfg = Config {
+            workgroups: [GROUPS, 1, 1],
+            ..Config::default()
+        };
+        let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(got.buffers[2], expected, "{stem}: out");
+        assert_eq!(got.buffers[0], bits, "{stem}: bits");
+        assert_eq!(got.buffers[1], halves, "{stem}: halves");
     }
 }
 
@@ -355,5 +362,170 @@ fn slot_addresses_past_the_window_are_read_from_the_pushed_parameter_block() {
             want.to_le_bytes(),
             "{stem}: out"
         );
+    }
+}
+
+/// A kernel storing, at its position in the grid `y · grid.x + x`, the grid's threads along `x` and
+/// `y` (bits 0-7, 8-15) and, with `groups`, its threadgroups along `x` and `y` (bits 16-23, 24-31).
+fn grid_kernel(name: &str, groups: bool) -> String {
+    let (param, read, arg) = match groups {
+        true => (
+            ", <3 x i32> noundef %3",
+            "  %nx = extractelement <3 x i32> %3, i64 0\n  %ny = extractelement <3 x i32> %3, i64 1\n  %hx = shl i32 %nx, 16\n  %hn = shl i32 %ny, 24\n  %v1 = or i32 %v0, %hx\n  %v = or i32 %v1, %hn\n",
+            ", !15",
+        ),
+        false => ("", "  %v = or i32 %v0, 0\n", ""),
+    };
+    format!(
+        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, <3 x i32> noundef %1, <3 x i32> noundef %2{param}) {{\n\
+entry:\n\
+  %tx = extractelement <3 x i32> %1, i64 0\n\
+  %ty = extractelement <3 x i32> %1, i64 1\n\
+  %gx = extractelement <3 x i32> %2, i64 0\n\
+  %gy = extractelement <3 x i32> %2, i64 1\n\
+  %row = mul i32 %ty, %gx\n\
+  %idx = add i32 %row, %tx\n\
+  %hy = shl i32 %gy, 8\n\
+  %v0 = or i32 %gx, %hy\n\
+{read}\
+  %i = zext i32 %idx to i64\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %i\n\
+  store i32 %v, ptr addrspace(1) %p, align 4\n\
+  ret void\n\
+}}\n\n\
+!air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
+!9 = !{{ptr @{name}, !10, !11}}\n!10 = !{{}}\n!11 = !{{!12, !13, !14{arg}}}\n\
+!12 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}}\n\
+!13 = !{{i32 1, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"tid\"}}\n\
+!14 = !{{i32 2, !\"air.threads_per_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"grid\"}}\n\
+!15 = !{{i32 3, !\"air.threadgroups_per_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"groups\"}}\n\
+!17 = !{{i32 2, i32 8, i32 0}}\n!18 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
+    )
+}
+
+/// The push bytes of a [`grid_kernel`]: its output at `out` and the region `region`.
+fn grid_push(plan: &Plan, out: u64, region: [u8; 32]) -> Vec<u8> {
+    let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+    for f in &plan.push.fields {
+        let PushLoc::Push { offset } = f.loc else {
+            panic!("{f:?} spilled");
+        };
+        let o = offset as usize;
+        match f.field {
+            PushField::SlotGuestBase(s) if s == slot(0) => {
+                push[o..o + 8].copy_from_slice(&out.to_le_bytes())
+            }
+            PushField::DispatchRegion => push[o..o + 32].copy_from_slice(&region),
+            _ => panic!("unexpected push field {f:?}"),
+        }
+    }
+    push
+}
+
+/// The output's address in the grid tests.
+const OUT: u64 = 0x6_0000_0000;
+
+/// A kernel's grid builtins read Metal's grid from the pushed region on every dispatch: whole,
+/// split in two pieces, and indirect.
+#[test]
+fn every_dispatch_reads_metals_grid_from_its_pushed_region() {
+    let Some(bc) = assemble_text("grid", &grid_kernel("grid", true)) else {
+        return;
+    };
+    const L: [u32; 3] = [4, 2, 1];
+    const GRID: [u32; 3] = [8, 6, 1];
+    const GROUPS: [u32; 3] = [2, 3, 1];
+    let threads = (GRID[0] * GRID[1]) as usize;
+    let value = GRID[0] | GRID[1] << 8 | GROUPS[0] << 16 | GROUPS[1] << 24;
+    let want: Vec<u8> = (0..threads).flat_map(|_| value.to_le_bytes()).collect();
+    // Each form's dispatches: (region base, region grid, workgroups).
+    type Dispatch = ([u32; 3], [u32; 3], [u32; 3]);
+    let forms: [(&str, &[Dispatch]); 3] = [
+        ("whole", &[([0; 3], GRID, GROUPS)]),
+        (
+            "split",
+            &[([0; 3], GRID, [2, 1, 1]), ([0, 1, 0], GRID, [2, 2, 1])],
+        ),
+        ("indirect", &[([0; 3], [0; 3], GROUPS)]),
+    ];
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, plan, module) =
+            compile_kept(&bc, "grid", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(
+            a.interface
+                .spec
+                .iter()
+                .all(|c| c.key != SpecKey::MultiRegion),
+            "{stem}"
+        );
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        for (what, dispatches) in forms {
+            let mut out = vec![0u8; 4 * threads];
+            for &(base, grid, workgroups) in dispatches {
+                let region = region_bytes(base, grid, L).expect("packs");
+                let res = Resources {
+                    buffers: vec![Buffer {
+                        slot: None,
+                        address: Some(OUT),
+                        bytes: out,
+                    }],
+                    push: grid_push(&plan, OUT, region),
+                    spec: local_size3(L),
+                };
+                let cfg = Config {
+                    workgroups,
+                    ..Config::default()
+                };
+                let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem} {what}: {e}"));
+                out = got.buffers.into_iter().next().expect("out");
+            }
+            assert_eq!(out, want, "{stem} {what}");
+        }
+    }
+}
+
+/// A flat variant reads its grid from its pushed region: its invocations count the grid's threads
+/// and those past its last store nothing.
+#[test]
+fn a_flat_variant_reads_its_grid_from_its_pushed_region() {
+    let Some(bc) = assemble_text("grid_flat", &grid_kernel("grid_flat", false)) else {
+        return;
+    };
+    const N: u32 = 16;
+    const GRID: [u32; 3] = [7, 5, 1];
+    let threads = (GRID[0] * GRID[1]) as usize;
+    // Three workgroups of 16: 48 invocations, 13 past the grid.
+    let slots = 3 * N as usize;
+    let value = GRID[0] | GRID[1] << 8;
+    let mut want: Vec<u8> = (0..threads).flat_map(|_| value.to_le_bytes()).collect();
+    want.resize(4 * slots, 0);
+    let mut inputs = LowerInputs::new();
+    inputs.flat_grid = true;
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let a =
+            compile_with(&bc, "grid_flat", &p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let (plan, module) = typed_module_with(&bc, "grid_flat", &p, &inputs)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let region = region_bytes([0; 3], GRID, [N, 1, 1]).expect("packs");
+        let res = Resources {
+            buffers: vec![Buffer {
+                slot: None,
+                address: Some(OUT),
+                bytes: vec![0; 4 * slots],
+            }],
+            push: grid_push(&plan, OUT, region),
+            spec: local_size(N),
+        };
+        let cfg = Config {
+            workgroups: [3, 1, 1],
+            ..Config::default()
+        };
+        let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(got.buffers[0], want, "{stem}");
     }
 }

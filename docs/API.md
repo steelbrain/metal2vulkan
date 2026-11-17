@@ -114,8 +114,11 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   pushed as `PushField::SlotGuestBase`, with no root table, no descriptor and no containment, as
   Metal contains no device-address access. Fields past the 128-byte push window go to a
   parameter block in memory, read at the device address `PushField::ArgumentTableAddress`, which
-  the window always holds. So far they lower a kernel that reaches memory only through its buffer
-  slots; any other function is refused as `Unsupported{IdentityDomains}`.
+  the window always holds. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
+  every dispatch, with no `MultiRegion` constant: a dispatch the host knows states Metal's grid
+  and its piece's first threadgroup there, and an indirect dispatch a zero grid, whose kernel
+  takes `NumWorkgroups` times its workgroup size. So far they lower a kernel that reaches memory
+  only through its buffer slots; any other function is refused as `Unsupported{IdentityDomains}`.
 - **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
   default; changes emitted code). On an integrated GPU or a CPU device a function that only
   samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes

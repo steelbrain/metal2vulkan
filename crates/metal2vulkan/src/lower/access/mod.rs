@@ -1730,7 +1730,8 @@ fn unwritten_slots(
 /// barrier may follow. A folded variant reads its group counts and every grid builtin's region
 /// from the record a preprocess writes for its dispatch, whatever builtins it reads; its
 /// workgroups past Metal's last threadgroup return early as wholes, so it runs emulated
-/// simdgroups too.
+/// simdgroups too. Under the identity domains a flat variant bound as any other kernel reads its
+/// pushed `DispatchRegion` instead of a record.
 fn plan_replay(cx: &mut SelectCx<'_>, sources: &[SlotRef]) -> Result<(), Error> {
     let p = cx.profile;
     if p.fields().buffer_access != BufferAccess::Addressed {
@@ -1769,9 +1770,15 @@ fn plan_replay(cx: &mut SelectCx<'_>, sources: &[SlotRef]) -> Result<(), Error> 
     if cx.inputs.flat_grid && cx.inputs.emulated_simdgroups {
         return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
     }
-    // A folded variant reads its group counts from the record whatever builtins it reads.
-    if cx.push.remove(&PushField::DispatchRegion) || cx.inputs.flat_grid || cx.inputs.folded_groups
+    if identity(p) && !cx.inputs.replay_bindings && !cx.inputs.folded_groups {
+        // Under the identity domains a flat variant bound as any other kernel reads its grid from
+        // its own `DispatchRegion`, which the consumer pushes with the dispatch.
+        cx.push.insert(PushField::DispatchRegion);
+    } else if cx.push.remove(&PushField::DispatchRegion)
+        || cx.inputs.flat_grid
+        || cx.inputs.folded_groups
     {
+        // A folded variant reads its group counts from the record whatever builtins it reads.
         cx.push.insert(PushField::ReplayRegionAddress);
     }
     if !cx.inputs.replay_bindings {
