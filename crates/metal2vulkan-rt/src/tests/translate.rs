@@ -7,6 +7,8 @@
 //! answer is checked against the program's, and each `VkPipeline` made after creation is a
 //! first-use wait the counters record. Vector accesses through pointers cast from a `uint`
 //! buffer land at their own addresses, 4, 8 or 12 bytes past a multiple of 16, as Metal places them.
+//! An access through a buffer argument at 2 GiB and past lands there, on every device that can
+//! allocate the buffer.
 //!
 //! `llvm-as` assembles the kernels; without it a test skips visibly.
 
@@ -16,7 +18,7 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, BlockId, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
-        DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Instance, Library,
+        DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Instance, Library, Limit,
         MemoryClass, PrecisionNote, Refusal, StageSource,
     };
     use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
@@ -1211,6 +1213,104 @@ mod on_device {
                 assert_eq!(command_buffer.error(), None, "{name}: offset {at}");
             }
             println!("{name}: refused off each argument's alignment, ran on it");
+        });
+    }
+
+    /// `ob1_storage_buffer` loads `src[idx[t]]` into `out[t]` and stores `0xA0000000 | t` to
+    /// `out[idx[8 + t]]`, with `src` and `out` one Shared buffer of 2 GiB and 64 KiB and the
+    /// indices on both sides of 2 GiB: the word below it, the word at it, and words past it up to
+    /// the buffer's last. A Metal buffer argument's offsets are unsigned, so each access lands at
+    /// its own word, where a signed 32-bit byte offset would land 4 GiB below. A device whose
+    /// largest block or memory is smaller skips visibly.
+    #[test]
+    fn an_access_at_2_gib_and_past_lands_at_its_own_word() {
+        let Some(descriptor) = descriptor("ob1_storage_buffer") else {
+            return;
+        };
+        // The word at byte 2 GiB, and the buffer's length.
+        const AT_2_GIB: u32 = 1 << 29;
+        const LEN: u64 = (2 << 30) + (64 << 10);
+        let last = (LEN / 4) as u32 - 1;
+        let loads = [
+            64,
+            AT_2_GIB - 1,
+            AT_2_GIB,
+            AT_2_GIB + 1,
+            AT_2_GIB + 2,
+            AT_2_GIB + 3,
+            AT_2_GIB + 4096,
+            last,
+        ];
+        let stores = [
+            128,
+            AT_2_GIB - 2,
+            AT_2_GIB + 8,
+            AT_2_GIB + 9,
+            AT_2_GIB + 10,
+            AT_2_GIB + 11,
+            AT_2_GIB + 8000,
+            last - 1,
+        ];
+        each_device("compute_past_2_gib", |name, _, device| {
+            let block = match device.take_block(MemoryClass::Shared, LEN) {
+                Ok(block) => block,
+                Err(
+                    error @ (Error::Limit(Limit::BlockLen { .. })
+                    | Error::Vulkan {
+                        result:
+                            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY
+                            | ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY,
+                        ..
+                    }),
+                ) => {
+                    eprintln!("SKIPPED: {name}: no Shared block of {LEN} bytes: {error}");
+                    return;
+                }
+                Err(error) => panic!("{name}: {error}"),
+            };
+            let kernel = state(name, &device, &descriptor);
+            // A taken block reads zero, so the buffer needs no second zeroing.
+            let big = device
+                .new_buffer(block.id, 0, LEN, false)
+                .expect("the large buffer");
+            let mut buffers = Buffers::new(&device, 64 * 1024);
+            let idx = buffers.buffer(64);
+            write(&idx, 0, &le_bytes(&[loads, stores].concat()));
+            for (t, &word) in loads.iter().enumerate() {
+                write(
+                    &big,
+                    4 * u64::from(word),
+                    &(0x5000_0000 | t as u32).to_le_bytes(),
+                );
+            }
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder
+                .set_compute_pipeline_state(&kernel)
+                .expect("a state");
+            encoder.set_buffer(Some(&idx), 0, 0).expect("a buffer");
+            encoder.set_buffer(Some(&big), 0, 1).expect("a buffer");
+            encoder.set_buffer(Some(&big), 0, 2).expect("a buffer");
+            encoder
+                .dispatch_threadgroups([1, 1, 1], [8, 1, 1])
+                .expect("a dispatch");
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let loaded: Vec<u32> = (0..8).map(|t| 0x5000_0000 | t).collect();
+            assert_eq!(words(&big, 0, 8), loaded, "{name}: the loads at {loads:x?}");
+            for (t, &word) in stores.iter().enumerate() {
+                assert_eq!(
+                    words(&big, 4 * u64::from(word), 1),
+                    [0xA000_0000 | t as u32],
+                    "{name}: the store to word {word:#x}"
+                );
+            }
+            println!("{name}: loads and stores at 2 GiB and past landed at their own words");
         });
     }
 }
