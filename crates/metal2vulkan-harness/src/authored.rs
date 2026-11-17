@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 12] = [
+pub const WORKLOADS: [Workload; 14] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -49,8 +49,16 @@ pub const WORKLOADS: [Workload; 12] = [
         plan: frame,
     },
     Workload {
-        name: "frame_stress",
-        plan: frame_stress,
+        name: "burst_160",
+        plan: burst_160,
+    },
+    Workload {
+        name: "burst_2000",
+        plan: burst_2000,
+    },
+    Workload {
+        name: "burst_2000x5",
+        plan: burst_2000x5,
     },
     Workload {
         name: "narrow_ints",
@@ -133,6 +141,7 @@ fn bandwidth() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -173,6 +182,7 @@ fn alu() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -207,6 +217,7 @@ fn threadgroup_scan() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -261,6 +272,7 @@ fn simd_reduce() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -316,6 +328,7 @@ fn image_filter() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -360,6 +373,7 @@ fn dispatch_chain() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -405,21 +419,34 @@ fn unset(length: u64) -> BufferPlan {
 /// a frame, two at the 90th percentile, a few dispatches each), in compute alone: a run is one
 /// command buffer of four `lcg_step` dispatches ([`lcg_frame`]).
 fn frame() -> Plan {
-    lcg_frame("frame", 1, 4)
+    lcg_frame("frame", 1, 4, None)
 }
 
-/// The frame of many small command buffers, a stress row: 160 command buffers of two `lcg_step`
-/// dispatches a run ([`lcg_frame`]). It is judged only where a recording commits at that rate.
-fn frame_stress() -> Plan {
-    lcg_frame("frame_stress", 160, 2)
+/// A burst of small command buffers: a run is 160 command buffers of two `lcg_step` dispatches
+/// each ([`lcg_frame`]).
+fn burst_160() -> Plan {
+    lcg_frame("burst_160", 160, 2, None)
 }
 
-/// A frame of `command_buffers` command buffers of `per` tiny dispatches each: `lcg_step` over
-/// 256 words of `Private` storage, each dispatch setting its bindings, since a command buffer
-/// starts with none. Both are buffers (`setBuffer:offset:atIndex:`): the words, and the increment
-/// in a `Shared` buffer written once; the frame makes no `setBytes` call (`dispatch_chain`
-/// measures those).
-fn lcg_frame(name: &str, command_buffers: usize, per: usize) -> Plan {
+/// The burst a recording commits most: a run is 2,000 command buffers of one compute encoder of
+/// one `lcg_step` dispatch each ([`lcg_frame`]).
+fn burst_2000() -> Plan {
+    lcg_frame("burst_2000", 2000, 1, None)
+}
+
+/// That burst at five compute encoders a command buffer: a run is 2,000 command buffers of five
+/// compute encoders of one `lcg_step` dispatch each ([`lcg_frame`]).
+fn burst_2000x5() -> Plan {
+    lcg_frame("burst_2000x5", 2000, 5, Some(1))
+}
+
+/// A run of `command_buffers` command buffers of `per` tiny dispatches each, in compute encoders
+/// of `per_encoder` dispatches (or one of them all), committed with no wait between and waited
+/// for once: `lcg_step` over 256 words of `Private` storage, each dispatch setting its bindings,
+/// since an encoder starts with none. Both are buffers (`setBuffer:offset:atIndex:`): the words,
+/// and the increment in a `Shared` buffer written once; the run makes no `setBytes` call
+/// (`dispatch_chain` measures those).
+fn lcg_frame(name: &str, command_buffers: usize, per: usize, per_encoder: Option<usize>) -> Plan {
     const WORDS: usize = 256;
     let steps = per * command_buffers;
     let increment = words(14, 1)[0];
@@ -453,6 +480,7 @@ fn lcg_frame(name: &str, command_buffers: usize, per: usize) -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: Some(per),
+        per_encoder,
     }
 }
 
@@ -495,6 +523,7 @@ fn narrow_ints() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -549,6 +578,7 @@ fn zero_products() -> Plan {
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -638,6 +668,7 @@ fn sampling_plan(
         }],
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 

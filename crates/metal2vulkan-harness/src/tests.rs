@@ -8,8 +8,8 @@ use crate::plan::{
 };
 use crate::rt::{self, Ranges};
 use crate::run::{
-    compare_outputs, copy_dispatches, percentile, run_each, settled, steady, warm_up, zeroed,
-    CreateReport, Report, Runs, Session,
+    compare_outputs, copy_dispatches, parts, percentile, run_each, settled, steady, warm_up,
+    zeroed, CreateReport, Report, Runs, Session,
 };
 use crate::{Buffer, Refused, Result, Storage, Waits};
 use metal2vulkan_rt::{Error as RtError, Gap, Limit};
@@ -108,6 +108,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
         expect_textures: Vec::new(),
         outputs: Vec::new(),
         per_command_buffer: None,
+        per_encoder: None,
     }
 }
 
@@ -125,6 +126,11 @@ fn a_plan_with_a_part_length_a_missing_buffer_or_no_dispatch_is_refused() {
     assert!(split.validate().is_ok());
     split.per_command_buffer = Some(0);
     assert!(split.validate().is_err());
+    let mut passes = one_buffer_plan(16, None, 0);
+    passes.per_encoder = Some(1);
+    assert!(passes.validate().is_ok());
+    passes.per_encoder = Some(0);
+    assert!(passes.validate().is_err());
     let mut idle = one_buffer_plan(16, None, 0);
     idle.dispatches.clear();
     assert!(idle.validate().is_err());
@@ -176,6 +182,17 @@ fn a_plan_with_a_part_tile_texture_a_missing_texture_or_too_many_texels_is_refus
     let mut unknown = one_texture_plan(16, None, 0, 4);
     unknown.expect_textures[0].texture = 1;
     assert!(unknown.validate().is_err());
+}
+
+/// A run's dispatches cut into command buffers, and a command buffer's into encoders: whole parts
+/// in order, the last one shorter.
+#[test]
+fn parts_cut_a_range_in_order_the_last_one_shorter() {
+    let cut = |range, per| parts(range, per).collect::<Vec<_>>();
+    assert_eq!(cut(0..5, Some(2)), [0..2, 2..4, 4..5]);
+    assert_eq!(cut(10..20, Some(5)), [10..15, 15..20]);
+    assert_eq!(cut(4..10, None), [4..10]);
+    assert_eq!(cut(3..4, Some(8)), [3..4]);
 }
 
 /// Each authored plan is whole: its builder's inputs, kernels and references agree in shape.

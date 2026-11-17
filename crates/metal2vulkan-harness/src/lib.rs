@@ -29,8 +29,9 @@
 //!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
 //! ```
 //!
-//! After a workload's first run, two of its command buffers are in flight: each run is committed
-//! while the GPU runs the one before it, so the GPU does not idle between runs. Before the timed
+//! After a workload's first run, two of its runs are in flight: each run is committed while the
+//! GPU runs the one before it, so the GPU does not idle between runs, and a run is waited for
+//! once, at its last command buffer, as a program waits for a burst it committed. Before the timed
 //! runs, the command warms the workload up: at least `--warmup` runs and half a second, then
 //! until the medians of its last two windows of 10 runs are within 3% of each other, for at most
 //! five seconds, so that an integrated GPU's clock has risen before it is timed. `--no-settle`

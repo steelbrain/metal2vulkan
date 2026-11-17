@@ -350,26 +350,35 @@ impl<D: ComputeDevice> Harness<D> {
     }
 
     /// A run of `plan`, committed: its command buffers in order, `per_command_buffer`
-    /// dispatches each (or all in one), each of one compute encoder.
+    /// dispatches each (or all in one), with no wait between.
     fn commit_run(&self, plan: &Plan, made: &Made<D>) -> Result<Vec<D::CommandBuffer>> {
-        let count = plan.dispatches.len();
-        // At least 1: `Plan::validate` refuses a plan of no dispatch or a `per_command_buffer`
-        // of 0.
-        let per = plan.per_command_buffer.unwrap_or(count);
-        (0..count)
-            .step_by(per)
-            .map(|start| {
-                let command_buffer = self.encode(plan, made, start..(start + per).min(count))?;
+        parts(0..plan.dispatches.len(), plan.per_command_buffer)
+            .map(|range| {
+                let command_buffer = self.encode(plan, made, range)?;
                 command_buffer.commit()?;
                 Ok(command_buffer)
             })
             .collect()
     }
 
-    /// The dispatches `range` of `plan`: a command buffer of one compute encoder, ended, not
-    /// committed.
+    /// The dispatches `range` of `plan`: a command buffer of compute encoders of `per_encoder`
+    /// dispatches each (or one of them all), ended, not committed.
     fn encode(&self, plan: &Plan, made: &Made<D>, range: Range<usize>) -> Result<D::CommandBuffer> {
         let command_buffer = self.queue.command_buffer()?;
+        for range in parts(range, plan.per_encoder) {
+            self.encode_pass(&command_buffer, plan, made, range)?;
+        }
+        Ok(command_buffer)
+    }
+
+    /// The dispatches `range` of `plan` in a compute encoder of `command_buffer`, ended.
+    fn encode_pass(
+        &self,
+        command_buffer: &D::CommandBuffer,
+        plan: &Plan,
+        made: &Made<D>,
+        range: Range<usize>,
+    ) -> Result<()> {
         let mut encoder = command_buffer.compute_command_encoder()?;
         let mut current = None;
         let states = &made.state_of[range.clone()];
@@ -407,8 +416,7 @@ impl<D: ComputeDevice> Harness<D> {
                 }
             }
         }
-        encoder.end_encoding()?;
-        Ok(command_buffer)
+        encoder.end_encoding()
     }
 
     /// Every buffer's starting contents: a `Shared` one's written through `contents`, a
@@ -623,16 +631,30 @@ impl<D: ComputeDevice> Session for Harness<D> {
     }
 }
 
-/// Waits for each command buffer of `run`, a run's in order: the run's GPU time in
-/// microseconds, from its first command buffer's `GPUStartTime` to its last's `GPUEndTime`.
+/// Waits for `run`, a run's command buffers in order, as a program waits once for a burst it
+/// committed: for its last command buffer, then for the others, each wait returning at once for
+/// one already complete. The run's GPU time in microseconds, from its first command buffer's
+/// `GPUStartTime` to its last's `GPUEndTime`.
 fn wait_run<D: ComputeDevice>(run: &[D::CommandBuffer]) -> Result<f64> {
-    for command_buffer in run {
-        command_buffer.wait_until_completed()?;
-    }
     let (Some(first), Some(last)) = (run.first(), run.last()) else {
         unreachable!("a validated plan's run has a command buffer");
     };
+    last.wait_until_completed()?;
+    for command_buffer in run {
+        command_buffer.wait_until_completed()?;
+    }
     Ok((last.gpu_end_time()? - first.gpu_start_time()?) * 1e6)
+}
+
+/// `range` cut in order into parts of `per` (the last one shorter where `per` does not divide
+/// it), or one part of it all where `per` is `None`. `per` and `range` hold at least 1:
+/// `Plan::validate` refuses a plan of no dispatch, or a `per_command_buffer` or `per_encoder` of
+/// 0.
+pub(crate) fn parts(range: Range<usize>, per: Option<usize>) -> impl Iterator<Item = Range<usize>> {
+    let (end, per) = (range.end, per.unwrap_or(range.len()));
+    range
+        .step_by(per)
+        .map(move |start| start..(start + per).min(end))
 }
 
 /// [`Session::create`] on `device`.

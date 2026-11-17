@@ -17,12 +17,19 @@ pub struct Plan {
     pub buffers: Vec<BufferPlan>,
     /// The textures it makes, in order; dispatches and expectations name them by index.
     pub textures: Vec<TexturePlan>,
-    /// The dispatches of one run, in order, in one compute encoder of each command buffer.
+    /// The dispatches of one run, in order, cut into command buffers ([`per_command_buffer`]) and
+    /// those into compute encoders ([`per_encoder`]).
+    ///
+    /// [`per_command_buffer`]: Self::per_command_buffer
+    /// [`per_encoder`]: Self::per_encoder
     pub dispatches: Vec<Dispatch>,
     /// How many dispatches each command buffer of a run holds, its command buffers committed in
-    /// order; `None`: one command buffer holds them all. A binding stays set for the dispatches
-    /// after it in its command buffer, not in the next.
+    /// order; `None`: one command buffer holds them all.
     pub per_command_buffer: Option<usize>,
+    /// How many dispatches each compute encoder of a command buffer holds, its encoders ended in
+    /// order; `None`: one encoder holds the command buffer's. A binding stays set for the
+    /// dispatches after it in its encoder, not in the next.
+    pub per_encoder: Option<usize>,
     /// What the first run must leave in its buffers: a CPU reference.
     pub expect: Vec<Expect>,
     /// What the first run must leave in its textures: a CPU reference.
@@ -399,8 +406,11 @@ impl Plan {
                 .into());
             }
         }
-        if self.dispatches.is_empty() || self.per_command_buffer == Some(0) {
-            return Err(format!("{name}: its command buffers hold no dispatch").into());
+        if self.dispatches.is_empty()
+            || self.per_command_buffer == Some(0)
+            || self.per_encoder == Some(0)
+        {
+            return Err(format!("{name}: its command buffers or encoders hold no dispatch").into());
         }
         Ok(())
     }
