@@ -2,7 +2,7 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
-use super::player::{Backend, Counters, Made, PlayError, Player, Report};
+use super::player::{Backend, Counters, Made, PlayError, Player, Report, WAIT_COMPLETED};
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
 use crate::ScratchDir;
@@ -515,7 +515,7 @@ fn a_command_buffer_held_on_an_event_does_not_hold_the_others() {
         w.call("commandBuffer", 3, 7, &[], &[])?;
         w.call("commit", 7, 0, &[], &[])?;
         w.call("setSignaledValue:", 4, 0, &[Value::Uint(1)], &[])?;
-        w.call("waitUntilCompleted", 5, 0, &[], &[])
+        w.call(WAIT_COMPLETED, 5, 0, &[], &[])
     });
     ended.unwrap();
     assert_eq!(kept.waits, [7, 5, 6], "#6 waits behind #5 on its queue");
@@ -548,7 +548,7 @@ fn a_play_stops_where_the_stream_or_the_backend_cannot_go_on() {
     };
     let (_, ended) = played(&mut Kept::default(), |w| {
         held(w)?;
-        w.call("waitUntilCompleted", 4, 0, &[], &[])
+        w.call(WAIT_COMPLETED, 4, 0, &[], &[])
     });
     assert!(matches!(ended, Err(PlayError::Invalid(_))), "{ended:?}");
     let (_, ended) = played(&mut Kept::default(), held);

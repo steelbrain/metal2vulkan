@@ -14,7 +14,9 @@
 
 use super::host_memory::on_device_with;
 use super::{at_plan, public_case};
-use crate::replay::{OldRuntime, Player, Report, StreamReader, StreamWriter, Value};
+use crate::replay::{
+    OldRuntime, Player, Report, StreamReader, StreamWriter, Value, WAIT_COMPLETED,
+};
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
 use metal2vulkan_runtime::Device;
@@ -52,7 +54,7 @@ fn written(
 
 /// `path` played on `device`, its report printed; the play's end unwrapped.
 fn play(test: &str, device: &Device, path: &Path) -> Report {
-    let mut backend = OldRuntime::new(device.clone());
+    let mut backend = OldRuntime::new(device.clone(), crate::gpu::TEST_DEVICE);
     let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
     let (report, ended) = Player::new(&mut backend).play(&mut reader);
     for line in report.lines() {
@@ -241,7 +243,7 @@ fn a_command_buffer_held_on_an_event_does_not_stop_another_queue() {
             &[("sha256", sha(&[0x22; 16]))],
         )?;
         w.call("setSignaledValue:", 4, 0, &[Value::Uint(1)], &[])?;
-        w.call("waitUntilCompleted", 7, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 7, 0, &[], &[])?;
         w.call(
             "m2v.check",
             0,

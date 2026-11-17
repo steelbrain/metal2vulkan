@@ -6,22 +6,19 @@
 use super::player::{placed_runs, upload, Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::value::Value;
+use crate::gpu::wait::{runtime::wait_for_command_buffer, SubmissionBackend};
+use crate::gpu::DeviceType;
 use metal2vulkan::metal::{
     BarrierScope, DispatchType, PixelFormat, ResourceUsage, TextureType, TextureUsage,
 };
 use metal2vulkan_runtime::{
-    BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue,
-    ComputeCommandEncoder, ComputePipelineState, Device, Error, Event, EventRef, Function, Heap,
-    HeapDescriptor, HeapType, IdPlacement, Library, Origin, PipelineOptions, Region, ResourceId,
-    ResourceOptions, ResourceRef, SharedEvent, Size, StorageMode, Texture, TextureDescriptor,
-    TextureLevelQuery,
+    BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoder,
+    ComputePipelineState, Device, Error, Event, EventRef, Function, Heap, HeapDescriptor, HeapType,
+    IdPlacement, Library, Origin, PipelineOptions, Region, ResourceId, ResourceOptions,
+    ResourceRef, SharedEvent, Size, StorageMode, Texture, TextureDescriptor, TextureLevelQuery,
 };
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::time::Duration;
-
-/// How long a command buffer may take.
-const WAIT: Duration = Duration::from_secs(60);
 
 /// One object of the stream, as the runtime holds it.
 enum Object {
@@ -45,6 +42,8 @@ enum Object {
 /// The old runtime on one device.
 pub struct OldRuntime {
     device: Device,
+    /// The kind of `device`, which decides what a wait that never ends records.
+    backend: SubmissionBackend,
     objects: HashMap<u64, Object>,
     /// The queue of the player's readbacks.
     readback: Option<CommandQueue>,
@@ -113,9 +112,12 @@ fn options(call: &Call, raw: u64) -> Result<ResourceOptions, PlayError> {
 }
 
 impl OldRuntime {
-    pub fn new(device: Device) -> Self {
+    /// The backend on `device`, of `device_type`: each wait for a command buffer is bounded
+    /// and follows the hang protocol (`gpu::wait`).
+    pub fn new(device: Device, device_type: DeviceType) -> Self {
         OldRuntime {
             device,
+            backend: SubmissionBackend::vulkan(device_type),
             objects: HashMap::new(),
             readback: None,
             host: None,
@@ -548,7 +550,7 @@ impl OldRuntime {
         copy(&mut blit, &into).map_err(broke)?;
         blit.end_encoding().map_err(broke)?;
         command_buffer.commit().map_err(broke)?;
-        completed(&command_buffer, "readback")?;
+        completed(&command_buffer, self.backend, "readback")?;
         let contents = into.contents().expect("a shared buffer's contents");
         // SAFETY: a shared buffer of at least `length` bytes, which no pending command writes.
         let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), length as usize) };
@@ -571,22 +573,23 @@ impl Resource {
     }
 }
 
-/// Wait for `command_buffer` and say how it ended where it did not complete.
-fn completed(command_buffer: &CommandBuffer, what: &str) -> Result<(), PlayError> {
-    let runtime = |error: String| PlayError::Runtime {
-        selector: what.to_string(),
-        error,
-    };
-    command_buffer
-        .wait_until_completed_for(WAIT)
-        .map_err(|_| runtime(format!("not complete after {WAIT:?}")))?;
-    match command_buffer.status() {
-        CommandBufferStatus::Completed => Ok(()),
-        status => Err(runtime(format!(
-            "{status:?}: {}",
-            command_buffer.error_description().unwrap_or_default()
-        ))),
-    }
+/// Wait for `command_buffer`, of `backend`, under the hang protocol (`gpu::wait`), and say how
+/// it ended where it did not complete.
+fn completed(
+    command_buffer: &CommandBuffer,
+    backend: SubmissionBackend,
+    what: &str,
+) -> Result<(), PlayError> {
+    let operation = format!("the replay's {what}");
+    wait_for_command_buffer(command_buffer, backend, &operation).map_err(|error| {
+        PlayError::Runtime {
+            selector: what.to_string(),
+            error: format!(
+                "{error}: {}",
+                command_buffer.error_description().unwrap_or_default()
+            ),
+        }
+    })
 }
 
 /// The texture descriptor of the map `call` takes, placed at the recorded resource ID.
@@ -775,7 +778,7 @@ impl Backend for OldRuntime {
 
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError> {
         match self.objects.get(&command_buffer) {
-            Some(Object::CommandBuffer(waited)) => completed(waited, "commit"),
+            Some(Object::CommandBuffer(waited)) => completed(waited, self.backend, "commit"),
             _ => Err(PlayError::Invalid(format!(
                 "#{command_buffer} is no command buffer"
             ))),

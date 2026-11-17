@@ -151,7 +151,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         }
     };
     report.line(&format!("device {}", device.name()));
-    let mut backend = OldRuntime::new(device);
+    let mut backend = OldRuntime::new(device, device_type);
     let (played, ended) = Player::new(&mut backend).play(&mut reader);
     for line in played.lines() {
         report.line(&line);

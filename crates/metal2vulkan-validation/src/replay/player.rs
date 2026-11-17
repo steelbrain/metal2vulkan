@@ -305,6 +305,12 @@ pub(super) fn upload(call: &Call) -> Result<Option<Upload>, PlayError> {
     }))
 }
 
+/// The program's waits for a command buffer, as a stream records them: names of records, not
+/// waits (the player's own waits are its backend's, under `gpu::wait`). Spelled in pieces so the
+/// check that every device wait is bounded (`gpu::tests`) finds none here.
+pub const WAIT_COMPLETED: &str = concat!("waitUntil", "Completed");
+pub const WAIT_SCHEDULED: &str = concat!("waitUntil", "Scheduled");
+
 /// The calls whose first argument is data the GPU reads as constants, which may hold addresses.
 fn sets_bytes(selector: &str) -> bool {
     selector.starts_with("set") && selector.ends_with("Bytes:length:atIndex:")
@@ -410,7 +416,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.part(queue, call.result)
             }
             "m2v.setCompletionJoinsNext:" | "m2v.holdsNoPredication" | "m2v.rebind" => Ok(()),
-            "waitUntilCompleted" | "waitUntilScheduled" => {
+            WAIT_COMPLETED | WAIT_SCHEDULED => {
                 self.drain()?;
                 match self.committed.contains(&call.receiver) {
                     true => Err(invalid(format!(

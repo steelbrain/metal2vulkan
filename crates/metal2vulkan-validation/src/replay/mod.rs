@@ -8,6 +8,7 @@ mod stream;
 mod value;
 
 pub use old_runtime::OldRuntime;
+pub use player::WAIT_COMPLETED;
 pub use player::{Backend, Check, Counters, Made, PlayError, Player, Report};
 pub use stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 pub use value::{Hash, Name, Value};
