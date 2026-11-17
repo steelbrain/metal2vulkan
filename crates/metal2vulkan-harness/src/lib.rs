@@ -11,7 +11,8 @@
 //! A workload is a [`plan::Plan`]: its buffers and their starting contents, the dispatches of one
 //! run and how many go in each command buffer, the contents its buffers must hold after the first
 //! run, and the buffers runtimes compare. Most workloads put a run in one command buffer; `frame`
-//! is shaped like a window server's frame, 160 command buffers of two small dispatches each.
+//! and `frame_5cb` are frames of one and of five command buffers of four small dispatches each,
+//! and the `burst_` workloads bursts of 160 and 2,000.
 //! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
 //! workloads ([`authored`]) are MSL kernels committed as public fixtures
 //! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
@@ -43,7 +44,10 @@
 //! 90th percentiles of the timed runs, the encoding thread's wall time per dispatch from the
 //! command buffer's creation through `commit`'s return, and the process's CPU time per dispatch
 //! from there to the return of the wait for the run before (unix only), each the median of the
-//! timed runs; and the runtime's gauges after the 100th and 200th timed runs. Per creation
+//! timed runs; where the workload asks for it ([`plan::Plan::commit_to_complete`]), the time of
+//! each timed command buffer from just before its `commit` until its completed handler ran, at
+//! the 50th and 99th percentiles of all of them; and the runtime's gauges after the 100th and
+//! 200th timed runs. Per creation
 //! workload and runtime it prints the warm-up, the wall time of `newBufferWithLength:options:` at
 //! the same percentiles, and the gauges. Beside each row it prints lines for the matrix's runner
 //! (docs/VALIDATION.md, "The matrix"):
@@ -267,6 +271,9 @@ pub trait CommandBuffer<D: ComputeDevice> {
 
     /// `GPUEndTime`, in seconds.
     fn gpu_end_time(&self) -> Result<f64>;
+
+    /// `addCompletedHandler:`, with a handler that reads nothing of the command buffer.
+    fn add_completed_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()>;
 }
 
 /// `MTLComputeCommandEncoder`.

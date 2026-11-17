@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 17] = [
+pub const WORKLOADS: [Workload; 18] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -47,6 +47,10 @@ pub const WORKLOADS: [Workload; 17] = [
     Workload {
         name: "frame",
         plan: frame,
+    },
+    Workload {
+        name: "frame_5cb",
+        plan: frame_5cb,
     },
     Workload {
         name: "burst_160",
@@ -154,6 +158,7 @@ fn bandwidth() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -195,6 +200,7 @@ fn alu() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -230,6 +236,7 @@ fn threadgroup_scan() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -285,6 +292,7 @@ fn simd_reduce() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -341,6 +349,7 @@ fn image_filter() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -386,6 +395,7 @@ fn dispatch_chain() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -423,6 +433,17 @@ fn unset(length: u64) -> BufferPlan {
 /// command buffer of four `lcg_step` dispatches ([`lcg_frame`]).
 fn frame() -> Plan {
     lcg_frame("frame", 1, 4, None, Storage::Managed)
+}
+
+/// A game's median frame, in the shape its recordings commit (a median of five command buffers a
+/// frame), in compute alone: a run is five command buffers of four `lcg_step` dispatches each,
+/// `frame`'s command buffer five times over ([`lcg_frame`]), committed back to back and waited
+/// for once. Each command buffer's commit-to-complete time is timed (`Plan::commit_to_complete`).
+fn frame_5cb() -> Plan {
+    Plan {
+        commit_to_complete: true,
+        ..lcg_frame("frame_5cb", 5, 4, None, Storage::Managed)
+    }
 }
 
 /// A burst of small command buffers: a run is 160 command buffers of two `lcg_step` dispatches
@@ -501,6 +522,7 @@ fn lcg_frame(
         outputs: Vec::new(),
         per_command_buffer: Some(per),
         per_encoder,
+        commit_to_complete: false,
     }
 }
 
@@ -543,6 +565,7 @@ fn wide_bindings() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -581,6 +604,7 @@ fn waves() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -624,6 +648,7 @@ fn narrow_ints() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -679,6 +704,7 @@ fn zero_products() -> Plan {
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -769,6 +795,7 @@ fn sampling_plan(
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 

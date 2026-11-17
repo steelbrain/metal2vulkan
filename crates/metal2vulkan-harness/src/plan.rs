@@ -30,6 +30,12 @@ pub struct Plan {
     /// order; `None`: one encoder holds the command buffer's. A binding stays set for the
     /// dispatches after it in its encoder, not in the next.
     pub per_encoder: Option<usize>,
+    /// Whether each command buffer of its timed runs takes a completed handler
+    /// (`addCompletedHandler:`) that times it from just before its `commit` until the handler
+    /// runs: its commit-to-complete time ([`Report::commit_us`]). The others take no handler.
+    ///
+    /// [`Report::commit_us`]: crate::run::Report::commit_us
+    pub commit_to_complete: bool,
     /// What the first run must leave in its buffers: a CPU reference.
     pub expect: Vec<Expect>,
     /// What the first run must leave in its textures: a CPU reference.
@@ -309,6 +315,11 @@ impl Values {
 }
 
 impl Plan {
+    /// The command buffers of one run.
+    pub fn command_buffers(&self) -> usize {
+        (self.per_command_buffer).map_or(1, |per| self.dispatches.len().div_ceil(per))
+    }
+
     /// `Ok` where every index it names exists and every length is whole and agrees.
     pub fn validate(&self) -> Result<()> {
         let name = &self.name;

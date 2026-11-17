@@ -394,6 +394,10 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
     fn gpu_end_time(&self) -> Result<f64> {
         Ok(rt::CommandBuffer::gpu_end_time(self) as f64 / 1e9)
     }
+
+    fn add_completed_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()> {
+        rt::CommandBuffer::add_completed_handler(self, move |_| handler()).map_err(error)
+    }
 }
 
 impl crate::ComputeCommandEncoder<Device> for rt::ComputeCommandEncoder {

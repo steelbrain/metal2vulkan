@@ -109,6 +109,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
         outputs: Vec::new(),
         per_command_buffer: None,
         per_encoder: None,
+        commit_to_complete: false,
     }
 }
 
@@ -186,6 +187,15 @@ fn a_plan_with_a_part_tile_texture_a_missing_texture_or_too_many_texels_is_refus
 
 /// A run's dispatches cut into command buffers, and a command buffer's into encoders: whole parts
 /// in order, the last one shorter.
+#[test]
+fn the_five_buffer_frame_is_the_frame_five_times_over_with_its_handlers() {
+    let plan = |name| (WORKLOADS.iter().find(|w| w.name == name).unwrap().plan)();
+    let (frame, five) = (plan("frame"), plan("frame_5cb"));
+    assert_eq!((frame.command_buffers(), five.command_buffers()), (1, 5));
+    assert_eq!(five.dispatches.len(), 5 * frame.dispatches.len());
+    assert!(five.commit_to_complete && !frame.commit_to_complete);
+}
+
 #[test]
 fn parts_cut_a_range_in_order_the_last_one_shorter() {
     let cut =

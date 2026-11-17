@@ -16,8 +16,17 @@ fn every_workload(session: &mut dyn Session) {
     };
     for workload in authored::WORKLOADS {
         let name = workload.name;
-        match session.run(&(workload.plan)(), runs) {
-            Ok(report) => assert_eq!(report.gpu_us.len(), 1, "{name}"),
+        let plan = (workload.plan)();
+        match session.run(&plan, runs) {
+            Ok(report) => {
+                assert_eq!(report.gpu_us.len(), 1, "{name}");
+                let handlers = if plan.commit_to_complete {
+                    plan.command_buffers()
+                } else {
+                    0
+                };
+                assert_eq!(report.commit_us.len(), handlers, "{name}");
+            }
             Err(why) => match why.downcast::<Refused>() {
                 Ok(refused) => println!("{name}: REFUSED: {refused}"),
                 Err(why) => panic!("{name}: {why}"),

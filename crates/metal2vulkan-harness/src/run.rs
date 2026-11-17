@@ -8,6 +8,7 @@ use crate::{
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// The kernel of the authored library that moves bytes for the harness, 16 a thread.
@@ -134,6 +135,10 @@ pub struct Report {
     /// Each run's process CPU time from before its command buffer's creation through the return
     /// of the wait for the run before it, in nanoseconds; empty where the host has no such clock.
     pub cpu_ns: Vec<f64>,
+    /// Each timed command buffer's time from just before its `commit` until its completed
+    /// handler ran, in microseconds, in the order the handlers ran; empty unless the plan asks
+    /// for it ([`Plan::commit_to_complete`]).
+    pub commit_us: Vec<f64>,
     /// The device's gauges after the 100th and the 200th timed run, where there were that many,
     /// read once the work committed by then completed: what the runs left behind.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
@@ -141,6 +146,42 @@ pub struct Report {
     pub outputs: Vec<Vec<u8>>,
     /// The untimed runs.
     pub warmup: Warmup,
+}
+
+/// The commit-to-complete times that the completed handlers of a plan's timed command buffers
+/// report ([`Plan::commit_to_complete`]).
+#[derive(Default)]
+struct Completions {
+    /// The times reported, in microseconds, in the order the handlers ran.
+    times: Mutex<Vec<f64>>,
+    /// Signalled at each report.
+    reported: Condvar,
+}
+
+/// How long [`Completions::wait`] waits for the handlers of command buffers already complete.
+const HANDLERS_RUN: Duration = Duration::from_secs(10);
+
+impl Completions {
+    /// Reports one command buffer's commit-to-complete time.
+    fn ran(&self, time: Duration) {
+        let mut times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
+        times.push(time.as_secs_f64() * 1e6);
+        self.reported.notify_all();
+    }
+
+    /// The times of the first `count` handlers to run, once they have: a completed handler may
+    /// run after the wait for its command buffer returns. An error where fewer have run within
+    /// [`HANDLERS_RUN`].
+    fn wait(&self, count: usize) -> Result<Vec<f64>> {
+        let times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
+        let (times, _) = (self.reported)
+            .wait_timeout_while(times, HANDLERS_RUN, |times| times.len() < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        if times.len() < count {
+            return Err(format!("{} of {count} completed handlers ran", times.len()).into());
+        }
+        Ok(times[..count].to_vec())
+    }
 }
 
 /// `Ok` where `other`'s outputs of `plan` match `reference`'s, each by its comparison.
@@ -266,14 +307,17 @@ impl<D: ComputeDevice> Harness<D> {
     /// Commits a run of `plan`, then waits for `in_flight`, the run before it, which the new one
     /// replaces: that run's GPU time in microseconds, and the new run's encoding time, from its
     /// first command buffer's creation through its last `commit`'s return.
+    /// Where `completions` is given, each command buffer of the new run reports its
+    /// commit-to-complete time there.
     fn next(
         &self,
         plan: &Plan,
         made: &Made<D>,
         in_flight: &mut Vec<D::CommandBuffer>,
+        completions: Option<&Arc<Completions>>,
     ) -> Result<(f64, Duration)> {
         let started = Instant::now();
-        let run = self.commit_run(plan, made)?;
+        let run = self.commit_run(plan, made, completions)?;
         let encoded = started.elapsed();
         let before = std::mem::replace(in_flight, run);
         Ok((wait_run::<D>(&before)?, encoded))
@@ -350,11 +394,23 @@ impl<D: ComputeDevice> Harness<D> {
     }
 
     /// A run of `plan`, committed: its command buffers in order, `per_command_buffer`
-    /// dispatches each (or all in one), with no wait between.
-    fn commit_run(&self, plan: &Plan, made: &Made<D>) -> Result<Vec<D::CommandBuffer>> {
+    /// dispatches each (or all in one), with no wait between. Where `completions` is given, each
+    /// takes a completed handler that reports its commit-to-complete time there.
+    fn commit_run(
+        &self,
+        plan: &Plan,
+        made: &Made<D>,
+        completions: Option<&Arc<Completions>>,
+    ) -> Result<Vec<D::CommandBuffer>> {
         parts(0..plan.dispatches.len(), plan.per_command_buffer)
             .map(|range| {
                 let command_buffer = self.encode(plan, made, range)?;
+                if let Some(completions) = completions {
+                    let (completions, committed) = (Arc::clone(completions), Instant::now());
+                    command_buffer.add_completed_handler(Box::new(move || {
+                        completions.ran(committed.elapsed());
+                    }))?;
+                }
                 command_buffer.commit()?;
                 Ok(command_buffer)
             })
@@ -559,7 +615,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
         }
         self.fill(&plan.buffers, &made.buffers)?;
         self.fill_textures(&plan.textures, &made.textures)?;
-        wait_run::<D>(&self.commit_run(plan, &made)?)?;
+        wait_run::<D>(&self.commit_run(plan, &made, None)?)?;
         for expect in &plan.expect {
             let storage = plan.buffers[expect.buffer].storage;
             let bytes = self.read(
@@ -585,17 +641,18 @@ impl<D: ComputeDevice> Session for Harness<D> {
         // The runs after the first keep two command buffers in flight: each is committed while
         // the GPU runs the one before it, so the GPU does not idle between runs and its clock
         // holds, as it does under a program that keeps it busy.
-        let mut in_flight = self.commit_run(plan, &made)?;
-        let warmup = warm_up(runs, || Ok(self.next(plan, &made, &mut in_flight)?.0))?;
+        let mut in_flight = self.commit_run(plan, &made, None)?;
+        let warmup = warm_up(runs, || Ok(self.next(plan, &made, &mut in_flight, None)?.0))?;
         let mut report = Report {
             dispatches: plan.dispatches.len(),
             outputs,
             warmup,
             ..Report::default()
         };
+        let completions = (plan.commit_to_complete).then(|| Arc::new(Completions::default()));
         for run in 1..=runs.timed {
             let cpu = clocks::process_cpu_nanos();
-            let (gpu_us, encoded) = self.next(plan, &made, &mut in_flight)?;
+            let (gpu_us, encoded) = self.next(plan, &made, &mut in_flight, completions.as_ref())?;
             if let (Some(before), Some(after)) = (cpu, clocks::process_cpu_nanos()) {
                 report.cpu_ns.push(after.saturating_sub(before) as f64);
             }
@@ -609,8 +666,12 @@ impl<D: ComputeDevice> Session for Harness<D> {
             }
         }
         wait_run::<D>(&in_flight)?;
+        if let Some(completions) = completions {
+            let count = runs.timed as usize * plan.command_buffers();
+            report.commit_us = completions.wait(count)?;
+        }
         let (before, submissions) = (self.device.counts(), self.device.submissions());
-        wait_run::<D>(&self.commit_run(plan, &made)?)?;
+        wait_run::<D>(&self.commit_run(plan, &made, None)?)?;
         report.counts = (before.into_iter().zip(self.device.counts()))
             .map(|((count, before), (_, after))| (count, after - before))
             .collect();

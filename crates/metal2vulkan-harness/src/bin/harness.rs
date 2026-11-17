@@ -168,7 +168,7 @@ fn run_all(args: &Args) -> Result<bool> {
     );
     if !workloads.is_empty() {
         println!(
-            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11}  gauges @100 -> @200",
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11} {:>11} {:>11}  gauges @100 -> @200",
             "workload",
             "runtime",
             "dispatches",
@@ -180,6 +180,8 @@ fn run_all(args: &Args) -> Result<bool> {
             "encode_ns/dispatch",
             "cpu_ns/dispatch",
             "submits/run",
+            "c2c_us_p50",
+            "c2c_us_p99",
         );
     }
     let set = if args.description.is_some() {
@@ -337,13 +339,15 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
 /// `report`'s row, and its matrix lines.
 fn print(runtime: &str, name: &str, report: &Report) {
     let gpu = |p| percentile(&report.gpu_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
+    let commit =
+        |p| percentile(&report.commit_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     let per_dispatch = |values: &[f64]| {
         percentile(values, 50).map_or("-".to_owned(), |ns| {
             format!("{:.0}", ns / report.dispatches as f64)
         })
     };
     println!(
-        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11}  {}",
+        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11} {:>11} {:>11}  {}",
         report.dispatches,
         warmup(&report.warmup),
         gpu(10),
@@ -353,6 +357,8 @@ fn print(runtime: &str, name: &str, report: &Report) {
         per_dispatch(&report.encode_ns),
         per_dispatch(&report.cpu_ns),
         report.submissions,
+        commit(50),
+        commit(99),
         gauges(&report.gauges),
     );
     matrix(runtime, name, &report.gpu_us, &report.gauges);

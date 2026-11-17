@@ -187,6 +187,13 @@ impl crate::CommandBuffer<runtime::Device> for runtime::CommandBuffer {
     fn gpu_end_time(&self) -> Result<f64> {
         Ok(runtime::CommandBuffer::gpu_end_time(self)?)
     }
+
+    fn add_completed_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()> {
+        Ok(runtime::CommandBuffer::add_completed_handler(
+            self,
+            Box::new(move |_| handler()),
+        )?)
+    }
 }
 
 impl crate::ComputeCommandEncoder<runtime::Device> for runtime::ComputeCommandEncoder {
