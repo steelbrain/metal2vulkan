@@ -132,7 +132,7 @@ pub(super) fn new_ram(log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
 }
 
 /// A RAM of `length` bytes, its writes logged to `log` where given, and its first byte.
-fn ram_of(length: u64, log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
+pub(super) fn ram_of(length: u64, log: Option<Arc<Log>>) -> (Arc<HostRam>, u64) {
     let start = super::host_os::private(length as usize).as_ptr() as u64;
     let keep: KeepAlive = Box::new(Mapping { start, length });
     let at = NonNull::new(start as *mut u8).unwrap();

@@ -4,10 +4,16 @@
 //! - **Both ways, texel for texel, straight from the imports.** A 300 by 200 `BGRA8Unorm`
 //!   `Private` texture fills from a surface of 63 pages scattered over the RAM's two chunks
 //!   (two of them side by side across the first chunk's end, one run), its rows 1,280 bytes apart
-//!   from byte 48: every texel its row's bytes, one region for each row's bytes in a run and a
-//!   chunk (a row across the chunk's end two) and no dispatch or staging. Copied back out into
-//!   the pages, rewritten since, only the texels' bytes change: the bytes between the rows and
-//!   every other byte of the RAM stay, and the writes are told to the RAM's log.
+//!   from byte 48: every texel its row's bytes, one region for each run of rows of a page (the
+//!   pieces of a row cut where a page or the chunk ends, those of rows one after another at one
+//!   first texel and the pitch apart in one chunk a region) and no dispatch or staging. Copied
+//!   back out into the pages, rewritten since, only the texels' bytes change: the bytes between
+//!   the rows and every other byte of the RAM stay, and the writes are told to the RAM's log.
+//! - **Rows over host bytes in a row are one region**, both ways: a surface over host bytes in a
+//!   row across the first chunk's end, given as a run a page, at a pitch past the row and at the
+//!   row's, and a sub-rectangle of the texture: its rows on each side of the chunk's end one
+//!   region each (the last of an odd height), the row across it two, the texels and the surface's
+//!   bytes exact.
 //! - **Ordered as a blit is**, in one command buffer: a fill of part of the texture after a render
 //!   pass cleared it leaves the clear around the region and the surface's texels in it, as a
 //!   blit's read after it reads; a copy out after a render pass cleared the texture writes the
@@ -32,6 +38,7 @@ use crate::{
     TextureDescriptor,
 };
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -73,16 +80,46 @@ fn surface_runs(start: u64) -> Vec<Range<u64>> {
     runs
 }
 
-/// The regions of a copy of `rows` rows of `width` texels from surface byte `offset` at `PITCH`:
-/// one a row and one more for each page's end inside it (each is a run's or the chunk's end).
-fn row_pieces(offset: u64, (width, rows): (u64, u64)) -> u64 {
-    (0..rows)
-        .map(|y| {
-            let first = offset + y * PITCH;
-            let last = first + width * TEXEL - 1;
-            1 + last / PAGE - first / PAGE
-        })
-        .sum()
+/// The regions a copy of `rows` rows of `width` texels from surface byte `offset` at `pitch`
+/// takes, the surface's byte `at` at host address `host(at)` in a RAM from `start`: each row's
+/// texels cut where their host bytes break and where a chunk ends, and a piece that continues a
+/// region whose last row is the row before (the same first texel and texels, in its chunk, its
+/// host bytes `pitch` on) one more row of it.
+fn regions(
+    host: impl Fn(u64) -> u64,
+    start: u64,
+    (offset, pitch): (u64, u64),
+    (width, rows): (u64, u64),
+) -> u64 {
+    let chunk = |address: u64| (address - start) / (SECOND * PAGE);
+    let mut count = 0;
+    // The regions whose last row is the row before, by first texel and texels: their chunk and
+    // their last row's host byte.
+    let mut before: HashMap<(u64, u64), (u64, u64)> = HashMap::new();
+    for y in 0..rows {
+        // The row's pieces: first texel, texels, host byte.
+        let mut pieces: Vec<(u64, u64, u64)> = Vec::new();
+        for x in 0..width {
+            let address = host(offset + y * pitch + x * TEXEL);
+            match pieces.last_mut() {
+                Some((_, texels, at))
+                    if *at + *texels * TEXEL == address && chunk(*at) == chunk(address) =>
+                {
+                    *texels += 1
+                }
+                _ => pieces.push((x, 1, address)),
+            }
+        }
+        let mut now = HashMap::new();
+        for (x, texels, at) in pieces {
+            let continues = (before.get(&(x, texels)))
+                .is_some_and(|&(last_chunk, last)| last_chunk == chunk(at) && last + pitch == at);
+            count += u64::from(!continues);
+            now.insert((x, texels), (chunk(at), at));
+        }
+        before = now;
+    }
+    count
 }
 
 /// A `Private` `BGRA8Unorm` texture of `WIDTH` by `HEIGHT`, a render target.
@@ -215,7 +252,12 @@ fn a_texture_fills_from_a_surface_s_rows_and_copies_back_into_their_texel_bytes_
         read_back(&device, &texture) == surface_texels(start, OFFSET, (WIDTH, HEIGHT)),
         "every texel from its row's bytes"
     );
-    let pieces = row_pieces(OFFSET, (WIDTH, HEIGHT));
+    let pieces = regions(
+        |at| host(start, at),
+        start,
+        (OFFSET, PITCH),
+        (WIDTH, HEIGHT),
+    );
     eprintln!(
         "HOST-RAM-TEXTURE {}: fill regions {}, dispatches {}, staged {}",
         device.name(),
@@ -226,7 +268,7 @@ fn a_texture_fills_from_a_surface_s_rows_and_copies_back_into_their_texel_bytes_
     assert_eq!(
         fill,
         [pieces, 0, 0, 0],
-        "a region a row's piece straight from its import, no dispatch, no staging"
+        "a region a run of rows of a page straight from its import, no dispatch, no staging"
     );
     // Out again into the pages, rewritten since: the texels' bytes alone take the texture's.
     for run in &runs {
@@ -252,7 +294,11 @@ fn a_texture_fills_from_a_surface_s_rows_and_copies_back_into_their_texel_bytes_
         now == want,
         "the texels' bytes alone, and no other byte of the RAM"
     );
-    assert_eq!(out, [pieces, 0, 0, 0], "a region a row's piece, out");
+    assert_eq!(
+        out,
+        [pieces, 0, 0, 0],
+        "a region a run of rows of a page, out"
+    );
     // Each row's texels told to the RAM's log as the GPU's writes in place.
     for y in [0, 99, HEIGHT - 1] {
         let first = host(start, OFFSET + y * PITCH);
@@ -260,6 +306,102 @@ fn a_texture_fills_from_a_surface_s_rows_and_copies_back_into_their_texel_bytes_
             log.heard(&(first..first + 64), 0),
             "row {y}'s writes told to the RAM's log"
         );
+    }
+}
+
+/// The surface of `length` bytes over host bytes in a row from `base`, as runs of the RAM: a run
+/// a host page, the first and the last cut to the surface.
+fn page_runs(base: u64, length: u64) -> Vec<Range<u64>> {
+    let mut runs = Vec::new();
+    let mut at = base;
+    while at < base + length {
+        let end = ((at / PAGE + 1) * PAGE).min(base + length);
+        runs.push(at..end);
+        at = end;
+    }
+    runs
+}
+
+#[test]
+fn rows_over_host_bytes_in_a_row_are_one_region_on_their_import_both_ways() {
+    let Some(device) = device() else {
+        return;
+    };
+    let (ram, start) = new_ram(None);
+    let _used = device.use_host_ram(&ram).unwrap();
+    let chunk_end = start + SECOND * PAGE;
+    let texture = bgra_texture(&device);
+    // Pitch, the texture's origin and the region's size, the surface's first texel's byte: a
+    // pitch past the row, the row's, and a sub-rectangle.
+    let cases = [
+        (PITCH, (0, 0), (WIDTH, HEIGHT), OFFSET),
+        (WIDTH * TEXEL, (0, 0), (WIDTH, HEIGHT), OFFSET),
+        (PITCH, (20, 30), (260, 150), OFFSET + 8 * TEXEL),
+    ];
+    for (seed, (pitch, (x, y), (width, rows), offset)) in (50..).zip(cases) {
+        let what = format!("pitch {pitch}, ({x}, {y}) {width} x {rows}");
+        // The chunk's end in the middle of row `rows / 2`: the rows after it, `rows - rows / 2 -
+        // 1`, of an odd height where `rows` is even.
+        let length = offset + (rows - 1) * pitch + width * TEXEL;
+        let cut = offset + rows / 2 * pitch + width / 2 * TEXEL;
+        let base = chunk_end - cut;
+        let runs = page_runs(base, length);
+        write_pattern(base..base + length, seed);
+        let size = Size::new(width, rows, 1);
+        let at = Origin::new(x, y, 0);
+        let fill = counted(&device, || {
+            blit(&device, |encoder| {
+                (encoder.copy_texture_from_host_ram(
+                    &ram, &runs, offset, pitch, size, &texture, 0, 0, at,
+                ))
+                .unwrap();
+            });
+        });
+        let want = regions(|at| base + at, start, (offset, pitch), (width, rows));
+        eprintln!(
+            "HOST-RAM-TEXTURE {} {what}: {} runs, fill regions {} of {rows} rows",
+            device.name(),
+            runs.len(),
+            fill[0]
+        );
+        assert_eq!(
+            want, 4,
+            "{what}: the rows before the chunk's end, the row across it, after"
+        );
+        assert_eq!(fill, [want, 0, 0, 0], "{what}: a region a run of rows");
+        let got = read_back(&device, &texture);
+        for row in 0..rows {
+            let first = (((y + row) * WIDTH + x) * TEXEL) as usize;
+            let from = base + offset + row * pitch;
+            assert!(
+                got[first..first + (width * TEXEL) as usize] == bytes(from..from + width * TEXEL),
+                "{what}: row {row}'s texels"
+            );
+        }
+        // Out again into the bytes, rewritten since, a page around them too: the texels' bytes
+        // alone take the texture's.
+        let around = base - PAGE..base + length + PAGE;
+        write_pattern(around.clone(), seed + 10);
+        let mut want_bytes = bytes(around.clone());
+        for row in 0..rows {
+            let first = (((y + row) * WIDTH + x) * TEXEL) as usize;
+            let to = (PAGE + offset + row * pitch) as usize;
+            let texels = (width * TEXEL) as usize;
+            want_bytes[to..to + texels].copy_from_slice(&got[first..first + texels]);
+        }
+        let out = counted(&device, || {
+            blit(&device, |encoder| {
+                (encoder.copy_texture_to_host_ram(
+                    &texture, 0, 0, at, size, &ram, &runs, offset, pitch,
+                ))
+                .unwrap();
+            });
+        });
+        assert!(
+            bytes(around) == want_bytes,
+            "{what}: the texels' bytes alone, out"
+        );
+        assert_eq!(out, [want, 0, 0, 0], "{what}: a region a run of rows, out");
     }
 }
 

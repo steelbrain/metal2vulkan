@@ -978,9 +978,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   of a texture's slice and level filled from, or copied out into, a surface laid out in a used
   guest RAM: the surface's bytes in order as host runs (as `copy_from_host_ram` takes them), the
   region's rows from a byte of them at a pitch (Metal's buffer layout for
-  `copy_from_buffer_to_texture`). Each row's texels in a run and a chunk are one region of a
-  `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` straight on the chunk's import, with no
-  staging copy (first touch through the CPU as the buffer forms); only the texels' bytes are
+  `copy_from_buffer_to_texture`). The rows whose host bytes lie the pitch apart in one chunk
+  (pages in a row) are one region of a `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer`
+  straight on the chunk's import (`bufferRowLength` the pitch), a row across a chunk's end or a
+  break in the host bytes a region for each piece, with no staging copy (first touch through the
+  CPU as the buffer forms); only the texels' bytes are
   read or written; ordered and seen as the buffer forms are, the texture as a blit uses it
   ([HOWTO](../../docs/HOWTO.md#guest-ram-imported-whole)). For a single-sample texture of
   uncompressed colour texels with an image of its own.

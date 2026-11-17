@@ -1151,11 +1151,13 @@ submission, can give the device the guest's RAM once instead:
   the surface's bytes in order, host runs laid one after another as above (its pages), and row
   `y` of the region lies from surface byte `offset + y × bytes_per_row`, Metal's buffer layout
   for `copy_from_buffer_to_texture`, checked as Metal checks it over the surface's bytes
-  (`Invalid`, `Problem::Copy`). Each row's texels in a run and a chunk are one region of a
-  `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` straight on the import that holds them
-  (`bufferRowLength` 0), with no staging buffer; over a chunk not imported yet, or one that takes
-  no import while it runs, the copy goes through the command buffer's own memory as the buffer
-  forms' does. Only the texels' bytes move: the bytes between the rows and around the surface
+  (`Invalid`, `Problem::Copy`). The rows' texels in one chunk's import whose host bytes lie the
+  pitch apart (the surface's pages in a row, given as one run or as a run a page) are one region
+  of a `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` straight on that import
+  (`bufferRowLength` the pitch in texels); a row across a chunk's end or a break in the host
+  bytes is a region for each of its pieces. No staging buffer; over a chunk not imported yet, or
+  one that takes no import while it runs, the copy goes through the command buffer's own memory
+  as the buffer forms' does. Only the texels' bytes move: the bytes between the rows and around the surface
   stay. Ordered and seen as the buffer forms are, the texture's region used as a blit's copy with
   a buffer uses it; a copy out is reported to the RAM's log. Refused as above, and a row's piece
   that does not start on a texel of host memory or hold whole texels (a run that splits a texel),

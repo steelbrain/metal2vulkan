@@ -12,18 +12,28 @@
 //!   `offset + y × bytes_per_row`, its texels one after another. Metal's checks of that layout
 //!   are a buffer's (`blit_plan.rs`'s `check_layout`, the surface's bytes its length:
 //!   `Problem::Copy`), and of the region the texture's (`copy_plan.rs`'s `check_region`).
-//! - **One region per row piece, straight on the imports.** Each row's texel bytes are cut where
-//!   a run ends and where a chunk ends (`copy.rs`'s `pieces`), and each piece is one region of a
-//!   `vkCmdCopyBufferToImage` (or `vkCmdCopyImageToBuffer`) on the import that holds it (the
-//!   chunk's, a range's alone, a list's: `RamOnDevice::copy_imports`, taken as the buffer forms
-//!   take them), its `bufferOffset` the piece's byte in that import and its `bufferRowLength` and
-//!   `bufferImageHeight` 0 (a row's texels, tight: `VUID-VkBufferImageCopy-bufferRowLength-09101`),
-//!   the regions of one import one command, at most `MOST_REGIONS` each. No staging copy and no
-//!   other byte of the pages read or written: the bytes between the rows and around the surface
+//! - **One region per run of rows, straight on the imports.** Each row's texel bytes are cut
+//!   where the runs' host bytes break (runs that continue one another in host memory are one) and
+//!   where a chunk ends (`copy.rs`'s `pieces`), and the pieces of one import with the same first
+//!   texel and texels in rows one after another, each row's bytes the surface's pitch past the row
+//!   before's, are one region of a `vkCmdCopyBufferToImage` (or `vkCmdCopyImageToBuffer`) on that
+//!   import (the chunk's, a range's alone, a list's: `RamOnDevice::copy_imports`, taken as the
+//!   buffer forms take them, `joined_rows`): its `bufferOffset` the first row's byte in the
+//!   import, its `imageExtent` the pieces' texels by its rows, its `bufferRowLength` the pitch in
+//!   texels (0 for a region of one row) and its `bufferImageHeight` 0 (one image). A row that
+//!   crosses a break or a chunk's end keeps its pieces, each a region of its own unless the rows
+//!   around it break at the same texel. The pitch is a whole number of texels, at least a row's
+//!   (`check_layout`: `VUID-VkBufferImageCopy-bufferRowLength-09101`); a pitch past 2^31 - 1 bytes
+//!   joins no rows (`VUID-vkCmdCopyBufferToImage-bufferRowLength-09108`,
+//!   `VUID-vkCmdCopyImageToBuffer-bufferRowLength-09108`). The regions of one import are one
+//!   command, at most `MOST_REGIONS` each. A region reads or writes its rows' texel bytes alone
+//!   (the spec's buffer addressing, "Copying Data Between Buffers and Images"): no staging copy and
+//!   no other byte of the pages read or written, the bytes between the rows and around the surface
 //!   stay as they were. A piece must start on a texel of its row and of host memory and hold
-//!   whole texels, so that its `bufferOffset` is a multiple of the texel's bytes
+//!   whole texels, so that a region's `bufferOffset` is a multiple of the texel's bytes
 //!   (`VUID-vkCmdCopyBufferToImage-dstImage-07975`, `VUID-vkCmdCopyImageToBuffer-srcImage-07975`;
-//!   the imports start on host pages); its texels lie inside the level (`check_region`:
+//!   the imports start on host pages; the formats are uncompressed colour, so no block or depth
+//!   or stencil rule applies); its texels lie inside the level (`check_region`:
 //!   `VUID-vkCmdCopyBufferToImage-imageSubresource-07971` and `-07972`, the same for
 //!   `vkCmdCopyImageToBuffer`), and no location is both a region's source and another's
 //!   destination (the image and the imports are apart: `VUID-vkCmdCopyBufferToImage-pRegions-00173`,
@@ -31,8 +41,10 @@
 //!   texel, a surface whose texels lie off their size in host memory) is refused
 //!   (`Problem::HostRam`): the caller copies through a view of the pages. A copy out of the
 //!   texture whose pieces name a host byte twice takes a round of commands for each
-//!   (`copy.rs`'s `rounds`), the later piece's bytes kept. Counted:
-//!   `WorkCounts::host_ram_copies`, `host_ram_copy_bytes`, `host_ram_copy_regions`.
+//!   (`copy.rs`'s `rounds`; rows join only within a round), the later piece's bytes kept, so no
+//!   location is written by two regions of one command
+//!   (`VUID-vkCmdCopyImageToBuffer-pRegions-12485`). Counted: `WorkCounts::host_ram_copies`,
+//!   `host_ram_copy_bytes`, `host_ram_copy_regions` (the regions, joined rows one).
 //! - **Ordered and seen as the buffer forms are** (`copy.rs`'s module docs): the chunks' bytes the
 //!   pieces touch by the chunks' keys (a read into the texture, a write out of it, reported to the
 //!   RAM's log of dirty pages where it has one), and the texture's region as a blit's copy with a
@@ -110,23 +122,95 @@ impl HostRamTextureCall {
 }
 
 /// The runs of `runs`, a surface's bytes in order as host runs laid one after another, that the
-/// surface's bytes `spans` lie in, cut to them, each at its byte of the surface: in one pass,
-/// `spans` ascending and apart (a region's rows), their bytes inside the runs' total.
+/// surface's bytes `spans` lie in, cut to them, each at its byte of the surface, the runs of a
+/// span that continue one another in host memory one: in one pass, `spans` ascending and apart
+/// (a region's rows), their bytes inside the runs' total.
 fn laid_over(runs: &[Range<u64>], spans: impl IntoIterator<Item = Range<u64>>) -> Vec<Run> {
-    let mut out = Vec::new();
+    let mut out: Vec<Run> = Vec::new();
     let (mut next, mut at) = (0usize, 0u64);
     for span in spans {
+        let first = out.len();
         while let Some(run) = runs.get(next) {
             let end = at + (run.end - run.start);
             let (from, to) = (span.start.max(at), span.end.min(end));
             if from < to {
-                out.push((from, run.start + (from - at)..run.start + (to - at)));
+                let host = run.start + (from - at)..run.start + (to - at);
+                // The span's bytes run on from the last run's, in the surface: its host bytes
+                // too where they start at its end.
+                let in_span = out.len() > first;
+                match out.last_mut() {
+                    Some((_, last)) if in_span && last.end == host.start => last.end = host.end,
+                    _ => out.push((from, host)),
+                }
             }
             if end > span.end {
                 // The run goes on past the span, into the next one's bytes.
                 break;
             }
             (next, at) = (next + 1, end);
+        }
+    }
+    out
+}
+
+/// Rows of a copy's region that are one region of a copy on one import: `rows` rows of `texels`
+/// texels from texel `(x, y)` of the region, its first row's bytes from byte `offset` of import
+/// `slot`, each next row's a pitch on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Rows {
+    pub(crate) slot: usize,
+    pub(crate) offset: u64,
+    pub(crate) x: u64,
+    pub(crate) y: u64,
+    pub(crate) texels: u64,
+    pub(crate) rows: u64,
+}
+
+/// `pieces` (each a row's texels in one import, one row: in order, by row and in a row by first
+/// texel) as regions on the imports: a piece that continues a region whose last row is the row
+/// before it (the same import, first texel and texels, its bytes `pitch` past that row's) joins
+/// it as one more row; any other starts a region. With no `pitch`, each piece is a region of its
+/// own.
+pub(crate) fn joined_rows(pieces: &[Rows], pitch: Option<u64>) -> Vec<Rows> {
+    let mut out: Vec<Rows> = Vec::with_capacity(pieces.len());
+    // The regions whose last row is the row before the piece's, and those whose last row is the
+    // piece's, by first texel (as their pieces came).
+    let mut before: Vec<usize> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    let (mut row, mut next) = (None, 0usize);
+    for piece in pieces {
+        if row != Some(piece.y) {
+            let follows = row.is_some_and(|y: u64| y + 1 == piece.y);
+            before.clear();
+            if follows {
+                before.extend_from_slice(&current);
+            }
+            current.clear();
+            (row, next) = (Some(piece.y), 0);
+        }
+        // Of the row before's regions, those that start left of the piece end before it.
+        while before.get(next).is_some_and(|&at| out[at].x < piece.x) {
+            next += 1;
+        }
+        let joins = pitch.and_then(|pitch| {
+            let &at = before.get(next)?;
+            let region = &out[at];
+            let continues = region.slot == piece.slot
+                && (region.x, region.texels) == (piece.x, piece.texels)
+                && (region.rows.checked_mul(pitch))
+                    .is_some_and(|step| piece.offset.checked_sub(region.offset) == Some(step));
+            continues.then_some(at)
+        });
+        match joins {
+            Some(at) => {
+                out[at].rows += 1;
+                current.push(at);
+                next += 1;
+            }
+            None => {
+                out.push(*piece);
+                current.push(out.len() - 1);
+            }
         }
     }
     out
@@ -141,10 +225,13 @@ impl BlitCommandEncoder {
     /// [`copy_from_host_ram`](Self::copy_from_host_ram) takes them); `source_size` texels of it,
     /// row `y` from surface byte `source_offset + y × source_bytes_per_row`, land in
     /// `destination_level` and `destination_slice` at `destination_origin`, as
-    /// `copy_from_buffer_to_texture` would land them from a buffer of the surface's bytes. Each
-    /// row's texels in each run and chunk are one region of a `vkCmdCopyBufferToImage` straight
-    /// from the import that holds them (the module docs of `host_ram/texture.rs`): no staging
-    /// copy, and no byte of the pages but the region's texels read. Ordered and seen as
+    /// `copy_from_buffer_to_texture` would land them from a buffer of the surface's bytes. The
+    /// rows' texels in one chunk's import whose host bytes lie the surface's pitch apart (pages in
+    /// a row) are one region of a `vkCmdCopyBufferToImage` straight from that import
+    /// (`bufferRowLength` the pitch's
+    /// texels; a row across a chunk's end or a break in the runs' host bytes a region for each
+    /// piece: the module docs of `host_ram/texture.rs`): no staging copy, and no byte of the
+    /// pages but the region's texels read. Ordered and seen as
     /// [`copy_from_host_ram`](Self::copy_from_host_ram) is (the CPU's writes before the commit
     /// seen, hazard tracking over the host bytes), and the texture written as by any blit; first
     /// touch through the CPU as that call says.
@@ -200,8 +287,8 @@ impl BlitCommandEncoder {
     /// runtime extension (Metal has none). `source_size` texels of `source_level` and
     /// `source_slice` from `source_origin` land in the surface `runs` (its bytes in order, as
     /// that call takes them), row `y` from surface byte `destination_offset + y ×
-    /// destination_bytes_per_row`, each row's texels in each run and chunk one region of a
-    /// `vkCmdCopyImageToBuffer` straight into the import that holds them. Only the region's texels
+    /// destination_bytes_per_row`, by regions of a `vkCmdCopyImageToBuffer` straight into the
+    /// imports that hold them, as that call's regions read them. Only the region's texels
     /// are written: the bytes between the rows and the rest of the pages keep what they held.
     /// Ordered and seen as [`copy_to_host_ram`](Self::copy_to_host_ram) is: its bytes are in the
     /// pages once the command buffer completed, and where the RAM came with a log of its pages'
@@ -416,10 +503,15 @@ impl BlitCommandEncoder {
                 FreshUnwritten::reads(&device, texture, &read)?
             }
         };
+        // Rows of one region at the surface's pitch, `bufferRowLength` its texels: a pitch of whole
+        // texels at least a row's (`check_layout`: `VUID-VkBufferImageCopy-bufferRowLength-09101`)
+        // and of at most 2^31 - 1 bytes (`VUID-vkCmdCopyBufferToImage-bufferRowLength-09108`,
+        // `VUID-vkCmdCopyImageToBuffer-bufferRowLength-09108`).
+        let pitch = (rows.rows > 1 && bytes_per_row <= i32::MAX as u64).then_some(bytes_per_row);
         let mut regions_recorded = 0u64;
         for round in &by_round {
-            // The round's regions, by import, in order: each piece a row's texels from its byte.
-            let mut by_import: BTreeMap<usize, Vec<vk::BufferImageCopy>> = BTreeMap::new();
+            // The round's pieces, each a row's texels from its byte of its import, in order.
+            let mut row_pieces = Vec::with_capacity(round.len());
             for &index in round {
                 let piece = &in_imports[index];
                 if !piece.offset.is_multiple_of(texel) {
@@ -430,25 +522,42 @@ impl BlitCommandEncoder {
                     1 => 0,
                     _ => from_first / bytes_per_row,
                 };
-                let x = (from_first - y * bytes_per_row) / texel;
+                row_pieces.push(Rows {
+                    slot: piece.slot,
+                    offset: piece.offset,
+                    x: (from_first - y * bytes_per_row) / texel,
+                    y,
+                    texels: piece.length / texel,
+                    rows: 1,
+                });
+            }
+            // The round's regions, by import, in order: the pieces of one import, one first texel
+            // and texels in rows one after another at the pitch one region of their rows.
+            let joined = joined_rows(&row_pieces, pitch);
+            let mut by_import: BTreeMap<usize, Vec<vk::BufferImageCopy>> = BTreeMap::new();
+            for region in &joined {
                 // Inside the region (`check_region`), whose extent is a `u32`'s.
                 let texels = ImageRegion {
                     origin: [
-                        image.origin[0] + x as u32,
-                        image.origin[1] + y as u32,
+                        image.origin[0] + region.x as u32,
+                        image.origin[1] + region.y as u32,
                         image.origin[2],
                     ],
-                    size: [(piece.length / texel) as u32, 1, 1],
+                    size: [region.texels as u32, region.rows as u32, 1],
                     ..image
                 };
-                let region = BufferImageRegion {
-                    buffer_offset: piece.offset,
-                    row_length: 0,
+                let row_length = match (region.rows, pitch) {
+                    (2.., Some(pitch)) => (pitch / texel) as u32,
+                    _ => 0,
+                };
+                let copy = BufferImageRegion {
+                    buffer_offset: region.offset,
+                    row_length,
                     image_height: 0,
                     image: texels,
                 };
-                let region = buffer_image_region(&image_buffer_region(plan, region));
-                by_import.entry(piece.slot).or_default().push(region);
+                let copy = buffer_image_region(&image_buffer_region(plan, copy));
+                by_import.entry(region.slot).or_default().push(copy);
             }
             // The round's uses: the chunks' bytes it reads or writes, by their keys, and the
             // texture's region.
@@ -465,7 +574,7 @@ impl BlitCommandEncoder {
                 }
             }
             uses.push(image_use.clone());
-            regions_recorded += round.len() as u64;
+            regions_recorded += joined.len() as u64;
             let imports = &imports;
             self.command_reading(&uses, (&fresh_reads, &[]), |functions, raw| {
                 let general = vk::ImageLayout::GENERAL;
@@ -474,10 +583,12 @@ impl BlitCommandEncoder {
                     for part in regions.chunks(MOST_REGIONS) {
                         // SAFETY: the encoder's command buffer is recording, outside a render
                         // pass; the imports and the texture are live until it completes (held
-                        // below); each region's bytes lie inside its import (`pieces`, the imports
-                        // made over them) from a multiple of the texel's bytes, its texels inside
-                        // the level (`check_region`), the image is in the `GENERAL` layout, and
-                        // no byte is written by two regions of one command (`rounds`).
+                        // below); each region's bytes, its rows' alone, lie inside its import
+                        // (each row a piece: `pieces`, the imports made over them) from a
+                        // multiple of the texel's bytes, its texels inside the level
+                        // (`check_region`), the image is in the `GENERAL` layout, and no byte is
+                        // written by two regions of one command (`rounds`, the rows of a region
+                        // pieces of one round).
                         unsafe {
                             match into {
                                 true => functions

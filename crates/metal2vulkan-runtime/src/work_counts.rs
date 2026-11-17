@@ -10571,7 +10571,11 @@ pub struct WorkCounts {
     /// the copies whose runs all start and end on a word.
     pub host_ram_copy_dispatches: u64,
     /// The regions of `vkCmdCopyBuffer` of the copies whose runs are not all whole pages (a run
-    /// that starts or ends inside a page): one for each run's bytes in a chunk.
+    /// that starts or ends inside a page): one for each run's bytes in a chunk. And the regions of
+    /// `vkCmdCopyBufferToImage` and `vkCmdCopyImageToBuffer` of the copies between a guest RAM and
+    /// a texture (`BlitCommandEncoder::copy_texture_from_host_ram`, `copy_texture_to_host_ram`):
+    /// one for each run of rows whose host bytes lie the pitch apart in one chunk, and one for each
+    /// piece of a row across a chunk's end or a break in its host bytes.
     pub host_ram_copy_regions: u64,
     /// The chunks of guest RAM the device imported (`Device::use_host_ram`): 64 MiB of a RAM's
     /// range each (its last fewer), each once, by the device's own thread ahead of the objects
