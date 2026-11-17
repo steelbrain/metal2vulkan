@@ -205,12 +205,14 @@ pub fn narrow_units(p: &DeviceProfile) -> Units {
 
 /// Words at a 4-aligned device address (a `u64`), loaded and stored with memory operands (a
 /// coherence and `Volatile`), and the narrow units ([`narrow_units`]) it also loads and stores
-/// directly.
+/// directly. Memory nothing writes while the module runs is loaded through `NonWritable` places
+/// ([`PsbMem::read_only`]).
 #[derive(Clone, Copy, Debug)]
 pub struct PsbMem {
     base: Value,
     ops: WordOps,
     units: Units,
+    read_only: bool,
 }
 
 impl PsbMem {
@@ -221,7 +223,15 @@ impl PsbMem {
             base,
             ops: WordOps::default(),
             units: Units::NONE,
+            read_only: false,
         }
+    }
+
+    /// The same words, loaded through `NonWritable` places where `read_only`: memory nothing
+    /// writes while the module runs (`AccessPlan`'s unwritten slots), so the device may read it as
+    /// read-only memory.
+    pub fn read_only(self, read_only: bool) -> PsbMem {
+        PsbMem { read_only, ..self }
     }
 
     /// The same words, loaded and stored with `ops`.
@@ -243,12 +253,13 @@ impl PsbMem {
     }
 
     /// A `PhysicalStorageBuffer` place of the `bytes`-byte unit `index` (a `u32` index of such
-    /// units) of the memory, and the unit's type.
+    /// units) of the memory, to load from where `load`, and the unit's type.
     fn unit_ptr(
         &self,
         fb: &mut FunctionBuilder<'_>,
         bytes: u32,
         index: Value,
+        load: bool,
     ) -> BResult<(Value, TypeId)> {
         let u64_ = u64_ty(fb)?;
         let i = fb.convert(ConvOp::UConvert, index, u64_)?;
@@ -264,16 +275,18 @@ impl PsbMem {
             width: if bytes == 1 { 8 } else { 16 },
             signed: false,
         })?;
-        Ok((fb.device_place(addr, ty)?, ty))
+        Ok((self.place(fb, addr, ty, load)?, ty))
     }
 
-    /// A `PhysicalStorageBuffer` place of word `word` (a `u32` index) of the memory.
-    pub fn word_ptr(&self, fb: &mut FunctionBuilder<'_>, word: Value) -> BResult<Value> {
+    /// A `PhysicalStorageBuffer` place of word `word` (a `u32` index) of the memory, to load from
+    /// where `load`.
+    fn word_ptr(&self, fb: &mut FunctionBuilder<'_>, word: Value, load: bool) -> BResult<Value> {
         let u32_ = fb.module().ty(Type::Int {
             width: 32,
             signed: false,
         })?;
-        self.typed_ptr(fb, word, u32_)
+        let addr = self.word_address(fb, word)?;
+        self.place(fb, addr, u32_, load)
     }
 
     /// A `PhysicalStorageBuffer` place of a `pointee` at word `word` (a `u32` index) of the
@@ -287,6 +300,20 @@ impl PsbMem {
     ) -> BResult<Value> {
         let addr = self.word_address(fb, word)?;
         fb.device_place(addr, pointee)
+    }
+
+    /// The place of a `pointee` at `addr`: `NonWritable` for a load of read-only memory.
+    fn place(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        addr: Value,
+        pointee: TypeId,
+        load: bool,
+    ) -> BResult<Value> {
+        match load && self.read_only {
+            true => fb.device_place_read_only(addr, pointee),
+            false => fb.device_place(addr, pointee),
+        }
     }
 
     /// The device address (a `u64`) of word `word` (a `u32` index) of the memory.
@@ -310,13 +337,13 @@ const WORD: MemAccess = MemAccess {
 
 impl WordMem for PsbMem {
     fn read(&mut self, fb: &mut FunctionBuilder<'_>, word: Value) -> BResult<Value> {
-        let p = self.word_ptr(fb, word)?;
+        let p = self.word_ptr(fb, word, true)?;
         let access = self.ops.access(fb, WORD, false)?;
         fb.load(p, access)
     }
 
     fn write(&mut self, fb: &mut FunctionBuilder<'_>, word: Value, value: Value) -> BResult<()> {
-        let p = self.word_ptr(fb, word)?;
+        let p = self.word_ptr(fb, word, false)?;
         let access = self.ops.access(fb, WORD, true)?;
         fb.store(p, value, access)
     }
@@ -328,7 +355,7 @@ impl WordMem for PsbMem {
         mask: Value,
         bits: Value,
     ) -> BResult<()> {
-        let p = self.word_ptr(fb, word)?;
+        let p = self.word_ptr(fb, word, false)?;
         let keep = fb.unary(UnOp::Not, mask)?;
         let clear = fb.binary(BinOp::BitwiseOr, keep, bits)?;
         fb.atomic(AtomicOp::And, p, Scope::Device, Semantics::RELAXED, clear)?;
@@ -346,7 +373,7 @@ impl WordMem for PsbMem {
         bytes: u32,
         index: Value,
     ) -> BResult<Value> {
-        let (p, _) = self.unit_ptr(fb, bytes, index)?;
+        let (p, _) = self.unit_ptr(fb, bytes, index, true)?;
         let access = self.ops.access(fb, unit_access(bytes), false)?;
         let x = fb.load(p, access)?;
         let u32_ = fb.module().ty(Type::Int {
@@ -367,7 +394,7 @@ impl WordMem for PsbMem {
         index: Value,
         value: Value,
     ) -> BResult<()> {
-        let (p, ty) = self.unit_ptr(fb, bytes, index)?;
+        let (p, ty) = self.unit_ptr(fb, bytes, index, false)?;
         let x = fb.convert(ConvOp::UConvert, value, ty)?;
         let access = self.ops.access(fb, unit_access(bytes), true)?;
         fb.store(p, x, access)

@@ -6,7 +6,7 @@ use crate::spirv::builder::ops::{err, index};
 use crate::spirv::error::{BResult, BuildError, ControlRule, OperandRule};
 use crate::spirv::ids::{FuncId, TypeId, Value};
 use crate::spirv::ir::{
-    natural_layout, ConvOp, Inst, LayoutRule, Shape, StorageClass, Type, ValueOrigin,
+    natural_layout, ConvOp, Inst, LayoutRule, Shape, StorageClass, StructLayout, Type, ValueOrigin,
 };
 
 impl FunctionBuilder<'_> {
@@ -124,13 +124,27 @@ impl FunctionBuilder<'_> {
     /// from here. The block takes the pointee's own layout rule, at most std430, so it needs no
     /// layout feature the pointee does not.
     pub fn device_place(&mut self, addr: Value, pointee: TypeId) -> BResult<Value> {
+        self.place_at(addr, pointee, false)
+    }
+
+    /// [`device_place`](Self::device_place) for memory nothing writes while the module runs: its
+    /// block's member is `NonWritable`, so the device may read it as read-only memory (RADV reads a
+    /// uniform address of it with a scalar load). Only loads go through it.
+    pub fn device_place_read_only(&mut self, addr: Value, pointee: TypeId) -> BResult<Value> {
+        self.place_at(addr, pointee, true)
+    }
+
+    fn place_at(&mut self, addr: Value, pointee: TypeId, non_writable: bool) -> BResult<Value> {
         let rule = self
             .mb()
             .types()
             .facts(pointee)?
             .max_rule()
             .min(LayoutRule::Std430);
-        let layout = natural_layout(self.mb().types(), rule, true, &[pointee])?;
+        let layout = StructLayout {
+            non_writable,
+            ..natural_layout(self.mb().types(), rule, true, &[pointee])?
+        };
         let block = self.module().ty(Type::Struct {
             members: [pointee].into(),
             layout: Some(layout),

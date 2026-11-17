@@ -760,6 +760,7 @@ fn device_places_are_block_members_at_offset_zero() {
             let layout = StructLayout {
                 rule,
                 block: true,
+                non_writable: false,
                 members: [MemberLayout {
                     offset: 0,
                     matrix_stride: None,

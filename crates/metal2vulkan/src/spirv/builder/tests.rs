@@ -87,6 +87,7 @@ impl T {
             layout: Some(StructLayout {
                 rule,
                 block: false,
+                non_writable: false,
                 members: offsets
                     .iter()
                     .map(|o| MemberLayout {
@@ -362,6 +363,7 @@ fn runtime_arrays_only_end_blocks_or_index_descriptors() {
             members: [u, rta].into(),
             layout: Some(StructLayout {
                 block: false,
+                non_writable: false,
                 ..not_last
             }),
         }),
@@ -477,6 +479,7 @@ fn matrix_members_need_a_valid_matrix_stride() {
         layout: Some(StructLayout {
             rule,
             block: false,
+            non_writable: false,
             members: [MemberLayout {
                 offset: 0,
                 matrix_stride: ms,
@@ -507,6 +510,7 @@ fn matrix_members_need_a_valid_matrix_stride() {
         layout: Some(StructLayout {
             rule: LayoutRule::Std430,
             block: false,
+            non_writable: false,
             members: [MemberLayout {
                 offset: 0,
                 matrix_stride: Some(16),
@@ -1352,6 +1356,7 @@ fn operand_rules_are_enforced() {
             layout: Some(StructLayout {
                 rule: LayoutRule::Std430,
                 block: true,
+                non_writable: false,
                 members: [MemberLayout {
                     offset: 0,
                     matrix_stride: None,

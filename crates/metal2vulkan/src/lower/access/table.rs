@@ -105,6 +105,7 @@ pub fn declare(mb: &mut ModuleBuilder, placement: &PushPlacement) -> BResult<Opt
         layout: Some(StructLayout {
             rule: LayoutRule::Std140,
             block: true,
+            non_writable: false,
             members: layout.into(),
         }),
     })?;

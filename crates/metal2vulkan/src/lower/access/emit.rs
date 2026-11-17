@@ -284,8 +284,9 @@ pub(super) fn prepare(
             psb::prepare(fb, table, t.root, m, start, n, contained)?
         };
         let units = cx.plan.families.access.psb_units;
+        let read_only = cx.plan.families.access.unwritten.contains(&t.slot);
         return Ok(Prepared {
-            mem: Mem::Psb(a.mem.with(ops).with_units(units)),
+            mem: Mem::Psb(a.mem.with(ops).with_units(units).read_only(read_only)),
             off: a.off,
             inb: a.inb,
             guard_store: false,

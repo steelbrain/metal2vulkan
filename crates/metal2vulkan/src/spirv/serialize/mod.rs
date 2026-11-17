@@ -1794,6 +1794,9 @@ impl Ser<'_> {
                         Op::MemberDecorate,
                         &[id, i, Decoration::Offset as u32, ml.offset],
                     )?;
+                    if l.non_writable {
+                        w.inst(Op::MemberDecorate, &[id, i, Decoration::NonWritable as u32])?;
+                    }
                     if let Some(ms) = ml.matrix_stride {
                         w.inst(Op::MemberDecorate, &[id, i, Decoration::ColMajor as u32])?;
                         w.inst(

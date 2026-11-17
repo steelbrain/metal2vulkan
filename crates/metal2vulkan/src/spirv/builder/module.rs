@@ -803,6 +803,7 @@ impl ModuleBuilder {
             layout: Some(StructLayout {
                 rule,
                 block: true,
+                non_writable: false,
                 members: offsets.clone(),
             }),
         };

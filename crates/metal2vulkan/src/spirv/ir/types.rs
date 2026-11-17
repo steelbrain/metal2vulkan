@@ -109,11 +109,15 @@ pub struct MemberLayout {
     pub matrix_stride: Option<u32>,
 }
 
-/// The explicit layout of a struct: its rule, member offsets, and whether it is a `Block`.
+/// The explicit layout of a struct: its rule, member offsets, whether it is a `Block`, and whether
+/// its members are `NonWritable`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StructLayout {
     pub rule: LayoutRule,
     pub block: bool,
+    /// Every member is decorated `NonWritable`: the block of a device-address place of memory
+    /// nothing writes while the module runs (`FunctionBuilder::device_place_read_only`).
+    pub non_writable: bool,
     pub members: Box<[MemberLayout]>,
 }
 
@@ -924,6 +928,7 @@ pub fn natural_layout(
     Ok(StructLayout {
         rule,
         block,
+        non_writable: false,
         members: out.into_boxed_slice(),
     })
 }

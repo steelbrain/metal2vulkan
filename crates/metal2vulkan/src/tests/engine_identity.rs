@@ -25,6 +25,10 @@
 //! - The same kernel with its textures in an argument buffer (`tex` with `ab`) reads their
 //!   resource IDs from the buffer's members, at its pushed address, and answers the same at the
 //!   same elements, with no handle table and no descriptor.
+//! - A kernel's slots that nothing writes (`read_only`, generated: an unaliased `device` buffer it
+//!   only reads and a `constant` one) are loaded through `NonWritable` device-address places; a
+//!   written slot, and a `device` slot the AIR does not declare unaliased, are not. It passes L3
+//!   and computes its answer on the CPU interpreter.
 //! - A kernel that samples a texture (`engine/a2_dynamic_texel_offset`) is still refused as
 //!   `Unsupported{IdentityDomains}`, not implemented, where the default domains compile it.
 //! - A kernel's emulated-simdgroup variant (`engine/gsm2_simd_products`'s `simd_float_products`)
@@ -1116,6 +1120,178 @@ fn the_emulated_tiers_barriers_run_only_in_a_threadgroup_of_several_threads() {
                     _ => assert!(passed > Some(0), "{stem}: {n} threads exchange"),
                 }
             }
+        }
+    }
+}
+
+/// A kernel adding the `constant` word `n` (slot 2) to the word at `data + n` (slot 0) and storing
+/// the sum to `out` (slot 1); `data` carries `air-buffer-no-alias` where `unaliased`, and the sum
+/// is stored back to `data` too where `data_written`. `n` carries no attribute.
+fn read_only_kernel(unaliased: bool, data_written: bool) -> String {
+    let attribute = if unaliased {
+        " \"air-buffer-no-alias\""
+    } else {
+        ""
+    };
+    let write_back = if data_written {
+        "  store i32 %s, ptr addrspace(1) %0, align 4\n"
+    } else {
+        ""
+    };
+    format!(
+        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @read_only(ptr addrspace(1) noundef{attribute} %0, ptr addrspace(1) noundef \"air-buffer-no-alias\" %1, ptr addrspace(2) noundef %2) {{\n\
+entry:\n\
+  %n = load i32, ptr addrspace(2) %2, align 4\n\
+  %p = getelementptr i8, ptr addrspace(1) %0, i32 %n\n\
+  %v = load i32, ptr addrspace(1) %p, align 4\n\
+  %s = add i32 %v, %n\n\
+  store i32 %s, ptr addrspace(1) %1, align 4\n\
+{write_back}  ret void\n\
+}}\n\n\
+!air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
+!9 = !{{ptr @read_only, !10, !11}}\n!10 = !{{}}\n!11 = !{{!12, !13, !14}}\n\
+!12 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"data\"}}\n\
+!13 = !{{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}}\n\
+!14 = !{{i32 2, !\"air.buffer\", !\"air.buffer_size\", i32 4, !\"air.location_index\", i32 2, i32 1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"n\"}}\n\
+!17 = !{{i32 2, i32 8, i32 0}}\n!18 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
+    )
+}
+
+/// The device-address loads of serialized module `words`: how many go through a `NonWritable`
+/// place (a member of a block decorated `NonWritable`) and how many through a writable one, and
+/// how many stores go through a `NonWritable` place.
+fn device_address_loads(words: &[u32]) -> (usize, usize, usize) {
+    const MEMBER_DECORATE: u32 = 72;
+    const NON_WRITABLE: u32 = 24;
+    const TYPE_POINTER: u32 = 32;
+    const PHYSICAL_STORAGE_BUFFER: u32 = 5349;
+    const CONVERT_U_TO_PTR: u32 = 120;
+    const ACCESS_CHAIN: u32 = 65;
+    const LOAD: u32 = 61;
+    const STORE: u32 = 62;
+    let insts = || {
+        let mut at = 5;
+        std::iter::from_fn(move || {
+            let w = *words.get(at)?;
+            let len = ((w >> 16) as usize).max(1);
+            let inst = &words[at..(at + len).min(words.len())];
+            at += len;
+            Some((w & 0xFFFF, inst))
+        })
+    };
+    let read_only_blocks: Vec<u32> = insts()
+        .filter(|(op, i)| *op == MEMBER_DECORATE && i.get(3) == Some(&NON_WRITABLE))
+        .map(|(_, i)| i[1])
+        .collect();
+    // Each device-address pointer type, whether its block is `NonWritable`.
+    let pointers: BTreeMap<u32, bool> = insts()
+        .filter(|(op, i)| *op == TYPE_POINTER && i.get(2) == Some(&PHYSICAL_STORAGE_BUFFER))
+        .map(|(_, i)| (i[1], read_only_blocks.contains(&i[3])))
+        .collect();
+    let mut bases = BTreeMap::new();
+    let mut places = BTreeMap::new();
+    let (mut read_only, mut writable, mut stores) = (0, 0, 0);
+    for (op, i) in insts() {
+        match op {
+            CONVERT_U_TO_PTR => {
+                if let Some(&ro) = pointers.get(&i[1]) {
+                    bases.insert(i[2], ro);
+                }
+            }
+            ACCESS_CHAIN => {
+                if let Some(&ro) = bases.get(&i[3]) {
+                    places.insert(i[2], ro);
+                }
+            }
+            LOAD => match places.get(&i[3]) {
+                Some(true) => read_only += 1,
+                Some(false) => writable += 1,
+                None => {}
+            },
+            STORE => stores += usize::from(places.get(&i[1]) == Some(&true)),
+            _ => {}
+        }
+    }
+    (read_only, writable, stores)
+}
+
+/// Under the identity domains a slot nothing in the kernel writes is loaded through
+/// `NonWritable` device-address places, so the device may read it as read-only memory (RADV reads
+/// a uniform address of it with a scalar load): a `constant` slot, aliased or not, and a `device`
+/// slot the AIR declares unaliased that no store reaches. A `device` slot without the attribute,
+/// or one the kernel also writes, is loaded through a writable place, and no store goes through a
+/// `NonWritable` one. Each kernel passes L3 and computes its sum on the CPU interpreter.
+#[test]
+fn unwritten_slots_are_loaded_through_non_writable_places() {
+    // (case, data unaliased, data written, the unwritten slots, read-only and writable loads)
+    let cases = [
+        ("read_only", true, false, vec![0u32, 2], (2, 0)),
+        ("data_aliased", false, false, vec![2], (1, 1)),
+        ("data_written", true, true, vec![2], (1, 1)),
+    ];
+    const N: u32 = 8;
+    const AT: [u64; 3] = [0x1_0000_0000, 0x2_0000_1000, 0x3_0000_2000];
+    let mut data = vec![0u8; 16];
+    data[8..12].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+    let want = 0x1234_5678u32 + N;
+    for (case, unaliased, written, slots, loads) in cases {
+        let Some(bc) = assemble_text(case, &read_only_kernel(unaliased, written)) else {
+            return;
+        };
+        for stem in PROFILES {
+            let what = format!("{stem} {case}");
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            let (a, plan, module) =
+                compile_kept(&bc, "read_only", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let unwritten: Vec<u32> = plan
+                .families
+                .access
+                .unwritten
+                .iter()
+                .filter_map(|&i| plan.slots.get(i).copied().flatten())
+                .map(|c| c.slot.index)
+                .collect();
+            assert_eq!(unwritten, slots, "{what}: unwritten slots");
+            let (read_only, writable, stores) = device_address_loads(&a.module.words);
+            assert_eq!((read_only, writable), loads, "{what}: loads");
+            assert_eq!(stores, 0, "{what}: a store through a NonWritable place");
+            let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+            for f in &plan.push.fields {
+                let PushLoc::Push { offset } = f.loc else {
+                    panic!("{what}: {f:?} spilled");
+                };
+                let o = offset as usize;
+                match f.field {
+                    PushField::SlotGuestBase(s) => {
+                        push[o..o + 8].copy_from_slice(&AT[s.index as usize].to_le_bytes());
+                    }
+                    PushField::DispatchRegion => {
+                        let region = region_bytes([0; 3], [1, 1, 1], [1, 1, 1]).expect("packs");
+                        push[o..o + 32].copy_from_slice(&region);
+                    }
+                    _ => panic!("{what}: unexpected push field {f:?}"),
+                }
+            }
+            let buffer = |at: u64, bytes: Vec<u8>| Buffer {
+                slot: None,
+                address: Some(at),
+                bytes,
+            };
+            let res = Resources {
+                buffers: vec![
+                    buffer(AT[0], data.clone()),
+                    buffer(AT[1], vec![0; 4]),
+                    buffer(AT[2], N.to_le_bytes().to_vec()),
+                ],
+                push,
+                spec: local_size(1),
+            };
+            let got =
+                run(&module, &Config::default(), res).unwrap_or_else(|e| panic!("{what}: {e}"));
+            assert_eq!(got.buffers[1], want.to_le_bytes(), "{what}: out");
         }
     }
 }

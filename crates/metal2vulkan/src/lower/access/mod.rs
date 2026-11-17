@@ -755,9 +755,11 @@ pub struct AccessPlan {
     /// while the dispatch or draw runs, and an atomic needs a storage view's word pointer, so the
     /// per-stage storage-buffer fallback never views them as uniform buffers.
     pub ordered: BTreeSet<usize>,
-    /// Memory-plan slots read through a storage view whose memory nothing in the module writes
-    /// ([`unwritten_slots`]): their views are decorated `NonWritable`, so the device may read them
-    /// as read-only memory (on RADV a uniform read is a scalar load).
+    /// Memory-plan slots whose memory nothing in the module writes ([`unwritten_slots`]), read
+    /// through a storage view or, under the identity domains, their device address: their views
+    /// are decorated `NonWritable`, and their device-address loads go through `NonWritable` places
+    /// (`psb::PsbMem::read_only`), so the device may read them as read-only memory (on RADV a
+    /// uniform read is a scalar load).
     pub unwritten: BTreeSet<usize>,
     /// The units ([`Units`]) the static-root accesses of each slot read or write whole, by
     /// memory-plan slot index: narrow units whose storage access the profile has, and `uvec2`
@@ -1670,12 +1672,14 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
 const BUFFER_NO_ALIAS: &[u8] = b"air-buffer-no-alias";
 
 /// The memory-plan slots whose memory nothing in the module writes, among those read through a
-/// storage view (`lowering`): a plain buffer argument the AIR declares unaliased
-/// ([`BUFFER_NO_ALIAS`]) that no store or atomic of the function reaches, through the slot or
-/// through a pointer its address may come back as (`SlotPlan::wide`), and that no volatile or
-/// coherent access reads (what it reads may change while the dispatch runs). Being unaliased, its
-/// memory is no other argument's, so no write of the module lands on it. A buffer-table element
-/// and a pulled fetch's source are left out.
+/// storage view (`lowering`) or, under the identity domains, through their device address: a
+/// plain buffer argument the AIR declares unaliased ([`BUFFER_NO_ALIAS`]) that no store or atomic
+/// of the function reaches, through the slot or through a pointer its address may come back as
+/// (`SlotPlan::wide`), and that no volatile or coherent access reads (what it reads may change
+/// while the dispatch runs). Being unaliased, its memory is no other argument's, so no write of
+/// the module lands on it. A device-address `constant` argument is one too, aliased or not: Metal's
+/// `constant` address space is read-only, so no write of a Metal program lands on it while it
+/// runs. A buffer-table element and a pulled fetch's source are left out.
 fn unwritten_slots(
     cx: &SelectCx<'_>,
     lowering: &[Option<SlotLowering>],
@@ -1693,21 +1697,26 @@ fn unwritten_slots(
                 .any(|&(key, _)| module.symbols().get(key) == Some(BUFFER_NO_ALIAS))
         })
     };
-    let storage = Some(SlotLowering::View(ViewKind::Storage));
+    let identity = identity(cx.profile);
     cx.memory
         .slots
         .iter()
         .zip(lowering)
         .enumerate()
         .filter(|&(i, (plan, l))| {
-            *l == storage
+            let unwritten = !plan.access.write && !plan.wide.write && unaliased(plan.param);
+            let read_only = match l {
+                Some(SlotLowering::View(ViewKind::Storage)) => unwritten,
+                Some(SlotLowering::Psb { .. }) if identity => {
+                    unwritten || plan.space == AddrSpace::Constant
+                }
+                _ => false,
+            };
+            read_only
                 && plan.element.is_none()
                 && !sources.contains(&plan.slot)
-                && !plan.access.write
-                && !plan.wide.write
                 && !plan.atomic
                 && !cx.families.access.ordered.contains(&i)
-                && unaliased(plan.param)
         })
         .map(|(i, _)| i)
         .collect()
@@ -1969,7 +1978,7 @@ pub fn declare(
             (Some(c), Some(SlotLowering::View(kind))) => Some(views::declare(mb, c.slot, kind)?),
             _ => None,
         };
-        if let (Some(c), true) = (s, plan.families.access.unwritten.contains(&i)) {
+        if let (Some(c), Some(_), true) = (s, view, plan.families.access.unwritten.contains(&i)) {
             mb.unwritten_buffer(views::binding_symbol(c.slot));
         }
         d.views.push(view);
