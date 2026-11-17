@@ -3,9 +3,9 @@
 The Metal API on Vulkan, with one path for every device. It replaces `metal2vulkan-runtime` and
 takes its name when it does; until then it is unpublished.
 
-Its public API so far: the instance and the device, memory blocks and the buffers in them, command
-queues, command buffers and events, the device's counters, and `floor`, the check of a Vulkan
-device against the floor below.
+Its public API so far: the instance and the device, memory blocks and the buffers in them, the
+grants of texture and sampler indices, command queues, command buffers and events, the device's
+counters, and `floor`, the check of a Vulkan device against the floor below.
 
 ## Instance and device
 
@@ -116,6 +116,30 @@ thread; in `Device::quiesce`, on the calling thread, for every block still hande
 teardown, on the thread that tears down, after the runtime's other threads are joined. It never calls
 into the runtime. Blocks the consumer never took are freed without it, and so is every block freed
 after a quiesce.
+
+## Set 1 and index grants
+
+Shaders reach textures and samplers by index (`docs/RESOURCE-ID.md`). Every pipeline takes set 1,
+one descriptor set the device makes at creation, of five arrays whose element `i` is the object
+whose `gpuResourceID` holds index `i`: 65,536 sampled textures (binding 0), 4,096
+storage-capable textures (binding 1), and 4,000 samplers of each use, plain, depth comparison and
+integer texture (bindings 2, 3 and 4). Every binding is partially bound, updated after bind and
+updated while unused elements are pending, so an object's element is written once, as it is
+made, with no lock, and never rewritten for layouts.
+
+- Every element no object owns is defined. A texture element is a null descriptor
+  (`nullDescriptor`): it reads zeros, sizes 0 and drops writes, as Metal's nil texture does. A
+  sampler element is its array's default sampler, nearest and clamped to the edge; the
+  comparison array's compares with `NEVER`, so a comparison through it answers 0, as Metal's
+  default compare function does. Vulkan has no null sampler. The device writes every element so
+  at creation and holds two `VkSampler`s for the defaults (`Gauges::device_samplers`).
+- `Device::grant_indices(class, first, count)` grants the consumer the range it names, so the IDs
+  it chooses from it on the guest's side reproduce in replay. The three classes are disjoint
+  (`IndexClass::range`): storage-capable textures (shader-write or unknown usage) take 1 to 4,095,
+  one index valid in both texture arrays; other textures 4,096 to 65,535; samplers 1 to 3,999.
+  Index 0 is nil and never granted. A range that is empty or leaves its class's is
+  `Limit::IndexRange`, and one holding an index granted already `Refusal::IndicesGranted`.
+  `Device::release_indices` returns a grant; one not granted is `Refusal::IndicesNotGranted`.
 
 ## Queues, command buffers and events
 
@@ -400,6 +424,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_surface` | instance | presenting |
 | `VK_KHR_swapchain` | device | presenting |
 | `VK_KHR_workgroup_memory_explicit_layout` | device | threadgroup memory laid out as Metal lays it |
+| `VK_EXT_robustness2` | device | null descriptors |
 | `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
 
@@ -419,6 +444,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderSampledImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
 | `shaderStorageImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
 | `shaderStorageImageWriteWithoutFormat` | `VkPhysicalDeviceFeatures` | writes to array elements of any pixel format |
+| `nullDescriptor` | `VkPhysicalDeviceRobustness2FeaturesEXT` | every texture element no texture owns: a nil, freed or unowned index reads zeros, sizes 0 and drops writes, as Metal's nil texture does. The robust buffer and image access beside it stay off |
 | `shaderInt16` | `VkPhysicalDeviceFeatures` | `short` and `ushort` in shaders |
 | `shaderInt8` | `VkPhysicalDeviceVulkan12Features` | `char` and `uchar` in shaders |
 | `storageBuffer16BitAccess` | `VkPhysicalDeviceVulkan11Features` | 16-bit values in buffers |
@@ -441,8 +467,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 ### Limits
 
 The descriptor limits are what the runtime's fixed arrays need: 65,536 sampled textures, 4,096
-read-write textures and 4,000 samplers. 4,000 is Vulkan's minimum `maxSamplerAllocationCount`, so
-every slot can hold a live sampler on every device. The compute limits let a threadgroup take
+read-write textures and three arrays of 4,000 samplers, one per use (plain, depth comparison,
+integer texture). 4,000 is Vulkan's minimum `maxSamplerAllocationCount`. The compute limits let a threadgroup take
 Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's minimum is 1,
 `VK_TRUE`; `timestampValidBits` is the queue family's.
 
@@ -452,11 +478,11 @@ Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's
 | `maxDescriptorSetUpdateAfterBindSampledImages` | `65536` | the sampled-texture array |
 | `maxPerStageDescriptorUpdateAfterBindStorageImages` | `4096` | the read-write texture array |
 | `maxDescriptorSetUpdateAfterBindStorageImages` | `4096` | the read-write texture array |
-| `maxPerStageDescriptorUpdateAfterBindSamplers` | `4000` | the sampler array |
-| `maxDescriptorSetUpdateAfterBindSamplers` | `4000` | the sampler array |
-| `maxSamplerAllocationCount` | `4000` | a live sampler in every slot |
+| `maxPerStageDescriptorUpdateAfterBindSamplers` | `12000` | the three sampler arrays |
+| `maxDescriptorSetUpdateAfterBindSamplers` | `12000` | the three sampler arrays |
+| `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
 | `maxPerStageUpdateAfterBindResources` | `69632` | both texture arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
-| `maxUpdateAfterBindDescriptorsInAllPools` | `73632` | all three arrays |
+| `maxUpdateAfterBindDescriptorsInAllPools` | `81632` | all five arrays |
 | `maxPushConstantsSize` | `256` | per-command values: a dispatch region and 28 buffer addresses; anything larger goes in a block whose address is pushed |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |

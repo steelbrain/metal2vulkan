@@ -1,3 +1,4 @@
+mod arrays;
 mod cache;
 mod command;
 mod compute;

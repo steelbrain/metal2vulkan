@@ -143,6 +143,8 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
         .join()
         .expect("the presenting thread");
         assert_eq!(submitted, expected, "{name}: the presenting queue");
+        // Set 1's two default samplers, and nothing else.
+        assert_eq!(counters.gauges().device_samplers, 2, "{name}");
 
         drop(device);
         let gauges = counters.gauges();
@@ -155,6 +157,7 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
             ("descriptor_slots", gauges.descriptor_slots),
             ("blocks", gauges.blocks),
             ("events", gauges.events),
+            ("device_samplers", gauges.device_samplers),
         ] {
             println!("M2V-MATRIX gauge device_teardown/{kind}@drop {value}");
         }
@@ -292,8 +295,8 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
 }
 
 /// The translator's profile on every device of the cfg's kind holds only what device creation
-/// enabled: the floor's `robustImageAccess`, and none of the robustness features the runtime
-/// leaves off, whatever the device reports.
+/// enabled: the floor's `robustImageAccess` and `nullDescriptor`, and none of the robustness
+/// features the runtime leaves off, whatever the device reports.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn every_device_of_the_cfgs_kind_gives_the_translator_only_what_it_enables() {
@@ -310,18 +313,16 @@ fn every_device_of_the_cfgs_kind_gives_the_translator_only_what_it_enables() {
         let device = Device::new(physical, DeviceOptions::default())
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let enabled = &device.core().translator.profile().enabled().features;
-        assert!(
-            enabled.contains(&VkFeature::RobustImageAccess),
-            "{name}: robustImageAccess"
-        );
+        for on in [VkFeature::RobustImageAccess, VkFeature::NullDescriptor] {
+            assert!(enabled.contains(&on), "{name}: {on:?}");
+        }
         for off in [
             VkFeature::RobustImageAccess2,
             VkFeature::RobustBufferAccess,
             VkFeature::RobustBufferAccess2,
-            VkFeature::NullDescriptor,
         ] {
             assert!(!enabled.contains(&off), "{name}: {off:?}");
         }
-        println!("profile: {name}: robustImageAccess alone of the robustness features");
+        println!("profile: {name}: robustImageAccess and nullDescriptor alone of the robustness features");
     }
 }

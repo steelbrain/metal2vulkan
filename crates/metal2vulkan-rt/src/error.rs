@@ -1,5 +1,6 @@
 //! The error every fallible call returns: one typed variant per case, never text to parse.
 
+use crate::arrays::IndexClass;
 use crate::floor::BelowFloor;
 use crate::memory::BlockId;
 use ash::vk;
@@ -139,6 +140,26 @@ pub enum Refusal {
         /// The buffer's length.
         length: u64,
     },
+    /// A grant of an index already granted ([`Device::grant_indices`](crate::Device::grant_indices)).
+    /// Metal has no counterpart: Metal chooses its resource IDs itself.
+    ///
+    /// Basis: ours (each index has one grant, so each resource ID names one object).
+    IndicesGranted {
+        /// The class of the index.
+        class: IndexClass,
+        /// The first index of the range that is granted already.
+        index: u32,
+    },
+    /// A release of an index that is not granted
+    /// ([`Device::release_indices`](crate::Device::release_indices)). Metal has no counterpart.
+    ///
+    /// Basis: ours (a grant is returned once).
+    IndicesNotGranted {
+        /// The class of the index.
+        class: IndexClass,
+        /// The first index of the range that is not granted.
+        index: u32,
+    },
 }
 
 /// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
@@ -248,6 +269,20 @@ pub enum Limit {
         /// The most one call takes.
         max: u64,
     },
+    /// A grant of no indices, or one past its class's range
+    /// ([`Device::grant_indices`](crate::Device::grant_indices), [`IndexClass::range`]). Metal
+    /// has no counterpart.
+    ///
+    /// Basis: ours (the descriptor arrays are 65,536 sampled textures, 4,096 storage textures and
+    /// 4,000 samplers of each use, and index 0 is nil).
+    IndexRange {
+        /// The class asked for.
+        class: IndexClass,
+        /// The first index asked for.
+        first: u32,
+        /// How many indices.
+        count: u32,
+    },
 }
 
 impl Error {
@@ -307,6 +342,12 @@ impl fmt::Display for Refusal {
                 f,
                 "indirect arguments at offset {offset} of a {length}-byte buffer are misaligned or past its end"
             ),
+            Refusal::IndicesGranted { class, index } => {
+                write!(f, "{class:?} index {index} is granted already")
+            }
+            Refusal::IndicesNotGranted { class, index } => {
+                write!(f, "{class:?} index {index} is not granted")
+            }
         }
     }
 }
@@ -356,6 +397,14 @@ impl fmt::Display for Limit {
             Limit::BytesLength { len, max } => {
                 write!(f, "{len} bytes are past the most one call takes, {max}")
             }
+            Limit::IndexRange {
+                class,
+                first,
+                count,
+            } => write!(
+                f,
+                "{count} {class:?} indices from {first} are none or leave the class's range"
+            ),
         }
     }
 }

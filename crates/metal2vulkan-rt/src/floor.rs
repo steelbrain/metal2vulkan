@@ -19,11 +19,12 @@ pub const VERSION: u32 = vk::API_VERSION_1_3;
 /// runtime's own device.
 pub const INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::surface::NAME];
 
-/// The device extensions the runtime requires and device creation enables: presenting, and
-/// threadgroup memory laid out as Metal lays it.
+/// The device extensions the runtime requires and device creation enables: presenting,
+/// threadgroup memory laid out as Metal lays it, and null descriptors.
 pub const DEVICE_EXTENSIONS: &[&CStr] = &[
     ash::khr::swapchain::NAME,
     ash::khr::workgroup_memory_explicit_layout::NAME,
+    ash::ext::robustness2::NAME,
 ];
 
 /// The device extensions device creation enables where the device lists them, each for the
@@ -41,6 +42,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::KhrShaderMaximalReconvergence)
     } else if name == ash::khr::shader_subgroup_uniform_control_flow::NAME {
         Some(VkExtension::KhrShaderSubgroupUniformControlFlow)
+    } else if name == ash::ext::robustness2::NAME {
+        Some(VkExtension::ExtRobustness2)
     } else {
         None
     }
@@ -52,9 +55,12 @@ pub(crate) const SAMPLED_IMAGES: u32 = 65_536;
 /// Slots in the read-write texture array.
 pub(crate) const STORAGE_IMAGES: u32 = 4096;
 
-/// Slots in the sampler array. 4000 is Vulkan's minimum `maxSamplerAllocationCount`, so every
+/// Slots in each sampler array. 4000 is Vulkan's minimum `maxSamplerAllocationCount`, so every
 /// device can hold a sampler in every slot.
 pub(crate) const SAMPLERS: u32 = 4000;
+
+/// Sampler arrays: one per use of a sampler (plain, depth comparison, integer texture).
+pub(crate) const SAMPLER_ARRAYS: u32 = 3;
 
 /// Bytes of push constants: a dispatch region and 28 buffer addresses (the translator's push
 /// window on `Device::from_queries`' profile), which every captured device reports, so no query
@@ -150,6 +156,9 @@ pub struct Features {
     /// it.
     pub subgroup_uniform_control_flow:
         vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR<'static>,
+    /// `VkPhysicalDeviceRobustness2FeaturesEXT`, of `VK_EXT_robustness2`: only `nullDescriptor`
+    /// is enabled, never the robust buffer and image access beside it.
+    pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -183,6 +192,9 @@ macro_rules! feature {
     (@structure subgroup_uniform_control_flow) => {
         "VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR"
     };
+    (@structure robustness2) => {
+        "VkPhysicalDeviceRobustness2FeaturesEXT"
+    };
     (@translator) => {
         None
     };
@@ -215,6 +227,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan12.shader_sampled_image_array_non_uniform_indexing => ShaderSampledImageArrayNonUniformIndexing),
     feature!(vulkan12.shader_storage_image_array_non_uniform_indexing => ShaderStorageImageArrayNonUniformIndexing),
     feature!(core.shader_storage_image_write_without_format => ShaderStorageImageWriteWithoutFormat),
+    // Every array element no texture owns is a null descriptor: a nil, freed or unowned texture
+    // index reads zeros, answers 0 to its size queries and drops its writes, as Metal's nil
+    // texture does, with no code in the shader.
+    feature!(robustness2.null_descriptor => NullDescriptor),
     // The translator's shaders: 8-, 16- and 64-bit integers, 8- and 16-bit values in buffers,
     // scalar and std430 layout of buffer, uniform and push-constant blocks, threadgroup memory
     // laid out as Metal lays it, and the Vulkan memory model with device scope for atomics and
@@ -507,6 +523,7 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
         let maximal_reconvergence_listed = listed(ash::khr::shader_maximal_reconvergence::NAME);
         let uniform_control_flow_listed =
             listed(ash::khr::shader_subgroup_uniform_control_flow::NAME);
+        let robustness2_listed = listed(ash::ext::robustness2::NAME);
 
         let Features {
             core,
@@ -516,6 +533,7 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
             workgroup_layout,
             maximal_reconvergence,
             subgroup_uniform_control_flow,
+            robustness2,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -530,6 +548,9 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
         if uniform_control_flow_listed {
             features = features.push_next(&mut *subgroup_uniform_control_flow);
         }
+        if robustness2_listed {
+            features = features.push_next(&mut *robustness2);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -538,6 +559,7 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
         workgroup_layout.p_next = std::ptr::null_mut();
         maximal_reconvergence.p_next = std::ptr::null_mut();
         subgroup_uniform_control_flow.p_next = std::ptr::null_mut();
+        robustness2.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -748,12 +770,12 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 15] {
         (
             "maxPerStageDescriptorUpdateAfterBindSamplers",
             descriptors.max_per_stage_descriptor_update_after_bind_samplers,
-            SAMPLERS,
+            SAMPLER_ARRAYS * SAMPLERS,
         ),
         (
             "maxDescriptorSetUpdateAfterBindSamplers",
             descriptors.max_descriptor_set_update_after_bind_samplers,
-            SAMPLERS,
+            SAMPLER_ARRAYS * SAMPLERS,
         ),
         (
             "maxSamplerAllocationCount",
@@ -769,7 +791,7 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 15] {
         (
             "maxUpdateAfterBindDescriptorsInAllPools",
             descriptors.max_update_after_bind_descriptors_in_all_pools,
-            SAMPLED_IMAGES + STORAGE_IMAGES + SAMPLERS,
+            SAMPLED_IMAGES + STORAGE_IMAGES + SAMPLER_ARRAYS * SAMPLERS,
         ),
         (
             "maxPushConstantsSize",

@@ -8,6 +8,7 @@
 
 #![warn(missing_docs)]
 
+mod arrays;
 mod buffer;
 mod cache;
 mod command;
@@ -34,6 +35,7 @@ mod submit;
 mod tests;
 mod times;
 
+pub use arrays::{IndexClass, IndexGrant};
 pub use buffer::Buffer;
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};

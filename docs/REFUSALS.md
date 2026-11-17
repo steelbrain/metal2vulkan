@@ -37,8 +37,8 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -55,8 +55,8 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 2 | 5 | 0 | 0 | 4 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 2 | 5 | 0 | 0 | 6 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 3 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -623,6 +623,8 @@ Columns:
 | `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)` | `-` |
 | `ThreadgroupSize` | A threadgroup of no threads, or of more than the pipeline state's `maxTotalThreadsPerThreadgroup` | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)` | `-` |
 | `IndirectOffset` | An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer than 12 bytes (three 32-bit counts) in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset inside the buffer | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` | `-` |
+| `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
+| `IndicesNotGranted` | A release of an index that is not granted (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: a grant is returned once | 1: `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
 
 ## 12. The new runtime's `Limit` (`Error::Limit(Limit)`)
 
@@ -633,6 +635,7 @@ Columns:
 | `ThreadgroupShape` | A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds 1,024 by 1,024 by 64) | at the device's limit | `device`: the device's `maxComputeWorkGroupSize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `ThreadgroupMemory` | A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up to 16 bytes), is past the device's... | at the device's limit | `device`: the device's `maxComputeSharedMemorySize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)` | `-` |
+| `IndexRange` | A grant of no indices, or one past its class's range (`Device::grant_indices`, [`IndexClass::range`]) | every device (a public call's own check of its arguments) | `ours`: the descriptor arrays are 65,536 sampled textures, 4,096 storage textures and 4,000 samplers of each use, and index 0 is nil | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
 
@@ -1140,11 +1143,14 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::NoBufferAtIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)`
 - `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)`
 - `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`
+- `rt:Refusal::IndicesGranted`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
+- `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-rt/src/arrays.rs (release)`
 - `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)`
 - `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (number)`
 - `rt:Limit::ThreadgroupShape`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::ThreadgroupMemory`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`
+- `rt:Limit::IndexRange`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)`

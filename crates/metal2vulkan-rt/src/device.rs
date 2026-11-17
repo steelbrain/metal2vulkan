@@ -1,6 +1,7 @@
 //! The device: one `VkDevice` for every command queue, every guest process and the compositor;
 //! its queues, its memory blocks, its threads, quiesce and teardown.
 
+use crate::arrays::Arrays;
 use crate::cache::Caches;
 use crate::complete::{self, Done};
 use crate::counters::{Counters, Gauge};
@@ -150,8 +151,11 @@ pub(crate) struct Core {
     /// Every queue's timestamp pool not yet destroyed: one whose queue outlives the device is
     /// destroyed with it.
     pub(crate) query_pools: Mutex<Vec<vk::QueryPool>>,
-    /// The one pipeline layout of every pipeline: the push window over every stage.
+    /// The one pipeline layout of every pipeline: the empty set 0, set 1, and the push window
+    /// over every stage.
     pub(crate) layout: vk::PipelineLayout,
+    /// Set 1: the texture and sampler arrays, and the grants of their indices.
+    pub(crate) arrays: Arrays,
     /// The device's compute limits.
     pub(crate) limits: ComputeLimits,
     /// The parameter ring.
@@ -261,13 +265,15 @@ impl Device {
             mut workgroup_layout,
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
+            mut robustness2,
         } = enabled_features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
             .push_next(&mut vulkan11)
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
-            .push_next(&mut workgroup_layout);
+            .push_next(&mut workgroup_layout)
+            .push_next(&mut robustness2);
         // An optional extension's structure goes in only where the extension is enabled.
         let enabled = |name: &std::ffi::CStr| capabilities.extensions.contains(&name);
         if enabled(ash::khr::shader_maximal_reconvergence::NAME) {
@@ -327,7 +333,7 @@ impl Device {
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
         let made = unsafe { objects(&device, &capabilities, family, &counters) };
-        let (memory_types, filler, done, layout) = match made {
+        let (memory_types, filler, done, arrays, layout) = match made {
             Ok(made) => made,
             Err(error) => {
                 // SAFETY: nothing made from the device is left but the caches, which made no
@@ -389,6 +395,7 @@ impl Device {
             reaper: Reaper::new(),
             query_pools: Mutex::new(Vec::new()),
             layout,
+            arrays,
             limits,
             ring: Ring::new(),
             ids: Ids::new(),
@@ -802,7 +809,7 @@ unsafe fn objects(
     capabilities: &floor::Capabilities,
     family: u32,
     counters: &Counters,
-) -> Result<(floor::MemoryTypes, Filler, Done, vk::PipelineLayout), Error> {
+) -> Result<(floor::MemoryTypes, Filler, Done, Arrays, vk::PipelineLayout), Error> {
     // SAFETY: the caller's contract.
     let memory_types =
         unsafe { floor::memory_types(device, capabilities) }.map_err(Error::BelowFloor)?;
@@ -811,18 +818,34 @@ unsafe fn objects(
     let mut filler = unsafe { Filler::new(device, family, memory_types.shared, counters) }?;
     // SAFETY: the device is live.
     let made = unsafe { Done::new(device) }.and_then(|mut done| {
+        // SAFETY: the device is live, with the floor's features.
+        let arrays = match unsafe { Arrays::new(device, counters) } {
+            Ok(arrays) => arrays,
+            Err(error) => {
+                // SAFETY: the completion objects are unused.
+                unsafe { done.destroy(device) };
+                return Err(error);
+            }
+        };
         let push = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::ALL,
             offset: 0,
             size: PUSH_BYTES,
         }];
-        let info = vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push);
-        // SAFETY: the device is live, and the floor holds `PUSH_BYTES` of push constants.
+        let sets = arrays.set_layouts();
+        let info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&sets)
+            .push_constant_ranges(&push);
+        // SAFETY: the device is live, and the floor holds `PUSH_BYTES` of push constants and set
+        // 1's update-after-bind descriptors in one stage.
         match unsafe { device.create_pipeline_layout(&info, None) } {
-            Ok(layout) => Ok((done, layout)),
+            Ok(layout) => Ok((done, arrays, layout)),
             Err(result) => {
-                // SAFETY: the completion objects are unused.
-                unsafe { done.destroy(device) };
+                // SAFETY: the completion objects and set 1 are unused.
+                unsafe {
+                    arrays.destroy(device, counters);
+                    done.destroy(device);
+                }
                 Err(Error::Vulkan {
                     call: "vkCreatePipelineLayout",
                     result,
@@ -831,7 +854,7 @@ unsafe fn objects(
         }
     });
     match made {
-        Ok((done, layout)) => Ok((memory_types, filler, done, layout)),
+        Ok((done, arrays, layout)) => Ok((memory_types, filler, done, arrays, layout)),
         Err(error) => {
             // SAFETY: the fill's objects are unused.
             if unsafe { filler.destroy(device) } {
@@ -950,6 +973,7 @@ impl Drop for Core {
         let zero_source = unsafe {
             self.caches.destroy(&self.device);
             self.device.destroy_pipeline_layout(self.layout, None);
+            self.arrays.destroy(&self.device, &self.counters);
             self.done.destroy(&self.device);
             let zero_source = self.filler.destroy(&self.device);
             self.device.destroy_device(None);

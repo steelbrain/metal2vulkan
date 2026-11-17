@@ -74,6 +74,7 @@ fn at_the_floor() -> Queried {
     features.vulkan12.timeline_semaphore = vk::TRUE;
     features.vulkan13.synchronization2 = vk::TRUE;
     features.vulkan13.dynamic_rendering = vk::TRUE;
+    features.robustness2.null_descriptor = vk::TRUE;
 
     Queried {
         version: vk::make_api_version(0, 1, 3, 0),
@@ -89,10 +90,10 @@ fn at_the_floor() -> Queried {
             .max_descriptor_set_update_after_bind_sampled_images(65_536)
             .max_per_stage_descriptor_update_after_bind_storage_images(4096)
             .max_descriptor_set_update_after_bind_storage_images(4096)
-            .max_per_stage_descriptor_update_after_bind_samplers(4000)
-            .max_descriptor_set_update_after_bind_samplers(4000)
+            .max_per_stage_descriptor_update_after_bind_samplers(3 * 4000)
+            .max_descriptor_set_update_after_bind_samplers(3 * 4000)
             .max_per_stage_update_after_bind_resources(65_536 + 4096 + 8)
-            .max_update_after_bind_descriptors_in_all_pools(65_536 + 4096 + 4000),
+            .max_update_after_bind_descriptors_in_all_pools(65_536 + 4096 + 3 * 4000),
         features,
         extensions: DEVICE_EXTENSIONS
             .iter()
@@ -134,7 +135,8 @@ fn holds(features: &Features, feature: &crate::floor::Feature) -> bool {
 
 /// The translator's description is restricted to what device creation enables: a feature or an
 /// extension the device reports beyond the floor is outside the enable set, so the translator's
-/// profile never relies on it, and the floor's `robustImageAccess` is in it.
+/// profile never relies on it, and the floor's `robustImageAccess` and `nullDescriptor` are in it.
+/// `VK_EXT_robustness2`'s robust buffer and image access stay off where the device reports them.
 #[test]
 fn the_translator_sees_only_what_device_creation_enables() {
     use crate::floor::shader_enables;
@@ -143,12 +145,20 @@ fn the_translator_sees_only_what_device_creation_enables() {
     device.features.core.geometry_shader = vk::TRUE;
     device.features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
     device.features.vulkan13.robust_image_access = vk::TRUE;
-    device
-        .extensions
-        .push(ash::ext::robustness2::NAME.to_owned());
+    device.features.robustness2.robust_image_access2 = vk::TRUE;
+    device.features.robustness2.robust_buffer_access2 = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert_eq!(
+        capabilities.features.robustness2.robust_image_access2,
+        vk::FALSE
+    );
+    assert_eq!(
+        capabilities.features.robustness2.robust_buffer_access2,
+        vk::FALSE
+    );
     let enables = shader_enables(&capabilities);
     assert!(enables.features.contains(&VkFeature::RobustImageAccess));
+    assert!(enables.features.contains(&VkFeature::NullDescriptor));
     for reported in [
         VkFeature::GeometryShader,
         VkFeature::SamplerMirrorClampToEdge,
@@ -158,7 +168,8 @@ fn the_translator_sees_only_what_device_creation_enables() {
     ] {
         assert!(!enables.features.contains(&reported), "{reported:?}");
     }
-    assert!(!enables.extensions.contains(&VkExtension::ExtRobustness2));
+    // `nullDescriptor` comes with the extension, which device creation enables.
+    assert!(enables.extensions.contains(&VkExtension::ExtRobustness2));
 }
 
 #[test]
@@ -210,8 +221,9 @@ fn each_missing_feature_is_named() {
     const V13: &str = "VkPhysicalDeviceVulkan13Features";
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const LAYOUT: &str = "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR";
+    const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 30] = [
+    let cases: [(Clear, Missing); 31] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -347,6 +359,10 @@ fn each_missing_feature_is_named() {
             |f| f.vulkan13.dynamic_rendering = vk::FALSE,
             feature(V13, "dynamicRendering"),
         ),
+        (
+            |f| f.robustness2.null_descriptor = vk::FALSE,
+            feature(ROBUSTNESS2, "nullDescriptor"),
+        ),
     ];
     assert_eq!(
         cases.len(),
@@ -399,15 +415,15 @@ fn each_low_limit_is_named() {
         (
             |d| {
                 d.vulkan12
-                    .max_per_stage_descriptor_update_after_bind_samplers = 3999
+                    .max_per_stage_descriptor_update_after_bind_samplers = 11_999
             },
             "maxPerStageDescriptorUpdateAfterBindSamplers",
-            4000,
+            12_000,
         ),
         (
-            |d| d.vulkan12.max_descriptor_set_update_after_bind_samplers = 3999,
+            |d| d.vulkan12.max_descriptor_set_update_after_bind_samplers = 11_999,
             "maxDescriptorSetUpdateAfterBindSamplers",
-            4000,
+            12_000,
         ),
         (
             |d| d.limits.max_sampler_allocation_count = 3999,
@@ -420,9 +436,9 @@ fn each_low_limit_is_named() {
             65_536 + 4096 + 8,
         ),
         (
-            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 65_536 + 4096 + 3999,
+            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 65_536 + 4096 + 11_999,
             "maxUpdateAfterBindDescriptorsInAllPools",
-            65_536 + 4096 + 4000,
+            65_536 + 4096 + 12_000,
         ),
         (
             |d| d.limits.max_push_constants_size = 255,
@@ -691,6 +707,7 @@ fn every_missing_item_is_named_at_once() {
         [
             Missing::Extension(ash::khr::swapchain::NAME),
             Missing::Extension(ash::khr::workgroup_memory_explicit_layout::NAME),
+            Missing::Extension(ash::ext::robustness2::NAME),
             feature("VkPhysicalDeviceFeatures", "shaderInt64"),
             feature("VkPhysicalDeviceVulkan13Features", "dynamicRendering"),
             Missing::Limit {
@@ -707,7 +724,8 @@ fn every_missing_item_is_named_at_once() {
     assert_eq!(
         below.to_string(),
         "the device is below the runtime's floor: it lacks VK_KHR_swapchain; \
-         VK_KHR_workgroup_memory_explicit_layout; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
+         VK_KHR_workgroup_memory_explicit_layout; VK_EXT_robustness2; \
+         VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
          maxPushConstantsSize 64, below 256; a queue family with graphics and compute; a memory \
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers"
@@ -951,13 +969,15 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut workgroup_layout,
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
+            mut robustness2,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
             .push_next(&mut vulkan11)
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
-            .push_next(&mut workgroup_layout);
+            .push_next(&mut workgroup_layout)
+            .push_next(&mut robustness2);
         let enabled = |name: &std::ffi::CStr| capabilities.extensions.contains(&name);
         if enabled(ash::khr::shader_maximal_reconvergence::NAME) {
             features = features.push_next(&mut maximal_reconvergence);

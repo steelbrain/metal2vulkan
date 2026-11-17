@@ -38,6 +38,8 @@ pub(crate) enum Gauge {
     CommandBuffers,
     /// [`Gauges::events`].
     Events,
+    /// [`Gauges::device_samplers`].
+    DeviceSamplers,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -72,6 +74,7 @@ struct Atomics {
     descriptor_slots: AtomicU64,
     blocks: AtomicU64,
     events: AtomicU64,
+    device_samplers: AtomicU64,
 }
 
 impl Counters {
@@ -125,6 +128,7 @@ impl Counters {
             Gauge::Blocks => &a.blocks,
             Gauge::CommandBuffers => &a.command_buffers,
             Gauge::Events => &a.events,
+            Gauge::DeviceSamplers => &a.device_samplers,
         }
     }
 
@@ -159,6 +163,7 @@ impl Counters {
             descriptor_slots: a.descriptor_slots.load(Relaxed),
             blocks: a.blocks.load(Relaxed),
             events: a.events.load(Relaxed),
+            device_samplers: a.device_samplers.load(Relaxed),
         }
     }
 }
@@ -225,4 +230,7 @@ pub struct Gauges {
     pub blocks: u64,
     /// Events and shared events (timeline semaphores).
     pub events: u64,
+    /// `VkSampler`s the runtime holds: the default samplers of the sampler arrays. They count
+    /// against the device's `maxSamplerAllocationCount`.
+    pub device_samplers: u64,
 }
