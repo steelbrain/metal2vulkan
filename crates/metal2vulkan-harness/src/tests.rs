@@ -6,7 +6,7 @@ use crate::plan::{
     Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Grid, Output, Plan, Source, Values,
 };
 use crate::rt::Ranges;
-use crate::run::{compare_outputs, percentile, settled, warm_up, zeroed, Report, Runs};
+use crate::run::{compare_outputs, percentile, settled, steady, warm_up, zeroed, Report, Runs};
 use crate::{Buffer, Storage};
 use std::path::Path;
 use std::ptr::NonNull;
@@ -377,4 +377,20 @@ fn without_settling_a_warm_up_runs_its_least_count() {
     })
     .unwrap();
     assert_eq!((warmup.runs, warmup.settled, count), (7, false, 7));
+}
+
+#[test]
+fn a_steady_time_is_the_lowest_median_of_windows_of_ten() {
+    assert_eq!(steady(&[1.0; 4]), None, "fewer than 5 runs");
+    assert_eq!(
+        steady(&[3.0, 1.0, 2.0, 5.0, 4.0]),
+        Some(3.0),
+        "their median below 10"
+    );
+    // A clock that drops partway through: the faster windows' level, not the mix.
+    let mut times = vec![100.0; 20];
+    times.extend([105.0; 30]);
+    times[3] = 400.0;
+    assert_eq!(steady(&times), Some(100.0));
+    assert_eq!(percentile(&times, 50), Some(105.0));
 }

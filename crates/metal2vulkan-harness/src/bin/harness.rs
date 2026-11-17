@@ -19,8 +19,8 @@
 use metal2vulkan_harness::authored::Create;
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
-    compare_outputs, percentile, Buffers, CreateReport, Harness, Report, Runs, Session, Warmup,
-    LEAST_TIMED,
+    compare_outputs, percentile, steady, Buffers, CreateReport, Harness, Report, Runs, Session,
+    Warmup,
 };
 use metal2vulkan_harness::{authored, description, old, rt, Result};
 use std::path::PathBuf;
@@ -161,7 +161,7 @@ fn run_all(args: &Args) -> Result<bool> {
     );
     if !workloads.is_empty() {
         println!(
-            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15}  gauges @100 -> @200",
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15}  gauges @100 -> @200",
             "workload",
             "runtime",
             "dispatches",
@@ -169,10 +169,19 @@ fn run_all(args: &Args) -> Result<bool> {
             "gpu_us_p10",
             "gpu_us_p50",
             "gpu_us_p90",
+            "steady",
             "encode_ns/dispatch",
             "cpu_ns/dispatch",
         );
     }
+    let set = if args.description.is_some() {
+        "described"
+    } else {
+        "authored"
+    };
+    let pipelines_before: Vec<u64> = (sessions.iter())
+        .map(|(_, session)| session.pipelines_created())
+        .collect();
     let mut matched = true;
     for (name, plan) in &workloads {
         let checked = plan().and_then(|plan| {
@@ -196,10 +205,17 @@ fn run_all(args: &Args) -> Result<bool> {
             }
         }
     }
+    if !workloads.is_empty() {
+        for ((runtime, session), before) in sessions.iter().zip(pipelines_before) {
+            let made = session.pipelines_created() - before;
+            println!("runtime {runtime}: the {set} workloads created {made} pipelines");
+            println!("M2V-MATRIX metric harness-{runtime}/{set}/pipelines_created {made}");
+        }
+    }
     if !creates.is_empty() {
         println!(
-            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11}  gauges @100 -> @200",
-            "create", "runtime", "bytes", "warmup", "us_p10", "us_p50", "us_p90",
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  gauges @100 -> @200",
+            "create", "runtime", "bytes", "warmup", "us_p10", "us_p50", "us_p90", "steady",
         );
     }
     for create in &creates {
@@ -235,6 +251,11 @@ fn run_all(args: &Args) -> Result<bool> {
     Ok(matched)
 }
 
+/// The column of a workload's [`steady`] time.
+fn time(times: &[f64]) -> String {
+    steady(times).map_or("-".to_owned(), |us| format!("{us:.1}"))
+}
+
 /// The column of `warmup`: its runs, marked where the time did not settle.
 fn warmup(warmup: &Warmup) -> String {
     let unsettled = if warmup.settled { "" } else { "~" };
@@ -244,10 +265,8 @@ fn warmup(warmup: &Warmup) -> String {
 /// The matrix lines of a workload's gauges at the timed runs they were read after, and of its
 /// time where it timed at least [`LEAST_TIMED`] runs.
 fn matrix(runtime: &str, name: &str, times: &[f64], gauges: &[(u32, Vec<(&'static str, u64)>)]) {
-    if times.len() >= LEAST_TIMED {
-        if let Some(median) = percentile(times, 50) {
-            println!("M2V-MATRIX time harness-{runtime}/{name} {median:.3}");
-        }
+    if let Some(time) = steady(times) {
+        println!("M2V-MATRIX time harness-{runtime}/{name} {time:.3}");
     }
     for (point, values) in gauges {
         for (gauge, value) in values {
@@ -278,13 +297,14 @@ fn gauges(gauges: &[(u32, Vec<(&'static str, u64)>)]) -> String {
 fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
     let us = |p| percentile(&report.create_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     println!(
-        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11}  {}",
+        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}",
         create.name,
         create.length,
         warmup(&report.warmup),
         us(10),
         us(50),
         us(90),
+        time(&report.create_us),
         gauges(&report.gauges),
     );
     matrix(runtime, create.name, &report.create_us, &report.gauges);
@@ -299,12 +319,13 @@ fn print(runtime: &str, name: &str, report: &Report) {
         })
     };
     println!(
-        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15}  {}",
+        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15}  {}",
         report.dispatches,
         warmup(&report.warmup),
         gpu(10),
         gpu(50),
         gpu(90),
+        time(&report.gpu_us),
         per_dispatch(&report.encode_ns),
         per_dispatch(&report.cpu_ns),
         gauges(&report.gauges),

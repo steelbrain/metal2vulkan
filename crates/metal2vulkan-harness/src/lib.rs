@@ -40,16 +40,19 @@
 //! from there to the return of the wait for the run before (unix only), each the median of the
 //! timed runs; and the runtime's gauges after the 100th and 200th timed runs. Per creation
 //! workload and runtime it prints the warm-up, the wall time of `newBufferWithLength:options:` at
-//! the same percentiles,
-//! and the gauges. Beside each row it prints lines for the matrix's runner (docs/VALIDATION.md,
-//! "The matrix"):
+//! the same percentiles, and the gauges. Beside each row it prints lines for the matrix's runner
+//! (docs/VALIDATION.md, "The matrix"):
 //!
 //! ```text
-//! M2V-MATRIX time harness-<runtime>/<workload> <median us of at least 5 timed runs>
+//! M2V-MATRIX time harness-<runtime>/<workload> <steady us>
 //! M2V-MATRIX gauge harness-<runtime>/<workload>/<gauge>@100 <value>
 //! M2V-MATRIX gauge harness-<runtime>/<workload>/<gauge>@200 <value>
 //! ```
 //!
+//! where the steady time ([`run::steady`], the table's `steady` column) is the lowest median of
+//! the timed runs' consecutive windows of 10, with at least 5 timed runs. After the plan
+//! workloads, per runtime, it prints how many `VkPipeline`s they created by the runtime's own
+//! count, as `M2V-MATRIX metric harness-<runtime>/<authored|described>/pipelines_created <n>`;
 //! and once every workload has run, where the runtime's gauges outlive its device,
 //! `M2V-MATRIX gauge harness-<runtime>/device/<gauge>@drop <value>` read after the device dropped.
 
@@ -112,6 +115,10 @@ pub trait Device: Sized {
     /// What reads the gauges once the device is dropped, where they outlive it; `None` where
     /// they end with it. No Metal counterpart.
     fn gauges_after_drop(&self) -> Option<GaugeReader>;
+
+    /// How many `VkPipeline`s the runtime has created on the device so far, by its own count. No
+    /// Metal counterpart.
+    fn pipelines_created(&self) -> u64;
 }
 
 /// A reader of a runtime's gauges that outlives its device ([`Device::gauges_after_drop`]).

@@ -44,6 +44,21 @@ const SETTLE_MOST: Duration = Duration::from_secs(5);
 /// The fewest timed runs whose median is a workload's time.
 pub const LEAST_TIMED: usize = 5;
 
+/// A workload's time from its timed runs' `times`: the lowest median of their consecutive
+/// windows of 10 runs, so that a clock that drops partway through the runs does not move it; with
+/// fewer than 10 runs, their median; `None` with fewer than [`LEAST_TIMED`].
+pub fn steady(times: &[f64]) -> Option<f64> {
+    if times.len() < LEAST_TIMED {
+        return None;
+    }
+    if times.len() < WINDOW {
+        return percentile(times, 50);
+    }
+    (times.chunks_exact(WINDOW))
+        .filter_map(|window| percentile(window, 50))
+        .min_by(f64::total_cmp)
+}
+
 /// The untimed runs before a workload's timed ones.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Warmup {
@@ -144,6 +159,9 @@ pub trait Session {
     /// Drops the session, its device last; the device's gauges after that, where the runtime's
     /// gauges outlive the device.
     fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>>;
+
+    /// The device's [`Device::pipelines_created`].
+    fn pipelines_created(&self) -> u64;
 }
 
 /// What the timed creations of buffers measured.
@@ -421,6 +439,10 @@ impl<D: ComputeDevice> Session for Harness<D> {
         drop(self);
         reader.map(|read| read())
     }
+
+    fn pipelines_created(&self) -> u64 {
+        self.device.pipelines_created()
+    }
 }
 
 /// A device whose runtime makes buffers but runs no compute work: its creation workloads alone.
@@ -447,6 +469,10 @@ impl<D: Device> Session for Buffers<D> {
         let reader = self.0.gauges_after_drop();
         drop(self);
         reader.map(|read| read())
+    }
+
+    fn pipelines_created(&self) -> u64 {
+        self.0.pipelines_created()
     }
 }
 

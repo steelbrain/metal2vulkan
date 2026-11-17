@@ -236,6 +236,11 @@ impl crate::Device for Device {
         let counters = self.device.counters();
         Some(Box::new(move || named(counters.gauges())))
     }
+
+    /// `Metrics::pipelines_created`.
+    fn pipelines_created(&self) -> u64 {
+        self.device.counters().metrics().pipelines_created
+    }
 }
 
 /// The gauges the harness reports, by name.

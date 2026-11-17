@@ -50,6 +50,12 @@ impl crate::Device for runtime::Device {
     fn gauges_after_drop(&self) -> Option<crate::GaugeReader> {
         None
     }
+
+    /// The `VkPipeline`s its pipeline states' variants made (`WorkCounts::variant_pipelines_made`):
+    /// compute regions, replays and draws, those made at a state's creation among them.
+    fn pipelines_created(&self) -> u64 {
+        self.work_counts().variant_pipelines_made
+    }
 }
 
 impl crate::ComputeDevice for runtime::Device {
