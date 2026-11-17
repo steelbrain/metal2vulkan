@@ -3618,6 +3618,8 @@ field	metal2vulkan-runtime::WorkCounts.reading_draws_split_unreadable_own_pixel_
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_variant_refused	pub reading_draws_split_variant_refused: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_views	pub reading_draws_split_views: u64
 field	metal2vulkan-runtime::WorkCounts.reading_draws_split_visibility_query	pub reading_draws_split_visibility_query: u64
+field	metal2vulkan-runtime::WorkCounts.reading_snapshots_recycled	pub reading_snapshots_recycled: u64
+field	metal2vulkan-runtime::WorkCounts.reading_snapshots_taken	pub reading_snapshots_taken: u64
 field	metal2vulkan-runtime::WorkCounts.rebinds_refused_calls_in_flight	pub rebinds_refused_calls_in_flight: u64
 field	metal2vulkan-runtime::WorkCounts.rebinds_refused_unsubmitted	pub rebinds_refused_unsubmitted: u64
 field	metal2vulkan-runtime::WorkCounts.record_lists_grown	pub record_lists_grown: u64

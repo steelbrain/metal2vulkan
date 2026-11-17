@@ -3781,6 +3781,7 @@ impl Device {
             host_copies: false,
             linear: linear_tiling(image.tiling),
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         };
         let pages = binding.pages.as_ref().filter(|_| binding.host);
@@ -3826,6 +3827,7 @@ impl Device {
             host_copies: false,
             linear: linear_tiling(image.tiling),
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         }
     }

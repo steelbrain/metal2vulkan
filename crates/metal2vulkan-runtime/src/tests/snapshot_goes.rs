@@ -3,7 +3,11 @@
 //! it is released, its image parks in the device's recycler while the texture and its view live on,
 //! the next command buffer's reader takes that image back rather than making one, and a parked one
 //! no reader takes again goes within the recycler's time (`recycle.rs`, `idle_sweep.rs`:
-//! `images_evicted`).
+//! `images_evicted`). Each snapshot taken is counted (`WorkCounts::reading_snapshots_taken`, the
+//! recycler's `reading_snapshots_recycled`) and named in the shadow log, on: one line each, naming
+//! the view, its texture, the snapshot's extent and whether its image is the recycler's. A device
+//! without the path takes none and names none; its reader's copy is the usage shadow the log
+//! names for the attached read.
 //!
 //! The texture is a guest's image cache: a private [`SIDE`]-square [`FORMAT`] render target that
 //! shaders read, rendered and read through a view of its own format at a resource index, which
@@ -21,18 +25,19 @@
 //! `tob_solid` and `tob_read` of the owned fixture `validation/fixtures/public/engine/tob_renders.ll`
 //! (`llvm-as`).
 
-use super::blit_holds::{device, Scratch, WAIT};
+use super::blit_holds::{options, Scratch, WAIT};
 use super::encoder_holds::bytes_of;
 use super::snapshot_reader_keeps::{
     corners, download, settled, state_into, target, upload, FORMAT, SIDE,
 };
 use crate::framebuffer_fetch::through_storage;
 use crate::{
-    CommandQueue, IdPlacement, LoadAction, RenderPassDescriptor, RenderPipelineState, ResourceId,
-    StoreAction, Texture, WorkCounts,
+    CommandQueue, Device, IdPlacement, LoadAction, MessageSink, RenderPassDescriptor,
+    RenderPipelineState, ResourceId, StoreAction, Texture, WorkCounts,
 };
 use metal2vulkan::metal::PrimitiveType;
 use metal2vulkan::pipeline::ColorAttachmentDescriptor;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// The rectangle the reader covers, `[x0, y0, x1, y1]`.
@@ -77,12 +82,15 @@ fn pass(queue: &CommandQueue, states: &States, view: &Texture) -> (WorkCounts, W
 }
 
 /// What a pass moved: its readers through snapshots, the images it took (made or recycled) and
-/// those of them the recycler handed back.
+/// those of them the recycler handed back; and its snapshots taken, and those of them the
+/// recycler's.
 #[derive(Debug, PartialEq, Eq)]
 struct Moved {
     snapshotted: u64,
     taken: u64,
     recycled: u64,
+    snapshots: u64,
+    snapshots_recycled: u64,
 }
 
 fn moved((before, after): &(WorkCounts, WorkCounts)) -> Moved {
@@ -91,13 +99,31 @@ fn moved((before, after): &(WorkCounts, WorkCounts)) -> Moved {
         snapshotted: delta(|c| c.reading_draws_snapshotted),
         taken: delta(|c| c.object_churn.vk_images_made + c.object_churn.images_recycled),
         recycled: delta(|c| c.object_churn.images_recycled),
+        snapshots: delta(|c| c.reading_snapshots_taken),
+        snapshots_recycled: delta(|c| c.reading_snapshots_recycled),
     }
+}
+
+/// The device the cfg selects (`blit_holds::options`), its shader cache in `scratch`, the shadow
+/// log on and its lines heard into `lines`.
+fn heard_device(scratch: &Scratch, lines: &Arc<Mutex<Vec<String>>>) -> Device {
+    crate::shadow_log::turn_on();
+    let heard = Arc::clone(lines);
+    let sink = MessageSink::new(move |message| {
+        if message.id_name == "metal2vulkan-shadows" {
+            heard.lock().unwrap().push(message.text.clone());
+        }
+    });
+    let mut options = options(&scratch.0);
+    options.messages = Some(sink);
+    Device::system_default_with(&options).unwrap()
 }
 
 #[test]
 fn a_reader_s_snapshot_goes_with_its_command_buffers_not_with_the_texture() {
     let scratch = Scratch::new("snapshot-goes");
-    let device = device(&scratch.0);
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let device = heard_device(&scratch, &lines);
     let queue = device.new_command_queue().unwrap();
     let color = || ColorAttachmentDescriptor::new(FORMAT);
     let states = States {
@@ -143,13 +169,56 @@ fn a_reader_s_snapshot_goes_with_its_command_buffers_not_with_the_texture() {
     );
     let off = (reds.iter()).position(|&red| red != SOLID);
     assert_eq!(off, None, "a pixel off the fill's red, by row");
+    let counts = device.work_counts();
+    let lines = lines.lock().unwrap().clone();
+    let named: Vec<&String> = (lines.iter())
+        .filter(|line| line.contains("took a reader's snapshot"))
+        .collect();
+    let named_recycled = (named.iter())
+        .filter(|line| line.contains("the recycler's parked image"))
+        .count() as u64;
+    eprintln!(
+        "SNAPSHOT-GOES {}: snapshots taken {}, of them recycled {}; lines {}, of them recycled \
+         {named_recycled}",
+        device.name(),
+        counts.reading_snapshots_taken,
+        counts.reading_snapshots_recycled,
+        named.len()
+    );
+    for line in &named {
+        eprintln!("SNAPSHOT-GOES line: {line}");
+    }
     if !snapshots {
         assert_eq!(
             (first.snapshotted, second.snapshotted),
             (0, 0),
             "readers through snapshots on a device without the path"
         );
+        assert_eq!(
+            (counts.reading_snapshots_taken, named.len()),
+            (0, 0),
+            "snapshots taken or named on a device without the path"
+        );
+        let copy = (lines.iter()).any(|line| line.contains("(an attached read)"));
+        assert!(copy, "the reader's copy, a usage shadow, named: {lines:#?}");
         return;
+    }
+    assert_eq!(
+        (named.len() as u64, named_recycled),
+        (
+            counts.reading_snapshots_taken,
+            counts.reading_snapshots_recycled
+        ),
+        "one line per snapshot taken, the recycler's named so"
+    );
+    let (view_id, texture_id) = (view.object_id().get(), texture.object_id().get());
+    let names = format!("object {view_id}, a view of object {texture_id}: ");
+    let extent = format!("storage image of {SIDE}x{SIDE}, ");
+    for line in &named {
+        assert!(
+            line.contains(&names) && line.contains(&extent),
+            "a line names the view, its texture and the snapshot's extent: {line}"
+        );
     }
     assert_eq!(
         first.snapshotted, 1,
@@ -163,6 +232,8 @@ fn a_reader_s_snapshot_goes_with_its_command_buffers_not_with_the_texture() {
         snapshotted: 1,
         taken: 1,
         recycled: 1,
+        snapshots: 1,
+        snapshots_recycled: 1,
     };
     assert_eq!(
         second, again,

@@ -49,7 +49,7 @@ fn a_swapped_out_image_leaves_the_recycler_s_book_as_it_goes() {
     let plan = kept_target.image_plan().unwrap().clone();
     let storage = descriptor.resource_options.storage_mode().unwrap();
     let class = plan.memory_class(storage, &device.properties().driver_defects);
-    let (raw, placement) = device
+    let (raw, placement, _) = device
         .recycled_image(&plan, TextureType::Type2D, class, shared.sharing())
         .unwrap();
     let in_book = || lock(&shared.textures.recycled).holds(raw);

@@ -602,11 +602,14 @@ impl Texture {
     /// and it goes once the last that holds it completed, its image to the device's recycler
     /// (`recycle.rs`), whence a later snapshot of the same plan takes it again. Each snapshot draw
     /// takes the texels it reads anew, so a snapshot holds nothing a later command buffer reads.
-    /// The runtime's memory counts it as any image of its own.
+    /// The runtime's memory counts it as any image of its own. Each one made is counted, its image
+    /// the recycler's or placed for it (`WorkCounts::reading_snapshots_taken`,
+    /// `reading_snapshots_recycled`), and named in the shadow log as `call`'s, the draw's
+    /// (`shadow_log.rs`).
     pub(crate) fn snapshot_texels(
         &self,
         maker: &CommandBuffer,
-        form: SnapshotForm,
+        (call, form): (&'static str, SnapshotForm),
     ) -> Result<Texture, Error> {
         let mut owner = self;
         while let Some(parent) = &owner.0.parent {
@@ -652,6 +655,12 @@ impl Texture {
         };
         let made = Device::new_planned_texture(maker, &descriptor, plan)?;
         held.push(made.downgrade());
+        drop(held);
+        let recycled =
+            matches!(made.stored(), Stored::Made(Storage::Image(image)) if image.recycled);
+        let device = owner.generation();
+        device.shared().counts.reading_snapshot_taken(recycled);
+        crate::shadow_log::snapshot(device, call, (self, owner), (pixel_format, recycled));
         Ok(made)
     }
 

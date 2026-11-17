@@ -1298,6 +1298,7 @@ impl Device {
             host_copies: false,
             linear: true,
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         }
     }

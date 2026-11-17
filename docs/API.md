@@ -2242,7 +2242,12 @@ filters, or a constexpr sampler's as the pipeline layout bakes it). And once per
 buffer of Metal's private option bit 24 whose read twin is not in place over the twin's bytes: the
 texture, its buffer, offset and row pitch, and why (the twin's placement where its making made a
 shadow, whose own line, under the call `make_twin_texture`, names the twin's bytes and the cause in
-full; or the making's error).
+full; or the making's error). And one line per reader's snapshot a draw takes (a draw that samples a
+color attachment of its own pass at its own pixels and writes that color reads it through a storage
+image of the texture's extent, held by the command buffers whose draws take it): the draw's call,
+the texture it binds (format, size, levels, usage, object ID, and the texture it is a view of), the
+snapshot's format and extent, and whether its image is the recycler's parked one or one placed for
+it (`WorkCounts::reading_snapshots_taken` and `reading_snapshots_recycled` count them).
 With `METAL2VULKAN_LOG_PASSES` set to a comma-separated list of `FORMAT:WIDTHxHEIGHT` (the format
 as the notices print it or as Metal names it, `*` for any format or any size, for example
 `RGBA16Float:128x128`) and of `state:HASH` (a render pipeline state's label hash, the 16 hex

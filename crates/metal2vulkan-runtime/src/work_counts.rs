@@ -771,6 +771,8 @@ pub(crate) struct Counters {
     reading_draws_snapshotted_leading: AtomicU64,
     reading_draws_in_place: AtomicU64,
     snapshot_inline_splits: AtomicU64,
+    reading_snapshots_taken: AtomicU64,
+    reading_snapshots_recycled: AtomicU64,
     reading_draws_split: [AtomicU64; 15],
     reading_draws_unreadable: [AtomicU64; 12],
     reading_draws_by_coverage: AtomicU64,
@@ -6102,6 +6104,15 @@ impl Counters {
     /// recorded inline (`render/snapshot.rs`).
     pub(crate) fn snapshot_inline_split(&self) {
         self.snapshot_inline_splits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A draw took a reader's snapshot, its image the recycler's parked one where `recycled`,
+    /// else placed for it (`render/snapshot.rs`, `Texture::snapshot_texels`).
+    pub(crate) fn reading_snapshot_taken(&self, recycled: bool) {
+        self.reading_snapshots_taken.fetch_add(1, Ordering::Relaxed);
+        if recycled {
+            (self.reading_snapshots_recycled).fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     /// A draw that reads its pass's texture after a barrier, through a slot its function reads
@@ -11718,6 +11729,16 @@ pub struct WorkCounts {
     /// instance because their own was recorded inline, its render pass instance begun without
     /// the feedback loop layout they need (`render/snapshot.rs`, `render/inline_first.rs`).
     pub snapshot_inline_splits: u64,
+    /// Snapshots the draws of `reading_draws_snapshotted` took: each a storage image of the read
+    /// texture's level-0 extent, 4, 8 or 16 bytes a texel, beside the texture's own image, made
+    /// where no command buffer held one of that texture in that form, and held by the command
+    /// buffers whose draws take it until they complete, then parked in the device's recycler
+    /// (`render/snapshot.rs`). The shadow log names each (`METAL2VULKAN_LOG_SHADOWS`).
+    pub reading_snapshots_taken: u64,
+    /// Of `reading_snapshots_taken`, those whose image was a parked one of the same making that
+    /// the recycler handed back (`object_churn.images_recycled` counts them among all), which
+    /// placed no memory; the rest placed an image of their own.
+    pub reading_snapshots_recycled: u64,
     /// Draws that read a texture of their render pass after a memory barrier at their own pixels
     /// and took the split (`attachment_read_splits`), or were spared it where their instance drew
     /// none of what they read (`attachment_read_splits_spared`), by why the snapshot did not
@@ -13735,6 +13756,9 @@ impl Device {
             reading_draws_snapshotted_stopped: commands(|c| &c.reading_draws_snapshotted_stopped),
             reading_draws_in_place: counters.reading_draws_in_place.load(Ordering::Relaxed),
             snapshot_inline_splits: counters.snapshot_inline_splits.load(Ordering::Relaxed),
+            reading_snapshots_taken: counters.reading_snapshots_taken.load(Ordering::Relaxed),
+            reading_snapshots_recycled: (counters.reading_snapshots_recycled)
+                .load(Ordering::Relaxed),
             reading_draws_split_unreadable_own_pixel: split_by(SplitReason::UnreadableOwnPixel),
             reading_draws_split_not_in_place: split_by(SplitReason::NotInPlace),
             reading_draws_split_device_lacks: split_by(SplitReason::DeviceLacks),

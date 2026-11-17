@@ -124,8 +124,10 @@ pub const REGISTRY: &[EnvVar] = &[
                  the texels' offset and row pitch, or its own image), and what made it a \
                  shadow; once per shadowed texture, at the first draw or dispatch that binds \
                  it, whether its function fetches, samples or writes it and its samplers' \
-                 filters; and once per texture over a buffer of private option bit 24 whose \
-                 read twin is not in place, why; set to anything but empty or 0",
+                 filters; once per texture over a buffer of private option bit 24 whose read \
+                 twin is not in place, why; and one line per reader's snapshot a draw takes \
+                 (its texture, the snapshot's format and extent, the recycler's image or one \
+                 placed for it); set to anything but empty or 0",
     },
     EnvVar {
         name: "METAL2VULKAN_LOG_PASSES",

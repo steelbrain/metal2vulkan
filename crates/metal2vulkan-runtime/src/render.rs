@@ -9883,7 +9883,8 @@ impl RenderLowering {
                         .ok_or_else(|| internal("a snapshot of an unbound slot"))?;
                     let form = snapshot::form(&plan, slot)
                         .ok_or_else(|| internal("a snapshot of a slot its plan has none of"))?;
-                    let texels = texture.snapshot_texels(self.core.command_buffer(), form)?;
+                    let maker = self.core.command_buffer();
+                    let texels = texture.snapshot_texels(maker, (call, form))?;
                     views.push((slot, texels.snapshot_view(form)?));
                     snapshot_texels.push(texels);
                 }

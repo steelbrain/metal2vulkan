@@ -952,7 +952,7 @@ impl RenderLowering {
         // (`render/snapshot.rs`).
         let kept = self.again.kept.as_ref()?;
         let (read_again, copy_weighed) = match &kept.reader {
-            Some(reader) => match self.read_again(reader, &kept.settings, settled) {
+            Some(reader) => match self.read_again((kept.call, reader), &kept.settings, settled) {
                 Some(read_again) => (Some(read_again), None),
                 None => {
                     self.core.counts().draw_reader_stopped();
@@ -1375,11 +1375,11 @@ impl RenderLowering {
     /// of the same colors, pinning none; the plan reads through them; its instance holds them in
     /// the feedback loop layout, or a carried draw's yet unbegun instance will; and its form,
     /// weighed again, is the snapshot. Its slots' snapshots made or kept with their textures, as
-    /// every step makes them. `None` where any of those differs, or a snapshot's view is refused,
-    /// as every step's would be: the draw takes every step.
+    /// every step makes them, as `call`'s, the kept draw's. `None` where any of those differs, or
+    /// a snapshot's view is refused, as every step's would be: the draw takes every step.
     fn read_again(
         &self,
-        reader: &KeptReader,
+        (call, reader): (&'static str, &KeptReader),
         settings: &DrawSettings,
         settled: &Settled,
     ) -> Option<ReadAgain> {
@@ -1409,7 +1409,7 @@ impl RenderLowering {
             let texture = self.fragment.textures.get(&slot)?;
             let form = snapshot::form(&settled.plan, slot)?;
             let made = texture
-                .snapshot_texels(self.core.command_buffer(), form)
+                .snapshot_texels(self.core.command_buffer(), (call, form))
                 .ok()?;
             views.push((slot, made.snapshot_view(form).ok()?));
             texels.push(made);

@@ -824,6 +824,9 @@ struct Image {
     /// It was moved to `GENERAL` and zeroed on the device's staging queue as it was made, so its
     /// CPU copies may run there (`texture/staging_copy.rs`).
     staging_copies: bool,
+    /// Its `VkImage` and memory are a parked image of the same making that the device's recycler
+    /// handed back as it was made (`recycle.rs`, `Device::recycled_image`), not placed for it.
+    recycled: bool,
     /// The texture objects over the image (the texture, its views, the textures opened from its
     /// handles), and the caller's token for its texture's range
     /// (`Device::new_texture_with_range_token`), set once as the texture is made: dropped as the
@@ -2483,6 +2486,7 @@ impl Device {
             host_copies: false,
             linear: false,
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         };
         let image = image.shared();
@@ -2612,6 +2616,7 @@ impl Device {
             host_copies: false,
             linear: false,
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         })
     }
@@ -4086,6 +4091,7 @@ impl Device {
             host_copies: false,
             linear: true,
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         };
         // Leaving `PREINITIALIZED` keeps the bytes the image holds: the buffer's; leaving
@@ -4156,6 +4162,7 @@ impl Device {
             host_copies: false,
             linear: true,
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         };
         // A parked one a submission moved rests in `GENERAL` on the device's queue family.
@@ -4281,6 +4288,7 @@ impl Device {
             host_copies: false,
             linear: true,
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         };
         if !moved {
@@ -4616,14 +4624,15 @@ impl Device {
     }
 
     /// [`placed_image`](Self::placed_image)'s image, or a parked image of the same making
-    /// (`recycle.rs`), noted as one the recycler may park as it goes.
+    /// (`recycle.rs`), noted as one the recycler may park as it goes; and whether it is the
+    /// parked one.
     fn recycled_image(
         &self,
         plan: &ImagePlan,
         texture_type: TextureType,
         class: MemoryClass,
         sharing: Sharing<'_>,
-    ) -> Result<(vk::Image, Placement), Error> {
+    ) -> Result<(vk::Image, Placement, bool), Error> {
         let shared = self.shared();
         let making = ImageMaking {
             plan: plan.clone(),
@@ -4633,13 +4642,13 @@ impl Device {
         };
         let (taken, gone) = lock(&shared.textures.recycled).take(&making, Instant::now());
         self.let_go_parked(gone);
-        if let Some(taken) = taken {
+        if let Some((raw, placement)) = taken {
             shared.counts.churn.taken(Recycled::Image);
-            return Ok(taken);
+            return Ok((raw, placement, true));
         }
         let (raw, placement) = self.placed_image(plan, texture_type, class, sharing)?;
         lock(&shared.textures.recycled).made(raw, making);
-        Ok((raw, placement))
+        Ok((raw, placement, false))
     }
 
     /// Destroy the parked images the recycler let go of, `gone`.
@@ -4767,17 +4776,17 @@ impl Device {
             false => self.host_placed_image(&plan, layout.texture_type, class, staged, zeroed),
         };
         let zeroed = zeroed && (hosted.as_ref()).is_some_and(|(_, _, placement)| placement.fresh());
-        let (plan, raw, placement, host_copies) = match hosted {
-            Some((plan, raw, placement)) => (plan, raw, placement, true),
+        let (plan, raw, placement, host_copies, recycled) = match hosted {
+            Some((plan, raw, placement)) => (plan, raw, placement, true, false),
             None => {
                 let sharing = match staged {
                     true => self.staging_sharing(),
                     false => None,
                 };
                 let sharing = sharing.unwrap_or_else(|| self.shared().sharing());
-                let (raw, placement) =
+                let (raw, placement, recycled) =
                     self.recycled_image(&plan, layout.texture_type, class, sharing)?;
-                (plan, raw, placement, false)
+                (plan, raw, placement, false, recycled)
             }
         };
         let staging_copies = staged && !host_copies;
@@ -4827,6 +4836,7 @@ impl Device {
             host_copies,
             linear: false,
             staging_copies,
+            recycled,
             objects: ObjectsToken::default(),
         };
         if !held && !moved && !clear && zero.is_none() {

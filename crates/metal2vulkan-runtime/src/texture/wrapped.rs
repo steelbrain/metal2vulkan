@@ -890,6 +890,7 @@ impl Device {
             host_copies: false,
             linear: false,
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         };
         self.degrade_block_decode(&layout);
@@ -1092,6 +1093,7 @@ impl Device {
             host_copies: false,
             linear: false,
             staging_copies: false,
+            recycled: false,
             objects: ObjectsToken::default(),
         };
         let record = ViewRecord::of_descriptor(&layout, descriptor);

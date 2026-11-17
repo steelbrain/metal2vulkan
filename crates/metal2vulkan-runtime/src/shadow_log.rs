@@ -18,6 +18,14 @@
 //!   plane (`texture/surface_depth.rs`); and a YCbCr texture's converted image and its render
 //!   shadow (`texture/ycbcr_image.rs`; its write shadow is a usage shadow). A device copy is no shadow it names, nor is a heap texture's
 //!   (its own notice names it), a view's shadow of an image or a texture buffer's staging.
+//! - **A reader's snapshot.** One line per snapshot a draw takes (`render/snapshot.rs`, made where
+//!   no command buffer holds one of the texture in that form): the draw's call, the texture it
+//!   binds (format, size, levels, usage, object ID, and the texture it is a view of), and the
+//!   snapshot's storage image, its format and extent, the recycler's parked image taken back or
+//!   one placed for it ([`snapshot`]). Not a shadow of the texture's truth: the draw writes the
+//!   color it reads, and the snapshot holds the texels at its pixels from before it, held by the
+//!   command buffers whose draws take it. Counted as `WorkCounts::reading_snapshots_taken` and
+//!   `reading_snapshots_recycled`.
 //! - **What a shadowed texture's first draw or dispatch reads.** One line per shadowed texture
 //!   (one whose reads go through a shadow of its truth, a usage shadow or two faces that take
 //!   turns), at the first draw or dispatch whose pipeline uses a slot that binds it, after the
@@ -159,6 +167,46 @@ pub(super) fn made_of(
         "metal2vulkan: shadow: {call} made a {:?} texture of {width}x{height} and {} levels, \
          usage {:?}, over {truth}, a shadow: {why}",
         texture.pixel_format, texture.levels, texture.usage,
+    );
+    inform_through(device.shared().instance.sink(), ID_NAME, text);
+}
+
+/// Where the log is on, say that `call`, a draw, took a reader's snapshot of `texture` (the one it
+/// binds) in `format`, its storage image of `owner`'s level-0 extent (`owner` the texture `texture`
+/// is a view of, or `texture` itself), the recycler's parked image where `recycled`, else one
+/// placed for it (the module's **A reader's snapshot**).
+pub(super) fn snapshot(
+    device: &Device,
+    call: &str,
+    (texture, owner): (&Texture, &Texture),
+    (format, recycled): (PixelFormat, bool),
+) {
+    if !enabled() {
+        return;
+    }
+    let (id, owner_id) = (texture.object_id().get(), owner.object_id().get());
+    let view = match id == owner_id {
+        true => String::new(),
+        false => format!(", a view of object {owner_id}"),
+    };
+    let image = match recycled {
+        true => "the recycler's parked image of that making, taken back",
+        false => "an image placed for it",
+    };
+    let text = format!(
+        "metal2vulkan: shadow: {call} took a reader's snapshot of the {:?} texture of {}x{} and {} \
+         levels, usage {:?}, object {}{view}: a {format:?} storage image of {}x{}, {image}; the \
+         draw reads the texture at its own pixels where its own render pass instance renders it, \
+         and writes that color (render/snapshot.rs); held by the command buffers whose draws take \
+         it, then parked in the device's recycler",
+        texture.pixel_format(),
+        texture.width(),
+        texture.height(),
+        texture.mipmap_level_count(),
+        texture.usage(),
+        id,
+        owner.width(),
+        owner.height(),
     );
     inform_through(device.shared().instance.sink(), ID_NAME, text);
 }

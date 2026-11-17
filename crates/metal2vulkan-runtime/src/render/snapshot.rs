@@ -106,7 +106,10 @@
 //!   normalized or integer format's codes (about 8.3 MB for a 1920x1080 texture), 8 for a 16-bit
 //!   one's or a half-float one's, 16 for the bits (`SnapshotForm::format`). The draw's use of it
 //!   is a fragment shader's storage read and write, so draws of other instances and encoders
-//!   that take it are ordered as any image's.
+//!   that take it are ordered as any image's. Each snapshot taken is counted
+//!   (`WorkCounts::reading_snapshots_taken`; `reading_snapshots_recycled`, those whose image the
+//!   recycler handed back, which placed no memory) and named in the shadow log with its texture,
+//!   format and extent (`shadow_log.rs`, `METAL2VULKAN_LOG_SHADOWS`).
 //! - **Where it runs** (each check else the split, or with no barrier the copy, as before): the
 //!   device enabled
 //!   `attachmentFeedbackLoopLayout`, `extendedDynamicState3ColorWriteMask` and
