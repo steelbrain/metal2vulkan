@@ -2703,7 +2703,8 @@ field	metal2vulkan-runtime::VertexAmplificationViewMapping.render_target_array_i
 field	metal2vulkan-runtime::VertexAmplificationViewMapping.viewport_array_index_offset	pub viewport_array_index_offset: u32
 field	metal2vulkan-runtime::ViewCosts.facts	pub facts: BTreeSet<DriverWorkaround>
 field	metal2vulkan-runtime::ViewCosts.per_lane	pub per_lane: Option<f64>
-field	metal2vulkan-runtime::ViewCosts.texel	pub texel: Option<f64>
+field	metal2vulkan-runtime::ViewCosts.texel_fastest	pub texel_fastest: Option<f64>
+field	metal2vulkan-runtime::ViewCosts.texel_slowest	pub texel_slowest: Option<f64>
 field	metal2vulkan-runtime::ViewCosts.verdict	pub verdict: ViewVerdict
 field	metal2vulkan-runtime::Viewport.height	pub height: f64
 field	metal2vulkan-runtime::Viewport.origin_x	pub origin_x: f64

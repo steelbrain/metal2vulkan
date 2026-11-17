@@ -1633,10 +1633,11 @@ pub enum DriverWorkaround {
     /// texel buffer keep: a measured cost fact that chooses between two exact encodings of a
     /// uniform view. Never keyed on an identity: the profile takes it where the description's
     /// [`measured`](crate::device::DeviceDescription::measured) set holds it, which the runtime's
-    /// view check decides on each driver (a uniform texel buffer's time over a uniform buffer's,
-    /// every invocation reading one word of imported host memory, below 0.7). ANV, Mesa 26.2.6, on
-    /// the Iris Xe of RPL-P gives imported and exported memory the memory object control state of
-    /// a displayable surface, which leaves out the data port's L1 cache a uniform buffer of the
+    /// view check decides on each driver (a uniform texel buffer's time over a uniform buffer's
+    /// for the reads it moves, over imported host memory: below 1 in every one, below 0.7 in at
+    /// least one). ANV, Mesa 26.2.6, on the Iris Xe of RPL-P gives imported and exported memory
+    /// the memory object control state of a displayable surface, which leaves out the data port's
+    /// L1 cache a uniform buffer of the
     /// device's own memory is given (Mesa's `isl_mocs`, Linux i915's Gen12 MOCS table; read, not
     /// measured). Measured there (jobs m3-max-37703, m3-max-37729 and m3-max-37780): a uniform
     /// buffer over a host allocation or a udmabuf took 2.0 to 2.5 times as long as over the

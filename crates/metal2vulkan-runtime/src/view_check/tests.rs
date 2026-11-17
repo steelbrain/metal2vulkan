@@ -2,17 +2,18 @@
 //! both sides of each bound, and the record that keeps its answer.
 //!
 //! - **The facts.** The per-lane fact only where the storage buffer's per-lane reads took less
-//!   than `PER_LANE_COSTLY` of the uniform buffer's at both windows; the texel fact only where
-//!   the texel buffer's uniform reads over imported pages took less than `TEXEL_FASTER` of the
-//!   uniform buffer's at both; neither where its arms were not run. The medians of the GPUs the
-//!   bounds come from give their facts: NVIDIA's per-lane ratios, RADV's none, the Iris Xe's
-//!   texel ratio.
+//!   than `PER_LANE_COSTLY` of the uniform buffer's at both windows. The texel fact only where, of
+//!   the reads it moves over imported pages (the uniform ones, and the per-lane ones where the
+//!   per-lane fact does not hold) at both windows, the texel buffer took less than
+//!   `TEXEL_NO_SLOWER` of the uniform buffer's time in every one and less than `TEXEL_FASTER` in
+//!   at least one; neither where its arms were not run. The ratios of the GPUs the bounds come
+//!   from give their facts: NVIDIA's per-lane ratios, RADV's none, the Iris Xe's texel ratios.
 //! - **The record.** Its medians read back for its identity alone, whole and unchanged, and never
 //!   a record whose device arms were not run.
 
 use super::{
     arms, decode, encode, facts_of, record_name, Arm, Medians, ViewVerdict, ARMS, KERNELS,
-    PER_LANE_COSTLY, TEXEL_FASTER,
+    PER_LANE_COSTLY, TEXEL_FASTER, TEXEL_NO_SLOWER,
 };
 use crate::in_place::DriverIdentity;
 use metal2vulkan::bind::{CheckReads, CheckView};
@@ -23,19 +24,19 @@ const LANES: DriverWorkaround = DriverWorkaround::UniformBufferPerLaneReadsSeria
 const TEXELS: DriverWorkaround = DriverWorkaround::ExternalUniformReadsSkipACache;
 
 /// Medians of 1000 ns everywhere but the storage per-lane arms (`per_lane` times the uniform
-/// buffer's) and the imported texel uniform arms (`texel` times the uniform buffer's there),
-/// the imported arms all 0 where `host` is false.
-fn medians(per_lane: [f64; 2], texel: [f64; 2], host: bool) -> Medians {
+/// buffer's) and the imported texel arms (`uniform` and `lanes` times the uniform buffer's there,
+/// for the uniform and the per-lane reads), the imported arms all 0 where `host` is false; each
+/// pair of ratios is the 1 KiB window's, then the 4 KiB one's.
+fn medians(per_lane: [f64; 2], uniform: [f64; 2], lanes: [f64; 2], host: bool) -> Medians {
     let mut out = [1000u64; ARMS];
     for (at, arm) in arms().iter().enumerate() {
         let window = usize::from(arm.vecs != 64);
-        let pair = KERNELS[arm.kernel];
-        out[at] = match (arm.host, pair) {
+        let nanos = |ratio: [f64; 2]| (1000.0 * ratio[window]) as u64;
+        out[at] = match (arm.host, KERNELS[arm.kernel]) {
             (true, _) if !host => 0,
-            (false, (CheckView::Storage, CheckReads::PerLane)) => {
-                (1000.0 * per_lane[window]) as u64
-            }
-            (true, (CheckView::Texel, CheckReads::Uniform)) => (1000.0 * texel[window]) as u64,
+            (false, (CheckView::Storage, CheckReads::PerLane)) => nanos(per_lane),
+            (true, (CheckView::Texel, CheckReads::Uniform)) => nanos(uniform),
+            (true, (CheckView::Texel, CheckReads::PerLane)) => nanos(lanes),
             _ => 1000,
         };
     }
@@ -43,64 +44,124 @@ fn medians(per_lane: [f64; 2], texel: [f64; 2], host: bool) -> Medians {
 }
 
 #[test]
-fn the_facts_hold_only_below_their_bounds_at_both_windows() {
+fn the_per_lane_fact_holds_only_below_its_bound_at_both_windows() {
     let below = PER_LANE_COSTLY - 0.01;
     let above = PER_LANE_COSTLY + 0.01;
-    let texel_below = TEXEL_FASTER - 0.01;
-    let texel_above = TEXEL_FASTER + 0.01;
     let facts = |m: Medians| m.costs().facts;
     assert_eq!(
-        facts(medians([below; 2], [1.0; 2], true)),
+        facts(medians([below; 2], [1.0; 2], [1.0; 2], true)),
         BTreeSet::from([LANES])
     );
     assert_eq!(
-        facts(medians([below, above], [1.0; 2], true)),
+        facts(medians([below, above], [1.0; 2], [1.0; 2], true)),
         BTreeSet::new(),
         "one window past the bound"
     );
+    let costs = medians([0.5, 0.25], [1.0; 2], [1.0; 2], false).costs();
+    assert_eq!(costs.verdict, ViewVerdict::Measured);
+    assert_eq!(costs.per_lane, Some(0.5), "the larger window's ratio");
+    assert_eq!((costs.texel_fastest, costs.texel_slowest), (None, None));
+}
+
+#[test]
+fn the_texel_fact_needs_one_read_clearly_faster_and_none_slower() {
+    let fast = TEXEL_FASTER - 0.01;
+    let not_fast = TEXEL_FASTER + 0.01;
+    let tied = TEXEL_NO_SLOWER - 0.01;
+    let slower = TEXEL_NO_SLOWER + 0.01;
+    let facts = |uniform, lanes| medians([1.0; 2], uniform, lanes, true).costs().facts;
+    assert_eq!(facts([fast; 2], [tied; 2]), BTreeSet::from([TEXELS]));
     assert_eq!(
-        facts(medians([above; 2], [texel_below; 2], true)),
-        BTreeSet::from([TEXELS])
+        facts([tied, fast], [tied; 2]),
+        BTreeSet::from([TEXELS]),
+        "one read at one window clearly faster"
     );
     assert_eq!(
-        facts(medians([1.0; 2], [texel_below, texel_above], true)),
-        BTreeSet::new()
+        facts([tied; 2], [tied, fast]),
+        BTreeSet::from([TEXELS]),
+        "a per-lane read, the per-lane fact not holding"
     );
     assert_eq!(
-        facts(medians([below; 2], [texel_below; 2], true)),
-        BTreeSet::from([LANES, TEXELS]),
-        "both hold together"
+        facts([not_fast; 2], [tied; 2]),
+        BTreeSet::new(),
+        "none fast"
     );
     assert_eq!(
-        facts(medians([1.0; 2], [texel_below; 2], false)),
+        facts([fast; 2], [tied, slower]),
+        BTreeSet::new(),
+        "a per-lane read slower at one window"
+    );
+    assert_eq!(
+        facts([fast, slower], [fast; 2]),
+        BTreeSet::new(),
+        "a uniform read slower at one window"
+    );
+    assert_eq!(
+        medians([1.0; 2], [fast; 2], [fast; 2], false).costs().facts,
         BTreeSet::new(),
         "no imported pages, no texel fact"
     );
-    let costs = medians([0.5, 0.25], [1.0; 2], false).costs();
-    assert_eq!(costs.verdict, ViewVerdict::Measured);
-    assert_eq!(costs.per_lane, Some(0.5), "the larger window's ratio");
-    assert_eq!(costs.texel, None);
+    let costs = medians([1.0; 2], [0.5, 0.75], [0.9, 0.25], true).costs();
+    assert_eq!(costs.texel_fastest, Some(0.25));
+    assert_eq!(costs.texel_slowest, Some(0.9));
 }
 
-/// The ratios the bounds come from give their facts: NVIDIA's storage per-lane reads at 0.011 to
-/// 0.107 of the uniform buffer's (the per-lane fact), RADV's at 0.96 to 1.00 (none), and the Iris
-/// Xe's texel uniform reads over imported memory at 0.40 to 0.49 of the uniform buffer's (the
-/// texel fact), a driver reading both alike over imported memory none.
+/// Where the per-lane fact holds, the per-lane reads keep their storage view, so the texel fact
+/// is judged on the uniform reads alone, both facts holding together.
+#[test]
+fn where_the_per_lane_fact_holds_the_texel_fact_is_judged_on_the_uniform_reads() {
+    let lanes_costly = [PER_LANE_COSTLY - 0.01; 2];
+    let fast = [0.5; 2];
+    let slower = [1.5; 2];
+    assert!(fast[0] < TEXEL_FASTER && slower[0] > TEXEL_NO_SLOWER);
+    let costs = medians(lanes_costly, fast, slower, true).costs();
+    assert_eq!(costs.facts, BTreeSet::from([LANES, TEXELS]));
+    assert_eq!(
+        costs.texel_slowest,
+        Some(0.5),
+        "the per-lane reads not judged"
+    );
+    let costs = medians(lanes_costly, [1.0; 2], fast, true).costs();
+    assert_eq!(
+        costs.facts,
+        BTreeSet::from([LANES]),
+        "per-lane gains moved none"
+    );
+}
+
+/// The ratios the bounds come from give their facts. Per-lane: NVIDIA's storage per-lane reads at
+/// 0.011 to 0.107 of the uniform buffer's (the fact), RADV's at 0.96 to 1.00 (none). Texel, over
+/// imported memory, worked out from the Iris Xe's records (job m3-max-37780): from each invocation
+/// walking the window at 0.026 to the workgroup walking 4 KiB at 0.86 (the fact); this check's
+/// uniform reads on the Iris Xe at 0.48 and 0.755 (job m3-max-38288; its per-lane reads over
+/// imported pages were not run then); on the Radeon 780M at 0.93 and 0.97 (none: no read clearly
+/// faster), on the RX 7900 XTX at 1.23 and 1.41 and on the RTX 3090 at 2.21 and 2.30 (none:
+/// slower; the 3090's per-lane fact holds, so its per-lane reads are not judged).
 #[test]
 fn the_measured_gpus_get_their_facts() {
-    assert_eq!(facts_of(Some(0.107), Some(1.0)), BTreeSet::from([LANES]));
-    assert_eq!(facts_of(Some(0.011), None), BTreeSet::from([LANES]));
-    assert_eq!(facts_of(Some(0.96), Some(0.98)), BTreeSet::new());
-    assert_eq!(facts_of(Some(1.0), Some(0.49)), BTreeSet::from([TEXELS]));
-    assert_eq!(facts_of(None, None), BTreeSet::new());
+    assert_eq!(facts_of(Some(0.107), None, None), BTreeSet::from([LANES]));
+    assert_eq!(facts_of(Some(0.011), None, None), BTreeSet::from([LANES]));
+    assert_eq!(facts_of(Some(0.96), None, None), BTreeSet::new());
+    let iris_records = facts_of(Some(1.0), Some(0.026), Some(0.86));
+    assert_eq!(iris_records, BTreeSet::from([TEXELS]));
+    let iris_uniform = facts_of(Some(4.798), Some(0.48), Some(0.755));
+    assert_eq!(iris_uniform, BTreeSet::from([TEXELS]));
+    assert_eq!(
+        facts_of(Some(1.001), Some(0.93), Some(0.97)),
+        BTreeSet::new()
+    );
+    assert_eq!(facts_of(Some(1.0), Some(1.23), Some(1.41)), BTreeSet::new());
+    let rtx_3090 = facts_of(Some(0.075), Some(2.21), Some(2.30));
+    assert_eq!(rtx_3090, BTreeSet::from([LANES]));
+    assert_eq!(facts_of(None, None, None), BTreeSet::new());
 }
 
-/// The arms: each window's eight device arms, then each window's two imported ones.
+/// The arms: each window's eight device arms, then each window's four imported ones.
 #[test]
 fn the_arms_are_each_kernel_at_each_window_then_the_imported_ones() {
     let arms = arms();
     assert_eq!(arms.len(), ARMS);
-    assert_eq!(arms.iter().filter(|arm| arm.host).count(), 4);
+    assert_eq!(arms.iter().filter(|arm| arm.host).count(), 8);
     assert!(arms[..16].iter().all(|arm| !arm.host));
     let distinct: BTreeSet<(usize, bool, u32)> = (arms.iter())
         .map(|&Arm { kernel, host, vecs }| (kernel, host, vecs))
@@ -123,10 +184,10 @@ fn identity() -> DriverIdentity {
 #[test]
 fn a_record_reads_back_for_its_identity_alone() {
     let identity = identity();
-    let kept = medians([0.05, 0.1], [0.9, 1.1], true);
+    let kept = medians([0.05, 0.1], [0.9, 1.1], [0.5, 0.6], true);
     let bytes = encode(&identity, &kept);
     assert_eq!(decode(&identity, &bytes), Some(kept));
-    let unimported = medians([0.05, 0.1], [0.9, 1.1], false);
+    let unimported = medians([0.05, 0.1], [0.9, 1.1], [0.5, 0.6], false);
     let bytes_unimported = encode(&identity, &unimported);
     assert_eq!(decode(&identity, &bytes_unimported), Some(unimported));
     let mut other = identity.clone();
@@ -160,7 +221,7 @@ fn an_answer_with_facts_makes_the_measured_compile_device() {
     let base = CompileDevice::new(description.clone(), policy).unwrap();
     let check = ViewCheck::new(description.clone(), policy);
     check.settle(
-        medians([1.0; 2], [1.0; 2], true).costs(),
+        medians([1.0; 2], [1.0; 2], [1.0; 2], true).costs(),
         None,
         "none".to_owned(),
     );
@@ -171,7 +232,7 @@ fn an_answer_with_facts_makes_the_measured_compile_device() {
     let check = ViewCheck::new(description, policy);
     let costs = ViewCosts {
         facts: BTreeSet::from([LANES, TEXELS]),
-        ..medians([0.05; 2], [0.4; 2], true).costs()
+        ..medians([0.05; 2], [0.4; 2], [0.4; 2], true).costs()
     };
     check.settle(costs, None, "both".to_owned());
     let measured = check.measured().expect("the measured compile device");

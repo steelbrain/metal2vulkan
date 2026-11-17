@@ -9,30 +9,43 @@
 //!   texel buffer of `R32G32B32A32_UINT` texels, every invocation the same vector at each step
 //!   (**uniform**), each its own (**per-lane**), or two vectors at constant offsets (**fields**).
 //!   Each window lies in the device's own memory (a `Private` buffer of the runtime's), and the
-//!   uniform reads through a uniform buffer and a uniform texel buffer again over host pages the
-//!   device imported by their pointer (the memory a no-copy buffer's view reads), where the device
-//!   imports them. Each arm is one dispatch between two timestamps in an internal submission
-//!   waited for; a round runs every arm once, the order turned by one each round; [`ROUNDS`]
-//!   rounds after one that warms the device, and each arm's answer is the median of its rounds,
-//!   its timestamps' ticks times `timestampPeriod`.
+//!   uniform and per-lane reads through a uniform buffer and a uniform texel buffer run again over
+//!   host pages the device imported by their pointer (the memory a no-copy buffer's view reads),
+//!   where the device imports them. Each arm is one dispatch between two timestamps in an
+//!   internal submission waited for; a round runs every arm once, the order turned by one each
+//!   round; [`ROUNDS`] rounds after one that warms the device, and each arm's answer is the median
+//!   of its rounds, its timestamps' ticks times `timestampPeriod`.
 //! - **Its verdicts** ([`facts_of`]): `DriverWorkaround::UniformBufferPerLaneReadsSerialize` where
 //!   the storage buffer's per-lane reads took less than [`PER_LANE_COSTLY`] of the uniform
-//!   buffer's at both windows; `DriverWorkaround::ExternalUniformReadsSkipACache` where the
-//!   uniform texel buffer's uniform reads over the imported pages took less than
-//!   [`TEXEL_FASTER`] of the uniform buffer's there at both windows. Both may hold: translation
-//!   gives a slot with a per-lane read its storage view, one with indexed reads all uniform its
-//!   texel view, and one read at constant offsets alone its uniform buffer
-//!   (`lower::access::view_kind`). The fields arm decides nothing; the report states it.
-//!   [`ViewVerdict::Unchecked`] where the device writes no timestamps the host reads or answers
-//!   GPU times from the host, refuses any object or command, or its loader word was found
-//!   overwritten. No driver, vendor or device identity enters it.
+//!   buffer's at both windows. `DriverWorkaround::ExternalUniformReadsSkipACache` is judged on
+//!   the reads it moves to the texel view, over the imported pages, where it is about: indexed
+//!   reads, so the uniform reads, and the per-lane reads too where the per-lane fact does not
+//!   hold (where it does, those keep their storage view). It holds where, of those reads at both
+//!   windows, the uniform texel buffer took less than [`TEXEL_NO_SLOWER`] of the uniform
+//!   buffer's time in every one (no read moved is slower) and less than [`TEXEL_FASTER`] in at
+//!   least one (one is clearly faster). Both facts may hold: translation gives a slot with a
+//!   per-lane read its storage view, one with indexed reads all uniform its texel view, and one
+//!   read at constant offsets alone its uniform buffer (`lower::access::view_kind`). The fields
+//!   arm decides nothing; the report states it. [`ViewVerdict::Unchecked`] where the device writes
+//!   no timestamps the host reads or answers GPU times from the host, refuses any object or
+//!   command, or its loader word was found overwritten. No driver, vendor or device identity
+//!   enters it.
 //! - **Its thresholds**, from bare Vulkan sweeps of the same reads: NVIDIA's storage buffer read
 //!   per-lane words in 0.011 to 0.107 of the uniform buffer's time (RTX 3090, RTX 2080, RTX 5080
 //!   Laptop GPU), RADV's in 0.96 to 1.00 (Radeon 780M, RX 7900 XTX): 0.3 lies about midway by
-//!   ratio. ANV's uniform texel buffer on the Iris Xe of RPL-P read one word for every invocation
-//!   over imported memory in 0.40 to 0.49 of the uniform buffer's time there (the uniform buffer
-//!   2.0 to 2.5 times its own over device memory, the texel buffer 0.99 to 1.00), where a driver
-//!   whose uniform buffer keeps its cache over imported memory reads both alike: 0.7 lies between.
+//!   ratio. ANV on the Iris Xe of RPL-P (Mesa 26.2.6; job m3-max-37780, 64 and 1024 reads an
+//!   invocation), the uniform texel buffer's time over the uniform buffer's, both over host
+//!   memory, worked out from each one's ratios to the uniform buffer over device memory: each
+//!   invocation walking the window 0.026 to 0.058 at 1 KiB and 0.16 to 0.17 at 4 KiB, each
+//!   reading its own word 0.081 to 0.084 and 0.19 to 0.23, every invocation one word 0.41 to 0.49
+//!   and 0.49 to 0.55, and each workgroup walking it 0.23 to 0.32 and 0.83 to 0.86 (the uniform
+//!   buffer there 1.15 to 5.56 times its own time over device memory, the texel buffer 0.99 to
+//!   1.00 times its own). Where a
+//!   uniform buffer keeps its cache over imported memory the two read alike: RADV on the Radeon
+//!   780M (Mesa 26.2.6) read this check's uniform walks over imported pages through the texel
+//!   buffer in 0.93 and 0.97 of the uniform buffer's time (job m3-max-38330). So 0.7 lies between
+//!   the Iris Xe's clear wins and a tie, and 1.0, no slower, is above every Iris Xe read moved,
+//!   its closest the workgroup's walk of 4 KiB.
 //! - **Its cost**: 4 KiB of the device's memory for the window, 64 KiB for the words the
 //!   invocations store, 64 KiB of host pages where the device imports them, eight kernels, their
 //!   pipelines, layouts and sets, two texel views and a two-timestamp query pool, while it runs;
@@ -82,9 +95,13 @@ pub(crate) const ROUNDS: usize = 7;
 /// holds (the module docs).
 pub(crate) const PER_LANE_COSTLY: f64 = 0.3;
 
-/// The uniform texel buffer's uniform time over the uniform buffer's, over imported pages, below
-/// which the texel fact holds (the module docs).
+/// The uniform texel buffer's time over the uniform buffer's, over imported pages, below which a
+/// read the texel fact moves is clearly faster through it; the fact needs one (the module docs).
 pub(crate) const TEXEL_FASTER: f64 = 0.7;
+
+/// The same ratio below which a read the texel fact moves is no slower through the texel buffer;
+/// the fact needs every one (the module docs).
+pub(crate) const TEXEL_NO_SLOWER: f64 = 1.0;
 
 /// The workgroups of each dispatch.
 const GROUPS: u32 = 256;
@@ -116,10 +133,12 @@ const KERNELS: [(CheckView, CheckReads); 8] = [
     (CheckView::Texel, CheckReads::Fields),
 ];
 
-/// The kernels the imported pages' arms run.
-const HOST_KERNELS: [(CheckView, CheckReads); 2] = [
+/// The kernels the imported pages' arms run: the reads the texel fact moves, through either view.
+const HOST_KERNELS: [(CheckView, CheckReads); 4] = [
     (CheckView::Uniform, CheckReads::Uniform),
     (CheckView::Texel, CheckReads::Uniform),
+    (CheckView::Uniform, CheckReads::PerLane),
+    (CheckView::Texel, CheckReads::PerLane),
 ];
 
 /// One arm: its kernel (an index of [`KERNELS`]), whether its window lies in the imported pages,
@@ -170,7 +189,7 @@ pub enum ViewVerdict {
 }
 
 /// The device's view check's answer ([`Device::view_costs`]): its verdict, the facts translation
-/// takes from it, and the two ratios they come from. No Metal counterpart: Metal answers no such
+/// takes from it, and the ratios they come from. No Metal counterpart: Metal answers no such
 /// question.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
@@ -183,9 +202,13 @@ pub struct ViewCosts {
     /// The storage buffer's per-lane time over the uniform buffer's, device memory, the larger of
     /// the two windows'. `None` unless measured.
     pub per_lane: Option<f64>,
-    /// The uniform texel buffer's uniform time over the uniform buffer's, imported pages, the
-    /// larger of the two windows'. `None` unless measured and the device imports host pages.
-    pub texel: Option<f64>,
+    /// The least of the uniform texel buffer's times over the uniform buffer's, imported pages,
+    /// of the reads the texel fact moves at the two windows: the uniform reads, and the per-lane
+    /// reads where the per-lane fact does not hold. `None` unless measured and the device imports
+    /// host pages.
+    pub texel_fastest: Option<f64>,
+    /// The greatest of the same ratios. `None` where `texel_fastest` is.
+    pub texel_slowest: Option<f64>,
 }
 
 impl ViewCosts {
@@ -195,7 +218,8 @@ impl ViewCosts {
             verdict,
             facts: BTreeSet::new(),
             per_lane: None,
-            texel: None,
+            texel_fastest: None,
+            texel_slowest: None,
         }
     }
 }
@@ -216,6 +240,22 @@ impl Medians {
         self.0.get(at).copied().filter(|&nanos| nanos > 0)
     }
 
+    /// The two windows' ratios of `over`'s arm to `under`'s, `host` the memory; `None` where an
+    /// arm was not run.
+    fn ratios(
+        &self,
+        over: (CheckView, CheckReads),
+        under: (CheckView, CheckReads),
+        host: bool,
+    ) -> Option<[f64; 2]> {
+        let at = |vecs| {
+            let over = self.of(over, host, vecs)?;
+            let under = self.of(under, host, vecs)?;
+            Some(over as f64 / under as f64)
+        };
+        Some([at(WINDOWS[0])?, at(WINDOWS[1])?])
+    }
+
     /// The larger of the two windows' ratios of `over`'s arm to `under`'s, `host` the memory.
     fn ratio(
         &self,
@@ -223,14 +263,8 @@ impl Medians {
         under: (CheckView, CheckReads),
         host: bool,
     ) -> Option<f64> {
-        WINDOWS
-            .iter()
-            .map(|&vecs| {
-                let over = self.of(over, host, vecs)?;
-                let under = self.of(under, host, vecs)?;
-                Some(over as f64 / under as f64)
-            })
-            .try_fold(0f64, |most, r| r.map(|r| most.max(r)))
+        let [one, other] = self.ratios(over, under, host)?;
+        Some(one.max(other))
     }
 
     /// The answer they give.
@@ -240,28 +274,45 @@ impl Medians {
             (CheckView::Uniform, CheckReads::PerLane),
             false,
         );
-        let texel = self.ratio(
-            (CheckView::Texel, CheckReads::Uniform),
-            (CheckView::Uniform, CheckReads::Uniform),
-            true,
-        );
+        let lanes = per_lane.is_some_and(|r| r < PER_LANE_COSTLY);
+        // The reads the texel fact moves: the uniform ones, and the per-lane ones unless the
+        // per-lane fact keeps them in their storage view.
+        let moved: &[CheckReads] = if lanes {
+            &[CheckReads::Uniform]
+        } else {
+            &[CheckReads::Uniform, CheckReads::PerLane]
+        };
+        let texels: Option<Vec<[f64; 2]>> = (moved.iter())
+            .map(|&reads| self.ratios((CheckView::Texel, reads), (CheckView::Uniform, reads), true))
+            .collect();
+        let texels = texels.map(|pairs| pairs.concat());
+        let texel_fastest = (texels.as_deref()).map(|r| r.iter().copied().fold(f64::MAX, f64::min));
+        let texel_slowest = (texels.as_deref()).map(|r| r.iter().copied().fold(0f64, f64::max));
         ViewCosts {
             verdict: ViewVerdict::Measured,
-            facts: facts_of(per_lane, texel),
+            facts: facts_of(per_lane, texel_fastest, texel_slowest),
             per_lane,
-            texel,
+            texel_fastest,
+            texel_slowest,
         }
     }
 }
 
-/// The facts of a run whose per-lane ratio is `per_lane` and texel ratio `texel` (the module
-/// docs): each where its ratio was measured and is below its bound.
-pub(crate) fn facts_of(per_lane: Option<f64>, texel: Option<f64>) -> BTreeSet<DriverWorkaround> {
+/// The facts of a run whose per-lane ratio is `per_lane` and the least and greatest texel ratios
+/// of the reads the texel fact moves `texel_fastest` and `texel_slowest` (the module docs): each
+/// where its ratios were measured and lie within their bounds.
+pub(crate) fn facts_of(
+    per_lane: Option<f64>,
+    texel_fastest: Option<f64>,
+    texel_slowest: Option<f64>,
+) -> BTreeSet<DriverWorkaround> {
     let mut facts = BTreeSet::new();
     if per_lane.is_some_and(|r| r < PER_LANE_COSTLY) {
         facts.insert(DriverWorkaround::UniformBufferPerLaneReadsSerialize);
     }
-    if texel.is_some_and(|r| r < TEXEL_FASTER) {
+    if texel_fastest.is_some_and(|r| r < TEXEL_FASTER)
+        && texel_slowest.is_some_and(|r| r < TEXEL_NO_SLOWER)
+    {
         facts.insert(DriverWorkaround::ExternalUniformReadsSkipACache);
     }
     facts
@@ -367,10 +418,12 @@ impl ViewCheck {
         if let Some(medians) = medians {
             out += &format!(
                 "; storage/uniform per-lane {} (costly below {PER_LANE_COSTLY}), texel/uniform \
-                 uniform over imported pages {} (faster below {TEXEL_FASTER}), texel/uniform \
-                 fields {}; medians of {ROUNDS} rounds in us:",
+                 over imported pages of the reads it moves fastest {} (faster below \
+                 {TEXEL_FASTER}) and slowest {} (no slower below {TEXEL_NO_SLOWER:.1}), \
+                 texel/uniform fields {}; medians of {ROUNDS} rounds in us:",
                 ratio(costs.per_lane),
-                ratio(costs.texel),
+                ratio(costs.texel_fastest),
+                ratio(costs.texel_slowest),
                 ratio(medians.ratio(
                     (CheckView::Texel, CheckReads::Fields),
                     (CheckView::Uniform, CheckReads::Fields),
@@ -435,10 +488,8 @@ impl Device {
         }
         if let Some(facts) = forced {
             let costs = ViewCosts {
-                verdict: ViewVerdict::Measured,
                 facts,
-                per_lane: None,
-                texel: None,
+                ..ViewCosts::unmeasured(ViewVerdict::Measured)
             };
             check.settle(costs, None, "fixed by the test's options".to_owned());
             return;
@@ -864,7 +915,7 @@ impl Drop for Kernels {
 
 /// The version of what the check measures and of how its record is named and framed: a change to
 /// either bumps it, and a record of another version is never read.
-pub(crate) const CHECK_VERSION: u32 = 1;
+pub(crate) const CHECK_VERSION: u32 = 2;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VVIEW\0";

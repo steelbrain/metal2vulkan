@@ -873,15 +873,19 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   waits for it but `settle_view_check`. Eight kernels of 256 workgroups of 64 invocations each read
   a 1 KiB and a 4 KiB window 256 times through a uniform buffer, a storage buffer and a uniform
   texel buffer, every invocation the same vector at each step, each its own, or two fixed ones;
-  the window lies in the device's memory, and the uniform reads run again over host pages the
-  device imported by their pointer. Seven rounds after a warm-up, the arms interleaved, medians of
-  timestamps. `UniformBufferPerLaneReadsSerialize` where the storage buffer's per-lane reads took
-  less than 0.3 of the uniform buffer's at both windows (NVIDIA's measured 0.011 to 0.107, RADV's
-  0.96 to 1.00); `ExternalUniformReadsSkipACache` where the texel buffer's uniform reads over the
-  imported pages took less than 0.7 of the uniform buffer's there (ANV on the Iris Xe of RPL-P
-  0.40 to 0.49). Both may hold: a slot with a per-lane read then keeps its storage view, one with
-  indexed reads all uniform takes the texel view, and one read at constant offsets alone keeps its
-  uniform buffer. `Unchecked`, never fatal, with no fact, where the device writes no timestamps
+  the window lies in the device's memory, and the uniform and per-lane reads through the uniform
+  and texel buffers run again over host pages the device imported by their pointer. Seven rounds
+  after a warm-up, the arms interleaved, medians of timestamps. `UniformBufferPerLaneReadsSerialize`
+  where the storage buffer's per-lane reads took less than 0.3 of the uniform buffer's at both
+  windows (NVIDIA's measured 0.011 to 0.107, RADV's 0.96 to 1.00). `ExternalUniformReadsSkipACache`
+  is judged on the reads it moves, over the imported pages: the uniform reads, and the per-lane
+  reads where the per-lane fact does not hold. It holds where, at both windows, the texel buffer
+  took less than the uniform buffer's time in every one of them and less than 0.7 of it in at
+  least one (ANV on the Iris Xe of RPL-P, from its records over host memory: 0.026 to 0.86 of
+  it, the least for each invocation walking a 1 KiB window, the most for each workgroup walking
+  4 KiB; RADV on the Radeon 780M 0.93 and 0.97 for the uniform reads). Both may hold: a slot
+  with a per-lane read then keeps its storage view, one with indexed reads all uniform takes the
+  texel view, and one read at constant offsets alone keeps its uniform buffer. `Unchecked`, never fatal, with no fact, where the device writes no timestamps
   the host reads or refuses any part of it. It holds 4 KiB and 64 KiB of the device's memory and
   64 KiB of host pages while it runs. Until it answers, pipelines compile with the profile of the
   device's identity alone (a uniform view stays a uniform buffer); once it answers with a fact,
