@@ -229,7 +229,8 @@ impl OldRuntime {
                 addressed(buffer.map_err(failed(call))?)
             }
             "newBufferWithBytesNoCopy:length:options:deallocator:" => {
-                let options = options(call, uint(call, 2)?)?;
+                // Played as a buffer of its length: without the read-only option (`buffer`).
+                let options = options(call, uint(call, 2)? & !ResourceOptions::PRIVATE_BIT)?;
                 let buffer = device.new_buffer(uint(call, 1)?, options);
                 addressed(buffer.map_err(failed(call))?)
             }

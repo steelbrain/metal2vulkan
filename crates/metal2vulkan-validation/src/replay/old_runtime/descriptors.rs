@@ -104,7 +104,7 @@ pub(super) fn texture(call: &Call, f: &Fields, d: &mut TextureDescriptor) -> Res
 
 /// A descriptor's resource options after its option setters, `[{Setter: raw}, ...]`, from
 /// `initial`, the options Metal's new descriptor holds.
-fn option_sets(call: &Call, initial: u64, sets: &[Value]) -> Result<ResourceOptions, PlayError> {
+fn option_sets(call: &Call, initial: u64, sets: &[Value]) -> Result<u64, PlayError> {
     let mut held = initial;
     for set in sets {
         let (setter, raw) = variant(call, set)?;
@@ -119,12 +119,14 @@ fn option_sets(call: &Call, initial: u64, sets: &[Value]) -> Result<ResourceOpti
             _ => return Err(refuse(call, format!("the option setter {setter}"))),
         };
     }
-    options(call, held)
+    Ok(held)
 }
 
 /// `newBufferWithDescriptor:`: the buffer's length and options. Its host memory is not in the
 /// stream (nil): a no-copy buffer's bytes arrive as `m2v.write`, and the pinned address is the
-/// host's, which the player relocates.
+/// host's, which the player relocates. A no-copy buffer is played as a buffer of its length, so
+/// one of the read-only option (`ResourceOptions::PRIVATE_BIT`) is made without it: its GPU writes,
+/// which Metal drops, are kept.
 pub(super) fn buffer(call: &Call) -> Result<(u64, ResourceOptions), PlayError> {
     let f = Fields::arg(
         call,
@@ -143,10 +145,11 @@ pub(super) fn buffer(call: &Call) -> Result<(u64, ResourceOptions), PlayError> {
         return Err(refuse(call, "contents other than host memory"));
     }
     let sets = f.list("options")?.unwrap_or_default();
-    Ok((
-        f.required("length", Fields::uint)?,
-        option_sets(call, 0, sets)?,
-    ))
+    let mut raw = option_sets(call, 0, sets)?;
+    if f.bool("noCopy")? == Some(true) {
+        raw &= !ResourceOptions::PRIVATE_BIT;
+    }
+    Ok((f.required("length", Fields::uint)?, options(call, raw)?))
 }
 
 /// `newHeapWithDescriptor:`: Metal's new heap descriptor holds `Private` storage.
@@ -156,7 +159,7 @@ pub(super) fn heap(call: &Call) -> Result<HeapDescriptor, PlayError> {
     let kind = f.required("heapType", Fields::uint)?;
     let kind = HeapType::from_raw(kind).map_err(super::args::failed(call))?;
     let sets = f.list("options")?.unwrap_or_default();
-    let options = option_sets(call, 0x20, sets)?;
+    let options = options(call, option_sets(call, 0x20, sets)?)?;
     Ok(HeapDescriptor::new(
         kind,
         f.required("size", Fields::uint)?,

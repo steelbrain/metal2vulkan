@@ -333,7 +333,8 @@ and the (name id, value) answer pairs.
   refuses rate maps, stage inputs, dynamic libraries, OpenCL mode, indirect command buffers,
   accumulated visibility results, and protection options, rotation, `framebufferOnly` and
   `isDrawable` other than their defaults; it does not play `defaultColorSampleCount`, which changes
-  nothing a pass shows.
+  nothing a pass shows. It plays a no-copy buffer as a buffer of its length, so one of the
+  read-only option (bit 24) is made without it and keeps the GPU writes Metal drops.
 
 `report.txt` holds one line per item: `device NAME`, `completed IDS KEY=VALUE ...`,
 `frame N KEY=VALUE ...`, `check ID SHA256 match|differs|unrecorded`, `total KEY=VALUE ...`,
