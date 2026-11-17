@@ -333,10 +333,12 @@ class Run:
             minutes = max(minutes, math.ceil(1.5 * max(r["minutes"] for r in runs)))
         return max(ram, 2), minutes
 
-    def job(self, kind, node, script, name, gpus=(), carry=None, space=None, exclusive=False):
+    def job(self, kind, node, script, name, gpus=(), carry=None, space=None, exclusive=False, again=True):
         """Dispatch SCRIPT on NODE, wait for it, and return (exit code, output, job record).
         SPACE names a workspace kept for this kind on this node across runs (incremental builds,
-        and no fresh checkout of the tree). A job that times anything is EXCLUSIVE."""
+        and no fresh checkout of the tree). A job that times anything is EXCLUSIVE. A job killed
+        for going over its RAM runs once more, sized from that kill: a fresh workspace can need
+        more than the incremental runs it was sized from, and the leg is not the job's to lose."""
         ram, minutes = self.size(kind, node)
         args = ["dispatch", "--json", "--priority", "5", "--kill-on-stall", "--label", "agent=matrix",
                 "--label", f"matrix={self.short}", "--on", f"node={node}", "--ram", str(ram),
@@ -373,6 +375,7 @@ class Run:
         out = w.stdout + w.stderr
         (self.rdir / f"{name}.log").write_text(out)
         rec = self.record(jid)
+        killed = False
         if rec and rec.get("started_at") and rec.get("ended_at"):
             peak = rec.get("usage", {}).get("peak_mem_bytes", 0) / 2**30
             took = (rec.get("ended_at", 0) - rec.get("started_at", 0)) / 60000
@@ -384,6 +387,9 @@ class Run:
                 if key and rec.get("workspace"):
                     self.spaces[key] = rec["workspace"]
         log(f"{name}: job {jid} ended {w.returncode}")
+        if killed and again:
+            log(f"{name}: over its {ram} GiB; once more with room from that run")
+            return self.job(kind, node, script, name, gpus, carry, space, exclusive, again=False)
         return w.returncode, out, rec
 
     def record(self, jid):
