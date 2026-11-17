@@ -177,11 +177,48 @@ that touch blocks first.
 - Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through
-  arithmetic defined for every value and never later than its `gpu_end_time`. One device serves
+  arithmetic defined for every value and never later than its `gpu_end_time`. The parameter ring
+  and an indirect dispatch's arguments are read only by the GPU: the runtime writes the ring and
+  never reads it back, and never reads the arguments. One device serves
   every guest process and shaders use raw device addresses, so a guest shader can reach any guest
   process's memory on the device; the runtime does not isolate processes from each other, and
   the old runtime did not either.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
+- An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
+  `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
+  dispatch past it is refused (`Limit::GroupCount`), where Metal's grids go further.
+- `setBytes` takes up to 64 KiB, one ring chunk (`Limit::BytesLength`).
+
+## Compute encoders
+
+- `CommandBuffer::compute_command_encoder(DispatchType)` is `computeCommandEncoderWithDispatchType:`.
+  While it is open, the encoder holds the command buffer's recording: another encoder, an encode
+  call, `enqueue` and `commit` are refused (`Refusal::EncoderOpen`). `end_encoding`, or dropping
+  the encoder, gives it back.
+- Each dispatch records at once. What it touches is its pipeline's bound buffer slots, with the
+  access the translator states for each, the `use_resource` declarations, and an indirect
+  dispatch's arguments buffer (a read). The hazard sets (resources read and resources written
+  since the last barrier) are kept by resource, a buffer being one resource, in a table indexed by
+  a small resource id with a generation counter, so clearing them is one increment. They carry
+  across the encoders of a command buffer until a barrier.
+- A `Serial` encoder places one global memory barrier before a dispatch that reads or writes a
+  resource in the written set, or writes one in the read set. A pipeline that reads through an
+  address outside its slots conflicts with any write; one that writes so conflicts with
+  everything and owes a barrier before the next dispatch. Every resource takes part whatever its
+  tracking mode: serial dispatch is serial order in Metal. A `Concurrent` encoder places barriers
+  only at `memory_barrier`, and begins with one where anything was read or written since the last.
+- An encoder that wrote anything owes one barrier at its end. The next command records it, or the
+  segment's own end barrier pays it, so a command buffer of one writing encoder has one barrier.
+- Parameters: fields in the push window, `[0, 128)` on every device, are pushed; fields past it go
+  to a 16-byte aligned block in the parameter ring, whose address is a field in the window.
+  `set_bytes` copies its bytes into the ring at the call, as Metal copies them. The ring is 2 MiB
+  blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
+  64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block
+  is made when no chunk is free and kept for the device's life.
+- A pipeline state makes one `VkPipeline` per threadgroup size and threadgroup memory lengths, on
+  the encoding thread that first dispatches with it, which waits for it: nothing recorded depends
+  on when a compile finishes. The command buffer keeps each state it dispatches with until it
+  retires.
 
 ## One path for every device
 
