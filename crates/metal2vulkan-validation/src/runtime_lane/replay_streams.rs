@@ -647,7 +647,8 @@ fn a_copied_buffer_starts_with_its_contents_and_ids_are_compared() {
 /// encoder, each with `m2v.privateBytes` records of the whole buffer: before each, the player puts
 /// the case's input in, and after each it compares what the kernel left with the bytes after, the
 /// case's Metal output for the first and that output with one word changed for the second, which
-/// is the one word the report counts.
+/// is the one word the report counts. The player's splits are in no count: the same stream
+/// without the records executes the same counts, group by group.
 #[test]
 fn a_private_buffer_takes_its_bytes_before_a_dispatch_and_is_compared_after() {
     let case = public_case("copy-twelve-bytes-through-a-four-byte-element-pointer").unwrap();
@@ -665,57 +666,82 @@ fn a_private_buffer_takes_its_bytes_before_a_dispatch_and_is_compared_after() {
         public: Vec::new(),
         tags: Vec::new(),
     }]);
-    let dir = ScratchDir::new("replay-private-bytes").unwrap();
-    let path = written(&dir, |w| {
-        let library = w.blob(&library)?;
-        let before = w.blob(&input)?;
-        let afters = [w.blob(&output)?, w.blob(&changed)?];
-        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
-        w.call("newCommandQueue", 1, 2, &[], &[])?;
-        let library = [Value::Blob(library)];
-        w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
-        let entry = [Value::Str(case.case.entry.clone())];
-        w.call("newFunctionWithName:", 3, 4, &entry, &[])?;
-        let function = [Value::Object(4)];
-        w.call(
-            "newComputePipelineStateWithFunction:error:",
-            1,
-            5,
-            &function,
-            &[],
-        )?;
-        let private = [Value::Uint(32), Value::Uint(0x20)];
-        w.call("newBufferWithLength:options:", 1, 6, &private, &[])?;
-        w.call("commandBuffer", 2, 7, &[], &[])?;
-        w.call("computeCommandEncoder", 7, 8, &[], &[])?;
-        w.call("setComputePipelineState:", 8, 0, &[Value::Object(5)], &[])?;
-        let bound = [Value::Object(6), Value::Uint(0), Value::Uint(0)];
-        w.call("setBuffer:offset:atIndex:", 8, 0, &bound, &[])?;
-        let one = uints(&[("width", 1), ("height", 1), ("depth", 1)]);
-        for _ in 0..2 {
-            let args = [one.clone(), one.clone()];
-            w.call("dispatchThreads:threadsPerThreadgroup:", 8, 0, &args, &[])?;
+    let (library, input, output, changed) = (&library, &input, &output, &changed);
+    let entry = &case.case.entry;
+    let stream = |records: bool| {
+        move |w: &mut StreamWriter<File>| {
+            let library = w.blob(library)?;
+            let before = w.blob(input)?;
+            let afters = [w.blob(output)?, w.blob(changed)?];
+            w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+            w.call("newCommandQueue", 1, 2, &[], &[])?;
+            let library = [Value::Blob(library)];
+            w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
+            let entry = [Value::Str(entry.clone())];
+            w.call("newFunctionWithName:", 3, 4, &entry, &[])?;
+            let function = [Value::Object(4)];
+            w.call(
+                "newComputePipelineStateWithFunction:error:",
+                1,
+                5,
+                &function,
+                &[],
+            )?;
+            let private = [Value::Uint(32), Value::Uint(0x20)];
+            w.call("newBufferWithLength:options:", 1, 6, &private, &[])?;
+            w.call("commandBuffer", 2, 7, &[], &[])?;
+            w.call("computeCommandEncoder", 7, 8, &[], &[])?;
+            w.call("setComputePipelineState:", 8, 0, &[Value::Object(5)], &[])?;
+            let bound = [Value::Object(6), Value::Uint(0), Value::Uint(0)];
+            w.call("setBuffer:offset:atIndex:", 8, 0, &bound, &[])?;
+            let one = uints(&[("width", 1), ("height", 1), ("depth", 1)]);
+            for _ in 0..2 {
+                let args = [one.clone(), one.clone()];
+                w.call("dispatchThreads:threadsPerThreadgroup:", 8, 0, &args, &[])?;
+            }
+            w.call("endEncoding", 8, 0, &[], &[])?;
+            w.call("commit", 7, 0, &[], &[])?;
+            w.call("release", 6, 0, &[], &[])?;
+            for (dispatch, after) in [(10, afters[0]), (11, afters[1])]
+                .into_iter()
+                .filter(|_| records)
+            {
+                let range = uints(&[("location", 0), ("length", 32)]);
+                let args = [
+                    Value::Uint(dispatch),
+                    range,
+                    Value::Blob(before),
+                    Value::Blob(after),
+                ];
+                w.call("m2v.privateBytes", 6, 0, &args, &[])?;
+            }
+            Ok(())
         }
-        w.call("endEncoding", 8, 0, &[], &[])?;
-        w.call("commit", 7, 0, &[], &[])?;
-        w.call("release", 6, 0, &[], &[])?;
-        for (dispatch, after) in [(10, afters[0]), (11, afters[1])] {
-            let range = uints(&[("location", 0), ("length", 32)]);
-            let args = [
-                Value::Uint(dispatch),
-                range,
-                Value::Blob(before),
-                Value::Blob(after),
-            ];
-            w.call("m2v.privateBytes", 6, 0, &args, &[])?;
-        }
-        Ok(())
-    });
-    on_device_with(at_plan, |device| {
-        let report = play("private-bytes", device, &path);
-        let differing = report.private.iter().map(|p| (p.dispatch, p.differing));
-        let differing: Vec<_> = differing.collect();
-        assert_eq!(differing, [(10, 0), (11, 1)], "{:?}", report.private);
-        assert_eq!(report.total.stream["written_bytes"], 64);
-    });
+    };
+    let mut reports = Vec::new();
+    for (name, records) in [("private-bytes", true), ("no-private-bytes", false)] {
+        let dir = ScratchDir::new("replay-private-bytes").unwrap();
+        let path = written(&dir, stream(records));
+        on_device_with(at_plan, |device| reports.push(play(name, device, &path)));
+    }
+    let (report, plain) = (&reports[0], &reports[1]);
+    let differing = report.private.iter().map(|p| (p.dispatch, p.differing));
+    let differing: Vec<_> = differing.collect();
+    assert_eq!(differing, [(10, 0), (11, 1)], "{:?}", report.private);
+    assert_eq!(report.total.stream["written_bytes"], 64);
+    assert_eq!((report.splits, plain.splits), (4, 0));
+    let executed = |report: &Report| {
+        let groups = report
+            .completed
+            .iter()
+            .map(|(_, counts)| counts.executed.clone());
+        groups
+            .chain([report.total.executed.clone()])
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        executed(report),
+        executed(plain),
+        "the splits are in no count"
+    );
 }

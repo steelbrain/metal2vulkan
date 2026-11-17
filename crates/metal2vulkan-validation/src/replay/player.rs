@@ -9,7 +9,7 @@ use super::addresses::AddressMap;
 use super::stream::{Call, StreamError, StreamReader};
 use super::value::{Hash, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 
@@ -172,7 +172,11 @@ pub struct Report {
     pub checks: Vec<Check>,
     pub ids: Vec<IdDiffers>,
     pub private: Vec<PrivateBytes>,
-    /// The whole play's counts, the player's readbacks left out. Its calls are the calls played:
+    /// How many times the player ended a program's compute encoder and made it again around a
+    /// dispatch an `m2v.privateBytes` record names (twice a dispatch): its own work, which no
+    /// count holds.
+    pub splits: u64,
+    /// The whole play's counts, the player's own work left out. Its calls are the calls played:
     /// where a play stopped, the stopping call is the next.
     pub total: Counts,
 }
@@ -224,6 +228,9 @@ impl Report {
             lines.push(format!(
                 "private #{buffer} {dispatch} {at}+{length} {verdict}"
             ));
+        }
+        if self.splits > 0 {
+            lines.push(format!("split {}", self.splits));
         }
         lines.push(format!("total{}", counted(&self.total)));
         lines
@@ -337,7 +344,7 @@ pub struct Player<'b, B: Backend> {
     /// The compute encoders open while a record names a later dispatch.
     encoders: HashMap<u64, Encoder>,
     /// The snapshots whose command buffers completed, not yet compared.
-    done: Vec<Snapshot>,
+    done: VecDeque<Snapshot>,
     /// The objects of the player's own made so far.
     own_made: u64,
     baseline: Counters,
@@ -529,7 +536,7 @@ impl<'b, B: Backend> Player<'b, B> {
             ahead: HashMap::new(),
             position: 0,
             encoders: HashMap::new(),
-            done: Vec::new(),
+            done: VecDeque::new(),
             own_made: 0,
             baseline,
             fixed,
@@ -541,15 +548,15 @@ impl<'b, B: Backend> Player<'b, B> {
     /// Play every call of `stream`; the report holds what ran, whether or not it all did.
     pub fn play(mut self, stream: &mut StreamReader) -> (Report, Result<(), PlayError>) {
         let start = self.baseline.clone();
-        let mut readbacks = Counters::new();
+        let mut left_out = Counters::new();
         let result = self.read_ahead(stream);
-        let result = result.and_then(|()| self.all(stream, &mut readbacks));
+        let result = result.and_then(|()| self.all(stream, &mut left_out));
         let ended = result.and_then(|()| self.finish());
-        let ended = ended.and_then(|()| self.compare(stream, &mut readbacks));
+        let ended = ended.and_then(|()| self.compare(stream, &mut left_out));
         let now = self.backend.counters();
         let mut executed = grown(&now, &start);
         for (key, value) in &mut executed {
-            *value = value.saturating_sub(readbacks.get(key).copied().unwrap_or(0));
+            *value = value.saturating_sub(left_out.get(key).copied().unwrap_or(0));
         }
         let mut stream = self.fixed.clone();
         for (_, group) in &self.report.completed {
@@ -559,22 +566,18 @@ impl<'b, B: Backend> Player<'b, B> {
         (self.report, ended)
     }
 
-    fn all(
-        &mut self,
-        stream: &mut StreamReader,
-        readbacks: &mut Counters,
-    ) -> Result<(), PlayError> {
+    fn all(&mut self, stream: &mut StreamReader, left_out: &mut Counters) -> Result<(), PlayError> {
         while let Some(call) = stream.next_call()? {
             let issued = self.issued(&call);
             match self.ahead.remove(&self.position) {
-                Some(ranges) => self.split(stream, call, ranges, readbacks)?,
-                None => self.step(stream, call, readbacks)?,
+                Some(ranges) => self.split(stream, call, ranges, left_out)?,
+                None => self.step(stream, call, left_out)?,
             }
             self.position += 1;
             for key in [Some(CALLS), issued].into_iter().flatten() {
                 *self.fixed.entry(key).or_default() += 1;
             }
-            self.compare(stream, readbacks)?;
+            self.compare(stream, left_out)?;
         }
         Ok(())
     }
@@ -614,7 +617,7 @@ impl<'b, B: Backend> Player<'b, B> {
         &mut self,
         stream: &mut StreamReader,
         call: Call,
-        readbacks: &mut Counters,
+        left_out: &mut Counters,
     ) -> Result<(), PlayError> {
         match &*call.selector {
             "m2v.write" => self.write(stream, &call),
@@ -628,7 +631,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.drain()?;
                 for (object, recorded) in objects {
                     let object = object.ok_or_else(|| invalid("m2v.check of no object"))?;
-                    self.check(object, recorded, readbacks)?;
+                    self.check(object, recorded, left_out)?;
                 }
                 Ok(())
             }
@@ -976,9 +979,9 @@ impl<'b, B: Backend> Player<'b, B> {
         &mut self,
         object: u64,
         recorded: Option<Hash>,
-        readbacks: &mut Counters,
+        left_out: &mut Counters,
     ) -> Result<(), PlayError> {
-        let bytes = self.read_back(object, readbacks)?;
+        let bytes = self.uncounted(left_out, |player| player.backend.read(object))?;
         self.report.checks.push(Check {
             object,
             sha256: Sha256::digest(&bytes).into(),
@@ -987,14 +990,19 @@ impl<'b, B: Backend> Player<'b, B> {
         Ok(())
     }
 
-    /// The bytes of `object`, the readback's own work left out of the counts.
-    fn read_back(&mut self, object: u64, readbacks: &mut Counters) -> Result<Vec<u8>, PlayError> {
+    /// Run `work`, the player's own, and leave what the runtime counted while it ran out of the
+    /// counts: out of the group it would fall in, and into `left_out`, which the total leaves out.
+    fn uncounted<T>(
+        &mut self,
+        left_out: &mut Counters,
+        work: impl FnOnce(&mut Self) -> Result<T, PlayError>,
+    ) -> Result<T, PlayError> {
         let before = self.backend.counters();
-        let bytes = self.backend.read(object)?;
+        let done = work(self);
         let own = grown(&self.backend.counters(), &before);
-        add(readbacks, &own);
+        add(left_out, &own);
         add(&mut self.baseline, &own);
-        Ok(bytes)
+        done
     }
 
     /// Keep what a split needs of the compute encoders open while a record names a later dispatch:
@@ -1051,7 +1059,7 @@ impl<'b, B: Backend> Player<'b, B> {
         stream: &mut StreamReader,
         call: Call,
         ranges: Vec<Around>,
-        readbacks: &mut Counters,
+        left_out: &mut Counters,
     ) -> Result<(), PlayError> {
         let dispatch = self.position;
         let open = match self.issued(&call) {
@@ -1074,29 +1082,33 @@ impl<'b, B: Backend> Player<'b, B> {
             half = (half + around.length).next_multiple_of(16);
         }
         let (staging, fence) = (self.own_object(), self.own_object());
-        let length = [Value::Uint((2 * half).max(16)), Value::Uint(0)];
-        self.own(device, "newBufferWithLength:options:", staging, &length)?;
-        self.own(device, "newFence", fence, &[])?;
-        for &(around, at) in &placed {
-            let mut before = stream.blob(&around.before)?;
-            sized(&around, &before)?;
-            if self.addresses.holds(around.buffer) {
-                self.relocate(&mut before, around.location);
-            }
-            *self.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
-            self.backend.write(staging, at, &before)?;
-        }
         let copy_in = |&(around, at): &(Around, u64)| {
             let (buffer, location) = (around.buffer, around.location);
             [staging, at, buffer, location, around.length]
         };
-        self.blit_between(&made, fence, placed.iter().map(copy_in))?;
-        self.step(stream, call, readbacks)?;
+        self.uncounted(left_out, |player| {
+            let length = [Value::Uint((2 * half).max(16)), Value::Uint(0)];
+            player.own(device, "newBufferWithLength:options:", staging, &length)?;
+            player.own(device, "newFence", fence, &[])?;
+            for &(around, at) in &placed {
+                let mut before = stream.blob(&around.before)?;
+                sized(&around, &before)?;
+                if player.addresses.holds(around.buffer) {
+                    player.relocate(&mut before, around.location);
+                }
+                *player.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
+                player.backend.write(staging, at, &before)?;
+            }
+            player.blit_between(&made, fence, placed.iter().map(copy_in))
+        })?;
+        self.step(stream, call, left_out)?;
         let copy_out = |&(around, at): &(Around, u64)| {
             let (buffer, location) = (around.buffer, around.location);
             [buffer, location, staging, half + at, around.length]
         };
-        self.blit_between(&made, fence, placed.iter().map(copy_out))?;
+        self.uncounted(left_out, |player| {
+            player.blit_between(&made, fence, placed.iter().map(copy_out))
+        })?;
         let pending = self.pending.get_mut(&command_buffer);
         let pending = pending.ok_or_else(|| invalid("a dispatch of no open command buffer"))?;
         pending.snapshots.push(Snapshot {
@@ -1140,6 +1152,7 @@ impl<'b, B: Backend> Player<'b, B> {
         self.own(blit, "endEncoding", 0, &[])?;
         self.backend_release(blit)?;
         self.backend.call(made)?;
+        self.report.splits += 1;
         self.own(encoder, "waitForFence:", 0, &fenced)?;
         if let Some(open) = self.encoders.get(&encoder) {
             for state in &open.state {
@@ -1154,13 +1167,16 @@ impl<'b, B: Backend> Player<'b, B> {
     fn compare(
         &mut self,
         stream: &mut StreamReader,
-        readbacks: &mut Counters,
+        left_out: &mut Counters,
     ) -> Result<(), PlayError> {
-        let done: Vec<Snapshot> = self.done.drain(..).collect();
-        for snapshot in done {
-            let bytes = self.read_back(snapshot.staging, readbacks)?;
-            self.backend_release(snapshot.staging)?;
-            self.backend_release(snapshot.fence)?;
+        while let Some(snapshot) = self.done.pop_front() {
+            let (staging, fence) = (snapshot.staging, snapshot.fence);
+            let bytes = self.uncounted(left_out, |player| {
+                let bytes = player.backend.read(staging)?;
+                player.backend_release(staging)?;
+                player.backend_release(fence)?;
+                Ok(bytes)
+            })?;
             for (around, at) in snapshot.ranges {
                 let mut after = stream.blob(&around.after)?;
                 sized(&around, &after)?;

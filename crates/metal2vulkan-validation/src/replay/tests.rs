@@ -258,7 +258,8 @@ fn the_address_map_relocates_by_the_innermost_live_range() {
 /// A backend that keeps what it is asked: the calls, the waits, the bytes written, the objects
 /// whose resource IDs it gave. It places blocks and buffers apart from the recorded addresses, and
 /// a buffer in a block at its offset. It holds the bytes of the buffers made by length, which
-/// writes and buffer copies change and a read gives; it runs no dispatch.
+/// writes and buffer copies change and a read gives; it runs no dispatch. It counts submissions,
+/// and buffer copies once there was one.
 #[derive(Default)]
 struct Kept {
     calls: Vec<String>,
@@ -273,6 +274,7 @@ struct Kept {
     ids: HashMap<u64, u64>,
     asked: Vec<u64>,
     memory: HashMap<u64, Vec<u8>>,
+    copies: u64,
 }
 
 impl Backend for Kept {
@@ -299,6 +301,7 @@ impl Backend for Kept {
                 let bytes = bytes.to_vec();
                 let into = self.memory.get_mut(&to.unwrap()).unwrap();
                 into[at(3)..at(3) + at(4)].copy_from_slice(&bytes);
+                self.copies += 1;
             }
             "notPlayed" => {
                 return Err(PlayError::Refused {
@@ -343,7 +346,11 @@ impl Backend for Kept {
     }
 
     fn counters(&mut self) -> Counters {
-        Counters::from([("submissions", self.commits)])
+        let mut counters = Counters::from([("submissions", self.commits)]);
+        if self.copies > 0 {
+            counters.insert("copies", self.copies);
+        }
+        counters
     }
 }
 
@@ -895,8 +902,8 @@ const OWN: u64 = (1 << 63) + 1;
 /// with every call that set its state, dispatches, and the same with a blit that copies the ranges
 /// out, each encoder after a fence the one before updated. At the completion it reads the bytes
 /// after back and counts the words that differ from the recording's (here, the dispatch changed
-/// nothing). The stream's own counts leave the player's calls out; a later dispatch plays as it
-/// is.
+/// nothing). The report counts the two splits; no count holds the player's calls or what the
+/// runtime counted for them (its copies); a later dispatch plays as it is.
 #[test]
 fn a_dispatch_plays_between_its_private_bytes() {
     let before: Vec<u8> = (0..24).collect();
@@ -1019,6 +1026,16 @@ fn a_dispatch_plays_between_its_private_bytes() {
         (15, 1, 2)
     );
     assert_eq!(stream["written_bytes"], 28);
+    assert_eq!((kept.copies, report.splits), (4, 2));
+    assert!(lines.contains(&"split 2".to_string()));
+    let groups = report.completed.iter().map(|(_, counts)| &counts.executed);
+    for executed in groups.chain([&report.total.executed]) {
+        assert_eq!(
+            executed.get("copies").copied().unwrap_or(0),
+            0,
+            "{executed:?}"
+        );
+    }
 }
 
 /// A record must name an earlier call, and that call a compute encoder's dispatch; a blob must hold

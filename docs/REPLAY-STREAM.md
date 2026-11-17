@@ -353,7 +353,8 @@ and the (name id, value) answer pairs.
   same way. A fence of its own orders each of these encoders after the one before it. Once the
   command buffer completed, it reads the bytes after back and counts the 4-byte words of each
   range that differ from the recording's, relocated the same way. A difference is reported, and
-  the play goes on. Its own objects take ids from 2^63 + 1.
+  the play goes on. Its own objects take ids from 2^63 + 1. The report counts the encoders it split
+  (`split`).
 - It reports, for each group of command buffers it waited for (normally the one just committed),
   for each frame and in total, two sets of counts:
   - **Fixed by the stream** (`stream`), the same on every play of the stream on any runtime: the
@@ -374,10 +375,11 @@ and the (name id, value) answer pairs.
     made records through the pipeline's general form and keeps nothing for a later encoder to
     draw again. So a play with cold shader caches records more commands than a warm one, and warm
     plays can move a few draws and barriers from one group or frame to another. Only the stream's
-    counts are compared between plays. A dispatch played around `m2v.privateBytes` records adds
-    the player's encoders and copies to them.
+    counts are compared between plays.
 
-  Its own readbacks are not counted.
+  Its own work is in no count: its readbacks, and around a dispatch an `m2v.privateBytes` record
+  names, its buffer, fence, blits and the encoders it ends and makes again. What the runtime
+  counted while the player's own calls ran is left out of the executed counts.
 - A selector, argument or descriptor key the runtime's backend does not implement is a typed
   refusal naming it; the run stops there and the report keeps what ran. The old runtime's backend
   refuses rate maps, stage inputs, dynamic libraries, OpenCL mode, indirect command buffers,
@@ -390,7 +392,8 @@ and the (name id, value) answer pairs.
 `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
 runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
-`m2v.privateBytes` range compared, `total COUNTS` (its `calls` the calls played: where
+`m2v.privateBytes` range compared, `split N` where the player split compute encoders around them,
+`total COUNTS` (its `calls` the calls played: where
 the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
 KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
