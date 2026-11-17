@@ -289,9 +289,13 @@ fn rebinding_one_of_two_buffers_over_one_memory_moves_it_alone() {
 /// (`WorkCounts::host_mappings_queried`, which Linux's imports count) and imports nothing, and the
 /// GPU reads and writes those bytes through either buffer. Rebound back onto bytes no live buffer
 /// was made over, it imports them, asking about their mapping, and reads them.
+/// The mappings are counted once the device's view check answered (`Device::settle_view_check`):
+/// with no record of it in the scratch cache, the check runs from the device's making, and its
+/// import of host pages asks about their mapping.
 #[test]
 fn a_rebind_onto_a_live_buffer_s_bytes_lies_in_its_import() {
     on_device(|device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let queue = device.new_command_queue().unwrap();
         let (live_seen, moved_seen, onto_seen, back_seen) = (
             Arc::new(Seen::default()),

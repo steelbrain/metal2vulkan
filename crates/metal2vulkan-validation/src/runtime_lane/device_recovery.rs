@@ -268,10 +268,17 @@ fn a_recovery_fails_the_command_buffers_on_their_way_as_its_victims() {
 ///
 /// It prints how long the recovery took beside the device's first making, which the recovery
 /// makes again, and bounds neither: both are the driver's work, which other processes' load on
-/// the host and the GPU stretches.
+/// the host and the GPU stretches. It recovers once the device's view check answered
+/// (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs from
+/// the device's making, and a check under way holds its generation's `VkDevice` until the step
+/// it is in ends, then lets it go, unchecked (`view_check.rs`).
 #[test]
 fn objects_made_before_a_recovery_are_refused_and_the_lost_vk_device_goes_with_them() {
     on_timed_device(|device, _, making| {
+        assert!(
+            device.settle_view_check(super::WAIT),
+            "the view check answers"
+        );
         let queue = device.new_command_queue().unwrap();
         let old = device.new_buffer(4096, ResourceOptions::shared()).unwrap();
         // SAFETY: the handles are read and not used.

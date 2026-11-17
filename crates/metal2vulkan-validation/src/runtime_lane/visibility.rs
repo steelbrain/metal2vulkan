@@ -247,11 +247,18 @@ fn boolean_results_announce_the_device_s_value() {
 
 /// A pass's `Boolean` results are its queries' own words: one `vkCmdCopyQueryPoolResults` of
 /// both offsets' queries and no dispatch after it, the word of the draw that passed a sample
-/// nonzero and the other's 0.
+/// nonzero and the other's 0. Counted once the device's view check answered
+/// (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs from
+/// the device's making, and its dispatches are the device's (one landed in the count beside the
+/// runtime lane on the RX 7900 XTX).
 #[test]
 fn boolean_results_are_copied_with_no_dispatch() {
     use VisibilityResultMode::Boolean;
     let (messages, _cache, probe) = validated();
+    assert!(
+        probe.device.settle_view_check(super::WAIT),
+        "the view check answers"
+    );
     let vis = visibility_buffer(&probe, 2);
     let before = probe.device.work_counts().commands_recorded;
     probe

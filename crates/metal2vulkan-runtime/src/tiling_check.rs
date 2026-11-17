@@ -659,44 +659,76 @@ impl Stamps {
     }
 
     /// The nanoseconds between the timestamps around what `record` records, in an internal
-    /// submission of `device`'s waited for: the pool's queries reset, a barrier of every stage
-    /// behind the work before, the first timestamp at the top of the pipe, the work, the second
-    /// at its bottom; inside a section of the exit guard.
+    /// submission of `device`'s waited for ([`record_around`](Self::record_around)); inside a
+    /// section of the exit guard.
     pub(crate) fn time(
         &self,
         device: &Device,
         clock: &GpuClock,
         record: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<u64, Error> {
-        let pool = self.pool;
         device.submit_internal(|commands, command_buffer| {
-            let raw: &ash::Device = commands;
-            let all = vk::PipelineStageFlags::ALL_COMMANDS;
-            let before = [vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-                .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)];
-            // SAFETY: the internal command buffer is recording outside a render pass; the pool is
-            // live, of two timestamp queries, which nothing pending uses (each submission is
-            // waited for).
-            unsafe {
-                raw.cmd_reset_query_pool(command_buffer, pool, 0, 2);
-                let flags = vk::DependencyFlags::empty();
-                raw.cmd_pipeline_barrier(command_buffer, all, all, flags, &before, &[], &[]);
-                let top = vk::PipelineStageFlags::TOP_OF_PIPE;
-                raw.cmd_write_timestamp(command_buffer, top, pool, 0);
-            }
-            record(raw, command_buffer);
-            // SAFETY: as above.
-            unsafe {
-                let bottom = vk::PipelineStageFlags::BOTTOM_OF_PIPE;
-                raw.cmd_write_timestamp(command_buffer, bottom, pool, 1);
-            }
+            self.record_around(commands, command_buffer, record);
         })?;
+        self.read(device, clock)
+    }
+
+    /// [`time`](Self::time), its submission made only where no batch of `device`'s is in flight
+    /// (`Device::submit_internal_if_idle`): `None` where one was, and nothing was submitted.
+    pub(crate) fn time_if_idle(
+        &self,
+        device: &Device,
+        clock: &GpuClock,
+        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+    ) -> Result<Option<u64>, Error> {
+        let made = device.submit_internal_if_idle(|commands, command_buffer| {
+            self.record_around(commands, command_buffer, record);
+        })?;
+        match made {
+            true => self.read(device, clock).map(Some),
+            false => Ok(None),
+        }
+    }
+
+    /// Record into `command_buffer`, an internal command buffer recording outside a render pass:
+    /// the pool's queries reset, a barrier of every stage behind the work before, the first
+    /// timestamp at the top of the pipe, what `record` records, the second at its bottom.
+    fn record_around(
+        &self,
+        raw: &ash::Device,
+        command_buffer: vk::CommandBuffer,
+        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+    ) {
+        let pool = self.pool;
+        let all = vk::PipelineStageFlags::ALL_COMMANDS;
+        let before = [vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+            .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE)];
+        // SAFETY: the internal command buffer is recording outside a render pass; the pool is
+        // live, of two timestamp queries, which nothing pending uses (each submission is waited
+        // for).
+        unsafe {
+            raw.cmd_reset_query_pool(command_buffer, pool, 0, 2);
+            let flags = vk::DependencyFlags::empty();
+            raw.cmd_pipeline_barrier(command_buffer, all, all, flags, &before, &[], &[]);
+            let top = vk::PipelineStageFlags::TOP_OF_PIPE;
+            raw.cmd_write_timestamp(command_buffer, top, pool, 0);
+        }
+        record(raw, command_buffer);
+        // SAFETY: as above.
+        unsafe {
+            let bottom = vk::PipelineStageFlags::BOTTOM_OF_PIPE;
+            raw.cmd_write_timestamp(command_buffer, bottom, pool, 1);
+        }
+    }
+
+    /// The nanoseconds between the pool's two timestamps, written by a submission that completed.
+    fn read(&self, device: &Device, clock: &GpuClock) -> Result<u64, Error> {
         let raw: &ash::Device = device.shared().vk();
         let mut stamps = [0u64; 2];
         let flags = vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT;
         // SAFETY: the pool is live, its two queries written by the submission, which completed.
-        unsafe { raw.get_query_pool_results(pool, 0, &mut stamps, flags) }.map_err(vulkan)?;
+        unsafe { raw.get_query_pool_results(self.pool, 0, &mut stamps, flags) }.map_err(vulkan)?;
         Ok(clock.duration(stamps[0], stamps[1]))
     }
 }

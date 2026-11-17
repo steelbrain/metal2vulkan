@@ -156,10 +156,14 @@ fn run(device: &Device, state: &RenderPipelineState, commands: u64) -> (u64, Vec
 /// earlier compute encoder made their buffer resident for writing, write no resident resource:
 /// a pass of 16 commands records as many barriers as one of a single command (none waits on
 /// another's), each draws, and nothing past the host step is announced (no draw's vertex stage
-/// writes bytes its fragments touch).
+/// writes bytes its fragments touch). The barriers are counted once the device's view check
+/// answered (`Device::settle_view_check`): with no record of it in the scratch cache, the check
+/// runs from the device's making, and each of its timed dispatches records a barrier (one landed
+/// in a count on lavapipe, `[12, 10, 9]`).
 #[test]
 fn replayed_draws_of_functions_that_write_nothing_write_no_resident_buffer() {
     on_device_with(at_plan, |device, messages| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let descriptor = descriptor(device);
         let state = device
             .new_render_pipeline_state(&descriptor, &PipelineOptions::default())

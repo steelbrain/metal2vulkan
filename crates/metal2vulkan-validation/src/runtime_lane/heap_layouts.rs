@@ -43,7 +43,7 @@ use super::degrade_notices::{counts, on_device, on_device_with};
 use super::host_memory::{not_importable, run, Mapping};
 use super::indirect_host_steps;
 use super::no_copy_heaps::{shared, HEAP};
-use super::{buffer_with, read_buffer, Messages};
+use super::{buffer_with, read_buffer, Messages, WAIT};
 use crate::air_library::AirLibrary;
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::metal::{PixelFormat, TextureType, TextureUsage};
@@ -301,9 +301,13 @@ fn layouts_counted(before: &WorkCounts, after: &WorkCounts) -> [u64; 4] {
 /// and its CPU copies are made in the heap's bytes with no submission
 /// (`WorkCounts::heap_shadow_cpu_copies`). Counted tiled, with no layout notice. Printed: how many
 /// shapes lay each way.
+/// The submissions are counted once the device's view check answered
+/// (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs from
+/// the device's making, and each of its timed dispatches is an internal submission.
 #[test]
 fn a_host_heap_s_plain_texture_lies_in_place_or_in_metal_s_tiles() {
     on_device(|device, messages| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let queue = device.new_command_queue().unwrap();
         let (mut in_place, mut tiled) = (0, 0);
         for plain in plains() {

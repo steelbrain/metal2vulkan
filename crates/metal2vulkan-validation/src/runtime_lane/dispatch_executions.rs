@@ -443,10 +443,17 @@ const STEPPED: [Degradation; 2] = [HOST_STEPS[0], Degradation::SplitDispatch];
 /// and after the range alone. Both encoders run twice, and the second time is
 /// counted: the first records the queue's kept barrier command buffers ([`kept_recorded`]), and
 /// the second counts a run that recorded none ([`own_barriers`]), so its barriers are the
-/// commands' and their encoder's own.
+/// commands' and their encoder's own, once the device's view check answered
+/// (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs from
+/// the device's making, and each of its timed dispatches records a barrier (one landed in the
+/// serial encoder's count on lavapipe, 7 against 6).
 #[test]
 fn each_command_runs_its_own_state_and_group_count() {
     on_device(|device, messages| {
+        assert!(
+            device.settle_view_check(super::WAIT),
+            "the view check answers"
+        );
         let queue = device.new_command_queue().unwrap();
         let mut ordered = Vec::new();
         let passes = [false, true].map(|counted| {

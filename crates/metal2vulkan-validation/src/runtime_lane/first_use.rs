@@ -1607,9 +1607,14 @@ fn a_heap_texture_s_replace_region_waits_for_no_gpu_work() {
 /// submission, and the blit's submission carries the move from them. Then an empty command
 /// buffer committed after a new texture is made carries its first move in its batch's one
 /// `VkSubmitInfo`.
+/// The submissions are counted once the device's view check answered
+/// (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs from
+/// the device's making, and each of its timed dispatches is an internal submission (six landed
+/// in a count on the RX 7900 XTX).
 #[test]
 fn a_new_heap_texture_s_staged_copy_lands_in_its_first_move_s_submission() {
     on_device(|device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let name = device.name();
         let queue = device.new_command_queue().unwrap();
         let d = descriptor(ResourceOptions::shared());
@@ -1730,9 +1735,15 @@ fn a_new_heap_texture_s_staged_copy_lands_in_its_first_move_s_submission() {
     });
 }
 
+/// A `Shared` or `Managed` texture's host copies while the GPU is busy wait for none of its
+/// work: on the host, or each on the staging queue alone. Counted once the device's view check
+/// answered (`Device::settle_view_check`): with no record of it in the scratch cache, the check
+/// runs from the device's making, and its dispatches are internal submissions (7 landed in a
+/// try's count beside the runtime lane on the RX 7900 XTX).
 #[test]
 fn shared_textures_copy_on_the_host_while_the_gpu_is_busy() {
     on_device(|device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let name = device.name();
         let queue = device.new_command_queue().unwrap();
         let busy = Busy::new(device, &queue);

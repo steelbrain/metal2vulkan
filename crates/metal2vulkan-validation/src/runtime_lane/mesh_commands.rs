@@ -697,10 +697,14 @@ fn encode_own(
 /// A buffer of mesh draws alone keeps no chunk, as no mesh draw is plain: the CPU's `own`
 /// commands' first execution begins as many command buffers as their second, which records them
 /// again, none for a chunk recorded apart only to be found not plain. An execution of another
-/// buffer runs first, so neither pays for the device's first work.
+/// buffer runs first, so neither pays for the device's first work, and the device's view check
+/// answered first (`Device::settle_view_check`): with no record of it in the scratch cache, the
+/// check runs from the device's making, and each of its timed dispatches begins a command buffer
+/// of the device's (one landed in the first execution's count on lavapipe, 10 against 9).
 #[test]
 fn a_buffer_of_mesh_draws_alone_records_no_chunk_apart() {
     on_device_with(at_plan, |device, _| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let lane = Lane::new(device);
         let (object, grid) = lane.draws_pipelines();
         let ctl = words(device, &[2, 1, 0, 0]);

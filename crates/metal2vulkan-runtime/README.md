@@ -879,9 +879,11 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   waits for it but `settle_view_check`. The device's work never waits on it: before each kernel's
   making it stands by until no command buffer committed waits for its submission, none is in
   flight and no `VkQueue` has been used for 20 ms since its start, and before each timed dispatch
-  for 1 ms, so a device whose work never pauses that long gets its answer once it does
-  (`WorkCounts::device_checks`, `view_check_stand_bys`); it stands by for no one while
-  `settle_view_check` waits. Eight kernels of 256 workgroups of 64 invocations each read
+  for 1 ms; each timed dispatch is submitted only where no command buffer is in flight as it
+  goes, so it never runs behind the program's work, and stands by again where one is. Its
+  stand-bys take 10 s in all at most: a device whose work never pauses long enough within them
+  ends the check `Unchecked`, with no further attempt (`WorkCounts::device_checks`,
+  `view_check_stand_bys`); it stands by for no one while `settle_view_check` waits. Eight kernels of 256 workgroups of 64 invocations each read
   a 1 KiB and a 4 KiB window 256 times through a uniform buffer, a storage buffer and a uniform
   texel buffer, every invocation the same vector at each step, each its own, or two fixed ones;
   the window lies in the device's memory, and the uniform and per-lane reads through the uniform
@@ -898,7 +900,8 @@ Calls Metal does not have, for a consumer that emulates a Metal device:
   with a per-lane read then keeps its storage view, one with indexed reads all uniform takes the
   texel view, and one read at constant offsets alone keeps its uniform buffer. `Unchecked`, never
   fatal, with no fact, where the device writes no timestamps the host reads or refuses any part of
-  it. Measured on six devices (jobs m3-max-38378, 38379, 38380, 38382, 38389 and 38359): the
+  it. A recovery ends a check under way on the lost `VkDevice`, which it lets go of, and the new
+  `VkDevice` runs a check of its own. Measured on six devices (jobs m3-max-38378, 38379, 38380, 38382, 38389 and 38359): the
   RTX 3090 and the RTX 2080 take `UniformBufferPerLaneReadsSerialize` alone (per-lane 0.073 and
   0.102; the texel buffer 2.20 to 2.26 and 2.26 to 2.72 times the uniform buffer over imported
   pages); the Iris Xe of RPL-P takes `ExternalUniformReadsSkipACache` alone (per-lane 4.84; the

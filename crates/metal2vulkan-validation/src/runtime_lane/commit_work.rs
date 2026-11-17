@@ -217,9 +217,13 @@ fn empty_command_buffers_make_no_submission() {
 /// empty command buffer's submission carries the first work's `VkCommandBuffer` alone (the module
 /// docs). The internal submission, a use of the queue outside a batch, is followed by the relay's
 /// mark of no work where the runtime relays the driver's failures ([`relay_marks`]).
+/// The submissions are counted once the device's view check answered
+/// (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs from
+/// the device's making, and each of its timed dispatches is an internal submission.
 #[test]
 fn a_new_texture_s_first_work_rides_in_the_next_submission() {
     on_device(|device, _| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let queue = device.new_command_queue().unwrap();
         finish(&queue.command_buffer().unwrap());
         let marks = relay_marks(device);

@@ -75,11 +75,22 @@
 //!   submitted is in flight, and no use of a `VkQueue` has been under way for [`COMPILE_QUIET`]
 //!   before a making (one cannot stop once begun) or [`ARM_QUIET`] before a dispatch, counted
 //!   from no earlier than the check's start (a program's first work comes right after the
-//!   device's making). A device
-//!   whose work never pauses that long gets its answer once it does; until then translation takes
-//!   no fact. It stands by for no one while a call waits for its answer
-//!   (`Device::settle_view_check`). Counted: `WorkCounts::device_checks`
-//!   (`view_check_stand_bys`, `view_check_stand_by_nanos`).
+//!   device's making). A batch committed after that read and submitted before the dispatch's
+//!   own submission would put the dispatch behind the program's work on the first `VkQueue`,
+//!   and the internal lock the dispatch holds while it waits for the GPU with it: on the RX 7900
+//!   XTX (RADV) a sparse heap's `new_texture` and a no-copy buffer's `rebind_bytes_no_copy`
+//!   returned only once the program's 2 s of busy work ended (job m3-max-39371). So the
+//!   dispatch is submitted only
+//!   where no batch is in flight as read with its place in the first work's order held
+//!   (`Device::submit_internal_if_idle`), which every batch takes before its `vkQueueSubmit`:
+//!   it runs behind none of the program's work, and where one went in flight it is not
+//!   submitted and stands by again. Its stand-bys take [`STAND_BY_MOST`] in all at most: a
+//!   device whose work never pauses that long within it ends the check there, unchecked, with no
+//!   further attempt (its next device or process checks again, as an unchecked answer is kept
+//!   nowhere); until an answer translation takes no fact. It stands by for no one while a call
+//!   waits for its answer (`Device::settle_view_check`), its dispatches then submitted at once.
+//!   Counted: `WorkCounts::device_checks` (`view_check_stand_bys`,
+//!   `view_check_stand_by_nanos`).
 //! - **Out of the device's way, and its thread**, as the tiling-cost check's
 //!   (`tiling_check.rs`): it steps aside before each kernel's making and each round for the
 //!   device's allocations and frees on other threads (`step_aside.rs`), at once while a call waits
@@ -87,8 +98,18 @@
 //!   the exit guard of its own; it holds its device through the registry of the runtime's holds
 //!   (`device/holds.rs`), reading the stop before each round and as it stands by. Its dispatches
 //!   are internal submissions, counted as the device's (`WorkCounts::internal_submissions`).
+//! - **Over one generation.** Each generation runs a check of its own as it is made (`line.rs`;
+//!   a recovery's new `VkDevice` too), whose answer its calls read. Where its generation is lost
+//!   (a hang, a recovery), the check ends there, read before each round and as it stands by, and
+//!   its answer is [`ViewVerdict::Unchecked`] saying so, for the lost generation's handles; it
+//!   lets go of its objects and its hold of the lost `VkDevice`. A recovery carries its buffers
+//!   to the next generation as it carries the runtime's own (`device/carry.rs`), so each step
+//!   that reaches their Vulkan objects (the sets' making, a timed dispatch) holds their parts
+//!   first (`Buffer::held_parts`) and runs only where the generation is not lost then: no handle
+//!   the carry made on the next generation meets the lost one's `VkDevice`, and the lost parts
+//!   stay until the step ends.
 
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, HeldParts};
 use crate::device::holds::Holder;
 use crate::device::{lock, Device, WeakDevice};
 use crate::error::{internal, vulkan, Error};
@@ -349,6 +370,14 @@ pub(crate) struct ViewCheck {
     base: (DeviceDescription, DevicePolicy),
     /// The compile device of the measured facts, set once where the answer holds any.
     measured: OnceLock<metal2vulkan::device::Device>,
+    /// In the runtime's own device tests, the most its stand-bys take in all, in nanoseconds,
+    /// where not 0 ([`STAND_BY_MOST`] where 0).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    most: std::sync::atomic::AtomicU64,
+    /// In the runtime's own device tests, the kernels' makings begun, each counted as its
+    /// stand-by ends ([`kernels_begun`](Self::kernels_begun)).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    begun: AtomicU32,
 }
 
 impl ViewCheck {
@@ -361,7 +390,36 @@ impl ViewCheck {
             waiters: AtomicU32::new(0),
             base: (description, policy),
             measured: OnceLock::new(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            most: std::sync::atomic::AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            begun: AtomicU32::new(0),
         }
+    }
+
+    /// The most its stand-bys take in all before it ends unchecked: [`STAND_BY_MOST`], or, in the
+    /// runtime's own device tests, the bound a test set (`stand_by_at_most`).
+    fn stand_by_most(&self) -> Duration {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if let set @ 1.. = self.most.load(Ordering::Acquire) {
+            return Duration::from_nanos(set);
+        }
+        STAND_BY_MOST
+    }
+
+    /// In the runtime's own device tests, the kernels' makings begun so far: counted as each one's
+    /// stand-by ends, before its translation and its pipeline's making, which may end long after
+    /// on a loaded host (`WorkCounts::compute_pipeline_create_nanos` counts a making as it ends).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn kernels_begun(&self) -> u32 {
+        self.begun.load(Ordering::Acquire)
+    }
+
+    /// In the runtime's own device tests, bound its stand-bys to `most` in all, read at each look.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn stand_by_at_most(&self, most: Duration) {
+        let nanos = u64::try_from(most.as_nanos()).unwrap_or(u64::MAX).max(1);
+        self.most.store(nanos, Ordering::Release);
     }
 
     /// The compile device of the measured facts, once the answer holds any.
@@ -539,7 +597,14 @@ fn run(weak: WeakDevice) {
         return;
     };
     let Some(measured) = measure(&device, began) else {
-        // The process is exiting, or the program let the device go: nothing is kept.
+        // The generation was lost under the check: it answers unchecked, so no call waits for an
+        // answer that never comes (the module docs).
+        if device.shared().lost() {
+            let unchecked = ViewCosts::unmeasured(ViewVerdict::Unchecked);
+            let why = "the device was lost during the check".to_owned();
+            device.view_check().settle(unchecked, None, why);
+        }
+        // Else the process is exiting, or the program let the device go: nothing is kept.
         return;
     };
     let check = device.view_check();
@@ -563,7 +628,8 @@ fn run(weak: WeakDevice) {
 }
 
 /// The run's medians, the check begun at `began`; why not, where it measured none; `None` where
-/// the process is exiting or the program's last drop stopped the device's holds.
+/// the process is exiting, the program's last drop stopped the device's holds, or the generation
+/// was lost.
 fn measure(device: &Device, began: Instant) -> Option<Result<Medians, String>> {
     let shared = device.shared();
     let clock = match (shared.timing.clock(), shared.timing.answers_from_host()) {
@@ -579,7 +645,10 @@ fn measure(device: &Device, began: Instant) -> Option<Result<Medians, String>> {
                    its messages)";
         return Some(Err(why.to_owned()));
     }
-    stand_by(device, COMPILE_QUIET, began, false)?;
+    let mut standing = Standing::default();
+    if let Err(why) = stand_by(device, (COMPILE_QUIET, began, false), &mut standing)? {
+        return Some(Err(why));
+    }
     let made = {
         let _busy = exit_guard::enter()?;
         Kernels::new(device)
@@ -590,7 +659,11 @@ fn measure(device: &Device, began: Instant) -> Option<Result<Medians, String>> {
     };
     for at in 0..KERNELS.len() {
         step_aside(device);
-        stand_by(device, COMPILE_QUIET, began, false)?;
+        if let Err(why) = stand_by(device, (COMPILE_QUIET, began, false), &mut standing)? {
+            return Some(Err(why));
+        }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        device.view_check().begun.fetch_add(1, Ordering::AcqRel);
         let _busy = exit_guard::enter()?;
         if let Err(error) = kernels.make_kernel(at) {
             return Some(Err(format!("its kernels were not made: {error}")));
@@ -603,20 +676,20 @@ fn measure(device: &Device, began: Instant) -> Option<Result<Medians, String>> {
     if let Err(error) = sets {
         return Some(Err(format!("its kernels' sets were not made: {error}")));
     }
-    let measured = rounds(device, &clock, &kernels, began);
+    let measured = rounds(device, &clock, &kernels, (began, &mut standing));
     let busy = exit_guard::enter();
     drop(kernels);
     drop(busy);
     measured
 }
 
-/// The rounds of every arm over `kernels`, the check begun at `began`, as [`measure`] answers
-/// them.
+/// The rounds of every arm over `kernels`, the check begun at `began`, its stand-bys so far
+/// `standing`, as [`measure`] answers them.
 fn rounds(
     device: &Device,
     clock: &GpuClock,
     kernels: &Kernels,
-    began: Instant,
+    (began, standing): (Instant, &mut Standing),
 ) -> Option<Result<Medians, String>> {
     let stamps = {
         let _busy = exit_guard::enter()?;
@@ -643,19 +716,32 @@ fn rounds(
         }
         for turn in 0..arms.len() {
             let (at, arm) = arms[(turn + round) % arms.len()];
-            stand_by(
-                device,
-                ARM_QUIET,
-                own_end.unwrap_or(began),
-                own_end.is_some(),
-            )?;
-            let _busy = exit_guard::enter()?;
-            let timed = stamps.time(device, clock, |raw, command_buffer| {
-                // SAFETY: the internal command buffer is recording outside a render pass and only
-                // this records it; the kernels' objects live until they are dropped, after the
-                // rounds, and every submission is waited for.
-                unsafe { kernels.record(raw, command_buffer, arm) }
-            });
+            // Its dispatch goes only where no batch is in flight as it is submitted, and stands by
+            // again where one went in flight since its stand-by read the work quiet; at once while
+            // a call waits for the answer (the module docs).
+            let timed = loop {
+                let after = (ARM_QUIET, own_end.unwrap_or(began), own_end.is_some());
+                if let Err(why) = stand_by(device, after, standing)? {
+                    return Some(Err(why));
+                }
+                let _busy = exit_guard::enter()?;
+                let _held = kernels.held()?;
+                let record = |raw: &ash::Device, command_buffer: vk::CommandBuffer| {
+                    // SAFETY: the internal command buffer is recording outside a render pass and
+                    // only this records it; the kernels' objects live until they are dropped,
+                    // after the rounds, and every submission is waited for.
+                    unsafe { kernels.record(raw, command_buffer, arm) }
+                };
+                let timed = match device.view_check().awaited() {
+                    true => stamps.time(device, clock, record).map(Some),
+                    false => stamps.time_if_idle(device, clock, record),
+                };
+                match timed {
+                    Ok(None) => standing.missed += 1,
+                    Ok(Some(nanos)) => break Ok(nanos),
+                    Err(error) => break Err(error),
+                }
+            };
             own_end = Some(Instant::now());
             match timed {
                 Ok(nanos) if round > 0 => times[at].push(nanos),
@@ -683,21 +769,37 @@ const ARM_QUIET: Duration = crate::device::queue_quiet::SETTLE;
 /// How often a stand-by looks again.
 const LOOK_EVERY: Duration = Duration::from_micros(250);
 
+/// The most the check's stand-bys take in all before it ends unchecked (the module docs).
+const STAND_BY_MOST: Duration = Duration::from_secs(10);
+
+/// The check's stand-bys over its run ([`stand_by`]): how long they took in all, and the timed
+/// dispatches that found a batch in flight as they were submitted, and stood by again.
+#[derive(Default)]
+struct Standing {
+    stood: Duration,
+    missed: u32,
+}
+
 /// Before a step the device's work could wait on, stand by until that work is quiet (the module
 /// docs): no batch committed waits for its submission, none submitted is in flight, and no use of
 /// a `VkQueue` has been under way for `quiet` since `since` (the check's start, or the end of its
 /// own last dispatch), or, where `own` (`since` ended the check's own dispatch), since then, where
 /// that was the last use. A device that has used no `VkQueue` yet is quiet only from the check's
 /// start: its program's first work comes right after its making. Not while a call waits for the
-/// answer. `None` where the program's last drop stops the device's holds. Counted where it
-/// waited.
-fn stand_by(device: &Device, quiet: Duration, since: Instant, own: bool) -> Option<()> {
+/// answer. `None` where the program's last drop stops the device's holds, or where the generation
+/// was lost (the module docs); why the check ends unchecked, where its stand-bys, `standing` so
+/// far, reached [`STAND_BY_MOST`] in all. Counted where it waited.
+fn stand_by(
+    device: &Device,
+    (quiet, since, own): (Duration, Instant, bool),
+    standing: &mut Standing,
+) -> Option<Result<(), String>> {
     let shared = device.shared();
     let check = device.view_check();
     let began = Instant::now();
     let mut stood = false;
     loop {
-        if shared.holds.stopping() {
+        if shared.holds.stopping() || shared.lost() {
             return None;
         }
         if check.awaited() {
@@ -711,13 +813,28 @@ fn stand_by(device: &Device, quiet: Duration, since: Instant, own: bool) -> Opti
             },
             None => LOOK_EVERY,
         };
+        let most = check.stand_by_most();
+        if standing.stood + began.elapsed() >= most {
+            let waited = began.elapsed();
+            shared.counts.view_check_stood_by(waited);
+            standing.stood += waited;
+            let why = format!(
+                "the device's work never paused for it: it stood by {:.1} s in all, its most \
+                 ({} timed dispatches found a batch in flight as they were submitted)",
+                standing.stood.as_secs_f64(),
+                standing.missed
+            );
+            return Some(Err(why));
+        }
         stood = true;
         std::thread::sleep(pause.min(LOOK_EVERY));
     }
     if stood {
-        shared.counts.view_check_stood_by(began.elapsed());
+        let waited = began.elapsed();
+        shared.counts.view_check_stood_by(waited);
+        standing.stood += waited;
     }
-    Some(())
+    Some(Ok(()))
 }
 
 /// Before a kernel's making or a round, step aside for the device's allocations and frees on
@@ -748,6 +865,41 @@ fn descriptor_type(view: CheckView) -> Result<vk::DescriptorType, String> {
     }
 }
 
+/// The parts of the check's buffers on its generation, held for a step that reaches their Vulkan
+/// objects ([`Held::of`]). Its fields go in the order they are declared, the reverse of their
+/// taking, as each hold's scope of this thread's reads of parts nests in the one before it
+/// (`NoticesFor`).
+struct Held<'a> {
+    _host: Option<HeldParts<'a>>,
+    _out: HeldParts<'a>,
+    _window: HeldParts<'a>,
+}
+
+impl<'a> Held<'a> {
+    /// The parts of `window`, `out` and `host`'s buffer, buffers of `device`'s generation, held:
+    /// `None` where that generation was lost, as read once all are held. A recovery carries them
+    /// to the next generation only after the loss (`device/carry.rs`), so where it was not lost
+    /// they are this generation's, and a recovery that begins meanwhile lets them go only once
+    /// the hold ends (`Buffer::held_parts`); where it was, their parts may be the next
+    /// generation's, which no call of this generation's `VkDevice` may meet.
+    fn of(
+        device: &Device,
+        window: &'a Buffer,
+        out: &'a Buffer,
+        host: Option<&'a crate::in_place_check::ClassPages>,
+    ) -> Option<Held<'a>> {
+        let window = window.held_parts();
+        let out = out.held_parts();
+        let host = host.map(|pages| pages.buffer.held_parts());
+        let held = Held {
+            _host: host,
+            _out: out,
+            _window: window,
+        };
+        (!device.shared().lost()).then_some(held)
+    }
+}
+
 /// The check's objects: the window and out buffers, the imported pages where the device imports
 /// them, the kernels' pipelines, and one set for each view and memory. Released as they go.
 struct Kernels {
@@ -767,6 +919,12 @@ struct Kernels {
 }
 
 impl Kernels {
+    /// Its buffers' parts, held for a timed dispatch ([`Held::of`]); `None` where its generation
+    /// was lost.
+    fn held(&self) -> Option<Held<'_>> {
+        Held::of(&self.device, &self.window, &self.out, self.host.as_ref())
+    }
+
     /// The objects on `device`, inside a section of the exit guard; why not, where it refuses one.
     fn new(device: &Device) -> Result<Kernels, String> {
         let window = (device.scratch_buffer(WINDOW_BYTES))
@@ -852,8 +1010,14 @@ impl Kernels {
     }
 
     /// Make the descriptor pool, the texel views and every kernel's two sets, every kernel made;
-    /// inside a section of the exit guard. Those made before a failure go with the drop.
+    /// inside a section of the exit guard. Those made before a failure go with the drop. Refused
+    /// (`DeviceLost`) where its generation was lost ([`Held::of`]).
     fn make_sets(&mut self) -> Result<(), Error> {
+        // The buffers' parts, held while their handles go into the views and sets ([`Held::of`]).
+        let Some(_held) = Held::of(&self.device, &self.window, &self.out, self.host.as_ref())
+        else {
+            return Err(Error::DeviceLost);
+        };
         let raw: &ash::Device = self.device.shared().vk();
         let sets = 2 * KERNELS.len() as u32;
         let sizes = [

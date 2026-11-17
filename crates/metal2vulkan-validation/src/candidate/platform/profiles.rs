@@ -716,7 +716,10 @@ fn identity_differences(
 }
 
 /// `description`'s capability members as JSON: everything but its identity, its sets (features
-/// and extensions), and its format table, which are compared typed.
+/// and extensions), and its format table, which are compared typed, and the workarounds measured
+/// on the device (`DeviceDescription::measured`, the runtime's view check's cost facts), which
+/// are no capability: as the driver's measured deviations (`KEPT`'s note), they follow the
+/// device they were measured on.
 fn capability_members(description: &DeviceDescription) -> Value {
     let mut value = serde_json::to_value(description).expect("a description serializes");
     if let Some(object) = value.as_object_mut() {
@@ -730,6 +733,7 @@ fn capability_members(description: &DeviceDescription) -> Value {
             "extensions",
             "features",
             "formats",
+            "measured",
         ] {
             object.remove(key);
         }

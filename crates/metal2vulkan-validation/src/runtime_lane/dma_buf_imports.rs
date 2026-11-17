@@ -928,6 +928,10 @@ fn a_ycbcr_texture_over_a_buffer_of_chunks_reads_its_planes_in_place() {
 /// pages, else it is a copy of its pages. Inside the import or a copy, it asks about no mapping,
 /// the live import's making having asked about them all, and its source is uncalled. It never
 /// imports a page a live import of its pointer holds; the GPU reads the CPU's bytes through it.
+/// The mappings are counted once the device's view check answered (`Device::settle_view_check`):
+/// with no record of it in the scratch cache, the check runs from the device's making, and its
+/// import of host pages asks about their mapping (one landed in the first buffer's count on the
+/// RX 7900 XTX, 65 against 64).
 #[test]
 fn a_buffer_that_lies_in_a_live_import_asks_about_no_mapping() {
     const TEST: &str = "dma-buf joined import";
@@ -936,6 +940,7 @@ fn a_buffer_that_lies_in_a_live_import_asks_about_no_mapping() {
         return;
     }
     on_device(|device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let page = host_page();
         let queue = device.new_command_queue().unwrap();
         let (ram, view, expected) = every_other_page(RUNS);
@@ -1031,6 +1036,9 @@ fn a_buffer_that_lies_in_a_live_import_asks_about_no_mapping() {
 /// imported (Linux drivers pin imported pages for writing), nor the pages as dma-bufs, which would
 /// take the GPU's writes. The GPU reads the CPU's bytes through each, and after its fill the
 /// file's pages, which the CPU reads through the file's own mapping, are as they were.
+/// The imports are counted once the device's view check answered (`Device::settle_view_check`):
+/// with no record of it in the scratch cache, the check runs from the device's making, and its
+/// pages are a pointer import.
 #[test]
 fn read_only_pages_are_a_copy_whose_gpu_writes_are_dropped() {
     const TEST: &str = "dma-buf read-only pages";
@@ -1038,6 +1046,7 @@ fn read_only_pages_are_a_copy_whose_gpu_writes_are_dropped() {
         return;
     }
     degrade_notices::on_device(|device, messages| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let page = host_page();
         let queue = device.new_command_queue().unwrap();
         let ram = Memfd::new(6 * page);
@@ -2635,6 +2644,9 @@ fn view_route(device: &Device, runs: usize, through: bool) -> Option<ViewRoute> 
 /// `host_pointer_imports_made`, and `copied_host_buffers_made` for the one route that copies); the
 /// GPU reads the CPU's bytes. Printed (`VIEW-IMPORT`): the making's answer, the source's calls,
 /// the counts, and the mappings the view and the import took.
+/// The routes are counted once the device's view check answered (`Device::settle_view_check`):
+/// with no record of it in the scratch cache, the check runs from the device's making, and its
+/// pages are a pointer import (one landed in a count on the RX 7900 XTX).
 #[test]
 fn a_reversed_view_of_single_pages_takes_the_route_its_device_answers() {
     const TEST: &str = "dma-buf reversed view";
@@ -2642,6 +2654,7 @@ fn a_reversed_view_of_single_pages_takes_the_route_its_device_answers() {
         return;
     }
     on_device(|device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let page = host_page();
         let queue = device.new_command_queue().unwrap();
         let shapes = [64, Limits::of_host().items + 1]

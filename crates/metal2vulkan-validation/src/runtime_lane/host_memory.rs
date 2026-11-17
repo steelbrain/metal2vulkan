@@ -1692,9 +1692,13 @@ fn a_read_only_page_is_a_copy_on_linux_and_read_elsewhere() {
 /// over them asks the kernel about none of their mappings (`WorkCounts::host_mappings_queried`),
 /// where a buffer over the same kind of pages without the vouching asks about each on Linux (one
 /// mapping here) and nothing elsewhere; both are made, and the GPU reads and writes their bytes.
+/// The mappings are counted once the device's view check answered (`Device::settle_view_check`):
+/// with no record of it in the scratch cache, the check runs from the device's making, and its
+/// import of host pages asks about their mapping.
 #[test]
 fn vouched_pages_are_imported_with_no_mapping_asked() {
     on_device(|device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let queue = device.new_command_queue().unwrap();
         let queried = || device.work_counts().host_mappings_queried;
         for vouched in [false, true] {

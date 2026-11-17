@@ -919,12 +919,15 @@ impl DeviceShared {
     /// its `VkQueue`s is under way; else the time since the last such use ended
     /// (`queue_quiet.rs`).
     pub(crate) fn work_quiet_for(&self) -> Option<Duration> {
-        let in_flight =
-            (self.queues.iter()).any(|slot| slot.completed_value() < slot.submitted_value());
-        if in_flight || !self.scheduler.holds_none() {
+        if self.batch_in_flight() || !self.scheduler.holds_none() {
             return None;
         }
         self.queue_quiet.unused_for()
+    }
+
+    /// Whether a batch submitted to one of the device's `VkQueue`s is not seen complete there.
+    pub(crate) fn batch_in_flight(&self) -> bool {
+        (self.queues.iter()).any(|slot| slot.completed_value() < slot.submitted_value())
     }
 }
 

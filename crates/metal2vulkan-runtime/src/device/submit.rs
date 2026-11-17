@@ -48,6 +48,16 @@ enum Reach {
     Mine { after_other_queues: bool },
 }
 
+/// When an internal submission is made ([`Device::submit_internal_taking`]).
+#[derive(Clone, Copy, Debug)]
+enum When {
+    /// At once, behind whatever the device's `VkQueue`s run.
+    Now,
+    /// Only where no batch is in flight (`DeviceShared::batch_in_flight`), as read under its
+    /// place in the first work's order ([`Device::submit_internal_if_idle`]).
+    Idle,
+}
+
 /// The device's own timelines outside the batches ([`Device::own_completed`]).
 pub(crate) const OWN_TIMELINES: usize = 3;
 
@@ -204,6 +214,27 @@ impl Device {
         self.submit_internal_naming(|_| false, record)
     }
 
+    /// [`submit_internal`](Self::submit_internal), made only where no batch is in flight on any
+    /// of the device's `VkQueue`s (`DeviceShared::batch_in_flight`), as read once its place in the
+    /// first work's order is held (`texture/first_move.rs`): every batch takes that place before
+    /// its `vkQueueSubmit` and notes its submission before it lets go of it, so none is submitted
+    /// between the read and this submission, which runs behind none of the program's work and
+    /// holds the internal lock, while it waits for the GPU, for its own work alone. Whether it was
+    /// made: where a batch was in flight nothing was recorded, and the first work it took goes
+    /// back. For a device check's timed dispatch (`view_check.rs`), which the program's work must
+    /// never wait on.
+    pub(crate) fn submit_internal_if_idle(
+        &self,
+        record: impl FnOnce(&Vk, vk::CommandBuffer),
+    ) -> Result<bool, Error> {
+        self.submit_internal_taking(
+            |firsts| firsts.take(|_| false),
+            Reach::Device,
+            When::Idle,
+            record,
+        )
+    }
+
     /// [`submit_internal`](Self::submit_internal), its first work (`texture/first_move.rs`)
     /// taking the moves of images bound to host pages whose key `named` names too (a texture's
     /// `VkImage` handed out, `Texture::vk_image`).
@@ -212,7 +243,13 @@ impl Device {
         named: impl Fn(ResourceKey) -> bool,
         record: impl FnOnce(&Vk, vk::CommandBuffer),
     ) -> Result<(), Error> {
-        self.submit_internal_taking(|firsts| firsts.take(&named), Reach::Device, record)
+        (self.submit_internal_taking(
+            |firsts| firsts.take(&named),
+            Reach::Device,
+            When::Now,
+            record,
+        ))
+        .map(|_made| ())
     }
 
     /// Make the first work of a handle handed out now (`Buffer::vk_buffer`,
@@ -232,11 +269,13 @@ impl Device {
             return Err(self.lost_refusal());
         }
         if !self.has_staging_queue() || mine.image.is_some() {
-            return self.submit_internal_taking(
+            return (self.submit_internal_taking(
                 |firsts| firsts.take_mine(mine),
                 Reach::Mine { after_other_queues },
+                When::Now,
                 |_, _| {},
-            );
+            ))
+            .map(|_made| ());
         }
         let shared = self.shared();
         let raw = shared.vk();
@@ -268,13 +307,14 @@ impl Device {
     }
 
     /// [`submit_internal`](Self::submit_internal), its first work what `take` takes, reaching
-    /// as far as `reach` says.
+    /// as far as `reach` says, made when `when` says: whether it was made.
     fn submit_internal_taking<'a>(
         &'a self,
         take: impl FnOnce(&'a FirstMoves) -> Taken<'a>,
         reach: Reach,
+        when: When,
         record: impl FnOnce(&Vk, vk::CommandBuffer),
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         if self.is_lost() {
             return Err(self.lost_refusal());
         }
@@ -293,6 +333,11 @@ impl Device {
             *internal = Some(Internal::new(self)?);
         }
         let taken = take(firsts);
+        // Read with its place in the order held, so no batch is submitted before it is: where one
+        // is in flight it is not made, the work taken going back as `taken` drops.
+        if matches!(when, When::Idle) && shared.batch_in_flight() {
+            return Ok(false);
+        }
         // The copies queued for the staging queue, submitted there first, which this waits for on
         // the GPU (below), holding what they copied until it completed
         // (`texture/staging_copy.rs`). A handle's own work reads none of them.
@@ -477,7 +522,7 @@ impl Device {
                     firsts.internal_completed(value);
                     shared.internal_done.reached(value);
                     shared.loader_word.end_step(word, mark);
-                    return Ok(());
+                    return Ok(true);
                 }
                 Err(vk::Result::TIMEOUT) => continue,
                 Err(error) => return Err(self.failed(error)),
