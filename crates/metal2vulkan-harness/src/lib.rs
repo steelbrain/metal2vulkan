@@ -5,7 +5,8 @@
 //!
 //! The traits below are the Metal compute subset the workloads call, one method per Metal call.
 //! A runtime implements them once: the old runtime in [`old`], which the cutover deletes with its
-//! file.
+//! file, and the new runtime in [`rt`]. The new runtime makes buffers only so far
+//! ([`Device`], not [`ComputeDevice`]), so it runs the creation workloads alone.
 //!
 //! A workload is a [`plan::Plan`]: its buffers and their starting contents, the dispatches of one
 //! run, the contents its buffers must hold after the first run, and the buffers runtimes compare.
@@ -22,7 +23,7 @@
 //! one left ([`run::Session::create`]), each checked to start zero.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-harness -- --runtime old[,RUNTIME...] [--runs 200] \
+//! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \
 //!     [--warmup 5] [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
 //! ```
 //!
@@ -43,6 +44,7 @@ mod clocks;
 pub mod description;
 pub mod old;
 pub mod plan;
+pub mod rt;
 pub mod run;
 
 #[cfg(test)]
@@ -76,10 +78,25 @@ pub enum Code<'a> {
     Air(&'a [u8]),
 }
 
-/// `MTLDevice`: the device a runtime opened, and the types of the objects it makes.
+/// `MTLDevice`: the device a runtime opened, and its buffers.
 pub trait Device: Sized {
     /// `MTLBuffer`.
     type Buffer: Buffer;
+
+    /// `name`.
+    fn name(&self) -> String;
+
+    /// `newBufferWithLength:options:` of `storage`.
+    fn new_buffer(&self, length: u64, storage: Storage) -> Result<Self::Buffer>;
+
+    /// The runtime's live gauges by name: how many of each thing it holds now. No Metal
+    /// counterpart.
+    fn gauges(&self) -> Vec<(&'static str, u64)>;
+}
+
+/// The compute calls of `MTLDevice`: its libraries, pipelines and queues, and the types of the
+/// objects they make.
+pub trait ComputeDevice: Device {
     /// `MTLLibrary`.
     type Library: Library<Self>;
     /// `MTLFunction`.
@@ -93,12 +110,6 @@ pub trait Device: Sized {
     /// `MTLComputeCommandEncoder`.
     type ComputeCommandEncoder: ComputeCommandEncoder<Self>;
 
-    /// `name`.
-    fn name(&self) -> String;
-
-    /// `newBufferWithLength:options:` of `storage`.
-    fn new_buffer(&self, length: u64, storage: Storage) -> Result<Self::Buffer>;
-
     /// `newLibraryWithData:error:` of a metallib; of AIR bitcode, the translator's library.
     fn new_library(&self, code: Code<'_>) -> Result<Self::Library>;
 
@@ -110,10 +121,6 @@ pub trait Device: Sized {
 
     /// `newCommandQueue`.
     fn new_command_queue(&self) -> Result<Self::CommandQueue>;
-
-    /// The runtime's live gauges by name: how many of each thing it holds now. No Metal
-    /// counterpart.
-    fn gauges(&self) -> Vec<(&'static str, u64)>;
 }
 
 /// `MTLBuffer`.
@@ -123,19 +130,19 @@ pub trait Buffer {
 }
 
 /// `MTLLibrary`.
-pub trait Library<D: Device> {
+pub trait Library<D: ComputeDevice> {
     /// `newFunctionWithName:`.
     fn new_function(&self, name: &str) -> Result<D::Function>;
 }
 
 /// `MTLCommandQueue`.
-pub trait CommandQueue<D: Device> {
+pub trait CommandQueue<D: ComputeDevice> {
     /// `commandBuffer`.
     fn command_buffer(&self) -> Result<D::CommandBuffer>;
 }
 
 /// `MTLCommandBuffer`.
-pub trait CommandBuffer<D: Device> {
+pub trait CommandBuffer<D: ComputeDevice> {
     /// `computeCommandEncoder`: a serial compute encoder.
     fn compute_command_encoder(&self) -> Result<D::ComputeCommandEncoder>;
 
@@ -154,7 +161,7 @@ pub trait CommandBuffer<D: Device> {
 }
 
 /// `MTLComputeCommandEncoder`.
-pub trait ComputeCommandEncoder<D: Device> {
+pub trait ComputeCommandEncoder<D: ComputeDevice> {
     /// `setComputePipelineState:`.
     fn set_compute_pipeline_state(&mut self, state: &D::ComputePipelineState) -> Result<()>;
 

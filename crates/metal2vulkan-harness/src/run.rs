@@ -2,8 +2,8 @@
 
 use crate::plan::{Binding, BufferPlan, Grid, Plan, Source};
 use crate::{
-    clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, Device, Library,
-    Result, Storage,
+    clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputeDevice,
+    Device, Library, Result, Storage,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -90,7 +90,7 @@ pub fn percentile(values: &[f64], p: u32) -> Option<f64> {
 
 /// The harness on a device: its own queue, the authored library and its copy kernel, and the
 /// metallibs the plans named so far.
-pub struct Harness<D: Device> {
+pub struct Harness<D: ComputeDevice> {
     queue: D::CommandQueue,
     copy: D::ComputePipelineState,
     authored: D::Library,
@@ -99,14 +99,14 @@ pub struct Harness<D: Device> {
 }
 
 /// A plan's objects on the device.
-struct Made<D: Device> {
+struct Made<D: ComputeDevice> {
     buffers: Vec<D::Buffer>,
     states: Vec<D::ComputePipelineState>,
     /// The index in `states` of each dispatch's.
     state_of: Vec<usize>,
 }
 
-impl<D: Device> Harness<D> {
+impl<D: ComputeDevice> Harness<D> {
     /// The harness on `device`, with the authored library of the AIR `authored`
     /// ([`authored::library_air`](crate::authored::library_air)).
     pub fn new(device: D, authored: &[u8]) -> Result<Self> {
@@ -256,7 +256,7 @@ impl<D: Device> Harness<D> {
     }
 }
 
-impl<D: Device> Session for Harness<D> {
+impl<D: ComputeDevice> Session for Harness<D> {
     fn device_name(&self) -> String {
         self.device.name()
     }
@@ -316,31 +316,57 @@ impl<D: Device> Session for Harness<D> {
     }
 
     fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport> {
-        // The range the first creation takes: a buffer of the length, written, released.
-        scribble(&self.device.new_buffer(length, Storage::Shared)?, length)?;
-        let mut report = CreateReport::default();
-        for run in 0..=runs.warmup + runs.timed {
-            let started = Instant::now();
-            let buffer = self.device.new_buffer(length, Storage::Shared)?;
-            let created = started.elapsed();
-            zeroed(&buffer, length, if run == 0 { 4 } else { 4096 })?;
-            scribble(&buffer, length)?;
-            drop(buffer);
-            if run > runs.warmup {
-                report.create_us.push(created.as_secs_f64() * 1e6);
-                let timed = run - runs.warmup;
-                if timed == 100 || timed == 200 {
-                    report.gauges.push((timed, self.device.gauges()));
-                }
+        create(&self.device, length, runs)
+    }
+}
+
+/// A device whose runtime makes buffers but runs no compute work: its creation workloads alone.
+pub struct Buffers<D: Device>(pub D);
+
+impl<D: Device> Session for Buffers<D> {
+    fn device_name(&self) -> String {
+        self.0.name()
+    }
+
+    fn run(&mut self, plan: &Plan, _: Runs) -> Result<Report> {
+        Err(format!(
+            "{}: the runtime makes buffers only, with no command queue",
+            plan.name
+        )
+        .into())
+    }
+
+    fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport> {
+        create(&self.0, length, runs)
+    }
+}
+
+/// [`Session::create`] on `device`.
+fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport> {
+    // The range the first creation takes: a buffer of the length, written, released.
+    scribble(&device.new_buffer(length, Storage::Shared)?, length)?;
+    let mut report = CreateReport::default();
+    for run in 0..=runs.warmup + runs.timed {
+        let started = Instant::now();
+        let buffer = device.new_buffer(length, Storage::Shared)?;
+        let created = started.elapsed();
+        zeroed(&buffer, length, if run == 0 { 4 } else { 4096 })?;
+        scribble(&buffer, length)?;
+        drop(buffer);
+        if run > runs.warmup {
+            report.create_us.push(created.as_secs_f64() * 1e6);
+            let timed = run - runs.warmup;
+            if timed == 100 || timed == 200 {
+                report.gauges.push((timed, device.gauges()));
             }
         }
-        Ok(report)
     }
+    Ok(report)
 }
 
 /// Dispatches of the copy kernel, already set on `encoder`, moving the first `length` bytes (a
 /// multiple of 16) of `from` to `to`, in as many dispatches as the threadgroup count limit needs.
-fn copy<D: Device>(
+fn copy<D: ComputeDevice>(
     encoder: &mut D::ComputeCommandEncoder,
     from: &D::Buffer,
     to: &D::Buffer,
@@ -360,7 +386,7 @@ fn copy<D: Device>(
 
 /// `Ok` where the first `length` bytes of the `Shared` buffer `buffer` are zero at every
 /// `stride`th byte (a multiple of 4), which no GPU work writes now.
-pub(crate) fn zeroed(buffer: &impl Buffer, length: u64, stride: u64) -> Result<()> {
+pub fn zeroed(buffer: &impl Buffer, length: u64, stride: u64) -> Result<()> {
     let contents = buffer.contents().ok_or("a Shared buffer has no contents")?;
     for at in (0..length.saturating_sub(3)).step_by(stride as usize) {
         // SAFETY: `contents` holds the buffer's bytes, at least `length` of them (the caller's

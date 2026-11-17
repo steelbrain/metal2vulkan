@@ -19,12 +19,6 @@ fn size(size: Size) -> runtime::Size {
 
 impl crate::Device for runtime::Device {
     type Buffer = runtime::Buffer;
-    type Library = runtime::Library;
-    type Function = runtime::Function;
-    type ComputePipelineState = runtime::ComputePipelineState;
-    type CommandQueue = runtime::CommandQueue;
-    type CommandBuffer = runtime::CommandBuffer;
-    type ComputeCommandEncoder = runtime::ComputeCommandEncoder;
 
     fn name(&self) -> String {
         runtime::Device::name(self).to_owned()
@@ -37,6 +31,26 @@ impl crate::Device for runtime::Device {
         };
         Ok(runtime::Device::new_buffer(self, length, options)?)
     }
+
+    /// Its pooled and its dedicated `VkDeviceMemory` blocks with a placement in them
+    /// (`WorkCounts`). Its empty blocks are left out: a bounded set it keeps for the next
+    /// placements, which fills as other blocks empty.
+    fn gauges(&self) -> Vec<(&'static str, u64)> {
+        let counts = self.work_counts();
+        vec![
+            ("memory_blocks", counts.memory_blocks_live),
+            ("dedicated_blocks", counts.dedicated_memory_blocks_live),
+        ]
+    }
+}
+
+impl crate::ComputeDevice for runtime::Device {
+    type Library = runtime::Library;
+    type Function = runtime::Function;
+    type ComputePipelineState = runtime::ComputePipelineState;
+    type CommandQueue = runtime::CommandQueue;
+    type CommandBuffer = runtime::CommandBuffer;
+    type ComputeCommandEncoder = runtime::ComputeCommandEncoder;
 
     fn new_library(&self, code: Code<'_>) -> Result<runtime::Library> {
         match code {
@@ -57,17 +71,6 @@ impl crate::Device for runtime::Device {
 
     fn new_command_queue(&self) -> Result<runtime::CommandQueue> {
         Ok(runtime::Device::new_command_queue(self)?)
-    }
-
-    /// Its pooled and its dedicated `VkDeviceMemory` blocks with a placement in them
-    /// (`WorkCounts`). Its empty blocks are left out: a bounded set it keeps for the next
-    /// placements, which fills as other blocks empty.
-    fn gauges(&self) -> Vec<(&'static str, u64)> {
-        let counts = self.work_counts();
-        vec![
-            ("memory_blocks", counts.memory_blocks_live),
-            ("dedicated_blocks", counts.dedicated_memory_blocks_live),
-        ]
     }
 }
 

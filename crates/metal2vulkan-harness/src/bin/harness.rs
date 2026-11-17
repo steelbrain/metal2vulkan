@@ -2,7 +2,7 @@
 //! runtime or several, checked, then timed (the crate's docs).
 //!
 //! ```text
-//! harness --runtime old[,RUNTIME...] [--runs N] [--warmup N] [--only NAME,NAME...]
+//! harness --runtime old|new[,old|new...] [--runs N] [--warmup N] [--only NAME,NAME...]
 //!     [--workloads DIRECTORY --description FILE]
 //! ```
 //!
@@ -12,13 +12,16 @@
 //! authored ones (not with a description); their rows print once every buffer each runtime made
 //! started zero. The command exits 0 when every workload did, 1 when one did not or failed, and
 //! 2 when it could not start.
+//!
+//! The runtime `new` makes buffers only so far: it runs the creation workloads, and every other
+//! workload fails on it, so it is named with `--only create_4KiB,create_1MiB,create_64MiB`.
 
 use metal2vulkan_harness::authored::Create;
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
-    compare_outputs, percentile, CreateReport, Harness, Report, Runs, Session,
+    compare_outputs, percentile, Buffers, CreateReport, Harness, Report, Runs, Session,
 };
-use metal2vulkan_harness::{authored, description, old, Result};
+use metal2vulkan_harness::{authored, description, old, rt, Result};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -31,7 +34,7 @@ struct Args {
     description: Option<PathBuf>,
 }
 
-const USAGE: &str = "usage: harness --runtime old[,RUNTIME...] [--runs N] [--warmup N] \
+const USAGE: &str = "usage: harness --runtime old|new[,old|new...] [--runs N] [--warmup N] \
                      [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]";
 
 fn main() -> ExitCode {
@@ -81,7 +84,8 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
 fn session(name: &str, authored: &[u8]) -> Result<Box<dyn Session>> {
     match name {
         "old" => Ok(Box::new(Harness::new(old::system_default()?, authored)?)),
-        other => Err(format!("no runtime {other}; the runtimes are: old").into()),
+        "new" => Ok(Box::new(Buffers(rt::system_default()?))),
+        other => Err(format!("no runtime {other}; the runtimes are: old, new").into()),
     }
 }
 

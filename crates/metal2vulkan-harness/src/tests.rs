@@ -5,6 +5,7 @@ use crate::description;
 use crate::plan::{
     Binding, BufferPlan, Comparison, Dispatch, Expect, Grid, Output, Plan, Source, Values,
 };
+use crate::rt::Ranges;
 use crate::run::{compare_outputs, percentile, zeroed, Report};
 use crate::{Buffer, Storage};
 use std::path::Path;
@@ -302,4 +303,24 @@ fn a_new_buffer_is_zero_only_where_every_word_read_is() {
     buffer.0[2048] = 1;
     assert!(zeroed(&buffer, 16384, 4096).is_err());
     assert!(zeroed(&HostBuffer(vec![9; 4]), 16, 4).is_err());
+}
+
+#[test]
+fn ranges_place_at_the_lowest_free_range_and_merge_what_is_given_back() {
+    let mut free = Ranges::new(1024);
+    assert_eq!(free.take(256), Some(0));
+    assert_eq!(free.take(256), Some(256));
+    assert_eq!(free.take(256), Some(512));
+    // A range given back is the next one taken of its length: the creation workloads' reuse.
+    free.give(256..512);
+    assert_eq!(free.take(256), Some(256));
+    free.give(256..512);
+    // Given back between two free ranges, it merges with both.
+    free.give(0..256);
+    assert_eq!(free, Ranges(vec![0..512, 768..1024]));
+    free.give(512..768);
+    assert_eq!(free, Ranges::new(1024));
+    assert_eq!(free.take(2048), None);
+    assert_eq!(free.take(1024), Some(0));
+    assert_eq!(free.take(1), None);
 }

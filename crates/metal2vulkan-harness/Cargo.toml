@@ -26,6 +26,10 @@ test = false
 metal2vulkan = { path = "../metal2vulkan" }
 # The old runtime, behind the harness's traits in `old.rs` alone.
 metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
+# The new runtime, behind the harness's traits in `rt.rs` alone, and the Vulkan types it chooses
+# a physical device by.
+metal2vulkan-rt = { path = "../metal2vulkan-rt" }
+ash.workspace = true
 # The fixture directory and `llvm-as` of the authored workloads' library.
 metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }
 
