@@ -6,6 +6,7 @@ use crate::{
     Device, Library, Result, Storage,
 };
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -115,8 +116,12 @@ pub(crate) fn settled(times: &[f64]) -> bool {
 pub struct Report {
     /// The dispatches of a run.
     pub dispatches: usize,
-    /// Each run's GPU time, `GPUEndTime - GPUStartTime`, in microseconds.
+    /// Each run's GPU time, from its first command buffer's `GPUStartTime` to its last's
+    /// `GPUEndTime`, in microseconds.
     pub gpu_us: Vec<f64>,
+    /// The pipeline barriers the runtime recorded per timed run, where it counts them
+    /// ([`Device::barriers`](crate::Device::barriers)).
+    pub barriers: Option<u64>,
     /// Each run's encoding thread's wall time from the command buffer's creation through
     /// `commit`'s return, in nanoseconds.
     pub encode_ns: Vec<f64>,
@@ -220,21 +225,18 @@ impl<D: ComputeDevice> Harness<D> {
 
     /// Commits a run of `plan`, then waits for `in_flight`, the run before it, which the new one
     /// replaces: that run's GPU time in microseconds, and the new run's encoding time, from its
-    /// command buffer's creation through `commit`'s return.
+    /// first command buffer's creation through its last `commit`'s return.
     fn next(
         &self,
         plan: &Plan,
         made: &Made<D>,
-        in_flight: &mut D::CommandBuffer,
+        in_flight: &mut Vec<D::CommandBuffer>,
     ) -> Result<(f64, Duration)> {
         let started = Instant::now();
-        let command_buffer = self.encode(plan, made)?;
-        command_buffer.commit()?;
+        let run = self.commit_run(plan, made)?;
         let encoded = started.elapsed();
-        let before = std::mem::replace(in_flight, command_buffer);
-        before.wait_until_completed()?;
-        let gpu = before.gpu_end_time()? - before.gpu_start_time()?;
-        Ok((gpu * 1e6, encoded))
+        let before = std::mem::replace(in_flight, run);
+        Ok((wait_run::<D>(&before)?, encoded))
     }
 
     /// Makes the library `source` names, where it is a metallib no plan named before.
@@ -289,12 +291,31 @@ impl<D: ComputeDevice> Harness<D> {
         })
     }
 
-    /// One run of `plan`: a command buffer of one compute encoder, ended, not committed.
-    fn encode(&self, plan: &Plan, made: &Made<D>) -> Result<D::CommandBuffer> {
+    /// A run of `plan`, committed: its command buffers in order, `per_command_buffer`
+    /// dispatches each (or all in one), each of one compute encoder.
+    fn commit_run(&self, plan: &Plan, made: &Made<D>) -> Result<Vec<D::CommandBuffer>> {
+        let count = plan.dispatches.len();
+        // At least 1: `Plan::validate` refuses a plan of no dispatch or a `per_command_buffer`
+        // of 0.
+        let per = plan.per_command_buffer.unwrap_or(count);
+        (0..count)
+            .step_by(per)
+            .map(|start| {
+                let command_buffer = self.encode(plan, made, start..(start + per).min(count))?;
+                command_buffer.commit()?;
+                Ok(command_buffer)
+            })
+            .collect()
+    }
+
+    /// The dispatches `range` of `plan`: a command buffer of one compute encoder, ended, not
+    /// committed.
+    fn encode(&self, plan: &Plan, made: &Made<D>, range: Range<usize>) -> Result<D::CommandBuffer> {
         let command_buffer = self.queue.command_buffer()?;
         let mut encoder = command_buffer.compute_command_encoder()?;
         let mut current = None;
-        for (dispatch, &state) in plan.dispatches.iter().zip(&made.state_of) {
+        let states = &made.state_of[range.clone()];
+        for (dispatch, &state) in plan.dispatches[range].iter().zip(states) {
             if current != Some(state) {
                 encoder.set_compute_pipeline_state(&made.states[state])?;
                 current = Some(state);
@@ -383,9 +404,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
         self.load(&plan.library)?;
         let made = self.make(plan)?;
         self.fill(&plan.buffers, &made.buffers)?;
-        let first = self.encode(plan, &made)?;
-        first.commit()?;
-        first.wait_until_completed()?;
+        wait_run::<D>(&self.commit_run(plan, &made)?)?;
         for expect in &plan.expect {
             let storage = plan.buffers[expect.buffer].storage;
             let bytes = self.read(
@@ -405,8 +424,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
         // The runs after the first keep two command buffers in flight: each is committed while
         // the GPU runs the one before it, so the GPU does not idle between runs and its clock
         // holds, as it does under a program that keeps it busy.
-        let mut in_flight = self.encode(plan, &made)?;
-        in_flight.commit()?;
+        let mut in_flight = self.commit_run(plan, &made)?;
         let warmup = warm_up(runs, || Ok(self.next(plan, &made, &mut in_flight)?.0))?;
         let mut report = Report {
             dispatches: plan.dispatches.len(),
@@ -414,6 +432,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
             warmup,
             ..Report::default()
         };
+        let barriers = self.device.barriers();
         for run in 1..=runs.timed {
             let cpu = clocks::process_cpu_nanos();
             let (gpu_us, encoded) = self.next(plan, &made, &mut in_flight)?;
@@ -426,7 +445,12 @@ impl<D: ComputeDevice> Session for Harness<D> {
                 report.gauges.push((run, self.device.gauges()));
             }
         }
-        in_flight.wait_until_completed()?;
+        // Each timed run commits one run, so the count over them divides evenly in a steady
+        // state.
+        if let (Some(before), Some(after)) = (barriers, self.device.barriers()) {
+            report.barriers = (after - before).checked_div(u64::from(runs.timed));
+        }
+        wait_run::<D>(&in_flight)?;
         Ok(report)
     }
 
@@ -474,6 +498,18 @@ impl<D: Device> Session for Buffers<D> {
     fn pipelines_created(&self) -> u64 {
         self.0.pipelines_created()
     }
+}
+
+/// Waits for each command buffer of `run`, a run's in order: the run's GPU time in
+/// microseconds, from its first command buffer's `GPUStartTime` to its last's `GPUEndTime`.
+fn wait_run<D: ComputeDevice>(run: &[D::CommandBuffer]) -> Result<f64> {
+    for command_buffer in run {
+        command_buffer.wait_until_completed()?;
+    }
+    let (Some(first), Some(last)) = (run.first(), run.last()) else {
+        unreachable!("a validated plan's run has a command buffer");
+    };
+    Ok((last.gpu_end_time()? - first.gpu_start_time()?) * 1e6)
 }
 
 /// [`Session::create`] on `device`.

@@ -9,7 +9,9 @@
 //! ([`Device`], not [`ComputeDevice`]), so it runs the creation workloads alone.
 //!
 //! A workload is a [`plan::Plan`]: its buffers and their starting contents, the dispatches of one
-//! run, the contents its buffers must hold after the first run, and the buffers runtimes compare.
+//! run and how many go in each command buffer, the contents its buffers must hold after the first
+//! run, and the buffers runtimes compare. Most workloads put a run in one command buffer; `frame`
+//! is shaped like a window server's frame, 160 command buffers of two small dispatches each.
 //! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
 //! workloads ([`authored`]) are MSL kernels committed as public fixtures
 //! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
@@ -35,7 +37,8 @@
 //! runs `--warmup` runs alone, for a run that counts rather than times (its pipelines).
 //!
 //! The command prints, per workload and runtime: the warm-up's runs (marked `~` where the time
-//! did not settle), the GPU time of a run (`GPUEndTime - GPUStartTime`) at the 10th, 50th and
+//! did not settle), the GPU time of a run (from its first command buffer's `GPUStartTime` to its
+//! last's `GPUEndTime`) at the 10th, 50th and
 //! 90th percentiles of the timed runs, the encoding thread's wall time per dispatch from the
 //! command buffer's creation through `commit`'s return, and the process's CPU time per dispatch
 //! from there to the return of the wait for the run before (unix only), each the median of the
@@ -53,7 +56,10 @@
 //! where the steady time ([`run::steady`], the table's `steady` column) is the lowest median of
 //! the timed runs' consecutive windows of 10, with at least 5 timed runs. After the plan
 //! workloads, per runtime, it prints how many `VkPipeline`s they created by the runtime's own
-//! count, as `M2V-MATRIX metric harness-<runtime>/<authored|described>/pipelines_created <n>`;
+//! count, as `M2V-MATRIX metric harness-<runtime>/<authored|described>/pipelines_created <n>`.
+//! Where the runtime counts its pipeline barriers ([`Device::barriers`]), each plan workload also
+//! prints `M2V-MATRIX metric harness-<runtime>/<workload>/barriers_per_run <n>`, the barriers it
+//! recorded per timed run;
 //! and once every workload has run, where the runtime's gauges outlive its device,
 //! `M2V-MATRIX gauge harness-<runtime>/device/<gauge>@drop <value>` read after the device dropped.
 
@@ -120,6 +126,10 @@ pub trait Device: Sized {
     /// How many `VkPipeline`s the runtime has created on the device so far, by its own count. No
     /// Metal counterpart.
     fn pipelines_created(&self) -> u64;
+
+    /// How many pipeline barriers the runtime has recorded on the device so far, by its own
+    /// count; `None` where it keeps no such total. No Metal counterpart.
+    fn barriers(&self) -> Option<u64>;
 }
 
 /// A reader of a runtime's gauges that outlives its device ([`Device::gauges_after_drop`]).

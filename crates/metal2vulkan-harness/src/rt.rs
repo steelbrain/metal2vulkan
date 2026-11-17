@@ -241,6 +241,11 @@ impl crate::Device for Device {
     fn pipelines_created(&self) -> u64 {
         self.device.counters().metrics().pipelines_created
     }
+
+    /// `Metrics::barriers`.
+    fn barriers(&self) -> Option<u64> {
+        Some(self.device.counters().metrics().barriers)
+    }
 }
 
 /// The gauges the harness reports, by name.

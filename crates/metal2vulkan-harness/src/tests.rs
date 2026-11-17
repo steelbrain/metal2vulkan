@@ -100,11 +100,12 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
             values: Values::Words(vec![0; 4]),
         }],
         outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 
 #[test]
-fn a_plan_with_a_part_length_or_a_missing_buffer_is_refused() {
+fn a_plan_with_a_part_length_a_missing_buffer_or_no_dispatch_is_refused() {
     assert!(one_buffer_plan(16, None, 0).validate().is_ok());
     assert!(one_buffer_plan(12, None, 0).validate().is_err());
     assert!(one_buffer_plan(16, Some(vec![0; 8]), 0).validate().is_err());
@@ -112,6 +113,14 @@ fn a_plan_with_a_part_length_or_a_missing_buffer_is_refused() {
     let mut short = one_buffer_plan(16, None, 0);
     short.expect[0].values = Values::Words(vec![0; 5]);
     assert!(short.validate().is_err());
+    let mut split = one_buffer_plan(16, None, 0);
+    split.per_command_buffer = Some(1);
+    assert!(split.validate().is_ok());
+    split.per_command_buffer = Some(0);
+    assert!(split.validate().is_err());
+    let mut idle = one_buffer_plan(16, None, 0);
+    idle.dispatches.clear();
+    assert!(idle.validate().is_err());
 }
 
 /// Each authored plan is whole: its builder's inputs, kernels and references agree in shape.

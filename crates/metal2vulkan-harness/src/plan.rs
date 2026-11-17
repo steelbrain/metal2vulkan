@@ -13,8 +13,12 @@ pub struct Plan {
     pub library: Source,
     /// The buffers it makes, in order; dispatches, expectations and outputs name them by index.
     pub buffers: Vec<BufferPlan>,
-    /// The dispatches of one run, in order, all in one compute encoder of one command buffer.
+    /// The dispatches of one run, in order, in one compute encoder of each command buffer.
     pub dispatches: Vec<Dispatch>,
+    /// How many dispatches each command buffer of a run holds, its command buffers committed in
+    /// order; `None`: one command buffer holds them all. A binding stays set for the dispatches
+    /// after it in its command buffer, not in the next.
+    pub per_command_buffer: Option<usize>,
     /// What the first run must leave in its buffers: a CPU reference.
     pub expect: Vec<Expect>,
     /// The buffers whose contents after the first run each runtime's must match the first
@@ -293,6 +297,9 @@ impl Plan {
                 )
                 .into());
             }
+        }
+        if self.dispatches.is_empty() || self.per_command_buffer == Some(0) {
+            return Err(format!("{name}: its command buffers hold no dispatch").into());
         }
         Ok(())
     }

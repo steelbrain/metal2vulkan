@@ -89,6 +89,7 @@ impl Described {
             dispatches: Vec::new(),
             expect: Vec::new(),
             outputs: Vec::new(),
+            per_command_buffer: None,
         };
         let mut lines = self.lines.iter().map(|(number, words)| {
             let words: Vec<&str> = words.iter().map(String::as_str).collect();

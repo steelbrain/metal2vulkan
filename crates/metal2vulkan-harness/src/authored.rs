@@ -18,7 +18,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 6] = [
+pub const WORKLOADS: [Workload; 7] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -42,6 +42,10 @@ pub const WORKLOADS: [Workload; 6] = [
     Workload {
         name: "dispatch_chain",
         plan: dispatch_chain,
+    },
+    Workload {
+        name: "frame",
+        plan: frame,
     },
 ];
 
@@ -105,6 +109,7 @@ fn bandwidth() -> Plan {
             values: Values::Words(output),
         }],
         outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 
@@ -142,6 +147,7 @@ fn alu() -> Plan {
             },
         }],
         outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 
@@ -173,6 +179,7 @@ fn threadgroup_scan() -> Plan {
             values: Values::Words(output),
         }],
         outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 
@@ -224,6 +231,7 @@ fn simd_reduce() -> Plan {
             },
         ],
         outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 
@@ -276,6 +284,7 @@ fn image_filter() -> Plan {
             values: Values::Words(output),
         }],
         outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 
@@ -317,6 +326,7 @@ fn dispatch_chain() -> Plan {
             values: Values::Words(output),
         }],
         outputs: Vec::new(),
+        per_command_buffer: None,
     }
 }
 
@@ -346,6 +356,42 @@ fn unset(length: u64) -> BufferPlan {
         length,
         storage: Storage::Private,
         contents: None,
+    }
+}
+
+/// A window server's frame: many small command buffers, each of two tiny dispatches. A run is
+/// 160 command buffers of two `lcg_step` dispatches over 256 words of `Private` storage, each
+/// dispatch setting its bindings, since a command buffer starts with none.
+fn frame() -> Plan {
+    const WORDS: usize = 256;
+    const COMMAND_BUFFERS: usize = 160;
+    const STEPS: usize = 2 * COMMAND_BUFFERS;
+    let increment = words(14, 1)[0];
+    let input = words(13, WORDS);
+    let output = (input.iter())
+        .map(|&word| {
+            (0..STEPS).fold(word, |word, _| {
+                word.wrapping_mul(1_664_525).wrapping_add(increment)
+            })
+        })
+        .collect();
+    let dispatch = Dispatch {
+        function: "lcg_step".to_owned(),
+        constants: Vec::new(),
+        bindings: vec![buffer(0, 0), bytes(1, increment.to_le_bytes().to_vec())],
+        grid: Grid::groups_of_256(1),
+    };
+    Plan {
+        name: "frame".to_owned(),
+        library: Source::Authored,
+        buffers: vec![private(word_bytes(&input))],
+        dispatches: vec![dispatch; STEPS],
+        expect: vec![Expect {
+            buffer: 0,
+            values: Values::Words(output),
+        }],
+        outputs: Vec::new(),
+        per_command_buffer: Some(STEPS / COMMAND_BUFFERS),
     }
 }
 

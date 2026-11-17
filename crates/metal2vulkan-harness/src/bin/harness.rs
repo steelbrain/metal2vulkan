@@ -158,7 +158,7 @@ fn run_all(args: &Args) -> Result<bool> {
         sessions.push((runtime.as_str(), session));
     }
     println!(
-        "warmup runs {}{}, timed runs {}",
+        "warmup runs {}{}{}, timed runs {}",
         if args.runs.settle { "at least " } else { "" },
         args.runs.warmup,
         if args.runs.settle {
@@ -340,4 +340,7 @@ fn print(runtime: &str, name: &str, report: &Report) {
         gauges(&report.gauges),
     );
     matrix(runtime, name, &report.gpu_us, &report.gauges);
+    if let Some(barriers) = report.barriers {
+        println!("M2V-MATRIX metric harness-{runtime}/{name}/barriers_per_run {barriers}");
+    }
 }

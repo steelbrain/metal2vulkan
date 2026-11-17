@@ -56,6 +56,11 @@ impl crate::Device for runtime::Device {
     fn pipelines_created(&self) -> u64 {
         self.work_counts().variant_pipelines_made
     }
+
+    /// `None`: it counts its barriers by kind, in no one total.
+    fn barriers(&self) -> Option<u64> {
+        None
+    }
 }
 
 impl crate::ComputeDevice for runtime::Device {
