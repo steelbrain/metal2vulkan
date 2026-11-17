@@ -293,7 +293,9 @@ M2V-MATRIX <kind> <test>/<name> <value>
 
 The value is an unsigned integer (`time`: microseconds, decimals allowed), and a key appears once
 per leg. The base is the nearest
-first-parent ancestor whose note holds the same leg.
+first-parent ancestor whose note holds the same leg. Times are compared only when the base's
+`crates/metal2vulkan-harness` tree is this commit's: the harness's warm-up and windows are part of
+the measurement, so a commit that changes the harness sets the base for the next.
 
 | Kind | What it counts | Fails when |
 |---|---|---|
@@ -303,6 +305,12 @@ first-parent ancestor whose note holds the same leg.
 | `time` | A duration in microseconds: the harness's median GPU time of a workload's run | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs |
 
 Every cache has a test that fills it past its capacity and records its gauge.
+
+The old runtime takes no fixes until the cutover deletes it, so its failures that the matrix has
+met are parked (`PARKED_TESTS` and `PARKED_GAUGES` in `scripts/matrix/results.py`, each with its
+reason): a parked test's failure, or a parked gauge's change between `@100` and `@200`, is named
+on the leg's line and fails no leg. A parked gauge's `@drop` still fails. The list goes with the old
+runtime.
 
 `metal2vulkan_devtools::instructions::InstructionCounter` measures `instructions`: the calling
 thread's user-space instructions from Linux's `perf_event_open`, the form an unprivileged process

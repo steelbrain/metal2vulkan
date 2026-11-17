@@ -121,6 +121,20 @@ def base_of(sha, leg_id):
     return None, None
 
 
+def harness_tree(sha):
+    """The harness crate's tree at SHA. Its times measure through the harness's own warm-up and
+    windows, so two commits' times compare only when one harness measured both."""
+    return git("rev-parse", f"{sha}:crates/metal2vulkan-harness", check=False)
+
+
+def base_times(sha, base_sha, base):
+    """The times of BASE (the leg at BASE_SHA) that SHA's are judged against: none when the
+    harness changed between them, and the run then sets the base for the next."""
+    if not base or harness_tree(base_sha) != harness_tree(sha):
+        return {}
+    return (base.get("records") or {}).get("time", {})
+
+
 # --- the plan ------------------------------------------------------------------------------------
 
 class Leg:
@@ -587,7 +601,8 @@ def leg_entry(run, leg):
         started=leg.started and datetime.fromtimestamp(leg.started, timezone.utc).isoformat(timespec="seconds"),
         minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
-        records=records, base=base_sha, base_records=base and base["records"], problems=problems)
+        records=records, base=base_sha, base_records=base and base["records"], problems=problems,
+        parked=results.leg_parked(parsed, records))
 
 
 def run_cmd(sha, only, dry):
@@ -632,11 +647,11 @@ def run_cmd(sha, only, dry):
     for leg_id, e in doc["legs"].items():
         if e.get("gpu") and leg_id not in entries:
             times[leg_id] = e["records"]["time"]
-            bases[leg_id] = ((base_of(sha, leg_id)[1] or {}).get("records") or {}).get("time", {})
+            bases[leg_id] = base_times(sha, *base_of(sha, leg_id))
     for leg_id, e in entries.items():
         if e["gpu"]:
             times[leg_id] = e["records"]["time"]
-            bases[leg_id] = (e["base_records"] or {}).get("time", {})
+            bases[leg_id] = base_times(sha, e["base"], e["base_records"] and {"records": e["base_records"]})
     for leg_id, problems in results.time_outliers(times, bases).items():
         if leg_id in entries:
             entries[leg_id]["problems"] += problems

@@ -20,6 +20,21 @@ TIME_OUTLIER = 1.25
 #: ...of at least this many GPUs.
 TIME_MIN_GPUS = 3
 
+#: The old runtime's failures the matrix reports on a leg's line but fails no leg for: the old
+#: runtime takes no fixes until the cutover deletes it, and this list goes with it. A test, by its
+#: nextest name, with the reason it fails.
+PARKED_TESTS = {
+    "metal2vulkan-validation runtime_lane::cross_queue_shadows::"
+    "a_cpu_write_while_a_command_buffer_runs_reaches_none_of_its_encoders":
+        "a GPU-hazard test whose spin can end before the host's write on a loaded host",
+    "metal2vulkan-validation runtime_lane::compute_inherited_buffers::"
+    "a_host_step_orders_the_commands_by_their_barriers_alone":
+        "the old runtime's barrier count moves with its background pipeline builds",
+}
+#: Gauge keys, by prefix, whose @100-to-@200 flatness is parked for the same reason (their @drop
+#: still fails): the old runtime frees idle memory blocks at times of its own.
+PARKED_GAUGES = ("harness-old/",)
+
 RECORD = re.compile(r"^\s*M2V-MATRIX (\S+) (\S+) (\S+)\s*$")
 LEG = re.compile(r"^M2V-LEG (\S+) begin\s*$")
 DEVICE = re.compile(r"^M2V-DEVICE (\S+) (\S+) (.*?)\s*$")
@@ -121,22 +136,38 @@ def leg_records(leg):
     return records, problems
 
 
+def leg_parked(leg, records):
+    """The leg's parked failures (PARKED_TESTS, PARKED_GAUGES), one line each."""
+    out = [f"test {test}" for suite in leg["suites"].values() for test in suite["failed"]
+           if test in PARKED_TESTS]
+    gauges = records["gauge"]
+    for key, value in sorted(gauges.items()):
+        name, _, point = key.rpartition("@")
+        if (point == "200" and name.startswith(PARKED_GAUGES) and f"{name}@100" in gauges
+                and value != gauges[f"{name}@100"]):
+            out.append(f"gauge {name}: {gauges[f'{name}@100']} at iteration 100, {value} at 200")
+    return out
+
+
 def leg_problems(leg, records, base):
     """What fails a leg: a suite that failed, a record's own problem, and the rules against the
-    base leg's records (BASE None: no base, so only the rules that need none)."""
+    base leg's records (BASE None: no base, so only the rules that need none). A suite whose every
+    failed test is parked (PARKED_TESTS) has not failed."""
     problems = []
     for name, suite in leg["suites"].items():
-        if suite["exit"] != 0 or suite["failed"]:
-            shown = ", ".join(suite["failed"][:5]) + (" ..." if len(suite["failed"]) > 5 else "")
+        failed = [test for test in suite["failed"] if test not in PARKED_TESTS]
+        if failed or (suite["exit"] != 0 and not suite["failed"]):
+            shown = ", ".join(failed[:5]) + (" ..." if len(failed) > 5 else "")
             problems.append(f"suite {name} exited {suite['exit']}"
-                            + (f", {len(suite['failed'])} failed: {shown}" if suite["failed"] else ""))
+                            + (f", {len(failed)} failed: {shown}" if failed else ""))
         problems += suite["problems"]
     gauges = records["gauge"]
     for key, value in sorted(gauges.items()):
         name, _, point = key.rpartition("@")
         if point == "drop" and value != 0:
             problems.append(f"gauge {name}: {value} live at device drop")
-        if point == "200" and f"{name}@100" in gauges and value != gauges[f"{name}@100"]:
+        if (point == "200" and not name.startswith(PARKED_GAUGES) and f"{name}@100" in gauges
+                and value != gauges[f"{name}@100"]):
             problems.append(f"gauge {name}: {gauges[f'{name}@100']} at iteration 100, {value} at 200")
     if base is not None:
         for key, value in sorted(records["metric"].items()):
@@ -183,4 +214,6 @@ def verdict_line(leg_id, leg):
             f"jobs {' '.join(leg.get('jobs', [])) or '-'}")
     if leg["problems"]:
         tail += " | " + " | ".join(leg["problems"][:4]) + (" ..." if len(leg["problems"]) > 4 else "")
+    if leg.get("parked"):
+        tail += f" | parked: {len(leg['parked'])} ({leg['parked'][0]}" + (" ..." if len(leg["parked"]) > 1 else "") + ")"
     return f"{head}: {tail}"

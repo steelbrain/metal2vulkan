@@ -125,6 +125,23 @@ class RuleTests(unittest.TestCase):
         leg = leg_of(recs(), code=100)
         self.assertEqual(results.leg_problems(leg, recs(), None), ["suite rt exited 100"])
 
+    def test_a_suite_whose_failures_are_all_parked_passes_and_names_them(self):
+        parked = next(iter(results.PARKED_TESTS))
+        leg = leg_of(recs(), code=100)
+        leg["suites"]["rt"]["failed"] = [parked]
+        self.assertEqual(results.leg_problems(leg, recs(), None), [])
+        self.assertEqual(results.leg_parked(leg, recs()), [f"test {parked}"])
+        leg["suites"]["rt"]["failed"].append("metal2vulkan-rt tests::breaks")
+        self.assertEqual(results.leg_problems(leg, recs(), None),
+                         ["suite rt exited 100, 1 failed: metal2vulkan-rt tests::breaks"])
+
+    def test_a_parked_gauge_moves_between_iterations_but_must_reach_zero(self):
+        prefix = results.PARKED_GAUGES[0]
+        now = recs(gauge={f"{prefix}w/b@100": 3, f"{prefix}w/b@200": 2, f"{prefix}w/b@drop": 1})
+        self.assertEqual(self.problems(now, None), [f"gauge {prefix}w/b: 1 live at device drop"])
+        self.assertEqual(results.leg_parked(leg_of(now), now),
+                         [f"gauge {prefix}w/b: 3 at iteration 100, 2 at 200"])
+
     def test_two_suites_recording_one_key_is_a_problem(self):
         leg = leg_of(recs(metric={"a/x": 1}))
         leg["suites"]["other"] = dict(leg["suites"]["rt"])
