@@ -270,6 +270,15 @@ pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
     enables
 }
 
+/// The floor's description of a feature the consumer names: its structure, member and field.
+pub(crate) fn consumer_feature(feature: crate::ConsumerFeature) -> Feature {
+    match feature {
+        crate::ConsumerFeature::SamplerYcbcrConversion => {
+            feature!(vulkan11.sampler_ycbcr_conversion)
+        }
+    }
+}
+
 /// What [`check`] reads from a physical device.
 pub(crate) struct Queried {
     /// `VkPhysicalDeviceProperties::apiVersion`.

@@ -1,11 +1,11 @@
 //! The instance, the device and its counters: that the handles cross threads, and, under a device
 //! cfg, that every device of the cfg's kind opens, presents on the queue its family offers, is torn
-//! down with its gauges at zero, and enables the consumer's extensions it offers.
+//! down with its gauges at zero, and enables the consumer's extensions and features it offers.
 
 use crate::{
     BlockId, BlockInfo, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
-    CommandBufferStatus, CommandQueue, Counters, Device, DeviceExtension, DeviceOptions, Event,
-    Gauges, Instance, Metrics, PhysicalDevice, SharedEvent,
+    CommandBufferStatus, CommandQueue, ConsumerFeature, Counters, Device, DeviceExtension,
+    DeviceOptions, Event, Gauges, Instance, Metrics, PhysicalDevice, SharedEvent,
 };
 
 #[test]
@@ -16,6 +16,7 @@ fn the_handles_cross_threads() {
     send_sync::<Device>();
     send_sync::<DeviceOptions>();
     send_sync::<DeviceExtension>();
+    send_sync::<ConsumerFeature>();
     send_sync::<Counters>();
     send_sync::<BlockId>();
     send_sync::<BlockInfo>();
@@ -234,9 +235,13 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
                 .any(|properties| properties.extension_name_as_c_str() == Ok(name))
         };
         let mut answer = vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
-        let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut answer);
-        // SAFETY: as above; `answer` lives through the call.
+        let mut vulkan11 = vk::PhysicalDeviceVulkan11Features::default();
+        let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut answer)
+            .push_next(&mut vulkan11);
+        // SAFETY: as above; `answer` and `vulkan11` live through the call.
         unsafe { vk_instance.get_physical_device_features2(physical.raw(), &mut features) };
+        let ycbcr = vulkan11.sampler_ycbcr_conversion == vk::TRUE;
         let swapchain = ash::ext::swapchain_maintenance1::NAME;
         let offered = lists(swapchain) && answer.swapchain_maintenance1 == vk::TRUE;
 
@@ -254,16 +259,34 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
         }
         let options = DeviceOptions {
             extensions: asked,
+            features: vec![
+                ConsumerFeature::SamplerYcbcrConversion,
+                ConsumerFeature::SamplerYcbcrConversion,
+            ],
             ..DeviceOptions::default()
         };
         let device =
             Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"));
         let mut expected: Vec<&CStr> = floor::DEVICE_EXTENSIONS.to_vec();
+        expected.extend(
+            floor::OPTIONAL_EXTENSIONS
+                .iter()
+                .copied()
+                .filter(|&name| lists(name)),
+        );
         if maintenance && offered {
             expected.push(swapchain);
         }
         let enabled: Vec<&CStr> = device.extensions().iter().map(|n| n.as_c_str()).collect();
         assert_eq!(enabled, expected, "{name}: the device's extensions");
         println!("extensions: {name}: {enabled:?}");
+        // The consumer's feature, asked twice, is enabled once where the device reports it.
+        let granted: &[ConsumerFeature] = if ycbcr {
+            &[ConsumerFeature::SamplerYcbcrConversion]
+        } else {
+            &[]
+        };
+        assert_eq!(device.features(), granted, "{name}: the device's features");
+        println!("features: {name}: {:?}", device.features());
     }
 }

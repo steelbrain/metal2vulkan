@@ -1392,6 +1392,7 @@ enum	metal2vulkan-air::tensor_ops::OperandIndex	#[derive(Clone, Copy, Debug, Par
 enum	metal2vulkan-air::tensor_ops::TensorSpace	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TensorSpace
 enum	metal2vulkan-rt::CommandBufferError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CommandBufferError
 enum	metal2vulkan-rt::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum CommandBufferStatus
+enum	metal2vulkan-rt::ConsumerFeature	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ConsumerFeature
 enum	metal2vulkan-rt::DispatchType	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum DispatchType
 enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
 enum	metal2vulkan-rt::Gap	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Gap
@@ -2223,6 +2224,7 @@ field	metal2vulkan-rt::ComputePipelineDescriptor.support_indirect_command_buffer
 field	metal2vulkan-rt::ComputePipelineDescriptor.threadgroup_size_is_multiple_of_execution_width	pub threadgroup_size_is_multiple_of_execution_width: bool
 field	metal2vulkan-rt::DeviceOptions.block_mappings	pub block_mappings: Option<Arc<dyn BlockMappings>>
 field	metal2vulkan-rt::DeviceOptions.extensions	pub extensions: Vec<DeviceExtension>
+field	metal2vulkan-rt::DeviceOptions.features	pub features: Vec<ConsumerFeature>
 field	metal2vulkan-rt::FunctionDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan-rt::FunctionDescriptor.function	pub function: Function
 field	metal2vulkan-rt::FunctionDescriptor.libraries	pub libraries: DynamicLibraries
@@ -8793,6 +8795,7 @@ method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
 method	metal2vulkan-rt::Device::extensions	pub fn extensions(&self) -> &[CString]
+method	metal2vulkan-rt::Device::features	pub fn features(&self) -> &[ConsumerFeature]
 method	metal2vulkan-rt::Device::has_unified_memory	pub fn has_unified_memory(&self) -> bool
 method	metal2vulkan-rt::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error>
@@ -12740,6 +12743,7 @@ variant	metal2vulkan-rt::CommandBufferStatus::Enqueued	Enqueued
 variant	metal2vulkan-rt::CommandBufferStatus::Error	Error
 variant	metal2vulkan-rt::CommandBufferStatus::NotEnqueued	NotEnqueued
 variant	metal2vulkan-rt::CommandBufferStatus::Scheduled	Scheduled
+variant	metal2vulkan-rt::ConsumerFeature::SamplerYcbcrConversion	SamplerYcbcrConversion
 variant	metal2vulkan-rt::DispatchType::Concurrent	Concurrent
 variant	metal2vulkan-rt::DispatchType::Serial	Serial
 variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)

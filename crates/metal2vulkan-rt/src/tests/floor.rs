@@ -906,6 +906,8 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut vulkan12,
             mut vulkan13,
             mut workgroup_layout,
+            mut maximal_reconvergence,
+            mut subgroup_uniform_control_flow,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -913,6 +915,13 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
             .push_next(&mut workgroup_layout);
+        let enabled = |name: &std::ffi::CStr| capabilities.extensions.contains(&name);
+        if enabled(ash::khr::shader_maximal_reconvergence::NAME) {
+            features = features.push_next(&mut maximal_reconvergence);
+        }
+        if enabled(ash::khr::shader_subgroup_uniform_control_flow::NAME) {
+            features = features.push_next(&mut subgroup_uniform_control_flow);
+        }
         let extensions: Vec<*const c_char> = capabilities
             .extensions
             .iter()

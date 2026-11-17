@@ -58,6 +58,22 @@ impl DeviceExtension {
     }
 }
 
+/// No Metal counterpart: a Vulkan feature the consumer needs for its own raw Vulkan work on the
+/// runtime's device, such as a two-plane image it imports and samples itself.
+///
+/// [`Device::new`](crate::Device::new) enables each of
+/// [`DeviceOptions::features`](crate::DeviceOptions::features) the device reports, and
+/// [`Device::features`](crate::Device::features) says which were enabled, so the consumer can
+/// refuse its own path with its own reason. The runtime's own work never reads them: the
+/// translator sees only the floor's features.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ConsumerFeature {
+    /// `samplerYcbcrConversion` (`VkPhysicalDeviceVulkan11Features`): samplers and image views
+    /// with a YCbCr conversion.
+    SamplerYcbcrConversion,
+}
+
 /// A feature structure as the consumer asks for it, whatever its type.
 trait Features: Send + Sync {
     /// Whether the device offers what the consumer needs.

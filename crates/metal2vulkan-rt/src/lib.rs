@@ -40,7 +40,7 @@ pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};
 pub use error::{Error, Gap, Limit, Refusal};
 pub use event::{Event, SharedEvent};
-pub use extension::DeviceExtension;
+pub use extension::{ConsumerFeature, DeviceExtension};
 pub use instance::{Instance, PhysicalDevice};
 pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass, BLOCK_LEN};
 /// `MTLLibrary`: the translator's, read from AIR or a metallib.

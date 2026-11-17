@@ -22,7 +22,9 @@ device against the floor below.
   with `DeviceExtension::with_features`, its feature structure: the members the consumer needs,
   and a test of the device's answer. The device enables it where it lists the extension and its
   answer passes, and passes over it otherwise; `Device::extensions` lists those enabled, the
-  floor's first. The consumer names an extension's dependencies too.
+  floor's first. The consumer names an extension's dependencies too. It names the core Vulkan
+  features its own work needs as `ConsumerFeature`s (`SamplerYcbcrConversion` for now): the device
+  enables each one it reports, once, and `Device::features` lists those enabled.
 - `Device::raw` gives the instance, physical device, device and queue family handles, and
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock.
   The runtime keeps owning every handle.

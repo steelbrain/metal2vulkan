@@ -4,7 +4,7 @@
 use crate::complete::{self, Done};
 use crate::counters::{Counters, Gauge};
 use crate::error::Error;
-use crate::extension::{self, DeviceExtension};
+use crate::extension::{self, ConsumerFeature, DeviceExtension};
 use crate::fill::Filler;
 use crate::floor;
 use crate::hazard::Ids;
@@ -128,6 +128,8 @@ pub(crate) struct Core {
     pub(crate) device: ash::Device,
     family: u32,
     extensions: Vec<CString>,
+    /// The consumer's features enabled.
+    consumer_features: Vec<ConsumerFeature>,
     pub(crate) queues: Queues,
     pub(crate) memory_types: floor::MemoryTypes,
     unified_memory: bool,
@@ -189,6 +191,9 @@ pub struct DeviceOptions {
     /// Device extensions the consumer uses beyond the floor's, each enabled where the device
     /// offers it and the features the consumer needs ([`Device::extensions`]).
     pub extensions: Vec<DeviceExtension>,
+    /// Vulkan features the consumer needs for its own raw Vulkan work, each enabled where the
+    /// device reports it ([`Device::features`]).
+    pub features: Vec<ConsumerFeature>,
 }
 
 /// Takes a lock. A panic while another thread held it leaves what it guards usable (a queue, the
@@ -231,6 +236,9 @@ impl Device {
             .queue_priorities(&priorities[..count as usize]);
         // Every structure of the floor's features goes in the chain: a structure added to
         // `floor::Features` fails to compile here until it is chained.
+        // SAFETY: as for the floor check.
+        let (enabled_features, consumer_features) =
+            unsafe { consumer_features(vk_instance, raw, &capabilities, &options.features) };
         let floor::Features {
             core,
             mut vulkan11,
@@ -239,7 +247,7 @@ impl Device {
             mut workgroup_layout,
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
-        } = capabilities.features;
+        } = enabled_features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
             .push_next(&mut vulkan11)
@@ -331,6 +339,7 @@ impl Device {
             device,
             family,
             extensions,
+            consumer_features,
             queues: Queues { runtime, present },
             memory_types,
             unified_memory,
@@ -383,6 +392,12 @@ impl Device {
     /// consumer's ([`DeviceOptions::extensions`]) the device offers with its features.
     pub fn extensions(&self) -> &[CString] {
         &self.shared.core.extensions
+    }
+
+    /// No Metal counterpart: the consumer's features enabled, each of
+    /// [`DeviceOptions::features`] the device reports, in the consumer's order.
+    pub fn features(&self) -> &[ConsumerFeature] {
+        &self.shared.core.consumer_features
     }
 
     /// No Metal counterpart: the memory types the device's buffers are allocated from, as the
@@ -680,6 +695,53 @@ unsafe fn translator(
     policy.pointer_domain = PointerDomain::Identity;
     policy.handle_domain = HandleDomain::Identity;
     metal2vulkan::device::Device::from_queries(description, policy).map_err(Error::Translation)
+}
+
+/// The features device creation enables: the floor's of `capabilities`, and each of `asked` the
+/// device reports, which are returned too.
+///
+/// # Safety
+///
+/// `raw` is a physical device of `instance`, of Vulkan 1.3.
+unsafe fn consumer_features(
+    instance: &ash::Instance,
+    raw: vk::PhysicalDevice,
+    capabilities: &floor::Capabilities,
+    asked: &[ConsumerFeature],
+) -> (floor::Features, Vec<ConsumerFeature>) {
+    let mut enabled = capabilities.features;
+    if asked.is_empty() {
+        return (enabled, Vec::new());
+    }
+    let mut vulkan11 = vk::PhysicalDeviceVulkan11Features::<'static>::default();
+    let mut vulkan12 = vk::PhysicalDeviceVulkan12Features::<'static>::default();
+    let mut vulkan13 = vk::PhysicalDeviceVulkan13Features::<'static>::default();
+    let mut features = vk::PhysicalDeviceFeatures2::default()
+        .push_next(&mut vulkan11)
+        .push_next(&mut vulkan12)
+        .push_next(&mut vulkan13);
+    // SAFETY: the caller's contract; the structures are Vulkan 1.3's and live through the call.
+    unsafe { instance.get_physical_device_features2(raw, &mut features) };
+    let core = features.features;
+    vulkan11.p_next = std::ptr::null_mut();
+    vulkan12.p_next = std::ptr::null_mut();
+    vulkan13.p_next = std::ptr::null_mut();
+    let mut reported = floor::Features {
+        core,
+        vulkan11,
+        vulkan12,
+        vulkan13,
+        ..floor::Features::default()
+    };
+    let mut granted = Vec::new();
+    for &feature in asked {
+        let field = floor::consumer_feature(feature).field;
+        if *field(&mut reported) == vk::TRUE && !granted.contains(&feature) {
+            *field(&mut enabled) = vk::TRUE;
+            granted.push(feature);
+        }
+    }
+    (enabled, granted)
 }
 
 unsafe fn objects(
