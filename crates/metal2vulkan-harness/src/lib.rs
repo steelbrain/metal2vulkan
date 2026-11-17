@@ -24,14 +24,15 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \
-//!     [--warmup 5] [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
+//!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
 //! ```
 //!
 //! After a workload's first run, two of its command buffers are in flight: each run is committed
 //! while the GPU runs the one before it, so the GPU does not idle between runs. Before the timed
 //! runs, the command warms the workload up: at least `--warmup` runs and half a second, then
 //! until the medians of its last two windows of 10 runs are within 3% of each other, for at most
-//! five seconds, so that an integrated GPU's clock has risen before it is timed.
+//! five seconds, so that an integrated GPU's clock has risen before it is timed. `--no-settle`
+//! runs `--warmup` runs alone, for a run that counts rather than times (its pipelines).
 //!
 //! The command prints, per workload and runtime: the warm-up's runs (marked `~` where the time
 //! did not settle), the GPU time of a run (`GPUEndTime - GPUStartTime`) at the 10th, 50th and

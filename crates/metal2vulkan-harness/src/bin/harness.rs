@@ -2,8 +2,8 @@
 //! runtime or several, checked, then timed (the crate's docs).
 //!
 //! ```text
-//! harness --runtime old|new[,old|new...] [--runs N] [--warmup N] [--only NAME,NAME...]
-//!     [--workloads DIRECTORY --description FILE]
+//! harness --runtime old|new[,old|new...] [--runs N] [--warmup N] [--no-settle]
+//!     [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
 //! ```
 //!
 //! Each workload runs on each runtime in turn, in the order named; a runtime named twice runs it
@@ -36,7 +36,8 @@ struct Args {
 }
 
 const USAGE: &str = "usage: harness --runtime old|new[,old|new...] [--runs N] [--warmup N] \
-                     [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]";
+                     [--no-settle] [--only NAME,NAME...] \
+                     [--workloads DIRECTORY --description FILE]";
 
 fn main() -> ExitCode {
     match parse(std::env::args().skip(1)).and_then(|args| run_all(&args)) {
@@ -70,6 +71,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
             "--runtime" => parsed.runtimes = value()?.split(',').map(str::to_owned).collect(),
             "--runs" => parsed.runs.timed = value()?.parse()?,
             "--warmup" => parsed.runs.warmup = value()?.parse()?,
+            "--no-settle" => parsed.runs.settle = false,
             "--only" => parsed.only = Some(value()?.split(',').map(str::to_owned).collect()),
             "--workloads" => parsed.workloads = Some(value()?.into()),
             "--description" => parsed.description = Some(value()?.into()),
@@ -156,8 +158,15 @@ fn run_all(args: &Args) -> Result<bool> {
         sessions.push((runtime.as_str(), session));
     }
     println!(
-        "warmup runs at least {} and until the time settles, timed runs {}",
-        args.runs.warmup, args.runs.timed
+        "warmup runs {}{}, timed runs {}",
+        if args.runs.settle { "at least " } else { "" },
+        args.runs.warmup,
+        if args.runs.settle {
+            " and until the time settles"
+        } else {
+            ""
+        },
+        args.runs.timed
     );
     if !workloads.is_empty() {
         println!(
