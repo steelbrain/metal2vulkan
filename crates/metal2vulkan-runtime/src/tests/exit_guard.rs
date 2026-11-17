@@ -2289,7 +2289,7 @@ fn the_device_s_functions_are_reached_through_checked_accessors() {
 /// tuple field, a type argument or a by-value parameter) fails
 /// `only_the_listed_modules_keep_the_device_s_functions`; so does a listed module that keeps none
 /// any more.
-const KEEPERS: [(&str, &str); 32] = [
+const KEEPERS: [(&str, &str); 33] = [
     (
         "binding.rs",
         "the push command (vkCmdPushDescriptorSet), a call's parameter (`push_set`) and the \
@@ -2422,6 +2422,12 @@ const KEEPERS: [(&str, &str); 32] = [
         "scheduler/mod.rs",
         "the scheduler's nudge, signalled and waited for only while its thread waits on the \
          GPU, a thread the teardown stops first",
+    ),
+    (
+        "spares.rs",
+        "the begin-ahead thread's begins of a spare command pool's primaries (`BeginTargets`), \
+         each inside a section; the teardown stops and joins the thread (`BeginAhead::stop`) \
+         before it releases the spares and before vkDestroyDevice",
     ),
     (
         "submit_check.rs",
