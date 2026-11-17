@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 11] = [
+pub const WORKLOADS: [Workload; 12] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -47,6 +47,10 @@ pub const WORKLOADS: [Workload; 11] = [
     Workload {
         name: "frame",
         plan: frame,
+    },
+    Workload {
+        name: "frame_stress",
+        plan: frame_stress,
     },
     Workload {
         name: "narrow_ints",
@@ -397,20 +401,32 @@ fn unset(length: u64) -> BufferPlan {
     }
 }
 
-/// A window server's frame: many small command buffers, each of two tiny dispatches. A run is
-/// 160 command buffers of two `lcg_step` dispatches over 256 words of `Private` storage, each
-/// dispatch setting its bindings, since a command buffer starts with none. Both are buffers
-/// (`setBuffer:offset:atIndex:`): the words, and the increment in a `Shared` buffer written
-/// once; the frame makes no `setBytes` call (`dispatch_chain` measures those).
+/// A desktop session's frame, in the shape its recordings commit (a median of one command buffer
+/// a frame, two at the 90th percentile, a few dispatches each), in compute alone: a run is one
+/// command buffer of four `lcg_step` dispatches ([`lcg_frame`]).
 fn frame() -> Plan {
+    lcg_frame("frame", 1, 4)
+}
+
+/// The frame of many small command buffers, a stress row: 160 command buffers of two `lcg_step`
+/// dispatches a run ([`lcg_frame`]). It is judged only where a recording commits at that rate.
+fn frame_stress() -> Plan {
+    lcg_frame("frame_stress", 160, 2)
+}
+
+/// A frame of `command_buffers` command buffers of `per` tiny dispatches each: `lcg_step` over
+/// 256 words of `Private` storage, each dispatch setting its bindings, since a command buffer
+/// starts with none. Both are buffers (`setBuffer:offset:atIndex:`): the words, and the increment
+/// in a `Shared` buffer written once; the frame makes no `setBytes` call (`dispatch_chain`
+/// measures those).
+fn lcg_frame(name: &str, command_buffers: usize, per: usize) -> Plan {
     const WORDS: usize = 256;
-    const COMMAND_BUFFERS: usize = 160;
-    const STEPS: usize = 2 * COMMAND_BUFFERS;
+    let steps = per * command_buffers;
     let increment = words(14, 1)[0];
     let input = words(13, WORDS);
     let output = (input.iter())
         .map(|&word| {
-            (0..STEPS).fold(word, |word, _| {
+            (0..steps).fold(word, |word, _| {
                 word.wrapping_mul(1_664_525).wrapping_add(increment)
             })
         })
@@ -422,13 +438,13 @@ fn frame() -> Plan {
         grid: Grid::groups_of_256(1),
     };
     Plan {
-        name: "frame".to_owned(),
+        name: name.to_owned(),
         library: Source::Authored,
         buffers: vec![
             private(word_bytes(&input)),
             shared(word_bytes(&[increment, 0, 0, 0])),
         ],
-        dispatches: vec![dispatch; STEPS],
+        dispatches: vec![dispatch; steps],
         expect: vec![Expect {
             buffer: 0,
             values: Values::Words(output),
@@ -436,7 +452,7 @@ fn frame() -> Plan {
         textures: Vec::new(),
         expect_textures: Vec::new(),
         outputs: Vec::new(),
-        per_command_buffer: Some(STEPS / COMMAND_BUFFERS),
+        per_command_buffer: Some(per),
     }
 }
 
