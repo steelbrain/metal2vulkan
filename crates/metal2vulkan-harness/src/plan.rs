@@ -1,4 +1,4 @@
-//! A workload as data: what [`run::run`](crate::run::run) makes, the calls of one run, and what
+//! A workload as data: what [`Harness::run`](crate::run::Harness::run) makes, the calls of one run, and what
 //! the first run must leave in the buffers.
 
 use crate::{Result, Size, Storage};

@@ -8,7 +8,7 @@
 //! file.
 //!
 //! A workload is a [`plan::Plan`]: its buffers and their starting contents, the dispatches of one
-//! run, and the contents its buffers must hold after the first run. [`run::run`] makes its
+//! run, and the contents its buffers must hold after the first run. [`run::Harness::run`] makes its
 //! objects, checks the first run, then times the rest. The authored workloads ([`authored`]) are
 //! MSL kernels committed as public fixtures (`crates/metal2vulkan-validation/fixtures/public/
 //! harness/workloads.metal`, compiled by `scripts/regen-air-fixtures --dir harness`); their
