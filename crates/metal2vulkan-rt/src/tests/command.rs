@@ -1,7 +1,8 @@
 //! Command queues, command buffers and events, under a device cfg on every device of the cfg's
 //! kind: states, handlers and refusals; holds per segment; the host floor; host values racing GPU
-//! signals; listeners; abandon; quiesce, also in an `exit()` handler; teardown from a handler; a
-//! loss; and a released block kept until its last command buffer retires.
+//! signals; listeners; abandon; quiesce, also in an `exit()` handler; teardown from a handler and
+//! with work held; refusals of what has started; a loss; and a released block kept until its last
+//! command buffer retires.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
@@ -9,8 +10,8 @@ pub(crate) mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, BlockId, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
-        CommandBufferStatus, CommandQueue, Device, DeviceOptions, Error, Gauges, Instance,
-        MemoryClass, Refusal, SharedEvent, BLOCK_LEN,
+        CommandBufferStatus, CommandQueue, Device, DeviceOptions, DispatchType, Error, Gauges,
+        Instance, MemoryClass, Refusal, SharedEvent, BLOCK_LEN,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -309,6 +310,62 @@ pub(crate) mod on_device {
             );
             assert_eq!((word(&b), word(&d)), (2, 4), "{name}");
             drop((a, b, c, d, arena, e, f, queue, other, device));
+        });
+    }
+
+    /// The consumer's contract at the end of a device's life. A call that configures what has
+    /// started refuses typed, never Ok for nothing: each call of a committed command buffer, and
+    /// the release of a block already released. And with every consumer handle dropped while one
+    /// command buffer is held behind a wait and another waits behind it, the device tears down
+    /// and every gauge reaches zero (`each_device`). A dropped device is never handed out again:
+    /// only `Device::new` makes a `Device`, and the runtime's threads hold its core, never one.
+    #[test]
+    fn every_device_refuses_configuration_after_start_and_tears_down_with_work_held() {
+        each_device("command_contract", |name, _, device| {
+            let event = shared_event(&device);
+            let queue = queue(&device);
+            let held = queue.command_buffer().expect("a command buffer");
+            held.encode_wait_for_event(event.as_event(), 1)
+                .expect("a wait");
+            held.commit().expect("a commit");
+            let behind = queue.command_buffer().expect("a command buffer");
+            behind.commit().expect("a commit");
+            let committed = |call: &str, result: Result<(), Error>| {
+                assert!(
+                    matches!(result, Err(Error::Refused(Refusal::Committed))),
+                    "{name}: {call}: {result:?}"
+                );
+            };
+            committed("commit", held.commit());
+            committed("enqueue", held.enqueue());
+            committed("add_completed_handler", held.add_completed_handler(|_| {}));
+            committed("add_scheduled_handler", held.add_scheduled_handler(|_| {}));
+            committed(
+                "encode_signal_event",
+                held.encode_signal_event(event.as_event(), 2),
+            );
+            committed(
+                "encode_wait_for_event",
+                held.encode_wait_for_event(event.as_event(), 2),
+            );
+            committed(
+                "compute_command_encoder",
+                held.compute_command_encoder(DispatchType::Serial).map(drop),
+            );
+            let block = device
+                .take_block(MemoryClass::Shared, 1)
+                .expect("a Shared block");
+            device.release_block(block.id).expect("a release");
+            assert!(
+                matches!(device.release_block(block.id), Err(Error::NoSuchBlock(id)) if id == block.id),
+                "{name}: release_block"
+            );
+            assert_eq!(
+                held.status(),
+                CommandBufferStatus::Committed,
+                "{name}: held"
+            );
+            drop((held, behind, queue, event, device));
         });
     }
 

@@ -47,6 +47,13 @@ static destructor or an `atexit` handler: the consumer drops every handle, or ca
 `Device::quiesce`, before the process exits, since a driver may unmap device memory inside
 `exit()`.
 
+A device the consumer dropped is never handed out again: only `Device::new` makes a `Device`, and
+the runtime's threads hold the device's core, never a handle. A call that configures what has
+started refuses typed, never answering Ok for nothing: every call of a committed command buffer
+(`Refusal::Committed`), the release of a block not held (`Error::NoSuchBlock`), and a call that
+needs a runtime thread after `Device::quiesce` (`Error::Quiesced`). `DeviceOptions` are read once,
+by `Device::new`.
+
 ### Counters
 
 `Device::counters` returns a handle that stays readable after the device is gone. `metrics()` are
