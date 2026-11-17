@@ -131,7 +131,7 @@ fn accesses_past_2_gib_land_at_their_own_words() {
         });
         let word = |w: u32| {
             let (b, o) = at(w);
-            u32::from_le_bytes(got.buffers[b].bytes[o..o + 4].try_into().expect("a word"))
+            u32::from_le_bytes(got.buffers[b][o..o + 4].try_into().expect("a word"))
         };
         let loaded: Vec<u32> = (0..THREADS).map(word).collect();
         let want: Vec<u32> = (0..THREADS).map(|t| 0x5000_0000 | t).collect();
