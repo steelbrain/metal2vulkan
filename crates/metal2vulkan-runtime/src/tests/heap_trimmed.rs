@@ -55,7 +55,7 @@ use super::spares_bench::process_memory;
 use super::uniform_bind_offsets::idle;
 use crate::pipeline::compile_memory::heap_bytes;
 use crate::pipeline::compile_memory::FREE_FLOOR;
-use crate::{CommandBufferStatus, ComputePipelineState, Device, Error, PipelineOptions, Size};
+use crate::{CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Size};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use std::fmt::Write;
 use std::time::{Duration, Instant};
