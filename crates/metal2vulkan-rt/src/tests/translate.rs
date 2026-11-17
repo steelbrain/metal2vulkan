@@ -1176,7 +1176,7 @@ mod on_device {
         else {
             return;
         };
-        each_device("compute_translated", |name, _, device| {
+        each_device("compute_address_alignment", |name, _, device| {
             let (vec16, words) = (state(name, &device, &vec16), state(name, &device, &words));
             let mut buffers = Buffers::new(&device, 64 * 1024);
             let (a, b) = (buffers.buffer(16384), buffers.buffer(16384));
