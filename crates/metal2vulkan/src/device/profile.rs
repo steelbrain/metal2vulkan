@@ -718,9 +718,11 @@ pub enum PointerDomain {
     /// The sorted resident set of bound arguments and used resources.
     ResidentTable,
     /// Pointers are device addresses used directly: a `device` or `constant` pointer is the
-    /// 64-bit Vulkan device address of the byte it names, as Metal's `gpuAddress` is. Needs
-    /// `bufferDeviceAddress` and `shaderInt64`. No function compiles under it yet: a compile is
-    /// refused as [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
+    /// 64-bit Vulkan device address of the byte it names, as Metal's `gpuAddress` is, and a
+    /// buffer slot is reached at its own address, pushed, uncontained. Needs
+    /// `bufferDeviceAddress` and `shaderInt64`. So far it lowers a kernel that reaches memory
+    /// only through its buffer slots; any other function is refused as
+    /// [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
     Identity,
 }
 
@@ -734,8 +736,8 @@ pub enum HandleDomain {
     Table,
     /// A texture's or sampler's handle is its `gpuResourceID`: the low 32 bits index the
     /// pipeline's descriptor arrays and the high 32 bits are the word of its Metal descriptor
-    /// (`docs/RESOURCE-ID.md`). No function compiles under it yet: a compile is refused as
-    /// [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
+    /// (`docs/RESOURCE-ID.md`). No function that reads a texture or a sampler compiles under it
+    /// yet: it is refused as [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
     Identity,
 }
 

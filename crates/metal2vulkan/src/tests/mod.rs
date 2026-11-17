@@ -82,6 +82,7 @@ mod engine_heap_texel_buffers;
 mod engine_heap_ycbcr_writes;
 mod engine_helper_picks;
 mod engine_helper_threads;
+mod engine_identity;
 mod engine_image_shapes;
 mod engine_imageblock;
 mod engine_index_words;

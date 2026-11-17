@@ -109,9 +109,11 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `HandleDomain::Table`, the default). The identity domains (`PointerDomain::Identity` with
   `HandleDomain::Identity`, taken together) are the new runtime's form: pointers are device
   addresses used directly and a texture's or sampler's handle is its `gpuResourceID`
-  ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`, and
-  they lower no function yet: a compile under them is refused as
-  `Unsupported{IdentityDomains}`.
+  ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
+  them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
+  pushed as `PushField::SlotGuestBase`, with no root table, no descriptor and no containment, as
+  Metal contains no device-address access. So far they lower a kernel that reaches memory only
+  through its buffer slots; any other function is refused as `Unsupported{IdentityDomains}`.
 - **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
   default; changes emitted code). On an integrated GPU or a CPU device a function that only
   samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes

@@ -274,9 +274,15 @@ pub(super) fn prepare(
     let lowering = cx.plan.families.access.slots.get(t.slot).copied().flatten();
     let ops = WordOps::of(crate::lower::sync::memory_model::coherence(cx.plan));
     if let Some(SlotLowering::Psb { start }) = lowering {
-        let table = cx.push_field(fb, PushField::RootTableAddress)?;
-        let contained = cx.plan.families.access.psb_contained;
-        let a = psb::prepare(fb, table, t.root, m, start, n, contained)?;
+        let a = if cx.plan.families.access.identity {
+            let address = cx.push_field(fb, PushField::SlotGuestBase(choice.slot))?;
+            let address = super::pointer::slot_guest_base_u64(fb, address)?;
+            psb::prepare_at(fb, address, m, start)?
+        } else {
+            let table = cx.push_field(fb, PushField::RootTableAddress)?;
+            let contained = cx.plan.families.access.psb_contained;
+            psb::prepare(fb, table, t.root, m, start, n, contained)?
+        };
         let units = cx.plan.families.access.psb_units;
         return Ok(Prepared {
             mem: Mem::Psb(a.mem.with(ops).with_units(units)),

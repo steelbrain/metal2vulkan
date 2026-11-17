@@ -164,6 +164,34 @@ pub fn prepare(
     })
 }
 
+/// Prepare an access of a static slot whose window starts at `start` at the `u32` displacement
+/// `m` from its bind offset, under the identity domains: `address` (a `u64`) is the slot's own
+/// device address, the buffer's plus the bind offset, so no table is read. It need not be
+/// 4-aligned: the word below the access and the byte offset in it come from the sum. Uncontained,
+/// as Metal contains no device-address access.
+pub fn prepare_at(
+    fb: &mut FunctionBuilder<'_>,
+    address: Value,
+    m: Value,
+    start: i64,
+) -> BResult<PsbAccess> {
+    let disp = displacement(fb, m, start)?;
+    let at = fb.binary(BinOp::IAdd, address, disp)?;
+    let three = k64(fb, 3)?;
+    let low = fb.binary(BinOp::BitwiseAnd, at, three)?;
+    let base = fb.binary(BinOp::ISub, at, low)?;
+    let u32_ = fb.module().ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let low = fb.convert(ConvOp::UConvert, low, u32_)?;
+    Ok(PsbAccess {
+        mem: PsbMem::at(base),
+        off: low,
+        inb: None,
+    })
+}
+
 /// The narrow units a device-address memory loads and stores directly on profile `p`: the 1- and
 /// 2-byte units of [`Units::storage_on`] (the width's storage access and integer type). No `uvec2`
 /// or `uvec4` unit: a device address below an access is only 4-byte aligned.

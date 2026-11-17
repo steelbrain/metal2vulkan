@@ -697,6 +697,9 @@ pub struct AccessPlan {
     /// The narrow units device-address accesses load and store directly (`psb::narrow_units` of
     /// the profile): a sub-word store there is one narrow store instead of two word atomics.
     pub psb_units: Units,
+    /// The function compiles under the identity domains: a device-address slot's address is its
+    /// own field ([`address_field`]), uncontained.
+    pub identity: bool,
     /// A storage view's slot declares its `RangeAtBindOffset` specialization, as a uniform view's
     /// does: the profile takes `DriverWorkaround::PushReadsLengthenThreadPayload`, so a read of
     /// the slot at its bind offset alone, which reads no push word, is worth the key
@@ -1196,6 +1199,9 @@ struct Census {
     uniform: u32,
     texel: u32,
     fields: BTreeSet<PushField>,
+    /// Under the identity domains a device-address slot reads its own address
+    /// ([`address_field`]), not the root table.
+    identity: bool,
 }
 
 impl Census {
@@ -1203,7 +1209,7 @@ impl Census {
     /// pointer reads the root table.
     fn new(
         push: &BTreeSet<PushField>,
-        dynamic: bool,
+        (dynamic, identity): (bool, bool),
         forms: impl Iterator<Item = (SlotRef, SlotLowering)>,
         m: &mut Meter,
     ) -> Result<Census, Error> {
@@ -1212,6 +1218,7 @@ impl Census {
             uniform: 0,
             texel: 0,
             fields: push.clone(),
+            identity,
         };
         let mut psb = dynamic;
         for (slot, l) in forms {
@@ -1224,7 +1231,12 @@ impl Census {
                 SlotLowering::View(_) => c.uniform = c.uniform.saturating_add(1),
                 SlotLowering::Psb { .. } => {
                     c.fields.remove(&PushField::SlotBindOffset(slot));
-                    psb = true;
+                    match identity {
+                        true => {
+                            c.fields.insert(address_field(slot));
+                        }
+                        false => psb = true,
+                    }
                 }
             }
         }
@@ -1263,8 +1275,24 @@ impl Census {
     fn addressed(&mut self, slot: SlotRef) {
         self.storage = self.storage.saturating_sub(1);
         self.fields.remove(&PushField::SlotBindOffset(slot));
-        self.fields.insert(PushField::RootTableAddress);
+        self.fields.insert(match self.identity {
+            true => address_field(slot),
+            false => PushField::RootTableAddress,
+        });
     }
+}
+
+/// The field a slot's device address is read from under the identity domains: its Metal address,
+/// the bound buffer's `gpuAddress` plus the bind offset, which is its Vulkan device address there
+/// (`SlotGuestBase`'s value, a `uvec2`, low word first).
+fn address_field(slot: SlotRef) -> PushField {
+    PushField::SlotGuestBase(slot)
+}
+
+/// Whether profile `p` takes the identity domains, where a pointer is a device address used
+/// directly.
+pub(crate) fn identity(p: &DeviceProfile) -> bool {
+    p.fields().pointer_domain == crate::device::PointerDomain::Identity
 }
 
 /// [`finish_slots`]'s placement, in its charged working tables.
@@ -1322,7 +1350,9 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         // reaches needs a typed pointer, which only its device address gives; a replay variant
         // reads every slot through its root entry, which the replay's preprocess writes from the
         // replayed command's record.
+        // Under the identity domains every slot is its device address.
         if replay
+            || identity(p)
             || cx.families.access.dynamic.slots.contains(&i)
             || cx.families.access.typed_slots.contains(&i)
         {
@@ -1382,7 +1412,12 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         .zip(&lowering)
         .filter_map(|(plan, l)| l.map(|l| (plan.slot, l)))
         .chain(own.iter().copied());
-    let mut census = Census::new(&cx.push, cx.families.access.dynamic.used, forms, m)?;
+    let mut census = Census::new(
+        &cx.push,
+        (cx.families.access.dynamic.used, identity(p)),
+        forms,
+        m,
+    )?;
     // Profile F's per-stage storage-buffer fallback: with robust descriptors (or containment off),
     // while the storage-buffer count exceeds its limit and a uniform buffer is left, the first
     // read-only storage slot in `fallback_rank` order becomes a uniform view. Slots the variant
@@ -1552,7 +1587,10 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     let addressed_slot = |cx: &mut SelectCx<'_>, slot: SlotRef| {
         cx.facts.insert(RuntimeFact::DeviceAddresses { slot });
         cx.push.remove(&PushField::SlotBindOffset(slot));
-        cx.push.insert(PushField::RootTableAddress);
+        cx.push.insert(match identity(cx.profile) {
+            true => address_field(slot),
+            false => PushField::RootTableAddress,
+        });
     };
     for (plan, (l, w)) in memory.slots.iter().zip(lowering.iter().zip(&windows)) {
         let (Some(l), Some(window)) = (l, w) else {
@@ -1611,8 +1649,11 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     cx.families.access.pulled = sourced;
     cx.families.access.unwritten = unwritten_slots(cx, &lowering, &sources);
     cx.families.access.slots = lowering;
-    cx.families.access.psb_contained = p.fields().containment != Containment::UnsafeOff;
+    // Metal contains no device-address access, so under the identity domains none is contained.
+    cx.families.access.psb_contained =
+        p.fields().containment != Containment::UnsafeOff && !identity(p);
     cx.families.access.psb_units = psb::narrow_units(p);
+    cx.families.access.identity = identity(p);
     cx.families.access.storage_at_bind = p
         .workarounds()
         .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);

@@ -309,11 +309,9 @@ fn below_1_2_and_contradictory_policies_are_refused() {
     assert_eq!(dev.profile().fields().containment, Containment::UnsafeOff);
 }
 
-/// The identity domains come as a pair (`InvalidDescriptor` for one alone), need
+/// The identity domains come as a pair (`InvalidDescriptor` for one alone) and need
 /// `bufferDeviceAddress` and `shaderInt64` (`Unsupported{IdentityDomains}` naming both, on a
-/// device without `shaderInt64`), and lower no function yet: a compile under them is
-/// `Unsupported{IdentityDomains}`, not implemented, where the same function compiles under the
-/// other domains.
+/// device without `shaderInt64`). What they lower is `tests::engine_identity`'s.
 #[test]
 fn the_identity_domains_come_as_a_pair_on_a_device_with_addresses() {
     let identity = DevicePolicy {
@@ -348,27 +346,6 @@ fn the_identity_domains_come_as_a_pair_on_a_device_with_addresses() {
             let both = [VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64];
             let both = both.map(Capability::Feature).to_vec();
             assert_eq!(u.needs, Needs::AnyOf(vec![both]));
-        }
-        other => panic!("{other:?}"),
-    }
-    use crate::pipeline::testing::{compile, engine_dir, llvm_assemble, AssembleError};
-    let bc = match llvm_assemble(&engine_dir().join("a1_bool_from_float.ll")) {
-        Ok(bc) => bc,
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            return;
-        }
-        Err(e) => panic!("{e:?}"),
-    };
-    let under = |policy| {
-        let dev = Device::new(profile("lavapipe"), policy).unwrap();
-        compile(&bc, "a1_bool_from_float", dev.profile())
-    };
-    assert!(under(DevicePolicy::default()).is_ok());
-    match under(identity) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::IdentityDomains);
-            assert_eq!(u.needs, Needs::NotImplemented);
         }
         other => panic!("{other:?}"),
     }

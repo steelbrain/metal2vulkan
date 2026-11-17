@@ -1412,7 +1412,8 @@ pub enum Feature {
     VulkanVersion,
     /// The identity pointer and handle domains (`PointerDomain::Identity`,
     /// `HandleDomain::Identity`): on a device without `bufferDeviceAddress` and `shaderInt64`,
-    /// and, on any device, a compile of a function they do not lower yet.
+    /// and, on any device, a compile of a function they do not lower yet: anything but a kernel
+    /// that reaches memory only through its buffer slots.
     IdentityDomains,
     /// A constants-block record LLVM defines that the typed model has no form for (a block
     /// address, a `select` and the other constant expressions of [`ConstantRecord`]), by LLVM's

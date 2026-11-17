@@ -82,7 +82,7 @@ feature	Tensors	rare	shader tensors
 feature	RasterizationRateMap	rare	rasterization rate maps
 feature	GpuEncodedIndirectCommands	rare	indirect command buffers encoded by a kernel
 feature	VulkanVersion	none	a device below Vulkan 1.2
-feature	IdentityDomains	none	the identity domains, which the new runtime alone takes and which lower no function yet
+feature	IdentityDomains	none	the identity domains, which the new runtime alone takes and which lower only kernels over buffer slots so far
 feature	Constant	none	LLVM constant forms AIR does not emit
 feature	Attribute	none	LLVM ABI attributes AIR does not use
 feature	BitcodeRecord	none	bitcode records AIR does not emit

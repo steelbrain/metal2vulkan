@@ -1856,7 +1856,35 @@ fn finish(
         None => 0,
     };
     plan.estimate.add(walk);
+    if access::identity(p) {
+        identity_admits(&plan)?;
+    }
     Ok(plan)
+}
+
+/// Under the identity domains, the plans lowered so far: a kernel that reaches memory only
+/// through its buffer slots' device addresses, all pushed, with no descriptor.
+fn identity_admits(plan: &Plan) -> Result<(), Error> {
+    let pushed = plan.push.fields.iter().all(|f| {
+        matches!(
+            f.field,
+            PushField::SlotGuestBase(_) | PushField::DispatchRegion
+        ) && matches!(f.loc, crate::pipeline::interface::PushLoc::Push { .. })
+    });
+    let addressed = plan
+        .slots
+        .iter()
+        .flatten()
+        .all(|c| c.form == BufferForm::Psb);
+    if plan.stage == Stage::Kernel
+        && pushed
+        && addressed
+        && plan.push.argument_table_size == 0
+        && plan.descriptors == DescriptorCounts::default()
+    {
+        return Ok(());
+    }
+    Err(Unsupported::not_implemented(Feature::IdentityDomains).into())
 }
 
 /// The words the predicated walk of `plan` adds for the constructs of its structured tree
