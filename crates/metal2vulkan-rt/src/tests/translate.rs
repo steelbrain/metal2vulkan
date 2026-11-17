@@ -16,8 +16,8 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, BlockId, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
-        DeviceOptions, DispatchType, FunctionDescriptor, Gauges, Instance, Library, MemoryClass,
-        PrecisionNote, StageSource,
+        DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Instance, Library,
+        MemoryClass, PrecisionNote, Refusal, StageSource,
     };
     use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
     use metal2vulkan::Budget;
@@ -1157,6 +1157,60 @@ mod on_device {
                 }
             }
             println!("{name}: Metal's words at bind offsets {OFFSETS:?}");
+        });
+    }
+
+    /// `vwp_vec16` takes its `float4 *` arguments' addresses to be multiples of 16 and `vwp_words`
+    /// its `uint *` arguments' multiples of 4 (`RuntimeFact::AddressAlignment`), so a dispatch with
+    /// the first argument bound off that alignment (4 past a multiple of 16; 2 past one of 4) is
+    /// refused (`Refusal::MisalignedBuffer`), as Metal's API validation refuses the bind ("must be
+    /// a multiple of 16 but was set to 4", "must be a multiple of 4 but was set to 2"), and the
+    /// same buffer bound at the next multiple runs.
+    #[test]
+    fn an_argument_bound_off_its_alignment_is_refused() {
+        use metal2vulkan_devtools::vector_word_phases::{FIXTURE, THREADS, VEC16, WORDS};
+        let (Some(vec16), Some(words)) =
+            (descriptor_of(FIXTURE, VEC16), descriptor_of(FIXTURE, WORDS))
+        else {
+            return;
+        };
+        each_device("compute_translated", |name, _, device| {
+            let (vec16, words) = (state(name, &device, &vec16), state(name, &device, &words));
+            let mut buffers = Buffers::new(&device, 64 * 1024);
+            let (a, b) = (buffers.buffer(16384), buffers.buffer(16384));
+            assert_eq!(a.gpu_address() % 16, 0, "{name}: the buffer's address");
+            let queue = device.new_command_queue(4).expect("a queue");
+            for (kernel, align, at) in [
+                (&vec16, 16, 4),
+                (&vec16, 16, 16),
+                (&words, 4, 2),
+                (&words, 4, 4),
+            ] {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(kernel).expect("a state");
+                encoder.set_buffer(Some(&a), at, 0).expect("a buffer");
+                encoder.set_buffer(Some(&b), 0, 1).expect("a buffer");
+                let r = encoder.dispatch_threadgroups([1, 1, 1], [THREADS, 1, 1]);
+                match r {
+                    Err(Error::Refused(Refusal::MisalignedBuffer {
+                        index: 0,
+                        address,
+                        align: refused,
+                    })) if at % align != 0 => {
+                        assert_eq!((address, refused), (a.gpu_address() + at, align), "{name}")
+                    }
+                    Ok(()) if at % align == 0 => {}
+                    r => panic!("{name}: align {align}, offset {at}: {r:?}"),
+                }
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}: offset {at}");
+            }
+            println!("{name}: refused off each argument's alignment, ran on it");
         });
     }
 }

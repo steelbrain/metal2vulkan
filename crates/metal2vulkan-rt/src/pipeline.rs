@@ -351,8 +351,10 @@ pub(crate) enum Place {
 #[derive(Clone, Copy)]
 pub(crate) enum FieldValue {
     /// A `u64`: the address of the buffer bound at the slot plus its offset, the address of the
-    /// slot's `set_bytes` copy, or 0 where nothing is bound.
-    BufferAddress(u32),
+    /// slot's `set_bytes` copy, or 0 where nothing is bound. `mask` is the alignment the module
+    /// takes that address to have, less 1 (`RuntimeFact::AddressAlignment`), 0 where it takes
+    /// none.
+    BufferAddress { slot: u32, mask: u64 },
     /// A `u64`: the `gpuResourceID` of the texture bound at the slot, 0 where none is.
     TextureId(u32),
     /// A `u64`: the `gpuResourceID` of the sampler state bound at the slot, 0 where none is.
@@ -615,11 +617,22 @@ fn interface(
     }
     // The bind-time facts the encoder supplies.
     let mut multiples = Vec::new();
+    let mut aligned = Vec::new();
     let mut vote = 0;
     let mut own = OwnMemory::Static(pipeline.metal_info.static_threadgroup_memory_length);
     for dependency in &pipeline.dependencies {
         match dependency.fact {
             RuntimeFact::LocalSizeConstraint { multiple } => multiples.push(multiple),
+            // The slot's address is a multiple of its argument's alignment.
+            RuntimeFact::AddressAlignment {
+                slot:
+                    SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Buffer,
+                        index,
+                    },
+                align,
+            } if align.is_power_of_two() => aligned.push((index, u64::from(align) - 1)),
             // The walk's vote word: 4 bytes beside the threadgroup memory.
             RuntimeFact::PredicationVote => vote = 4,
             // The emulated tier's arena and scratch, in place of Metal's static part.
@@ -707,7 +720,13 @@ fn interface(
                     }),
                     _,
                 ) => match class {
-                    SlotClass::Buffer => FieldValue::BufferAddress(index),
+                    SlotClass::Buffer => FieldValue::BufferAddress {
+                        slot: index,
+                        mask: aligned
+                            .iter()
+                            .find(|&&(slot, _)| slot == index)
+                            .map_or(0, |&(_, mask)| mask),
+                    },
                     SlotClass::Texture => FieldValue::TextureId(index),
                     SlotClass::Sampler => FieldValue::SamplerId(index),
                 },

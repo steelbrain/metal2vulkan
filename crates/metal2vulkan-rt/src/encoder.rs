@@ -714,7 +714,7 @@ impl ComputeCommandEncoder {
                                 kernel,
                                 &inner.numbered.ids,
                                 &region(base, threads, ragged)?,
-                            );
+                            )?;
                             self.record(vk_pipeline, Launch::Direct(count))?;
                         }
                     }
@@ -722,7 +722,7 @@ impl ComputeCommandEncoder {
                 Ok(())
             }
             (None, Grid::Indirect(buffer, offset)) => {
-                self.fill_parameters(kernel, &inner.numbered.ids, &region([0; 3], [0; 3], false)?);
+                self.fill_parameters(kernel, &inner.numbered.ids, &region([0; 3], [0; 3], false)?)?;
                 self.record(vk_pipeline, Launch::Indirect(buffer, offset))
             }
             (None, Grid::Direct { .. }) => Ok(()),
@@ -750,7 +750,15 @@ impl ComputeCommandEncoder {
     /// `region`, the `DispatchRegion` push field's bytes, and whose state gave its numbered
     /// samplers `sampler_ids`. The block's address is written by [`Building::record_dispatch`]
     /// once the block is in the ring.
-    fn fill_parameters(&mut self, kernel: &Kernel, sampler_ids: &[u32], region: &[u8; 32]) {
+    ///
+    /// Err: [`Refusal::MisalignedBuffer`] where a buffer's address is not a multiple of the
+    /// alignment the module takes it to have.
+    fn fill_parameters(
+        &mut self,
+        kernel: &Kernel,
+        sampler_ids: &[u32],
+        region: &[u8; 32],
+    ) -> Result<(), Error> {
         let interface: &Interface = &kernel.interface;
         let parameters = &mut self.parameters;
         parameters.push.clear();
@@ -765,7 +773,7 @@ impl ComputeCommandEncoder {
                 Place::Block(offset) => (&mut parameters.block, offset as usize),
             };
             match field.value {
-                FieldValue::BufferAddress(slot) => {
+                FieldValue::BufferAddress { slot, mask } => {
                     let address = match self.slots.get(slot as usize) {
                         Some(Slot::Buffer { buffer, offset }) => {
                             buffer.gpu_address().wrapping_add(*offset)
@@ -773,6 +781,13 @@ impl ComputeCommandEncoder {
                         Some(Slot::Bytes(address)) => *address,
                         Some(Slot::Empty) | None => 0,
                     };
+                    if address & mask != 0 {
+                        return Err(Error::Refused(Refusal::MisalignedBuffer {
+                            index: slot,
+                            address,
+                            align: mask + 1,
+                        }));
+                    }
                     bytes[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }
                 FieldValue::TextureId(slot) => {
@@ -806,6 +821,7 @@ impl ComputeCommandEncoder {
             }
         }
         parameters.block_address = (interface.block_len > 0).then_some(interface.block_address);
+        Ok(())
     }
 }
 

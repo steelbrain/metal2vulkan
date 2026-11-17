@@ -141,6 +141,23 @@ pub enum Refusal {
         /// The indices given.
         given: usize,
     },
+    /// A dispatch whose buffer at `index` sits at an address, its buffer's `gpuAddress` plus the
+    /// bind offset, that is not a multiple of the alignment of the kernel's argument there
+    /// (`air.arg_type_align_size`, at most 16; `RuntimeFact::AddressAlignment`). The kernel reaches
+    /// such an argument from its address as it is.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max: API validation fails a bind offset that is not a
+    /// multiple of the argument type's alignment: "must be a multiple of 4 but was set to 2" for a
+    /// `uint *` argument, "of 16 but was set to 8" for a `float4 *`, "of 2 but was set to 1" for a
+    /// `ushort *`; `probes/vector_access_placement.m` in the conformance crate).
+    MisalignedBuffer {
+        /// The buffer argument index.
+        index: u32,
+        /// The buffer's address plus the bind offset.
+        address: u64,
+        /// The argument's alignment: 2, 4, 8 or 16.
+        align: u64,
+    },
     /// `setBufferOffset` at an index where no buffer is bound.
     ///
     /// Basis: ours (there is no buffer whose offset to change).
@@ -569,6 +586,14 @@ impl fmt::Display for Refusal {
             Refusal::SamplerIds { numbered, given } => write!(
                 f,
                 "{given} sampler indices were given for the {numbered} samplers the state numbers"
+            ),
+            Refusal::MisalignedBuffer {
+                index,
+                address,
+                align,
+            } => write!(
+                f,
+                "the buffer at index {index} sits at {address:#x}, not a multiple of the {align} bytes its argument takes"
             ),
             Refusal::ThreadgroupSize { size, max } => write!(
                 f,

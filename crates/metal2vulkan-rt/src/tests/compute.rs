@@ -28,7 +28,7 @@ mod on_device {
     fn address(slot: u32, place: Place) -> Field {
         Field {
             place,
-            value: FieldValue::BufferAddress(slot),
+            value: FieldValue::BufferAddress { slot, mask: 0 },
         }
     }
 
