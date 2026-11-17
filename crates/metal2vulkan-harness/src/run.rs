@@ -134,7 +134,8 @@ pub struct Report {
     /// Each run's process CPU time from before its command buffer's creation through the return
     /// of the wait for the run before it, in nanoseconds; empty where the host has no such clock.
     pub cpu_ns: Vec<f64>,
-    /// The device's gauges after the 100th and the 200th timed run, where there were that many.
+    /// The device's gauges after the 100th and the 200th timed run, where there were that many,
+    /// read once the work committed by then completed: what the runs left behind.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
     /// The contents of the plan's outputs after the first run, in its order.
     pub outputs: Vec<Vec<u8>>,
@@ -587,6 +588,9 @@ impl<D: ComputeDevice> Session for Harness<D> {
             report.encode_ns.push(encoded.as_nanos() as f64);
             report.gpu_us.push(gpu_us);
             if run == 100 || run == 200 {
+                // With the device idle, so the gauges count what the runs left behind, not the
+                // work in flight at that moment, which moves with completion timing.
+                wait_run::<D>(&in_flight)?;
                 report.gauges.push((run, self.device.gauges()));
             }
         }
