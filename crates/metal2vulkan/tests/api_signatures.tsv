@@ -43,6 +43,9 @@ assoc-const	metal2vulkan-air::ir::BinOp::ALL	pub const ALL: [BinOp; 18]
 assoc-const	metal2vulkan-air::ir::FloatPredicate::ALL	pub const ALL: [FloatPredicate; 16]
 assoc-const	metal2vulkan-air::ir::IntPredicate::ALL	pub const ALL: [IntPredicate; 10]
 assoc-const	metal2vulkan-air::metal::DataType::ALL	pub const ALL: [DataType; 17]
+assoc-const	metal2vulkan-rt::ResourceUsage::READ	pub const READ: ResourceUsage
+assoc-const	metal2vulkan-rt::ResourceUsage::SAMPLE	pub const SAMPLE: ResourceUsage
+assoc-const	metal2vulkan-rt::ResourceUsage::WRITE	pub const WRITE: ResourceUsage
 assoc-const	metal2vulkan-runtime::AddressModeMap::IDENTITY	pub const IDENTITY: AddressModeMap
 assoc-const	metal2vulkan-runtime::FeatureRow::ALL	pub const ALL: [FeatureRow; 144]
 assoc-const	metal2vulkan-runtime::FormatCapabilities::NONE	pub const NONE: FormatCapabilities
@@ -567,6 +570,9 @@ assoc-const-value	metal2vulkan-air::ir::BinOp::ALL	[BinOp::Add, BinOp::Sub, BinO
 assoc-const-value	metal2vulkan-air::ir::FloatPredicate::ALL	[FloatPredicate::False, FloatPredicate::Oeq, FloatPredicate::Ogt, FloatPredicate::Oge, FloatPredicate::Olt, FloatPredicate::Ole, FloatPredicate::One, FloatPredicate::Ord, FloatPredicate::Uno, FloatPredicate::Ueq, FloatPredicate::Ugt, FloatPredicate::Uge, FloatPredicate::Ult, FloatPredicate::Ule, FloatPredicate::Une, FloatPredicate::True]
 assoc-const-value	metal2vulkan-air::ir::IntPredicate::ALL	[IntPredicate::Eq, IntPredicate::Ne, IntPredicate::Ugt, IntPredicate::Uge, IntPredicate::Ult, IntPredicate::Ule, IntPredicate::Sgt, IntPredicate::Sge, IntPredicate::Slt, IntPredicate::Sle]
 assoc-const-value	metal2vulkan-air::metal::DataType::ALL	[DataType::Float32, DataType::Float16, DataType::BFloat16, DataType::Int2, DataType::Int4, DataType::Int8, DataType::Int16, DataType::Int32, DataType::UInt2, DataType::UInt4, DataType::UInt8, DataType::UInt16, DataType::UInt32, DataType::Fp4E2M1, DataType::Fp8E4M3, DataType::Fp8E5M2, DataType::Fp8UE8M0]
+assoc-const-value	metal2vulkan-rt::ResourceUsage::READ	ResourceUsage(1)
+assoc-const-value	metal2vulkan-rt::ResourceUsage::SAMPLE	ResourceUsage(4)
+assoc-const-value	metal2vulkan-rt::ResourceUsage::WRITE	ResourceUsage(2)
 assoc-const-value	metal2vulkan-runtime::AddressModeMap::IDENTITY	AddressModeMap
 assoc-const-value	metal2vulkan-runtime::FeatureRow::ALL	[FeatureRow::MetalKit, FeatureRow::MetalPerformanceShaders, FeatureRow::ProgrammableBlending, FeatureRow::SeparateDepthStencilAttachments, FeatureRow::PvrtcPixelFormats, FeatureRow::EacEtcPixelFormats, FeatureRow::AstcPixelFormats, FeatureRow::BcPixelFormats, FeatureRow::CompressedVolumeTextureFormats, FeatureRow::ExtendedRangePixelFormats, FeatureRow::WideColorPixelFormat, FeatureRow::Depth16PixelFormat, FeatureRow::LinearTextures, FeatureRow::MsaaDepthResolve, FeatureRow::ArrayOfTexturesRead, FeatureRow::ArrayOfTexturesWrite, FeatureRow::CubeMapTextureArrays, FeatureRow::StencilTextureViews, FeatureRow::ArrayOfSamplers, FeatureRow::SamplerMaxAnisotropy, FeatureRow::SamplerLodClamp, FeatureRow::SamplerCompareFunctions, FeatureRow::UnsignedShortCoordinates, FeatureRow::BorderColor, FeatureRow::CountingOcclusionQuery, FeatureRow::BaseVertexInstanceDrawing, FeatureRow::LayeredRendering, FeatureRow::LayeredRenderingToMultisampleTextures, FeatureRow::MemorylessRenderTargets, FeatureRow::DualSourceBlending, FeatureRow::StoreAndMultisampleResolve, FeatureRow::MsaaBlits, FeatureRow::ProgrammableSamplePositions, FeatureRow::DeferredStoreAction, FeatureRow::MemoryBarriers, FeatureRow::IcbComputeMemoryBarriers, FeatureRow::IcbRenderMemoryBarriers, FeatureRow::Tessellation, FeatureRow::IndirectTessellationArguments, FeatureRow::IcbTessellation, FeatureRow::ResourceHeaps, FeatureRow::FunctionSpecialization, FeatureRow::ReadWriteBuffers, FeatureRow::ReadWriteTextures, FeatureRow::ExtractInsertReverseBits, FeatureRow::SimdBarrier, FeatureRow::IndirectDrawDispatchArguments, FeatureRow::ArgumentBuffersTier1, FeatureRow::ArgumentBuffersTier2, FeatureRow::IcbRendering, FeatureRow::IcbCompute, FeatureRow::UniformType, FeatureRow::Imageblocks, FeatureRow::TileShaders, FeatureRow::ImageblockSampleCoverageControl, FeatureRow::PostDepthCoverage, FeatureRow::QuadPermute, FeatureRow::QuadBallot, FeatureRow::QuadReduction, FeatureRow::SimdPermute, FeatureRow::SimdReduction, FeatureRow::SimdMatrixMultiply, FeatureRow::RasterOrderGroups, FeatureRow::NonuniformThreadgroupSize, FeatureRow::MultipleViewports, FeatureRow::StencilFeedback, FeatureRow::StencilResolve, FeatureRow::NonsquareTileDispatch, FeatureRow::TextureSwizzle, FeatureRow::PlacementHeap, FeatureRow::PrimitiveId, FeatureRow::BarycentricCoordinates, FeatureRow::ReadWriteCubeMapTextures, FeatureRow::SparseTextures, FeatureRow::SparseDepthStencilTextures, FeatureRow::VariableRasterizationRate, FeatureRow::VertexAmplification, FeatureRow::Int64Math, FeatureRow::LossyTextureCompression, FeatureRow::SimdShiftAndFill, FeatureRow::RenderDynamicLibraries, FeatureRow::ComputeDynamicLibraries, FeatureRow::MeshShading, FeatureRow::IndirectMeshDrawArguments, FeatureRow::IcbMeshDraws, FeatureRow::MetalFxSpatialUpscaling, FeatureRow::MetalFxTemporalUpscaling, FeatureRow::MetalFxFrameInterpolation, FeatureRow::MetalFxDenoisedUpscaling, FeatureRow::FastResourceLoading, FeatureRow::RayTracingCompute, FeatureRow::RayTracingRender, FeatureRow::FloatAtomics, FeatureRow::TextureAtomics, FeatureRow::Int64Atomics, FeatureRow::QueryTextureLod, FeatureRow::BinaryArchives, FeatureRow::FunctionPointersCompute, FeatureRow::FunctionPointersRender, FeatureRow::DepthCompareBiasAndGradient, FeatureRow::NonprivateDepthStencilTextures, FeatureRow::DynamicAttributeStride, FeatureRow::PackedFloatAttributeFormats, FeatureRow::BFloat, FeatureRow::RelaxedMath, FeatureRow::GlobalBuiltinsAndBindings, FeatureRow::CoherentMemory, FeatureRow::ShaderValidation, FeatureRow::ShaderLogging, FeatureRow::ResidencySets, FeatureRow::RowMajorAccelerationStructures, FeatureRow::PerComponentMotionInterpolation, FeatureRow::IntersectionResultStorage, FeatureRow::VisibilityCountAccumulation, FeatureRow::ArgumentTables, FeatureRow::CommandAllocators, FeatureRow::DecoupledQueuesAndCommandBuffers, FeatureRow::TextureViewPools, FeatureRow::CommandBarriers, FeatureRow::PlacementSparseBuffers, FeatureRow::PlacementSparseTextures, FeatureRow::CompilationContexts, FeatureRow::PipelineDatasetSerialization, FeatureRow::FlexibleRenderPipelineState, FeatureRow::ColorAttachmentMapping, FeatureRow::MachineLearningEncoding, FeatureRow::Tensors, FeatureRow::PerformanceCounterHeaps, FeatureRow::AddressDrivenAccelerationStructureBuilds, FeatureRow::AccelerationStructureBuildOptions, FeatureRow::IntersectionFunctionBuffers, FeatureRow::SamplerMinMaxReduction, FeatureRow::SamplerLodBias, FeatureRow::PreRasterVertexValues, FeatureRow::DepthBoundsTesting, FeatureRow::IcbRasterAndDepthStencilState, FeatureRow::CubeMapAtomics, FeatureRow::UniversalTextureCompression, FeatureRow::AcquireReleaseAtomics, FeatureRow::BlockTextureReads, FeatureRow::ClampToEdgeTextureReads, FeatureRow::IntegerCoordinateOffsets, FeatureRow::TextureBarriers, FeatureRow::DeviceNotifications]
 assoc-const-value	metal2vulkan-runtime::FormatCapabilities::NONE	FormatCapabilities(0)
@@ -1384,10 +1390,12 @@ enum	metal2vulkan-air::tensor_ops::OperandIndex	#[derive(Clone, Copy, Debug, Par
 enum	metal2vulkan-air::tensor_ops::TensorSpace	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TensorSpace
 enum	metal2vulkan-rt::CommandBufferError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CommandBufferError
 enum	metal2vulkan-rt::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum CommandBufferStatus
+enum	metal2vulkan-rt::DispatchType	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum DispatchType
 enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
 enum	metal2vulkan-rt::Limit	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Limit
 enum	metal2vulkan-rt::MemoryClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum MemoryClass
 enum	metal2vulkan-rt::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Refusal
+enum	metal2vulkan-rt::Resource	#[derive(Clone, Copy)] #[non_exhaustive] pub enum Resource<'a>
 enum	metal2vulkan-rt::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
 enum	metal2vulkan-runtime::AddressPlacement	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AddressPlacement
 enum	metal2vulkan-runtime::AppleOnly	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AppleOnly
@@ -8713,6 +8721,7 @@ method	metal2vulkan-rt::Buffer::offset	pub fn offset(&self) -> u64
 method	metal2vulkan-rt::CommandBuffer::add_completed_handler	pub fn add_completed_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::add_scheduled_handler	pub fn add_scheduled_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::commit	pub fn commit(&self) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::compute_command_encoder	pub fn compute_command_encoder(&self, dispatch_type: DispatchType) -> Result<ComputeCommandEncoder, Error>
 method	metal2vulkan-rt::CommandBuffer::encode_signal_event	pub fn encode_signal_event(&self, event: &Event, value: u64) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::encode_wait_for_event	pub fn encode_wait_for_event(&self, event: &Event, value: u64) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::enqueue	pub fn enqueue(&self) -> Result<(), Error>
@@ -8727,6 +8736,18 @@ method	metal2vulkan-rt::CommandBuffer::wait_until_scheduled	pub fn wait_until_sc
 method	metal2vulkan-rt::CommandQueue::abandon	pub fn abandon(&self)
 method	metal2vulkan-rt::CommandQueue::command_buffer	pub fn command_buffer(&self) -> Result<CommandBuffer, Error>
 method	metal2vulkan-rt::CommandQueue::device	pub fn device(&self) -> &Device
+method	metal2vulkan-rt::ComputeCommandEncoder::dispatch_threadgroups	pub fn dispatch_threadgroups(&mut self, threadgroups_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3]) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer	pub fn dispatch_threadgroups_with_indirect_buffer(&mut self, buffer: &Buffer, offset: u64, threads_per_threadgroup: [u32; 3]) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::dispatch_threads	pub fn dispatch_threads(&mut self, threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3]) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::end_encoding	pub fn end_encoding(mut self)
+method	metal2vulkan-rt::ComputeCommandEncoder::memory_barrier	pub fn memory_barrier(&mut self)
+method	metal2vulkan-rt::ComputeCommandEncoder::set_buffer	pub fn set_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::set_buffer_offset	pub fn set_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::set_bytes	pub fn set_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::set_compute_pipeline_state	pub fn set_compute_pipeline_state(&mut self, state: &ComputePipelineState) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::set_threadgroup_memory_length	pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::use_resource	pub fn use_resource(&mut self, resource: Resource<'_>, usage: ResourceUsage) -> Result<(), Error>
+method	metal2vulkan-rt::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
 method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
@@ -10776,6 +10797,8 @@ struct	metal2vulkan-rt::BlockInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive
 struct	metal2vulkan-rt::Buffer	#[derive(Clone)] pub struct Buffer
 struct	metal2vulkan-rt::CommandBuffer	#[derive(Clone)] pub struct CommandBuffer
 struct	metal2vulkan-rt::CommandQueue	#[derive(Clone)] pub struct CommandQueue
+struct	metal2vulkan-rt::ComputeCommandEncoder	pub struct ComputeCommandEncoder
+struct	metal2vulkan-rt::ComputePipelineState	#[derive(Clone)] pub struct ComputePipelineState
 struct	metal2vulkan-rt::Counters	#[derive(Clone)] pub struct Counters
 struct	metal2vulkan-rt::Device	#[derive(Clone)] pub struct Device
 struct	metal2vulkan-rt::DeviceExtension	#[derive(Clone)] pub struct DeviceExtension
@@ -10786,6 +10809,7 @@ struct	metal2vulkan-rt::Instance	#[derive(Clone)] pub struct Instance
 struct	metal2vulkan-rt::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Metrics
 struct	metal2vulkan-rt::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
 struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
+struct	metal2vulkan-rt::ResourceUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct ResourceUsage(u32)
 struct	metal2vulkan-rt::SharedEvent	#[derive(Clone)] pub struct SharedEvent
 struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
 struct	metal2vulkan-rt::floor::Capabilities	pub struct Capabilities
@@ -11330,10 +11354,12 @@ trait-impl	metal2vulkan-air::ir::DataLayout impl Default	impl Default for DataLa
 trait-impl	metal2vulkan-air::tensor_ops::Descriptor impl fmt::Display	impl fmt::Display for Descriptor
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Send	unsafe impl Send for BlockInfo
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Sync	unsafe impl Sync for BlockInfo
+trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for ComputeCommandEncoder
 trait-impl	metal2vulkan-rt::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-rt::Error impl std::error::Error	impl std::error::Error for Error
 trait-impl	metal2vulkan-rt::Limit impl fmt::Display	impl fmt::Display for Limit
 trait-impl	metal2vulkan-rt::Refusal impl fmt::Display	impl fmt::Display for Refusal
+trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsage
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl std::error::Error	impl std::error::Error for BelowFloor
 trait-impl	metal2vulkan-rt::floor::Missing impl fmt::Display	impl fmt::Display for Missing
@@ -12647,6 +12673,8 @@ variant	metal2vulkan-rt::CommandBufferStatus::Enqueued	Enqueued
 variant	metal2vulkan-rt::CommandBufferStatus::Error	Error
 variant	metal2vulkan-rt::CommandBufferStatus::NotEnqueued	NotEnqueued
 variant	metal2vulkan-rt::CommandBufferStatus::Scheduled	Scheduled
+variant	metal2vulkan-rt::DispatchType::Concurrent	Concurrent
+variant	metal2vulkan-rt::DispatchType::Serial	Serial
 variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)
 variant	metal2vulkan-rt::Error::Limit	Limit(Limit)
 variant	metal2vulkan-rt::Error::Loader	Loader(ash::LoadingError)
@@ -12657,13 +12685,23 @@ variant	metal2vulkan-rt::Error::Thread	Thread(io::Error)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
+variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
+variant	metal2vulkan-rt::Limit::GroupCount	GroupCount { count: [u32; 3], max: [u32; 3] }
+variant	metal2vulkan-rt::Limit::ThreadgroupShape	ThreadgroupShape { size: [u32; 3], max: [u32; 3] }
 variant	metal2vulkan-rt::MemoryClass::Private	Private
 variant	metal2vulkan-rt::MemoryClass::Shared	Shared
+variant	metal2vulkan-rt::Refusal::BufferIndex	BufferIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-rt::Refusal::Committed	Committed
 variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
+variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen
+variant	metal2vulkan-rt::Refusal::IndirectOffset	IndirectOffset { offset: u64, length: u64 }
+variant	metal2vulkan-rt::Refusal::NoBufferAtIndex	NoBufferAtIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::NoCommandBuffers	NoCommandBuffers
+variant	metal2vulkan-rt::Refusal::NoPipeline	NoPipeline
 variant	metal2vulkan-rt::Refusal::OtherDevice	OtherDevice
+variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
+variant	metal2vulkan-rt::Resource::Buffer	Buffer(&'a Buffer)
 variant	metal2vulkan-rt::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-rt::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-rt::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }

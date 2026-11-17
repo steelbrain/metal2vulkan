@@ -37,8 +37,8 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -54,8 +54,8 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 2 | 1 | 0 | 0 | 2 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 2 | 5 | 0 | 0 | 4 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 3 | 2 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -612,9 +612,15 @@ Columns:
 |---|---|---|---|---|---|
 | `EmptyBuffer` | A buffer of no bytes (`Device::new_buffer` with a length of 0) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: newBufferWithLength:0 answers nil | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
 | `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
-| `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 3: `crates/metal2vulkan-rt/src/command.rs (building)`, `crates/metal2vulkan-rt/src/command.rs (commit)` (+1) | `-` |
-| `OtherDevice` | An event of another device in an encode call (`CommandBuffer::encode_wait_for_event` or `CommandBuffer::encode_signal_event`) | every device (a public call's own check of its arguments) | `ours`: an event's semaphore belongs to the `VkDevice` that made it | 1: `crates/metal2vulkan-rt/src/command.rs (check)` | `-` |
+| `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
+| `OtherDevice` | An event, a buffer or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block and a pipeline belong to the `VkDevice` that made them | 5: `crates/metal2vulkan-rt/src/command.rs (check)`, `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` (+3) | `-` |
 | `NoCommandBuffers` | A queue that may hold no command buffer (`Device::new_command_queue` with a count of 0) | every device (a public call's own check of its arguments) | `ours`: its first `commandBuffer` call would wait forever | 1: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)` | `-` |
+| `EncoderOpen` | A second encoder, an encode call, or a commit or enqueue, while an encoder of the command buffer is open | every device (a public call's own check of its arguments) | `metal-documented`: a command buffer has one active encoder at a time, ended by `endEncoding` before another is made or the command buffer is committed | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
+| `NoPipeline` | A dispatch with no pipeline state set | every device (a public call's own check of its arguments) | `metal-documented`: a compute dispatch needs a compute pipeline state set first | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `BufferIndex` | A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`, `setBufferOffset`, `setThreadgroupMemoryLength`) | every device (a public call's own check of its arguments) | `metal-documented`: the buffer argument table has 31 entries per stage | 1: `crates/metal2vulkan-rt/src/encoder.rs (slot)` | `-` |
+| `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)` | `-` |
+| `ThreadgroupSize` | A threadgroup of no threads, or of more than the pipeline state's `maxTotalThreadsPerThreadgroup` | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `IndirectOffset` | An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer than 12 bytes (three 32-bit counts) in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset inside the buffer | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` | `-` |
 
 ## 12. The new runtime's `Limit` (`Error::Limit(Limit)`)
 
@@ -622,6 +628,9 @@ Columns:
 |---|---|---|---|---|---|
 | `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 1: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)` | `-` |
 | `BlockIds` | A block after every block number has been used (`Device::take_block`) | every device (a public call's own check of its arguments) | `ours`: block numbers are 32 bits | 1: `crates/metal2vulkan-rt/src/memory.rs (number)` | `-` |
+| `GroupCount` | A dispatch of more threadgroups on an axis than the device's `maxComputeWorkGroupCount` | at the device's limit | `device`: the device's `maxComputeWorkGroupCount` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `ThreadgroupShape` | A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds 1,024 by 1,024 by 64) | at the device's limit | `device`: the device's `maxComputeWorkGroupSize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)` | `-` |
 
 ## Appendix: every site
 
@@ -1111,9 +1120,18 @@ Each refusal's sites, with the function that builds it.
 - `floor::MemoryType`: `crates/metal2vulkan-rt/src/floor.rs (choose)`
 - `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
 - `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
-- `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (building)`; `crates/metal2vulkan-rt/src/command.rs (commit)`; `crates/metal2vulkan-rt/src/command.rs (enqueue)`
-- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/command.rs (check)`
+- `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (open)`
+- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource)`
 - `rt:Refusal::NoCommandBuffers`: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)`
+- `rt:Refusal::EncoderOpen`: `crates/metal2vulkan-rt/src/command.rs (open)`
+- `rt:Refusal::NoPipeline`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Refusal::BufferIndex`: `crates/metal2vulkan-rt/src/encoder.rs (slot)`
+- `rt:Refusal::NoBufferAtIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)`
+- `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`
 - `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)`
 - `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (number)`
+- `rt:Limit::GroupCount`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Limit::ThreadgroupShape`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`
 
