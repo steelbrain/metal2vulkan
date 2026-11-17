@@ -103,7 +103,7 @@ impl Described {
                 } => {
                     plan.dispatches.push(Dispatch {
                         function: function.clone(),
-                        bindings: pending,
+                        bindings: pending.drain(..).collect(),
                         grid,
                     });
                     for _ in 1..repeat {
@@ -113,7 +113,6 @@ impl Described {
                             grid,
                         });
                     }
-                    pending = Vec::new();
                 }
             }
         }
