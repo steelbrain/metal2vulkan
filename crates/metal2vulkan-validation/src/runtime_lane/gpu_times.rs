@@ -465,7 +465,9 @@ fn calibrated_within_slack(device: &Device) {
 /// [`ONE_AFTER_ANOTHER`] command buffers on one queue, each a fill committed once the one before it
 /// completed, each taking the slot the one before gave back: each is timed inside its own commit
 /// and wait, and starts no earlier than the one before it ended, so none reads a timestamp an
-/// earlier command buffer wrote into the slot. Where the first encoder writes the start
+/// earlier command buffer wrote into the slot. An untimed fill before them takes the buffer's
+/// first work (its zeros), in whose command buffer a batch that carries it writes its start
+/// (`command_buffer/submit.rs`, **GPU times**). Where the first encoder writes the start
 /// ([`starts_in_the_first_encoder`]), each fill's own command buffer wrote its start as its
 /// encoder opened, and its batch began with no command buffer of barriers
 /// (`WorkCounts::prefixed_starts`, one each; no stamped command buffer recorded or taken again).
@@ -495,6 +497,15 @@ fn command_buffers_one_after_another_are_each_timed_on_their_own() {
         let buffer = device
             .new_buffer(LENGTH, ResourceOptions::private())
             .unwrap();
+        // The buffer's first work goes with the first batch after its making, before the counted
+        // command buffers.
+        let first = queue.command_buffer().unwrap();
+        let mut blit = first.blit_command_encoder().unwrap();
+        blit.fill_buffer(&buffer, 0..LENGTH, u8::MAX).unwrap();
+        blit.end_encoding().unwrap();
+        first.commit().unwrap();
+        first.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(first.error(), None, "the untimed fill");
         let before = device.work_counts();
         let mut last_end = 0.0;
         for n in 0..ONE_AFTER_ANOTHER {
