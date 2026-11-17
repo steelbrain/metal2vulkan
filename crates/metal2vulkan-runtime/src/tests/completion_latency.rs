@@ -1812,7 +1812,7 @@ fn guest_leg(leg: GuestLeg) {
         .collect();
     let (timed, to_submission) = (to_submission.len(), tail(to_submission));
     // From each command buffer's `commit_and_submit` call to its GPU start, and the commit calls'
-    // own time, with each `VkQueue`'s floor of its last batch calls (`device/submit_calls.rs`).
+    // own time, with each `VkQueue`'s cost of its last batch submissions (`device/submit_calls.rs`).
     let to_gpu_start = tail(
         (seen.iter())
             .filter(|one| one.committed > 0 && one.gpu_start >= one.committed)
@@ -1822,13 +1822,13 @@ fn guest_leg(leg: GuestLeg) {
     let commit_call = (after.commit_nanos - before.commit_nanos) as f64
         / (after.commit_calls - before.commit_calls).max(1) as f64
         / 1e3;
-    let floors: Vec<String> = (device.shared().queues.iter())
-        .map(|slot| format!("{:.1}", slot.calls.floor() as f64 / 1e3))
+    let costs: Vec<String> = (device.shared().queues.iter())
+        .map(|slot| format!("{:.1}", slot.calls.cost() as f64 / 1e3))
         .collect();
     eprintln!(
         "COMPLETION-LATENCY guest-shaped, {leg:?} ({}), us: commit call {commit_call:.1} a \
          commit; commit -> GPU start {to_gpu_start}; at commit a frame {:.2} batches, left for \
-         slow calls {:.2}; batch call floor by VkQueue {floors:?}",
+         slow calls {:.2}; batch submission cost by VkQueue {costs:?}",
         device.name(),
         per_frame(|c| c.batches_submitted_at_commit),
         per_frame(|c| c.scheduler_at_commit_left_slow_calls),

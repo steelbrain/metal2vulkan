@@ -461,6 +461,9 @@ impl CommandBufferShared {
         if device.is_lost() {
             return Err(CommandBufferError::DeviceLost);
         }
+        // Its start: a call that carries it alone times its whole submission, the cost a
+        // committing thread weighs (`device/submit_calls.rs`).
+        let begun = gpu_time::host_nanos();
         // Where the device notes queue times, the submission timed phase by phase on this thread
         // (`slow_submissions.rs`).
         let mut watch = Watch::start(device.shared().timing.queue_times());
@@ -1524,6 +1527,7 @@ impl CommandBufferShared {
                 buffers,
                 value: at.value,
                 fence,
+                begun,
                 relayed: &self.relayed,
                 carry: &carry,
             };

@@ -796,7 +796,7 @@ impl Drop for Pages {
 /// [`a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread`] proves), not for a
 /// host step; on the Radeon 780M beside other jobs on its host, 160 of a leg's 200 were left so.
 /// Each leg prints its share of batches at commit, the time from each commit call to its
-/// submission's return, and the queue's floor of its last calls at the leg's end and at its least.
+/// submission's return, and the queue's submission cost at the leg's end and at its least.
 #[test]
 fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
     let pages = Pages(super::host_os::private(PAGES));
@@ -832,8 +832,8 @@ fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
             let returned = command_buffer.submit_returned_time() * 1e9;
             to_submission.push((returned - committed as f64) / 1e3);
             // 0 until the queue's first calls were timed.
-            if calls.floor() > 0 {
-                least = least.min(calls.floor());
+            if calls.cost() > 0 {
+                least = least.min(calls.cost());
             }
         }
         let after = device.work_counts();
@@ -848,13 +848,13 @@ fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
         println!(
             "{leg} ({}): batches at commit {batches} of {PAGE_ROUNDS}; commit -> its submission \
              returned, us: p50 {:.1} p99 {:.1} max {:.1}; logs kept {logs}, left for a host step \
-             {left}, for slow calls {slow}, host steps recorded {steps}; the queue's call floor \
+             {left}, for slow calls {slow}, host steps recorded {steps}; the queue's submission cost \
              {:.1} us at the leg's end, {:.1} us at its least",
             device.name(),
             at(50),
             at(99),
             at(100),
-            calls.floor() as f64 / 1e3,
+            calls.cost() as f64 / 1e3,
             least as f64 / 1e3,
         );
         assert!(
@@ -914,15 +914,15 @@ fn a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread() {
         assert_eq!(first_byte(&over_pages), value, "round {value}");
         returned
     };
-    // The floor passes the bound once each of the queue's last calls was slow.
+    // The cost passes the bound once most of the queue's last submissions were slow.
     for value in 0..CALLS as u8 {
         round(value);
     }
     let calls = &device.shared().queues[queue.vk_queue_sharing().0].calls;
     assert!(
-        calls.floor() >= SLOW_NANOS,
-        "the queue's call floor is {} ns",
-        calls.floor()
+        calls.cost() >= SLOW_NANOS,
+        "the queue's submission cost is {} ns",
+        calls.cost()
     );
     let before = device.work_counts();
     let mut returned: Vec<Duration> = (0..SLOW_ROUNDS).map(|value| round(value as u8)).collect();
@@ -935,11 +935,11 @@ fn a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread() {
     println!(
         "slow calls ({}): batches at commit {batches} of {SLOW_ROUNDS}; passes at commit \
          {passes}, left for slow calls {slow}, for a host step {}, host steps recorded {}; the \
-         queue's call floor {:.1} us; commit_and_submit returned in p50 {:?} max {:?}",
+         queue's submission cost {:.1} us; commit_and_submit returned in p50 {:?} max {:?}",
         device.name(),
         moved(|c| c.scheduler_at_commit_left_host_steps),
         moved(|c| c.host_steps_recorded),
-        calls.floor() as f64 / 1e3,
+        calls.cost() as f64 / 1e3,
         returned[returned.len() / 2],
         returned[returned.len() - 1],
     );
@@ -957,15 +957,33 @@ fn a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread() {
 /// Where a `VkQueue`'s batches' calls of commands are slow (each made [`SLOW_CALL`] longer) but one
 /// in each [`CALLS`], which takes the driver's own time (`Device::fast_submit_call_every`), as one
 /// guest queue's smaller batches among another's, `commit_and_submit` still leaves them to the
-/// scheduler's thread: the queue's floor sets the shortest of its last calls aside
-/// (`device/submit_calls.rs`, "One short call set aside"), so no batch goes at commit and each
-/// commit that passed is counted as left for the slow calls
-/// (`WorkCounts::scheduler_at_commit_left_slow_calls`). Before, the floor was the least of the last
-/// calls: each short call held it under the bound for the next [`CALLS`] calls, and the committing
-/// thread made those slow calls itself, as it made 5 to 9% of a macOS guest's window drag's on the
-/// Radeon 780M.
+/// scheduler's thread: the queue's cost is the median of its last submissions
+/// (`device/submit_calls.rs`), so no batch goes at commit and each commit that passed is counted as
+/// left for the slow calls (`WorkCounts::scheduler_at_commit_left_slow_calls`). With the least of
+/// the last calls as the cost, each short call held it under the bound for the next [`CALLS`]
+/// calls, and the committing thread made those slow calls itself, as it made 5 to 9% of a macOS
+/// guest's window drag's on the Radeon 780M.
 #[test]
 fn a_queue_whose_calls_of_commands_are_slow_but_one_in_each_leaves_them() {
+    slow_but_every(CALLS as u64);
+}
+
+/// As [`a_queue_whose_calls_of_commands_are_slow_but_one_in_each_leaves_them`], with one call in
+/// each three at the driver's own time: a queue whose submissions straddle the bound, as the Iris
+/// Xe's compositor parts did, a third of them under it (`device/submit_calls.rs`), is left to the
+/// scheduler's thread. With the least of the last calls but the shortest as the cost, two short
+/// calls in each [`CALLS`] or more held it under the bound, and the committing threads submitted
+/// 40 to 69% of those parts inside their commit, each such commit call about 220 us against 37 to
+/// 70 us for the others.
+#[test]
+fn a_queue_whose_calls_of_commands_are_slow_but_a_third_leaves_them() {
+    slow_but_every(3);
+}
+
+/// The two tests above: each `every`th call of commands at the driver's own time, the rest made
+/// [`SLOW_CALL`] longer; once the queue's cost reached the bound, no batch at commit and most
+/// commits left for the slow calls.
+fn slow_but_every(every: u64) {
     let pages = Pages(super::host_os::private(PAGES));
     let device = device();
     let queue = device.new_command_queue().unwrap();
@@ -977,7 +995,7 @@ fn a_queue_whose_calls_of_commands_are_slow_but_one_in_each_leaves_them() {
         unsafe { device.new_buffer_with_bytes_no_copy(memory, PAGES as u64, shared, None) }
             .unwrap();
     device.slow_submit_calls(Some(SLOW_CALL));
-    device.fast_submit_call_every(Some(CALLS as u64));
+    device.fast_submit_call_every(Some(every));
     let round = |value: u8| {
         let command_buffer = fill(&queue, &over_pages, value);
         command_buffer.commit_and_submit().unwrap();
@@ -985,15 +1003,14 @@ fn a_queue_whose_calls_of_commands_are_slow_but_one_in_each_leaves_them() {
         assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
         assert_eq!(first_byte(&over_pages), value, "round {value}");
     };
-    // The last of these rounds' calls is a fast one.
     for value in 0..CALLS as u8 {
         round(value);
     }
     let calls = &device.shared().queues[queue.vk_queue_sharing().0].calls;
     assert!(
-        calls.floor() >= SLOW_NANOS,
-        "the queue's call floor is {} ns with one fast call among its last",
-        calls.floor()
+        calls.cost() >= SLOW_NANOS,
+        "the queue's submission cost is {} ns with one fast call in each {every} among its last",
+        calls.cost()
     );
     let before = device.work_counts();
     for value in 0..SLOW_ROUNDS {
@@ -1004,10 +1021,10 @@ fn a_queue_whose_calls_of_commands_are_slow_but_one_in_each_leaves_them() {
     let batches = moved(|c| c.batches_submitted_at_commit);
     let slow = moved(|c| c.scheduler_at_commit_left_slow_calls);
     println!(
-        "slow calls but one in {CALLS} ({}): batches at commit {batches} of {SLOW_ROUNDS}; left \
-         for slow calls {slow}; the queue's call floor {:.1} us",
+        "slow calls but one in {every} ({}): batches at commit {batches} of {SLOW_ROUNDS}; left \
+         for slow calls {slow}; the queue's submission cost {:.1} us",
         device.name(),
-        calls.floor() as f64 / 1e3,
+        calls.cost() as f64 / 1e3,
     );
     assert_eq!(
         batches, 0,
@@ -1021,6 +1038,88 @@ fn a_queue_whose_calls_of_commands_are_slow_but_one_in_each_leaves_them() {
     );
 }
 
+/// How much longer each call of commands takes in
+/// [`a_queue_whose_submissions_turn_cheap_again_goes_back_to_its_committing_threads`]'s slow
+/// stretch, and the bound it sets (`Device::leave_calls_from`): far apart, so a loaded host neither
+/// brings the slow stretch's submissions under the bound nor lifts the cheap stretch's past it.
+const STRETCH_CALL: Duration = Duration::from_millis(3);
+
+/// The bound of that test: a third of [`STRETCH_CALL`].
+const STRETCH_BOUND: u64 = 1_000_000;
+
+/// A `VkQueue` whose submissions were slow (each call of commands made [`STRETCH_CALL`] longer)
+/// leaves its batches to the scheduler's thread, whose own submissions keep the queue's cost
+/// current (`device/submit_calls.rs`): once its calls take the driver's own time again, the cost
+/// falls under the bound within half of [`CALLS`] submissions, and `commit_and_submit` submits at
+/// the commit again. Counted: no batch at commit while slow, most of them once cheap again.
+#[test]
+fn a_queue_whose_submissions_turn_cheap_again_goes_back_to_its_committing_threads() {
+    let pages = Pages(super::host_os::private(PAGES));
+    let device = device();
+    device.leave_calls_from(Some(STRETCH_BOUND));
+    let queue = device.new_command_queue().unwrap();
+    // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
+    let memory = unsafe { crate::HostMemory::new(pages.0) };
+    let shared = ResourceOptions::shared();
+    // SAFETY: `memory` is `PAGES` bytes of fresh pages.
+    let over_pages =
+        unsafe { device.new_buffer_with_bytes_no_copy(memory, PAGES as u64, shared, None) }
+            .unwrap();
+    let round = |value: u8| {
+        let command_buffer = fill(&queue, &over_pages, value);
+        command_buffer.commit_and_submit().unwrap();
+        command_buffer.wait_until_completed().unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        assert_eq!(first_byte(&over_pages), value, "round {value}");
+    };
+    let calls = &device.shared().queues[queue.vk_queue_sharing().0].calls;
+    let stretch = |leg: &str| {
+        // The queue's last calls all of this stretch's.
+        for value in 0..CALLS as u8 {
+            round(value);
+        }
+        let before = device.work_counts();
+        for value in 0..SLOW_ROUNDS {
+            round(value as u8);
+        }
+        let after = device.work_counts();
+        let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
+        let (batches, slow) = (
+            moved(|c| c.batches_submitted_at_commit),
+            moved(|c| c.scheduler_at_commit_left_slow_calls),
+        );
+        println!(
+            "{leg} ({}): batches at commit {batches} of {SLOW_ROUNDS}; left for slow calls \
+             {slow}; the queue's submission cost {:.1} us",
+            device.name(),
+            calls.cost() as f64 / 1e3,
+        );
+        (batches, slow)
+    };
+    device.slow_submit_calls(Some(STRETCH_CALL));
+    let (batches, slow) = stretch("slow");
+    assert!(calls.cost() >= STRETCH_BOUND, "slow: {} ns", calls.cost());
+    assert_eq!(batches, 0, "slow: a committing thread made a slow call");
+    assert!(
+        slow >= SLOW_ROUNDS / 2,
+        "slow: {slow} of {SLOW_ROUNDS} left"
+    );
+    device.slow_submit_calls(None);
+    let (batches, slow) = stretch("cheap again");
+    assert!(
+        calls.cost() < STRETCH_BOUND,
+        "cheap again: {} ns",
+        calls.cost()
+    );
+    assert_eq!(slow, 0, "cheap again: a commit left for slow calls");
+    // A pass of the scheduler's thread under way at the commit (a completion's nudge) takes it
+    // in instead: rarely, on an idle device.
+    assert!(
+        batches >= SLOW_ROUNDS / 2,
+        "cheap again: {batches} of {SLOW_ROUNDS} batches at commit"
+    );
+}
+
 /// How often, in fills, [`a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones`]
 /// commits an empty command buffer before one: several among every [`CALLS`] calls.
 const EMPTY_EVERY: u64 = 5;
@@ -1030,13 +1129,13 @@ const EMPTY_EVERY: u64 = 5;
 /// buffer that encodes nothing but an event's signal, whose batch holds no command buffer
 /// (`submit.rs`; one that signals nothing makes no call), is committed before every
 /// [`EMPTY_EVERY`]th fill, `commit_and_submit` still leaves the fills to the scheduler's thread:
-/// a call of no command buffer is not among the calls whose floor is the queue's cost
+/// a call of no command buffer is not among the submissions whose median is the queue's cost
 /// (`device/submit_calls.rs`), so no batch goes at commit and each commit that passed is counted
-/// as left for the slow calls (`WorkCounts::scheduler_at_commit_left_slow_calls`). Before, each
-/// empty one's short call held the floor under the bound for the next [`CALLS`] calls, and the
-/// committing thread made the fills' slow calls itself: a macOS guest's window drag on the
-/// Radeon 780M, whose decoder ends many command buffers with an empty part, made 85 to 88% of its
-/// calls on its committing threads so.
+/// as left for the slow calls (`WorkCounts::scheduler_at_commit_left_slow_calls`). Timed among
+/// them, each empty one's short call held a floor of the least of them under the bound for the
+/// next [`CALLS`] calls, and the committing thread made the fills' slow calls itself: a macOS
+/// guest's window drag on the Radeon 780M, whose decoder ends many command buffers with an empty
+/// part, made 85 to 88% of its calls on its committing threads so.
 #[test]
 fn a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones() {
     let pages = Pages(super::host_os::private(PAGES));
@@ -1090,9 +1189,9 @@ fn a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones() {
     );
     let calls = &device.shared().queues[queue.vk_queue_sharing().0].calls;
     assert!(
-        calls.floor() >= SLOW_NANOS,
-        "the queue's call floor is {} ns among empty command buffers' calls",
-        calls.floor()
+        calls.cost() >= SLOW_NANOS,
+        "the queue's submission cost is {} ns among empty command buffers' calls",
+        calls.cost()
     );
     let before = device.work_counts();
     for value in 0..SLOW_ROUNDS {
@@ -1104,10 +1203,10 @@ fn a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones() {
     let slow = moved(|c| c.scheduler_at_commit_left_slow_calls);
     println!(
         "slow calls among empty ones ({}): batches at commit {batches} of {}; left for slow \
-         calls {slow}; the queue's call floor {:.1} us",
+         calls {slow}; the queue's submission cost {:.1} us",
         device.name(),
         SLOW_ROUNDS + SLOW_ROUNDS.div_ceil(EMPTY_EVERY),
-        calls.floor() as f64 / 1e3,
+        calls.cost() as f64 / 1e3,
     );
     assert_eq!(
         batches, 0,

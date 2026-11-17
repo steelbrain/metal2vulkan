@@ -465,12 +465,13 @@ impl super::DeviceShared {
     /// device notes queue times (`WorkCounts::batch_submit_cpu_nanos`, and the long calls' apart),
     /// and the call counted
     /// in the queue's place in its driver's period of stalls (`submit_stalls.rs`): `f` makes one
-    /// signalling call. A batch's call that succeeded and submitted `buffers` command buffers,
-    /// one or more, is kept among the queue's last (`submit_calls.rs`), whose floor decides
-    /// whether a committing thread makes the next.
+    /// signalling call of `buffers` command buffers. Where it carries one batch alone whose
+    /// submission began at host time `begun` (`CommandBufferShared::submit_batch`) and submits
+    /// command buffers, that whole submission, to the call's return, is kept among the queue's last
+    /// (`submit_calls.rs`), whose median decides whether a committing thread makes the next.
     pub(crate) fn submit_logged(
         &self,
-        (queue, value, buffers): (usize, Option<u64>, usize),
+        (queue, value, buffers, begun): (usize, Option<u64>, usize, Option<u64>),
         fence: Option<vk::Fence>,
         failed: &Arc<Relayed>,
         f: impl FnOnce(vk::Queue) -> Result<(), vk::Result>,
@@ -526,10 +527,10 @@ impl super::DeviceShared {
             crate::command_buffer::completion::trace::submitting("submit returned");
             let nanos = end.saturating_sub(entered);
             (self.counts).batch_submitted_in(nanos, spent);
-            // A batch's call of commands, the queue's cost a committing thread reads; one of no
-            // command buffer is another call, and stays out (`submit_calls.rs`).
-            if submitted.is_ok() && value.is_some() && buffers > 0 {
-                slot.calls.called(nanos);
+            // A batch's whole submission, the queue's cost a committing thread reads; a call of no
+            // command buffer, or of a group's batches, stays out (`submit_calls.rs`).
+            if let (Ok(()), Some(begun)) = (&submitted, begun.filter(|_| buffers > 0)) {
+                slot.calls.called(end.saturating_sub(begun));
             }
             let took = period.took(nanos, cpu);
             if submitted.is_ok() && period.called(Caller::Work, took, end) {

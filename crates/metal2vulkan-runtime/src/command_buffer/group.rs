@@ -287,7 +287,7 @@ impl CommandBufferShared {
     }
 
     /// Whether a committing thread leaves its batches to the scheduler's thread, as its
-    /// `VkQueue`'s batches' `vkQueueSubmit` calls are slow (`device/submit_calls.rs`): read
+    /// `VkQueue`'s batches' submissions are slow (`device/submit_calls.rs`): read
     /// without the queue's lock.
     pub(crate) fn submits_slowly(&self) -> bool {
         self.device.shared().submits_slowly(self.queue.vk_queue())
@@ -539,6 +539,9 @@ pub(crate) struct After<'a> {
     /// The value it signals on the queue's timeline.
     pub(crate) value: u64,
     pub(crate) fence: Option<vk::Fence>,
+    /// The host time its batch's submission began (`CommandBufferShared::submit_batch`): a call
+    /// that carries it alone is timed from there (`device/submit_calls.rs`).
+    pub(crate) begun: u64,
     pub(crate) relayed: &'a Arc<Relayed>,
     /// What it carried, for the line its failed submission logs (`submit_failure.rs`): called
     /// only once the call failed.
@@ -815,7 +818,7 @@ impl Group {
         // timeline signal is above the queue's value; the `VkQueue` is used under its lock.
         let mut called = 0;
         let submitted = shared.submit_logged(
-            (queue, Some(value), buffers),
+            (queue, Some(value), buffers, None),
             fence,
             &relayed,
             |vk_queue| unsafe {
@@ -929,13 +932,14 @@ fn submit_alone(device: &Device, after: After<'_>) -> Result<u64, vk::Result> {
         buffers,
         value,
         fence,
+        begun,
         relayed,
         carry,
     } = after;
     let mut called = 0;
     // SAFETY: the batch's submission's own (`submit.rs`).
     let submitted = shared.submit_logged(
-        (queue, Some(value), buffers),
+        (queue, Some(value), buffers, Some(begun)),
         fence,
         relayed,
         |vk_queue| unsafe {
@@ -977,10 +981,11 @@ fn signal_alone(
     // SAFETY: a submission of the signals a failed group's end held, each above its semaphore's
     // value (no batch signalled them); the `VkQueue` is used under its lock.
     let infos = [info];
-    let submitted = shared.submit_logged((queue, value, 0), None, relayed, |vk_queue| unsafe {
-        shared.counts.queue_submitted(1, 0);
-        raw.queue_submit(vk_queue, &infos, vk::Fence::null())
-    });
+    let submitted =
+        shared.submit_logged((queue, value, 0, None), None, relayed, |vk_queue| unsafe {
+            shared.counts.queue_submitted(1, 0);
+            raw.queue_submit(vk_queue, &infos, vk::Fence::null())
+        });
     exit_guard::called(Call::QueueSubmit);
     if let Err(result) = submitted {
         let failed = Failed {

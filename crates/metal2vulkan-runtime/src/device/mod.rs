@@ -637,7 +637,7 @@ pub(super) struct DeviceShared {
     /// (`Device::fast_submit_call_every`); 0 for none.
     #[cfg(test)]
     pub(crate) submit_call_fast: (AtomicU64, AtomicU64),
-    /// The call floor at or above which a committing thread leaves a `VkQueue`'s batches to
+    /// The submission cost at or above which a committing thread leaves a `VkQueue`'s batches to
     /// the scheduler's thread, where a device test set one (`Device::leave_calls_from`); 0 for
     /// `submit_calls::SLOW_NANOS`.
     #[cfg(test)]
@@ -901,8 +901,8 @@ impl DeviceShared {
     }
 
     /// Whether a committing thread leaves the batches of `VkQueue` `queue` to the scheduler's
-    /// thread: each of its batches' last calls took `submit_calls::SLOW_NANOS` or more, as timed
-    /// (`submit_calls.rs`).
+    /// thread: its batches' last submissions took `submit_calls::SLOW_NANOS` or more at their
+    /// median, as timed (`submit_calls.rs`).
     pub(crate) fn submits_slowly(&self, queue: usize) -> bool {
         let bound = submit_calls::SLOW_NANOS;
         #[cfg(test)]
@@ -1492,8 +1492,8 @@ pub(crate) struct QueueSlot {
     raw: Mutex<(vk::Queue, submit_stalls::Period)>,
     /// Its place's `Period::may_be_due`, as of the last use: read without the lock.
     stall_due: AtomicBool,
-    /// Its batches' last `vkQueueSubmit` calls' times and their floor (`submit_calls.rs`):
-    /// kept under the lock, the floor read without it.
+    /// Its batches' last submissions' times and their median (`submit_calls.rs`): kept under
+    /// the lock, the median read without it.
     pub(crate) calls: submit_calls::SubmitCalls,
     /// The queue's family, which the command pools of what it runs are made for.
     pub(super) family: u32,
@@ -1751,8 +1751,8 @@ impl Device {
 
     /// Of the calls [`slow_submit_calls`](Self::slow_submit_calls) lengthens, leave each `every`th
     /// from now on at the driver's own time, the first the `every`th to come (`None`: lengthen
-    /// each): the tests' stand-in for a short call of commands among slow ones
-    /// (`submit_calls.rs`, "One short call set aside").
+    /// each): the tests' stand-in for short calls of commands among slow ones
+    /// (`submit_calls.rs`, "Measured, not named").
     pub(crate) fn fast_submit_call_every(&self, every: Option<u64>) {
         let (fast, counted) = &self.shared().submit_call_fast;
         counted.store(0, Ordering::Relaxed);
@@ -1760,9 +1760,9 @@ impl Device {
     }
 
     /// A committing thread leaves a `VkQueue`'s batches to the scheduler's thread where their
-    /// last calls each took `bound` nanoseconds or more, from now on (`None`:
-    /// `submit_calls::SLOW_NANOS` again): 1 leaves every batch of a queue whose calls were timed,
-    /// `u64::MAX` none.
+    /// last submissions took `bound` nanoseconds or more at their median, from now on (`None`:
+    /// `submit_calls::SLOW_NANOS` again): 1 leaves every batch of a queue whose submissions were
+    /// timed, `u64::MAX` none.
     pub(crate) fn leave_calls_from(&self, bound: Option<u64>) {
         (self.shared().slow_calls_from).store(bound.unwrap_or(0), Ordering::Relaxed);
     }

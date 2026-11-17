@@ -11,16 +11,17 @@
 //! from most of a window drag's buffers on the Radeon 780M; one that signals nothing makes no
 //! call); the frame's parts are waited for before the next frame. Each with the driver's calls,
 //! then with each call of commands made [`MIXED_PAUSE`] longer but one in each [`CALLS`]
-//! (`Device::slow_submit_calls`, `Device::fast_submit_call_every`): a short call among slow ones,
-//! as one guest queue's smaller batches come among another's (`device/submit_calls.rs`, "One
-//! short call set aside").
+//! (`Device::slow_submit_calls`, `Device::fast_submit_call_every`), a short call among slow ones,
+//! as one guest queue's smaller batches come among another's, then but one in each three, as the
+//! Iris Xe's compositor parts straddled the bound (`device/submit_calls.rs`, "Measured, not
+//! named").
 //!
 //! Printed (`DRAG-SUBMIT`), each: the parts submitted at their commit and those left for slow
 //! calls (`WorkCounts::batches_submitted_at_commit`,
 //! `WorkCounts::scheduler_at_commit_left_slow_calls`), the commit calls' time a part (the parts
 //! with work's median, 90th percentile and mean; the empty ones' mean; all of them a frame), the
 //! batch calls' mean (`WorkCounts::batch_submit_nanos` a `queue_submissions`, the
-//! `VkCommandBuffer`s a call) and the queue's call floor at the end.
+//! `VkCommandBuffer`s a call) and the queue's submission cost at the end.
 //!
 //! Ignored: run it in release under `--cfg m2v_gpu` where `/dev/udmabuf` opens,
 //! `cargo test --release -p metal2vulkan-runtime --lib drag_submit_bench -- --ignored --nocapture`.
@@ -45,8 +46,8 @@ const PARTS: usize = 13;
 const WARM: usize = 20;
 /// The frames measured.
 const FRAMES: usize = 200;
-/// How much longer each call of commands but one in each [`CALLS`] takes in the second
-/// measurement of each.
+/// How much longer each call of commands but one in each [`CALLS`], then one in each three, takes
+/// in the second and third measurements of each.
 const MIXED_PAUSE: Duration = Duration::from_micros(100);
 
 /// The `at` quantile of `values`, sorted.
@@ -130,12 +131,21 @@ fn drag_submit_bench() {
                 empty.push(took[PARTS - 1]);
             }
         };
-        for (calls_were, pause) in [
-            ("the driver's", None),
-            ("100 us longer but one in each 15", Some(MIXED_PAUSE)),
+        for (calls_were, pause, every) in [
+            ("the driver's", None, None),
+            (
+                "100 us longer but one in each 15",
+                Some(MIXED_PAUSE),
+                Some(CALLS as u64),
+            ),
+            (
+                "100 us longer but one in each 3",
+                Some(MIXED_PAUSE),
+                Some(3),
+            ),
         ] {
             device.slow_submit_calls(pause);
-            device.fast_submit_call_every(pause.map(|_| CALLS as u64));
+            device.fast_submit_call_every(every);
             for _ in 0..WARM {
                 frame(None);
             }
@@ -152,16 +162,16 @@ fn drag_submit_bench() {
             let at_commit = moved(|c| c.batches_submitted_at_commit);
             let slow = moved(|c| c.scheduler_at_commit_left_slow_calls);
             let submissions = moved(|c| c.queue_submissions).max(1) as f64;
-            let floor = device.shared().queues[queue.vk_queue_sharing().0]
+            let cost = device.shared().queues[queue.vk_queue_sharing().0]
                 .calls
-                .floor();
+                .cost();
             println!(
                 "DRAG-SUBMIT listed {} (live dma-buf memories {}), calls of commands \
                  {calls_were}, on {}: {} parts ({FRAMES} frames of {PARTS}, the last empty) in \
                  {elapsed:.2} s; at commit {at_commit} ({:.1}%), left for slow calls {slow} \
                  ({:.1}%); commit call a part, us: with work p50 {:.1} p90 {:.1} mean {:.1}, \
                  empty mean {:.1}, all a frame {:.0}; batch calls {} of mean {:.1} us, {:.1} \
-                 VkCommandBuffers a call; the queue's call floor {:.1} us",
+                 VkCommandBuffers a call; the queue's submission cost {:.1} us",
                 listed.len(),
                 after.dma_buf_memories_live,
                 device.name(),
@@ -176,7 +186,7 @@ fn drag_submit_bench() {
                 submissions,
                 moved(|c| c.batch_submit_nanos) as f64 / submissions / 1e3,
                 moved(|c| c.command_buffers_submitted) as f64 / submissions,
-                floor as f64 / 1e3,
+                cost as f64 / 1e3,
             );
         }
         device.slow_submit_calls(None);

@@ -8407,9 +8407,9 @@ pub struct WorkCounts {
     pub scheduler_at_commit_left_unshared: u64,
     /// It waits for its turn on a `VkQueue` it shares (`queue_turns.rs`).
     pub scheduler_at_commit_left_turns: u64,
-    /// Its `VkQueue`'s batches' `vkQueueSubmit` calls are slow, each of the last 15 100 us or
-    /// more, so the scheduler's thread makes them and the committing thread goes on
-    /// (`device/submit_calls.rs`).
+    /// Its `VkQueue`'s batches' submissions are slow, the last 15 100 us or more at their median
+    /// (from each one's start to its `vkQueueSubmit`'s return), so the scheduler's thread makes
+    /// them and the committing thread goes on (`device/submit_calls.rs`).
     pub scheduler_at_commit_left_slow_calls: u64,
     /// Anything else: a rebind encodes it again, a decode it reads is queued, a switch of storage
     /// forms rides on it, a group holds it or was held, or its submission was put back.

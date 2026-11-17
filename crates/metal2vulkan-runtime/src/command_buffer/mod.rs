@@ -4160,9 +4160,9 @@ impl CommandBuffer {
     /// away. Here, where no other submission pass is under way, this thread makes it: it submits
     /// the device's ready batches in commit order, this one's among them, each needing no host
     /// step and no switch of a storage form, up to the pass's bound. A batch of a `VkQueue` whose
-    /// batches' `vkQueueSubmit` calls are slow (each of its last 15 100 us or more, as
-    /// timed: a driver that lists every host import in each kernel submission) is left to the
-    /// scheduler's thread, which submits it while this one goes on
+    /// batches' submissions are slow (its last 15 that submitted command buffers 100 us or more at
+    /// their median, as timed from each one's start to its `vkQueueSubmit`'s return: a driver that
+    /// lists every host import in each kernel submission) is left to the scheduler's thread, which submits it while this one goes on
     /// (`WorkCounts::scheduler_at_commit_left_slow_calls`). Under
     /// `CompletionPolicy::Grouped`, on a driver whose batches may wait in a group for one kernel
     /// submission, a batch goes alone where its `VkQueue` runs at most one earlier submission not
@@ -6831,7 +6831,7 @@ impl CommandBufferShared {
         // the `VkQueue` is used under its lock.
         shared.counts.queue_submitted(0, 0);
         let submitted = shared.submit_logged(
-            (queue, None, 0),
+            (queue, None, 0, None),
             Some(fence),
             &self.relayed,
             |vk_queue| unsafe { raw.queue_submit(vk_queue, &[], fence) },

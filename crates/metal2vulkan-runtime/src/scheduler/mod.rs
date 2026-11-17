@@ -24,9 +24,9 @@
 //!   nothing of this thread (no host step, no switch of a storage form, no rebind's encoding; a
 //!   batch that may wait in a group goes alone where its `VkQueue` runs at most one earlier
 //!   submission not seen complete, as the group would go at once, and is left to this thread to
-//!   hold where two or more run; a batch of a `VkQueue` whose calls are slow, each of its
-//!   batches' last 15 100 us or more, is left to this thread, whose call it then is,
-//!   `device/submit_calls.rs`) and wait behind no earlier commit, as this thread's own pass picks them
+//!   hold where two or more run; a batch of a `VkQueue` whose submissions are slow, its
+//!   batches' last 15 100 us or more at their median, is left to this thread, whose submission
+//!   it then is, `device/submit_calls.rs`) and wait behind no earlier commit, as this thread's own pass picks them
 //!   ([`Order::next`], [`is_behind`]), up to [`PASS_SUBMISSIONS`]; its own command buffer's
 //!   submission handlers then run on it, in their turn ([`Turns`]), and every other command
 //!   buffer's go to the device's handler threads as the pass goes on, as this thread's passes
@@ -2863,7 +2863,7 @@ pub(crate) enum LeftAtCommit {
     Unshared,
     /// It waits for its turn on a `VkQueue` it shares (`queue_turns.rs`).
     Turn,
-    /// Its `VkQueue`'s batches' calls are slow, so the scheduler's thread makes them
+    /// Its `VkQueue`'s batches' submissions are slow, so the scheduler's thread makes them
     /// (`device/submit_calls.rs`).
     SlowCalls,
     /// Anything else: a rebind encodes it again, a decode it reads is queued, a switch of
@@ -2910,7 +2910,7 @@ pub(crate) enum Hand {
 ///   settles and announces (`texture/storage_form.rs`);
 /// - a `VkQueue` whose batches never wait in a group (`command_buffer/group.rs`), which is
 ///   the thread's to hold and to send;
-/// - and, for a committing thread, a `VkQueue` whose batches' `vkQueueSubmit` calls are not slow
+/// - and, for a committing thread, a `VkQueue` whose batches' submissions are not slow
 ///   (`device/submit_calls.rs`): where they are, the scheduler's thread makes them, and the
 ///   program's thread goes on.
 fn plain_ready(
@@ -2975,8 +2975,8 @@ fn plain(
     if held.buffer.held_for_turn(held.index).is_some() {
         return Err(LeftAtCommit::Turn);
     }
-    // A batch whose `VkQueue`'s calls are slow is the scheduler thread's to submit, which the
-    // committing thread wakes: the call would hold the program's thread
+    // A batch whose `VkQueue`'s submissions are slow is the scheduler thread's to submit, which
+    // the committing thread wakes: the submission would hold the program's thread
     // (`device/submit_calls.rs`). A waiting thread would only wait meanwhile, and submits it.
     if passer == Passer::Committing && held.buffer.submits_slowly() {
         return Err(LeftAtCommit::SlowCalls);

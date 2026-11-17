@@ -98,7 +98,7 @@
 //!   need nothing of the scheduler's thread (`scheduler/mod.rs`'s `submit_plain_ready`). Where
 //!   such a pass leaves an unshared queue's head that the scheduler's own look would find ready
 //!   and send first (one with a submission or scheduled handler, for a thread about to block; one
-//!   a switch of storage forms rides on; one on a `VkQueue` whose calls are slow, for a committing
+//!   a switch of storage forms rides on; one on a `VkQueue` whose submissions are slow, for a committing
 //!   thread, `device/submit_calls.rs`), or one on its way
 //!   (above), it leaves the other queues' batches held back on that head's `VkQueue` to the
 //!   scheduler's thread too, which it wakes: that thread's next pass sends the unshared one first
