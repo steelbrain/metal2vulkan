@@ -164,6 +164,25 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(failing, {})
         self.assertEqual(list(parked), ["d"])
 
+    def test_the_old_path_moving_fails_unless_a_commit_since_the_bless_is_its_fix(self):
+        # The golden test's two panics, as its captured output prints them.
+        changed = ("    tests/golden_hashes.tsv: output changed under an unchanged key: 333 cell(s) "
+                   "changed while their fixture source and profile fingerprint did not, so a")
+        stale = ("    tests/golden_hashes.tsv is stale: 4 cell(s) are new, gone, or under a changed "
+                 "fixture source or profile (their keys changed, so no SEMANTICS_VERSION bump is "
+                 "needed): 0 new, 0 gone, 0 under a changed fixture source, 4 under a changed "
+                 "profile fingerprint. Bless it with")
+        new_rows = stale.replace("0 new", "4 new").replace("4 under a changed profile", "0 under a changed profile")
+        for text, moved in ((changed, True), (stale, True), (new_rows, False), (NEXTEST, False)):
+            leg = results.parse_job(job(("cpu", "workspace", 100, text)))["cpu"]
+            problems = results.old_path_moved(leg, ["translator: one stage bound on every device"])
+            self.assertEqual(len(problems), int(moved), text)
+            self.assertEqual(results.old_path_moved(
+                leg, ["Old-runtime regression fix: the stage bound returns to Device::new"]), [])
+        leg = results.parse_job(job(("cpu", "workspace", 100, changed)))["cpu"]
+        self.assertIn("333 cell(s) changed under an unchanged key and 0 under a changed profile",
+                      results.old_path_moved(leg, [])[0])
+
     def test_time_needs_three_gpus(self):
         bases = {"a": {"t": 100}, "b": {"t": 100}}
         self.assertEqual(results.time_outliers({"a": {"t": 100}, "b": {"t": 300}}, bases), ({}, {}))

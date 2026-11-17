@@ -42,6 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import results  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
+#: The golden hash table, compiled through `Device::new`: results.old_path_moved.
+GOLDEN_TABLE = "crates/metal2vulkan/tests/golden_hashes.tsv"
 CONFIG = Path.home() / ".config/metal2vulkan/matrix.json"
 STATE = Path.home() / ".cache/metal2vulkan-matrix"
 TREE = STATE / "tree"
@@ -360,6 +362,11 @@ class Run:
         #: Whether the commit has the harness, whose timed workloads each GPU leg runs.
         self.harness = subprocess.run(["git", "cat-file", "-e", f"{sha}:crates/metal2vulkan-harness/Cargo.toml"],
                                       cwd=REPO, capture_output=True).returncode == 0
+        #: The messages of the commits since the golden table's last bless, which
+        #: results.old_path_moved reads for the one phrase that lets the old path move.
+        blessed = git("log", "-1", "--format=%H", sha, "--", GOLDEN_TABLE)
+        self.since_bless = [m for m in git("log", "--format=%B%x00", f"{blessed}..{sha}").split("\0")
+                            if m.strip()]
 
     def setup(self, node):
         return self.cfg.get("setup", {}).get(node, "")
@@ -628,6 +635,7 @@ def leg_entry(run, leg):
     base_sha, base = base_of(run.sha, leg.id)
     problems += run.failures.get(leg.id, [])
     problems += results.leg_problems(parsed, records, base and base["records"])
+    problems += results.old_path_moved(parsed, run.since_bless)
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
     dev = parsed["device"]

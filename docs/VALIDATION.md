@@ -313,6 +313,12 @@ reason): a parked test's failure, a parked gauge's change between `@100` and `@2
 time's cross-GPU outlier is named on the leg's line and fails no leg. A parked gauge's `@drop` still fails. The list goes with the old
 runtime.
 
+The old runtime's translations do not move either. The golden hash table compiles through
+`Device::new`, the old runtime's path. When its test reports a cell that changed under an unchanged
+key, or one under a changed profile fingerprint, the leg fails with `OLD PATH MOVED`. The one
+exception is a range where a commit since the table's last bless has a message that says
+`old-runtime regression fix`. New, gone and re-keyed fixture rows only need a bless.
+
 `metal2vulkan_devtools::instructions::InstructionCounter` measures `instructions`: the calling
 thread's user-space instructions from Linux's `perf_event_open`, the form an unprivileged process
 may open at `perf_event_paranoid` 2. On a hybrid x86 CPU it sums the event over each core type's

@@ -915,6 +915,19 @@ fn diff(committed: &Table, observed: &Observed) -> Diff {
     d
 }
 
+/// The stale cells by kind, in the words the matrix reads (scripts/matrix/results.py): a cell
+/// under a changed profile fingerprint is one whose device, built by `Device::new`, changed.
+fn stale_counts(stale: &[String]) -> String {
+    let count = |kind: &str| stale.iter().filter(|l| l.starts_with(kind)).count();
+    format!(
+        "{} new, {} gone, {} under a changed fixture source, {} under a changed profile fingerprint",
+        count("new:"),
+        count("gone:"),
+        count("fixture source changed:"),
+        count("profile changed:")
+    )
+}
+
 fn shown(lines: &[String]) -> String {
     let mut s = String::new();
     for l in lines.iter().take(SHOWN) {
@@ -997,9 +1010,10 @@ fn matches_the_table(golden: Golden, devices: &[(String, Device)], observed: &Ob
     if !d.stale.is_empty() {
         panic!(
             "{table} is stale: {} cell(s) are new, gone, or under a changed fixture source or \
-             profile (their keys changed, so no SEMANTICS_VERSION bump is needed). Bless it \
+             profile (their keys changed, so no SEMANTICS_VERSION bump is needed): {}. Bless it \
              with\n  {BLESS}\n{}",
             d.stale.len(),
+            stale_counts(&d.stale),
             shown(&d.stale)
         );
     }
@@ -1151,8 +1165,16 @@ fn only_a_cell_changed_under_its_key_needs_a_bump() {
     assert_eq!((d.changed.len(), d.stale.len()), (0, 1));
     let d = diff(&base, &observed(table("s", "f2", &[("a.ll", "h2")]), &[]));
     assert_eq!((d.changed.len(), d.stale.len()), (0, 1));
+    assert_eq!(
+        stale_counts(&d.stale),
+        "0 new, 0 gone, 0 under a changed fixture source, 1 under a changed profile fingerprint"
+    );
     let d = diff(&base, &observed(table("s", "f", &[("b.ll", "h1")]), &[]));
     assert_eq!((d.changed.len(), d.stale.len()), (0, 2));
+    assert_eq!(
+        stale_counts(&d.stale),
+        "1 new, 1 gone, 0 under a changed fixture source, 0 under a changed profile fingerprint"
+    );
     let d = diff(&base, &observed(table("s", "f", &[]), &["a.ll"]));
     assert_eq!((d.changed.len(), d.stale.len()), (0, 0));
     let d = diff(&base, &observed(base.clone(), &[]));

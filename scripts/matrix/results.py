@@ -37,6 +37,15 @@ PARKED_TESTS = {
 #: code (1.58x at a68d520bee, 1.47x at 9af29fbb20).
 PARKED_RECORDS = ("harness-old/",)
 
+#: The phrase that opens the message of a commit allowed to change the old runtime's output: until
+#: the cutover, the translator's output through `Device::new` moves only in such a commit.
+OLD_PATH_FIX = "old-runtime regression fix"
+#: The golden hash table's test (crates/metal2vulkan/src/tests/golden_hashes.rs) compiles through
+#: `Device::new`, the old runtime's path. Its failure names the cells that changed under an
+#: unchanged key and those under a changed profile fingerprint: either is the old path moving.
+GOLDEN_CHANGED = re.compile(r"output changed under an unchanged key: (\d+) cell")
+GOLDEN_PROFILE = re.compile(r"(\d+) under a changed profile fingerprint")
+
 RECORD = re.compile(r"^\s*M2V-MATRIX (\S+) (\S+) (\S+)\s*$")
 LEG = re.compile(r"^M2V-LEG (\S+) begin\s*$")
 DEVICE = re.compile(r"^M2V-DEVICE (\S+) (\S+) (.*?)\s*$")
@@ -64,8 +73,13 @@ def parse_suite(lines):
     run = passed = 0
     failed, problems = [], []
     records = empty_records()
+    golden = dict(changed=0, profile=0)
     summary = False
     for line in lines:
+        for kind, pattern in (("changed", GOLDEN_CHANGED), ("profile", GOLDEN_PROFILE)):
+            m = pattern.search(line)
+            if m:
+                golden[kind] = max(golden[kind], int(m.group(1)))
         m = NEXTEST_SUMMARY.match(line)
         if m and not summary:
             summary = True
@@ -96,7 +110,8 @@ def parse_suite(lines):
                 problems.append(f"record {kind} {key}: recorded twice")
             else:
                 records[kind][key] = float(value) if kind == "time" else int(value)
-    return dict(run=run, passed=passed, failed=failed, records=records, problems=problems)
+    return dict(run=run, passed=passed, failed=failed, records=records, problems=problems,
+                golden=golden)
 
 
 def parse_job(text):
@@ -181,6 +196,20 @@ def leg_problems(leg, records, base):
             if was is not None and value > was * (1 + INSTRUCTIONS_BAND):
                 problems.append(f"instructions {key}: {was} -> {value} (+{(value / was - 1) * 100:.1f}%)")
     return problems
+
+
+def old_path_moved(leg, messages):
+    """The old path's output moved: the golden table's test reports a cell changed under an
+    unchanged key or under a changed profile fingerprint, and none of MESSAGES (the commits since
+    the table's last bless) says OLD_PATH_FIX. One problem per suite that reports it."""
+    if any(OLD_PATH_FIX in message.lower() for message in messages):
+        return []
+    return [f"OLD PATH MOVED: suite {name}: the golden table, compiled through Device::new, has "
+            f"{s['golden']['changed']} cell(s) changed under an unchanged key and "
+            f"{s['golden']['profile']} under a changed profile fingerprint, and no commit since "
+            f"its last bless says \"{OLD_PATH_FIX}\""
+            for name, s in leg["suites"].items()
+            if s.get("golden") and (s["golden"]["changed"] or s["golden"]["profile"])]
 
 
 def time_outliers(times, bases):
