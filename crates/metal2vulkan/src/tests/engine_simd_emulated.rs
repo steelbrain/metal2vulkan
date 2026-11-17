@@ -22,9 +22,8 @@
 //! dispatch with a partial simdgroup asks for the kernel's emulated-simdgroups variant, which gives
 //! the same reading at 1 to 32 threads. Every run takes Vulkan's barrier rule
 //! (`BarrierRule::Vulkan`): an invocation that returned while others wait at a workgroup barrier
-//! traps. Under the identity domains every one of those kernels gives the same readings with its
-//! exchanges and votes taking the scratch's two regions in turn and closing with no barrier. No GPU
-//! is used.
+//! traps. Under the identity domains every one of those kernels gives the same readings, with one
+//! scratch region and as many barriers as under the default domains. No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -685,23 +684,16 @@ fn run_kernel(stem: &str, bc: &[u8], kernel: &str, words: Option<u32>) {
     run_kernel_under(stem, DevicePolicy::default(), bc, kernel, words);
 }
 
-/// [`run_kernel`] on profile `stem` under `policy`, giving the kernel's plan.
-fn run_kernel_under(
-    stem: &str,
-    policy: DevicePolicy,
-    bc: &[u8],
-    kernel: &str,
-    words: Option<u32>,
-) -> Plan {
+/// [`run_kernel`] on profile `stem` under `policy`.
+fn run_kernel_under(stem: &str, policy: DevicePolicy, bc: &[u8], kernel: &str, words: Option<u32>) {
     let p = profile(stem, policy).expect("profile");
     let (plan, m) = typed_module(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     check_emulated(stem, kernel, &plan, words);
     run_expected(stem, kernel, &plan, &m, &LOCALS);
-    plan
 }
 
 /// `plan` is `kernel`'s in the emulated tier: no subgroup requirement, the local size kept, and
-/// (when `words` is given) the scratch of `words` words per lane, in each of its regions.
+/// (when `words` is given) the scratch of `words` words per lane.
 fn check_emulated(stem: &str, kernel: &str, plan: &Plan, words: Option<u32>) {
     assert_eq!(plan.simd.1, Tier::Emulated, "{stem} {kernel}");
     assert_eq!(plan.subgroup, SubgroupRequirement::NONE, "{stem} {kernel}");
@@ -718,10 +710,9 @@ fn check_emulated(stem: &str, kernel: &str, plan: &Plan, words: Option<u32>) {
         _ => None,
     });
     if let Some(w) = words {
-        let regions = if plan.families.simd.alternating { 2 } else { 1 };
         assert_eq!(
             fact,
-            (w > 0).then_some(128 * w * regions),
+            (w > 0).then_some(128 * w),
             "{stem} {kernel}: the scratch"
         );
     }
@@ -1345,20 +1336,15 @@ fn barriers(stem: &str, policy: DevicePolicy, bc: &[u8], kernel: &str) -> usize 
     spirv_dis(&words).matches("OpControlBarrier").count()
 }
 
-/// Under the identity domains the emulated tier's scratch holds two regions, which its exchanges
-/// and votes take in turn, so none closes with a barrier: every kernel of `simd_ops`,
+/// Under the identity domains the emulated tier's exchanges and votes use one scratch region and
+/// each closes with a barrier, as under the default domains: every kernel of `simd_ops`,
 /// `simd_uniform` and `simd_divergent` (shuffles, reductions, prefix sums, votes, ballots, quad
 /// operations, vector and `half` values, exchanges in uniform and per-thread loops, after early
-/// returns and in branch arms) gives the same expectation as with one region, at every subgroup
-/// width in both scheduling orders, in full and partial threadgroups. At 8 lanes a simdgroup is
-/// four subgroups the interpreter runs apart, each to its next barrier, so a lane that wrote words
-/// another lane had still to read would show as a wrong word or a difference between the orders.
-/// Each kernel that exchanges values and binds no `[[threadgroup(n)]]` region plans two regions
-/// (twice the scratch; its threadgroup memory leaves room for them) and has no more barriers than
-/// under the default domains, which keep one region and close every exchange and vote with a
-/// barrier, and the kernels have fewer in all.
+/// returns and in branch arms) gives the same expectation at every subgroup width in both
+/// scheduling orders, in full and partial threadgroups, plans the scratch of one region, and has as
+/// many barriers as under the default domains.
 #[test]
-fn identity_exchanges_take_two_scratch_regions_in_turn() {
+fn identity_exchanges_keep_one_scratch_region() {
     const STEM: &str = "lavapipe";
     let (Some(ops), Some(uniform), Some(divergent)) = (
         assemble("simd_ops"),
@@ -1374,33 +1360,14 @@ fn identity_exchanges_take_two_scratch_regions_in_turn() {
         .chain(SIMD_UNIFORM.iter().map(|(k, w)| (&uniform, *k, Some(*w))))
         .chain([(&uniform, "divergent_k", None)])
         .chain(SIMD_DIVERGENT.iter().map(|k| (&divergent, *k, None)));
-    let (mut ones, mut twos) = (0, 0);
     for (bc, kernel, words) in kernels {
-        let plan = run_kernel_under(STEM, identity(), bc, kernel, words);
-        let regions =
-            (plan.families.access.local.tg.as_ref()).is_some_and(|s| !s.regions.is_empty());
+        run_kernel_under(STEM, identity(), bc, kernel, words);
         assert_eq!(
-            plan.families.simd.alternating,
-            plan.families.simd.exchange_words > 0 && !regions,
-            "{kernel}: two regions"
-        );
-        let (one, two) = (
-            barriers(STEM, DevicePolicy::default(), bc, kernel),
             barriers(STEM, identity(), bc, kernel),
+            barriers(STEM, DevicePolicy::default(), bc, kernel),
+            "{kernel}: barriers under the identity domains"
         );
-        eprintln!("{kernel}: {one} barriers with one region, {two} in turn");
-        assert!(
-            two <= one,
-            "{kernel}: {two} barriers in turn, {one} with one region"
-        );
-        ones += one;
-        twos += two;
     }
-    eprintln!("all: {ones} barriers with one region, {twos} in turn");
-    assert!(
-        twos < ones,
-        "{twos} barriers in turn, {ones} with one region"
-    );
 }
 
 /// The tail of `a3_multi_level_break_tail`'s two-level break runs after the inner loop, once per
@@ -1583,58 +1550,6 @@ fn the_scratch_must_fit_beside_the_threadgroup_memory() {
     assert_memory_refused(plan.instantiate_dispatch(&state, &threads(257)), 32896);
 }
 
-/// Under the identity domains the scratch holds two regions only where they cost the kernel
-/// nothing Metal shows. On lavapipe (32 KiB), `barrier_k` with a shuffle (one word a lane, 128
-/// bytes a simdgroup a region) beside an arena of 32,640 bytes has room for one region of one
-/// simdgroup and not two: it translates with one region and its closing barriers, reports 32
-/// threads per threadgroup as under the default domains, and answers as they do on the
-/// interpreter. Beside 31 KiB it fits eight simdgroups of one region and four of two, so it takes
-/// one region and reports 256. Beside 512 bytes two regions fit as many threads as one, so it
-/// takes two.
-#[test]
-fn identity_scratch_takes_two_regions_only_where_they_cost_nothing() {
-    for (words, two) in [(8160, false), (31 * 256, false), (128, true)] {
-        let Some(bc) = arena_kernel(words) else {
-            return;
-        };
-        let one = pipeline(&lavapipe(), &bc, "barrier_k");
-        let turn = pipeline(&lavapipe_under(identity()), &bc, "barrier_k");
-        let threads = |p: &ComputePipeline| p.metal_info.max_total_threads_per_threadgroup;
-        assert_eq!(
-            threads(&turn),
-            threads(&one),
-            "{words} words: threads per threadgroup"
-        );
-        if words == 8160 {
-            assert_eq!(threads(&turn), 32, "{words} words");
-        }
-        let (plain, plain_module) = typed_module(
-            &bc,
-            "barrier_k",
-            &profile(STEM_32K, DevicePolicy::default()).expect("profile"),
-        )
-        .expect("default domains");
-        let p = profile(STEM_32K, identity()).expect("profile");
-        let (plan, m) =
-            typed_module(&bc, "barrier_k", &p).unwrap_or_else(|e| panic!("{words}: {e}"));
-        assert_eq!(
-            plan.families.simd.alternating, two,
-            "{words} words: two regions"
-        );
-        let local = [32, 1, 1];
-        for lanes in [SubgroupSize::W8, SubgroupSize::W32] {
-            assert_eq!(
-                run_all(&plan, &m, local, lanes, None),
-                run_all(&plain, &plain_module, local, lanes, None),
-                "{words} words {lanes:?}"
-            );
-        }
-    }
-}
-
-/// The emulated profile with the smallest `maxComputeSharedMemorySize` of the captured ones.
-const STEM_32K: &str = "lavapipe";
-
 /// A kernel that reads a `[[threadgroup(0)]]` region declares the threadgroup arena, a `u32` array
 /// of at least `MIN_ARENA_BYTES` even when the region is empty, beside the scratch. `region_k`
 /// publishes eight words per lane (1 KiB per simdgroup): lavapipe's 32 KiB fits 31 simdgroups
@@ -1737,17 +1652,12 @@ fn emulated_shuffles_keep_metals_reconvergence_without_maximal_reconvergence() {
 
 /// The committed lavapipe profile (32 KiB of shared memory, 8-lane subgroups).
 fn lavapipe() -> Device {
-    lavapipe_under(DevicePolicy::default())
-}
-
-/// [`lavapipe`] under `policy`.
-fn lavapipe_under(policy: DevicePolicy) -> Device {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc =
         crate::device::DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::new(desc, policy).expect("device");
+    let dev = Device::new(desc, DevicePolicy::default()).expect("device");
     assert_eq!(
         dev.profile().fields().limits.max_compute_shared_memory_size,
         32 * 1024
