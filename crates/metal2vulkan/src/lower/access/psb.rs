@@ -164,6 +164,20 @@ pub fn prepare(
     })
 }
 
+/// How a device-address memory reaches its units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reach {
+    /// From the 4-aligned device address below one access ([`prepare`], [`prepare_at`]): each
+    /// unit at that address plus its index times its size, in 64 bits.
+    Rounded,
+    /// From a slot's own device address under the identity domains ([`prepare_direct`]): each
+    /// unit at its byte offset in a byte array at that address, that element's pointer bitcast to
+    /// the unit's block ([`FunctionBuilder::device_byte_place`]). The device forms the address
+    /// from the 32-bit byte offset itself, with no shift (an array of the units would scale its
+    /// index in 64 bits), and a load of an unwritten slot keeps the block's `NonWritable`.
+    Bytes,
+}
+
 /// Prepare an access of a static slot whose window starts at `start` at the `u32` displacement
 /// `m` from its bind offset, under the identity domains: `address` (a `u64`) is the slot's own
 /// device address, the buffer's plus the bind offset, so no table is read. It need not be
@@ -192,6 +206,40 @@ pub fn prepare_at(
     })
 }
 
+/// Prepare an access of a static slot whose window starts at `start` at the `u32` displacement
+/// `m` from its bind offset, under the identity domains, from `address` (a `u64`), the slot's own
+/// device address, which the binder holds to a multiple of 16 or of the argument's alignment
+/// (`RuntimeFact::AddressAlignment`), and `start` a multiple of 16: the access is the byte offset
+/// `m − start` (in 32 bits) from `address + start`, as a descriptor view's is `m` from its base.
+/// Nothing is rounded, so a constant offset is one immediate. Uncontained, as Metal contains no
+/// device-address access.
+pub fn prepare_direct(
+    fb: &mut FunctionBuilder<'_>,
+    address: Value,
+    m: Value,
+    start: i64,
+) -> BResult<PsbAccess> {
+    let (base, off) = match start {
+        0 => (address, m),
+        // `m − start` modulo 2^32 from `address + start` (its two's-complement bits are its value
+        // modulo 2^64).
+        _ => {
+            let k = k64(fb, start as u64)?;
+            let base = fb.binary(BinOp::IAdd, address, k)?;
+            let k = crate::memory::leaf::k32(fb, start as u32)?;
+            (base, crate::memory::leaf::u32_op(fb, BinOp::ISub, m, k)?)
+        }
+    };
+    Ok(PsbAccess {
+        mem: PsbMem {
+            reach: Reach::Bytes,
+            ..PsbMem::at(base)
+        },
+        off,
+        inb: None,
+    })
+}
+
 /// The narrow units a device-address memory loads and stores directly on profile `p`: the 1- and
 /// 2-byte units of [`Units::storage_on`] (the width's storage access and integer type). No `uvec2`
 /// or `uvec4` unit: a device address below an access is only 4-byte aligned.
@@ -213,6 +261,7 @@ pub struct PsbMem {
     ops: WordOps,
     units: Units,
     read_only: bool,
+    reach: Reach,
 }
 
 impl PsbMem {
@@ -224,6 +273,7 @@ impl PsbMem {
             ops: WordOps::default(),
             units: Units::NONE,
             read_only: false,
+            reach: Reach::Rounded,
         }
     }
 
@@ -252,6 +302,53 @@ impl PsbMem {
         }
     }
 
+    /// The same words, also loading and storing 8- and 16-byte units (`uvec2`, `uvec4`) at
+    /// offsets proven multiples of their size, where `vectors`: a memory whose base the offsets
+    /// are proven from, under the identity domains, where a slot's device address is its Metal
+    /// address.
+    pub fn with_vectors(self, vectors: bool) -> PsbMem {
+        PsbMem {
+            units: Units {
+                vec2: vectors,
+                vec4: vectors,
+                ..self.units
+            },
+            ..self
+        }
+    }
+
+    /// A `PhysicalStorageBuffer` place of the `bytes`-byte unit `index` (a `u32` index of such
+    /// units, `bytes` 1, 2, 4, 8 or 16) of type `ty`, to load from where `load`.
+    fn place_of(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        bytes: u32,
+        index: Value,
+        ty: TypeId,
+        load: bool,
+    ) -> BResult<Value> {
+        match self.reach {
+            Reach::Rounded => {
+                let u64_ = u64_ty(fb)?;
+                let i = fb.convert(ConvOp::UConvert, index, u64_)?;
+                let d = match bytes {
+                    1 => i,
+                    _ => {
+                        let size = k64(fb, u64::from(bytes))?;
+                        fb.binary(BinOp::IMul, i, size)?
+                    }
+                };
+                let addr = fb.binary(BinOp::IAdd, self.base, d)?;
+                self.place(fb, addr, ty, load)
+            }
+            Reach::Bytes => {
+                let shift = crate::memory::leaf::k32(fb, bytes.trailing_zeros())?;
+                let at = crate::memory::leaf::u32_op(fb, BinOp::ShiftLeftLogical, index, shift)?;
+                fb.device_byte_place(self.base, at, ty, load && self.read_only)
+            }
+        }
+    }
+
     /// A `PhysicalStorageBuffer` place of the `bytes`-byte unit `index` (a `u32` index of such
     /// units) of the memory, to load from where `load`, and the unit's type.
     fn unit_ptr(
@@ -261,21 +358,11 @@ impl PsbMem {
         index: Value,
         load: bool,
     ) -> BResult<(Value, TypeId)> {
-        let u64_ = u64_ty(fb)?;
-        let i = fb.convert(ConvOp::UConvert, index, u64_)?;
-        let d = match bytes {
-            1 => i,
-            _ => {
-                let size = k64(fb, u64::from(bytes))?;
-                fb.binary(BinOp::IMul, i, size)?
-            }
-        };
-        let addr = fb.binary(BinOp::IAdd, self.base, d)?;
         let ty = fb.module().ty(Type::Int {
             width: if bytes == 1 { 8 } else { 16 },
             signed: false,
         })?;
-        Ok((self.place(fb, addr, ty, load)?, ty))
+        Ok((self.place_of(fb, bytes, index, ty, load)?, ty))
     }
 
     /// A `PhysicalStorageBuffer` place of word `word` (a `u32` index) of the memory, to load from
@@ -285,8 +372,7 @@ impl PsbMem {
             width: 32,
             signed: false,
         })?;
-        let addr = self.word_address(fb, word)?;
-        self.place(fb, addr, u32_, load)
+        self.place_of(fb, 4, word, u32_, load)
     }
 
     /// The place of a `pointee` at `addr`: `NonWritable` for a load of read-only memory.
@@ -303,13 +389,33 @@ impl PsbMem {
         }
     }
 
-    /// The device address (a `u64`) of word `word` (a `u32` index) of the memory.
-    pub fn word_address(&self, fb: &mut FunctionBuilder<'_>, word: Value) -> BResult<Value> {
-        let u64_ = u64_ty(fb)?;
-        let w = fb.convert(ConvOp::UConvert, word, u64_)?;
-        let four = k64(fb, 4)?;
-        let d = fb.binary(BinOp::IMul, w, four)?;
-        fb.binary(BinOp::IAdd, self.base, d)
+    /// The `PhysicalStorageBuffer` place of the `uvecN` unit `index` (`N = lanes`, 2 or 4), to
+    /// load from where `load`.
+    fn vec_ptr(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        lanes: u32,
+        index: Value,
+        load: bool,
+    ) -> BResult<Value> {
+        let u32_ = fb.module().ty(Type::Int {
+            width: 32,
+            signed: false,
+        })?;
+        let len = if lanes == 2 { 2 } else { 4 };
+        let ty = fb.module().ty(Type::Vector { elem: u32_, len })?;
+        self.place_of(fb, 4 * lanes, index, ty, load)
+    }
+
+    /// The `PhysicalStorageBuffer` place of a `pointee` at word `word` (a `u32` index) of the
+    /// memory, for an atomic: never `NonWritable`.
+    pub fn word_place(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        word: Value,
+        pointee: TypeId,
+    ) -> BResult<Value> {
+        self.place_of(fb, 4, word, pointee, false)
     }
 }
 
@@ -352,6 +458,29 @@ impl WordMem for PsbMem {
 
     fn units(&self) -> Units {
         self.units
+    }
+
+    fn read_vec(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        lanes: u32,
+        index: Value,
+    ) -> BResult<Value> {
+        let p = self.vec_ptr(fb, lanes, index, true)?;
+        let access = self.ops.access(fb, unit_access(4 * lanes), false)?;
+        fb.load(p, access)
+    }
+
+    fn write_vec(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        lanes: u32,
+        index: Value,
+        value: Value,
+    ) -> BResult<()> {
+        let p = self.vec_ptr(fb, lanes, index, false)?;
+        let access = self.ops.access(fb, unit_access(4 * lanes), true)?;
+        fb.store(p, value, access)
     }
 
     fn read_unit(

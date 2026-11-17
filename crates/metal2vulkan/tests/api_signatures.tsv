@@ -16313,6 +16313,7 @@ variant	metal2vulkan::pipeline::RotatedBlendForm::Premultiplied	Premultiplied
 variant	metal2vulkan::pipeline::RotatedBlendForm::Unmeasured	Unmeasured
 variant	metal2vulkan::pipeline::RuntimeFact::AbsentArgumentRead	AbsentArgumentRead { stage: Stage }
 variant	metal2vulkan::pipeline::RuntimeFact::AccelerationStructureInstanceCount	AccelerationStructureInstanceCount { slot: SlotRef }
+variant	metal2vulkan::pipeline::RuntimeFact::AddressAlignment	AddressAlignment { slot: SlotRef, align: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::AliasedImageblock	AliasedImageblock { data_size: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::AmplificationCount	AmplificationCount
 variant	metal2vulkan::pipeline::RuntimeFact::AmplificationDraws	AmplificationDraws { layered: bool, viewports: bool }

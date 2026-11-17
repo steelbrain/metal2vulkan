@@ -1328,6 +1328,7 @@ codec_enum! {
         TexelRows { slot },
         UnitAxes { axes, relief },
         TexelBufferParts { slot },
+        AddressAlignment { slot, align },
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

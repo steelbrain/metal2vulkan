@@ -134,7 +134,7 @@ use crate::lower::strategy::FamilyStrategy;
 use crate::memory::contain::{self, Check};
 use crate::memory::leaf::{self, Coherence, Leaf, Units};
 use crate::memory::plan::SlotPlan;
-use crate::memory::provenance::Repr;
+use crate::memory::provenance::{Repr, Root};
 use crate::memory::views::{self, View, ViewKind};
 use crate::pipeline::facts::{RuntimeFact, UniformViewChoice};
 use crate::pipeline::interface::{
@@ -761,6 +761,12 @@ pub struct AccessPlan {
     /// (`psb::PsbMem::read_only`), so the device may read them as read-only memory (on RADV a
     /// uniform read is a scalar load).
     pub unwritten: BTreeSet<usize>,
+    /// Memory-plan slots reached under the identity domains from their address as it is, which
+    /// the binder holds to a multiple of their argument's alignment ([`address_alignment`],
+    /// `RuntimeFact::AddressAlignment`): no access rounds it (`psb::prepare_direct`), and
+    /// `uvec2` and `uvec4` units are taken at offsets proven multiples of their size. Every other
+    /// device-address slot is reached from the word below each access (`psb::prepare_at`).
+    pub aligned: BTreeSet<usize>,
     /// The units ([`Units`]) the static-root accesses of each slot read or write whole, by
     /// memory-plan slot index: narrow units whose storage access the profile has, and `uvec2`
     /// and `uvec4` units. The slot gets a view of each that its final view kind holds
@@ -1605,15 +1611,28 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             false => PushField::RootTableAddress,
         });
     };
-    for (plan, (l, w)) in memory.slots.iter().zip(lowering.iter().zip(&windows)) {
+    for (i, (plan, (l, w))) in (memory.slots.iter())
+        .zip(lowering.iter().zip(&windows))
+        .enumerate()
+    {
         let (Some(l), Some(window)) = (l, w) else {
             slots.push(None);
             continue;
         };
         let form = match l {
             SlotLowering::View(kind) => BufferForm::Descriptor(descriptor_view(*kind)),
-            SlotLowering::Psb { .. } => {
+            SlotLowering::Psb { start } => {
                 addressed_slot(cx, plan.slot);
+                if let Some(align) = address_alignment(cx, plan) {
+                    cx.facts.insert(RuntimeFact::AddressAlignment {
+                        slot: plan.slot,
+                        align,
+                    });
+                    // A word memory's base is a multiple of 4, and of 16 for its vector units.
+                    if align >= 4 && start % 16 == 0 {
+                        cx.families.access.aligned.insert(i);
+                    }
+                }
                 BufferForm::Psb
             }
         };
@@ -1674,6 +1693,25 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         .workarounds()
         .contains(&DriverWorkaround::PushReadsLengthenThreadPayload);
     Ok(slots)
+}
+
+/// The alignment (2, 4, 8 or 16) the binder holds a device-address slot's address to under the
+/// identity domains: its argument's `air.arg_type_align_size`, at most 16. Metal's API validation
+/// refuses a buffer bound at an offset that is not a multiple of its argument type's alignment
+/// ("must be a multiple of 4 but was set to 2" for a `uint *` argument, "of 16 ... 8" for a
+/// `float4 *`, "of 2 ... 1" for a `ushort *`; `probes/vector_access_placement.m` in the conformance
+/// crate). A slot whose alignment is at least 4 and whose window starts at a multiple of 16 is
+/// then reached from its address as it is ([`AccessPlan::aligned`]). `None` for a buffer-table
+/// element, an argument buffer, and an argument with no alignment or one of 1.
+fn address_alignment(cx: &SelectCx<'_>, plan: &SlotPlan) -> Option<u32> {
+    if !identity(cx.profile) || plan.element.is_some() || plan.argument_buffer {
+        return None;
+    }
+    let twos = cx
+        .memory
+        .base_twos(cx.entry, Root::Param(plan.param))
+        .min(4);
+    (twos >= 1).then(|| 1 << twos)
 }
 
 /// The string attribute by which Metal's compiler declares that a buffer argument's memory is

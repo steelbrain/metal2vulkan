@@ -1117,8 +1117,7 @@ fn on_target(fb: &mut FunctionBuilder<'_>, p: Prepared, o: Op) -> BResult<Option
                 Some(t) => t,
                 None => u32_ty(fb)?,
             };
-            let addr = m.word_address(fb, word)?;
-            device_ptr(fb, addr, pointee)?
+            m.word_place(fb, word, pointee)?
         }
         // Selection moved every slot of a typed atomic to its device address.
         (Mem::View(_), Some(_)) => return Err(dangling()),

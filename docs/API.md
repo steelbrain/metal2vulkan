@@ -109,10 +109,18 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `HandleDomain::Table`, the default). The identity domains (`PointerDomain::Identity` with
   `HandleDomain::Identity`, taken together) are the new runtime's form: pointers are device
   addresses used directly and a texture's or sampler's handle is its `gpuResourceID`
-  ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
-  them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
-  pushed as `PushField::SlotGuestBase`, with no root table, no descriptor and no containment, as
-  Metal contains no device-address access. Fields past a kernel's push window (128 bytes; 256 on
+  ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress`, `shaderInt64` and
+  `storageBuffer8BitAccess`. Under them a buffer slot is reached at its own device address
+  (`gpuAddress` plus the bind offset), pushed as `PushField::SlotGuestBase`, with no root table,
+  no descriptor and no containment, as Metal contains no device-address access. A slot whose
+  argument states an alignment of at least 4 (`air.arg_type_align_size`) is reached from that
+  address as it is: each access is a 32-bit byte offset through a byte array there, whose element
+  pointer is bitcast to the accessed unit's, and an access of 8 or 16 bytes at an offset proven a
+  multiple of its size is one `uvec2` or `uvec4`. The function states
+  `RuntimeFact::AddressAlignment` with that alignment (at most 16), and a binder refuses a binding
+  whose address is not a multiple of it, as Metal's API validation refuses the bind offset. Any
+  other slot (an argument with no alignment or one below 4) is reached from the word below each
+  access. Fields past a kernel's push window (128 bytes; 256 on
   a device made by `Device::from_queries`, whose runtime's floor requires that much
   `maxPushConstantsSize`: a dispatch region and 28 buffer addresses) go to a parameter block in
   memory, read at the device address `PushField::ArgumentTableAddress`, which

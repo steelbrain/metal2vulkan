@@ -209,8 +209,10 @@ impl Device {
     }
 }
 
-/// The identity domains come as a pair, and need device addresses and 64-bit integers: a
-/// pointer is a 64-bit device address.
+/// The identity domains come as a pair, and need device addresses and 64-bit integers, as a
+/// pointer is a 64-bit device address, and 8-bit storage, as a buffer slot whose address the
+/// binder holds to its argument's alignment is reached through a byte array at that address
+/// (`lower::access::psb::prepare_direct`).
 fn identity_domains(desc: &DeviceDescription, policy: &DevicePolicy) -> Result<(), Error> {
     let pointers = policy.pointer_domain == PointerDomain::Identity;
     let handles = policy.handle_domain == HandleDomain::Identity;
@@ -221,7 +223,11 @@ fn identity_domains(desc: &DeviceDescription, policy: &DevicePolicy) -> Result<(
             },
         ));
     }
-    let needs = [VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64];
+    let needs = [
+        VkFeature::BufferDeviceAddress,
+        VkFeature::ShaderInt64,
+        VkFeature::StorageBuffer8BitAccess,
+    ];
     if pointers && !needs.iter().all(|&f| desc.has(f)) {
         let all = needs.iter().map(|&f| Capability::Feature(f)).collect();
         return Err(Unsupported::needs_any_of(Feature::IdentityDomains, vec![all]).into());

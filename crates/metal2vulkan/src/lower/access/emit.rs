@@ -274,10 +274,17 @@ pub(super) fn prepare(
     let lowering = cx.plan.families.access.slots.get(t.slot).copied().flatten();
     let ops = WordOps::of(crate::lower::sync::memory_model::coherence(cx.plan));
     if let Some(SlotLowering::Psb { start }) = lowering {
+        // Under the identity domains a slot whose address the binder holds to its argument's
+        // alignment is reached from that address as it is, with `uvec2` and `uvec4` units at
+        // offsets proven multiples of their size; any other from the word below each access.
+        let aligned = cx.plan.families.access.aligned.contains(&t.slot);
         let a = if cx.plan.families.access.identity {
             let address = cx.push_field(fb, PushField::SlotGuestBase(choice.slot))?;
             let address = super::pointer::slot_guest_base_u64(fb, address)?;
-            psb::prepare_at(fb, address, m, start)?
+            match aligned {
+                true => psb::prepare_direct(fb, address, m, start)?,
+                false => psb::prepare_at(fb, address, m, start)?,
+            }
         } else {
             let table = cx.push_field(fb, PushField::RootTableAddress)?;
             let contained = cx.plan.families.access.psb_contained;
@@ -286,7 +293,13 @@ pub(super) fn prepare(
         let units = cx.plan.families.access.psb_units;
         let read_only = cx.plan.families.access.unwritten.contains(&t.slot);
         return Ok(Prepared {
-            mem: Mem::Psb(a.mem.with(ops).with_units(units).read_only(read_only)),
+            mem: Mem::Psb(
+                a.mem
+                    .with(ops)
+                    .with_units(units)
+                    .with_vectors(aligned)
+                    .read_only(read_only),
+            ),
             off: a.off,
             inb: a.inb,
             guard_store: false,

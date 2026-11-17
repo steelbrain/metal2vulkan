@@ -135,6 +135,7 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::OneRow,
         RuntimeFact::UnitAxes { axes: 0, relief: 2 },
         RuntimeFact::TexelBufferParts { slot },
+        RuntimeFact::AddressAlignment { slot, align: 16 },
         RuntimeFact::FlatGrid,
         RuntimeFact::CallThreadgroups,
         RuntimeFact::SparseTextureWrites {
@@ -409,6 +410,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::UnitAxes { .. } => 101,
         RuntimeFact::TexelBufferParts { .. } => 102,
         RuntimeFact::OpenClLineTexture { .. } => 103,
+        RuntimeFact::AddressAlignment { .. } => 104,
     }
 }
 
@@ -416,7 +418,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..104).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..105).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -467,6 +469,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::HeapResidency { .. }
                 | RuntimeFact::HeapStorageReads { .. }
                 | RuntimeFact::ObjectThreadgroupArena { .. }
+                | RuntimeFact::AddressAlignment { .. }
                 | RuntimeFact::RowLockstep => Mechanism::PlanTimeCheck,
                 RuntimeFact::DispatchGrid
                 | RuntimeFact::TileThreadgroup { .. }

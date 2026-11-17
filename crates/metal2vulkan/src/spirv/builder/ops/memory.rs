@@ -134,6 +134,93 @@ impl FunctionBuilder<'_> {
         self.place_at(addr, pointee, true)
     }
 
+    /// Element `index` (a 32-bit integer scalar) of the array of `elem` that starts at device
+    /// address `base` (a 64-bit integer scalar, aligned to `elem`'s stride `stride`), as a
+    /// `PhysicalStorageBuffer` place: `base` converted to a pointer to the one-member
+    /// `Block { elem[] }` (`ArrayStride` `stride`), and the access chain to that member's element.
+    /// The element's address is `base + index · stride`, which the device computes from the index
+    /// itself. The member is `NonWritable` where `non_writable` (memory nothing writes while the
+    /// module runs, as [`device_place_read_only`](Self::device_place_read_only)).
+    pub fn device_element(
+        &mut self,
+        base: Value,
+        elem: TypeId,
+        stride: u32,
+        index: Value,
+        non_writable: bool,
+    ) -> BResult<Value> {
+        let array = self.module().ty(Type::RuntimeArray {
+            elem,
+            stride: Some(stride),
+        })?;
+        let rule = self
+            .mb()
+            .types()
+            .facts(elem)?
+            .max_rule()
+            .min(LayoutRule::Std430);
+        let layout = StructLayout {
+            non_writable,
+            ..natural_layout(self.mb().types(), rule, true, &[array])?
+        };
+        let block = self.module().ty(Type::Struct {
+            members: [array].into(),
+            layout: Some(layout),
+        })?;
+        let ptr = self.module().ty(Type::Pointer {
+            class: StorageClass::PhysicalStorageBuffer,
+            pointee: block,
+        })?;
+        let at = self.convert(ConvOp::ConvertUToPtr, base, ptr)?;
+        let zero = self.u32_const(0)?;
+        let zero = self.module().const_value(zero)?;
+        self.access_chain(at, &[zero, index])
+    }
+
+    /// A `PhysicalStorageBuffer` place of a `pointee` at byte `offset` (a 32-bit integer scalar)
+    /// of the memory at device address `base` (a 64-bit integer scalar): element `offset` of the
+    /// byte array at `base` ([`device_element`](Self::device_element) of `u8`, so the device forms
+    /// the address from the offset itself), bitcast to a pointer to the one-member
+    /// `Block { pointee }`, and the access chain to that member: a place, as
+    /// [`device_place`](Self::device_place)'s is. SPIR-V's `OpBitcast` takes a pointer to a
+    /// pointer of the same storage class. The member, and the byte array's, is `NonWritable`
+    /// where `non_writable`. The byte array needs the 8-bit storage access.
+    pub fn device_byte_place(
+        &mut self,
+        base: Value,
+        offset: Value,
+        pointee: TypeId,
+        non_writable: bool,
+    ) -> BResult<Value> {
+        let u8_ = self.module().ty(Type::Int {
+            width: 8,
+            signed: false,
+        })?;
+        let byte = self.device_element(base, u8_, 1, offset, non_writable)?;
+        let rule = self
+            .mb()
+            .types()
+            .facts(pointee)?
+            .max_rule()
+            .min(LayoutRule::Std430);
+        let layout = StructLayout {
+            non_writable,
+            ..natural_layout(self.mb().types(), rule, true, &[pointee])?
+        };
+        let block = self.module().ty(Type::Struct {
+            members: [pointee].into(),
+            layout: Some(layout),
+        })?;
+        let ptr = self.module().ty(Type::Pointer {
+            class: StorageClass::PhysicalStorageBuffer,
+            pointee: block,
+        })?;
+        let at = self.convert(ConvOp::Bitcast, byte, ptr)?;
+        let zero = self.u32_const(0)?;
+        let zero = self.module().const_value(zero)?;
+        self.access_chain(at, &[zero])
+    }
+
     fn place_at(&mut self, addr: Value, pointee: TypeId, non_writable: bool) -> BResult<Value> {
         let rule = self
             .mb()
