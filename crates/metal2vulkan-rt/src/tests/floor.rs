@@ -224,7 +224,7 @@ fn each_missing_feature_is_named() {
     const LAYOUT: &str = "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 32] = [
+    let cases: [(Clear, Missing); 33] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
