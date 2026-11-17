@@ -489,7 +489,7 @@ pub(super) unsafe fn submit_fenced(
     // SAFETY: the `VkQueue` is used under its lock; each command buffer is the caller's; the
     // fence is unsignaled and in no pending submission.
     let submitted = shared.submit_logged(
-        (queue, None),
+        (queue, None, raws.len()),
         Some(fence),
         &buffer.relayed,
         |vk_queue| unsafe { raw.queue_submit(vk_queue, &submits, fence) },

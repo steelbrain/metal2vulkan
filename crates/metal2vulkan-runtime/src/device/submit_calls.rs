@@ -13,16 +13,32 @@
 //! which the scheduler's thread made before.
 //!
 //! **Measured, not named.** Each successful call that submits a batch (one that signals the
-//! queue's timeline, `DeviceShared::submit_logged`) is timed under the queue's lock, the time
-//! inside the call alone, whichever thread made it. The floor of the last [`CALLS`], the least of
-//! them, is the queue's cost, published for reads without the lock; none before [`CALLS`] calls
-//! were timed. A floor, as the submission checks read floors (`submit_check.rs`, "Load beside
+//! queue's timeline, `DeviceShared::submit_logged`) of one command buffer or more is timed under
+//! the queue's lock, the time inside the call alone, whichever thread made it. The floor of the
+//! last [`CALLS`], the least of them, is the queue's cost, published for reads without the lock;
+//! none before [`CALLS`] calls were timed. A floor, as the submission checks read floors
+//! (`submit_check.rs`, "Load beside
 //! it"): other work on the host or the device lengthens a call and never shortens it, and a
 //! driver's own long calls come among short ones (NVIDIA's stall in one signalling call of 1024,
 //! `submit_stalls.rs`; lavapipe's first calls of a fresh device), so only a cost every call pays
 //! moves the floor. A median moved by them: on lavapipe beside the runtime's device tests, the
 //! median of a fresh device's last 15 calls stood past [`SLOW_NANOS`] for 14 of its first 200
 //! commits, where its calls then took 5.3 us at the median.
+//!
+//! **Calls of commands alone.** A batch with no work, no wait and no timestamp holds no command
+//! buffer (`command_buffer/submit.rs`), as that of an empty command buffer that signals an event
+//! (one that signals nothing makes no call), and its call is another call: the driver submits no commands, where it lists every import for a submission of
+//! them (ANV on i915 lists two objects in a submission of none, `submit_check.rs`). Kept in, one
+//! such call among [`CALLS`] holds the floor at its own length. In reims's traced macOS guest on
+//! the Radeon 780M (RADV, a window drag, about 140 dma-buf imports live), 8.8% of the batches had
+//! no GPU work; most of those a committing thread submitted took 15 to 40 us for the whole commit,
+//! where the batches with work took 173 us at their first quartile, so the floor stayed under
+//! [`SLOW_NANOS`] and the committing threads made 85 to 88% of the calls. Of the calls of commands
+//! alone, the least of each 15 the window server's thread made was 143 us at its tenth
+//! percentile. On the Iris Xe (ANV), a third of a Safari video step's batches had no GPU work, and
+//! its calls, 306 to 374 us on the average, stayed on the committing threads. A batch with no
+//! command buffer is left to the scheduler's thread with the rest of its queue's where those are
+//! slow, and is counted as such.
 //!
 //! **Left to the scheduler's thread.** Where a `VkQueue`'s cost is [`SLOW_NANOS`] or more, a
 //! committing thread's pass leaves every batch there to the scheduler's thread
@@ -54,8 +70,8 @@ pub(crate) struct SubmitCalls {
 }
 
 impl SubmitCalls {
-    /// A call that submitted a batch took `nanos`: kept, and the floor published once [`CALLS`]
-    /// were timed.
+    /// A call that submitted a batch of one command buffer or more took `nanos`: kept, and the
+    /// floor published once [`CALLS`] were timed.
     pub(crate) fn called(&self, nanos: u64) {
         let mut ring = super::lock(&self.ring);
         let (calls, timed) = &mut *ring;

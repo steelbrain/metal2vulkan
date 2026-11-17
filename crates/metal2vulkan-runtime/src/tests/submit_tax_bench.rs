@@ -271,7 +271,7 @@ fn run_arm(kernel: &Kernel, shape: Shape<'_>, arm: &mut Arm) {
 
 /// Each of `buffers` bound by a dispatch of a command buffer completed, 48 a command buffer: kept
 /// imported for good (`host_residency.rs`).
-fn bind_all(kernel: &Kernel, buffers: &[Buffer]) {
+pub(super) fn bind_all(kernel: &Kernel, buffers: &[Buffer]) {
     let queue = kernel.device.new_command_queue().unwrap();
     for group in buffers.chunks(48) {
         let command_buffer = queue.command_buffer().unwrap();

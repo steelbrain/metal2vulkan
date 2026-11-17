@@ -958,3 +958,103 @@ fn a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread() {
         "{slow} of {SLOW_ROUNDS} commits left for slow calls"
     );
 }
+
+/// How often, in fills, [`a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones`]
+/// commits an empty command buffer before one: several among every [`CALLS`] calls.
+const EMPTY_EVERY: u64 = 5;
+
+/// Where a `VkQueue`'s batches' calls of commands are slow (each made [`SLOW_CALL`] longer, a call
+/// of no command buffer not, as a driver's are that submits no commands for one) and a command
+/// buffer that encodes nothing but an event's signal, whose batch holds no command buffer
+/// (`submit.rs`; one that signals nothing makes no call), is committed before every
+/// [`EMPTY_EVERY`]th fill, `commit_and_submit` still leaves the fills to the scheduler's thread:
+/// a call of no command buffer is not among the calls whose floor is the queue's cost
+/// (`device/submit_calls.rs`), so no batch goes at commit and each commit that passed is counted
+/// as left for the slow calls (`WorkCounts::scheduler_at_commit_left_slow_calls`). Before, each
+/// empty one's short call held the floor under the bound for the next [`CALLS`] calls, and the
+/// committing thread made the fills' slow calls itself: a macOS guest's window drag on the
+/// Radeon 780M, whose decoder ends many command buffers with an empty part, made 85 to 88% of its
+/// calls on its committing threads so.
+#[test]
+fn a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones() {
+    let pages = Pages(super::host_os::private(PAGES));
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
+    let memory = unsafe { crate::HostMemory::new(pages.0) };
+    let shared = ResourceOptions::shared();
+    // SAFETY: `memory` is `PAGES` bytes of fresh pages.
+    let over_pages =
+        unsafe { device.new_buffer_with_bytes_no_copy(memory, PAGES as u64, shared, None) }
+            .unwrap();
+    device.slow_submit_calls(Some(SLOW_CALL));
+    let event = device.new_event().unwrap();
+    let signalled = AtomicU64::new(0);
+    let empty = || {
+        let command_buffer = queue.command_buffer().unwrap();
+        let value = signalled.fetch_add(1, Ordering::Relaxed) + 1;
+        command_buffer
+            .encode_signal_event(EventRef::from(&event), value)
+            .unwrap();
+        command_buffer.commit_and_submit().unwrap();
+        command_buffer.wait_until_completed().unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+    };
+    let round = |value: u64| {
+        if value.is_multiple_of(EMPTY_EVERY) {
+            empty();
+        }
+        let command_buffer = fill(&queue, &over_pages, value as u8);
+        command_buffer.commit_and_submit().unwrap();
+        command_buffer.wait_until_completed().unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        assert_eq!(first_byte(&over_pages), value as u8, "round {value}");
+    };
+    for value in 0..CALLS as u64 {
+        round(value);
+    }
+    // An empty command buffer's batch, after the device's first work, is a call of no command
+    // buffer.
+    let before = device.work_counts();
+    empty();
+    let after = device.work_counts();
+    assert!(
+        after.queue_submissions > before.queue_submissions,
+        "an empty command buffer's batch made no call"
+    );
+    assert_eq!(
+        after.command_buffers_submitted, before.command_buffers_submitted,
+        "an empty command buffer's batch submitted a command buffer"
+    );
+    let calls = &device.shared().queues[queue.vk_queue_sharing().0].calls;
+    assert!(
+        calls.floor() >= SLOW_NANOS,
+        "the queue's call floor is {} ns among empty command buffers' calls",
+        calls.floor()
+    );
+    let before = device.work_counts();
+    for value in 0..SLOW_ROUNDS {
+        round(value);
+    }
+    let after = device.work_counts();
+    let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
+    let batches = moved(|c| c.batches_submitted_at_commit);
+    let slow = moved(|c| c.scheduler_at_commit_left_slow_calls);
+    println!(
+        "slow calls among empty ones ({}): batches at commit {batches} of {}; left for slow \
+         calls {slow}; the queue's call floor {:.1} us",
+        device.name(),
+        SLOW_ROUNDS + SLOW_ROUNDS.div_ceil(EMPTY_EVERY),
+        calls.floor() as f64 / 1e3,
+    );
+    assert_eq!(
+        batches, 0,
+        "a committing thread made a call among slow ones"
+    );
+    // A pass of the scheduler's thread under way at the commit (a completion's nudge) takes it
+    // in instead: rarely, on an idle device.
+    assert!(
+        slow >= SLOW_ROUNDS / 2,
+        "{slow} of {SLOW_ROUNDS} fills' commits left for slow calls"
+    );
+}

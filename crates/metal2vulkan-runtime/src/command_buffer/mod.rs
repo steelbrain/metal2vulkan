@@ -6824,7 +6824,7 @@ impl CommandBufferShared {
         // the `VkQueue` is used under its lock.
         shared.counts.queue_submitted(0, 0);
         let submitted = shared.submit_logged(
-            (queue, None),
+            (queue, None, 0),
             Some(fence),
             &self.relayed,
             |vk_queue| unsafe { raw.queue_submit(vk_queue, &[], fence) },

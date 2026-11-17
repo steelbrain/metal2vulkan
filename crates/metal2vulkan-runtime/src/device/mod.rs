@@ -627,9 +627,9 @@ pub(super) struct DeviceShared {
     /// (`Device::fail_next_submissions_with`).
     #[cfg(test)]
     pub(crate) failing_result: std::sync::atomic::AtomicI32,
-    /// How long each `vkQueueSubmit` of a batch takes more, in nanoseconds, slept inside its timed
-    /// call: the device tests' stand-in for a driver whose calls are slow
-    /// (`Device::slow_submit_calls`).
+    /// How long each `vkQueueSubmit` of a batch of command buffers takes more, in nanoseconds,
+    /// slept inside its timed call: the device tests' stand-in for a driver whose calls of
+    /// commands are slow (`Device::slow_submit_calls`).
     #[cfg(test)]
     pub(crate) submit_call_pause: AtomicU64,
     /// The call floor at or above which a committing thread leaves a `VkQueue`'s batches to
@@ -1736,9 +1736,9 @@ impl Device {
         self.fail_next_submissions(count);
     }
 
-    /// Make each `vkQueueSubmit` of a batch take `pause` more, inside its timed call, from now on
-    /// (`None`: no more): the tests' stand-in for a driver whose calls are slow
-    /// (`submit_calls.rs`).
+    /// Make each `vkQueueSubmit` of a batch that submits command buffers take `pause` more, inside
+    /// its timed call, from now on (`None`: no more): the tests' stand-in for a driver whose calls
+    /// of commands are slow, a call of none not (`submit_calls.rs`).
     pub(crate) fn slow_submit_calls(&self, pause: Option<std::time::Duration>) {
         let nanos = pause.map_or(0, |pause| pause.as_nanos() as u64);
         (self.shared().submit_call_pause).store(nanos, Ordering::Relaxed);

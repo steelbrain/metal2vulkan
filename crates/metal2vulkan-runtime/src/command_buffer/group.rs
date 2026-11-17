@@ -814,12 +814,16 @@ impl Group {
         // executable and submitted once; every wait is for a signal submitted before; the one
         // timeline signal is above the queue's value; the `VkQueue` is used under its lock.
         let mut called = 0;
-        let submitted =
-            shared.submit_logged((queue, Some(value)), fence, &relayed, |vk_queue| unsafe {
+        let submitted = shared.submit_logged(
+            (queue, Some(value), buffers),
+            fence,
+            &relayed,
+            |vk_queue| unsafe {
                 shared.counts.queue_submitted(submits.len(), buffers);
                 called = gpu_time::host_nanos();
                 raw.queue_submit(vk_queue, submits, fence.unwrap_or(vk::Fence::null()))
-            });
+            },
+        );
         // Where the device notes queue times, the call's return, for each command buffer a batch
         // held ends (`CommandBuffer::submit_returned_time`).
         let returned = shared.timing.queue_times().then(gpu_time::host_nanos);
@@ -930,11 +934,16 @@ fn submit_alone(device: &Device, after: After<'_>) -> Result<u64, vk::Result> {
     } = after;
     let mut called = 0;
     // SAFETY: the batch's submission's own (`submit.rs`).
-    let submitted = shared.submit_logged((queue, Some(value)), fence, relayed, |vk_queue| unsafe {
-        shared.counts.queue_submitted(infos.len(), buffers);
-        called = gpu_time::host_nanos();
-        raw.queue_submit(vk_queue, infos, fence.unwrap_or(vk::Fence::null()))
-    });
+    let submitted = shared.submit_logged(
+        (queue, Some(value), buffers),
+        fence,
+        relayed,
+        |vk_queue| unsafe {
+            shared.counts.queue_submitted(infos.len(), buffers);
+            called = gpu_time::host_nanos();
+            raw.queue_submit(vk_queue, infos, fence.unwrap_or(vk::Fence::null()))
+        },
+    );
     exit_guard::called(Call::QueueSubmit);
     if let Err(result) = submitted {
         let failed = Failed {
@@ -968,7 +977,7 @@ fn signal_alone(
     // SAFETY: a submission of the signals a failed group's end held, each above its semaphore's
     // value (no batch signalled them); the `VkQueue` is used under its lock.
     let infos = [info];
-    let submitted = shared.submit_logged((queue, value), None, relayed, |vk_queue| unsafe {
+    let submitted = shared.submit_logged((queue, value, 0), None, relayed, |vk_queue| unsafe {
         shared.counts.queue_submitted(1, 0);
         raw.queue_submit(vk_queue, &infos, vk::Fence::null())
     });

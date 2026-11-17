@@ -240,6 +240,8 @@ mod dma_buf_plane_offset;
 mod dma_buf_shared_files;
 #[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod dma_buf_standing_refusal;
+#[cfg(all(m2v_gpu, target_os = "linux"))]
+mod drag_submit_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod draw_again;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
