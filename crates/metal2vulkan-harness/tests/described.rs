@@ -107,10 +107,11 @@ fn described_workloads_match_between_two_runs_of_the_old_runtime() {
 /// The fixture's LLVM text `ll` with `kernel` its only entry point: every other kernel's
 /// definition, its `!air.kernel` node and the threadgroup globals named after it left out.
 fn single_entry(ll: &str, kernel: &str) -> String {
-    let defined = |line: &str| -> Option<&str> {
+    /// The name of the function `line` defines, where it starts a definition.
+    fn defined(line: &str) -> Option<&str> {
         let rest = line.strip_prefix("define ")?;
         Some(rest.split_once('@')?.1.split_once('(')?.0)
-    };
+    }
     let others: Vec<&str> = (ll.lines().filter_map(defined))
         .filter(|&name| name != kernel)
         .collect();
