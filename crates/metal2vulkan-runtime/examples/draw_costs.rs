@@ -3,7 +3,7 @@
 //! through the runtime's public calls alone, on one thread.
 //!
 //! ```sh
-//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds|guest]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
+//! cargo run --release -p metal2vulkan-runtime --example draw_costs [-- [ws|many|10k|clips|damage|compositor|backdrops|pass1|pass17|scene|rebinds|restated|guest]... [--runs N] [--calls] [--counts] [--heap] [--shadowed] [--pages] [--states N] [--worker] [--threads N] [--metallib PATH]]
 //! ```
 //!
 //! Each shape is command buffers committed back to back, each of one render pass over a 512x512
@@ -69,6 +69,9 @@
 //!   the mesh by 6 indices (`UInt16`) at the piece's offset.
 //! - **rebinds**: as **scene**, but each draw first binds its material's 8 textures and 8
 //!   samplers again, the same objects within a material's run.
+//! - **restated**: as **scene**, but each draw first sets a scissor rectangle of its own, the
+//!   next cell of **damage**'s grid, so nearly every draw is its pipeline state's kept draw
+//!   rebound with its scissor restated, its offsets moved and its own indices.
 //! - **guest**, a guest's command buffers of a few render encoders: 16 command buffers of 4
 //!   passes over the target (the first cleared, the rest loaded) of 8 draws each. Each draw is a
 //!   4-vertex triangle strip after `set_fragment_texture` (the next of 16), `set_vertex_buffer` at
@@ -214,8 +217,9 @@ enum Stream {
     /// objects ([`Compositor::small_passes`]).
     Passes(usize),
     /// A 3D engine's frame of passes over four color targets ([`Scene`]), each draw binding its
-    /// material's textures and samplers again where `rebinds`.
-    Scene { rebinds: bool },
+    /// material's textures and samplers again where `rebinds`, and setting a scissor rectangle
+    /// of its own ([`damaged`]) where `scissors`.
+    Scene { rebinds: bool, scissors: bool },
     /// A guest's: [`GUEST_PASSES`] passes of [`GUEST_PASS_DRAWS`] draws, each draw a texture, its
     /// vertex slot and its vertex and fragment bytes, every second one the pipeline state and the
     /// sampler again ([`Bench::guest_steps`]).
@@ -269,7 +273,7 @@ struct Shape {
 }
 
 /// The shapes, in the order they run.
-const SHAPES: [Shape; 12] = [
+const SHAPES: [Shape; 13] = [
     Shape {
         name: "ws",
         buffers: 8,
@@ -328,13 +332,28 @@ const SHAPES: [Shape; 12] = [
         name: "scene",
         buffers: 8,
         draws: SCENE_DRAWS,
-        stream: Stream::Scene { rebinds: false },
+        stream: Stream::Scene {
+            rebinds: false,
+            scissors: false,
+        },
     },
     Shape {
         name: "rebinds",
         buffers: 8,
         draws: SCENE_DRAWS,
-        stream: Stream::Scene { rebinds: true },
+        stream: Stream::Scene {
+            rebinds: true,
+            scissors: false,
+        },
+    },
+    Shape {
+        name: "restated",
+        buffers: 8,
+        draws: SCENE_DRAWS,
+        stream: Stream::Scene {
+            rebinds: false,
+            scissors: true,
+        },
     },
     Shape {
         name: "guest",
@@ -675,8 +694,8 @@ impl Bench {
         if let (Stream::Passes(each), Some(compositor)) = (shape.stream, &self.compositor) {
             return compositor.small_passes(buffer, shape.draws / each, each);
         }
-        if let (Stream::Scene { rebinds }, Some(scene)) = (shape.stream, &self.scene) {
-            return scene.steps(buffer, rebinds);
+        if let (Stream::Scene { rebinds, scissors }, Some(scene)) = (shape.stream, &self.scene) {
+            return scene.steps(buffer, (rebinds, scissors));
         }
         if shape.stream == Stream::Guest {
             return self.guest_steps(chunks, shape, buffer);
@@ -1473,8 +1492,8 @@ impl Scene {
 
     /// Command buffer `buffer`'s steps: its passes and their draws, each draw's slots the next
     /// of the buffer's; each draw binding its material's textures and samplers again where
-    /// `rebinds`.
-    fn steps(&self, buffer: usize, rebinds: bool) -> Vec<Step<'_>> {
+    /// `rebinds`, and setting a scissor rectangle of its own where `scissors`.
+    fn steps(&self, buffer: usize, (rebinds, scissors): (bool, bool)) -> Vec<Step<'_>> {
         let mut steps = Vec::new();
         for d in 0..SCENE_DRAWS {
             if d % SCENE_PASS_DRAWS == 0 {
@@ -1490,6 +1509,9 @@ impl Scene {
             if rebinds || d % SCENE_RUN == 0 {
                 steps.push(Step::FragmentTextures(&self.materials[material]));
                 steps.push(Step::FragmentSamplers(&self.samplers));
+            }
+            if scissors {
+                steps.push(Step::Scissor(damaged(d)));
             }
             let slot = (buffer * SCENE_DRAWS + d) as u64 % SCENE_SLOTS;
             steps.push(Step::VertexOffset(SCENE_TRANSFORMS + slot * 256, 1));
@@ -2135,7 +2157,7 @@ fn main() -> Result<()> {
                 || {
                     format!(
                         "no shape {name}: ws, many, 10k, clips, damage, compositor, backdrops, \
-                         pass1, pass17, scene, rebinds or guest"
+                         pass1, pass17, scene, rebinds, restated or guest"
                     )
                 },
             )?),
