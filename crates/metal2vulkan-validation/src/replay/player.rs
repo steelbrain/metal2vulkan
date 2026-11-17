@@ -48,10 +48,10 @@ pub struct Made {
 /// One runtime behind the player. Objects are named by their stream ids; the player resolves blobs
 /// and relocates before a call reaches the backend, and handles `m2v.write`, `m2v.check`,
 /// `m2v.present`, `m2v.commitPart`, `gpuResourceID`, `release` of a device, and the program's
-/// waits itself. A copy from the guest's RAM reaches it with its data relocated ([`upload`] says
-/// where the data lands), a record of the host's own plumbing as the plain Metal call it stands
-/// for ([`plain`]), and a copied buffer's descriptor without its `contents`, which reach it as a
-/// write once the buffer is made ([`copied`]).
+/// waits itself. A copy from the guest's RAM reaches it with its data relocated (the player's
+/// `upload` says where the data lands), a record of the host's own plumbing as the plain Metal
+/// call it stands for (`plain`), and a copied buffer's descriptor without its `contents`, which
+/// reach it as a write once the buffer is made (`copied`).
 pub trait Backend {
     /// Run `call`: make its result, or run its receiver's method, or drop the object `release`
     /// names.
