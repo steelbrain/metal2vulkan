@@ -1215,6 +1215,99 @@ mod on_device {
         });
     }
 
+    /// A dispatch refused for a misaligned argument (`Refusal::MisalignedBuffer`) records
+    /// nothing: in the same encoder, with the arguments bound again at their alignment, the next
+    /// dispatches record and run, the command buffer commits and completes without error, and
+    /// every buffer holds Metal's words for those dispatches alone (`vector_word_phases`'s
+    /// answer). The device's gauges read zero at its drop (`each_device`).
+    #[test]
+    fn a_misaligned_dispatch_refused_leaves_its_encoder_and_command_buffer_usable() {
+        use metal2vulkan_devtools::vector_word_phases::{
+            answer, inputs, vec16_offsets, FIXTURE, OFFSETS, THREADS, VEC16, WORDS,
+        };
+        let (Some(phased), Some(aligned)) =
+            (descriptor_of(FIXTURE, WORDS), descriptor_of(FIXTURE, VEC16))
+        else {
+            return;
+        };
+        each_device("compute_misaligned_then_aligned", |name, _, device| {
+            let before = inputs();
+            let (phased, aligned) = (
+                state(name, &device, &phased),
+                state(name, &device, &aligned),
+            );
+            let mut buffers = Buffers::new(&device, 64 * 1024);
+            let held: Vec<(Buffer, Vec<u8>)> = [before.src, before.dst, before.a, before.b]
+                .into_iter()
+                .map(|bytes| (buffers.buffer(bytes.len() as u64), bytes))
+                .collect();
+            for (buffer, bytes) in &held {
+                write(buffer, 0, bytes);
+            }
+            let offset = OFFSETS[0];
+            let (a_at, b_at) = vec16_offsets(offset);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            // `vwp_vec16`'s first `float4 *` 4 bytes past its alignment.
+            encoder
+                .set_compute_pipeline_state(&aligned)
+                .expect("a state");
+            encoder
+                .set_buffer(Some(&held[2].0), a_at + 4, 0)
+                .expect("a buffer");
+            encoder
+                .set_buffer(Some(&held[3].0), b_at, 1)
+                .expect("a buffer");
+            match encoder.dispatch_threadgroups([1, 1, 1], [THREADS, 1, 1]) {
+                Err(Error::Refused(Refusal::MisalignedBuffer {
+                    index: 0,
+                    align: 16,
+                    ..
+                })) => {}
+                r => panic!("{name}: a misaligned dispatch: {r:?}"),
+            }
+            for (state, binds) in [
+                (&phased, [(0, offset), (1, offset)]),
+                (&aligned, [(2, a_at), (3, b_at)]),
+            ] {
+                encoder.set_compute_pipeline_state(state).expect("a state");
+                for (index, (buffer, at)) in binds.into_iter().enumerate() {
+                    encoder
+                        .set_buffer(Some(&held[buffer].0), at, index as u32)
+                        .expect("a buffer");
+                }
+                encoder
+                    .dispatch_threadgroups([1, 1, 1], [THREADS, 1, 1])
+                    .unwrap_or_else(|error| panic!("{name}: after the refusal: {error}"));
+            }
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let want = answer(offset);
+            for ((buffer, bytes), (which, want)) in held.iter().zip([
+                ("src", &want.src),
+                ("dst", &want.dst),
+                ("a", &want.a),
+                ("b", &want.b),
+            ]) {
+                let got = words(buffer, 0, bytes.len() / 4);
+                let want: Vec<u32> = want
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|w| u32::from_le_bytes(*w))
+                    .collect();
+                let first = got.iter().zip(&want).position(|(x, y)| x != y);
+                assert_eq!(first, None, "{name}: {which} differs from Metal's words");
+            }
+            println!("{name}: refused, then ran in the same encoder and command buffer");
+        });
+    }
+
     /// `ob1_storage_buffer` loads `src[idx[t]]` into `out[t]` and stores `0xA0000000 | t` to
     /// `out[idx[8 + t]]`, with `src` and `out` one Shared buffer of [`MAX_BUFFER_LENGTH`] (2 GiB)
     /// bound at its start and the indices near it and up to its last word. Each access lands at

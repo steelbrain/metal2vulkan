@@ -431,6 +431,9 @@ impl ComputeCommandEncoder {
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
     /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
     /// [`Error::Quiesced`] where the device was quiesced before that module was lowered;
+    /// [`Refusal::MisalignedBuffer`] where a bound buffer's address plus its offset is not a
+    /// multiple of its argument's alignment, as Metal's API validation refuses the bind: the
+    /// dispatch is not recorded, and the encoder and its command buffer stay usable;
     /// [`Error::Vulkan`] where the pipeline's compile, the ring or recording fails.
     pub fn dispatch_threadgroups(
         &mut self,
