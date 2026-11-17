@@ -1,11 +1,14 @@
 //! A description's workloads over a metallib run on the old runtime twice, from the same starting
 //! contents, and their outputs match; one of them matches its CPU reference too. The metallib is
 //! the authored fixture's kernels in a synthetic container, so the path a described workload takes
-//! runs without any kernel the repository does not own.
+//! runs without any kernel the repository does not own. Each function's bitcode is a module
+//! holding that kernel alone, as a metallib's is: the translator checks that a metallib function's
+//! module declares one entry point.
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
 
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
 use metal2vulkan_devtools::scratch::Owned;
+use metal2vulkan_devtools::{fixtures_dir, llvm_assemble_text};
 use metal2vulkan_harness::plan::seeded_words;
 use metal2vulkan_harness::run::{compare_outputs, Harness, Runs, Session};
 use metal2vulkan_harness::{authored, description, old};
@@ -52,11 +55,12 @@ check 1 exact
 #[test]
 fn described_workloads_match_between_two_runs_of_the_old_runtime() {
     let air = authored::library_air().unwrap();
+    let ll = std::fs::read_to_string(fixtures_dir().join("harness/workloads.ll")).unwrap();
     let functions: Vec<MtlbFunction> = ["scale_offset", "lcg_step", "binomial3x3", "reduce_sum"]
         .map(|name| MtlbFunction {
             name,
             type_code: 2,
-            bitcode: wrap(&air),
+            bitcode: wrap(&llvm_assemble_text(&single_entry(&ll, name)).unwrap()),
             constants: Vec::new(),
             public: Vec::new(),
             tags: Vec::new(),
@@ -98,4 +102,56 @@ fn described_workloads_match_between_two_runs_of_the_old_runtime() {
         }
     }
     assert_eq!(described.len(), 4);
+}
+
+/// The fixture's LLVM text `ll` with `kernel` its only entry point: every other kernel's
+/// definition, its `!air.kernel` node and the threadgroup globals named after it left out.
+fn single_entry(ll: &str, kernel: &str) -> String {
+    let defined = |line: &str| -> Option<&str> {
+        let rest = line.strip_prefix("define ")?;
+        Some(rest.split_once('@')?.1.split_once('(')?.0)
+    };
+    let others: Vec<&str> = (ll.lines().filter_map(defined))
+        .filter(|&name| name != kernel)
+        .collect();
+    let names_other_entry =
+        |line: &str| (others.iter()).any(|other| line.contains(&format!("ptr @{other},")));
+    let dropped: Vec<&str> = (ll.lines())
+        .filter(|line| line.starts_with('!') && names_other_entry(line))
+        .filter_map(|line| Some(line.split_once(" = ")?.0))
+        .collect();
+    let mut out = String::new();
+    let mut in_other = false;
+    for line in ll.lines() {
+        if in_other {
+            in_other = line != "}";
+            continue;
+        }
+        if defined(line).is_some_and(|name| name != kernel) {
+            in_other = true;
+            continue;
+        }
+        let other_global = line.starts_with('@') && others.iter().any(|other| line.contains(other));
+        if other_global || (line.starts_with('!') && names_other_entry(line)) {
+            continue;
+        }
+        match (line.strip_prefix("!air.kernel = !{")).and_then(|list| list.strip_suffix('}')) {
+            Some(list) => {
+                let kept: Vec<&str> = (list.split(", "))
+                    .filter(|node| !dropped.contains(node))
+                    .collect();
+                out.push_str(&format!("!air.kernel = !{{{}}}\n", kept.join(", ")));
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    assert_eq!(
+        out.lines().filter(|line| defined(line).is_some()).count(),
+        1,
+        "{kernel} alone"
+    );
+    out
 }
