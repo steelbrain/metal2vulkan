@@ -772,7 +772,6 @@ pub struct LeafCaps {
     pub storage_buffer_16bit: bool,
     pub uniform_buffer_16bit: bool,
     pub push_constant_16bit: bool,
-    pub input_output_16bit: bool,
     pub workgroup_explicit_layout: bool,
     pub workgroup_explicit_layout_8bit: bool,
     pub workgroup_explicit_layout_16bit: bool,

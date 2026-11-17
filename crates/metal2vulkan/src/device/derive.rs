@@ -207,7 +207,6 @@ fn derive_fields(
         storage_buffer_16bit: has(VkFeature::StorageBuffer16BitAccess),
         uniform_buffer_16bit: has(VkFeature::UniformAndStorageBuffer16BitAccess),
         push_constant_16bit: has(VkFeature::StoragePushConstant16),
-        input_output_16bit: has(VkFeature::StorageInputOutput16),
         workgroup_explicit_layout: has(VkFeature::WorkgroupMemoryExplicitLayout),
         workgroup_explicit_layout_8bit: has(VkFeature::WorkgroupMemoryExplicitLayout8BitAccess),
         workgroup_explicit_layout_16bit: has(VkFeature::WorkgroupMemoryExplicitLayout16BitAccess),

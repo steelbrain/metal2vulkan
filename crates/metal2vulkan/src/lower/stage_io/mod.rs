@@ -11,13 +11,10 @@
 //!
 //! - User interface variables (vertex attributes, varyings, color outputs) carry a relocatable
 //!   `Location` keyed by a [`VaryingKey`] whose role the artifact states
-//!   ([`crate::pipeline::stage_io::StageIo`]); link numbers them. Every one is 32-bit: integers are
-//!   declared `uint` (held zero-extended), narrow floats `float` (held widened), but a `half` color
-//!   output on a profile that enables `storageInputOutput16` and `shaderFloat16`, declared with
-//!   16-bit `float` lanes (`StageIo::half_outputs`) and stored by the exact conversion of the
-//!   `half` it holds, so the device receives the `half` the function returns, as Metal's attachment
-//!   does, and blends and converts it as its own `half` output. Only that output needs
-//!   `storageInputOutput16`. A 32-bit integer color output to a signed-integer attachment
+//!   ([`crate::pipeline::stage_io::StageIo`]); link numbers them. Every one is 32-bit on every
+//!   device: integers are declared `uint` (held zero-extended), narrow floats `float` (held
+//!   widened; every `half` is exactly a `float`), so no module needs `storageInputOutput16`. A
+//!   32-bit integer color output to a signed-integer attachment
 //!   (`LoweringInputs::signed_color_attachments`) is declared `int` and stored by `OpBitcast`; a
 //!   narrower one to such an attachment is `NotImplemented`.
 //! - Builtins map one to one (`vertex_id` → `VertexIndex`, `[[position]]` → `Position` /
@@ -216,10 +213,6 @@ pub enum IoObject {
         numeric: IoNumeric,
         components: u8,
         deco: IoDecor,
-        /// Declared with 16-bit `float` lanes: a `half` color output on a device that enables
-        /// `storageInputOutput16` (`plan::half_variable`), stored by the conversion of the `half` it
-        /// holds widened, exact. Every other user variable is 32-bit.
-        half: bool,
     },
     /// A builtin variable.
     Builtin {
@@ -2911,9 +2904,8 @@ fn below_count(
 
 /// The element type of a user variable of class `numeric`: 32-bit, but a 16-bit `float` where
 /// `half` (`IoObject::User::half`).
-fn io_elem(mb: &mut ModuleBuilder, numeric: IoNumeric, half: bool) -> BResult<TypeId> {
+fn io_elem(mb: &mut ModuleBuilder, numeric: IoNumeric) -> BResult<TypeId> {
     match numeric {
-        IoNumeric::Float if half => mb.ty(SType::Float { width: 16 }),
         IoNumeric::Float => mb.ty(SType::Float { width: 32 }),
         IoNumeric::Uint => mb.ty(SType::Int {
             width: 32,
@@ -2927,29 +2919,10 @@ fn io_elem(mb: &mut ModuleBuilder, numeric: IoNumeric, half: bool) -> BResult<Ty
 }
 
 /// Store output part `x` (in its lowered representation, which is the interface type, except a
-/// `bool`, carried as `uint` 1 or 0, a 32-bit integer declared `int`, whose bits are stored by
-/// `OpBitcast`, and a `half` declared 16-bit, stored by `OpFConvert` of the `f32` holding it,
-/// whose value is a `half`, so the conversion is exact) through `link`.
+/// `bool`, carried as `uint` 1 or 0, and a 32-bit integer declared `int`, whose bits are stored by
+/// `OpBitcast`) through `link`.
 fn store(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, link: &Link, x: SValue) -> BResult<()> {
-    let x = if let Some(IoObject::User {
-        numeric: IoNumeric::Float,
-        components,
-        half: true,
-        ..
-    }) = cx.plan.families.stage_io.objects.get(link.object)
-    {
-        let components = *components;
-        let elem = io_elem(fb.module(), IoNumeric::Float, true)?;
-        let ty = if components == 1 {
-            elem
-        } else {
-            fb.module().ty(SType::Vector {
-                elem,
-                len: components,
-            })?
-        };
-        fb.convert(ConvOp::FConvert, x, ty)?
-    } else if bool_as_uint(cx, link) {
+    let x = if bool_as_uint(cx, link) {
         let one = ops::splat(fb, uint_lanes(link.form), 1)?;
         let zero = ops::splat(fb, uint_lanes(link.form), 0)?;
         fb.select(x, one, zero)?
@@ -2960,7 +2933,7 @@ fn store(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, link: &Link, x: SVal
     }) = cx.plan.families.stage_io.objects.get(link.object)
     {
         let components = *components;
-        let elem = io_elem(fb.module(), IoNumeric::Sint, false)?;
+        let elem = io_elem(fb.module(), IoNumeric::Sint)?;
         let ty = if components == 1 {
             elem
         } else {
@@ -3028,9 +3001,8 @@ pub fn declare(
                 numeric,
                 components,
                 deco,
-                half,
             } => {
-                let elem = io_elem(mb, *numeric, *half)?;
+                let elem = io_elem(mb, *numeric)?;
                 let ty = if *components == 1 {
                     elem
                 } else {

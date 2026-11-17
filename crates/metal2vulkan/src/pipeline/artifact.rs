@@ -1502,13 +1502,8 @@ pub enum PrecisionNote {
     /// on NVIDIA) for a 32-bit float one (at 0bcc0163e5: an RTX 3090 and an
     /// RTX 5080 Laptop GPU on NVIDIA's 615.71.09, a Radeon 780M on RADV, an Iris Xe of RPL-P on
     /// ANV and lavapipe, Mesa 26.2.4, the 14 blends Metal measured over the two sweeps, each handed
-    /// the output widened to `float`; RADV and ANV, which enable `storageInputOutput16`, receive
-    /// it as a 16-bit `half`, `StageIo::half_outputs`, which is not measured there); and 1 or 2
-    /// codes of an 8-bit or extended-range format. MoltenVK 1.4.2 on the M3 Max (macOS 27.0.1),
-    /// which receives the 16-bit `half`, stores the value of Metal's measured rule in every channel
-    /// of every measured blend draw of the sweep into `R16Float`, `RG16Float` and `RGBA16Float`
-    /// (28 of 28 each, `runtime_lane::half_output_blends`), and into `R32Float`, `RG32Float` and
-    /// `RGBA32Float` 28, 28 and 26 of 28, the two off at one channel by a zero's sign.
+    /// the output widened to `float`, as every device is); and 1 or 2 codes of an 8-bit or
+    /// extended-range format.
     ///
     /// Also: a `float` color output (a scalar or vector of AIR's `float`) of a module compiled
     /// without fast math to a 16-bit float attachment that blends by one and zero, added, for
@@ -1716,11 +1711,7 @@ pub enum PrecisionNote {
     /// two units in the last place of a `float` there into a 32-bit float one (MoltenVK on the M3
     /// Max, handed the output widened to `float`, against plain Metal over every blended draw of
     /// the sweep; the device's `float` blend modelled on the same draws, three units). A consumer
-    /// may relay it as a known difference. Where the device enables `storageInputOutput16` the
-    /// output reaches it as a 16-bit `half` (`StageIo::half_outputs`): MoltenVK 1.4.2 on the M3
-    /// Max (macOS 27.0.1) then stores Metal's codes at every word of every blend of the
-    /// conformance family `half-output-blends-*` (a loaded `half4`, 21 blends into each 16- and
-    /// 32-bit float format); a computed output is not measured there.
+    /// may relay it as a known difference.
     ///
     /// A fragment function that fetches a blended `R16Float`, `RG16Float` or `RGBA16Float`
     /// attachment in the interlocked storage form computes the blend itself, no Vulkan blend
