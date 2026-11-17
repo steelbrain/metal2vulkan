@@ -1,5 +1,7 @@
 //! The device's checks of its submissions, on a thread of its own, once per driver, release,
-//! kernel and runtime: whether `VkSubmitInfo`s that signal nothing merge into one submission of
+//! kernel and runtime for each answer that earns its record, at each device's making and again in
+//! its life for the others ("Answers for now", below): whether `VkSubmitInfo`s that signal nothing
+//! merge into one submission of
 //! the driver's ([`Check::Merge`]), and whether a host-pointer import the device holds adds to the
 //! cost of every submission ([`Check::ImportTax`]). Each answers a question the runtime once read
 //! from the driver's identity, its `driverID`, vendor and `deviceID`, so that a GPU no
@@ -58,8 +60,7 @@
 //!   its rounds or phases, and answers only where the two halves agree. Each half holds several
 //!   rounds or phases of each form, so one that load lengthened throughout moves no floor. A try
 //!   whose halves disagree is made again, at most [`TRIES`] times; where none agrees, the check
-//!   answers `Unchecked` for the device's life and the record is not written, so the next device
-//!   measures again. Seen on the Radeon 780M while the checks compared medians of single tries: a
+//!   answers `Unchecked` for now (below) and the record is not written. Seen on the Radeon 780M while the checks compared medians of single tries: a
 //!   device made while a test's thread made and released buffers in a loop
 //!   (`tests/in_place_check.rs`) placed its long buffers in fresh pages, which follows only from
 //!   an answer that a held import adds nothing, where the quiet devices of the same run answered
@@ -76,16 +77,15 @@
 //!   devices answered `Fails` from 2.1 to 2.2 us held and bare alike (2026-11-09), and that
 //!   process took the routes of a taxed device the quiet ones never take. So an import tax
 //!   `Holds` stands only where its try's floors pass its bound [`TAX_MARGIN`] times over: short
-//!   of that it answers `Fails` for the device's life, unrecorded, and the next device measures
-//!   again. Past it, it is recorded only where each of [`TAX_REPEATS`] tries more passes so
-//!   again; short of that, it answers for the device's life alone. The same load splits a
+//!   of that it answers `Fails` for now, unrecorded. Past it, it is recorded only where each of
+//!   [`TAX_REPEATS`] tries more passes so again; short of that, it answers for now. The same load splits a
 //!   try's halves: on the M3 Max, in three runs of the runtime's device tests (2026-11-09,
 //!   MoltenVK 1.4.2), one of the six devices that printed their verdicts had all three of its
 //!   import tax tries split, its last 2.5 against 1.2 us over all its phases, where the other five
 //!   answered `Fails` (1.1 to 2.6 us against 1.2 to 3.0), and it answered `Unchecked`, so its long
 //!   buffers took no fresh pages where the others' did. Tries that all split so answer `Fails` for
-//!   the device's life, unrecorded, where the last one's floors fall short of the margin, and
-//!   `Unchecked` only past it. Load moves the merge's floors either way, its halves agreeing: in
+//!   now, unrecorded, where the last one's floors fall short of the margin, and `Unchecked` only
+//!   past it. Load moves the merge's floors either way, its halves agreeing: in
 //!   one full run of the runtime's and the validation crate's device tests on the Radeon 780M
 //!   (RADV, Mesa 26.2.6, Linux 7.3.1), 32 of 2,531 devices answered `Fails`, one call of four at
 //!   0.6 to 1.15 of the calls apart where a quiet device's is 0.35; and on the M3 Max beside loops
@@ -94,8 +94,7 @@
 //!   the kernel's release. So a merge verdict is recorded only where its try's floors are clear of
 //!   that load ([`merge_clear`]: a `Holds` at most [`MERGE_HOLDS_CLEAR`] of the calls apart, a
 //!   `Fails` at least [`MERGE_FAILS_CLEAR`]) and each of [`MERGE_REPEATS`] tries more answers it
-//!   so ([`merge_tried`]); short of that it answers for the device's life, unrecorded, and the
-//!   next device measures again. Those `Holds` on the M3 Max came from floors that were each the
+//!   so ([`merge_tried`]); short of that it answers for now, unrecorded. Those `Holds` on the M3 Max came from floors that were each the
 //!   least of a form's rounds, inside one call for the one call of the infos and inside
 //!   [`MERGED`] for the calls apart: load that lengthened any one call of a round lengthened its
 //!   sum, so each round of the calls apart took a hit about [`MERGED`] times as often, and their
@@ -105,12 +104,45 @@
 //!   buffer of its own. So each call apart has a floor of its own, over as many rounds as the
 //!   one call's, and the form's floor is their sum ([`apart_floor`]): each floor is the least of
 //!   as many calls, equally exposed to the load, and a hit to one call of each round, whichever,
-//!   moves none.
+//!   moves none. A lift of one call of every round in both forms alike still reads as a `Fails`,
+//!   and past [`MERGE_FAILS_CLEAR`]: on the Radeon 780M beside other jobs on its host (job
+//!   m3-max-39740, a load average of 18 to 24 on 16 threads), two of four devices' merges
+//!   answered `Fails` from 76.8 us in one call against 106.9 apart (0.72) and 67.6 against 90.7
+//!   (0.745), 58 to 67 us past the other two's one call (9.3 and 9.5 us) and 64 to 80 past
+//!   their calls apart (26.6 and 27.1), whose answer was `Holds`; and those two devices grouped
+//!   no batch for their lives. Their checks waited up to 9.4 and 38.6 ms for one of their
+//!   submissions, the quiet ones' 0.09 ms. Threads of the checks' own process that spun, or
+//!   wrote fresh pages, on twice the host's 16 threads lifted every call alike instead, by up to
+//!   30 us, and each of the eight devices made beside them answered `Holds`, its tries at 0.23 to
+//!   0.64 of the calls apart (job m3-max-39786).
+//! - **Answers for now.** So an answer stands for now unless it earned more ([`Stands`]): a
+//!   merge `Holds` clear of the load and repeated, an import tax `Holds` past its margin and
+//!   repeated, and an `Unchecked` of a call refused or of a device that imports no host pointer
+//!   are recorded (below); a `Fails` clear of the load (the merge's past [`MERGE_FAILS_CLEAR`]
+//!   and repeated, the import tax's with a held import adding at most a
+//!   [`TAX_FAILS_CLEAR`]th of its bound) whose every try ran quiet stands for the device's life
+//!   and is never recorded ([`merge_stands`], [`tax_stands`]). A try ran quiet ([`Load`]) where
+//!   each stand-by before its rounds or submissions found the device's work quiet (below), none
+//!   of them took past [`QUIET_ROUND_MOST`] from its first call to its fence's reset, and all of
+//!   them no more than [`QUIET_TRY_MOST`]. The checks' thread keeps its command buffers and
+//!   fence and checks again each answer that stands for now: [`RECHECK_FIRST`] after the
+//!   device's first answers, then each time twice as long after the last up to 64 s, then every
+//!   [`RECHECK_EVERY`] ([`recheck_after`]), until none does. Each answer of a check again takes
+//!   the place of the one before (tries that all split keep it), so a merge that answered
+//!   `Fails` under a load that passed groups once a check again answers `Holds`.
+//! - **Stood by.** Before each round and each submission of a phase, the thread stands by until
+//!   the device's work is quiet (`DeviceShared::work_quiet_for`): none of its batches held or in
+//!   flight, and no use of its `VkQueue`s under way for [`ROUND_QUIET`], or none since its own
+//!   last round. It stands by [`STAND_BY_MOST`] at most, and not at all while a call waits for
+//!   its verdicts; a round that goes without finding the work quiet leaves its try not quiet.
 //! - **Its verdicts** are `Pending` until it answers, and the device takes the form a driver
 //!   without each answer takes: every batch its own call, its long buffers placed and cleared as
 //!   ever, every pointer import kept. `Unchecked` where a check could not run (no
 //!   `VK_EXT_external_memory_host`, a call refused, too few rounds) or its tries disagreed (the
-//!   import tax's only past its margin, above), with the same forms.
+//!   import tax's only past its margin, above), with the same forms. A verdict changes in the
+//!   device's life only where a check again answers otherwise; each path reads it as it decides
+//!   (a batch whether it waits in a group, a buffer as it is made whether it takes fresh pages),
+//!   and what it decided before stays.
 //! - **Its cost**: [`ROUNDS`] rounds of each merge form and [`TAX_PHASES`] phases of
 //!   [`TAX_SUBMITS`] submissions, each waited for, every command buffer empty; the
 //!   [`TAX_IMPORTS`] imports of [`TAX_BYTES`] in all made and freed once a try, over pages
@@ -118,18 +150,25 @@
 //!   [`TRIES`] times in all, where its halves disagree, and the import tax's [`TAX_REPEATS`]
 //!   tries more where it answers `Holds` past its margin, and the merge's [`MERGE_REPEATS`] where
 //!   its answer is clear of the load beside it. The probe's rounds took 3 to 12 ms on those
-//!   devices.
-//! - **Kept.** Once every check answered and each timed check's answer earned its record (no
-//!   check's tries all disagreed; the merge's answer was clear of the load and repeated, and an
-//!   import tax `Holds` passed its margin and repeated, above),
-//!   the verdicts are written as one record in the shader cache's content directory
-//!   (`shader_cache/store.rs`), named by the driver's identity, the kernel's release (the import
-//!   tax is the kernel's work on RADV), the check's version and the runtime's ([`record_name`]):
-//!   a device of the same driver, release and kernel reads them as it is made and runs no check.
-//!   A failed write leaves the verdicts for the device's life. A device made with
+//!   devices. Where an answer stands for now, as much again at each check again, the first 1 s
+//!   after the first answers and the eighth and later a minute apart; and a device that does not
+//!   merge, or holds an import with no cost, pays its merge's or its import tax's tries at each
+//!   making, a `Fails` never being recorded (below): on a driver that does neither (the M3 Max's
+//!   MoltenVK, NVIDIA's), every device runs both checks, as it did before any record, and, where
+//!   no try of its first answers ran quiet, once more at least.
+//! - **Kept.** Once a check's answer earned its record (above), the verdicts recorded are
+//!   written as one record in the shader cache's content directory (`shader_cache/store.rs`),
+//!   named by the driver's identity, the kernel's release (the import tax is the kernel's work on
+//!   RADV), the check's version and the runtime's ([`record_name`]), with no answer of a check
+//!   whose answer earned none; written again as a check again earns one. A device of the same
+//!   driver, release and kernel reads it as it is made: it takes each `Holds` and `Unchecked`
+//!   there and does not check that again, and runs the checks the record holds no answer of, or
+//!   a `Fails` of, which it takes as a hint and no answer ([`recalled`]): a `Fails` of the load
+//!   beside one device's checks would hold every later device of the release to it. A failed
+//!   write leaves the verdicts for the device's life. A device made with
 //!   `DeviceOptions::assume_submissions_merge` (a test hook) reads and writes no record: its merge
 //!   check holds from its making, the merge's floors only reported, and its other checks answer
-//!   for its life.
+//!   for its life, never checked again.
 //! - **Out of the device's way.** Before each step that allocates, frees, maps or unmaps pages,
 //!   or submits (each round, each import and its release, each submission of a phase), the
 //!   thread steps aside for the device's allocations and frees on other threads
@@ -182,7 +221,7 @@ use crate::command_buffer::fences::Fences;
 use crate::device::functions::{Functions, Vk};
 use crate::device::relay::{By, QueueUses};
 use crate::device::submit_stalls::Uses;
-use crate::device::{lock, Device, QueueSlot};
+use crate::device::{lock, Device, QueueSlot, WorkShare};
 use crate::driver_facts::inform_through;
 use crate::exit_guard::{self, Call};
 use crate::freed_memory::Parking;
@@ -211,8 +250,8 @@ pub(crate) const ROUNDS: usize = 16;
 /// The untimed rounds of each form first.
 const WARM: usize = 2;
 
-/// The tries of a timed check (the merge, the import tax) whose halves disagree, before
-/// it answers `Unchecked` for the device's life and nothing is recorded (the module docs).
+/// The tries of a timed check (the merge, the import tax) whose halves disagree, before it
+/// answers `Unchecked` for now and nothing is recorded (the module docs).
 pub(crate) const TRIES: usize = 3;
 
 /// The most one call of the merge's infos costs, as a share of its calls apart, where the driver
@@ -272,6 +311,77 @@ pub(crate) const TAX_MARGIN: i64 = 2;
 /// The tries more an import tax `Holds` past [`TAX_MARGIN`] answers again, each past it, before
 /// it is recorded.
 pub(crate) const TAX_REPEATS: usize = 2;
+
+/// What a held import may add to a submission at most over a whole try, as a part of its bound
+/// ([`tax_bound`]), for an import tax `Fails` to be clear of the load beside it
+/// ([`tax_stands`]): the bound divided by this, a half.
+pub(crate) const TAX_FAILS_CLEAR: i64 = 2;
+
+/// How long no use of the device's `VkQueue`s may have been under way, none of its batches in
+/// flight or held, before a round or a submission of the checks goes ([`Parts::stand_by`]): the
+/// gap that ends a burst of submissions (`queue_quiet::SETTLE`).
+const ROUND_QUIET: Duration = crate::device::queue_quiet::SETTLE;
+
+/// The longest a stand-by lasts ([`Parts::stand_by`]): past it the round goes beside the device's
+/// work, and its try did not run quiet ([`Load::ran_quiet`]).
+pub(crate) const STAND_BY_MOST: Duration = Duration::from_millis(20);
+
+/// How often a stand-by looks again.
+const LOOK_EVERY: Duration = Duration::from_micros(250);
+
+/// The longest a round or a submission of a try that ran quiet took, from its first call to its
+/// fence's reset, in nanoseconds ([`Load::ran_quiet`]): about twenty times a quiet one's (the
+/// Radeon 780M's longest, 0.09 ms), where the loaded checks of the module docs waited 9.4 to
+/// 38.6 ms for one.
+pub(crate) const QUIET_ROUND_MOST: i64 = 2_000_000;
+
+/// The longest the rounds or submissions of a try that ran quiet took in all, in nanoseconds
+/// ([`Load::ran_quiet`]): the probe's rounds took 3 to 12 ms on its devices.
+pub(crate) const QUIET_TRY_MOST: i64 = 30_000_000;
+
+/// The wait before the first check again of an answer that stands only for now ([`Stands::Now`],
+/// [`recheck_after`]), from the end of the device's first answers.
+pub(crate) const RECHECK_FIRST: Duration = Duration::from_secs(1);
+
+/// The checks again whose wait doubles the one before ([`recheck_after`]): from [`RECHECK_FIRST`]
+/// to 64 s.
+pub(crate) const RECHECK_DOUBLINGS: u32 = 6;
+
+/// The wait between checks again past those ([`recheck_after`]): one a minute.
+pub(crate) const RECHECK_EVERY: Duration = Duration::from_secs(60);
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// The merge tries of the next device this thread makes that a device test lifts
+    /// ([`lift_next_merge_tries`]).
+    static LIFTED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// The answers the next device this thread makes takes as a record's, every one standing
+    /// ([`answer_next_device`]).
+    static ANSWERED: std::cell::Cell<Option<[Verdict; Check::COUNT]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Lift the first `tries` merge tries of the next device this thread makes as the load beside
+/// them lifted the Radeon 780M's (the module docs, "Load beside it"): [`LIFT`] more on the first
+/// call of each of their rounds, and none of their stand-bys found quiet. A device test's.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn lift_next_merge_tries(tries: u32) {
+    LIFTED.with(|lifted| lifted.set(tries));
+}
+
+/// What [`lift_next_merge_tries`] adds to the first call of each round, in nanoseconds: about
+/// what the load lifted the Radeon 780M's one call of the infos by (the module docs).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) const LIFT: i64 = 70_000;
+
+/// The next device this thread makes takes `answers` as its submission checks' verdicts, as a
+/// record's that each stand, and runs no check: a device test's, for one that holds the device
+/// to the paths those verdicts choose from its making (a record's `Fails` is no answer,
+/// [`recalled`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) fn answer_next_device(answers: [Verdict; Check::COUNT]) {
+    ANSWERED.with(|answered| answered.set(Some(answers)));
+}
 
 /// How long one wait for a fence lasts before it is repeated.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
@@ -356,9 +466,131 @@ pub(crate) struct Measured {
     pub(crate) bare: i64,
 }
 
+/// How long a check's answer stands (the module docs, "Load beside it").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stands {
+    /// Recorded: a later device of the same driver, release and kernel reads it and does not
+    /// check again. A `Holds` its tries earned, clear of the load beside them and repeated, or an
+    /// `Unchecked` of a call refused or of a device that imports no host pointer.
+    Recorded,
+    /// For the device's life, unrecorded, so the next device checks again: a `Fails` clear of
+    /// the load beside it whose tries each ran quiet ([`Load::ran_quiet`]).
+    Life,
+    /// Until the check runs again, later in the device's life ([`recheck_after`]): any other
+    /// answer.
+    Now,
+}
+
+impl Stands {
+    fn byte(self) -> u8 {
+        match self {
+            Stands::Recorded => 1,
+            Stands::Life => 2,
+            Stands::Now => 3,
+        }
+    }
+
+    fn of_byte(byte: u8) -> Option<Stands> {
+        match byte {
+            1 => Some(Stands::Recorded),
+            2 => Some(Stands::Life),
+            3 => Some(Stands::Now),
+            _ => None,
+        }
+    }
+}
+
+/// A check's answer from one run of its tries: its verdict, its floors (those of its first try
+/// that answered) and how long it stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Answer {
+    pub(crate) verdict: Verdict,
+    pub(crate) floors: (i64, i64),
+    pub(crate) stands: Stands,
+}
+
+/// How long a merge answer stands: `verdict` with its floors over its tries ([`merge_tried`]),
+/// `earned` where it is clear of the load and repeated (or an `Unchecked` of a refused call),
+/// each try run quiet where `quiet`. A `Holds` earned is recorded; a `Fails` earned stands for
+/// the device's life where its tries ran quiet and is never recorded, since load that lifts one
+/// call of each form alike reads as a `Fails` (the module docs); every other answer stands for
+/// now.
+pub(crate) fn merge_stands(verdict: Verdict, earned: bool, quiet: bool) -> Stands {
+    match (verdict, earned) {
+        (Verdict::Holds | Verdict::Unchecked, true) => Stands::Recorded,
+        (Verdict::Fails, true) if quiet => Stands::Life,
+        _ => Stands::Now,
+    }
+}
+
+/// How long an import tax answer stands: `verdict` with `floors`, `(held, bare)`, over its tries
+/// ([`tax_tried`]), `kept` where they may be recorded, each try run quiet where `quiet`. A `Holds`
+/// kept (past its margin and repeated) is recorded, and so is an `Unchecked` kept (a call
+/// refused, no pointer import); a `Fails` kept stands for the device's life where its tries ran
+/// quiet and a held import added at most a [`TAX_FAILS_CLEAR`]th of its bound, and is never
+/// recorded; every other answer stands for now.
+pub(crate) fn tax_stands(verdict: Verdict, floors: (i64, i64), kept: bool, quiet: bool) -> Stands {
+    let (held, bare) = floors;
+    match (verdict, kept) {
+        (Verdict::Holds | Verdict::Unchecked, true) => Stands::Recorded,
+        (Verdict::Fails, true) if quiet && held - bare <= tax_bound(bare) / TAX_FAILS_CLEAR => {
+            Stands::Life
+        }
+        _ => Stands::Now,
+    }
+}
+
+/// The wait before the checks' thread checks again, the `done`th time from 0, an answer that
+/// stands for now: [`RECHECK_FIRST`], doubled for each of the next [`RECHECK_DOUBLINGS`] (1, 2,
+/// 4 ... 64 s), then [`RECHECK_EVERY`].
+pub(crate) fn recheck_after(done: u32) -> Duration {
+    match done <= RECHECK_DOUBLINGS {
+        true => RECHECK_FIRST * (1 << done),
+        false => RECHECK_EVERY,
+    }
+}
+
+/// What a device that reads a record takes of its verdict for a check: a `Holds` or an `Unchecked`
+/// stands; a `Fails` is a hint, no answer, and the check runs again, as for a check the record
+/// holds no answer of (`Pending`) (the module docs, "Kept").
+pub(crate) fn recalled(verdict: Verdict) -> Option<Verdict> {
+    match verdict {
+        Verdict::Holds | Verdict::Unchecked => Some(verdict),
+        Verdict::Fails | Verdict::Pending => None,
+    }
+}
+
+/// What a try's rounds or submissions read of the load beside them: whether a stand-by before one
+/// of them went without finding the device's work quiet ([`Parts::stand_by`]), and the longest
+/// one and all of them together, each from its first call to its fence's reset, in nanoseconds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Load {
+    pub(crate) missed: bool,
+    pub(crate) longest: i64,
+    pub(crate) total: i64,
+}
+
+impl Load {
+    /// A round or submission that found the device's work quiet where `quiet`, and took `nanos`.
+    pub(crate) fn round(&mut self, quiet: bool, nanos: i64) {
+        self.missed |= !quiet;
+        self.longest = self.longest.max(nanos);
+        self.total = self.total.saturating_add(nanos);
+    }
+
+    /// Whether the try ran quiet: each of its stand-bys found the device's work quiet, no round or
+    /// submission took past [`QUIET_ROUND_MOST`], and all of them no more than
+    /// [`QUIET_TRY_MOST`].
+    pub(crate) fn ran_quiet(&self) -> bool {
+        !self.missed && self.longest <= QUIET_ROUND_MOST && self.total <= QUIET_TRY_MOST
+    }
+}
+
 /// A device's verdicts of its submission checks, and their state (the module docs).
 pub(crate) struct SubmitChecks {
     verdicts: [AtomicU8; Check::COUNT],
+    /// How long each check's last answer stands ([`Stands`]), 0 before one.
+    stands: [AtomicU8; Check::COUNT],
     measured: [AtomicI64; 4],
     started: AtomicBool,
     settled: Mutex<bool>,
@@ -381,6 +613,10 @@ pub(crate) struct SubmitChecks {
     /// The import tax's tries, in this process: each makes and releases [`TAX_IMPORTS`] imports
     /// once ([`tax_holds`]).
     pub(crate) tax_tries: AtomicU64,
+    /// The merge's tries, in this process.
+    pub(crate) merge_tries: AtomicU64,
+    /// The checks again of answers that stood for now, in this process ([`recheck_after`]).
+    pub(crate) rechecks: AtomicU64,
     /// The device's teardown stopped the checks ([`SubmitChecks::stop`]): read between steps.
     stopping: AtomicBool,
     /// The calls waiting for the verdicts ([`SubmitChecks::wait`]), for which no step steps
@@ -389,6 +625,9 @@ pub(crate) struct SubmitChecks {
     /// Whether the checks' thread runs, and what tells its end.
     running: Mutex<bool>,
     ending: Condvar,
+    /// What wakes the checks' thread from its rest between checks again
+    /// ([`SubmitChecks::rest`]), under `running`'s lock: the device's teardown.
+    rest: Condvar,
     /// The longest the checks waited for one of their submissions in this process, in
     /// nanoseconds, a stalled one's wait included ([`STALL`]).
     longest_wait: AtomicU64,
@@ -418,6 +657,9 @@ pub(crate) struct SubmitChecks {
     /// test's.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) stall: Mutex<Option<Duration>>,
+    /// The merge tries still to lift ([`lift_next_merge_tries`]): a device test's.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    lifted: AtomicU32,
 }
 
 /// A device test's injection into the next submission of the checks
@@ -440,6 +682,7 @@ impl SubmitChecks {
     pub(crate) fn new(merge_assumed: bool) -> SubmitChecks {
         let checks = SubmitChecks {
             verdicts: Default::default(),
+            stands: Default::default(),
             measured: Default::default(),
             started: AtomicBool::new(false),
             settled: Mutex::new(false),
@@ -451,10 +694,13 @@ impl SubmitChecks {
             merge_unearned: AtomicBool::new(false),
             merge_assumed,
             tax_tries: AtomicU64::new(0),
+            merge_tries: AtomicU64::new(0),
+            rechecks: AtomicU64::new(0),
             stopping: AtomicBool::new(false),
             waiters: AtomicU32::new(0),
             running: Mutex::new(false),
             ending: Condvar::new(),
+            rest: Condvar::new(),
             longest_wait: AtomicU64::new(0),
             stalled: AtomicBool::new(false),
             left: Mutex::new(None),
@@ -468,6 +714,8 @@ impl SubmitChecks {
             idles: AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             stall: Mutex::new(None),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            lifted: AtomicU32::new(LIFTED.with(|lifted| lifted.replace(0))),
         };
         if merge_assumed {
             checks.set(Check::Merge, Verdict::Holds);
@@ -494,6 +742,20 @@ impl SubmitChecks {
         self.verdicts[check.index()].store(verdict.byte(), Ordering::Release);
     }
 
+    /// How long `check`'s last answer stands; `None` before one, and for a verdict read from a
+    /// record.
+    pub(crate) fn stands(&self, check: Check) -> Option<Stands> {
+        Stands::of_byte(self.stands[check.index()].load(Ordering::Acquire))
+    }
+
+    /// `check`'s floors in what the checks measured: the merge's `(merged, apart)`, the import
+    /// tax's `(held, bare)`.
+    fn set_floors(&self, check: Check, (first, second): (i64, i64)) {
+        let at = 2 * check.index();
+        self.measured[at].store(first, Ordering::Release);
+        self.measured[at + 1].store(second, Ordering::Release);
+    }
+
     fn measured(&self) -> Measured {
         let at = |i: usize| self.measured[i].load(Ordering::Acquire);
         Measured {
@@ -508,19 +770,14 @@ impl SubmitChecks {
     /// chooses, whatever the device measured (`tests/host_ram_dma_buf.rs`).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
     pub(crate) fn force(&self, check: Check, verdict: Verdict) {
+        // It stands for the device's life: no check again takes its place.
+        self.stands[check.index()].store(Stands::Life.byte(), Ordering::Release);
         self.set(check, verdict);
     }
 
     fn set_measured(&self, measured: Measured) {
-        let values = [
-            measured.merged,
-            measured.apart,
-            measured.held,
-            measured.bare,
-        ];
-        for (slot, value) in self.measured.iter().zip(values) {
-            slot.store(value, Ordering::Release);
-        }
+        self.set_floors(Check::Merge, (measured.merged, measured.apart));
+        self.set_floors(Check::ImportTax, (measured.held, measured.bare));
     }
 
     /// Note the checks started; whether they had not before.
@@ -558,6 +815,8 @@ impl SubmitChecks {
         self.stopping.store(true, Ordering::SeqCst);
         {
             let mut running = lock(&self.running);
+            // Its thread may rest between checks again ([`SubmitChecks::rest`]).
+            self.rest.notify_all();
             while *running {
                 running =
                     (self.ending.wait(running)).unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -565,6 +824,26 @@ impl SubmitChecks {
         }
         let left = lock(&self.left).take();
         left.is_none_or(|left| left.release_once_complete(raw, self.bound()))
+    }
+
+    /// The checks' thread rests for `wait` before it checks again ([`recheck_after`]): whether it
+    /// goes on, `false` once the device's teardown stops it, which wakes it at once.
+    fn rest(&self, wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
+        let mut running = lock(&self.running);
+        loop {
+            if self.stopping() {
+                return false;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return true;
+            }
+            running = match self.rest.wait_timeout(running, left) {
+                Ok((running, _)) => running,
+                Err(poisoned) => poisoned.into_inner().0,
+            };
+        }
     }
 
     /// The longest the checks wait for one of their submissions, and the teardown for a stalled
@@ -751,8 +1030,8 @@ fn floor(times: &[i64]) -> i64 {
 /// framed: a change to any bumps it, and a record of another version is never read (one of 3 may
 /// hold an import tax `Holds` short of [`TAX_MARGIN`], one of 5 a merge verdict of one loaded
 /// try, one of 6 three verdicts, one of 7 a merge verdict from the least of the calls apart's
-/// sums rather than [`apart_floor`]).
-pub(crate) const CHECK_VERSION: u32 = 8;
+/// sums rather than [`apart_floor`], one of 8 a `Fails` taken as an answer).
+pub(crate) const CHECK_VERSION: u32 = 9;
 
 /// A record's first bytes.
 const MAGIC: [u8; 8] = *b"M2VSUBC\0";
@@ -802,7 +1081,8 @@ pub(crate) fn record_name(identity: &DriverIdentity) -> String {
 /// version        u32       CHECK_VERSION
 /// runtime        u32       RUNTIME_VERSION
 /// identity       32 bytes  the identity's and the kernel's digest for these checks
-/// verdicts       2 bytes   one per check, in Check::ALL's order: Holds 1, Fails 2, Unchecked 3
+/// verdicts       2 bytes   one per check, in Check::ALL's order: Holds 1, Fails 2, Unchecked 3,
+///                          or 0 where the record holds no answer of it
 /// measured       4 x i64   merged, apart, held, bare, in nanoseconds
 /// checksum       32 bytes  SHA-256 of every byte before it
 /// ```
@@ -832,9 +1112,9 @@ pub(crate) fn encode(
     bytes
 }
 
-/// The verdicts and measurements `bytes` record for `identity`: `None` for anything but a whole
-/// record of this version and runtime, for this identity and kernel, whose checksum holds and
-/// whose every verdict is an answer.
+/// The verdicts and measurements `bytes` record for `identity`, `Pending` for a check it holds no
+/// answer of: `None` for anything but a whole record of this version and runtime, for this
+/// identity and kernel, whose checksum holds. A device takes of them what [`recalled`] keeps.
 pub(crate) fn decode(
     identity: &DriverIdentity,
     bytes: &[u8],
@@ -861,9 +1141,6 @@ pub(crate) fn decode(
         return None;
     }
     let verdicts: [Verdict; Check::COUNT] = std::array::from_fn(|i| Verdict::of_byte(verdicts[i]));
-    if verdicts.contains(&Verdict::Pending) {
-        return None;
-    }
     let value = |i: usize| i64::from_le_bytes(rest[8 * i..8 * i + 8].try_into().unwrap_or([0; 8]));
     let measured = Measured {
         merged: value(0),
@@ -875,37 +1152,59 @@ pub(crate) fn decode(
 }
 
 impl Device {
-    /// As the device is made: its verdicts where a record holds them (settled then), else its
-    /// checks start on a thread of their own. A record that does not decode is no record. Where
-    /// the merge check holds without its answer (`DeviceOptions::assume_submissions_merge`), no
-    /// record is read: the checks run, and keep none.
+    /// As the device is made: its verdicts where a record holds them, else its checks start on a
+    /// thread of their own. Of a record, a `Holds` or an `Unchecked` stands ([`recalled`]); a
+    /// check it holds a `Fails` of, or no answer, runs (the module docs, "Kept"), and the
+    /// verdicts settle once those answered; where none does, they settle at once. A record that
+    /// does not decode is no record. Where the merge check holds without its answer
+    /// (`DeviceOptions::assume_submissions_merge`), no record is read: the checks run, and keep
+    /// none.
     pub(crate) fn recall_submit_checks(&self) {
         let shared = self.shared();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if let Some(answers) = ANSWERED.with(std::cell::Cell::take) {
+            let checks = &shared.submit_checks;
+            for (check, verdict) in Check::ALL.into_iter().zip(answers) {
+                checks.set(check, verdict);
+            }
+            shared.counts.submit_checks_recalled();
+            checks.start();
+            checks.settle(None);
+            return;
+        }
+        let none = [Verdict::Pending; Check::COUNT];
         if shared.submit_checks.merge_assumed {
-            self.start_submit_checks();
+            self.start_submit_checks([true; Check::COUNT], none);
             return;
         }
         let identity = self.driver_identity();
         let name = record_name(&identity);
         let looked = (shared.shader_cache.content_store())
             .load_content(&name, |bytes| decode(&identity, &bytes));
-        if let Lookup::Hit((verdicts, measured)) = looked {
-            let checks = &shared.submit_checks;
-            for (check, verdict) in Check::ALL.into_iter().zip(verdicts) {
-                checks.set(check, verdict);
-            }
-            checks.set_measured(measured);
-            checks.start();
-            shared.counts.submit_checks_recalled();
-            checks.settle(None);
+        let Lookup::Hit((verdicts, measured)) = looked else {
+            self.start_submit_checks([true; Check::COUNT], none);
+            return;
+        };
+        let checks = &shared.submit_checks;
+        let kept = verdicts.map(|verdict| recalled(verdict).unwrap_or(Verdict::Pending));
+        for (check, verdict) in Check::ALL.into_iter().zip(kept) {
+            checks.set(check, verdict);
+        }
+        checks.set_measured(measured);
+        shared.counts.submit_checks_recalled();
+        let open = kept.map(|verdict| verdict == Verdict::Pending);
+        if open.contains(&true) {
+            self.start_submit_checks(open, kept);
             return;
         }
-        self.start_submit_checks();
+        checks.start();
+        checks.settle(None);
     }
 
-    /// Start the checks on a thread of their own, where they have not started. Where the thread
-    /// cannot start, every verdict is unchecked.
-    fn start_submit_checks(&self) {
+    /// Start the checks that are `open` on a thread of their own, where they have not started,
+    /// the record holding `recorded` (`Pending` for none). Where the thread cannot start, every
+    /// verdict not answered is unchecked.
+    fn start_submit_checks(&self, open: [bool; Check::COUNT], recorded: [Verdict; Check::COUNT]) {
         let checks = &self.shared().submit_checks;
         if !checks.start() {
             return;
@@ -927,7 +1226,7 @@ impl Device {
             crate::loader_word::on_a_check_s_thread();
             crate::step_aside::mark_a_check_s_thread(crate::step_aside::Counted::Apart);
             let parts = parts;
-            run(&parts, made);
+            run(&parts, made, (open, recorded));
         });
         if spawned.is_err() {
             // SAFETY: the pool is the checks' and nothing of it was used.
@@ -1032,6 +1331,20 @@ impl Device {
             0 => String::new(),
             tries => format!(", {tries} import tax tries"),
         };
+        let merge_tries = match checks.merge_tries.load(Ordering::Relaxed) {
+            0 => String::new(),
+            tries => format!(", {tries} merge tries"),
+        };
+        let rechecks = match checks.rechecks.load(Ordering::Relaxed) {
+            0 => String::new(),
+            again => format!(", checked again {again} times"),
+        };
+        let stands = |check: Check| match checks.stands(check) {
+            Some(Stands::Recorded) => ", recorded",
+            Some(Stands::Life) => ", for the device's life",
+            Some(Stands::Now) => ", for now",
+            None => "",
+        };
         let assumed = match checks.merge_assumed {
             true => " assumed",
             false => "",
@@ -1048,13 +1361,16 @@ impl Device {
             false => "",
         };
         format!(
-            "merge {:?}{assumed} ({:.1} us in one call of {MERGED} against {:.1} us apart), import tax \
-             {:?} ({:.1} us a submission with {} imports of {} MiB in all held against {:.1} us), \
-             {took}{split}{merge_unearned}{unearned}{short}{tax_tries}{longest}{stalled} (floors)",
+            "merge {:?}{assumed}{} ({:.1} us in one call of {MERGED} against {:.1} us apart), \
+             import tax {:?}{} ({:.1} us a submission with {} imports of {} MiB in all held \
+             against {:.1} us), {took}{split}{merge_unearned}{unearned}{short}{merge_tries}\
+             {tax_tries}{rechecks}{longest}{stalled} (floors)",
             checks.verdict(Check::Merge),
+            stands(Check::Merge),
             us(m.merged),
             us(m.apart),
             checks.verdict(Check::ImportTax),
+            stands(Check::ImportTax),
             us(m.held),
             TAX_IMPORTS,
             TAX_BYTES >> 20,
@@ -1078,6 +1394,9 @@ struct Parts {
     /// The device's allocations, whose work in progress the checks step aside for
     /// (`step_aside.rs`).
     allocations: Arc<Allocations>,
+    /// What tells whether the device's work is quiet, which the checks stand by for
+    /// ([`Parts::stand_by`]).
+    work: WorkShare,
     store: Arc<Store>,
     /// The device's import of host pointers, where it imports them.
     pointers: Option<PointerImport>,
@@ -1141,6 +1460,7 @@ impl Parts {
             loader_word: Arc::clone(&shared.loader_word),
             checks: Arc::clone(&shared.submit_checks),
             allocations: Arc::clone(&shared.allocations.allocations),
+            work: shared.work_share(),
             store: shared.shader_cache.content_store_share(),
             pointers: (shared.host_import.as_ref().ok())
                 .and_then(Importer::pointers)
@@ -1203,6 +1523,85 @@ impl Parts {
         !self.checks.stopping()
     }
 
+    /// Before a round or a submission, stand by until the device's work is quiet
+    /// (`DeviceShared::work_quiet_for`): none of its batches held or in flight, and no use of its
+    /// `VkQueue`s under way for [`ROUND_QUIET`], or none since the checks' own last use, which
+    /// ended by `own`. At most [`STAND_BY_MOST`], and not while a call waits for the verdicts or
+    /// the checks stop: whether it found the work quiet.
+    fn stand_by(&self, own: Option<Instant>) -> bool {
+        let checks = &*self.checks;
+        let began = Instant::now();
+        loop {
+            let pause = match self.work.quiet_for() {
+                Some(unused)
+                    if own
+                        .is_some_and(|own| unused.saturating_add(LOOK_EVERY) >= own.elapsed()) =>
+                {
+                    return true;
+                }
+                Some(unused) => match ROUND_QUIET.checked_sub(unused) {
+                    None | Some(Duration::ZERO) => return true,
+                    Some(left) => left,
+                },
+                None => LOOK_EVERY,
+            };
+            if checks.stopping() || checks.awaited() || began.elapsed() >= STAND_BY_MOST {
+                return false;
+            }
+            std::thread::sleep(pause.min(LOOK_EVERY));
+        }
+    }
+
+    /// Take `check`'s `answer`, `first` where it is among the device's first: its verdict (but
+    /// the merge's where it holds without its answer), its floors and how long it stands. A
+    /// check again whose tries all split keeps the verdict and floors before it: they tell
+    /// nothing but the load beside them. Whether the answer earned a record `recorded` does not
+    /// hold, which it then holds.
+    fn take(
+        &self,
+        check: Check,
+        answer: Answer,
+        recorded: &mut [Verdict; Check::COUNT],
+        first: bool,
+    ) -> bool {
+        let checks = &*self.checks;
+        let at = check.index();
+        // A check again answers only while the check stands for now (a device test's forced
+        // verdict stands for the device's life).
+        if !first && Stands::of_byte(checks.stands[at].load(Ordering::Acquire)) != Some(Stands::Now)
+        {
+            return false;
+        }
+        let split = !first && answer.verdict == Verdict::Unchecked && answer.stands == Stands::Now;
+        // The merge's verdict holds from the device's making where it is assumed.
+        let assumed = check == Check::Merge && checks.merge_assumed;
+        if !split && !assumed {
+            checks.set(check, answer.verdict);
+        }
+        if !split {
+            checks.set_floors(check, answer.floors);
+        }
+        checks.stands[at].store(answer.stands.byte(), Ordering::Release);
+        let earned = answer.stands == Stands::Recorded && recorded[at] != answer.verdict;
+        if earned {
+            recorded[at] = answer.verdict;
+        }
+        earned
+    }
+
+    /// Write the device's record of `recorded`, with what the checks measured: not where the
+    /// merge holds without its answer or the store has no directory. A failed write leaves the
+    /// verdicts to the device's life alone.
+    fn record(&self, recorded: [Verdict; Check::COUNT]) {
+        let checks = &*self.checks;
+        if checks.merge_assumed || !self.store.has_directory() {
+            return;
+        }
+        let identity = &self.identity;
+        let bytes = encode(identity, recorded, checks.measured());
+        let _ = self.store.write_record_soon(&record_name(identity), bytes);
+    }
+
     /// Step aside for the device's allocations and frees on other threads before a step that
     /// allocates, frees, maps or submits (`step_aside.rs`): not while the checks stop or a call
     /// waits for their verdicts. Counted where it waited.
@@ -1233,9 +1632,17 @@ impl Drop for Ends {
     }
 }
 
-/// The checks' thread: each check's verdict given as it is known, then the record. Stopped by
-/// the device's teardown, it settles what it had not answered `Unchecked` and records nothing.
-fn run(parts: &Parts, made: Made) {
+/// The checks' thread: each check that is `open` answers, its verdict given as it is known, and
+/// the record is written where an answer earned it; the verdicts settle; then each answer that
+/// stands for now ([`Stands::Now`]) is checked again later in the device's life
+/// ([`recheck_after`]), until none does. `recorded` is what the device's record holds
+/// (`Pending` for no answer). Stopped by the device's teardown before its first answers, it
+/// settles what it had not answered `Unchecked` and records nothing.
+fn run(
+    parts: &Parts,
+    made: Made,
+    (open, recorded): ([bool; Check::COUNT], [Verdict; Check::COUNT]),
+) {
     let checks = &*parts.checks;
     let started = Instant::now();
     parts.step();
@@ -1243,64 +1650,102 @@ fn run(parts: &Parts, made: Made) {
         checks.settle_unchecked();
         return;
     };
-    let ran = measure(parts, &objects);
-    if checks.stalled() {
-        // The stalled submission's fence and command buffers are still pending: they go with the
-        // device's teardown, once it sees it complete ([`SubmitChecks::stop`]).
-        *lock(&checks.left) = Some(objects);
+    let mut recorded = recorded;
+    let Some(mut again) = measure(parts, &objects, open, &mut recorded, true) else {
+        // The process is exiting, or the device's teardown, its loss or a stalled submission
+        // stopped the checks: nothing is kept.
+        end(parts, objects);
         checks.settle_unchecked();
+        return;
+    };
+    parts.counts.submit_checks_ran();
+    checks.settle(Some(started.elapsed()));
+    let mut done = 0;
+    while !checks.merge_assumed && again.contains(&true) && checks.rest(recheck_after(done)) {
+        done += 1;
+        checks.rechecks.fetch_add(1, Ordering::Relaxed);
+        match measure(parts, &objects, again, &mut recorded, false) {
+            Some(open) => again = open,
+            None => break,
+        }
+    }
+    end(parts, objects);
+}
+
+/// The checks' objects as their thread ends: left to the device's teardown where a submission of
+/// theirs stalled, still pending ([`SubmitChecks::stop`]); else released.
+fn end(parts: &Parts, objects: Objects) {
+    if parts.checks.stalled() {
+        *lock(&parts.checks.left) = Some(objects);
         return;
     }
     parts.step();
-    let released = objects.release(parts);
-    let Some((measured, kept)) = ran.filter(|_| released) else {
-        // The process is exiting, or the device's teardown stopped the checks: nothing is kept.
-        checks.settle_unchecked();
-        return;
-    };
-    checks.set_measured(measured);
-    parts.counts.submit_checks_ran();
-    let verdicts = Check::ALL.map(|check| checks.verdict(check));
-    // A failed write, or a store with no directory, leaves the verdicts to the device's life
-    // alone.
-    let recorded = !checks.merge_assumed && !verdicts.contains(&Verdict::Pending);
-    if kept && recorded && parts.store.has_directory() {
-        let identity = &parts.identity;
-        let bytes = encode(identity, verdicts, measured);
-        let _ = parts.store.write_record_soon(&record_name(identity), bytes);
-    }
-    checks.settle(Some(started.elapsed()));
+    objects.release(parts);
 }
 
-/// Each check in turn, its verdict set as it is known: what they measured, and whether their
-/// verdicts may be recorded (no timed check's tries all disagreed, an import tax `Holds` earned
-/// its record: [`tax_tried`]); `None` where the process is exiting, or the device's teardown or
-/// its loss stopped the checks.
-fn measure(parts: &Parts, objects: &Objects) -> Option<(Measured, bool)> {
-    let checks = &parts.checks;
-    let (merges, (merged, apart), merge_kept) = merge_tried(checks, || merge(parts, objects))?;
-    if !checks.merge_assumed {
-        checks.set(Check::Merge, merges);
-    }
-    let (taxed, (held, bare), tax_kept) = tax_tried(checks, || {
-        checks.tax_tries.fetch_add(1, Ordering::Relaxed);
-        tax(parts, objects)
-    })?;
-    checks.set(Check::ImportTax, taxed);
-    let measured = Measured {
-        merged,
-        apart,
-        held,
-        bare,
+/// Each check that is `open` in turn, its answer taken as it is known ([`Parts::take`]); then,
+/// where an answer earned a record the device's does not hold (`recorded`), the record written
+/// again. `first` where these are the device's first answers. Which checks stand for now, to
+/// check again; `None` where the process is exiting, or the device's teardown, its loss or a
+/// stalled submission stopped the checks.
+fn measure(
+    parts: &Parts,
+    objects: &Objects,
+    open: [bool; Check::COUNT],
+    recorded: &mut [Verdict; Check::COUNT],
+    first: bool,
+) -> Option<[bool; Check::COUNT]> {
+    let checks = &*parts.checks;
+    let mut again = [false; Check::COUNT];
+    let mut earned = false;
+    // A check again runs only while its answer stands for now (a device test's forced verdict
+    // stands for the device's life).
+    let runs = |check: &Check| {
+        open[check.index()] && (first || checks.stands(*check) == Some(Stands::Now))
     };
-    Some((measured, merge_kept && tax_kept))
+    for check in Check::ALL.into_iter().filter(runs) {
+        // Whether each of the answer's tries ran quiet ([`Load::ran_quiet`]).
+        let quiet = Cell::new(true);
+        let answer = match check {
+            Check::Merge => {
+                let (verdict, floors, kept) = merge_tried(checks, || {
+                    checks.merge_tries.fetch_add(1, Ordering::Relaxed);
+                    merge(parts, objects, &quiet)
+                })?;
+                let stands = merge_stands(verdict, kept, quiet.get());
+                Answer {
+                    verdict,
+                    floors,
+                    stands,
+                }
+            }
+            Check::ImportTax => {
+                let (verdict, floors, kept) = tax_tried(checks, || {
+                    checks.tax_tries.fetch_add(1, Ordering::Relaxed);
+                    tax(parts, objects, &quiet)
+                })?;
+                let stands = tax_stands(verdict, floors, kept, quiet.get());
+                Answer {
+                    verdict,
+                    floors,
+                    stands,
+                }
+            }
+        };
+        earned |= parts.take(check, answer, recorded, first);
+        again[check.index()] = checks.stands(check) == Some(Stands::Now);
+    }
+    if earned {
+        parts.record(*recorded);
+    }
+    Some(again)
 }
 
 /// A timed check's verdict and floors over at most [`TRIES`] tries of `once`, and whether they
 /// may be recorded: the first try whose blocks or phases agree answers. Where none does, the
-/// check is `Unchecked` for the device's life and not recorded (load beside the check may have
-/// split them, and the next device measures again). `Unchecked`, recorded, where a call was
-/// refused (`once` answered `Some(None)`); `None` where the check stops.
+/// check is `Unchecked` for now and not recorded (load beside the check may have split them, and
+/// it runs again: [`Stands::Now`]). `Unchecked`, recorded, where a call was refused (`once`
+/// answered `Some(None)`); `None` where the check stops.
 pub(crate) fn tried(
     checks: &SubmitChecks,
     mut once: impl FnMut() -> Option<Option<Timed>>,
@@ -1319,13 +1764,13 @@ pub(crate) fn tried(
     Some((Verdict::Unchecked, floors, false))
 }
 
-/// The merge's verdict and floors over its tries of `once` ([`tried`]), and whether they may be
-/// recorded (the module docs, "Load beside it"). A `Holds` or a `Fails` is recorded only where its
-/// try's floors are clear of the load beside it ([`merge_clear`]) and each of [`MERGE_REPEATS`]
-/// tries more answers it so again; short of that it answers for the device's life alone, with the
-/// floors of its first try, and the next device measures again; a refused call ends the repeats,
-/// unrecorded. Tries that all split, or a refused call, answer as [`tried`] does. `None` where the
-/// check stops.
+/// The merge's verdict and floors over its tries of `once` ([`tried`]), and whether they earned
+/// more than now (the module docs, "Load beside it"): a `Holds` or a `Fails` only where its try's
+/// floors are clear of the load beside it ([`merge_clear`]) and each of [`MERGE_REPEATS`] tries
+/// more answers it so again ([`merge_stands`]: a `Holds` so is recorded, a `Fails` never is);
+/// short of that it answers for now, with the floors of its first try; a refused call ends the
+/// repeats, unearned. Tries that all split, or a refused call, answer as [`tried`] does. `None`
+/// where the check stops.
 pub(crate) fn merge_tried(
     checks: &SubmitChecks,
     mut once: impl FnMut() -> Option<Option<Timed>>,
@@ -1351,14 +1796,14 @@ pub(crate) fn merge_tried(
 }
 
 /// The import tax's verdict and floors over its tries of `once` ([`tried`]), and whether they may
-/// be recorded (the module docs, "Load beside it"). A `Holds` stands only where its floors pass
-/// the bound [`TAX_MARGIN`] times over ([`tax_clear`]), and is recorded only where each of
-/// [`TAX_REPEATS`] tries more answers `Holds` so again; short of the repeats it answers for the
-/// device's life alone, with the floors of its first try, and the next device measures again; a
-/// refused call ends the repeats, unrecorded. A `Holds` short of the margin, and tries that all
-/// split where the last one's floors over all its phases fall short of it, answer `Fails` for the
-/// device's life, unrecorded: a cost no try told from the load beside it. Tries that all split
-/// past it answer `Unchecked` so. `None` where the check stops.
+/// be kept (the module docs, "Load beside it"). A `Holds` stands only where its floors pass the
+/// bound [`TAX_MARGIN`] times over ([`tax_clear`]), and is recorded only where each of
+/// [`TAX_REPEATS`] tries more answers `Holds` so again; short of the repeats it answers for now,
+/// with the floors of its first try; a refused call ends the repeats, unrecorded. A `Holds` short
+/// of the margin, and tries that all split where the last one's floors over all its phases fall
+/// short of it, answer `Fails` for now, unrecorded: a cost no try told from the load beside it.
+/// Tries that all split past it answer `Unchecked` so. A `Fails` kept is never recorded
+/// ([`tax_stands`]). `None` where the check stops.
 pub(crate) fn tax_tried(
     checks: &SubmitChecks,
     mut once: impl FnMut() -> Option<Option<Timed>>,
@@ -1390,20 +1835,37 @@ pub(crate) fn tax_tried(
     Some((verdict, floors, earned))
 }
 
-/// One merge try ([`merge_try`]) of one call of [`MERGED`] infos against [`MERGED`] calls.
-/// `Some(None)` where a call was refused; `None` where the check stops.
-fn merge(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
+/// One merge try ([`merge_try`]) of one call of [`MERGED`] infos against [`MERGED`] calls, each
+/// round after a stand-by ([`Parts::stand_by`]); `quiet` keeps whether it ran quiet, with the
+/// tries before it ([`Load::ran_quiet`]). `Some(None)` where a call was refused; `None` where the
+/// check stops.
+fn merge(parts: &Parts, objects: &Objects, quiet: &Cell<bool>) -> Option<Option<Timed>> {
     let mut merged = Vec::with_capacity(ROUNDS);
     let mut apart = Vec::with_capacity(ROUNDS);
+    let mut load = Load::default();
+    // When the checks' own last use of the queue ended, at the latest.
+    let mut own = None;
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    let lifted = (parts.checks.lifted)
+        .try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+            left.checked_sub(1)
+        })
+        .is_ok();
     for round in 0..WARM + ROUNDS {
         for together in [true, false] {
             if !parts.goes_on() {
                 return None;
             }
+            let found = parts.stand_by(own);
+            let began = Instant::now();
             let Some(calls) = objects.submit_round(parts, together)? else {
                 return Some(None);
             };
+            own = Some(Instant::now());
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            let (found, calls) = lifted_round(lifted, found, calls);
             if round >= WARM {
+                load.round(found, nanos(began.elapsed()));
                 match together {
                     true => merged.push(calls.iter().sum()),
                     false => apart.push(std::array::from_fn(|at| calls[at])),
@@ -1411,13 +1873,31 @@ fn merge(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
             }
         }
     }
+    quiet.set(quiet.get() && load.ran_quiet());
     Some(Some(merge_try(&merged, &apart)))
 }
 
+/// A merge round of a try a device test lifts where `lifted` ([`lift_next_merge_tries`]): [`LIFT`]
+/// more on its first call, and its stand-by not found quiet.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+fn lifted_round(lifted: bool, found: bool, mut calls: Vec<i64>) -> (bool, Vec<i64>) {
+    if lifted {
+        calls[0] += LIFT;
+    }
+    (found && !lifted, calls)
+}
+
+/// `elapsed` in nanoseconds.
+fn nanos(elapsed: Duration) -> i64 {
+    i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX)
+}
+
 /// One import tax try ([`tax_try`]) of a submission with the [`TAX_IMPORTS`] imports of
-/// [`TAX_BYTES`] in all held, and without. `Some(None)` where the device imports no host pointer,
-/// the system maps no pages or a call was refused; `None` where the check stops.
-fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
+/// [`TAX_BYTES`] in all held, and without, each submission after a stand-by
+/// ([`Parts::stand_by`]); `quiet` keeps whether it ran quiet, with the tries before it
+/// ([`Load::ran_quiet`]). `Some(None)` where the device imports no host pointer, the system maps
+/// no pages or a call was refused; `None` where the check stops.
+fn tax(parts: &Parts, objects: &Objects, quiet: &Cell<bool>) -> Option<Option<Timed>> {
     let Some(pieces) = (0..TAX_IMPORTS)
         .map(|_| {
             parts.step();
@@ -1434,6 +1914,9 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
     // One set of imports, made before the first phase that holds them and released after the
     // last ([`tax_holds`]).
     let mut imports = Vec::new();
+    let mut load = Load::default();
+    // When the checks' own last use of the queue ended, at the latest.
+    let mut own = None;
     for phase in 0..TAX_PHASES {
         if !parts.goes_on() {
             return release_all(parts, imports.drain(..)).and(None);
@@ -1451,11 +1934,17 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
         let mut refused = false;
         for submission in 0..=TAX_SUBMITS {
             parts.step();
+            let found = parts.stand_by(own);
+            let began = Instant::now();
             let Some(submitted) = objects.submit_one(parts) else {
                 return release_all(parts, imports.drain(..)).and(None);
             };
+            own = Some(Instant::now());
             match submitted {
-                Some(nanos) if submission > 0 => times.push(nanos),
+                Some(nanos) if submission > 0 => {
+                    load.round(found, self::nanos(began.elapsed()));
+                    times.push(nanos);
+                }
                 Some(_) => {}
                 None => {
                     refused = true;
@@ -1471,6 +1960,7 @@ fn tax(parts: &Parts, objects: &Objects) -> Option<Option<Timed>> {
         }
         phases.push(times);
     }
+    quiet.set(quiet.get() && load.ran_quiet());
     Some(Some(tax_try(&phases)))
 }
 
@@ -1805,7 +2295,7 @@ impl Objects {
                     }
                     let start = Instant::now();
                     submitted = raw.queue_submit(queue, infos, fence);
-                    spent.push(i64::try_from(start.elapsed().as_nanos()).unwrap_or(i64::MAX));
+                    spent.push(nanos(start.elapsed()));
                     if submitted.is_err() {
                         break;
                     }
@@ -1966,13 +2456,13 @@ impl Objects {
         }
     }
 
-    /// Let the objects go, inside a section: whether it ran (`false` once the process is
-    /// exiting, the objects then left to its end). No submission naming them is pending: each
-    /// was waited for, or the device was lost, which Vulkan counts as their completion.
-    fn release(&self, parts: &Parts) -> bool {
+    /// Let the objects go, inside a section: once the process is exiting, they are left to its
+    /// end. No submission naming them is pending: each was waited for, or the device was lost,
+    /// which Vulkan counts as their completion.
+    fn release(&self, parts: &Parts) {
         let _held = parts.step_held();
         let Some(_busy) = exit_guard::enter() else {
-            return false;
+            return;
         };
         let raw = parts.vk();
         // SAFETY: no pending submission names them; a null handle is skipped.
@@ -1982,7 +2472,6 @@ impl Objects {
             }
             release::object(raw, self.pool);
         }
-        true
     }
 
     /// The objects a stalled submission names ([`SubmitChecks::stop`]), inside the device's

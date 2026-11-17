@@ -3,11 +3,14 @@
 
 use crate::in_place::DriverIdentity;
 use crate::submit_check::{
-    apart_floor, decode, encode, merge_clear, merge_tried, merge_try, merge_verdict, record_name,
-    tax_clear, tax_holds, tax_tried, tax_try, tax_verdict, tried, Measured, SubmitChecks, Timed,
-    Verdict, MERGED, MERGE_FAILS_CLEAR, MERGE_HOLDS_CLEAR, MERGE_RATIO, MERGE_REPEATS, ROUNDS,
-    TAX_FLOOR, TAX_MARGIN, TAX_PHASES, TAX_REPEATS, TAX_SUBMITS, TRIES,
+    apart_floor, decode, encode, merge_clear, merge_stands, merge_tried, merge_try, merge_verdict,
+    recalled, recheck_after, record_name, tax_clear, tax_holds, tax_stands, tax_tried, tax_try,
+    tax_verdict, tried, Load, Measured, Stands, SubmitChecks, Timed, Verdict, MERGED,
+    MERGE_FAILS_CLEAR, MERGE_HOLDS_CLEAR, MERGE_RATIO, MERGE_REPEATS, QUIET_ROUND_MOST,
+    QUIET_TRY_MOST, RECHECK_EVERY, RECHECK_FIRST, ROUNDS, TAX_FLOOR, TAX_MARGIN, TAX_PHASES,
+    TAX_REPEATS, TAX_SUBMITS, TRIES,
 };
+use std::time::Duration;
 
 /// The probe's medians (2026-11-07, Mesa 26.2.6 under Linux 7.3.1, MoltenVK 1.4.2 under macOS
 /// 27.0.1), in nanoseconds: one call of four infos and four calls apart; a submission with one
@@ -460,8 +463,8 @@ fn identity(device_id: u32) -> DriverIdentity {
 }
 
 /// A record decodes for its own identity alone, every verdict and measurement as written, and
-/// names itself apart from another identity's; a record with a pending verdict, a truncated one
-/// and one whose bytes changed decode to nothing.
+/// names itself apart from another identity's; a record with no answer of a check holds it
+/// pending; a truncated one and one whose bytes changed decode to nothing.
 #[test]
 fn a_record_holds_its_identity_s_verdicts() {
     let (one, other) = (identity(0x15bf), identity(0x1114));
@@ -480,6 +483,117 @@ fn a_record_holds_its_identity_s_verdicts() {
     let mut changed = bytes.clone();
     changed[60] ^= 1;
     assert_eq!(decode(&one, &changed), None);
-    let pending = encode(&one, [Verdict::Holds, Verdict::Pending], measured);
-    assert_eq!(decode(&one, &pending), None);
+    let pending = [Verdict::Holds, Verdict::Pending];
+    let bytes = encode(&one, pending, measured);
+    assert_eq!(decode(&one, &bytes), Some((pending, measured)));
+}
+
+/// A record's `Holds` and `Unchecked` stand for the device that reads it; its `Fails` is a hint
+/// and no answer, as a check it holds none of: the device checks again (the load of one device's
+/// checks would otherwise hold every later device of the release to a `Fails`).
+#[test]
+fn a_recorded_fails_is_no_answer() {
+    assert_eq!(recalled(Verdict::Holds), Some(Verdict::Holds));
+    assert_eq!(recalled(Verdict::Unchecked), Some(Verdict::Unchecked));
+    assert_eq!(recalled(Verdict::Fails), None);
+    assert_eq!(recalled(Verdict::Pending), None);
+}
+
+/// How far each answer stands: a `Holds` earned (clear of the load and repeated, past its margin
+/// for the import tax) is recorded, and so is an `Unchecked` of a call refused; a `Fails` clear
+/// of the load whose tries each ran quiet stands for the device's life and no further; every other
+/// answer stands for now: a `Holds` or a `Fails` short of its record, a `Fails` whose tries did
+/// not all run quiet, tries that all split. An import tax `Fails` is clear where a held import
+/// adds at most half its bound: 2.1 against 2.2 us, as the RTX 5080's quiet devices measured, but
+/// not 0.7 us more where the bound is 1 us.
+#[test]
+fn an_answer_stands_as_far_as_it_earned() {
+    let earned = [
+        (Verdict::Holds, true, Stands::Recorded),
+        (Verdict::Holds, false, Stands::Recorded),
+        (Verdict::Unchecked, true, Stands::Recorded),
+        (Verdict::Fails, true, Stands::Life),
+        (Verdict::Fails, false, Stands::Now),
+    ];
+    for (verdict, quiet, stands) in earned {
+        assert_eq!(
+            merge_stands(verdict, true, quiet),
+            stands,
+            "{verdict:?} quiet {quiet}"
+        );
+    }
+    for verdict in [Verdict::Holds, Verdict::Fails, Verdict::Unchecked] {
+        for quiet in [true, false] {
+            assert_eq!(
+                merge_stands(verdict, false, quiet),
+                Stands::Now,
+                "{verdict:?} unearned"
+            );
+        }
+    }
+    let clear = (2_100, 2_200);
+    let held = (1_900 + TAX_FLOOR, 1_900);
+    assert_eq!(
+        tax_stands(Verdict::Holds, held, true, false),
+        Stands::Recorded
+    );
+    assert_eq!(
+        tax_stands(Verdict::Unchecked, (0, 0), true, true),
+        Stands::Recorded
+    );
+    assert_eq!(tax_stands(Verdict::Fails, clear, true, true), Stands::Life);
+    assert_eq!(tax_stands(Verdict::Fails, clear, true, false), Stands::Now);
+    assert_eq!(
+        tax_stands(Verdict::Fails, (1_900, 1_200), true, true),
+        Stands::Now
+    );
+    assert_eq!(tax_stands(Verdict::Fails, clear, false, true), Stands::Now);
+    assert_eq!(tax_stands(Verdict::Holds, held, false, true), Stands::Now);
+    assert_eq!(
+        tax_stands(Verdict::Unchecked, clear, false, true),
+        Stands::Now
+    );
+}
+
+/// An answer for now is checked again 1, 2, 4 ... 64 s after the one before, then each minute.
+#[test]
+fn checks_again_wait_twice_as_long_up_to_a_minute_apart() {
+    let waits: Vec<Duration> = (0..10).map(recheck_after).collect();
+    let seconds = |s: u64| Duration::from_secs(s);
+    assert_eq!(waits[0], RECHECK_FIRST);
+    assert_eq!(
+        waits,
+        [1, 2, 4, 8, 16, 32, 64, 60, 60, 60].map(seconds).to_vec()
+    );
+    assert_eq!(recheck_after(u32::MAX), RECHECK_EVERY);
+}
+
+/// A try ran quiet where each of its stand-bys found the device's work quiet, no round took past
+/// [`QUIET_ROUND_MOST`] and all of them no more than [`QUIET_TRY_MOST`]: the Radeon 780M's quiet
+/// tries (rounds of 61 to 104 us, the longest 1.3 ms, 4 to 6 ms a try) did; its loaded ones,
+/// which waited 9.4 ms and more for a submission, did not.
+#[test]
+fn a_try_runs_quiet_within_its_bounds() {
+    let rounds = |quiet: bool, each: i64, count: usize| {
+        let mut load = Load::default();
+        for _ in 0..count {
+            load.round(quiet, each);
+        }
+        load
+    };
+    // A merge try's timed rounds, of both forms.
+    let count = 2 * ROUNDS;
+    assert!(rounds(true, 64_000, count).ran_quiet(), "a quiet try");
+    assert!(
+        !rounds(false, 64_000, count).ran_quiet(),
+        "a stand-by not found quiet"
+    );
+    let mut long = rounds(true, 64_000, count);
+    long.round(true, 9_400_000);
+    assert!(!long.ran_quiet(), "a round of 9.4 ms");
+    let mut longest = rounds(true, 64_000, count);
+    longest.round(true, QUIET_ROUND_MOST);
+    assert!(longest.ran_quiet(), "a round at the bound");
+    let slow = rounds(true, QUIET_TRY_MOST / count as i64 + 1, count);
+    assert!(!slow.ran_quiet(), "a try past its bound in all");
 }

@@ -424,8 +424,11 @@ released:
   does.
   A blit whose released buffer the device cannot import again (out of memory) is refused.
 - An import of the pointer, on a device whose held pointer imports add to every submission's cost,
-  as the device checks once per driver, release and kernel (its import tax check, which holds 32
-  imports of its own pages through timed submissions; RADV and ANV on i915 pay it). The new import
+  as the device checks (its import tax check, which holds 32 imports of its own pages through
+  timed submissions; RADV and ANV on i915 pay it): once per driver, release and kernel where it
+  finds that cost, at each device's making where it does not (an answer that no import costs is
+  never recorded), and again in the device's life where load beside its tries left the answer
+  open. The new import
   at the same pointer reads the pages the kept one did: `HostMemory::new`'s contract keeps the
   caller's pages mapped there, with the same backing, while the buffer lives. Buffers made before
   the check answered keep their imports. A blit whose released buffer the device cannot import

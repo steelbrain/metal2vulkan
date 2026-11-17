@@ -32,7 +32,9 @@
 //! (`CommandBuffer::submit_returned_time`, the device noting queue times: its planning, any
 //! hold in a group, and the call), and from there to its GPU start; and why the commits' passes
 //! left batches (the `WorkCounts::scheduler_at_commit_left_*` counts) and the groups held past
-//! a pass for two submissions in flight (`WorkCounts::groups_kept_pending`). And (`DRAG-FRAME`)
+//! a pass for two submissions in flight (`WorkCounts::groups_kept_pending`); the device's
+//! submission checks' report (`Device::submit_check_report`) heads them and ends them, as the
+//! merge check decides whether its batches group. And (`DRAG-FRAME`)
 //! each frame's whole (medians and 90th percentiles): from its first commit call to the GPU start
 //! and the GPU end of its last part with work, and its commit calls' time, the committing
 //! thread's for the frame. A part's time from its own commit call leaves out the commit calls
@@ -112,10 +114,11 @@ fn drag_submit_bench() {
     // Each command buffer's submission's return (`CommandBuffer::submit_returned_time`).
     device.shared().timing.note_queue_times();
     println!(
-        "DRAG-PATH on {}: completion {:?}, submissions merge {}",
+        "DRAG-PATH on {}: completion {:?}, submissions merge {}; its submission checks: {}",
         device.name(),
         device.compile_device().policy().completion,
         device.submissions_merge(),
+        device.submit_check_report(),
     );
     let len = 2 * LISTED * LISTED_BYTES;
     let ram = Ram::new(len, 0, len);
@@ -316,5 +319,10 @@ fn drag_submit_bench() {
         device.fast_submit_call_every(None);
         device.leave_calls_from(None);
     }
+    println!(
+        "DRAG-PATH after the measurements: submissions merge {}; its submission checks: {}",
+        device.submissions_merge(),
+        device.submit_check_report(),
+    );
     drop(listed);
 }

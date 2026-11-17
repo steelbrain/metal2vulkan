@@ -10,13 +10,13 @@
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. Each device's shader cache is a fresh
 //! directory, so no record holds its verdicts and its check runs; the two devices the placement
-//! test compares find there only a record of the same submission-check answers ([`answering`]).
+//! test compares take the same submission-check answers ([`answering`]).
 
 use super::blit_holds::{device, options, Scratch};
 use crate::address::{PAGE, SPACE_BASE, SPACE_END};
 use crate::fresh_pages::FRESH_PAGES_PAST;
 use crate::in_place::{verdict_index, Access, PagesClass, RowEnds, Verdict as InPlaceVerdict};
-use crate::submit_check::{encode, record_name, Check, Measured, Verdict};
+use crate::submit_check::{answer_next_device, Check, Verdict};
 use crate::{
     AddressPlacement, Buffer, BufferContents, BufferDescriptor, DebugMessage, Device,
     DeviceOptions, Error, GpuAddress, MessageSink, ResourceId, ResourceIdKind, ResourceOptions,
@@ -24,7 +24,7 @@ use crate::{
 };
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -49,43 +49,16 @@ const ANSWERS: [Verdict; Check::COUNT] = [Verdict::Fails, Verdict::Fails];
 /// long buffers take no fresh pages (`fresh_pages.rs`).
 const TAXED: [Verdict; Check::COUNT] = [Verdict::Fails, Verdict::Holds];
 
-/// A record of submission-check answers for the driver of the device the cfg selects, and its
-/// path under a shader cache's directory.
-struct AnswersRecord {
-    answers: [Verdict; Check::COUNT],
-    bytes: Vec<u8>,
-    under: PathBuf,
-}
-
-impl AnswersRecord {
-    /// The record of `answers`, its identity and path read from a device made over a cache of its
-    /// own and dropped before any device that recalls the record is made.
-    fn new(answers: [Verdict; Check::COUNT]) -> AnswersRecord {
-        let scratch = Scratch::new("in-place-check-identity");
-        let probe = device(&scratch.0);
-        let identity = probe.driver_identity();
-        let path = (probe.shared().shader_cache.content_store().directory())
-            .expect("a device over a cache of its own")
-            .record_path(&record_name(&identity));
-        let under = path.strip_prefix(&scratch.0).unwrap().to_owned();
-        AnswersRecord {
-            answers,
-            bytes: encode(&identity, answers, Measured::default()),
-            under,
-        }
-    }
-}
-
-/// A device over `scratch`'s shader cache that recalls `record`'s answers, written there before
-/// it is made, and runs no submission check (`submit_check.rs`): what places the product's long
-/// buffers in fresh pages or not (`fresh_pages.rs`). Two devices made so place them alike, where
-/// the submission checks each timed under the load beside it can answer apart: a held import
-/// measured to cost 1.2 us a submission on one llvmpipe device and 0.3 us on the next, either side
-/// of the check's 1 us (`TAX_FLOOR`).
-fn answering(scratch: &Scratch, record: &AnswersRecord) -> Device {
-    let path = scratch.0.join(&record.under);
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(&path, &record.bytes).unwrap();
+/// A device over `scratch`'s shader cache that takes `answers` as its submission checks'
+/// verdicts, as a record's, and runs no submission check (`submit_check.rs`,
+/// `answer_next_device`): what places the product's long buffers in fresh pages or not
+/// (`fresh_pages.rs`). Two devices made so place them alike, where the submission checks each
+/// timed under the load beside it can answer apart: a held import measured to cost 1.2 us a
+/// submission on one llvmpipe device and 0.3 us on the next, either side of the check's 1 us
+/// (`TAX_FLOOR`). A record's `Fails` is no answer (the device checks again), so a record could
+/// not hold these.
+fn answering(scratch: &Scratch, answers: [Verdict; Check::COUNT]) -> Device {
+    answer_next_device(answers);
     let device = device(&scratch.0);
     let counts = device.work_counts();
     assert_eq!(
@@ -94,10 +67,7 @@ fn answering(scratch: &Scratch, record: &AnswersRecord) -> Device {
         "the device recalled the written answers and ran no submission check"
     );
     let recalled = Check::ALL.map(|check| device.shared().submit_checks.verdict(check));
-    assert_eq!(
-        recalled, record.answers,
-        "the recalled submission-check verdicts"
-    );
+    assert_eq!(recalled, answers, "the recalled submission-check verdicts");
     device
 }
 
@@ -132,10 +102,9 @@ fn the_in_place_check_takes_no_range_of_the_metal_space() {
             .take(lines)
             .collect()
     };
-    let record = AnswersRecord::new(ANSWERS);
     let reference = {
         let scratch = Scratch::new("in-place-check-reference");
-        let device = answering(&scratch, &record);
+        let device = answering(&scratch, ANSWERS);
         assert!(
             device.settle_in_place_checks(WAIT),
             "the reference check answered"
@@ -143,7 +112,7 @@ fn the_in_place_check_takes_no_range_of_the_metal_space() {
         verdicts(&device)
     };
     let scratch = Scratch::new("in-place-check-placement");
-    let device = answering(&scratch, &record);
+    let device = answering(&scratch, ANSWERS);
     let rest = SPACE_BASE + LOW;
     // The pool's span is its pages and one guard page, to the space's end.
     let pool = device
@@ -189,12 +158,12 @@ fn the_in_place_check_takes_no_range_of_the_metal_space() {
 fn the_in_place_check_checks_fresh_pages_where_held_imports_cost_submissions() {
     let takes = {
         let scratch = Scratch::new("in-place-check-untaxed");
-        let device = answering(&scratch, &AnswersRecord::new(ANSWERS));
+        let device = answering(&scratch, ANSWERS);
         let buffer = device.new_buffer(2 * FRESH_PAGES_PAST, ResourceOptions::shared());
         buffer.unwrap().in_fresh_pages()
     };
     let scratch = Scratch::new("in-place-check-taxed");
-    let device = answering(&scratch, &AnswersRecord::new(TAXED));
+    let device = answering(&scratch, TAXED);
     assert!(
         !device.fresh_pages_pay(),
         "the recalled answers keep long buffers out of fresh pages"
@@ -242,13 +211,12 @@ fn the_in_place_check_checks_fresh_pages_where_held_imports_cost_submissions() {
 #[test]
 fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where_it_lasts() {
     let scratch = Scratch::new("in-place-check-unmade-pages");
-    let record = AnswersRecord::new(ANSWERS);
     let pointer_reads = |device: &Device| {
         let checks = &device.shared().in_place;
         RowEnds::ALL.map(|rows| checks.verdict(PagesClass::Pointer, Access::Reads, rows))
     };
     let (first, note, first_notes) = {
-        let device = answering(&scratch, &record);
+        let device = answering(&scratch, ANSWERS);
         device.fail_next_host_imports(1);
         assert!(
             device.settle_in_place_checks(WAIT),
@@ -279,7 +247,7 @@ fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where
     };
     let dma_buf_reads = verdict_index(PagesClass::DmaBuf, Access::Reads, RowEnds::InLines);
     let (second_reads, second_recalled) = {
-        let device = answering(&scratch, &record);
+        let device = answering(&scratch, ANSWERS);
         let recalled = device.shared().in_place.verdicts();
         let held = recalled
             .iter()
@@ -335,7 +303,7 @@ fn an_unchecked_verdict_is_checked_again_where_its_cause_may_pass_and_kept_where
             .count();
         (reads, (held, unchecked))
     };
-    let device = answering(&scratch, &record);
+    let device = answering(&scratch, ANSWERS);
     assert_eq!(
         pointer_reads(&device),
         second_reads,

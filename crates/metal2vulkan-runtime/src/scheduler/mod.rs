@@ -483,6 +483,17 @@ pub(crate) struct Scheduler {
     thread: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// A share of the scheduler's state that reads whether it holds any batch committed and not
+/// submitted ([`Scheduler::holds_share`]).
+pub(crate) struct HoldsShare(Arc<SchedulerShared>);
+
+impl HoldsShare {
+    /// [`Scheduler::holds_none`].
+    pub(crate) fn holds_none(&self) -> bool {
+        self.0.holds_none()
+    }
+}
+
 struct SchedulerShared {
     /// The state, under the lock a pass holds, with the commits a pass under way takes in.
     inbox: Inbox<State, Committed>,
@@ -644,6 +655,13 @@ impl Posted {
 }
 
 impl SchedulerShared {
+    /// [`Scheduler::holds_none`].
+    fn holds_none(&self) -> bool {
+        let inbox = &self.inbox;
+        let state = lock(inbox.state());
+        state.order.is_empty() && state.grouped.is_empty() && !inbox.holds_commits()
+    }
+
     /// A pass that took in `taken` commits ended, its submissions made and counted, under the
     /// lock: counted, released after them (`WorkCounts::commits_taken_in`).
     fn took_in(&self, taken: usize) {
@@ -1278,9 +1296,13 @@ impl Scheduler {
     /// semaphore, a host step, a check or a group, or waits in the inbox
     /// (`texture/storage_form.rs`).
     pub(crate) fn holds_none(&self) -> bool {
-        let inbox = &self.shared.inbox;
-        let state = lock(inbox.state());
-        state.order.is_empty() && state.grouped.is_empty() && !inbox.holds_commits()
+        self.shared.holds_none()
+    }
+
+    /// A share of its state that reads [`holds_none`](Self::holds_none) alone, for a thread that
+    /// holds no device (`submit_check.rs`).
+    pub(crate) fn holds_share(&self) -> HoldsShare {
+        HoldsShare(Arc::clone(&self.shared))
     }
 
     /// A CPU decode into the decoded twin of the resource `key` was queued: every batch whose

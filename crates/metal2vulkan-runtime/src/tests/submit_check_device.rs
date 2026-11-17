@@ -1,6 +1,6 @@
 //! The device's submission checks (`submit_check.rs`) on the device the cfg selects: they answer,
-//! a second device of the same driver reads their record and runs none, and the paths they choose
-//! follow their verdicts alone.
+//! a second device of the same driver reads their record and runs those it holds, and the paths
+//! they choose follow their verdicts alone.
 //!
 //! - **They answer.** A device made over a fresh shader cache runs its checks once
 //!   (`WorkCounts::submit_checks_run`), each verdict an answer (never pending once settled), their
@@ -8,10 +8,12 @@
 //!   (`device_checks`), and their commands among none of the device's (`commands_recorded`: a
 //!   device that ran them recorded the copies one that recalled them did, besides its priming's,
 //!   which a device made again on what stays loaded leaves out); a later device over the
-//!   same cache recalls them
-//!   (`submit_checks_recalled`), runs none, and holds the verdicts of the last device that ran
-//!   them: the first's, or, where load split its tries or its import tax answered `Holds` short
-//!   of a record and nothing was recorded, those of the next device that ran them.
+//!   same cache recalls each answer the first recorded (`submit_checks_recalled`) and checks again
+//!   each other, a `Fails` among them: a record's `Fails` is no answer
+//!   ([`a_recorded_fails_is_checked_again`]).
+//! - **Load lifts an answer for now.** A merge answer whose tries load lifted is checked again
+//!   in the device's life, which comes to the answer of tries clear of it and records no `Fails`
+//!   ([`a_lifted_merge_answer_is_checked_again`]).
 //! - **No remap under an import.** The checks map no page over a live import of it: they make and
 //!   bind no buffer, and every import of theirs is freed by the time they answer
 //!   ([`a_device_s_checks_map_no_pages_over_a_live_import`]).
@@ -31,7 +33,10 @@
 
 use super::blit_holds::{Scratch, WAIT};
 use crate::fresh_pages::FRESH_PAGES_PAST;
-use crate::submit_check::{record_name, Check, Verdict, MERGED, TAX_IMPORTS};
+use crate::submit_check::{
+    decode, encode, lift_next_merge_tries, record_name, Check, Measured, Stands, Verdict, MERGED,
+    MERGE_REPEATS, TAX_IMPORTS,
+};
 use crate::tests::SETTLE;
 use crate::{
     CommandBufferStatus, Device, DeviceKind, DeviceOptions, EventRef, LayerSetting,
@@ -118,7 +123,7 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     let counts = first.work_counts();
     // The copies besides its priming's, which a device made again on what stays loaded leaves
     // out.
-    let mut copies = counts.commands_recorded.cmd_copy_buffer - primed;
+    let copies = counts.commands_recorded.cmd_copy_buffer - primed;
     assert_eq!(counts.submit_checks_run, 1);
     assert_eq!(counts.submit_checks_recalled, 0);
     assert!(
@@ -148,50 +153,213 @@ fn the_checks_answer_once_and_a_second_device_recalls_them() {
     // it) as it goes, so the second is a new device over the same directory, as a later
     // process's would be.
     let identity = first.driver_identity();
+    let recorded = recorded_of(&first);
     drop(first);
-    // The verdicts of the last device that ran the checks, which its record holds where it wrote
-    // one (a device whose tries split, or whose import tax `Holds` fell short of its margin or of
-    // its record, writes none, and the next runs them again).
-    let mut ran = answered;
-    let start = std::time::Instant::now();
-    loop {
-        let (second, primed) = device_primed(&scratch.0);
-        assert!(
-            second.settle_submit_checks(SETTLE),
-            "the second device never answered"
+    // The second recalls each answer the first recorded, and checks again each other: a `Fails`
+    // (never recorded), and an answer for now (tries split or short of their record).
+    let (second, primed) = device_primed(&scratch.0);
+    assert!(
+        second.settle_submit_checks(SETTLE),
+        "the second device never answered"
+    );
+    let counts = second.work_counts();
+    let checks = &second.shared().submit_checks;
+    let tries = [
+        checks.merge_tries.load(Ordering::Relaxed),
+        checks.tax_tries.load(Ordering::Relaxed),
+    ];
+    println!(
+        "{} again, the first's answers recorded {recorded:?}: {}",
+        second.name(),
+        second.submit_check_report()
+    );
+    let name = record_name(&identity);
+    assert_eq!(
+        counts.submit_checks_recalled,
+        u64::from(recorded.iter().any(Option::is_some)),
+        "the record {name} was read where the first recorded an answer: found at {:?}, \
+         identities {identity:?} and {:?}",
+        files_named(&scratch.0, &name),
+        second.driver_identity(),
+    );
+    for (at, check) in Check::ALL.into_iter().enumerate() {
+        match recorded[at] {
+            Some(verdict) => {
+                assert_eq!(
+                    tries[at], 0,
+                    "{check:?}: a recorded answer was checked again"
+                );
+                assert_eq!(
+                    checks.verdict(check),
+                    verdict,
+                    "{check:?}: the recorded answer"
+                );
+            }
+            None => assert!(
+                tries[at] > 0,
+                "{check:?}: an answer that earned no record was not checked again"
+            ),
+        }
+    }
+    if recorded.iter().all(Option::is_some) {
+        assert_eq!(counts.submit_checks_run, 0);
+        assert_eq!(counts.submit_check_calls, 0);
+        assert_eq!(verdicts(&second), answered);
+        assert_eq!(
+            counts.commands_recorded.cmd_copy_buffer - primed,
+            copies,
+            "the device that ran the checks recorded other copies than one that recalled them"
         );
-        let counts = second.work_counts();
-        if counts.submit_checks_recalled == 1 {
-            assert_eq!(counts.submit_checks_run, 0);
-            assert_eq!(counts.submit_check_calls, 0);
-            assert_eq!(verdicts(&second), ran);
-            assert_eq!(
-                counts.commands_recorded.cmd_copy_buffer - primed,
-                copies,
-                "the device that ran the checks recorded other copies than one that recalled them"
-            );
+    }
+}
+
+/// Each answer of `device`'s checks that earned a record (`Stands::Recorded`), by check.
+fn recorded_of(device: &Device) -> [Option<Verdict>; Check::COUNT] {
+    let checks = &device.shared().submit_checks;
+    Check::ALL.map(|check| {
+        (checks.stands(check) == Some(Stands::Recorded)).then(|| checks.verdict(check))
+    })
+}
+
+/// A record's `Fails` is a hint and no answer (`submit_check.rs`, "Kept"): a device that reads a
+/// record holding a `Fails` of each check, as an earlier device's checks under load could have
+/// written, checks both again; one that reads a merge `Holds` and an import tax `Fails` takes the
+/// `Holds` and checks the import tax again. Printed (`STALE-FAILS`).
+#[test]
+fn a_recorded_fails_is_checked_again() {
+    let scratch = Scratch::new("submit-check-stale-fails");
+    let first = device(&scratch.0);
+    assert!(
+        first.settle_submit_checks(SETTLE),
+        "the checks never answered"
+    );
+    let identity = first.driver_identity();
+    let path = (first.shared().shader_cache.content_store().directory())
+        .expect("a device over a cache of its own")
+        .record_path(&record_name(&identity));
+    // Its own record, where it wrote one, is in place once it is gone.
+    drop(first);
+    for planted in [
+        [Verdict::Fails, Verdict::Fails],
+        [Verdict::Holds, Verdict::Fails],
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, encode(&identity, planted, Measured::default())).unwrap();
+        let device = device(&scratch.0);
+        assert!(
+            device.settle_submit_checks(SETTLE),
+            "the checks never answered"
+        );
+        let checks = &device.shared().submit_checks;
+        let tries = [
+            checks.merge_tries.load(Ordering::Relaxed),
+            checks.tax_tries.load(Ordering::Relaxed),
+        ];
+        println!(
+            "STALE-FAILS {} read {planted:?}: {}",
+            device.name(),
+            device.submit_check_report()
+        );
+        assert_eq!(
+            device.work_counts().submit_checks_recalled,
+            1,
+            "the planted record was not read"
+        );
+        for (at, check) in Check::ALL.into_iter().enumerate() {
+            match planted[at] {
+                Verdict::Fails => {
+                    assert!(
+                        tries[at] > 0,
+                        "{check:?}: a recorded Fails was taken as its answer"
+                    );
+                    assert!(
+                        checks.stands(check).is_some(),
+                        "{check:?}: checked again, it gave no answer"
+                    );
+                }
+                verdict => {
+                    assert_eq!(
+                        tries[at], 0,
+                        "{check:?}: a recorded {verdict:?} was checked again"
+                    );
+                    assert_eq!(checks.verdict(check), verdict);
+                }
+            }
+        }
+        drop(device);
+    }
+}
+
+/// A merge answer whose tries the load beside them lifted stands only for now: the device checks
+/// again later in its life, takes the answer of tries clear of that load, and records no `Fails`
+/// (`submit_check.rs`, "Load beside it", "Answers for now"). The load is the one the Radeon
+/// 780M's checks met beside other jobs on its host: one call of every round of both forms about
+/// 70 us longer, which `lift_next_merge_tries` adds to each try of the device's first merge
+/// answer (`LIFT`), each of them read as not quiet. A device of the same driver made before it
+/// over a cache of its own gives the answer the lifted one comes to. Printed (`LIFTED`).
+#[test]
+fn a_lifted_merge_answer_is_checked_again() {
+    let quiet = Scratch::new("submit-check-unlifted");
+    let reference = device(&quiet.0);
+    assert!(
+        reference.settle_submit_checks(SETTLE),
+        "the checks never answered"
+    );
+    let scratch = Scratch::new("submit-check-lifted");
+    lift_next_merge_tries(1 + MERGE_REPEATS as u32);
+    let device = device(&scratch.0);
+    assert!(
+        device.settle_submit_checks(SETTLE),
+        "the checks never answered"
+    );
+    let checks = &device.shared().submit_checks;
+    let first = (checks.verdict(Check::Merge), checks.stands(Check::Merge));
+    println!(
+        "LIFTED {} first: {}",
+        device.name(),
+        device.submit_check_report()
+    );
+    assert_eq!(
+        first.1,
+        Some(Stands::Now),
+        "a lifted answer stood past now: {first:?}"
+    );
+    // Within the first checks again, the device comes to the answer the device beside it gives.
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let expected = reference.shared().submit_checks.verdict(Check::Merge);
+        let rechecked = checks.rechecks.load(Ordering::Relaxed) > 0;
+        if rechecked && checks.verdict(Check::Merge) == expected {
             break;
         }
-        if counts.submit_checks_run == 1 {
-            println!("{} again: {}", second.name(), second.submit_check_report());
-            ran = verdicts(&second);
-            copies = counts.commands_recorded.cmd_copy_buffer - primed;
-        }
-        if start.elapsed() >= WAIT {
-            let name = record_name(&second.driver_identity());
-            let found = files_named(&scratch.0, &name);
-            let statistics = second.shader_cache_statistics();
-            panic!(
-                "no device recalled the record {name}: found at {found:?}; the second device's \
-                 cache rejected {} and failed {} reads; identities {:?} and {:?}",
-                statistics.rejected,
-                statistics.read_failures,
-                identity,
-                second.driver_identity(),
-            );
-        }
-        drop(second);
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            Instant::now() < deadline,
+            "the lifted device kept {:?} where the other answers {expected:?}: {}; the other: {}",
+            checks.verdict(Check::Merge),
+            device.submit_check_report(),
+            reference.submit_check_report(),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    println!(
+        "LIFTED {} then: {}; the device beside it: {}",
+        device.name(),
+        device.submit_check_report(),
+        reference.submit_check_report()
+    );
+    // Its record, where it wrote one, holds no merge `Fails`.
+    let path = (device.shared().shader_cache.content_store().directory())
+        .expect("a device over a cache of its own")
+        .record_path(&record_name(&device.driver_identity()));
+    let identity = device.driver_identity();
+    drop(device);
+    if let Ok(bytes) = std::fs::read(&path) {
+        let (verdicts, _) = decode(&identity, &bytes).expect("the device's record decodes");
+        assert_ne!(
+            verdicts[0],
+            Verdict::Fails,
+            "the record holds the merge's Fails"
+        );
     }
 }
 

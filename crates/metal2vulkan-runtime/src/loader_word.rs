@@ -35,7 +35,8 @@
 //! mark after it ([`DeviceWord::end_step`]: the use's last submission on the queue, whose Metal
 //! command buffer completes after the check's own), so the
 //! runtime's loader-served calls on other threads may wait for one step of theirs, once, while they
-//! run (the checks run once per driver and runtime, for milliseconds); elsewhere the word never
+//! run (the checks run for milliseconds, as a device is made and, where an answer of the
+//! submission checks stands only for now, again in its life); elsewhere the word never
 //! changes and they hold it across their submission calls alone. A narrower hold, around the calls
 //! that read the word alone, cannot exclude the writer: MoltenVK writes from its own threads as
 //! each of the checks' Metal command buffers completes, at no call of the runtime's, so only

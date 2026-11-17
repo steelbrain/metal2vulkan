@@ -919,16 +919,60 @@ impl DeviceShared {
     /// its `VkQueue`s is under way; else the time since the last such use ended
     /// (`queue_quiet.rs`).
     pub(crate) fn work_quiet_for(&self) -> Option<Duration> {
-        if self.batch_in_flight() || !self.scheduler.holds_none() {
-            return None;
-        }
-        self.queue_quiet.unused_for()
+        quiet_for(
+            &self.queues,
+            || self.scheduler.holds_none(),
+            &self.queue_quiet,
+        )
     }
 
     /// Whether a batch submitted to one of the device's `VkQueue`s is not seen complete there.
     pub(crate) fn batch_in_flight(&self) -> bool {
-        (self.queues.iter()).any(|slot| slot.completed_value() < slot.submitted_value())
+        in_flight(&self.queues)
     }
+
+    /// A share of what tells whether its work is quiet, for a thread that holds no device
+    /// (`submit_check.rs`).
+    pub(crate) fn work_share(&self) -> WorkShare {
+        WorkShare {
+            queues: Arc::clone(&self.queues),
+            holds: self.scheduler.holds_share(),
+            uses: Arc::clone(&self.queue_quiet),
+        }
+    }
+}
+
+/// What tells whether a device's work is quiet ([`DeviceShared::work_quiet_for`]), shared with a
+/// thread that holds no device: its `VkQueue`s, the scheduler's holds and its queue uses.
+pub(crate) struct WorkShare {
+    queues: Arc<[QueueSlot]>,
+    holds: crate::scheduler::HoldsShare,
+    uses: Arc<queue_quiet::QueueQuiet>,
+}
+
+impl WorkShare {
+    /// [`DeviceShared::work_quiet_for`].
+    pub(crate) fn quiet_for(&self) -> Option<Duration> {
+        quiet_for(&self.queues, || self.holds.holds_none(), &self.uses)
+    }
+}
+
+/// Whether a batch submitted to one of `queues` is not seen complete there.
+fn in_flight(queues: &[QueueSlot]) -> bool {
+    (queues.iter()).any(|slot| slot.completed_value() < slot.submitted_value())
+}
+
+/// How long the work of a device of `queues`, whose scheduler holds none of it where `holds_none`
+/// and whose queue uses are `uses`, has been quiet ([`DeviceShared::work_quiet_for`]).
+fn quiet_for(
+    queues: &[QueueSlot],
+    holds_none: impl FnOnce() -> bool,
+    uses: &queue_quiet::QueueQuiet,
+) -> Option<Duration> {
+    if in_flight(queues) || !holds_none() {
+        return None;
+    }
+    uses.unused_for()
 }
 
 impl DeviceShared {
