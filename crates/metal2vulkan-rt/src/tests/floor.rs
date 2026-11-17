@@ -515,8 +515,9 @@ fn vulkan_names_follow_the_registry() {
     assert_eq!(vulkan_name("synchronization2"), "synchronization2");
 }
 
-/// Every device the machine's Vulkan loader lists is above the floor. The device legs pick one
-/// device per run with `VK_DRIVER_FILES` and, for Mesa, `MESA_VK_DEVICE_SELECT`.
+/// Every device of the cfg's kind the machine's Vulkan loader lists is above the floor: CPU devices
+/// under `m2v_cpu_icd`, the others under `m2v_gpu`. The device legs pick one device per run with
+/// `VK_DRIVER_FILES` and, for Mesa, `MESA_VK_DEVICE_SELECT`.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn every_device_the_loader_lists_is_above_the_floor() {
@@ -538,12 +539,18 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         .expect("an instance with the floor's version and instance extensions");
     // SAFETY: `instance` is live.
     let physicals = unsafe { instance.enumerate_physical_devices() }.expect("the physical devices");
+    let mut checked = 0;
     let mut below = Vec::new();
     for &physical in &physicals {
         let mut driver = vk::PhysicalDeviceVulkan12Properties::default();
         let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
         // SAFETY: `physical` is one of `instance`'s, which is a Vulkan 1.3 instance.
         unsafe { instance.get_physical_device_properties2(physical, &mut properties) };
+        let cpu = properties.properties.device_type == vk::PhysicalDeviceType::CPU;
+        if cpu != cfg!(m2v_cpu_icd) {
+            continue;
+        }
+        checked += 1;
         let api = properties.properties.api_version;
         let name = properties
             .properties
@@ -577,6 +584,6 @@ fn every_device_the_loader_lists_is_above_the_floor() {
     }
     // SAFETY: nothing made from `instance` is alive.
     unsafe { instance.destroy_instance(None) };
-    assert!(!physicals.is_empty(), "the loader lists no device");
+    assert!(checked > 0, "the loader lists no device of this cfg's kind");
     assert!(below.is_empty(), "below the floor: {below:#?}");
 }
