@@ -40,6 +40,7 @@ The translator's core lives in `crates/metal2vulkan-air/src/` and, in
 | `docs/FAST-PATHS.md` | The old runtime's and the translator's speed-for-accuracy switches, until the cutover deletes them |
 | `docs/VALIDATION.md` | The validation ladder |
 | `docs/REPLAY-STREAM.md` | The replay stream format and its player |
+| `docs/RESOURCE-ID.md` | The resource ID: its index classes, the texture and sampler words, and their test vectors |
 | `docs/CONFORMANCE-COVERAGE.md` | Generated, along two axes: which Metal items the conformance suite compares against Metal, and which of each Metal enum's and option set's values it compared |
 | `CONTRIBUTING.md` | Build, test, golden tables |
 | `crates/metal2vulkan/src/env_vars.rs` | The `METAL2VULKAN_*` variables |
