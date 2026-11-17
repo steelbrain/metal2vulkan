@@ -18,6 +18,16 @@
 //   offset-4      `device float4 *v` bound at offset 4: `v[p] = (p, p, p, p)` for 8 threads, read
 //                 from the buffer's start, so the first word says where element 0 went
 //
+// Then one bind per line, each a buffer argument bound at a byte offset that is or is not a
+// multiple of its type's alignment, 8 threads each storing `p + 1` at element `p` (a `constant`
+// argument is read and its element stored to a second buffer at offset 0); each line prints the
+// command buffer's status and the buffer's first 12 words from its start:
+//
+//   uint-2        `device uint *` at offset 2       uint-4        the same at 4
+//   cuint-2       `constant uint *` at offset 2     ushort-1      `device ushort *` at offset 1
+//   ushort-2      `device ushort *` at offset 2     uchar-1       `device uchar *` at offset 1
+//   float4-8      `device float4 *` at offset 8     pair-2        `device` struct of two `uint`s at 2
+//
 // Each case prints the device, then one line per row: `row p: <elements>`. A row placed at the real
 // address reads `p 0 1 2 p 4 5 6 p 8 9 10 p 12 13 14 16 17 18 19 20` (the stores), or the element
 // indices of its vectors (the loads).
@@ -74,6 +84,27 @@ static NSString *const kSource = @
     "}\n"
     "kernel void offset_store(device float4 *v [[buffer(0)]], uint p [[thread_position_in_grid]]) {\n"
     "  v[p] = float4(p);\n"
+    "}\n"
+    "kernel void uint_bind(device uint *v [[buffer(0)]], uint p [[thread_position_in_grid]]) {\n"
+    "  v[p] = p + 1;\n"
+    "}\n"
+    "kernel void cuint_bind(constant uint *c [[buffer(0)]], device uint *out [[buffer(1)]],\n"
+    "                       uint p [[thread_position_in_grid]]) {\n"
+    "  out[p] = c[p];\n"
+    "}\n"
+    "kernel void ushort_bind(device ushort *v [[buffer(0)]], uint p [[thread_position_in_grid]]) {\n"
+    "  v[p] = p + 1;\n"
+    "}\n"
+    "kernel void uchar_bind(device uchar *v [[buffer(0)]], uint p [[thread_position_in_grid]]) {\n"
+    "  v[p] = p + 1;\n"
+    "}\n"
+    "kernel void float4_bind(device float4 *v [[buffer(0)]], uint p [[thread_position_in_grid]]) {\n"
+    "  v[p] = float4(p + 1);\n"
+    "}\n"
+    "struct Pair { uint a; uint b; };\n"
+    "kernel void pair_bind(device Pair *v [[buffer(0)]], uint p [[thread_position_in_grid]]) {\n"
+    "  v[p].a = p + 1;\n"
+    "  v[p].b = p + 1;\n"
     "}\n";
 
 enum { ROWS = 8, ROW = 21 };
@@ -172,6 +203,46 @@ int main(void) {
       else printf(" %g", ((const float *)out.contents)[j]);
     }
     printf("\n");
+    // Binds at offsets that are or are not a multiple of the argument type's alignment.
+    struct {
+      const char *name;
+      const char *entry;
+      NSUInteger offset;
+      BOOL constant;
+    } binds[] = {
+        {"uint-2", "uint_bind", 2, NO},     {"uint-4", "uint_bind", 4, NO},
+        {"cuint-2", "cuint_bind", 2, YES},  {"ushort-1", "ushort_bind", 1, NO},
+        {"ushort-2", "ushort_bind", 2, NO}, {"uchar-1", "uchar_bind", 1, NO},
+        {"float4-8", "float4_bind", 8, NO}, {"pair-2", "pair_bind", 2, NO},
+    };
+    for (size_t k = 0; k < sizeof binds / sizeof binds[0]; k++) {
+      id<MTLFunction> bf = [library newFunctionWithName:@(binds[k].entry)];
+      id<MTLComputePipelineState> bp = [device newComputePipelineStateWithFunction:bf error:&error];
+      if (!bp) {
+        printf("%s: pipeline %s\n", binds[k].name, error.description.UTF8String);
+        continue;
+      }
+      id<MTLBuffer> buf = [device newBufferWithLength:256 options:MTLResourceStorageModeShared];
+      memset(buf.contents, 0xEE, 256);
+      id<MTLBuffer> dst = [device newBufferWithLength:256 options:MTLResourceStorageModeShared];
+      memset(dst.contents, 0xEE, 256);
+      id<MTLCommandBuffer> bcb = [queue commandBuffer];
+      id<MTLComputeCommandEncoder> benc = [bcb computeCommandEncoder];
+      [benc setComputePipelineState:bp];
+      [benc setBuffer:buf offset:binds[k].offset atIndex:0];
+      if (binds[k].constant) [benc setBuffer:dst offset:0 atIndex:1];
+      [benc dispatchThreads:MTLSizeMake(ROWS, 1, 1) threadsPerThreadgroup:MTLSizeMake(ROWS, 1, 1)];
+      [benc endEncoding];
+      [bcb commit];
+      [bcb waitUntilCompleted];
+      const unsigned *words = (const unsigned *)(binds[k].constant ? dst : buf).contents;
+      printf("%s: status %ld; words 0..11:", binds[k].name, (long)bcb.status);
+      for (int j = 0; j < 12; j++) {
+        if (words[j] == 0xEEEEEEEEu) printf(" -");
+        else printf(" %08x", words[j]);
+      }
+      printf("\n");
+    }
   }
   return 0;
 }
