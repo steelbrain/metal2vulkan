@@ -1,54 +1,11 @@
-//! The instance, the device and its counters: which queue family and queues a device takes, that
-//! the handles cross threads, and, under a device cfg, that every device of the cfg's kind opens,
-//! presents on the queue its family offers, and is torn down with its gauges at zero.
+//! The instance, the device and its counters: that the handles cross threads, and, under a device
+//! cfg, that every device of the cfg's kind opens, presents on the queue its family offers, and is
+//! torn down with its gauges at zero.
 
-use crate::device::queue_plan;
-use crate::{Counters, Device, Gauges, Instance, Metrics, PhysicalDevice};
-use ash::vk;
-
-fn family(flags: vk::QueueFlags, count: u32) -> vk::QueueFamilyProperties {
-    vk::QueueFamilyProperties {
-        queue_flags: flags,
-        queue_count: count,
-        ..Default::default()
-    }
-}
-
-#[test]
-fn the_runtime_takes_the_first_family_that_does_graphics_and_compute() {
-    let g = vk::QueueFlags::GRAPHICS;
-    let c = vk::QueueFlags::COMPUTE;
-    let t = vk::QueueFlags::TRANSFER;
-    let cases = [
-        // A family with many queues gives the runtime one and presenting one.
-        (vec![family(g | c | t, 16)], Some((0, 2))),
-        // A family with one queue is shared by the runtime and presenting.
-        (vec![family(g | c | t, 1)], Some((0, 1))),
-        // Compute-only and graphics-only families are passed over.
-        (
-            vec![family(c | t, 2), family(g, 1), family(g | c, 4)],
-            Some((2, 2)),
-        ),
-        // The first family that does both wins over a later one with more queues.
-        (vec![family(g | c, 1), family(g | c | t, 8)], Some((0, 1))),
-        // A family that reports no queue is passed over.
-        (vec![family(g | c, 0), family(g | c, 3)], Some((1, 2))),
-        // No family does both.
-        (vec![family(c | t, 4), family(g | t, 1)], None),
-        (vec![], None),
-    ];
-    for (families, expected) in cases {
-        let shown: Vec<(u32, u32)> = families
-            .iter()
-            .map(|family| (family.queue_flags.as_raw(), family.queue_count))
-            .collect();
-        assert_eq!(
-            queue_plan(&families),
-            expected,
-            "flags and counts {shown:x?}"
-        );
-    }
-}
+use crate::{
+    BlockId, BlockInfo, BlockMappings, Buffer, Counters, Device, DeviceOptions, Gauges, Instance,
+    Metrics, PhysicalDevice,
+};
 
 #[test]
 fn the_handles_cross_threads() {
@@ -56,7 +13,12 @@ fn the_handles_cross_threads() {
     send_sync::<Instance>();
     send_sync::<PhysicalDevice>();
     send_sync::<Device>();
+    send_sync::<DeviceOptions>();
     send_sync::<Counters>();
+    send_sync::<BlockId>();
+    send_sync::<BlockInfo>();
+    send_sync::<Buffer>();
+    send_sync::<std::sync::Arc<dyn BlockMappings>>();
 }
 
 #[test]
@@ -78,6 +40,7 @@ fn new_counters_read_zero_from_every_clone() {
 #[test]
 fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
     use crate::floor::{PRIVATE_MEMORY, RING_MEMORY, SHARED_MEMORY};
+    use ash::vk;
 
     let instance = Instance::new(&[]).expect("an instance at the floor");
     let physicals = instance.physical_devices().expect("the physical devices");
@@ -95,7 +58,8 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
             .device_name_as_c_str()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let device = Device::new(physical).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let device = Device::new(physical, DeviceOptions::default())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         let counters = device.counters();
 
         let raw = device.raw();
@@ -202,7 +166,8 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
     // and the physical devices dropped first, the device still opens and is torn down last.
     let physical = opened[0].clone();
     drop((instance, physicals, opened));
-    let device = Device::new(&physical).expect("a device after the instance's handle dropped");
+    let device = Device::new(&physical, DeviceOptions::default())
+        .expect("a device after the instance's handle dropped");
     drop(physical);
     drop(device);
 }

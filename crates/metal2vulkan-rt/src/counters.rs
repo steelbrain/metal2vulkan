@@ -4,6 +4,24 @@
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
+/// A metric the runtime adds to.
+#[derive(Clone, Copy)]
+pub(crate) enum Metric {
+    /// [`Metrics::submissions`].
+    Submissions,
+    /// [`Metrics::blocks_made`].
+    BlocksMade,
+}
+
+/// A gauge the runtime moves.
+#[derive(Clone, Copy)]
+pub(crate) enum Gauge {
+    /// [`Gauges::buffers`].
+    Buffers,
+    /// [`Gauges::blocks`].
+    Blocks,
+}
+
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
 ///
 /// A cheap handle that stays readable after the device is torn down, so a test can read the
@@ -37,6 +55,34 @@ impl Counters {
     pub(crate) fn new() -> Counters {
         Counters {
             atomics: Arc::default(),
+        }
+    }
+
+    /// Counts one more of `metric`.
+    pub(crate) fn count(&self, metric: Metric) {
+        let a = &self.atomics;
+        let atomic = match metric {
+            Metric::Submissions => &a.submissions,
+            Metric::BlocksMade => &a.blocks_made,
+        };
+        atomic.fetch_add(1, Relaxed);
+    }
+
+    /// One more live resource of `gauge`'s kind.
+    pub(crate) fn rise(&self, gauge: Gauge) {
+        self.gauge(gauge).fetch_add(1, Relaxed);
+    }
+
+    /// One fewer live resource of `gauge`'s kind.
+    pub(crate) fn fall(&self, gauge: Gauge) {
+        self.gauge(gauge).fetch_sub(1, Relaxed);
+    }
+
+    fn gauge(&self, gauge: Gauge) -> &AtomicU64 {
+        let a = &self.atomics;
+        match gauge {
+            Gauge::Buffers => &a.buffers,
+            Gauge::Blocks => &a.blocks,
         }
     }
 
@@ -85,7 +131,8 @@ pub struct Metrics {
     pub bytes_copied: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
-    /// `VkDeviceMemory` allocations made: pooled and dedicated blocks, image blocks, the ring.
+    /// `VkDeviceMemory` allocations made: pooled and dedicated blocks, the zero source, and later
+    /// image blocks and the ring.
     pub blocks_made: u64,
 }
 
@@ -106,7 +153,8 @@ pub struct Gauges {
     pub command_buffers: u64,
     /// Occupied entries of the descriptor arrays.
     pub descriptor_slots: u64,
-    /// Live `VkDeviceMemory` allocations.
+    /// Live `VkDeviceMemory` allocations: blocks the consumer holds, blocks ready or idle in the
+    /// pool, and the runtime's own.
     pub blocks: u64,
     /// Events and shared events (timeline semaphores).
     pub events: u64,

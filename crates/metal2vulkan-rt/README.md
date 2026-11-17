@@ -3,8 +3,8 @@
 The Metal API on Vulkan, with one path for every device. It replaces `metal2vulkan-runtime` and
 takes its name when it does; until then it is unpublished.
 
-Its public API so far: the instance and the device, the device's counters, and `floor`, the
-check of a Vulkan device against the floor below.
+Its public API so far: the instance and the device, memory blocks and the buffers in them, the
+device's counters, and `floor`, the check of a Vulkan device against the floor below.
 
 ## Instance and device
 
@@ -12,9 +12,10 @@ check of a Vulkan device against the floor below.
   the floor's instance extensions and the window-system extensions the consumer names.
   `Instance::physical_devices` lists the physical devices in the loader's order.
 - `Device::new` checks a physical device against the floor and makes one `VkDevice`. Every
-  command queue, every guest process and the compositor share it. It takes the first queue family
-  that does graphics and compute: one queue for the runtime, and a second for presenting where the
-  family has one. Where it has one queue, presenting shares the runtime's queue and its lock.
+  command queue, every guest process and the compositor share it. It takes the floor's queue
+  family, the first that does graphics and compute: one queue for the runtime, and a second for
+  presenting where the family has one. Where it has one queue, presenting shares the runtime's
+  queue and its lock. `DeviceOptions` carries what the consumer adds: its `BlockMappings` hook.
 - `Device::raw` gives the instance, physical device, device and queue family handles, and
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock.
   The runtime keeps owning every handle.
@@ -23,10 +24,12 @@ check of a Vulkan device against the floor below.
 ### Teardown
 
 A device is torn down when its last handle, and the last handle of every object made from it, is
-dropped: it waits until the GPU is idle and destroys the `VkDevice`. A physical device and a
-device each hold their instance. No thread of the runtime outlives its device and nothing relies
-on a static destructor or an `atexit` handler, so the consumer drops every handle before the
-process exits: a driver may unmap device memory inside `exit()`.
+dropped. Blocks the consumer holds do not keep it alive. Teardown joins the block-maker thread
+and waits until the GPU is idle; then, on the dropping thread, it frees every block, calling
+`BlockMappings::unmap` first for each block the consumer was handed, and destroys the `VkDevice`.
+A physical device and a device each hold their instance. No thread of the runtime outlives its
+device and nothing relies on a static destructor or an `atexit` handler, so the consumer drops
+every handle before the process exits: a driver may unmap device memory inside `exit()`.
 
 ### Counters
 
@@ -34,6 +37,47 @@ process exits: a driver may unmap device memory inside `exit()`.
 cumulative counts (submissions, passes, barriers, bytes copied, pipelines created, blocks made);
 `gauges()` are live counts per kind of resource, every one zero after teardown. They are relaxed
 atomics, always on.
+
+## Memory blocks and buffers
+
+Memory comes in blocks the consumer takes and places buffers in, as a placement heap's buffers sit
+in its memory.
+
+- `Device::take_block(class, len)` gives a block of `MemoryClass::Private` (device-local, no host
+  mapping) or `MemoryClass::Shared` (host-visible, host-coherent and host-cached, mapped for the
+  block's life) memory, as a `BlockInfo`: its number, class, length, device address and, for
+  Shared, its host address. One `VkBuffer` spans each block, with every buffer usage and a device
+  address. Nothing in a block is exportable.
+- Up to `BLOCK_LEN` (256 MiB) a block is pooled. The block-maker thread keeps one block of each
+  class ready, made off every caller's path, so a take waits only when none is ready. Past
+  `BLOCK_LEN` a block is dedicated: the length rounded up to 64 KiB, made in the call, up to the
+  device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
+- Every block reads zero when it is handed out, new or taken again, as Metal's new buffers do. A
+  Shared block is zeroed through its mapping, which also makes every page resident before anyone
+  holds it; a Private block by a GPU fill.
+- `Device::release_block` gives a block back. It takes effect once no buffer of the block remains.
+  A pooled block is then zeroed and kept, with the same number, address and mapping, while its
+  class has fewer than two idle blocks; the block-maker thread frees the rest. A dedicated block is
+  always freed. Block numbers are never reused during the device's life.
+- `Device::new_buffer(block, offset, length, zeroed)` makes a `Buffer`: a view of the range, with
+  no Vulkan object of its own. Its `gpu_address` is the block's address plus the offset, and its
+  `contents` the block's mapping plus the offset, or `None` in a Private block. `zeroed` zeroes the
+  range before the call returns, as `newBufferWithLength:options:` does: through the mapping for
+  Shared, by a GPU fill submitted and waited for in Private, which writes exactly the range. A
+  buffer placed in a heap passes false, since Metal does not zero heap memory. A length of 0 and a
+  range past the block are refused, as Metal answers nil for both.
+
+The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
+the buffer there before has completed.
+
+### The consumer's mappings
+
+A consumer that maps blocks itself, into a guest for instance, passes `DeviceOptions::block_mappings`.
+Before the runtime frees a block it handed out, it calls `BlockMappings::unmap(block)`, which
+returns once every mapping the consumer made of it is gone and none of its threads touches the
+block. The memory stays mapped and valid until then. It runs on the block-maker thread, or at
+teardown on the dropping thread after the runtime's threads are joined, and it never calls into the
+runtime. Blocks the consumer never took are freed without it.
 
 ## One path for every device
 

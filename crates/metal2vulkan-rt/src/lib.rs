@@ -8,15 +8,20 @@
 
 #![warn(missing_docs)]
 
+mod buffer;
 mod counters;
 mod device;
 mod error;
+mod fill;
 pub mod floor;
 mod instance;
+mod memory;
 #[cfg(test)]
 mod tests;
 
+pub use buffer::Buffer;
 pub use counters::{Counters, Gauges, Metrics};
-pub use device::{Device, RawDevice};
-pub use error::Error;
+pub use device::{Device, DeviceOptions, RawDevice};
+pub use error::{Error, Limit, Refusal};
 pub use instance::{Instance, PhysicalDevice};
+pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass, BLOCK_LEN};
