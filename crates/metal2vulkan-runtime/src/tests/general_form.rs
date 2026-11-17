@@ -4,7 +4,7 @@
 //! plan takes where the device reads its uniform views at their residuals: those views' constants
 //! alone at 0.
 
-use crate::pipeline::{general_form, residual_form_of, residual_ids, residual_in_place};
+use crate::pipeline::{general_form, residual_form_of};
 use metal2vulkan::cache::SpecializationKey;
 use metal2vulkan::pipeline::{SlotClass, SlotRef, SpecKey, Stage};
 use metal2vulkan::vk::SpecializationMapEntry;
@@ -114,41 +114,4 @@ fn a_plans_key_zeroes_its_uniform_views_and_keeps_its_storage_views() {
     // A key whose uniform view is read at its residual already is the plan's own.
     let kept = key([0, 1, 1, 1, 3]);
     assert_eq!(residual_form_of(constants(), uniform_views, &kept), None);
-}
-
-/// A dispatch's regions take that key in their own bytes (`Variant::keyed_regions`): zeroing the
-/// constants `residual_ids` lists in place gives `residual_form_of`'s key, or the key as it was
-/// where that answers `None`, in the storage the key held, for the uniform views alone and for
-/// every view.
-#[test]
-fn a_key_takes_its_residual_form_in_its_own_bytes() {
-    let uniform = slot(SlotClass::Buffer, 0);
-    let texture = slot(SlotClass::Texture, 0);
-    let constants = || {
-        vec![
-            (0, SpecKey::RangeAtBindOffset(uniform)),
-            (1, SpecKey::RangeAtBindOffset(slot(SlotClass::Buffer, 1))),
-            (2, SpecKey::UnmeasuredTexels(texture)),
-            (3, SpecKey::PlainHalfTexels(texture)),
-            (4, SpecKey::BicubicTexels(texture)),
-        ]
-        .into_iter()
-    };
-    let uniform_views = |at: SlotRef| at == uniform;
-    let every_view = |_: SlotRef| true;
-    let views: [&dyn Fn(SlotRef) -> bool; 2] = [&uniform_views, &every_view];
-    assert_eq!(residual_ids(constants(), uniform_views), vec![0]);
-    assert_eq!(residual_ids(constants(), every_view), vec![0, 1]);
-    for (n, views) in views.into_iter().enumerate() {
-        for values in [[1, 1, 1, 1, 3], [0, 1, 1, 1, 3], [0, 0, 0, 0, 0]] {
-            let was = key(values);
-            let made = residual_form_of(constants(), views, &was).unwrap_or_else(|| was.clone());
-            let mut in_place = was.clone();
-            let storage = (in_place.data.as_ptr(), in_place.entries.as_ptr());
-            residual_in_place(&mut in_place, &residual_ids(constants(), views));
-            assert_eq!(in_place, made, "views {n}, {values:?}");
-            let kept = (in_place.data.as_ptr(), in_place.entries.as_ptr());
-            assert_eq!(kept, storage, "views {n}, {values:?}: the key's storage");
-        }
-    }
 }

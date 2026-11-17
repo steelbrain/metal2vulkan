@@ -100,8 +100,6 @@ mod compute_create_scaling_bench;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_instantiated;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod compute_lone_parts;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_parked;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod compute_sampler_listing;

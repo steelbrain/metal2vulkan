@@ -5,8 +5,8 @@
 use crate::binding::ResidentPrefix;
 use crate::encoder_fold::{joined, FoldOrder};
 use crate::tracker::{
-    join_looked_at, merge, ordered, part_notes, Access, Barrier, EncoderUses, Footprint,
-    GeometryWrites, ImagePlace, IndirectReads, LegacyBarrier, Owed, Point, Reach, Summary, Tracker,
+    join_looked_at, merge, ordered, Access, Barrier, EncoderUses, Footprint, GeometryWrites,
+    ImagePlace, IndirectReads, LegacyBarrier, Owed, Point, Reach, Summary, Tracker,
     UnorderedWrites, Use, UseRange, Wait, ENTRIES_PER_KEY, OWED,
 };
 use ash::vk;
@@ -58,14 +58,6 @@ fn writes(key: Key, range: UseRange, access: Access) -> Use<Key> {
 
 fn barrier(src: Access, dst: Access) -> Option<Barrier> {
     Some(Barrier { src, dst })
-}
-
-/// The order of a group after the encoder whose summary is `summary`, as a second encoder's join
-/// builds it (`State::join_fold`).
-fn order_after(summary: &Summary<Key>) -> FoldOrder<Key> {
-    let mut order = FoldOrder::none();
-    order.join(summary);
-    order
 }
 
 /// An ordered encoder with one command per entry of `commands`.
@@ -1666,7 +1658,7 @@ fn a_folded_encoder_s_first_dispatch_takes_a_serial_encoder_s_barrier() {
     // (`encoder_fold.rs`): its own order needs nothing, the group's order the same barrier.
     let mut first = EncoderUses::<Key>::new(true);
     first.order(COMPUTE, &bump(), Reach::Unnamed);
-    let order = order_after(&first.finish());
+    let order = FoldOrder::after(&first.finish());
     let mut second = EncoderUses::<Key>::new(true);
     let own = second.order(COMPUTE, &bump(), Reach::Unnamed);
     assert_eq!(own, None);
@@ -1676,43 +1668,6 @@ fn a_folded_encoder_s_first_dispatch_takes_a_serial_encoder_s_barrier() {
         folded.map(Barrier::legacy),
         Some(least_between_dispatches())
     );
-}
-
-/// A group's order cleared for the command buffer's next group (`FoldOrder::clear`, the room
-/// the groups of a command buffer and of the ones that take its state pass on): it answers as
-/// one built fresh, nothing of the group before left (its writes and its fenced writes), and the
-/// same uses again take no more room than the clear kept.
-#[test]
-fn a_cleared_fold_order_answers_as_a_fresh_one_in_the_room_it_kept() {
-    let written = [
-        Use::writes(5, true, bytes(0..64), shader_write()),
-        Use::writes(6, true, bytes(0..256), shader_write()),
-    ];
-    let read = [Use::reads(5, true, bytes(0..64), shader_read())];
-    let group = |fence: bool| {
-        let mut first = EncoderUses::<Key>::new(true);
-        first.order(COMPUTE, &written, Reach::Unnamed);
-        if fence {
-            first.update_fence(100, None);
-        }
-        first.finish()
-    };
-    let mut order = order_after(&group(true));
-    assert!(order.barrier(&read).is_some(), "the group's write");
-    assert!(order.fence_barrier(COMPUTE, &read).is_some(), "the fence");
-    order.clear();
-    let room = order.room();
-    assert_eq!(order.barrier(&read), None, "the write of the group before");
-    assert_eq!(order.fence_barrier(COMPUTE, &read), None, "its fence");
-    order.join(&group(false));
-    let fresh = order_after(&group(false));
-    assert!(fresh.barrier(&read).is_some());
-    assert_eq!(order.barrier(&read), fresh.barrier(&read));
-    assert_eq!(
-        order.fence_barrier(COMPUTE, &read),
-        fresh.fence_barrier(COMPUTE, &read)
-    );
-    assert_eq!(order.room(), room, "the room it kept");
 }
 
 /// A group's encoder after one that wrote an untracked buffer and updated a fence
@@ -1729,7 +1684,7 @@ fn a_folded_encoder_after_a_fence_update_takes_the_least_barrier_widened_only_by
         if let Some(fence) = fence {
             first.update_fence(fence, None);
         }
-        order_after(&first.finish())
+        FoldOrder::after(&first.finish())
     };
     let unfenced = writer(None);
     let mut order = writer(Some(100));
@@ -3086,114 +3041,4 @@ fn runs_of_9_and_20_uses_join_exactly_and_one_with_an_empty_range_does_not() {
             );
         }
     }
-}
-
-/// A command of one key at two ranges, one of them twice (a write, then a read), another key,
-/// an untracked use and a use that touches nothing: what a part of it alone keeps.
-fn lone_command() -> [Use<Key>; 6] {
-    [
-        writes(3, bytes(0..64), shader_write()),
-        reads(1, bytes(64..128), shader_read()),
-        reads(3, bytes(128..256), shader_read()),
-        reads(3, bytes(0..64), shader_read()),
-        Use::reads(2, false, bytes(0..64), shader_read()),
-        reads(4, bytes(0..64), Access::NONE),
-    ]
-}
-
-/// An encoder, ordered or not, of the one command `command`, and the commands it noted in a
-/// part's map.
-fn encoder_of_one(ordered: bool, command: &[Use<Key>]) -> (EncoderUses<Key>, u64) {
-    let before = part_notes();
-    let mut uses = EncoderUses::new(ordered);
-    uses.order(COMPUTE, command, Reach::Unnamed);
-    (uses, part_notes() - before)
-}
-
-/// A part of one command of an ordered encoder, which waits uncompared, is summarized from the
-/// uses it recorded and notes nothing in its map: its summary is the one an unordered encoder's
-/// map makes of the same command (each key's ranges in the order recorded, the uses of one range
-/// joined, the untracked use and the one that touches nothing left out). A second command notes
-/// both in the map.
-#[test]
-fn a_part_of_one_command_is_summarized_as_its_map_would_be() {
-    let command = lone_command();
-    let (lone, lone_notes) = encoder_of_one(true, &command);
-    let (mapped, mapped_notes) = encoder_of_one(false, &command);
-    assert_eq!(
-        (lone_notes, mapped_notes),
-        (0, 1),
-        "the commands noted in a map"
-    );
-    let (lone, mapped) = (lone.finish_parts(), mapped.finish_parts());
-    assert!(lone == mapped, "the summaries: {lone:?} and {mapped:?}");
-    let want = [
-        reads(1, bytes(64..128), shader_read()),
-        Use {
-            read: shader_read(),
-            ..writes(3, bytes(0..64), shader_write())
-        },
-        reads(3, bytes(128..256), shader_read()),
-    ];
-    assert_eq!(lone[0].uses(), &want[..]);
-    let before = part_notes();
-    let mut two = EncoderUses::new(true);
-    two.order(COMPUTE, &command, Reach::Unnamed);
-    two.order(
-        COMPUTE,
-        &[reads(5, bytes(0..4), shader_read())],
-        Reach::Unnamed,
-    );
-    assert_eq!(
-        part_notes() - before,
-        2,
-        "a part of two commands notes both"
-    );
-}
-
-/// A part of one command answers what its encoder's later commands ask of the commands before
-/// them as an unordered encoder's map of the same command does: its writes and accesses met, its
-/// touches in a stage, the ranges of a key it writes and its tracked uses in a stage.
-#[test]
-fn a_part_of_one_command_answers_its_readers_as_its_map_would() {
-    let command = lone_command();
-    let (lone, _) = encoder_of_one(true, &command);
-    let (mapped, _) = encoder_of_one(false, &command);
-    let probes = [
-        reads(3, bytes(32..48), shader_read()),
-        reads(1, bytes(64..72), shader_read()),
-        writes(1, bytes(100..101), shader_write()),
-        writes(3, bytes(200..201), shader_write()),
-        writes(2, bytes(0..64), shader_write()),
-        writes(4, bytes(0..8), shader_write()),
-    ];
-    let mut met = 0;
-    for probe in &probes {
-        let probe = std::slice::from_ref(probe);
-        let answers = |uses: &EncoderUses<Key>| {
-            [
-                uses.written(probe),
-                uses.accessed(probe),
-                uses.touched_in(probe, COMPUTE),
-                uses.touched_in(probe, TRANSFER),
-            ]
-        };
-        assert_eq!(answers(&lone), answers(&mapped), "{probe:?}");
-        met += answers(&lone).iter().filter(|&&met| met).count();
-    }
-    assert!(met > 0, "no probe met the command");
-    for key in 1..=5 {
-        let ranges =
-            |uses: &EncoderUses<Key>| uses.written_ranges(key).cloned().collect::<Vec<_>>();
-        assert_eq!(ranges(&lone), ranges(&mapped), "key {key}");
-    }
-    let by_key = |mut uses: Vec<Use<Key>>| {
-        uses.sort_by_key(|used| used.key);
-        uses
-    };
-    assert_eq!(
-        by_key(lone.tracked_in(COMPUTE)),
-        by_key(mapped.tracked_in(COMPUTE))
-    );
-    assert_eq!(lone.written_ranges(3).count(), 1);
 }

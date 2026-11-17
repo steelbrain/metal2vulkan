@@ -242,48 +242,6 @@ pub(crate) fn uniform_residual_form<'a>(
     residual_form_of(constants, uniform, specialization)
 }
 
-/// The IDs of `constants`' `SpecKey::RangeAtBindOffset` constants whose slot `interface` reads
-/// through a uniform view: those [`uniform_residual_form`] zeroes, listed once for a pipeline so
-/// each of its keys takes that form in place ([`residual_in_place`]).
-pub(crate) fn uniform_residual_ids<'a>(
-    constants: impl Iterator<Item = &'a SpecConstant>,
-    interface: &PipelineInterface,
-) -> Vec<u32> {
-    let uniform = |slot| {
-        matches!(interface.slots.get(&slot),
-            Some(SlotInterface::Buffer(b)) if b.form.uniform_view())
-    };
-    residual_ids(
-        constants.map(|constant| (constant.id, constant.key)),
-        uniform,
-    )
-}
-
-/// The IDs of `constants`' (each its ID and its meaning) `SpecKey::RangeAtBindOffset` constants
-/// whose slot `views` holds: those [`residual_form_of`] zeroes.
-pub(crate) fn residual_ids(
-    constants: impl Iterator<Item = (u32, SpecKey)>,
-    views: impl Fn(SlotRef) -> bool,
-) -> Vec<u32> {
-    constants
-        .filter(|&(_, key)| matches!(key, SpecKey::RangeAtBindOffset(slot) if views(slot)))
-        .map(|(id, _)| id)
-        .collect()
-}
-
-/// `specialization` with the value of each constant `ids` names at 0, written in its own bytes:
-/// [`residual_form_of`]'s key where `ids` are [`residual_ids`]' of the same constants and views,
-/// and `specialization` as it was where that answers `None`, with no key made.
-pub(crate) fn residual_in_place(specialization: &mut SpecializationKey, ids: &[u32]) {
-    let SpecializationKey { data, entries, .. } = specialization;
-    for entry in entries.iter().filter(|e| ids.contains(&e.constant_id)) {
-        let at = entry.offset as usize;
-        if let Some(bytes) = data.get_mut(at..at + entry.size as usize) {
-            bytes.fill(0);
-        }
-    }
-}
-
 /// `specialization` with each `SpecKey::RangeAtBindOffset` constant of `constants` (a pipeline's
 /// stages', each its ID and its meaning) whose slot `views` holds at 0; `None` where every one of
 /// them is 0 there already. A constant `specialization` gives no entry takes the module's

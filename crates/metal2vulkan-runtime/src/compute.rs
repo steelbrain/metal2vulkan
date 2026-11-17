@@ -111,7 +111,6 @@ use metal2vulkan::error::{BindError, RuntimeDriverDefect};
 use metal2vulkan::metal::{BarrierScope, DispatchType, RenderStages, ResourceUsage};
 use metal2vulkan::pipeline::Stage;
 use std::borrow::Cow;
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::atomic::AtomicU64;
@@ -295,13 +294,12 @@ impl CommandBuffer {
         let counts = &self.device().shared().counts;
         // Under the core's one lock of the state: it joins its command buffer's unit of command
         // predication, carrying on the loops open across its start, or starts the next; it starts
-        // with the residency the ended encoders left (`State::inheriting`); it takes what the
-        // command buffer's last compute encoder parked (`compute/live.rs`); and it takes a log its
-        // state kept (`spare_states.rs`), where it kept one.
+        // with the residency the ended encoders left (`State::inheriting`); and it takes what the
+        // command buffer's last compute encoder parked (`compute/live.rs`).
         // The core is made in the box the command buffer's last compute encoder parked, beside its
         // bind state (`compute/live.rs`); else in a box of the device's spares, beside one of its
         // bind states (`EncoderCore::open_placed`).
-        let (mut core, (live, carried, residency, predicated, log)) = EncoderCore::open_placed(
+        let (mut core, (live, carried, residency, predicated)) = EncoderCore::open_placed(
             self,
             call,
             EncoderKind::Compute,
@@ -309,11 +307,9 @@ impl CommandBuffer {
             |state| {
                 let carried = state.enter_predication(dispatch_type);
                 let residency = state.inheriting(false, counts);
-                let parked = state.unpark_compute();
-                let log = state.kept_compute_log();
-                (carried, residency, state.predicated, parked, log)
+                (carried, residency, state.predicated, state.unpark_compute())
             },
-            |opened, (carried, residency, predicated, parked, log)| {
+            |opened, (carried, residency, predicated, parked)| {
                 let (core, live) = match parked {
                     Some(parked) => {
                         counts.parked_compute_taken();
@@ -325,7 +321,7 @@ impl CommandBuffer {
                         (opened.boxed(), live)
                     }
                 };
-                (core, (live, carried, residency, predicated, log))
+                (core, (live, carried, residency, predicated))
             },
         )?;
         // A record of command predication of its unit, or a dispatch it leaves to its host step,
@@ -349,9 +345,7 @@ impl CommandBuffer {
             indirect_stage_in: None,
             residency,
             captures: Captures::carried(carried, predicated),
-            log: Some(
-                log.unwrap_or_else(|| self.device().shared().scheduler.spare_logs().compute()),
-            ),
+            log: Some(self.device().shared().scheduler.spare_logs().compute()),
             dispatches: 0,
             live,
             heaps_noted: None,
@@ -2634,86 +2628,48 @@ impl DispatchMemo {
 ///   does not read changed only in values its commands do not read: a program that binds two
 ///   textures of one shape in turn, an encoder for each dispatch, keeps them. Checked in builds
 ///   with debug assertions, where each dispatch that takes them instantiates again and compares.
-/// - **Their storage, kept where the entry goes.** Commands no longer of the state stay as the
-///   storage the next direct dispatch's instantiation writes over
-///   (`BindingPlan::instantiate_dispatch_into`, `WorkCounts::dispatches_instantiated_in_place`)
-///   where nothing else holds them (the memo's entry they were taken into goes before: a dispatch
-///   that instantiates settled anew), so a program that binds a buffer at another offset at each
-///   dispatch, an encoder for each, makes its commands' lists once. Exact: the method sets every
-///   field as `instantiate_dispatch` does, which builds with debug assertions instantiate again
-///   to compare.
 #[derive(Default)]
 pub(super) struct Instantiated(Option<KeptCommands>);
 
-/// An [`Instantiated`]'s entry: its commands, and what they are of, where they still are.
+/// An [`Instantiated`]'s entry.
 struct KeptCommands {
-    /// `None` where a value they may read moved since: the commands are then storage alone.
-    of: Option<CommandsOf>,
-    commands: Arc<DispatchCommands>,
-}
-
-/// What a [`KeptCommands`]' commands are of.
-struct CommandsOf {
     planned: Weak<Planned>,
     /// The dispatch they run: what it planned may be of another grid of its class
     /// (`Planned::grids`).
     dispatch: Dispatch,
     /// The kinds of the state's values the commands may read.
     reads: ValueKinds,
-}
-
-impl CommandsOf {
-    fn new(planned: &Arc<Planned>, dispatch: Dispatch) -> CommandsOf {
-        CommandsOf {
-            planned: Arc::downgrade(planned),
-            dispatch,
-            reads: ValueKinds::dispatch_reads(&planned.plan),
-        }
-    }
+    commands: Arc<DispatchCommands>,
 }
 
 impl Instantiated {
     /// The commands kept, where they are of `planned` and `dispatch`.
     fn of(&self, planned: &Arc<Planned>, dispatch: &Dispatch) -> Option<&Arc<DispatchCommands>> {
         let kept = self.0.as_ref()?;
-        let of = kept.of.as_ref()?;
-        let same = std::ptr::eq(of.planned.as_ptr(), Arc::as_ptr(planned));
-        (same && of.dispatch == *dispatch).then_some(&kept.commands)
+        let of = std::ptr::eq(kept.planned.as_ptr(), Arc::as_ptr(planned));
+        (of && kept.dispatch == *dispatch).then_some(&kept.commands)
     }
 
-    /// The commands of a direct dispatch of `planned` and `dispatch`, kept in place of the
-    /// entry's: `over` writes them over the kept commands' storage where nothing else holds it
-    /// (with whether it did), else `fresh` makes them.
-    fn instantiate(
+    /// Keep `commands`, a direct dispatch's of `planned` and `dispatch`, in place of the entry.
+    fn keep(
         &mut self,
-        (planned, dispatch): (&Arc<Planned>, Dispatch),
-        fresh: impl FnOnce() -> Result<DispatchCommands, Error>,
-        over: impl FnOnce(&mut DispatchCommands) -> Result<(), Error>,
-    ) -> Result<(Arc<DispatchCommands>, bool), Error> {
-        if let Some(kept) = &mut self.0 {
-            if let Some(commands) = Arc::get_mut(&mut kept.commands) {
-                // Of nothing while they are written, and after an error.
-                kept.of = None;
-                over(commands)?;
-                kept.of = Some(CommandsOf::new(planned, dispatch));
-                return Ok((Arc::clone(&kept.commands), true));
-            }
-        }
-        let commands = Arc::new(fresh()?);
+        planned: &Arc<Planned>,
+        dispatch: Dispatch,
+        commands: Arc<DispatchCommands>,
+    ) {
         self.0 = Some(KeptCommands {
-            of: Some(CommandsOf::new(planned, dispatch)),
-            commands: Arc::clone(&commands),
+            planned: Arc::downgrade(planned),
+            dispatch,
+            reads: ValueKinds::dispatch_reads(&planned.plan),
+            commands,
         });
-        Ok((commands, false))
     }
 
-    /// The state's values of the kinds `moved` names changed: the commands are of nothing where
-    /// they may read one, and are kept as storage alone.
+    /// The state's values of the kinds `moved` names changed: the entry goes where its commands
+    /// may read one.
     fn moved(&mut self, moved: ValueKinds) {
-        if let Some(kept) = &mut self.0 {
-            if (kept.of.as_ref()).is_some_and(|of| of.reads.meets(moved)) {
-                kept.of = None;
-            }
+        if (self.0.as_ref()).is_some_and(|kept| kept.reads.meets(moved)) {
+            self.0 = None;
         }
     }
 }
@@ -2923,33 +2879,13 @@ fn record(
                     Arc::clone(commands)
                 }
                 None => {
-                    // A direct dispatch's are kept, over the storage of those kept before where
-                    // nothing else holds it.
-                    let commands = match (kept_commands, direct) {
-                        (Some(memo), Some(_)) => {
-                            let over = |commands: &mut DispatchCommands| {
-                                (plan.instantiate_dispatch_into(state, &dispatch, commands))
-                                    .map_err(Error::Bind)?;
-                                variant.keyed_regions(core.device(), commands);
-                                debug_assert!(
-                                    instantiate().is_ok_and(|again| again == *commands),
-                                    "a dispatch's commands written over kept ones that are not \
-                                     those it instantiates"
-                                );
-                                Ok(())
-                            };
-                            let (commands, in_place) =
-                                memo.instantiate((planned, dispatch), instantiate, over)?;
-                            if in_place {
-                                counts.dispatch_instantiated_in_place();
-                            }
-                            commands
-                        }
-                        _ => Arc::new(instantiate()?),
-                    };
+                    let commands = Arc::new(instantiate()?);
                     counts.dispatch_instantiated();
                     if from_aside {
                         counts.set_aside_commands_instantiated();
+                    }
+                    if let (Some(memo), Some(_)) = (kept_commands, direct) {
+                        memo.keep(planned, dispatch, Arc::clone(&commands));
                     }
                     commands
                 }
@@ -3036,11 +2972,12 @@ fn record(
     // upload (16-aligned, as the variant reads it): the grid in threads is the call's, so nothing
     // on the device writes it.
     if let Some(bytes) = commands.region_record {
+        let device = core.device().clone();
         let record = {
             let mut state = core.command_buffer().state();
             state
                 .uploads
-                .upload_aligned(core.device(), &bytes, bytes.len() as u64, 16)?
+                .upload_aligned(&device, &bytes, bytes.len() as u64, 16)?
         };
         let Some(address) = record.device_address() else {
             return Err(internal(
@@ -3128,8 +3065,7 @@ fn record(
         core.counts().dispatch_skipped_inert();
         return Ok(true);
     }
-    // The device through the command buffer's handle, borrowed at each use (`core.device()`): no
-    // handle of its own, whose count every encoding thread's handles share.
+    let device = core.device().clone();
     // Inside a block of command predication, each command runs from its gate: the flat path's
     // preprocess (whose command then stays zero), else each region's dispatch. Their group
     // counts are listed only for a unit that gates them.
@@ -3148,7 +3084,7 @@ fn record(
                                 .map(|region| region.group_count)
                                 .collect(),
                         };
-                        predication.gates(uploads, core.device(), &counts)?
+                        predication.gates(uploads, &device, &counts)?
                     }
                     false => (None, Vec::new()),
                 }
@@ -3167,7 +3103,7 @@ fn record(
         let mut state = core.command_buffer().state();
         binding::bind(
             call,
-            core.device(),
+            &device,
             &mut state,
             plan,
             &command,
@@ -3198,12 +3134,12 @@ fn record(
     let kept_made = kept
         .and_then(|kept| kept.made.get())
         .or_else(|| planned.made_for(commands))
-        .filter(|_| !apart_samplers(core.device(), objects));
+        .filter(|_| !apart_samplers(&device, objects));
     // Inside a predicated loop's laying, it waits for them too, so the laying, which its check
     // may submit again (`command_buffer/rerun.rs`), is not split for it; but where its variant
     // records in one of its own.
     let laying = core.command_buffer().state().predication_mut().laying();
-    let waits = laying && !apart_samplers(core.device(), objects);
+    let waits = laying && !apart_samplers(&device, objects);
     let (pipelines, pending) = match (own.filter(|_| !waits), kept_made) {
         (Some(_), Some(made)) => {
             if let Some(kept) = kept.filter(|kept| kept.made.get().is_none()) {
@@ -3233,7 +3169,7 @@ fn record(
                 pipeline.record_dispatch(direct, state);
             }
             match made {
-                Some(made) if !apart_samplers(core.device(), objects) => {
+                Some(made) if !apart_samplers(&device, objects) => {
                     // Kept with the entry, which the next dispatch of its inputs takes, and with
                     // what it planned, which the next dispatch of its shape takes.
                     if let Some(kept) = kept {
@@ -3250,7 +3186,7 @@ fn record(
                     (Cow::Owned(made), None)
                 }
                 Some(_) => {
-                    core.device()
+                    device
                         .shared()
                         .counts
                         .thread()
@@ -3283,20 +3219,18 @@ fn record(
     };
     // The shadowed textures the dispatch binds, at the first draw or dispatch of each, its
     // shadow made now (`shadow_log.rs`).
-    crate::shadow_log::dispatched(core.device(), variant.pipeline(), tables.table);
+    crate::shadow_log::dispatched(&device, variant.pipeline(), tables.table);
     // The resident textures' shadows as the encoder keeps them (`compute/live.rs`).
     let textures = tables.table.textures.values();
     let shadows = match resident_shadows {
-        Some(kept) => {
-            shadow::shadow_uses_of(textures, kept.of(core.device(), tables.residency), uses)
-        }
+        Some(kept) => shadow::shadow_uses_of(textures, kept.of(&device, tables.residency), uses),
         None => shadow::shadow_uses(textures.chain(tables.residency.textures()), uses),
     };
     let copies = core.plan_shadows(&shadows, uses)?;
     let heap_set = match heap {
         Some(_) => Some(
             heap_sets::bind(
-                core.device(),
+                &device,
                 objects,
                 &mut core.command_buffer().state().heaps,
                 heap_writes,
@@ -3321,7 +3255,7 @@ fn record(
     // here, what its push carries (`binding::PushedSetZero`).
     let pushes = !pushed.is_empty();
     if pushes && pending.is_some() {
-        (core.device().shared().counts.thread()).dispatch_pushing_set_zero(pushed.len() as u64);
+        (device.shared().counts.thread()).dispatch_pushing_set_zero(pushed.len() as u64);
     }
     let recording = Recording {
         layout: objects.layout(),
@@ -3335,7 +3269,7 @@ fn record(
     };
     let stages = vk::PipelineStageFlags2::COMPUTE_SHADER;
     let regions = &commands.regions;
-    (core.device().shared().counts.thread()).dispatch_tracked(uses.len() as u64);
+    (device.shared().counts.thread()).dispatch_tracked(uses.len() as u64);
     match pending {
         Some((dispatch, begun, next)) => {
             // Tracked here, as a command recorded here is; its execution recorded here, its
@@ -3368,20 +3302,19 @@ fn record(
         }
         None => {
             let made = &*pipelines;
-            let stale = core.device().shared().pushes_after_pipeline_binds;
+            let shared = device.shared();
+            let stale = shared.pushes_after_pipeline_binds;
             let resident = uses.resident();
-            let carried = Cell::new(0);
             core.command_reaching_pushed(stages, uses, resident, |raw, command_buffer, held| {
                 // SAFETY: the encoder's command buffer is recording outside a render pass;
                 // every object recorded is live until the command buffer completes (retained
                 // below), the pipelines are the variant's, one per region, and `held` is what
                 // its compute bind point holds (`EncoderCore::command_reaching_pushed`).
-                let pushed = unsafe { recording.record(raw, command_buffer, made, (held, stale)) };
-                carried.set(carried.get() + pushed);
+                let carried = unsafe { recording.record(raw, command_buffer, made, (held, stale)) };
+                if pushes {
+                    (shared.counts.thread()).dispatch_pushing_set_zero(carried);
+                }
             });
-            if pushes {
-                (core.device().shared().counts.thread()).dispatch_pushing_set_zero(carried.get());
-            }
             core.shadows_used(&shadows, uses, &[]);
             core.executed(|| {
                 Execution::new(
@@ -3402,7 +3335,7 @@ fn record(
             .iter()
             .all(|earlier| earlier.specialization != region.specialization)
         {
-            core.device().degrade_bound_values(
+            device.degrade_bound_values(
                 std::slice::from_ref(&variant.pipeline().stage),
                 &region.specialization,
                 &|k| plan.specialized_value(k),
@@ -3410,10 +3343,8 @@ fn record(
             );
         }
     }
-    core.device()
-        .degrade_cross_class(&plan.diagnostics, formats);
-    core.device()
-        .degrade_astc_storage(&plan.diagnostics, formats);
+    device.degrade_cross_class(&plan.diagnostics, formats);
+    device.degrade_astc_storage(&plan.diagnostics, formats);
     objects.announce_bound(
         (
             std::slice::from_ref(&variant.pipeline().stage),
@@ -3444,20 +3375,20 @@ fn record(
     }
     let emulated = variant.emulates_simdgroups();
     let split = (regions.len(), variant.runs_partial_threadgroups());
-    degrade_dispatch(core.device(), kernel, &dispatch, split, emulated);
+    degrade_dispatch(&device, kernel, &dispatch, split, emulated);
     // A large kernel's whole grid on its partial-threadgroups variant ([`partial_direct`]).
     if variant.runs_partial_threadgroups() && whole_grid(&dispatch) {
         core.counts().whole_dispatch_on_partial_variant();
     }
     if let Some(unlisted) = unlisted {
         heap_sets::degrade_unlisted(
-            core.device(),
+            &device,
             unlisted,
             &format!("kernel `{kernel}`'s dispatches"),
         );
         // It runs with the states its sampler arrays hold.
         let mut held = core.command_buffer().state();
-        held.unlisted_argument_sampler(core.device());
+        held.unlisted_argument_sampler(&device);
     }
     Ok(true)
 }

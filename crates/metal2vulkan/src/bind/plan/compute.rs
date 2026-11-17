@@ -357,19 +357,6 @@ pub(crate) fn spec_key(
     value: impl Fn(SpecKey) -> Option<u64>,
 ) -> SpecializationKey {
     let mut key = SpecializationKey::new();
-    spec_key_into(layout, value, &mut key);
-    key
-}
-
-/// [`spec_key`]'s key, written over `key` in the storage its two lists hold: a key written over
-/// one of as many constants allocates nothing.
-pub(crate) fn spec_key_into(
-    layout: &[SpecConstant],
-    value: impl Fn(SpecKey) -> Option<u64>,
-    key: &mut SpecializationKey,
-) {
-    key.entries.clear();
-    key.data.clear();
     for (at, c) in layout.iter().enumerate() {
         let Some(v) = value(c.key) else { continue };
         // Room for the rest of the layout at once, rather than growing a push at a time: a
@@ -389,6 +376,7 @@ pub(crate) fn spec_key_into(
         key.data
             .extend_from_slice(&v.to_le_bytes()[..size as usize]);
     }
+    key
 }
 
 fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError> {

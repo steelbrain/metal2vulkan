@@ -90,14 +90,13 @@
 //! dispatch carries an [`IndirectClamp`] prepass and its region reads the clamp's scratch
 //! ([`IndirectArgs::ClampScratch`]).
 
-use crate::bind::graphics::zeroed;
 use crate::bind::heap::HeapSource;
 use crate::bind::indirect_clamp::IndirectClamp;
 use crate::bind::instantiate::{
     bind_buffers, put, slot_field, texel_ranges, BufferExtent, DescriptorBytes, DescriptorRange,
     FieldBytes, IndirectRef, PushConstantWrite, PushHole, RootEntry, RootTable,
 };
-use crate::bind::plan::compute::{internal, not_implemented, spec_key_into};
+use crate::bind::plan::compute::{internal, not_implemented, spec_key};
 use crate::bind::plan::{
     AccessClass, BindingPlan, ByteRange, ComputeTemplate, LocalRules, ResourceUse, UseTarget,
 };
@@ -212,23 +211,6 @@ pub struct DispatchCommands {
     pub uses: Vec<ResourceUse>,
 }
 
-impl DispatchCommands {
-    /// No dispatch's commands, which an instantiation writes over (`instantiate`).
-    fn none() -> DispatchCommands {
-        DispatchCommands {
-            regions: Vec::new(),
-            descriptor_bytes: Vec::new(),
-            descriptor_ranges: Vec::new(),
-            extents: Vec::new(),
-            push_holes: Vec::new(),
-            region_record: None,
-            root_table: None,
-            indirect_clamp: None,
-            uses: Vec::new(),
-        }
-    }
-}
-
 /// Where an indirect region reads its group counts.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -336,16 +318,17 @@ fn emulated_rules(rules: &LocalRules) -> LocalRules {
 /// least 1), with every region checked against that pipeline's rules. A flattened tier's dispatch
 /// with a region that is not whole subgroups runs whole on the emulated-simdgroups variant, so each
 /// of its regions is checked against the variant's rules ([`emulated_rules`]).
-pub(crate) fn fit(
-    rules: &LocalRules,
-    mut locals: impl Iterator<Item = [u32; 3]> + Clone,
-) -> Result<Fit, BindError> {
-    if locals.clone().any(|r| partial(rules, r)) {
+pub(crate) fn fit(rules: &LocalRules, locals: &[[u32; 3]]) -> Result<Fit, BindError> {
+    if locals.iter().any(|&r| partial(rules, r)) {
         let emulated = emulated_rules(rules);
-        locals.try_for_each(|r| check_local(&emulated, r))?;
+        for &r in locals {
+            check_local(&emulated, r)?;
+        }
         Ok(Fit::EmulatedSimdgroups)
     } else {
-        locals.try_for_each(|r| check_local(rules, r))?;
+        for &r in locals {
+            check_local(rules, r)?;
+        }
         Ok(Fit::Planned)
     }
 }
@@ -434,174 +417,24 @@ pub(crate) struct Region {
     pub multi: bool,
 }
 
-/// One piece of an axis: `(base, count, local)`.
+/// One axis's pieces: `(base, count, local)`.
 type Piece = (u32, u32, u32);
 
-/// One axis's pieces: `count` groups of `local` threads from group `base`, in chunks of at most
-/// `max`, then the edge piece where there is one. Held as these numbers alone, so a dispatch's
-/// regions are planned with no list of each axis's pieces, nor of the regions ([`Regions`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Pieces {
-    base: u32,
-    count: u32,
-    local: u32,
-    max: u32,
-    /// How many chunks `count` takes: `count / max`, rounded up.
-    chunks: u32,
-    edge: Option<Piece>,
-}
-
-impl Pieces {
-    /// `count` groups of `local` threads from group `base`, in chunks of at most `max`.
-    fn chunks(base: u32, count: u32, local: u32, max: u32) -> Pieces {
-        let max = max.max(1);
-        Pieces {
-            base,
-            count,
-            local,
-            max,
-            chunks: count.div_ceil(max),
-            edge: None,
-        }
-    }
-
-    /// The one piece `(base, count, local)`, whatever its count (0 for an indirect region's).
-    fn one(base: u32, count: u32, local: u32) -> Pieces {
-        Pieces {
-            base,
-            count: 0,
-            local,
-            max: 1,
-            chunks: 0,
-            edge: Some((base, count, local)),
-        }
-    }
-
-    /// How many pieces the axis has.
-    fn len(&self) -> u64 {
-        u64::from(self.chunks) + u64::from(self.edge.is_some())
-    }
-
-    /// Piece `k` in order: each chunk, then the edge; `None` past the last.
-    fn piece(&self, k: u64) -> Option<Piece> {
-        match u32::try_from(k) {
-            // Each chunk starts below `count`, so no start overflows.
-            Ok(k) if k < self.chunks => {
-                let done = k * self.max;
-                Some((
-                    self.base + done,
-                    (self.count - done).min(self.max),
-                    self.local,
-                ))
-            }
-            Ok(k) if k == self.chunks => self.edge,
-            _ => None,
-        }
-    }
-
-    /// The widest local size of its pieces, 0 where it has none.
-    fn widest(&self) -> u32 {
-        let chunk = if self.chunks > 0 { self.local } else { 0 };
-        chunk.max(self.edge.map_or(0, |(_, _, local)| local))
-    }
-}
-
-/// The regions of a dispatch: the product of each axis's pieces, x slowest, each region taking one
-/// piece of every axis, all of one `MultiRegion`. Held as these numbers alone, so planning a
-/// dispatch makes no list of its regions: [`Regions::iter`] gives them in order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Regions {
-    pieces: [Pieces; 3],
-    multi: bool,
-}
-
-impl Regions {
-    /// No region.
-    fn none() -> Regions {
-        Regions {
-            pieces: [Pieces::chunks(0, 0, 0, 1); 3],
-            multi: false,
-        }
-    }
-
-    /// The one region `r`.
-    fn one(r: Region) -> Regions {
-        Regions {
-            pieces: std::array::from_fn(|i| Pieces::one(r.base[i], r.groups[i], r.local[i])),
-            multi: r.multi,
-        }
-    }
-
-    /// How many regions there are.
-    pub(crate) fn len(&self) -> usize {
-        self.pieces.iter().map(Pieces::len).product::<u64>() as usize
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// The regions in order.
-    pub(crate) fn iter(&self) -> RegionsIter {
-        RegionsIter {
-            regions: *self,
-            at: [0; 3],
-            left: self.len(),
-        }
-    }
-
-    /// The widest local size along `axis` of any region, 0 where there is none: each piece of an
-    /// axis is some region's where there is a region.
-    fn widest(&self, axis: usize) -> u32 {
-        match self.is_empty() {
-            true => 0,
-            false => self.pieces[axis].widest(),
-        }
-    }
-
-    /// Every region with `MultiRegion` 1: it reads its record.
-    fn read_records(&mut self) {
-        self.multi = true;
-    }
-}
-
-/// [`Regions::iter`]: each region in order, the piece of each axis it takes counted from x
-/// slowest to z fastest.
-#[derive(Clone)]
-pub(crate) struct RegionsIter {
-    regions: Regions,
-    at: [u64; 3],
-    left: usize,
-}
-
-impl Iterator for RegionsIter {
-    type Item = Region;
-
-    fn next(&mut self) -> Option<Region> {
-        self.left = self.left.checked_sub(1)?;
-        let pieces = &self.regions.pieces;
-        let [x, y, z] = [0, 1, 2].map(|i| pieces[i].piece(self.at[i]));
-        let ((bx, cx, lx), (by, cy, ly), (bz, cz, lz)) = (x?, y?, z?);
-        for i in [2, 1, 0] {
-            self.at[i] += 1;
-            if i == 0 || self.at[i] < pieces[i].len() {
-                break;
-            }
-            self.at[i] = 0;
-        }
-        Some(Region {
-            local: [lx, ly, lz],
-            groups: [cx, cy, cz],
-            base: [bx, by, bz],
-            multi: self.regions.multi,
-        })
+/// `count` groups of `local` threads from group `base`, in chunks of at most `max`.
+fn chunks(out: &mut Vec<Piece>, base: u32, count: u32, local: u32, max: u32) {
+    let max = max.max(1);
+    let mut done = 0;
+    while done < count {
+        let n = (count - done).min(max);
+        out.push((base + done, n, local));
+        done += n;
     }
 }
 
 /// The regions of a direct dispatch whose axes split into `pieces`; `MultiRegion` whenever there
 /// is more than one region or `force_multi`.
-fn product(pieces: [Pieces; 3], force_multi: bool) -> Result<Regions, BindError> {
-    let total: u64 = pieces.iter().map(Pieces::len).product();
+fn product(pieces: [Vec<Piece>; 3], force_multi: bool) -> Result<Vec<Region>, BindError> {
+    let total: u64 = pieces.iter().map(|p| p.len() as u64).product();
     if total > MAX_REGIONS {
         let (i, _) = pieces
             .iter()
@@ -614,10 +447,21 @@ fn product(pieces: [Pieces; 3], force_multi: bool) -> Result<Regions, BindError>
             },
         )));
     }
-    Ok(Regions {
-        pieces,
-        multi: force_multi || total > 1,
-    })
+    let multi = force_multi || total > 1;
+    let mut out = Vec::with_capacity(total as usize);
+    for &(bx, cx, lx) in &pieces[0] {
+        for &(by, cy, ly) in &pieces[1] {
+            for &(bz, cz, lz) in &pieces[2] {
+                out.push(Region {
+                    local: [lx, ly, lz],
+                    groups: [cx, cy, cz],
+                    base: [bx, by, bz],
+                    multi,
+                });
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Whether a region of `planned` has more than one row (`y` or `z` above 1), where a simdgroup
@@ -626,7 +470,7 @@ fn product(pieces: [Pieces; 3], force_multi: bool) -> Result<Regions, BindError>
 /// 2 `z`): Metal's `threads_per_threadgroup` there is 1, and so is every region's local size.
 fn unit_axes(planned: &Planned) -> u8 {
     (0..3)
-        .filter(|&a| planned.nominal[a] == 1 && planned.regions.widest(a) <= 1)
+        .filter(|&a| planned.nominal[a] == 1 && planned.regions.iter().all(|r| r.local[a] <= 1))
         .fold(0, |axes, a| axes | 1 << a)
 }
 
@@ -637,13 +481,16 @@ fn unit_axes_run(axes: u8, planned: &Planned) -> bool {
 }
 
 fn multi_row(planned: &Planned) -> bool {
-    planned.regions.widest(1) > 1 || planned.regions.widest(2) > 1
+    planned
+        .regions
+        .iter()
+        .any(|r| r.local[1] > 1 || r.local[2] > 1)
 }
 
 /// The regions of a dispatch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Planned {
-    pub regions: Regions,
+    pub regions: Vec<Region>,
     /// The Metal grid (`threads_per_grid`) the `DispatchRegion` field reports (0 for an indirect
     /// dispatch, whose grid only the GPU knows).
     pub grid: [u32; 3],
@@ -785,7 +632,7 @@ pub(crate) fn regions(
         }
     }
     let empty = |v: [u32; 3]| v.contains(&0);
-    let planned = |regions: Regions, grid, emulated: bool| Planned {
+    let planned = |regions: Vec<Region>, grid, emulated: bool| Planned {
         emulated: emulated && !regions.is_empty(),
         regions,
         grid,
@@ -794,13 +641,16 @@ pub(crate) fn regions(
     };
     match *dispatch {
         Dispatch::Threadgroups { groups, .. } => {
-            let fit = fit(rules, std::iter::once(l))?;
+            let fit = fit(rules, &[l])?;
             let grid = threadgroup_grid(groups, nominal)?;
             if empty(groups) {
-                return Ok(planned(Regions::none(), grid, false));
+                return Ok(planned(Vec::new(), grid, false));
             }
-            let pieces =
-                std::array::from_fn(|i| Pieces::chunks(0, groups[i], l[i], rules.max_count[i]));
+            let pieces = std::array::from_fn(|i| {
+                let mut p = Vec::new();
+                chunks(&mut p, 0, groups[i], l[i], rules.max_count[i]);
+                p
+            });
             // A partial-threadgroups variant's regions read their region, as its `Threads`
             // regions do, so both run on its one `VkPipeline` of the dispatch's size.
             let multi = tile_sized || ragged == Ragged::Partial;
@@ -816,16 +666,24 @@ pub(crate) fn regions(
             count,
             ..
         } => {
-            let fit = fit(rules, std::iter::once(l))?;
+            let fit = fit(rules, &[l])?;
             let grid = threadgroup_grid(groups, nominal)?;
             let start: [u32; 3] = std::array::from_fn(|i| first[i].min(groups[i]));
             let end: [u32; 3] =
                 std::array::from_fn(|i| first[i].saturating_add(count[i]).min(groups[i]));
             if (0..3).any(|i| end[i] <= start[i]) {
-                return Ok(planned(Regions::none(), grid, false));
+                return Ok(planned(Vec::new(), grid, false));
             }
             let pieces = std::array::from_fn(|i| {
-                Pieces::chunks(start[i], end[i] - start[i], l[i], rules.max_count[i])
+                let mut p = Vec::new();
+                chunks(
+                    &mut p,
+                    start[i],
+                    end[i] - start[i],
+                    l[i],
+                    rules.max_count[i],
+                );
+                p
             });
             // Every region takes its first threadgroup from the push field.
             Ok(planned(
@@ -836,7 +694,7 @@ pub(crate) fn regions(
         }
         Dispatch::Threads { threads, .. } => {
             if empty(threads) {
-                return Ok(planned(Regions::none(), threads, false));
+                return Ok(planned(Vec::new(), threads, false));
             }
             // A flat variant runs the whole grid in one region of the dispatch's own threadgroup
             // size: invocation `((wz · ny + wy) · nx + wx) · N + LocalInvocationIndex`, with
@@ -846,7 +704,7 @@ pub(crate) fn regions(
             // in each and run the same threads again: the region is never chunked, and its counts
             // only have to cover the grid ([`spread`]).
             if ragged == Ragged::Flat {
-                let fit = fit(rules, std::iter::once(l))?;
+                let fit = fit(rules, &[l])?;
                 let n: u64 = l.iter().map(|&x| u64::from(x)).product();
                 let total: u128 = threads.iter().map(|&x| u128::from(x)).product();
                 let need = u64::try_from(total.div_ceil(u128::from(n))).map_err(|_| {
@@ -864,7 +722,7 @@ pub(crate) fn regions(
                     multi: false,
                 };
                 return Ok(planned(
-                    Regions::one(region),
+                    vec![region],
                     threads,
                     fit == Fit::EmulatedSimdgroups,
                 ));
@@ -876,10 +734,18 @@ pub(crate) fn regions(
             // every thread is live, on the same `VkPipeline` of the dispatch's size.
             let nonuniform = (0..3).any(|i| !threads[i].is_multiple_of(l[i]));
             if ragged == Ragged::Partial {
-                let pieces = std::array::from_fn(|i| {
-                    Pieces::chunks(0, threads[i].div_ceil(l[i]), l[i], rules.max_count[i])
+                let pieces: [Vec<Piece>; 3] = std::array::from_fn(|i| {
+                    let mut p = Vec::new();
+                    chunks(
+                        &mut p,
+                        0,
+                        threads[i].div_ceil(l[i]),
+                        l[i],
+                        rules.max_count[i],
+                    );
+                    p
                 });
-                let fit = fit(rules, std::iter::once(l))?;
+                let fit = fit(rules, &[l])?;
                 let mut out = planned(
                     product(pieces, true)?,
                     threads,
@@ -889,21 +755,23 @@ pub(crate) fn regions(
                 return Ok(out);
             }
             let mut edges = false;
-            let pieces = std::array::from_fn(|i| {
+            let pieces: [Vec<Piece>; 3] = std::array::from_fn(|i| {
                 let (full, rem) = (threads[i] / l[i], threads[i] % l[i]);
-                let mut p = Pieces::chunks(0, full, l[i], rules.max_count[i]);
+                let mut p = Vec::new();
+                chunks(&mut p, 0, full, l[i], rules.max_count[i]);
                 if rem > 0 {
                     edges = true;
-                    p.edge = Some((full, 1, rem));
+                    p.push((full, 1, rem));
                 }
                 p
             });
             let out = product(pieces, edges)?;
-            let fit = fit(rules, out.iter().map(|r| r.local))?;
+            let locals: Vec<[u32; 3]> = out.iter().map(|r| r.local).collect();
+            let fit = fit(rules, &locals)?;
             Ok(planned(out, threads, fit == Fit::EmulatedSimdgroups))
         }
         Dispatch::ThreadgroupsIndirect { .. } => {
-            let fit = fit(rules, std::iter::once(l))?;
+            let fit = fit(rules, &[l])?;
             let region = Region {
                 local: l,
                 groups: [0; 3],
@@ -911,7 +779,7 @@ pub(crate) fn regions(
                 multi: false,
             };
             Ok(planned(
-                Regions::one(region),
+                vec![region],
                 [0; 3],
                 fit == Fit::EmulatedSimdgroups,
             ))
@@ -971,23 +839,6 @@ impl BindingPlan {
         state: &BindState,
         dispatch: &Dispatch,
     ) -> Result<DispatchCommands, BindError> {
-        let mut commands = DispatchCommands::none();
-        self.instantiate_dispatch_into(state, dispatch, &mut commands)?;
-        Ok(commands)
-    }
-
-    /// [`instantiate_dispatch`](Self::instantiate_dispatch)'s commands, written over `commands`:
-    /// every field is set as `instantiate_dispatch` sets it, and the vectors (each region's
-    /// specialization and push write's bytes, and the argument table's, among them) keep the
-    /// storage the commands written there before left, so a consumer that keeps one
-    /// `DispatchCommands` from dispatch to dispatch allocates none of it again once it holds as
-    /// much. On an error `commands` holds no dispatch's commands.
-    pub fn instantiate_dispatch_into(
-        &self,
-        state: &BindState,
-        dispatch: &Dispatch,
-        commands: &mut DispatchCommands,
-    ) -> Result<(), BindError> {
         let t = self.compute_template("instantiate_dispatch")?;
         let flat = self.variant.flat_grid;
         let ragged = Ragged::of(&self.variant);
@@ -1019,9 +870,11 @@ impl BindingPlan {
         }
         // A folded variant's region reads its record.
         if self.variant.folded_groups {
-            planned.regions.read_records();
+            for r in &mut planned.regions {
+                r.multi = true;
+            }
         }
-        instantiate(t, planned, (state, dispatch), records, commands)
+        instantiate(t, planned, state, dispatch, records)
     }
 
     /// Whether [`instantiate_dispatch`](Self::instantiate_dispatch)'s commands may read a value the
@@ -1096,16 +949,10 @@ impl BindingPlan {
             });
         }
         // Every region record states the dispatch's region.
-        planned.regions.read_records();
-        let mut commands = DispatchCommands::none();
-        instantiate(
-            t,
-            planned,
-            (state, &dispatch),
-            Records::Replay,
-            &mut commands,
-        )?;
-        Ok(commands)
+        for r in &mut planned.regions {
+            r.multi = true;
+        }
+        instantiate(t, planned, state, &dispatch, Records::Replay)
     }
 
     /// The variant of the pipeline a compute dispatch runs on: the plan's
@@ -1221,39 +1068,14 @@ fn region_specialization(
     multi: bool,
     reach: bool,
 ) -> SpecializationKey {
-    let mut key = SpecializationKey::new();
-    region_specialization_into(t, (local, multi, reach), &mut key);
-    key
-}
-
-/// [`region_specialization`]'s key of a region of `local` threads, `multi` and `reach`, written
-/// over `key` in the storage its lists hold ([`spec_key_into`]).
-///
-/// The template's fixed constants are the plan's value of every other constant of the layout, in
-/// the layout's order, each a function of its key alone (`plan::compute`): each is taken where the
-/// one before left off, and found from the start only where that one is another key's, so a
-/// region's key takes no search of them.
-fn region_specialization_into(
-    t: &ComputeTemplate,
-    (local, multi, reach): ([u32; 3], bool, bool),
-    key: &mut SpecializationKey,
-) {
     let n: u64 = local.iter().map(|&x| u64::from(x)).product();
-    let next = std::cell::Cell::new(0);
-    let value = |k| match k {
+    spec_key(&t.spec, |k| match k {
         SpecKey::LocalSize(a) => Some(u64::from(local[a as usize])),
         SpecKey::FlatLocalSize => Some(n),
         SpecKey::MultiRegion => Some(u64::from(multi)),
         SpecKey::StageInReach => Some(u64::from(reach)),
-        other => match t.fixed.get(next.get()) {
-            Some(&(at, v)) if at == other => {
-                next.set(next.get() + 1);
-                Some(v)
-            }
-            _ => t.fixed.iter().find(|(key, _)| *key == other).map(|f| f.1),
-        },
-    };
-    spec_key_into(&t.spec, value, key);
+        other => t.fixed.iter().find(|(key, _)| *key == other).map(|f| f.1),
+    })
 }
 
 /// The stride the compute encoder binds kernel buffer `index` with in `state`
@@ -1399,27 +1221,13 @@ enum Records {
 /// The commands of `dispatch` planned as `planned`, whose region records and group counts
 /// `records` writes: for a device-replay variant (whose `dispatch` is the `ThreadgroupsIndirect` of
 /// its threadgroup size) the region reads the replay's arguments and no root table is built.
-/// Written over `out`: each of its fields set, its vectors cleared or their values overwritten in
-/// place (each region's specialization and push write, the argument table's bytes), never
-/// replaced. On an error `out` holds no dispatch's commands.
 fn instantiate(
     t: &ComputeTemplate,
     planned: Planned,
-    (state, dispatch): (&BindState, &Dispatch),
+    state: &BindState,
+    dispatch: &Dispatch,
     records: Records,
-    out: &mut DispatchCommands,
-) -> Result<(), BindError> {
-    let DispatchCommands {
-        regions: regions_out,
-        descriptor_bytes,
-        descriptor_ranges,
-        extents,
-        push_holes,
-        region_record: region_record_out,
-        root_table: root_table_out,
-        indirect_clamp: indirect_clamp_out,
-        uses,
-    } = out;
+) -> Result<DispatchCommands, BindError> {
     let replay = records == Records::Replay;
     // A kernel that reads the stage-in region needs the encoder's.
     let region = match t.stage_in_region {
@@ -1431,76 +1239,18 @@ fn instantiate(
         ),
     };
     let (push_start, push_size) = t.push_range.unwrap_or((0, 0));
+    let mut push = vec![0u8; push_size as usize];
+    let mut table = vec![0u8; t.table.map_or(0, |(_, _, size)| size as usize)];
     let compute = vk::ShaderStageFlags::COMPUTE;
-    // One region of the commands per planned region, each over the one a dispatch before left
-    // at its place where there is one.
-    let count = planned.regions.len();
-    regions_out.truncate(count);
-    while regions_out.len() < count {
-        regions_out.push(DispatchRegion {
-            specialization: SpecializationKey::new(),
-            group_count: [0; 3],
-            push_constants: Vec::new(),
-            indirect: None,
-            stage_flags: vk::PipelineShaderStageCreateFlags::empty(),
-            required_subgroup_size: None,
-        });
-    }
-    // Each region's one push write, where the plan pushes bytes.
-    for r in regions_out.iter_mut() {
-        let writes = &mut r.push_constants;
-        writes.truncate(usize::from(push_size > 0));
-        if push_size > 0 && writes.is_empty() {
-            writes.push(PushConstantWrite {
-                stages: compute,
-                offset: push_start,
-                bytes: Vec::new(),
-            });
-        }
-        for w in writes.iter_mut() {
-            w.stages = compute;
-            w.offset = push_start;
-        }
-    }
-    // The push bytes every region shares, written in the first region's write (a grid of no
-    // region pushes none, and writes them apart), and the argument table, in the first
-    // descriptor bytes.
-    let mut apart = Vec::new();
-    let push = match regions_out
-        .first_mut()
-        .and_then(|r| r.push_constants.first_mut())
-    {
-        Some(write) => zeroed(&mut write.bytes, push_size as usize),
-        None => zeroed(&mut apart, push_size as usize),
-    };
-    descriptor_bytes.truncate(usize::from(t.table.is_some()));
-    let mut no_table = Vec::new();
-    let table = match t.table {
-        Some((set, binding, size)) => {
-            if descriptor_bytes.is_empty() {
-                descriptor_bytes.push(DescriptorBytes {
-                    set,
-                    binding,
-                    bytes: Vec::new(),
-                });
-            }
-            let written = &mut descriptor_bytes[0];
-            written.set = set;
-            written.binding = binding;
-            zeroed(&mut written.bytes, size as usize)
-        }
-        None => &mut no_table,
-    };
 
     // Buffer slots: descriptor ranges and residuals, root entries, extents; texel buffers.
-    descriptor_ranges.clear();
-    extents.clear();
-    let bound = bind_buffers(&t.buffers, state, descriptor_ranges, extents)?;
+    let (mut descriptor_ranges, mut extents) = (Vec::new(), Vec::new());
+    let bound = bind_buffers(&t.buffers, state, &mut descriptor_ranges, &mut extents)?;
     descriptor_ranges.extend(texel_ranges(&t.resources, state)?);
 
     // The root table: the Psb entries and the resident set.
-    push_holes.clear();
-    *root_table_out = match t.root_first {
+    let mut push_holes = Vec::new();
+    let root_table = match t.root_first {
         // A replay variant's root table is its command's slot table.
         Some(_) if replay => None,
         Some(first) => {
@@ -1557,23 +1307,13 @@ fn instantiate(
             field => slot_field(field, &bound.residuals, &t.resources, state)
                 .ok_or_else(|| internal(format!("a compute push field {field:?}")))?,
         };
-        put(push, push_start, table, f.loc, &bytes)?;
+        put(&mut push, push_start, &mut table, f.loc, &bytes)?;
     }
     let region_field = t
         .fields
         .iter()
         .find(|f| f.field == PushField::DispatchRegion)
         .map(|f| f.loc);
-    // Every later region's push bytes start as the first's.
-    if let Some((first, rest)) = regions_out.split_first_mut() {
-        if let Some(shared) = first.push_constants.first() {
-            for r in rest {
-                for w in &mut r.push_constants {
-                    w.bytes.clone_from(&shared.bytes);
-                }
-            }
-        }
-    }
 
     // Regions.
     let Planned {
@@ -1584,21 +1324,19 @@ fn instantiate(
         ..
     } = planned;
     let reach = stage_in_reach(t, region, grid, state);
-    for (r, out) in planned.iter().zip(regions_out.iter_mut()) {
+    let mut regions = Vec::with_capacity(planned.len());
+    for r in planned {
+        let mut bytes = push.clone();
         if let Some(loc) = region_field {
             let b = match nonuniform {
                 true => nonuniform_region_bytes(r.base, grid, nominal),
                 false => region_bytes(r.base, grid, nominal),
             }
             .ok_or_else(|| internal("an unpackable nominal threadgroup size"))?;
-            let bytes = match out.push_constants.first_mut() {
-                Some(write) => &mut write.bytes[..],
-                None => &mut [],
-            };
-            put(bytes, push_start, &mut [], loc, &b)?;
+            put(&mut bytes, push_start, &mut [], loc, &b)?;
         }
-        region_specialization_into(t, (r.local, r.multi, reach), &mut out.specialization);
-        out.indirect = match *dispatch {
+        let specialization = region_specialization(t, r.local, r.multi, reach);
+        let indirect = match *dispatch {
             Dispatch::ThreadgroupsIndirect { .. } if replay => Some(IndirectArgs::Replay),
             Dispatch::ThreadgroupsIndirect { indirect, .. } => {
                 Some(if records == Records::Binder && needs_clamp(&t.local) {
@@ -1609,13 +1347,26 @@ fn instantiate(
             }
             _ => None,
         };
-        out.group_count = r.groups;
-        out.stage_flags = region_flags(&t.local, r.local);
-        out.required_subgroup_size = t.local.required_subgroup_size;
+        regions.push(DispatchRegion {
+            specialization,
+            group_count: r.groups,
+            push_constants: if push_size == 0 {
+                Vec::new()
+            } else {
+                vec![PushConstantWrite {
+                    stages: compute,
+                    offset: push_start,
+                    bytes,
+                }]
+            },
+            indirect,
+            stage_flags: region_flags(&t.local, r.local),
+            required_subgroup_size: t.local.required_subgroup_size,
+        });
     }
 
     // A preprocess checks its group counts against the limit.
-    *indirect_clamp_out = match *dispatch {
+    let indirect_clamp = match *dispatch {
         Dispatch::ThreadgroupsIndirect { indirect, .. }
             if records == Records::Binder && needs_clamp(&t.local) =>
         {
@@ -1634,7 +1385,7 @@ fn instantiate(
     // A direct dispatch on a flat variant reads its region from the record the consumer writes
     // (base 0, the dispatch's threadgroup size, and the grid in threads), since the flat lowering
     // reads the record by address wherever its group counts come from.
-    *region_record_out = match (records, *dispatch) {
+    let region_record = match (records, *dispatch) {
         (Records::Flat, Dispatch::ThreadgroupsIndirect { .. }) | (Records::Binder, _) => None,
         (Records::Flat, _) => Some(
             region_bytes([0; 3], grid, nominal)
@@ -1642,32 +1393,54 @@ fn instantiate(
         ),
         (Records::Replay, _) => None,
     };
+    let mut descriptor_bytes = match t.table {
+        Some((set, binding, _)) => vec![DescriptorBytes {
+            set,
+            binding,
+            bytes: table,
+        }],
+        None => Vec::new(),
+    };
     descriptor_bytes.extend(crate::bind::heap::table_bytes(&t.resources, state)?);
-    uses.clear();
-    if let Dispatch::ThreadgroupsIndirect { .. } = *dispatch {
-        let (class, stages) = if indirect_clamp_out.is_some() {
-            (
-                AccessClass::Storage,
-                vk::PipelineStageFlags2::COMPUTE_SHADER,
-            )
-        } else {
-            (
-                AccessClass::Indirect,
-                vk::PipelineStageFlags2::DRAW_INDIRECT,
-            )
-        };
-        uses.push(ResourceUse {
-            resource: UseTarget::Indirect,
-            access: AccessSet::READ,
-            class,
-            stages,
-            range: Some(ByteRange {
-                offset: 0,
-                len: u64::from(IndirectClamp::SCRATCH_BYTES),
-            }),
-        });
-    }
-    Ok(())
+    let uses = match *dispatch {
+        Dispatch::ThreadgroupsIndirect { .. } => {
+            let (class, stages) = if indirect_clamp.is_some() {
+                (
+                    AccessClass::Storage,
+                    vk::PipelineStageFlags2::COMPUTE_SHADER,
+                )
+            } else {
+                (
+                    AccessClass::Indirect,
+                    vk::PipelineStageFlags2::DRAW_INDIRECT,
+                )
+            };
+            vec![ResourceUse {
+                resource: UseTarget::Indirect,
+                access: AccessSet::READ,
+                class,
+                stages,
+                range: Some(ByteRange {
+                    offset: 0,
+                    len: u64::from(IndirectClamp::SCRATCH_BYTES),
+                }),
+            }]
+        }
+        Dispatch::Threadgroups { .. }
+        | Dispatch::Threads { .. }
+        | Dispatch::ThreadgroupRange { .. } => Vec::new(),
+    };
+    Ok(DispatchCommands {
+        regions,
+        descriptor_bytes,
+        descriptor_ranges,
+        extents,
+        push_holes,
+        region_record,
+        root_table,
+        indirect_clamp,
+        uses,
+    })
 }
 
 /// Whether an indirect dispatch needs the clamp prepass: some axis of the device's group-count

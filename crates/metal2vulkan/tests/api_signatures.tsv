@@ -2977,7 +2977,6 @@ field	metal2vulkan-runtime::WorkCounts.dispatch_uses_tracked	pub dispatch_uses_t
 field	metal2vulkan-runtime::WorkCounts.dispatches_from_set_aside	pub dispatches_from_set_aside: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated	pub dispatches_instantiated: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated_as_before	pub dispatches_instantiated_as_before: u64
-field	metal2vulkan-runtime::WorkCounts.dispatches_instantiated_in_place	pub dispatches_instantiated_in_place: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_across_grids	pub dispatches_planned_across_grids: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_planned_as_before	pub dispatches_planned_as_before: u64
 field	metal2vulkan-runtime::WorkCounts.dispatches_pushing_set_zero	pub dispatches_pushing_set_zero: u64
@@ -9602,7 +9601,6 @@ method	metal2vulkan::bind::BindingPlan::heap_elements	pub fn heap_elements(&self
 method	metal2vulkan::bind::BindingPlan::heap_slots	pub fn heap_slots(&self) -> impl Iterator<Item = SlotRef> + '_
 method	metal2vulkan::bind::BindingPlan::heap_tables_into	pub fn heap_tables_into(&self, state: &BindState, tables: &mut Vec<crate::bind::instantiate::DescriptorBytes>) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_dispatch	pub fn instantiate_dispatch(&self, state: &BindState, dispatch: &Dispatch) -> Result<DispatchCommands, BindError>
-method	metal2vulkan::bind::BindingPlan::instantiate_dispatch_into	pub fn instantiate_dispatch_into(&self, state: &BindState, dispatch: &Dispatch, commands: &mut DispatchCommands) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_draw	pub fn instantiate_draw(&self, state: &BindState, draw: &DrawCall) -> Result<DrawCommands, BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_draw_apart_into	pub fn instantiate_draw_apart_into(&self, state: &BindState, draw: &DrawCall, commands: &mut DrawCommands) -> Result<(), BindError>
 method	metal2vulkan::bind::BindingPlan::instantiate_draw_into	pub fn instantiate_draw_into(&self, state: &BindState, draw: &DrawCall, commands: &mut DrawCommands) -> Result<(), BindError>

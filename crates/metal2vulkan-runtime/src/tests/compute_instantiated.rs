@@ -8,17 +8,15 @@
 //!   each dispatch, as a guest compute benchmark's workloads bind them: the second dispatch on takes the
 //!   commands (`WorkCounts::dispatches_instantiated_as_before`), and each samples its own texture.
 //! - **A buffer's binding**: the output bound at another offset instantiates again
-//!   (`dispatches_instantiated`) and writes there; five encoders of one command buffer, each
-//!   binding it at the next offset, instantiate each dispatch but the first over the storage of
-//!   the commands the one before kept (`dispatches_instantiated_in_place`).
+//!   (`dispatches_instantiated`) and writes there.
 //! - **A field**: a buffer made resident (`use_resource`), which the state lists among its used
 //!   resources, instantiates again.
 //! - **Texture bindings a plan reads**: texture buffers over one buffer at two offsets, read
 //!   through a texel-buffer view whose range the commands state, instantiate again at each change,
 //!   and each dispatch reads its own texels.
 //!
-//! Every dispatch is the only one of its compute encoder, in a command buffer of its own (but the
-//! five encoders'), waited for before the next.
+//! Every dispatch is the only one of its compute encoder, in a command buffer of its own, waited
+//! for before the next.
 //!
 //! A device test: compiled only under the validation crate's GPU safety cfgs (`m2v_gpu`,
 //! `m2v_cpu_icd`), on the kind of device the cfg selects. The kernels are owned fixtures under
@@ -53,15 +51,6 @@ fn counts(device: &Device) -> [u64; 2] {
     [
         counts.dispatches_instantiated,
         counts.dispatches_instantiated_as_before,
-    ]
-}
-
-/// The dispatches whose commands were instantiated, and those instantiated over kept commands.
-fn in_place(device: &Device) -> [u64; 2] {
-    let counts = device.work_counts();
-    [
-        counts.dispatches_instantiated,
-        counts.dispatches_instantiated_in_place,
     ]
 }
 
@@ -220,44 +209,6 @@ fn a_buffer_bound_at_another_offset_instantiates_again() {
         };
         assert_eq!(sampler.dispatch(&queue, &bound), want, "dispatch {at}");
         assert_eq!(red(&out, offset), 1.0, "dispatch {at}: texel 1 at {offset}");
-    }
-}
-
-/// Five encoders of one command buffer, each one dispatch binding the output at the next offset:
-/// each instantiates, and each but the first over the commands the one before kept, which the
-/// memo's entry of that dispatch no longer holds; each writes at its own offset.
-#[test]
-fn encoders_of_moving_offsets_instantiate_over_the_kept_commands() {
-    let scratch = Scratch::new("instantiated-in-place");
-    let device = device(&scratch.0);
-    let sampler = Sampler::new(&device);
-    let texture = texels(&device, [0.0, 1.0]);
-    let out = device.new_buffer(1280, ResourceOptions::shared()).unwrap();
-    let queue = device.new_command_queue().unwrap();
-    let before = in_place(&device);
-    let command_buffer = queue.command_buffer().unwrap();
-    let offsets = [0, 256, 512, 768, 1024];
-    for offset in offsets {
-        let mut encoder = command_buffer.compute_command_encoder().unwrap();
-        encoder.set_compute_pipeline_state(&sampler.state).unwrap();
-        encoder.set_texture(Some(&texture), 0).unwrap();
-        encoder
-            .set_sampler_state(Some(&sampler.nearest), 0)
-            .unwrap();
-        encoder.set_buffer(Some(&out), offset, 0).unwrap();
-        encoder.set_buffer(Some(&sampler.coords), 0, 1).unwrap();
-        let one = Size::new(1, 1, 1);
-        encoder.dispatch_threads(one, one).unwrap();
-        encoder.end_encoding().unwrap();
-    }
-    let after = in_place(&device);
-    command_buffer.commit().unwrap();
-    command_buffer.wait_until_completed_for(WAIT).unwrap();
-    assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
-    let moved = [0, 1].map(|at| after[at] - before[at]);
-    assert_eq!(moved, [5, 4], "instantiated, of them over kept commands");
-    for offset in offsets {
-        assert_eq!(red(&out, offset), 1.0, "texel 1 at {offset}");
     }
 }
 

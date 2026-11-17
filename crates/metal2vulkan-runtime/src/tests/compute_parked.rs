@@ -22,7 +22,7 @@ use crate::{
 use metal2vulkan::bind::SamplerDescriptor;
 
 /// The words a dispatch writes, one threadgroup's.
-pub(super) const WORDS: u64 = 64;
+const WORDS: u64 = 64;
 
 /// The compute encoders of a command buffer.
 const ENCODERS: u64 = 8;
@@ -65,27 +65,19 @@ impl Kernel {
 
     /// A compute encoder of `command_buffer` of one dispatch that writes `output` from byte
     /// `offset` on, ended.
-    pub(super) fn dispatch(&self, command_buffer: &CommandBuffer, output: (&Buffer, u64)) {
-        self.dispatches(command_buffer, output, 1);
-    }
-
-    /// [`dispatch`](Self::dispatch) with `count` dispatches of the same words in the encoder.
-    pub(super) fn dispatches(
+    pub(super) fn dispatch(
         &self,
         command_buffer: &CommandBuffer,
         (output, offset): (&Buffer, u64),
-        count: u32,
     ) {
         let mut encoder = command_buffer.compute_command_encoder().unwrap();
         encoder.set_compute_pipeline_state(&self.state).unwrap();
         encoder.set_buffer(Some(&self.input), 0, 0).unwrap();
         encoder.set_buffer(Some(output), offset, 1).unwrap();
         encoder.set_buffer(Some(&self.scale), 0, 2).unwrap();
-        for _ in 0..count {
-            encoder
-                .dispatch_threads(Size::new(WORDS, 1, 1), Size::new(WORDS, 1, 1))
-                .unwrap();
-        }
+        encoder
+            .dispatch_threads(Size::new(WORDS, 1, 1), Size::new(WORDS, 1, 1))
+            .unwrap();
         encoder.end_encoding().unwrap();
     }
 
@@ -139,7 +131,7 @@ impl Moved {
 }
 
 /// The words `2 * i` of `count` dispatches, as floats' bits.
-pub(super) fn written(count: u64) -> Vec<u32> {
+fn written(count: u64) -> Vec<u32> {
     (0..count)
         .flat_map(|_| (0..WORDS).map(|i| (2.0 * i as f32).to_bits()))
         .collect()

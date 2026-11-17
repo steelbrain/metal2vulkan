@@ -902,7 +902,6 @@ struct CommandCounters {
     dispatches_settled_as_before: AtomicU64,
     dispatches_settled_across_encoders: AtomicU64,
     dispatches_instantiated: AtomicU64,
-    dispatches_instantiated_in_place: AtomicU64,
     dispatches_instantiated_as_before: AtomicU64,
     dispatches_from_set_aside: AtomicU64,
     set_aside_commands_kept: AtomicU64,
@@ -2157,13 +2156,6 @@ impl Counting<'_> {
     /// A dispatch whose commands `compute::record` instantiated.
     pub(crate) fn dispatch_instantiated(&self) {
         self.0.add(|counts| &counts.dispatches_instantiated, 1);
-    }
-
-    /// A compute encoder's dispatch whose commands `compute::record` instantiated over the
-    /// storage of those its kept bind state kept (`compute::Instantiated`).
-    pub(crate) fn dispatch_instantiated_in_place(&self) {
-        self.0
-            .add(|counts| &counts.dispatches_instantiated_in_place, 1);
     }
 
     /// A compute encoder's dispatch that took the commands its kept bind state kept of what it
@@ -7982,8 +7974,7 @@ pub struct WorkCounts {
     pub parked_compute_taken: u64,
     /// The lists a released command buffer keeps of what its encoders ended with (its ended
     /// encoders' records, their recordings, a group's logs its members did not keep and those held
-    /// for its commit, its command predication's lists, and its groups' order's map and lists)
-    /// that held more room as it was released than the storage it started on:
+    /// for its commit) that held more room as it was released than the storage it started on:
     /// counted once each, at the release. A command buffer starts on the state a released one of
     /// the device left (`record_storage_kept`), its lists emptied with their room kept, so one of
     /// no more encoders than that one's grows none.
@@ -10122,13 +10113,6 @@ pub struct WorkCounts {
     /// execution, or of a host step. None for a compute encoder's dispatch counted in
     /// `dispatches_settled_as_before` or `dispatches_instantiated_as_before`.
     pub dispatches_instantiated: u64,
-    /// Of `dispatches_instantiated`, compute encoders' direct dispatches whose commands were
-    /// written over the storage of those their encoder's kept bind state kept
-    /// (`BindingPlan::instantiate_dispatch_into`, `compute::Instantiated`), which nothing else
-    /// held any more, rather than made anew: a dispatch of an encoder of its own that binds a
-    /// buffer at another offset than its pipeline state's last dispatch, for one. A function of
-    /// what the dispatches bind and of their order alone.
-    pub dispatches_instantiated_in_place: u64,
     /// Compute encoders' dispatches that took the commands their encoder's kept bind state kept
     /// rather than instantiating them (`compute::Instantiated`): those of the very variant, plan
     /// and dispatch (`pipeline::Planned`) a direct dispatch of the encoder, or of an earlier
@@ -13285,9 +13269,6 @@ impl Device {
                 &counts.dispatches_settled_across_encoders
             }),
             dispatches_instantiated: commands(|counts| &counts.dispatches_instantiated),
-            dispatches_instantiated_in_place: commands(|counts| {
-                &counts.dispatches_instantiated_in_place
-            }),
             dispatches_instantiated_as_before: commands(|counts| {
                 &counts.dispatches_instantiated_as_before
             }),

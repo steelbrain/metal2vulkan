@@ -519,23 +519,17 @@ pub(super) const SPARE_LOG_BYTES: usize = 64 * 1024;
 const SPARE_ROOM_BYTES: usize = SPARE_LOGS * SPARE_LOG_BYTES;
 
 /// Cleared logs the device keeps for its next encoders (the module docs): of each kind,
-/// [`SPARE_LOGS`], or for compute encoders as many as the last command buffer's release gave
-/// back ([`give_compute`](Self::give_compute)) where that is more; each with at most
-/// [`SPARE_LOG_BYTES`] of room, all of a kind together with at most [`SPARE_ROOM_BYTES`]
-/// (1 MiB), and no call or handle. An encoder that logs takes one, or a new log where none is
-/// kept; its log comes back as its encoder ends where its command buffer does not keep it, and
-/// else in the command buffer's release, on its queue's handler thread, which keeps a compute
-/// encoder's in the command buffer's state first, for the compute encoders of the command buffer
-/// that takes the state next (`command_buffer/spare_states.rs`): those take theirs there, and
-/// here only where it kept none.
+/// [`SPARE_LOGS`], or for compute encoders as many as the last command buffer that held logs
+/// for its commit gave back ([`give_held`](Self::give_held)) where that is more; each with at most [`SPARE_LOG_BYTES`] of
+/// room, all of a kind together with at most [`SPARE_ROOM_BYTES`] (1 MiB), and no call or handle.
+/// An encoder that logs takes one, or a new log where none is kept; its log comes back as its
+/// encoder ends where its command buffer does not keep it, and else in the command buffer's
+/// release, on its queue's handler thread.
 #[derive(Default)]
 pub(crate) struct SpareLogs {
     compute: Spares<CallLog<ComputeCall>>,
     blit: Spares<CallLog<BlitCall>>,
     render: Spares<RenderRoom>,
-    /// The compute logs taken here: a device test's (`tests::spare_states`).
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    compute_taken: std::sync::atomic::AtomicU64,
 }
 
 /// One kind's [`SpareLogs`].
@@ -606,47 +600,24 @@ impl<T> Spares<T> {
 impl SpareLogs {
     /// A compute encoder's log: a kept one, or a new one.
     pub(super) fn compute(&self) -> CallLog<ComputeCall> {
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        self.compute_taken
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.compute.take().unwrap_or_else(CallLog::new)
     }
 
-    /// The compute logs taken here so far ([`compute`](Self::compute)): a device test's
-    /// (`tests::spare_states`).
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn compute_taken(&self) -> u64 {
-        self.compute_taken
-            .load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Clear `logs`, those a command buffer's release lets go of (those its encoders kept and
-    /// those it held for its commit for its groups of encoders and no split took,
-    /// `command_buffer/fold.rs`): their calls and handles go now. The compute ones come back
-    /// cleared, with their room in bytes, for the command buffer's state to keep
-    /// (`State::keep_compute_logs`) and [`give_compute`](Self::give_compute) the rest; the others
-    /// are kept here ([`give`](Self::give)).
-    pub(super) fn cleared_compute(
-        &self,
-        logs: impl Iterator<Item = Replay>,
-    ) -> Vec<(CallLog<ComputeCall>, usize)> {
-        let mut compute = Vec::new();
-        for replay in logs {
+    /// Clear `held`, the logs a command buffer held for its commit for its groups of compute
+    /// encoders and no split took (`command_buffer/fold.rs`), in its release, and keep them for
+    /// next encoders under one lock: as many as they are, within [`SPARE_ROOM_BYTES`], so a next
+    /// command buffer's encoders as many reuse their room rather than allocate. Their calls and
+    /// handles go now.
+    pub(super) fn give_held(&self, held: Vec<Replay>) {
+        if held.is_empty() {
+            return;
+        }
+        let mut compute = Vec::with_capacity(held.len());
+        for replay in held {
             match replay {
                 Replay::Compute { log, .. } => compute.extend(log.cleared()),
                 other => self.give(other),
             }
-        }
-        compute
-    }
-
-    /// Keep `compute`, cleared compute logs of a command buffer's release its state did not keep
-    /// ([`cleared_compute`](Self::cleared_compute)), for next encoders under one lock: as many as
-    /// they are, within [`SPARE_ROOM_BYTES`], so a next command buffer's encoders as many reuse
-    /// their room rather than allocate.
-    pub(super) fn give_compute(&self, compute: Vec<(CallLog<ComputeCall>, usize)>) {
-        if compute.is_empty() {
-            return;
         }
         self.compute.give_all(compute);
     }
@@ -686,6 +657,13 @@ impl SpareLogs {
                     self.render.give(log, room);
                 }
             }
+        }
+    }
+
+    /// [`give`](Self::give) `replay` where this is its last hold; else the hold goes.
+    pub(super) fn give_last(&self, replay: Arc<Replay>) {
+        if let Some(replay) = Arc::into_inner(replay) {
+            self.give(replay);
         }
     }
 }

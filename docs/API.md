@@ -1739,10 +1739,7 @@ reads the buffer's bytes inside the range.
 
 `instantiate_draw_into` writes the same commands over a `DrawCommands` you keep, in the storage
 its vectors already hold: keep one from draw to draw (`DrawCommands::default()` to start) and the
-draws allocate none of it again once it holds as much. `instantiate_dispatch_into` does the same
-for a compute dispatch over a `DispatchCommands` you keep (one `instantiate_dispatch` made, to
-start): each region's specialization and push bytes, and the argument table's, are written in the
-storage the commands before held.
+draws allocate none of it again once it holds as much.
 
 `dispatch_reads` says which slot classes' bound values, past their shape, a compute plan's
 `instantiate_dispatch` may read: buffer slots always; texture slots only where the plan binds a

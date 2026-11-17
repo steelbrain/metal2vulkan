@@ -268,115 +268,6 @@ fn dispatch_threads_edges_become_multi_region_dispatches() {
         .is_empty());
 }
 
-/// `instantiate_dispatch_into` over commands a dispatch before left, of more regions, fewer, none,
-/// another state: each time the commands a fresh `instantiate_dispatch` gives, in the storage
-/// kept (a region's specialization written over a key of as many constants allocates nothing).
-#[test]
-fn instantiating_over_kept_commands_gives_a_fresh_instantiation() {
-    let plan = compute_plan(&template(), VariantKey::new());
-    let threads = |threads| Dispatch::Threads {
-        threads,
-        threads_per_group: [16, 2, 1],
-    };
-    let split = Dispatch::Threadgroups {
-        groups: [70000, 1, 2],
-        threads_per_group: [1, 1, 1],
-    };
-    let dispatches = [
-        (threads([40, 3, 1]), 0),
-        (threads([64, 4, 1]), 64),
-        (split, 0),
-        (threads([0, 4, 1]), 64),
-        (threads([40, 3, 1]), 128),
-        (threads([64, 4, 1]), 128),
-    ];
-    let mut kept = plan
-        .instantiate_dispatch(&state(0), &threads([64, 4, 1]))
-        .expect("first");
-    for (at, (d, offset)) in dispatches.into_iter().enumerate() {
-        let s = state(offset);
-        let data = kept.regions.first().map(|r| r.specialization.data.as_ptr());
-        plan.instantiate_dispatch_into(&s, &d, &mut kept)
-            .expect("into");
-        let fresh = plan.instantiate_dispatch(&s, &d).expect("fresh");
-        assert_eq!(kept, fresh, "dispatch {at}");
-        // The first region's key, kept, is written in the storage it held.
-        let first = kept.regions.first().map(|r| r.specialization.data.as_ptr());
-        if let (Some(was), Some(now)) = (data, first) {
-            assert_eq!(was, now, "dispatch {at}: the key's storage");
-        }
-    }
-}
-
-/// `instantiate_dispatch_into` over commands a dispatch of as many regions or more left allocates
-/// nothing: the regions are planned as numbers (`Regions`), and each region's key and push write,
-/// the ranges and the extents are written in the storage kept.
-#[test]
-fn instantiating_over_kept_commands_allocates_nothing() {
-    use crate::tests::constant_blob_footprint::allocations_during;
-    let plan = compute_plan(&template(), VariantKey::new());
-    let ragged = Dispatch::Threads {
-        threads: [40, 3, 1],
-        threads_per_group: [16, 2, 1],
-    };
-    let whole = Dispatch::Threadgroups {
-        groups: [4, 2, 1],
-        threads_per_group: [16, 2, 1],
-    };
-    let mut kept = plan
-        .instantiate_dispatch(&state(0), &ragged)
-        .expect("first");
-    assert_eq!(kept.regions.len(), 4, "the interior and three edges");
-    for (at, (d, offset)) in [(ragged, 64), (ragged, 128), (whole, 192)]
-        .into_iter()
-        .enumerate()
-    {
-        let s = state(offset);
-        let (into, made) = allocations_during(|| plan.instantiate_dispatch_into(&s, &d, &mut kept));
-        into.expect("into");
-        assert_eq!(made, 0, "dispatch {at}: allocations");
-        let fresh = plan.instantiate_dispatch(&s, &d).expect("fresh");
-        assert_eq!(kept, fresh, "dispatch {at}");
-    }
-}
-
-/// A region's key takes each fixed constant of the template where the walk of the layout left
-/// off, the order the planner lists them in, and finds one listed out of that order: the same key
-/// either way, each constant at its own value.
-#[test]
-fn a_regions_key_takes_its_fixed_constants_in_any_order() {
-    let mut t = template();
-    t.spec = vec![
-        spec(0, SpecKey::LocalSize(Axis::X)),
-        spec(1, SpecKey::TgLength(0)),
-        spec(2, SpecKey::LocalSize(Axis::Y)),
-        spec(3, SpecKey::TgLength(1)),
-        spec(4, SpecKey::LocalSize(Axis::Z)),
-        spec(5, SpecKey::MultiRegion),
-        spec(6, SpecKey::TgLength(2)),
-    ];
-    let fixed = [
-        (SpecKey::TgLength(0), 16),
-        (SpecKey::TgLength(1), 32),
-        (SpecKey::TgLength(2), 48),
-    ];
-    let d = Dispatch::Threadgroups {
-        groups: [4, 2, 1],
-        threads_per_group: [16, 2, 1],
-    };
-    let mut keys = Vec::new();
-    for order in [[0, 1, 2], [2, 0, 1], [1, 2, 0]] {
-        t.fixed = order.iter().map(|&i| fixed[i]).collect();
-        let c = instantiate(&t, &state(0), &d).expect("one region");
-        let key = c.regions[0].specialization.clone();
-        let values: Vec<_> = (0..7).map(|id| spec_value(&key, id)).collect();
-        let expected = [16, 16, 2, 32, 1, 0, 48].map(Some);
-        assert_eq!(values, expected, "{order:?}");
-        keys.push(key);
-    }
-    assert!(keys.windows(2).all(|k| k[0] == k[1]));
-}
-
 #[test]
 fn group_counts_above_the_limit_are_split_with_their_base() {
     let t = template();
@@ -457,28 +348,25 @@ fn local_sizes_are_checked_against_every_d4_limit() {
     // A partial simdgroup runs on the emulated-simdgroups variant, whose local size is not
     // flattened: each axis and the product are checked, not `sn` and the subgroups.
     assert_eq!(
-        fit(&r, std::iter::once([33, 1, 1])).expect("partial"),
+        fit(&r, &[[33, 1, 1]]).expect("partial"),
         Fit::EmulatedSimdgroups
     );
+    assert_eq!(fit(&r, &[[32, 1, 1]]).expect("full"), Fit::Planned);
     assert_eq!(
-        fit(&r, std::iter::once([32, 1, 1])).expect("full"),
-        Fit::Planned
-    );
-    assert_eq!(
-        fit(&r, std::iter::once([1, 1, 1])).expect("one thread"),
+        fit(&r, &[[1, 1, 1]]).expect("one thread"),
         Fit::EmulatedSimdgroups
     );
     r.max_subgroups = 1;
     assert_eq!(
-        fit(&r, std::iter::once([60, 1, 1])).expect("the subgroup limit is the flattened tier's"),
+        fit(&r, &[[60, 1, 1]]).expect("the subgroup limit is the flattened tier's"),
         Fit::EmulatedSimdgroups
     );
-    let e = fit(&r, std::iter::once([1, 1, 65])).expect_err("z of a partial region");
+    let e = fit(&r, &[[1, 1, 65]]).expect_err("z of a partial region");
     assert!(
         matches!(&e, BindError::Unsupported(u) if u.feature == Feature::LocalSize { axis: Some(Axis::Z) }),
         "{e:?}"
     );
-    let e = fit(&r, std::iter::once([33, 33, 1])).expect_err("invocations of a partial region");
+    let e = fit(&r, &[[33, 33, 1]]).expect_err("invocations of a partial region");
     assert!(
         matches!(&e, BindError::Unsupported(u) if u.feature == Feature::LocalSize { axis: None }),
         "{e:?}"
@@ -486,27 +374,24 @@ fn local_sizes_are_checked_against_every_d4_limit() {
     // The whole dispatch runs on the variant, so every region of a dispatch with a partial one
     // is checked against the variant's limits, its whole-subgroup regions included: the z of
     // [1, 1, 96] is past them, and [1, 1, 64], past the flattened tier's subgroups, is not.
-    let e = fit(&r, [[1, 1, 96], [1, 1, 4]].into_iter()).expect_err("z of a whole region");
+    let e = fit(&r, &[[1, 1, 96], [1, 1, 4]]).expect_err("z of a whole region");
     assert!(
         matches!(&e, BindError::Unsupported(u) if u.feature == Feature::LocalSize { axis: Some(Axis::Z) }),
         "{e:?}"
     );
     assert!(
-        fit(&r, std::iter::once([1, 1, 64])).is_err(),
+        fit(&r, &[[1, 1, 64]]).is_err(),
         "two subgroups on the flattened tier"
     );
     assert_eq!(
-        fit(&r, [[1, 1, 64], [1, 1, 36]].into_iter()).expect("mixed"),
+        fit(&r, &[[1, 1, 64], [1, 1, 36]]).expect("mixed"),
         Fit::EmulatedSimdgroups
     );
     // Outside the flattened tiers a multiple is a derivative group's, and stays refused.
     let mut d4 = rules();
     d4.multiples = vec![4];
-    assert_eq!(
-        fit(&d4, std::iter::once([8, 1, 1])).expect("quads"),
-        Fit::Planned
-    );
-    let e = fit(&d4, std::iter::once([6, 1, 1])).expect_err("a partial quad");
+    assert_eq!(fit(&d4, &[[8, 1, 1]]).expect("quads"), Fit::Planned);
+    let e = fit(&d4, &[[6, 1, 1]]).expect_err("a partial quad");
     assert!(
         matches!(&e, BindError::Unsupported(u) if u.feature == Feature::ComputeDerivatives),
         "{e:?}"
@@ -1045,7 +930,7 @@ fn a_flat_region_counts_every_grid_thread_exactly_once() {
                                 assert_eq!(planned.regions.len(), 1, "{what}");
                                 assert_eq!(planned.grid, threads, "{what}");
                                 assert_eq!(planned.nominal, local, "{what}");
-                                let r = planned.regions.iter().next().expect("a region");
+                                let r = planned.regions[0];
                                 assert_eq!(r.local, local, "{what}");
                                 assert_eq!(r.base, [0; 3], "{what}");
                                 for (&count, &limit) in r.groups.iter().zip(&max_count) {
