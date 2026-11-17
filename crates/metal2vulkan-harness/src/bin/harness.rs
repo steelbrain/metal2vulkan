@@ -263,7 +263,7 @@ fn warmup(warmup: &Warmup) -> String {
 }
 
 /// The matrix lines of a workload's gauges at the timed runs they were read after, and of its
-/// time where it timed at least [`LEAST_TIMED`] runs.
+/// [`steady`] time where it has one.
 fn matrix(runtime: &str, name: &str, times: &[f64], gauges: &[(u32, Vec<(&'static str, u64)>)]) {
     if let Some(time) = steady(times) {
         println!("M2V-MATRIX time harness-{runtime}/{name} {time:.3}");

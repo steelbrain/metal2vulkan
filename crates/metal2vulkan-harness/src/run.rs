@@ -54,7 +54,7 @@ pub fn steady(times: &[f64]) -> Option<f64> {
     if times.len() < WINDOW {
         return percentile(times, 50);
     }
-    (times.chunks_exact(WINDOW))
+    (times.as_chunks::<WINDOW>().0.iter())
         .filter_map(|window| percentile(window, 50))
         .min_by(f64::total_cmp)
 }
