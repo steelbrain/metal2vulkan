@@ -172,6 +172,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/memory/provenance.rs", compile),
         ("metal2vulkan/src/memory/union_find.rs", compile),
         ("metal2vulkan/src/memory/views.rs", compile),
+        ("metal2vulkan/src/metal/resource_word.rs", "the gpuResourceID texture word of the new runtime's ID spec (docs/RESOURCE-ID.md); the old runtime reaches it only as a child of metal/mod.rs and calls none of it"),
         ("metal2vulkan/src/pipeline/artifact.rs", values),
         ("metal2vulkan/src/pipeline/compile.rs", compile),
         ("metal2vulkan/src/pipeline/compile/key.rs", "the compile's cache key, which the artifact digest excludes"),
