@@ -767,9 +767,15 @@ impl<'a> Calls<'a> {
 /// Textures made down every path, buffers, a heap's resources and a rebind, each while the GPU's
 /// busy work runs: each call returns before it ends, and every resource then holds
 /// Metal's bytes (the module docs).
+///
+/// The calls are timed once the device's view check answered (`Device::settle_view_check`):
+/// with no record of it in the scratch cache, the check runs from the device's making, and its
+/// timed dispatches build the decode kernels the heap's compressed textures queued, which the
+/// device-wide count of kernels made would charge to whichever call was running.
 #[test]
 fn new_resources_wait_for_no_gpu_work() {
     on_device(|device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let queue = device.new_command_queue().unwrap();
         let name = device.name();
         let busy = Busy::new(device, &queue);
