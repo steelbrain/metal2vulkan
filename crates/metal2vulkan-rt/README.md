@@ -122,6 +122,18 @@ after a quiesce.
   status, the blocks they kept, their recorders and their place in the queue, then the handlers.
   Scheduled and completed handlers run on it, every device's in turn, so no handler waits for a
   command buffer.
+- A command buffer's times are nanoseconds of one host clock, `host_time()`: `CLOCK_UPTIME_RAW`
+  on macOS (the clock of `mach_absolute_time`), `CLOCK_MONOTONIC_RAW` elsewhere on Unix, and the
+  performance counter on Windows. Metal gives seconds. `kernel_start_time` is the commit and
+  `kernel_end_time` the return of the `vkQueueSubmit2` that passed the last segment.
+  `gpu_end_time` is when the completion thread saw the command buffer complete, so a queue's end
+  times never decrease in completion order; `gpu_start_time` is that less the GPU's own duration
+  of the command buffer, exact from two timestamp queries: one written where its first commands
+  begin, one where its last segment ends, read once it completes, with no wait. Each queue has a
+  pool of two queries per command buffer it may have made at once; a command buffer's first
+  `VkCommandBuffer` resets its pair. A command buffer with no commands, or whose last segment has
+  none, records a `VkCommandBuffer` for its timestamps. One that ends with an error has GPU times
+  of 0.
 - `Event` and `SharedEvent` are timeline semaphores whose values are Metal's values. A host set
   (`SharedEvent::set_signaled_value`) raises a floor and never signals the semaphore; a wait the
   floor meets is submitted with no semaphore wait, and a GPU signal not above the highest value
@@ -162,7 +174,13 @@ that touch blocks first.
 
 ### Known gaps
 
-- `GPUStartTime` and `GPUEndTime` are not built yet.
+- Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
+  buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
+  the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through
+  arithmetic defined for every value and never later than its `gpu_end_time`. One device serves
+  every guest process and shaders use raw device addresses, so a guest shader can reach any guest
+  process's memory on the device; the runtime does not isolate processes from each other, and
+  the old runtime did not either.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 
 ## One path for every device

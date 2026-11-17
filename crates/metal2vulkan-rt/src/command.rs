@@ -6,7 +6,9 @@ use crate::error::{Error, Refusal};
 use crate::event::{Event, EventInner};
 use crate::memory::Block;
 use crate::queue::QueueInner;
+use crate::readback;
 use crate::record::{self, Recorder};
+use crate::times::{self, Stamps, Times};
 use ash::vk;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -16,9 +18,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 /// segments, one `VkCommandBuffer` each where it records commands, submitted with the semaphore
 /// operations between them. The submit thread holds a segment whose waits are not yet met, and its
 /// queue's later command buffers behind it, while the segments before it run: an event the held
-/// part waits for can be signalled by the part before it. Each segment's commands start with a
-/// barrier after every earlier submission, and end with a barrier that makes their writes visible
-/// to the host.
+/// part waits for can be signalled by the part before it. Each segment's commands end with one
+/// barrier that makes their writes visible to every later command and to the host.
+///
+/// Its GPU times come from two timestamps, written where its first commands begin and where its
+/// last segment ends, and read once it completes. A command buffer with no commands, or whose
+/// last segment has none, records a `VkCommandBuffer` for them.
 ///
 /// A cheap handle: clones share one command buffer. It holds the device until it is committed and
 /// nothing of it after, so a command buffer held forever on an event does not keep the device
@@ -68,6 +73,8 @@ pub(crate) type Handler = Box<dyn FnOnce(&CommandBuffer) + Send>;
 /// The command buffer itself: what its handles, its queue's FIFO and the completion thread hold.
 pub(crate) struct CbInner {
     pub(crate) queue: Arc<QueueInner>,
+    /// Its slot in the queue, and so its pair of timestamp queries.
+    slot: u32,
     state: Mutex<CbState>,
     /// Signalled at each status change and once the handlers have run.
     changed: Condvar,
@@ -83,12 +90,17 @@ struct CbState {
     /// Ended while enqueued and not yet committed (an abandon, a loss or a quiesce): the commit
     /// ends it with this error at once.
     ended: Option<CommandBufferError>,
+    times: Times,
 }
 
 struct Building {
     device: Device,
     gpu: Gpu,
     handlers: Handlers,
+    /// The queue's timestamp pool and the first of the command buffer's two queries.
+    stamps: (vk::QueryPool, u32),
+    /// Whether the start timestamp is recorded.
+    started: bool,
 }
 
 /// What the GPU uses: the recorder, the segments, and the blocks kept until retirement.
@@ -127,11 +139,13 @@ pub(crate) struct Pending {
 }
 
 impl CommandBuffer {
-    /// A new command buffer of `queue`, which has counted it.
-    pub(crate) fn new(queue: Arc<QueueInner>, device: Device) -> CommandBuffer {
+    /// A new command buffer of `queue`, which gave it `slot`.
+    pub(crate) fn new(queue: Arc<QueueInner>, device: Device, slot: u32) -> CommandBuffer {
+        let stamps = (queue.stamps.pool, Stamps::first(slot));
         CommandBuffer {
             inner: Arc::new(CbInner {
                 queue,
+                slot,
                 state: Mutex::new(CbState {
                     status: CommandBufferStatus::NotEnqueued,
                     error: None,
@@ -147,8 +161,11 @@ impl CommandBuffer {
                             scheduled: Vec::new(),
                             completed: Vec::new(),
                         },
+                        stamps,
+                        started: false,
                     }),
                     ended: None,
+                    times: Times::default(),
                 }),
                 changed: Condvar::new(),
             }),
@@ -272,11 +289,12 @@ impl CommandBuffer {
         let Some(mut building) = state.building.take() else {
             return Err(Error::Refused(Refusal::Committed));
         };
-        if let Err(error) = building.close() {
+        if let Err(error) = building.finish() {
             state.building = Some(building);
             return Err(error);
         }
         let Building { gpu, handlers, .. } = building;
+        state.times.kernel_start = times::host_time();
         let pending = Pending {
             seq: work.seq(),
             next: 0,
@@ -345,6 +363,35 @@ impl CommandBuffer {
         self.state().error
     }
 
+    /// `kernelStartTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives
+    /// seconds: the host time at the commit; 0 before it.
+    pub fn kernel_start_time(&self) -> u64 {
+        self.state().times.kernel_start
+    }
+
+    /// `kernelEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives
+    /// seconds: the host time when the `vkQueueSubmit2` that passed the last segment returned; 0
+    /// before the command buffer is scheduled, and for one that ended without being scheduled.
+    pub fn kernel_end_time(&self) -> u64 {
+        self.state().times.kernel_end
+    }
+
+    /// `GPUStartTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives
+    /// seconds: [`gpu_end_time`](Self::gpu_end_time) less the GPU's duration of the command
+    /// buffer, exact from two timestamps written where its first commands began and where its
+    /// last segment ended. 0 until it completes, and for one that ended with an error.
+    pub fn gpu_start_time(&self) -> u64 {
+        self.state().times.gpu_start
+    }
+
+    /// `GPUEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives seconds:
+    /// the host time at which the completion thread saw the command buffer complete, so a queue's
+    /// end times never decrease in completion order. 0 until it completes, and for one that ended
+    /// with an error.
+    pub fn gpu_end_time(&self) -> u64 {
+        self.state().times.gpu_end
+    }
+
     /// For the device tests: records commands into the current segment with `f`, and keeps each
     /// buffer's block until the command buffer retires.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -378,6 +425,37 @@ impl Building {
         let segments = &mut self.gpu.segments;
         let last = segments.len() - 1;
         &mut segments[last]
+    }
+
+    /// At commit: records the end timestamp into the last segment, beginning a command buffer for
+    /// it where the segment has none, and ends it.
+    fn finish(&mut self) -> Result<(), Error> {
+        let command = match self.last().command {
+            Some(command) => command,
+            None => self.begin()?,
+        };
+        let (pool, first) = self.stamps;
+        times::write_end(&self.device.core().device, command, pool, first);
+        self.close()
+    }
+
+    /// Begins the last segment's command buffer. The command buffer's first begins with the
+    /// start timestamp.
+    fn begin(&mut self) -> Result<vk::CommandBuffer, Error> {
+        let core = Arc::clone(self.device.core());
+        let recorder = match self.gpu.recorder.take() {
+            Some(recorder) => recorder,
+            None => core.recorders.take(&core.device)?,
+        };
+        let recorder = self.gpu.recorder.insert(recorder);
+        let command = recorder.next(&core.device)?;
+        if !self.started {
+            let (pool, first) = self.stamps;
+            times::write_start(&core.device, command, pool, first);
+            self.started = true;
+        }
+        self.last().command = Some(command);
+        Ok(command)
     }
 
     /// Ends the last segment's commands, if it has any.
@@ -422,18 +500,10 @@ impl Building {
         if !self.last().signals.is_empty() {
             self.split()?;
         }
-        if let Some(command) = self.last().command {
-            return Ok(command);
+        match self.last().command {
+            Some(command) => Ok(command),
+            None => self.begin(),
         }
-        let core = Arc::clone(self.device.core());
-        let recorder = match self.gpu.recorder.take() {
-            Some(recorder) => recorder,
-            None => core.recorders.take(&core.device)?,
-        };
-        let recorder = self.gpu.recorder.insert(recorder);
-        let command = recorder.next(&core.device)?;
-        self.last().command = Some(command);
-        Ok(command)
     }
 
     /// Keeps `block` until the command buffer retires.
@@ -446,10 +516,11 @@ impl Building {
 }
 
 impl CbInner {
-    /// The submit thread passed the last segment to `vkQueueSubmit2`.
-    pub(crate) fn scheduled(&self) {
+    /// The submit thread passed the last segment to `vkQueueSubmit2`, which returned at `now`.
+    pub(crate) fn scheduled(&self, now: u64) {
         let mut state = lock(&self.state);
         state.status = CommandBufferStatus::Scheduled;
+        state.times.kernel_end = now;
         self.changed.notify_all();
     }
 
@@ -467,18 +538,35 @@ pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
     }
 }
 
-/// On the completion thread: retires a command buffer that completed (`error` None) or ended,
-/// recycling its recorder and giving up its blocks and its place in the queue, then runs its
-/// handlers.
+/// On the completion thread: retires a command buffer that completed (`error` None), seen at host
+/// time `seen`, or ended, recycling its recorder and giving up its blocks and its place in the
+/// queue, then runs its handlers.
 pub(crate) fn retire(
     core: &Core,
     inner: Arc<CbInner>,
     gpu: Gpu,
     handlers: Handlers,
     error: Option<CommandBufferError>,
+    seen: u64,
 ) {
+    let gpu_times = match error {
+        // SAFETY: the queue's pool holds the command buffer's two queries.
+        None => unsafe {
+            readback::timestamps(
+                &core.device,
+                inner.queue.stamps.pool,
+                Stamps::first(inner.slot),
+            )
+        }
+        .map(|(start, end)| core.ticks.gpu_times(seen, start, end)),
+        Some(_) => None,
+    };
     {
         let mut state = lock(&inner.state);
+        if let Some((start, end)) = gpu_times {
+            state.times.gpu_start = start;
+            state.times.gpu_end = end;
+        }
         state.status = match error {
             Some(_) => CommandBufferStatus::Error,
             None => CommandBufferStatus::Completed,
@@ -495,7 +583,7 @@ pub(crate) fn retire(
         core.recorders.give_back(core, recorder);
     }
     drop((segments, blocks));
-    inner.queue.release();
+    inner.queue.release(inner.slot);
     let handle = CommandBuffer { inner };
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {
         handler(&handle);
@@ -515,7 +603,7 @@ impl Drop for CbInner {
                 let core = device.core();
                 core.recorders.give_back(core, recorder);
             }
-            self.queue.release();
+            self.queue.release(self.slot);
         }
     }
 }

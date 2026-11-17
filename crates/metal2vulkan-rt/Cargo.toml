@@ -21,6 +21,14 @@ path = "src/lib.rs"
 # The Vulkan API. Nothing is linked at build time: the instance opens the loader with `dlopen`.
 ash = { workspace = true, features = ["std", "loaded"] }
 
+# The host clock of command buffer times on unix.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# The same on Windows: the performance counter.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_System_Performance"] }
+
 # The device tests compile only under the validation crate's device cfgs (docs/VALIDATION.md).
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(m2v_gpu)", "cfg(m2v_cpu_icd)"] }

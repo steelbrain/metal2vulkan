@@ -21,11 +21,13 @@ pub mod floor;
 mod instance;
 mod memory;
 mod queue;
+mod readback;
 mod reaper;
 mod record;
 mod submit;
 #[cfg(test)]
 mod tests;
+mod times;
 
 pub use buffer::Buffer;
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
@@ -37,3 +39,4 @@ pub use extension::DeviceExtension;
 pub use instance::{Instance, PhysicalDevice};
 pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass, BLOCK_LEN};
 pub use queue::CommandQueue;
+pub use times::host_time;

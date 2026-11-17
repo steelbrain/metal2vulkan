@@ -12,6 +12,7 @@ use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, MemoryClass,
 use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
 use crate::submit::{self, Work};
+use crate::times::Ticks;
 use ash::vk;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -125,6 +126,8 @@ pub(crate) struct Core {
     memory_types: floor::MemoryTypes,
     unified_memory: bool,
     pub(crate) counters: Counters,
+    /// What the device's timestamps count.
+    pub(crate) ticks: Ticks,
     /// The longest block: the device's `maxMemoryAllocationSize` or `maxBufferSize`, whichever is
     /// less.
     max_block_len: u64,
@@ -282,6 +285,10 @@ impl Device {
         let max_block_len = vulkan11
             .max_memory_allocation_size
             .min(vulkan13.max_buffer_size);
+        let ticks = Ticks::new(
+            properties.properties.limits.timestamp_period,
+            families[family as usize].timestamp_valid_bits,
+        );
 
         let core = Arc::new(Core {
             instance,
@@ -293,6 +300,7 @@ impl Device {
             memory_types,
             unified_memory,
             counters,
+            ticks,
             max_block_len,
             pool: Pool::new(options.block_mappings),
             filler,

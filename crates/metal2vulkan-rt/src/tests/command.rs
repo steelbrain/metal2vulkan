@@ -8,9 +8,9 @@ mod on_device {
     use crate::device::lock;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        BlockId, BlockMappings, Buffer, CommandBuffer, CommandBufferError, CommandBufferStatus,
-        CommandQueue, Device, DeviceOptions, Error, Gauges, Instance, MemoryClass, Refusal,
-        SharedEvent, BLOCK_LEN,
+        host_time, BlockId, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
+        CommandBufferStatus, CommandQueue, Device, DeviceOptions, Error, Gauges, Instance,
+        MemoryClass, Refusal, SharedEvent, BLOCK_LEN,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -440,6 +440,72 @@ mod on_device {
         });
     }
 
+    /// Times, on the host clock: the kernel start at commit precedes the kernel end at submission;
+    /// each GPU start precedes its end, which falls between the first commit and the last
+    /// completion; a queue's GPU end times never decrease in completion order, through slots its
+    /// command buffers reuse, with or without commands.
+    #[test]
+    fn every_device_times_command_buffers_on_the_host_clock() {
+        each_device("command_times", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            // Fewer slots than command buffers, so slots and their queries are reused.
+            let queue = device.new_command_queue(4).expect("a queue");
+            let ends: Arc<Mutex<Vec<(usize, u64, u64)>>> = Arc::default();
+            let first = host_time();
+            let mut committed = Vec::new();
+            for index in 0..24 {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                // Every third has no commands.
+                if index % 3 != 2 {
+                    fill(&command_buffer, &buffer, index as u32);
+                }
+                let ends = Arc::clone(&ends);
+                command_buffer
+                    .add_completed_handler(move |cb| {
+                        lock(&ends).push((index, cb.gpu_start_time(), cb.gpu_end_time()))
+                    })
+                    .expect("a completed handler");
+                command_buffer.commit().expect("a commit");
+                committed.push(command_buffer);
+            }
+            for command_buffer in &committed {
+                finished(name, command_buffer);
+            }
+            let last = host_time();
+            let ends = lock(&ends).clone();
+            let order: Vec<usize> = ends.iter().map(|(index, _, _)| *index).collect();
+            assert_eq!(
+                order,
+                (0..24).collect::<Vec<_>>(),
+                "{name}: completion order"
+            );
+            for pair in ends.windows(2) {
+                assert!(pair[0].2 <= pair[1].2, "{name}: ends decrease: {pair:?}");
+            }
+            for ((_, start, end), command_buffer) in ends.iter().zip(&committed) {
+                let (kernel_start, kernel_end) = (
+                    command_buffer.kernel_start_time(),
+                    command_buffer.kernel_end_time(),
+                );
+                assert!(
+                    first <= kernel_start && kernel_start <= kernel_end,
+                    "{name}"
+                );
+                assert!(0 < *start && start <= end && *end <= last, "{name}");
+                assert!(first <= *end, "{name}");
+                assert_eq!(
+                    (
+                        command_buffer.gpu_start_time(),
+                        command_buffer.gpu_end_time()
+                    ),
+                    (*start, *end),
+                    "{name}"
+                );
+            }
+        });
+    }
+
     /// Abandon ends the queue's held and unsubmitted command buffers with NotRun and runs their
     /// handlers; the part already submitted ran, the rest never does, and the queue goes on.
     #[test]
@@ -478,6 +544,15 @@ mod on_device {
                 assert_eq!(
                     (command_buffer.status(), command_buffer.error()),
                     (CommandBufferStatus::Error, Some(CommandBufferError::NotRun)),
+                    "{name}"
+                );
+                // An ended command buffer has no GPU times.
+                assert_eq!(
+                    (
+                        command_buffer.gpu_start_time(),
+                        command_buffer.gpu_end_time()
+                    ),
+                    (0, 0),
                     "{name}"
                 );
             }

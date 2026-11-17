@@ -11,6 +11,7 @@ use crate::fill;
 use crate::memory::Block;
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
+use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -512,8 +513,9 @@ fn submit(core: &Core, batch: Batch) {
     if !ok {
         complete::lose(core);
     }
+    let now = times::host_time();
     for (cb, _) in &finished {
-        cb.scheduled();
+        cb.scheduled(now);
     }
     core.done.submitted(core, value, upload, finished, watch);
 }

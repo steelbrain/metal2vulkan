@@ -5751,6 +5751,7 @@ fn	metal2vulkan-air::specialize_dynamic	pub fn specialize_dynamic(d: Decoded, r:
 fn	metal2vulkan-air::specialize_linked	pub fn specialize_linked(d: Decoded, r: &SpecRequest, linked: &[LinkedModule], m: &mut Meter) -> Result<Entry, Error>
 fn	metal2vulkan-rt::floor::check	pub unsafe fn check(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Result<Capabilities, BelowFloor>
 fn	metal2vulkan-rt::floor::memory_types	pub unsafe fn memory_types(device: &ash::Device, capabilities: &Capabilities) -> Result<MemoryTypes, BelowFloor>
+fn	metal2vulkan-rt::host_time	pub fn host_time() -> u64
 fn	metal2vulkan-runtime::host_time	pub fn host_time() -> f64
 fn	metal2vulkan-runtime::process_exiting	pub fn process_exiting() -> bool
 fn	metal2vulkan-runtime::program_instance_made	pub fn program_instance_made()
@@ -8718,6 +8719,10 @@ method	metal2vulkan-rt::CommandBuffer::encode_signal_event	pub fn encode_signal_
 method	metal2vulkan-rt::CommandBuffer::encode_wait_for_event	pub fn encode_wait_for_event(&self, event: &Event, value: u64) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::enqueue	pub fn enqueue(&self) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::error	pub fn error(&self) -> Option<CommandBufferError>
+method	metal2vulkan-rt::CommandBuffer::gpu_end_time	pub fn gpu_end_time(&self) -> u64
+method	metal2vulkan-rt::CommandBuffer::gpu_start_time	pub fn gpu_start_time(&self) -> u64
+method	metal2vulkan-rt::CommandBuffer::kernel_end_time	pub fn kernel_end_time(&self) -> u64
+method	metal2vulkan-rt::CommandBuffer::kernel_start_time	pub fn kernel_start_time(&self) -> u64
 method	metal2vulkan-rt::CommandBuffer::status	pub fn status(&self) -> CommandBufferStatus
 method	metal2vulkan-rt::CommandBuffer::wait_until_completed	pub fn wait_until_completed(&self)
 method	metal2vulkan-rt::CommandBuffer::wait_until_scheduled	pub fn wait_until_scheduled(&self)

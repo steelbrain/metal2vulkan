@@ -5,8 +5,7 @@
 //! The check reads every source file under `src/` except the tests, with line comments removed,
 //! so prose may still name what the code must not do.
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use crate::tests::product_sources;
 
 /// Identifiers that only an identity-keyed branch needs: Vulkan's vendor, device and driver
 /// identity fields and the structures that carry the driver's identity.
@@ -94,43 +93,11 @@ fn is_suffix(rest: &str) -> bool {
     )
 }
 
-/// Every product source file under `dir`, the tests excepted.
-fn product_sources(dir: &Path, out: &mut Vec<PathBuf>) {
-    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
-        .unwrap_or_else(|error| panic!("reading {}: {error}", dir.display()))
-        .map(|entry| entry.expect("a directory entry").path())
-        .collect();
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            if path.file_name().is_some_and(|name| name == "tests") {
-                continue;
-            }
-            product_sources(&path, out);
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            out.push(path);
-        }
-    }
-}
-
 #[test]
 fn the_product_sources_take_one_path_for_every_device() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    product_sources(&root, &mut files);
-    assert!(!files.is_empty(), "no source under {}", root.display());
-    let findings: Vec<Finding> = files
+    let findings: Vec<Finding> = product_sources()
         .iter()
-        .flat_map(|path| {
-            let text = fs::read_to_string(path)
-                .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
-            let label = path
-                .strip_prefix(&root)
-                .unwrap_or(path)
-                .display()
-                .to_string();
-            scan(&label, &text)
-        })
+        .flat_map(|(label, text)| scan(label, text))
         .collect();
     assert!(
         findings.is_empty(),

@@ -24,8 +24,11 @@ struct State {
 pub(crate) enum Job {
     Free(Free),
     /// The device's teardown, after its last handle dropped on the completion thread.
-    Teardown(Box<dyn FnOnce(&Arc<Core>) + Send>),
+    Teardown(Teardown),
 }
+
+/// A teardown the reaper runs.
+pub(crate) type Teardown = Box<dyn FnOnce(&Arc<Core>) + Send>;
 
 /// An object whose last user is gone.
 pub(crate) enum Free {
@@ -33,6 +36,8 @@ pub(crate) enum Free {
     Semaphore(vk::Semaphore),
     /// A command pool past the idle ones the device keeps, or one whose reset failed.
     CommandPool(vk::CommandPool),
+    /// A dropped queue's timestamp queries.
+    QueryPool(vk::QueryPool),
 }
 
 impl Reaper {
@@ -82,6 +87,8 @@ fn free(core: &Core, object: Free) {
         }
         // SAFETY: no command buffer of the pool is pending: its work retired, or never ran.
         Free::CommandPool(pool) => unsafe { device.destroy_command_pool(pool, None) },
+        // SAFETY: every command buffer of the queue retired or never ran.
+        Free::QueryPool(pool) => unsafe { device.destroy_query_pool(pool, None) },
     }
 }
 

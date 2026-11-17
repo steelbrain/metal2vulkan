@@ -1,9 +1,11 @@
 //! Command queues: Metal's bound on a queue's uncompleted command buffers, and abandoning a queue.
 
 use crate::command::CommandBuffer;
-use crate::counters::{Counters, Gauge};
-use crate::device::{lock, Device};
+use crate::counters::Gauge;
+use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
+use crate::reaper::{Free, Job};
+use crate::times::Stamps;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 /// `MTLCommandQueue`: one FIFO on the submit thread. Every queue submits to the device's one
@@ -19,27 +21,53 @@ pub struct CommandQueue {
 /// The queue itself: what its command buffers and the submit thread hold.
 pub(crate) struct QueueInner {
     max: u32,
-    /// Command buffers made and not yet retired.
-    count: Mutex<u32>,
+    /// The slots of the command buffers made and not yet retired.
+    slots: Mutex<Slots>,
     /// Signalled when one retires.
     room: Condvar,
-    counters: Counters,
+    /// Two timestamp queries per slot.
+    pub(crate) stamps: Stamps,
+    pub(crate) core: Arc<Core>,
+}
+
+/// A queue's slots: each command buffer made and not yet retired holds one, and with it its pair
+/// of timestamp queries.
+struct Slots {
+    /// Slots below it have been taken at least once.
+    next: u32,
+    /// Slots given back.
+    free: Vec<u32>,
+}
+
+impl Slots {
+    fn taken(&self) -> u32 {
+        self.next - self.free.len() as u32
+    }
 }
 
 impl Device {
     /// `newCommandQueueWithMaxCommandBufferCount:`; `newCommandQueue` is this call with 64.
     ///
-    /// Err: [`Refusal::NoCommandBuffers`] for a count of 0.
+    /// The queue holds a pool of two timestamp queries per command buffer it may have made at
+    /// once, for their GPU times.
+    ///
+    /// Err: [`Refusal::NoCommandBuffers`] for a count of 0; [`Error::Vulkan`] where the pool
+    /// cannot be made.
     pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error> {
         if max_command_buffer_count == 0 {
             return Err(Error::Refused(Refusal::NoCommandBuffers));
         }
+        let core = self.core();
         Ok(CommandQueue {
             inner: Arc::new(QueueInner {
                 max: max_command_buffer_count,
-                count: Mutex::new(0),
+                slots: Mutex::new(Slots {
+                    next: 0,
+                    free: Vec::new(),
+                }),
                 room: Condvar::new(),
-                counters: self.counters(),
+                stamps: Stamps::new(core, max_command_buffer_count)?,
+                core: Arc::clone(core),
             }),
             device: self.clone(),
         })
@@ -54,26 +82,33 @@ impl CommandQueue {
     /// Err: [`Error::Quiesced`].
     pub fn command_buffer(&self) -> Result<CommandBuffer, Error> {
         let core = self.device.core();
-        let mut count = lock(&self.inner.count);
+        let mut slots = lock(&self.inner.slots);
         loop {
             if core.closed() {
                 return Err(Error::Quiesced);
             }
-            if *count < self.inner.max {
+            if slots.taken() < self.inner.max {
                 break;
             }
-            count = self
+            slots = self
                 .inner
                 .room
-                .wait(count)
+                .wait(slots)
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        *count += 1;
-        drop(count);
-        self.inner.counters.rise(Gauge::CommandBuffers);
+        let slot = match slots.free.pop() {
+            Some(slot) => slot,
+            None => {
+                slots.next += 1;
+                slots.next - 1
+            }
+        };
+        drop(slots);
+        core.counters.rise(Gauge::CommandBuffers);
         Ok(CommandBuffer::new(
             Arc::clone(&self.inner),
             self.device.clone(),
+            slot,
         ))
     }
 
@@ -99,10 +134,19 @@ impl QueueInner {
         std::ptr::eq(self, queue)
     }
 
-    /// One of the queue's command buffers retired, or was dropped uncommitted.
-    pub(crate) fn release(&self) {
-        *lock(&self.count) -= 1;
+    /// The command buffer holding `slot` retired, or was dropped uncommitted: the slot goes back.
+    pub(crate) fn release(&self, slot: u32) {
+        lock(&self.slots).free.push(slot);
         self.room.notify_one();
-        self.counters.fall(Gauge::CommandBuffers);
+        self.core.counters.fall(Gauge::CommandBuffers);
+    }
+}
+
+impl Drop for QueueInner {
+    fn drop(&mut self) {
+        // No command buffer of the queue is left, so no work names the pool.
+        self.core
+            .reaper
+            .give(Job::Free(Free::QueryPool(self.stamps.pool)));
     }
 }

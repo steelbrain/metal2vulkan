@@ -7,6 +7,7 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
 use crate::submit::{Ended, Upload};
+use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -254,14 +255,15 @@ pub(crate) fn lose(core: &Core) {
 }
 
 impl Retiree {
-    fn retire(self, core: &Core) {
+    /// Retires it; `seen` is the host time its completion was seen.
+    fn retire(self, core: &Core, seen: u64) {
         match self.item {
             Item::Command {
                 cb,
                 gpu,
                 handlers,
                 error,
-            } => command::retire(core, cb, gpu, handlers, error),
+            } => command::retire(core, cb, gpu, handlers, error, seen),
             Item::Upload(upload) => upload.retire(core),
         }
     }
@@ -286,6 +288,8 @@ pub(crate) fn run(core: Arc<Core>) {
         let fired = std::mem::take(&mut state.fire);
         let mut fire: Vec<(Listener, u64)> = Vec::new();
         let mut newly_lost = false;
+        // The host time the completions retired in this pass were seen.
+        let mut seen = 0;
         if state.lost {
             // The signals pending never come: the host waits for them end first.
             for event in state.watched.drain(..) {
@@ -304,6 +308,7 @@ pub(crate) fn run(core: Arc<Core>) {
                 // SAFETY: the progress semaphore is the device's.
                 match unsafe { device.get_semaphore_counter_value(done.progress) } {
                     Ok(reached) => {
+                        seen = times::host_time();
                         while state
                             .flight
                             .front()
@@ -342,7 +347,7 @@ pub(crate) fn run(core: Arc<Core>) {
                 command::run_scheduled(cb, handlers);
             }
             for retiree in retire {
-                retiree.retire(&core);
+                retiree.retire(&core, seen);
             }
             for (listener, value) in fire {
                 listener(value);
