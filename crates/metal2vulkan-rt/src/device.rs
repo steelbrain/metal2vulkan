@@ -2,7 +2,7 @@
 //! its queues, its memory blocks, its threads, quiesce and teardown.
 
 use crate::complete::{self, Done};
-use crate::counters::Counters;
+use crate::counters::{Counters, Gauge};
 use crate::error::Error;
 use crate::extension::{self, DeviceExtension};
 use crate::fill::Filler;
@@ -32,8 +32,9 @@ use std::time::{Duration, Instant};
 /// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun); the completion thread
 /// retires the rest as the GPU completes it; the threads are joined; then every block is freed,
 /// after [`BlockMappings::unmap`] for each the consumer was handed, and the `VkDevice` is
-/// destroyed, with every gauge at zero. Where the last handle drops in a handler or a listener,
-/// the completion thread finishes the teardown itself once the handler returns. No thread of the
+/// destroyed; every gauge reads zero only then. Where the last handle drops in a handler or a
+/// listener, the completion thread finishes the teardown itself once the handler returns, and the
+/// consumer waits for the gauges to read zero before it drops its instance or exits. No thread of the
 /// runtime outlives the teardown, and nothing relies on a static destructor or an `atexit`
 /// handler: the consumer drops every handle, or calls [`quiesce`](Device::quiesce), before the
 /// process exits (a driver may unmap device memory inside `exit()`).
@@ -566,7 +567,9 @@ unsafe fn objects(
         Ok(done) => Ok((memory_types, filler, done)),
         Err(error) => {
             // SAFETY: the fill's objects are unused.
-            unsafe { filler.destroy(device, counters) };
+            if unsafe { filler.destroy(device) } {
+                counters.fall(Gauge::Blocks);
+            }
             Err(error)
         }
     }
@@ -632,10 +635,17 @@ impl Drop for Core {
         }
         self.recorders.destroy_all(&self.device);
         // SAFETY: the device is idle, and nothing made from it is left but these objects.
-        unsafe {
+        let zero_source = unsafe {
             self.done.destroy(&self.device);
-            self.filler.destroy(&self.device, &self.counters);
+            let zero_source = self.filler.destroy(&self.device);
             self.device.destroy_device(None);
+            zero_source
+        };
+        // The zero source's gauge falls last, once the `VkDevice` is destroyed: every gauge reads
+        // zero only when the teardown has made its last Vulkan call, so a consumer whose last
+        // handle dropped in a handler can wait for that before it exits.
+        if zero_source {
+            self.counters.fall(Gauge::Blocks);
         }
     }
 }

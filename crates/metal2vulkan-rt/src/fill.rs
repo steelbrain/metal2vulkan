@@ -118,7 +118,9 @@ impl Filler {
             }),
             Err(error) => {
                 // SAFETY: nothing made is in use.
-                unsafe { objects.destroy(device, counters) };
+                if unsafe { objects.destroy(device) } {
+                    counters.fall(Gauge::Blocks);
+                }
                 Err(error)
             }
         }
@@ -175,15 +177,16 @@ impl Filler {
         Ok(())
     }
 
-    /// Destroys the fill's objects.
+    /// Destroys the fill's objects. True where it freed the zero source's allocation, whose
+    /// gauge the caller lowers.
     ///
     /// # Safety
     ///
     /// `device` is the one they were made on, and no fill is pending.
-    pub(crate) unsafe fn destroy(&mut self, device: &ash::Device, counters: &Counters) {
+    pub(crate) unsafe fn destroy(&mut self, device: &ash::Device) -> bool {
         let objects = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
         // SAFETY: the caller's contract.
-        unsafe { objects.destroy(device, counters) };
+        unsafe { objects.destroy(device) }
     }
 }
 
@@ -249,17 +252,18 @@ impl Objects {
     /// # Safety
     ///
     /// As [`Filler::destroy`]. A null handle is skipped.
-    unsafe fn destroy(&mut self, device: &ash::Device, counters: &Counters) {
+    unsafe fn destroy(&mut self, device: &ash::Device) -> bool {
+        let allocated = self.zeros_memory != vk::DeviceMemory::null();
         // SAFETY: the caller's contract; destroying a null handle does nothing, and freeing a
         // command pool frees its command buffer.
         unsafe {
             device.destroy_buffer(self.zeros, None);
-            if self.zeros_memory != vk::DeviceMemory::null() {
+            if allocated {
                 device.free_memory(self.zeros_memory, None);
-                counters.fall(Gauge::Blocks);
             }
             device.destroy_fence(self.fence, None);
             device.destroy_command_pool(self.pool, None);
         }
+        allocated
     }
 }

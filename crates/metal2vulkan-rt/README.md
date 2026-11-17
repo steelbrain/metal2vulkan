@@ -38,8 +38,9 @@ Teardown stops the submit thread, which submits what is ready and ends what it h
 runs the handlers; the threads are joined and the GPU goes idle. Then every block is freed,
 `BlockMappings::unmap` first for each block the consumer was handed, and the `VkDevice` is
 destroyed. Teardown runs on the thread that drops the last handle, or, where that is a handler or
-a listener, on the completion thread once the handler returns. A physical device and a device
-each hold their instance. No thread of the runtime outlives its device, and nothing relies on a
+a listener, on the completion thread once the handler returns; every gauge reads zero only once
+the `VkDevice` is destroyed, so such a consumer waits for that before it drops its instance or
+exits. A physical device and a device each hold their instance. No thread of the runtime outlives its device, and nothing relies on a
 static destructor or an `atexit` handler: the consumer drops every handle, or calls
 `Device::quiesce`, before the process exits, since a driver may unmap device memory inside
 `exit()`.
