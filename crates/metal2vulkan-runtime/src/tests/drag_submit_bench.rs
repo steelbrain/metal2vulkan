@@ -25,7 +25,14 @@
 //! time from each part with work's commit call to its GPU start (`CommandBuffer::gpu_start_time`;
 //! median and 90th percentile), the batch calls' mean (`WorkCounts::batch_submit_nanos` a
 //! `queue_submissions`, the `VkCommandBuffer`s a call) and the queue's submission cost at the
-//! end.
+//! end. And (`DRAG-PATH`) where the time from a commit call to its GPU start went, for each part
+//! with work (medians and 90th percentiles): to the start of its submission
+//! (`CommandBuffer::kernel_start_time`: the committing thread's, or the scheduler's thread's once
+//! woken and at it), from there to the return of the call that carried it
+//! (`CommandBuffer::submit_returned_time`, the device noting queue times: its planning, any
+//! hold in a group, and the call), and from there to its GPU start; and why the commits' passes
+//! left batches (the `WorkCounts::scheduler_at_commit_left_*` counts) and the groups held past
+//! a pass for two submissions in flight (`WorkCounts::groups_kept_pending`).
 //!
 //! Ignored: run it in release under `--cfg m2v_gpu` where `/dev/udmabuf` opens,
 //! `cargo test --release -p metal2vulkan-runtime --lib drag_submit_bench -- --ignored --nocapture`.
@@ -55,6 +62,20 @@ const FRAMES: usize = 200;
 /// in the second and third measurements of each.
 const MIXED_PAUSE: Duration = Duration::from_micros(100);
 
+/// What a measurement's frames noted, in microseconds, of its parts: each commit call's (those with
+/// work, the empty ones'); and of those with work, from the commit call to the GPU start, to the
+/// start of the part's submission, from there to the return of the call that carried it, and
+/// from there to the GPU start.
+#[derive(Default)]
+struct Times {
+    work: Vec<f64>,
+    empty: Vec<f64>,
+    started: Vec<f64>,
+    picked: Vec<f64>,
+    called: Vec<f64>,
+    ran: Vec<f64>,
+}
+
 /// The `at` quantile of `values`, sorted.
 fn quantile(values: &[f64], at: f64) -> f64 {
     let mut sorted = values.to_vec();
@@ -80,6 +101,14 @@ fn drag_submit_bench() {
     let kernel = Kernel::new(&scratch);
     kernel.warm();
     let device = &kernel.device;
+    // Each command buffer's submission's return (`CommandBuffer::submit_returned_time`).
+    device.shared().timing.note_queue_times();
+    println!(
+        "DRAG-PATH on {}: completion {:?}, submissions merge {}",
+        device.name(),
+        device.compile_device().policy().completion,
+        device.submissions_merge(),
+    );
     let len = 2 * LISTED * LISTED_BYTES;
     let ram = Ram::new(len, 0, len);
     let calls = Arc::new(AtomicUsize::new(0));
@@ -109,7 +138,7 @@ fn drag_submit_bench() {
             .collect();
         bind_all(&kernel, &made);
         listed.extend(made);
-        let frame = |times: Option<(&mut Vec<f64>, &mut Vec<f64>, &mut Vec<f64>)>| {
+        let frame = |times: Option<&mut Times>| {
             let mut parts = Vec::with_capacity(PARTS);
             let mut took = Vec::with_capacity(PARTS);
             let mut committed = Vec::with_capacity(PARTS);
@@ -133,12 +162,23 @@ fn drag_submit_bench() {
                 command_buffer.wait_until_completed_for(WAIT).unwrap();
                 assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
             }
-            if let Some((work, empty, started)) = times {
-                work.extend_from_slice(&took[..PARTS - 1]);
-                empty.push(took[PARTS - 1]);
+            if let Some(times) = times {
+                times.work.extend_from_slice(&took[..PARTS - 1]);
+                times.empty.push(took[PARTS - 1]);
                 for (command_buffer, &at) in parts.iter().zip(&committed).take(PARTS - 1) {
-                    if let Ok(start) = command_buffer.gpu_start_time() {
-                        started.push((start - gpu_time::seconds(at)) * 1e6);
+                    let at = gpu_time::seconds(at);
+                    let Ok(start) = command_buffer.gpu_start_time() else {
+                        continue;
+                    };
+                    times.started.push((start - at) * 1e6);
+                    let (kernel, returned) = (
+                        command_buffer.kernel_start_time(),
+                        command_buffer.submit_returned_time(),
+                    );
+                    if kernel > 0.0 && returned > 0.0 {
+                        times.picked.push((kernel - at) * 1e6);
+                        times.called.push((returned - kernel) * 1e6);
+                        times.ran.push((start - returned) * 1e6);
                     }
                 }
             }
@@ -171,12 +211,20 @@ fn drag_submit_bench() {
             for _ in 0..WARM {
                 frame(None);
             }
-            let (mut work, mut empty, mut gpu_started) = (Vec::new(), Vec::new(), Vec::new());
+            let mut times = Times::default();
             let before = device.work_counts();
             let started = Instant::now();
             for _ in 0..FRAMES {
-                frame(Some((&mut work, &mut empty, &mut gpu_started)));
+                frame(Some(&mut times));
             }
+            let Times {
+                work,
+                empty,
+                started: gpu_started,
+                picked,
+                called,
+                ran,
+            } = times;
             let elapsed = started.elapsed().as_secs_f64();
             let after = device.work_counts();
             let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
@@ -213,6 +261,27 @@ fn drag_submit_bench() {
                 moved(|c| c.batch_submit_nanos) as f64 / submissions / 1e3,
                 moved(|c| c.command_buffers_submitted) as f64 / submissions,
                 cost as f64 / 1e3,
+            );
+            let spread = |values: &[f64]| (quantile(values, 0.5), quantile(values, 0.9));
+            println!(
+                "DRAG-PATH listed {}, calls of commands {calls_were}, batches {placed}: commit to \
+                 submission start p50/p90 {:.1?} us, to the call's return {:.1?}, to GPU start \
+                 {:.1?} ({} read); passes left: under way {}, taken in {}, behind its queue {}, \
+                 turns {}, slow calls {slow}, other {}; groups' calls {}, of {} batches, kept \
+                 for two in flight {}",
+                listed.len(),
+                spread(&picked),
+                spread(&called),
+                spread(&ran),
+                picked.len(),
+                moved(|c| c.scheduler_at_commit_left_passing),
+                moved(|c| c.scheduler_at_commit_left_taken_in),
+                moved(|c| c.scheduler_at_commit_left_behind_its_queue),
+                moved(|c| c.scheduler_at_commit_left_turns),
+                moved(|c| c.scheduler_at_commit_left_other),
+                moved(|c| c.grouped_submissions),
+                moved(|c| c.batches_grouped),
+                moved(|c| c.groups_kept_pending),
             );
         }
         device.slow_submit_calls(None);

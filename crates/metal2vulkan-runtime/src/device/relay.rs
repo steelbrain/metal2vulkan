@@ -465,11 +465,11 @@ impl super::DeviceShared {
     /// device notes queue times (`WorkCounts::batch_submit_cpu_nanos`, and the long calls' apart),
     /// and the call counted
     /// in the queue's place in its driver's period of stalls (`submit_stalls.rs`): `f` makes one
-    /// signalling call of `buffers` command buffers. Where it submits command buffers and the
-    /// submission of the last batch it carries began at host time `begun`
-    /// (`CommandBufferShared::submit_batch`; a group's, as `Group::submit` places it), that whole
-    /// submission, to the call's return, is kept among the queue's last (`submit_calls.rs`), whose
-    /// median decides whether a committing thread makes the next.
+    /// signalling call of `buffers` command buffers. Where it carries one batch alone, whose
+    /// submission began at host time `begun` (`CommandBufferShared::submit_batch`; one a group
+    /// held, as `Group::submit` places it), and submits command buffers, that whole submission, to
+    /// the call's return, is kept among the queue's last (`submit_calls.rs`), whose median decides
+    /// whether a committing thread makes the next.
     pub(crate) fn submit_logged(
         &self,
         (queue, value, buffers, begun): (usize, Option<u64>, usize, Option<u64>),
@@ -528,8 +528,8 @@ impl super::DeviceShared {
             crate::command_buffer::completion::trace::submitting("submit returned");
             let nanos = end.saturating_sub(entered);
             (self.counts).batch_submitted_in(nanos, spent);
-            // A batch's whole submission, the queue's cost a committing thread reads (a group's
-            // call, its last batch's); a call of no command buffer stays out (`submit_calls.rs`).
+            // A batch's whole submission, the queue's cost a committing thread reads; a call of no
+            // command buffer, or of several batches, stays out (`submit_calls.rs`).
             if let (Ok(()), Some(begun)) = (&submitted, begun.filter(|_| buffers > 0)) {
                 slot.calls.called(end.saturating_sub(begun));
             }

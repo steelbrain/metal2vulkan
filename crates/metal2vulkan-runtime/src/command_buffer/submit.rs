@@ -1784,8 +1784,8 @@ impl CommandBufferShared {
             (false, true) => &parts[..1],
             (false, false) => &parts[..],
         };
-        // How long its submission took to here: the group's call is timed from as far before it
-        // where this batch goes last in it (`Group::submit`).
+        // How long its submission took to here: a group's call that carries this batch alone is
+        // timed from as far before it (`Group::submit`).
         let planned = gpu_time::host_nanos().saturating_sub(begun);
         scheduler.group.hold(
             parts,

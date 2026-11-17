@@ -540,8 +540,8 @@ pub(crate) struct After<'a> {
     /// The value it signals on the queue's timeline.
     pub(crate) value: u64,
     pub(crate) fence: Option<vk::Fence>,
-    /// The host time its batch's submission began (`CommandBufferShared::submit_batch`): the call
-    /// that carries it, alone or after a group, is timed from there (`device/submit_calls.rs`).
+    /// The host time its batch's submission began (`CommandBufferShared::submit_batch`): a call
+    /// that carries it alone is timed from there (`device/submit_calls.rs`).
     pub(crate) begun: u64,
     pub(crate) relayed: &'a Arc<Relayed>,
     /// What it carried, for the line its failed submission logs (`submit_failure.rs`): called
@@ -817,19 +817,17 @@ impl Group {
             None => (held_value, None),
         };
         let submits = &submits[..submitting];
-        // The call is timed as the whole submission of the last batch it carries
-        // (`device/submit_calls.rs`): one after the group from its own start, else the last one
-        // held from as far before the call as its submission took to its hold.
-        let begun = match &after {
-            Some(after) => after.begun,
-            None => gpu_time::host_nanos().saturating_sub(self.members[count - 1].planned),
-        };
+        // A call of one batch, a group of one, is timed as that batch's whole submission, from as
+        // far before the call as its submission took to its hold; a call of several is not
+        // (`device/submit_calls.rs`, "A group's call").
+        let begun = (count == 1 && alone)
+            .then(|| gpu_time::host_nanos().saturating_sub(self.members[0].planned));
         // SAFETY: as each batch's own submission (`submit.rs`): every command buffer is
         // executable and submitted once; every wait is for a signal submitted before; the one
         // timeline signal is above the queue's value; the `VkQueue` is used under its lock.
         let mut called = 0;
         let submitted = shared.submit_logged(
-            (queue, Some(value), buffers, Some(begun)),
+            (queue, Some(value), buffers, begun),
             fence,
             &relayed,
             |vk_queue| unsafe {

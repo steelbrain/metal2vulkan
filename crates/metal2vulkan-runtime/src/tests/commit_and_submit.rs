@@ -1127,7 +1127,7 @@ fn a_queue_whose_submissions_turn_cheap_again_goes_back_to_its_committing_thread
     );
 }
 
-/// How much longer each call of commands takes in [`a_group_s_call_is_timed_for_its_last_batch`]:
+/// How much longer each call of commands takes in [`a_call_of_one_batch_is_timed_and_one_of_several_not`]:
 /// long enough that a frame's later command buffers are all committed while the scheduler's thread
 /// is in the call of its first.
 const GROUPING_CALL: Duration = Duration::from_millis(2);
@@ -1138,17 +1138,20 @@ const GROUPING_PARTS: usize = 4;
 /// The frames of that test.
 const GROUPING_FRAMES: usize = 8;
 
-/// Every call of commands is timed among its queue's submissions (`device/submit_calls.rs`), a
-/// group's for its last batch (`command_buffer/group.rs`): frames of [`GROUPING_PARTS`] fills
-/// committed back to back with `commit`, each call of commands made [`GROUPING_CALL`] longer
-/// (`Device::slow_submit_calls`), so that the scheduler's thread finds a frame's later batches
-/// ready together once its call of the first returned and, where the device's batches may wait in
-/// a group (`CompletionPolicy::Grouped`, and its check found the merge), sends them in one call.
-/// Counted: the groups' calls made there, and the queue's timed submissions moved by every call of
-/// commands. With a group's call untimed, a queue the scheduler's thread served in groups kept its
-/// cost from before for good (the Radeon RX 7900 XTX's, `submit_calls.rs`).
+/// Each call of commands that carries one batch is timed among its queue's submissions, a group's
+/// of one batch too, and a call of several batches is not (`device/submit_calls.rs`, "A group's
+/// call"): frames of [`GROUPING_PARTS`] fills committed back to back with `commit`, each call of
+/// commands made [`GROUPING_CALL`] longer (`Device::slow_submit_calls`), so that the scheduler's
+/// thread finds a frame's later batches ready together once its call of the first returned and,
+/// where the device's batches may wait in a group (`CompletionPolicy::Grouped`, and its check
+/// found the merge), sends them in one call. Counted: the calls of several batches made there
+/// (`WorkCounts::grouped_submissions`), and the queue's timed submissions moved by every other
+/// call of commands. With a group of one untimed, a queue the scheduler's thread served kept its
+/// cost from before for good; with a call of several timed as one batch's submission, a queue
+/// whose submissions sit near the bound went to the scheduler's thread for its groups' cost
+/// (the Radeon RX 7900 XTX's, `submit_calls.rs`).
 #[test]
-fn a_group_s_call_is_timed_for_its_last_batch() {
+fn a_call_of_one_batch_is_timed_and_one_of_several_not() {
     let device = device();
     assert!(
         device.settle_submit_checks(SETTLE),
@@ -1185,14 +1188,21 @@ fn a_group_s_call_is_timed_for_its_last_batch() {
     let (timed, called) = ((calls.timed() - timed) as u64, made() - called);
     let grouped = after.grouped_submissions - before.grouped_submissions;
     println!(
-        "groups' calls ({}, batches grouping {groups}): calls of commands {called}, groups' \
-         {grouped}; submissions timed {timed}",
+        "groups' calls ({}, batches grouping {groups}): calls of commands {called}, of several \
+         batches {grouped}; submissions timed {timed}",
         device.name(),
     );
     if groups {
-        assert!(grouped > 0, "no group's call: each batch went alone");
+        assert!(
+            grouped > 0,
+            "no call of several batches: each batch went alone"
+        );
     }
-    assert_eq!(timed, called, "a call of commands left untimed");
+    assert_eq!(
+        timed,
+        called - grouped,
+        "the calls of one batch timed, and none of several"
+    );
 }
 
 /// How often, in fills, [`a_queue_whose_calls_of_commands_are_slow_leaves_them_among_empty_ones`]
