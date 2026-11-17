@@ -288,7 +288,8 @@ made, with no lock, and never rewritten for layouts.
   `kernel_end_time` the time it was scheduled. `gpu_end_time` is when the completion thread saw
   the command buffer complete, less the GPU's ticks from its end timestamp to that of the last
   command buffer seen complete with it, so each command buffer of a submission has its own end;
-  end times never decrease in completion order. `gpu_start_time` is that less the GPU's own
+  end times never decrease in completion order (those seen complete together move later as one
+  where they would begin before an end given earlier). `gpu_start_time` is that less the GPU's own
   duration of the command buffer, exact from two timestamp queries: one written where its first
   commands begin, one where its last segment ends, read once it completes, with no wait. Each
   queue has a pool of two queries per command buffer it may have made at once; a command

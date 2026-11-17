@@ -412,16 +412,24 @@ pub(crate) fn run(core: Arc<Core>) {
             // Each completed command buffer's end is placed before `seen` by the ticks between its
             // end timestamp and that of the last one seen complete in this pass, which ended
             // last: every segment's end barrier orders the commands after it on the one queue.
+            // Where the pass's first end would come before an end given earlier, the whole pass
+            // moves later by the difference, so its command buffers keep their order and gaps.
             let stamps: Vec<Option<(u64, u64)>> =
                 retire.iter().map(|retiree| retiree.stamps(&core)).collect();
             let last = stamps.iter().rev().flatten().next().map(|&(_, end)| end);
-            for (retiree, stamps) in retire.into_iter().zip(stamps) {
-                let times = stamps.zip(last).map(|((start, end), last)| {
-                    let (start, end) = core.ticks.place(seen, last, start, end);
-                    let late = latest.saturating_sub(end);
-                    latest = latest.max(end + late);
-                    (start + late, end + late)
-                });
+            let placed: Vec<Option<(u64, u64)>> = (stamps.into_iter())
+                .map(|stamps| {
+                    let ((start, end), last) = stamps.zip(last)?;
+                    Some(core.ticks.place(seen, last, start, end))
+                })
+                .collect();
+            let first = placed.iter().flatten().next().map(|&(_, end)| end);
+            let late = first.map_or(0, |first| latest.saturating_sub(first));
+            for (retiree, times) in retire.into_iter().zip(placed) {
+                let times = times.map(|(start, end)| (start + late, end + late));
+                if let Some((_, end)) = times {
+                    latest = latest.max(end);
+                }
                 retiree.retire(&core, times);
             }
             for (listener, value) in fire {

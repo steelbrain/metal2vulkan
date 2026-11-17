@@ -692,43 +692,43 @@ pub(crate) mod on_device {
     /// The command buffers of one submission retire in commit order, each with its own status
     /// and GPU times: a group held behind two running submissions takes a command buffer, one
     /// ended by an abandon while enqueued and committed after it, and two more; they complete in
-    /// that order, the ended one `NotRun` with no times, the others each ending later than the
-    /// one before.
+    /// that order, the ended one `NotRun` with no times. The other three, each the same work, run
+    /// back to back: each starts no earlier than the one before ends, where one shared end less
+    /// each one's duration would overlap them.
     #[test]
-    fn every_device_retires_a_group_in_commit_order_with_an_ended_command_buffer() {
+    fn every_device_retires_a_group_in_commit_order_each_with_its_own_times() {
         each_device("command_group_order", |name, _, device| {
             let mut arena = Arena::new(&device);
             let buffers = [arena.buffer(), arena.buffer(), arena.buffer()];
             let work = private(&device);
             let queue = queue(&device);
+            // A word written, then the whole block filled: work long enough to time.
+            let member = |label: &str, log: &Log, buffer: &Buffer, word: u32| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                fill(&command_buffer, buffer, word);
+                let target = work.held_block().memory.buffer;
+                command_buffer
+                    .record_for_test(&[&work], |device, command| {
+                        // SAFETY: as `busy`'s.
+                        unsafe { device.cmd_fill_buffer(command, target, 0, BLOCK_LEN, word) };
+                    })
+                    .expect("a fill");
+                log.handlers(label, &command_buffer);
+                command_buffer.commit().expect("a commit");
+                command_buffer
+            };
             behind_two(name, &device, &queue, |_, before| {
                 let log = Log::default();
-                let first = queue.command_buffer().expect("a command buffer");
-                fill(&first, &buffers[0], 1);
-                log.handlers("1", &first);
-                first.commit().expect("a commit");
+                let first = member("1", &log, &buffers[0], 1);
                 let ended = queue.command_buffer().expect("a command buffer");
                 log.handlers("2", &ended);
                 ended.enqueue().expect("an enqueue");
                 queue.abandon();
                 ended.commit().expect("a commit");
-                let rest: Vec<CommandBuffer> = (0..2)
-                    .map(|index| {
-                        let command_buffer = queue.command_buffer().expect("a command buffer");
-                        fill(&command_buffer, &buffers[1 + index], 3 + index as u32);
-                        // Long enough that each ends measurably after the one before.
-                        let target = work.held_block().memory.buffer;
-                        command_buffer
-                            .record_for_test(&[&work], |device, command| {
-                                // SAFETY: as `busy`'s.
-                                unsafe { device.cmd_fill_buffer(command, target, 0, BLOCK_LEN, 0) };
-                            })
-                            .expect("a fill");
-                        log.handlers(&(3 + index).to_string(), &command_buffer);
-                        command_buffer.commit().expect("a commit");
-                        command_buffer
-                    })
-                    .collect();
+                let rest = [
+                    member("3", &log, &buffers[1], 3),
+                    member("4", &log, &buffers[2], 4),
+                ];
                 within(name, || rest[1].status() != CommandBufferStatus::Committed);
                 let submissions = device.counters().metrics().submissions - before;
                 for command_buffer in [&first, &ended].into_iter().chain(&rest) {
@@ -762,12 +762,14 @@ pub(crate) mod on_device {
                     .map(|cb| (cb.gpu_start_time(), cb.gpu_end_time()))
                     .collect();
                 for &(start, end) in &times {
-                    assert!(0 < start && start <= end, "{name}: {times:?}");
+                    assert!(0 < start && start < end, "{name}: {times:?}");
                 }
-                assert!(
-                    times[0].1 < times[1].1 && times[1].1 < times[2].1,
-                    "{name}: each ends after the one before: {times:?}"
-                );
+                for pair in times.windows(2) {
+                    assert!(
+                        pair[0].1 <= pair[1].0,
+                        "{name}: each starts no earlier than the one before ends: {times:?}"
+                    );
+                }
                 if submissions == 2 {
                     // All three were held while the two ran, so they went as one submission.
                     let after = device.counters().metrics().submissions - before;

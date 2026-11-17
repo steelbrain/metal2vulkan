@@ -485,7 +485,9 @@ impl CommandBuffer {
     /// the host time at which the completion thread saw the command buffer complete, less the GPU's
     /// ticks from its end timestamp to that of the last command buffer seen complete with it, so
     /// each command buffer of a submission has its own end. End times never decrease in
-    /// completion order. 0 until it completes, and for one that ended with an error.
+    /// completion order: where those seen complete together would begin before an end given
+    /// earlier, they all move later by the difference. 0 until it completes, and for one that
+    /// ended with an error.
     pub fn gpu_end_time(&self) -> u64 {
         self.state().times.gpu_end
     }
