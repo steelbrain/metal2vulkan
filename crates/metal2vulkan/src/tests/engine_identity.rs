@@ -9,7 +9,7 @@
 //!   (`ArgumentTableAddress`), the addresses that fit after it, and reads the rest from the block
 //!   at their placed offsets, with no descriptor; it passes L3 and computes its answer on the CPU
 //!   interpreter. On `Device::from_queries`' profile, whose kernel window is 256 bytes, the same
-//!   kernel pushes all 21 addresses with no block, and one of 33 slots spills 2.
+//!   kernel pushes all 21 addresses with no block, and one of 31 slots, Metal's most, all 31.
 //! - A kernel that reads grid builtins (`grid`, generated) declares no `MultiRegion` constant and
 //!   reads Metal's grid from its pushed `DispatchRegion` on every dispatch: whole, split in two
 //!   pieces at a base, and indirect (a zero grid, its grid `NumWorkgroups · L`) store the same
@@ -806,11 +806,11 @@ fn slot_addresses_past_the_window_are_read_from_the_pushed_parameter_block() {
 }
 
 /// On `Device::from_queries`' profile a kernel's push window is 256 bytes (`PushWindow::Floor`):
-/// the same kernel's 21 slot addresses are all pushed, with no block, and a kernel of 33 slots
-/// pushes its block's address and 31 of them, reading 2 from the block. Each computes its answer.
+/// the same kernel's 21 slot addresses are all pushed, with no block, and so are a kernel's 31,
+/// Metal's most buffer slots (248 bytes). Each computes its answer.
 #[test]
-fn the_floor_window_pushes_up_to_thirty_two_slot_addresses() {
-    for (reads, pushes, spills) in [(READS, 21, 0), (32, 31, 2)] {
+fn the_floor_window_pushes_every_slot_address_of_a_kernel_without_a_region() {
+    for reads in [READS, 30] {
         let Some(bc) = assemble_text("many", &many_of(reads)) else {
             return;
         };
@@ -820,21 +820,14 @@ fn the_floor_window_pushes_up_to_thirty_two_slot_addresses() {
             let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
             let (first, pushed, spilled, table) = many_placed(stem, device.profile(), &bc, reads);
             let what = format!("{stem}, {} slots", reads + 1);
-            assert_eq!((pushed.len(), spilled.len()), (pushes, spills), "{what}");
-            match spills {
-                0 => {
-                    assert_eq!(table, 0, "{what}");
-                    assert_ne!(first.map(|(f, _)| f), Some(PushField::ArgumentTableAddress));
-                }
-                _ => {
-                    assert_eq!(table, 16, "{what}");
-                    assert_eq!(
-                        first,
-                        Some((PushField::ArgumentTableAddress, PushLoc::Push { offset: 0 })),
-                        "{what}"
-                    );
-                }
-            }
+            assert_eq!(pushed.len(), (reads + 1) as usize, "{what}");
+            assert!(spilled.is_empty(), "{what}");
+            assert_eq!(table, 0, "{what}");
+            assert_ne!(
+                first.map(|(f, _)| f),
+                Some(PushField::ArgumentTableAddress),
+                "{what}"
+            );
         }
     }
 }
