@@ -3197,6 +3197,16 @@ impl CommandBuffer {
         lock(&self.0.own_textures).push(texture);
     }
 
+    /// Hold `texture`, one of the runtime's that another command buffer made and one of its
+    /// encoders' commands use (`Texture::snapshot_texels`), as `own_textures` holds those its
+    /// encoders made, once.
+    pub(super) fn hold_used_texture(&self, texture: &Texture) {
+        let mut own = lock(&self.0.own_textures);
+        if !(own.iter()).any(|held| held.address() == texture.address()) {
+            own.push(texture.clone());
+        }
+    }
+
     /// The pool of the scratch its merges are done with (`merge_scratch.rs`).
     pub(super) fn merge_scratch(&self) -> &Arc<MergeScratch> {
         &self.0.merge_scratch

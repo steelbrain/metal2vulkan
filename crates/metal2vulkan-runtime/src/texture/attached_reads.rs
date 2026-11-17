@@ -596,8 +596,13 @@ impl Texture {
     /// The texture's snapshot in `form` (the module docs): a single-sampled 2D storage image of
     /// the form's format (`SnapshotForm::format`: 4, 8 or 16 bytes a texel) and of the image's
     /// level-0 extent, which holds every level's render area, made by `maker` at the first draw
-    /// that takes it in that form and kept with the texture a view was made from, so it goes with
-    /// that texture; the runtime's memory counts it as any image of its own.
+    /// that takes it in that form while no command buffer holds one. The texture a view was made
+    /// from holds it weakly, and each command buffer whose draws take it holds it until it
+    /// completes (`maker` among them from then): so one serves every command buffer in flight,
+    /// and it goes once the last that holds it completed, its image to the device's recycler
+    /// (`recycle.rs`), whence a later snapshot of the same plan takes it again. Each snapshot draw
+    /// takes the texels it reads anew, so a snapshot holds nothing a later command buffer reads.
+    /// The runtime's memory counts it as any image of its own.
     pub(crate) fn snapshot_texels(
         &self,
         maker: &CommandBuffer,
@@ -611,8 +616,13 @@ impl Texture {
         let pixel_format = snapshot_pixel_format(format)
             .ok_or_else(|| crate::error::internal("a snapshot form of no snapshot's format"))?;
         let mut held = crate::device::lock(&owner.s().snapshot);
-        if let Some(made) = held.iter().find(|t| t.pixel_format() == pixel_format) {
-            return Ok(made.clone());
+        held.retain(|texels| texels.strong_count() > 0);
+        let alive = (held.iter())
+            .filter_map(Texture::upgrade)
+            .find(|texels| texels.pixel_format() == pixel_format);
+        if let Some(texels) = alive {
+            maker.hold_used_texture(&texels);
+            return Ok(texels);
         }
         let [width, height, _] = owner.0.record.image_extent;
         let descriptor = TextureDescriptor {
@@ -641,7 +651,7 @@ impl Texture {
                 | TextureUsage::PIXEL_FORMAT_VIEW,
         };
         let made = Device::new_planned_texture(maker, &descriptor, plan)?;
-        held.push(made.clone());
+        held.push(made.downgrade());
         Ok(made)
     }
 

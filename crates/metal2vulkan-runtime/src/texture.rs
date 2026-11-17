@@ -537,9 +537,10 @@ pub(super) struct TextureParts {
     /// (`texture/faces.rs`): it presents one of them, [`Texture::storage`].
     faces: OnceLock<faces::Faces>,
     /// The storage images a draw that reads the texture where its pass renders it takes the
-    /// texture's texels into before it reads them (`texture/attached_reads.rs`), one a form, each
-    /// made at the first such draw: on the texture a view was made from, never a view's own.
-    snapshot: Mutex<Vec<Texture>>,
+    /// texture's texels into before it reads them (`texture/attached_reads.rs`), one a form, held
+    /// here weakly: each command buffer whose draws take one holds it until it completes. On the
+    /// texture a view was made from, never a view's own.
+    snapshot: Mutex<Vec<Weak<TextureShared>>>,
     /// A memoryless texture's backings, one per queue and subresource, made at the first pass
     /// that needs one and kept with the texture (`attachment_stand_in::kept_backing`).
     kept_backings: Mutex<Vec<KeptBacking>>,

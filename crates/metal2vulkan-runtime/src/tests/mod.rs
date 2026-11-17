@@ -809,6 +809,8 @@ mod small_heap;
 mod small_stack_device;
 mod snapshot_area;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod snapshot_goes;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod snapshot_reader_again;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod snapshot_reader_keeps;

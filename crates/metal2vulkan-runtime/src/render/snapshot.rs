@@ -98,8 +98,11 @@
 //! - **The snapshot** is a texture's storage image of its level-0 extent in the form the plan
 //!   names for the slot (`VariantKey::snapshot_textures`, `SnapshotForm::of` the bound view: the
 //!   texel's codes, whatever the device's decode, or the fetched lanes' bits), made at the first
-//!   draw that takes it in that form and kept with the texture (`Texture::snapshot_texels`),
-//!   bound in `GENERAL` (`WriteSource::SnapshotTexels`): 4 bytes a pixel for an 8-bit
+//!   draw that takes it in that form while no command buffer holds one, held by each command
+//!   buffer whose draws take it until it completes and by the texture weakly, its image the
+//!   device's recycler's once the last such command buffer completed (`Texture::snapshot_texels`):
+//!   each snapshot draw takes anew the texels it reads, so a snapshot holds nothing a later
+//!   command buffer reads. It is bound in `GENERAL` (`WriteSource::SnapshotTexels`): 4 bytes a pixel for an 8-bit
 //!   normalized or integer format's codes (about 8.3 MB for a 1920x1080 texture), 8 for a 16-bit
 //!   one's or a half-float one's, 16 for the bits (`SnapshotForm::format`). The draw's use of it
 //!   is a fragment shader's storage read and write, so draws of other instances and encoders

@@ -9861,7 +9861,7 @@ impl RenderLowering {
             .map(|bytes| self.tile_memory.buffer(&device, bytes))
             .transpose()?;
         // A draw that reads through snapshots binds each slot's snapshot in the form its plan
-        // names, made at the first draw that takes it so and kept with the texture
+        // names, held by the command buffers whose draws take it so until each completes
         // (`render/snapshot.rs`). Each slot of a draw that reads in place binds its texture in
         // the feedback loop layout, with no snapshot.
         let mut snapshot_texels = Vec::new();
