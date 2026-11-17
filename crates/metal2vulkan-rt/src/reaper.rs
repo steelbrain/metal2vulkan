@@ -174,7 +174,7 @@ pub(crate) fn run(core: Arc<Core>) {
                     break Next::Job(job);
                 }
                 if state.stop {
-                    break Next::End(state.lowerings.drain(..).collect());
+                    break Next::End(std::mem::take(&mut state.lowerings));
                 }
                 if let Some(lowering) = state.lowerings.pop_front() {
                     break Next::Lower(lowering);

@@ -99,7 +99,7 @@ pub(crate) struct Emulated {
 /// What the reaper's lowering of an emulated variant gave.
 pub(crate) enum Lowered {
     /// The module, and the translator's notes of it.
-    Made(Kernel, Vec<PrecisionNote>),
+    Made(Box<Kernel>, Vec<PrecisionNote>),
     /// The translator refused the variant, or it reads what the compute encoder does not supply.
     Refused,
     /// `vkCreateShaderModule` failed.
@@ -742,7 +742,7 @@ impl PipelineInner {
             }
         };
         match lowered {
-            Lowered::Made(kernel, _) => Ok(kernel),
+            Lowered::Made(kernel, _) => Ok(&**kernel),
             Lowered::Refused => Err(refused),
             &Lowered::Failed(result) => Err(Error::Vulkan {
                 call: "vkCreateShaderModule",
@@ -782,7 +782,7 @@ impl Emulated {
         };
         let notes = pipeline.stage.precision_notes.clone();
         match Kernel::new(core, pipeline, descriptor.required_threads_per_threadgroup) {
-            Ok(kernel) => Lowered::Made(kernel, notes),
+            Ok(kernel) => Lowered::Made(Box::new(kernel), notes),
             Err(Error::Vulkan { result, .. }) => Lowered::Failed(result),
             Err(_) => Lowered::Refused,
         }
