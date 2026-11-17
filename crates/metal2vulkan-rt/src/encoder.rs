@@ -120,7 +120,9 @@ enum Launch<'a> {
 /// mode, as serial dispatch is serial order in Metal. An encoder that wrote anything owes one
 /// barrier at its end, which the next command, or the segment's own end, records. A barrier
 /// between dispatches orders the dispatches after it after the dispatches before it, and reaches
-/// nothing else, as nothing else in the command buffer touches memory.
+/// nothing else, as nothing else in the command buffer touches memory; it orders indirect
+/// argument reads only where the dispatch after it is indirect, and an indirect dispatch after a
+/// write no barrier since has ordered before them gets one that does.
 ///
 /// Parameters: a dispatch's parameter block (bound addresses plus offsets, `set_bytes` addresses
 /// and grid values) is pushed as push constants up to 128 bytes; a longer one is written into the
@@ -762,21 +764,23 @@ impl Building {
         interface: &crate::pipeline::Interface,
         accesses: &Accesses<'_>,
     ) -> Result<bool, Error> {
-        let command = self.command(Reach::Dispatches)?;
-        let core = Arc::clone(self.device.core());
+        let indirect = accesses.indirect.is_some();
+        let reach = Reach::Dispatches { indirect };
+        let command = self.command(reach)?;
         let hazards = self.hazards();
-        if serial {
-            let conflict = accesses
+        let conflict = serial
+            && (accesses
                 .each(&interface.buffers)
                 .any(|(id, access)| hazards.conflicts(id, access))
                 || (interface.reads_unbound && hazards.wrote())
-                || (interface.writes_unbound && hazards.touched());
-            if conflict {
-                record::barrier(&core.device, command, Reach::Dispatches);
-                core.counters.count(Metric::Barriers);
-                hazards.clear();
-            }
+                || (interface.writes_unbound && hazards.touched()));
+        // In either kind of encoder: the barriers since a write may have left indirect argument
+        // reads out.
+        if conflict || (indirect && self.args_unordered()) {
+            self.barrier(command, reach);
+            self.hazards().clear();
         }
+        let hazards = self.hazards();
         let mut wrote = false;
         for (id, access) in accesses.each(&interface.buffers) {
             hazards.mark(id, access);
@@ -792,6 +796,9 @@ impl Building {
                 // Such a write conflicts with everything after it.
                 self.owe();
             }
+        }
+        if wrote {
+            self.wrote();
         }
         Ok(wrote)
     }
@@ -813,7 +820,9 @@ impl Building {
         }
         let push = &parameters.push[..];
         debug_assert!(push.len() <= PUSH_BYTES as usize);
-        let command = self.command(Reach::Dispatches)?;
+        let command = self.command(Reach::Dispatches {
+            indirect: matches!(launch, Launch::Indirect(..)),
+        })?;
         // SAFETY: the command buffer is recording outside any render pass; the pipeline and the
         // layout are the device's, and the push range of the layout spans every stage's first 128
         // bytes.

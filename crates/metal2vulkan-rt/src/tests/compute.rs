@@ -10,7 +10,8 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::kernels;
     use crate::{
-        Buffer, CommandBuffer, ComputePipelineState, Device, DispatchType, Error, Gap, Refusal,
+        Buffer, CommandBuffer, ComputeCommandEncoder, ComputePipelineState, Device, DispatchType,
+        Error, Gap, Refusal,
     };
 
     /// Words in each test buffer: 256 bytes.
@@ -309,6 +310,76 @@ mod on_device {
             encoder.end_encoding();
             run(name, &command_buffer);
             let expected: Vec<u32> = (0..WORDS as u32).map(|index| 1001 * index).collect();
+            assert_eq!(words(&o), expected, "{name}");
+        });
+    }
+
+    /// An indirect dispatch after a write that no barrier since has ordered before indirect
+    /// argument reads gets a barrier that does: a dispatch writes the arguments, a direct
+    /// dispatch that reads them follows (its barrier reaches shader accesses alone), and the
+    /// indirect dispatch, which conflicts with neither, reads them.
+    #[test]
+    fn every_device_orders_an_indirect_dispatch_after_the_write_of_its_arguments() {
+        each_device("compute_indirect_after_write", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (a, b, arguments, c, o) = (
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+                arena.buffer(),
+            );
+            write_words(&a, |index| if index == 4 { 3 } else { index * 10 });
+            write_words(&b, |index| match index {
+                4..=6 => 1,
+                _ => 0,
+            });
+            for buffer in [&arguments, &c, &o] {
+                write_words(buffer, |_| 0);
+            }
+            let state = add(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let before = device.counters().metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            let bind = |encoder: &mut ComputeCommandEncoder, buffers: [&Buffer; 3]| {
+                for (slot, buffer) in buffers.into_iter().enumerate() {
+                    encoder
+                        .set_buffer(Some(buffer), 0, slot as u32)
+                        .expect("a buffer");
+                }
+            };
+            // The arguments, a + b: (4, 1, 1) threadgroups at words 4 to 6.
+            bind(&mut encoder, [&a, &b, &arguments]);
+            encoder
+                .dispatch_threadgroups([4, 1, 1], [16, 1, 1])
+                .expect("a dispatch");
+            // A direct dispatch that reads them, after a barrier for shader accesses alone.
+            bind(&mut encoder, [&arguments, &b, &c]);
+            encoder
+                .dispatch_threadgroups([4, 1, 1], [16, 1, 1])
+                .expect("a dispatch");
+            // The indirect dispatch: a barrier that reaches its argument read.
+            bind(&mut encoder, [&a, &b, &o]);
+            encoder
+                .dispatch_threadgroups_with_indirect_buffer(&arguments, 16, [16, 1, 1])
+                .expect("an indirect dispatch");
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = device.counters().metrics();
+            // The direct dispatch's, the indirect dispatch's, and the segment's end.
+            assert_eq!(after.barriers - before.barriers, 3, "{name}");
+            let sum = |index: u32| {
+                if index == 4 {
+                    4
+                } else {
+                    index * 10 + u32::from((4..=6).contains(&index))
+                }
+            };
+            let expected: Vec<u32> = (0..WORDS as u32).map(sum).collect();
             assert_eq!(words(&o), expected, "{name}");
         });
     }

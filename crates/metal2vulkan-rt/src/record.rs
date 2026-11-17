@@ -50,14 +50,25 @@ impl Recorder {
 #[derive(Clone, Copy)]
 pub(crate) enum Reach {
     /// Within a segment: the dispatches after it after the dispatches before it, their shader
-    /// reads and writes and their indirect argument reads seeing the earlier shader writes. A
+    /// reads and writes seeing the earlier shader writes, and where `indirect` (the dispatch that
+    /// follows it reads its arguments from a buffer), their indirect argument reads too. A
     /// segment records nothing else that reads or writes memory, so it orders the segment's
     /// commands as [`Reach::Commands`] would.
-    Dispatches,
+    Dispatches { indirect: bool },
     /// Every later command, in this submission and every later one on the queue.
     Commands,
     /// Every later command, and the host once it has waited for the work.
     Host,
+}
+
+impl Reach {
+    /// Whether the barrier orders indirect argument reads after the writes before it.
+    pub(crate) fn reaches_indirect(self) -> bool {
+        match self {
+            Reach::Dispatches { indirect } => indirect,
+            Reach::Commands | Reach::Host => true,
+        }
+    }
 }
 
 /// Records one global memory barrier: the writes earlier in submission order are made visible
@@ -66,7 +77,13 @@ pub(crate) enum Reach {
 /// where it is part of the queues' work.
 pub(crate) fn barrier(device: &ash::Device, buffer: vk::CommandBuffer, reach: Reach) {
     let (source, written, stages, accesses) = match reach {
-        Reach::Dispatches => (
+        Reach::Dispatches { indirect: false } => (
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_WRITE,
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
+        ),
+        Reach::Dispatches { indirect: true } => (
             vk::PipelineStageFlags2::COMPUTE_SHADER,
             vk::AccessFlags2::SHADER_WRITE,
             vk::PipelineStageFlags2::COMPUTE_SHADER | vk::PipelineStageFlags2::DRAW_INDIRECT,

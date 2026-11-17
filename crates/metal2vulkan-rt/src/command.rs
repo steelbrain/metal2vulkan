@@ -124,6 +124,10 @@ pub(crate) struct Building {
     /// asked for, or a dispatch wrote through an address outside its resources. The segment's
     /// own end barrier pays it too.
     owed: bool,
+    /// A dispatch wrote since the last barrier that reached indirect argument reads: a barrier
+    /// between dispatches leaves them out unless the dispatch after it is indirect, so an
+    /// indirect dispatch after such a write needs one that reaches them.
+    args_unordered: bool,
     /// The pipeline bound in the current segment's command buffer.
     bound: Option<vk::Pipeline>,
 }
@@ -195,6 +199,7 @@ impl CommandBuffer {
                         stamps,
                         started: false,
                         owed: false,
+                        args_unordered: false,
                         bound: None,
                     }),
                     ended: None,
@@ -527,6 +532,7 @@ impl Building {
             Some(command) => {
                 // Its end barrier pays what is owed and starts the hazard sets again.
                 self.owed = false;
+                self.args_unordered = false;
                 if let Some(recorder) = &mut self.gpu.recorder {
                     recorder.hazards.clear();
                 }
@@ -574,12 +580,33 @@ impl Building {
             None => self.begin()?,
         };
         if self.owed {
-            let core = self.device.core();
-            record::barrier(&core.device, command, reach);
-            core.counters.count(Metric::Barriers);
-            self.owed = false;
+            self.barrier(command, reach);
         }
         Ok(command)
+    }
+
+    /// Records a barrier into `command`, the current segment's, reaching what the caller records
+    /// next (`reach`), and pays what is owed. The caller starts the hazard sets again where it
+    /// has not.
+    pub(crate) fn barrier(&mut self, command: vk::CommandBuffer, reach: Reach) {
+        let core = self.device.core();
+        record::barrier(&core.device, command, reach);
+        core.counters.count(Metric::Barriers);
+        self.owed = false;
+        if reach.reaches_indirect() {
+            self.args_unordered = false;
+        }
+    }
+
+    /// A dispatch wrote: an indirect dispatch after it needs a barrier that reaches its
+    /// argument read.
+    pub(crate) fn wrote(&mut self) {
+        self.args_unordered = true;
+    }
+
+    /// Whether a dispatch wrote since the last barrier that reached indirect argument reads.
+    pub(crate) fn args_unordered(&self) -> bool {
+        self.args_unordered
     }
 
     /// The hazard sets, once the command buffer records: they live with its recorder.
