@@ -53,7 +53,7 @@ HARNESS_RUNTIMES = ("old",)
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
 #: (RAM GiB, minutes) of each job kind before a run of it was measured; the minutes stay its floor.
-DEFAULTS = {"build": (16, 30), "gpu": (4, 15), "time": (4, 20), "lavapipe": (32, 60), "winbuild": (16, 60),
+DEFAULTS = {"build": (16, 30), "gpu": (4, 15), "time": (4, 20), "lavapipe": (32, 60), "lint": (16, 60), "winbuild": (16, 60),
             "winrun": (4, 15), "wintime": (4, 20)}
 #: The awk filter between nextest and the job's log: every line up to the summary, then only the
 #: captured output of tests that did not pass, and the records of those that did.
@@ -144,9 +144,13 @@ class Leg:
         self.started = self.ended = None
 
 
+#: The legs that need no GPU, both run on the builder.
+CPU_LEGS = ("lavapipe", "lint")
+
+
 def plan(nodes, cfg, only):
     """The legs: each lab GPU on one node, the nodes' loads kept even (the GPUs on fewest nodes
-    placed first), lavapipe, and each Windows GPU on its host."""
+    placed first), each Windows GPU on its host, lavapipe and the lint."""
     skip = set(cfg.get("skip_gpus", []))
     linux = {n: f for n, f in nodes.items() if f["os"] == "linux"}
     where = {}
@@ -170,7 +174,7 @@ def plan(nodes, cfg, only):
         if facts["os"] == "windows":
             legs += [Leg(f"{g['vendor']}:{g['device']}", name, g["id"]) for g in facts["gpus"]
                      if f"{g['vendor']}:{g['device']}" not in skip]
-    legs.append(Leg("lavapipe", None))
+    legs += [Leg(leg_id, None) for leg_id in CPU_LEGS]
     if only:
         unknown = set(only) - {leg.id for leg in legs}
         if unknown:
@@ -278,6 +282,30 @@ cargo test --workspace --all-features --doc 2>&1 | grep -E '^(test result:|error
 d=${{PIPESTATUS[0]}}
 echo "M2V-SUITE lavapipe doctests exit $d"
 [ $a -eq 0 ] && [ $d -eq 0 ]
+"""
+
+
+def lint_script(setup):
+    """The gate's format check, clippy in each configuration and Rustdoc, each its own suite, in a
+    tree of its own so they run beside the builder's other jobs."""
+    show = "awk 'n < 40 && /^(error|warning)|^ *--> / { print; n++ }'"
+    return f"""set -u
+{setup}
+echo "M2V-LEG lint begin"
+all=0
+step() {{
+  name=$1; shift
+  "$@" 2>&1 | {show}
+  rc=${{PIPESTATUS[0]}}
+  echo "M2V-SUITE lint $name exit $rc"
+  [ $rc -eq 0 ] || all=1
+}}
+step fmt cargo fmt --all --check
+step clippy cargo clippy --workspace --all-targets --all-features -- -D warnings
+step clippy-gpu env RUSTFLAGS='--cfg m2v_gpu' CARGO_TARGET_DIR=target/gpucfg cargo clippy --workspace --all-targets --all-features -- -D warnings
+step clippy-cpu-icd env RUSTFLAGS='--cfg m2v_cpu_icd' CARGO_TARGET_DIR=target/cpuicd cargo clippy --workspace --all-targets --all-features -- -D warnings
+step rustdoc env RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+exit $all
 """
 
 
@@ -517,14 +545,20 @@ class Run:
                                   space="lavapipe")
         self.finish([leg], code, out, rec, "lavapipe")
 
+    def lint(self, leg):
+        leg.node = self.build_node["node"]
+        leg.started = time.time()
+        code, out, rec = self.job("lint", leg.node, lint_script(self.setup(leg.node)), "lint", space="lint")
+        self.finish([leg], code, out, rec, "lint")
+
     def go(self):
-        """Every chain of jobs at once: the builder (its build, its GPU legs if any, lavapipe),
-        each other Linux GPU node (its own build where the builder's archive cannot run there,
+        """Every chain of jobs at once: the builder (its build, its GPU legs if any, lavapipe), the
+        lint beside it on the builder, each other Linux GPU node (its own build where the builder's archive cannot run there,
         then its legs), and each Windows host (build, then its leg)."""
         b = self.build_node["node"]
         by_node = {}
         for leg in self.legs:
-            if leg.id != "lavapipe" and self.nodes[leg.node]["os"] == "linux":
+            if leg.id not in CPU_LEGS and self.nodes[leg.node]["os"] == "linux":
                 by_node.setdefault(leg.node, []).append(leg)
         built = threading.Event()
         box = {}
@@ -558,6 +592,9 @@ class Run:
 
         lavapipe = [leg for leg in self.legs if leg.id == "lavapipe"]
         start(by_node.get(b, []) + lavapipe, builder_chain)
+        for leg in self.legs:
+            if leg.id == "lint":
+                start([leg], self.lint, leg)
         cpu = self.nodes[b]["cpu_model"]
         for node, legs in sorted(by_node.items()):
             if node == b:
@@ -567,7 +604,7 @@ class Run:
             else:
                 start(legs, self.gpu_node, node, legs, lambda node=node: self.linux_build(node, f"build-{node}"))
         for leg in self.legs:
-            if leg.id != "lavapipe" and self.nodes[leg.node]["os"] == "windows":
+            if leg.id not in CPU_LEGS and self.nodes[leg.node]["os"] == "windows":
                 start([leg], self.windows, leg)
         for t in threads:
             t.join()
@@ -595,7 +632,7 @@ def leg_entry(run, leg):
         problems.append("no suite reported")
     dev = parsed["device"]
     return dict(
-        node=leg.node, gpu=leg.id if leg.id != "lavapipe" else None, jobs=leg.jobs,
+        node=leg.node, gpu=leg.id if leg.id not in CPU_LEGS else None, jobs=leg.jobs,
         device=dev.get("deviceName"), driver=" ".join(v for v in (dev.get("driverName"), dev.get("driverInfo"))
                                                 if v) + (f" ({dev['driverVersion']})" if dev.get("driverVersion") else "") or None,
         started=leg.started and datetime.fromtimestamp(leg.started, timezone.utc).isoformat(timespec="seconds"),

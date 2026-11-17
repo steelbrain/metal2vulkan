@@ -269,7 +269,7 @@ note under `refs/notes/matrix`: one JSON document per commit, kept in the local 
 never pushed. `scripts/matrix/matrix show SHA` prints a note's verdicts, one line per leg.
 CONTRIBUTING.md says how to run it.
 
-A leg is one GPU, named by its PCI `vendor:device`, or `lavapipe`. Each GPU runs on one node, and
+A leg is one GPU, named by its PCI `vendor:device`, or `lavapipe`, or `lint`. Each GPU runs on one node, and
 the nodes run at once; a node with several leg GPUs runs them in turn in one job that holds them.
 
 | Leg | Runs | Built |
@@ -277,6 +277,7 @@ the nodes run at once; a node with several leg GPUs runs them in turn in one job
 | Each GPU of a Linux node | `metal2vulkan-rt`'s tests under `--cfg m2v_gpu`, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`), the harness's timed workloads (`harness --runtime <runtime>`, `crates/metal2vulkan-harness`) | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
 | The Windows host's GPU | The same tests and harness, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
 | `lavapipe` | The gate's suites and the device tests in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
+| `lint` | The gate's `cargo fmt --all --check`, clippy with `-D warnings` plain, under `--cfg m2v_gpu` and under `--cfg m2v_cpu_icd`, and Rustdoc with `-D warnings`, each its own suite | In place, on the builder, beside its other jobs |
 
 A leg passes when every suite passed and no rule below fails. Its line names the device and
 driver as `vulkaninfo` reported them, the node, the tests passed of those run, the records, the
