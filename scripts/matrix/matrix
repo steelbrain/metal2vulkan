@@ -47,10 +47,14 @@ STATE = Path.home() / ".cache/metal2vulkan-matrix"
 TREE = STATE / "tree"
 NOTES = "refs/notes/matrix"
 ARCHIVE = "m2v-matrix-gpu.tar.zst"
+HARNESS = "m2v-matrix-harness"
+#: The runtimes the harness command times (`harness --runtime NAME`).
+HARNESS_RUNTIMES = ("old",)
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
 #: (RAM GiB, minutes) of each job kind before a run of it was measured.
-DEFAULTS = {"build": (6, 15), "gpu": (4, 15), "lavapipe": (32, 60), "winbuild": (12, 30), "winrun": (4, 15)}
+DEFAULTS = {"build": (16, 30), "gpu": (4, 15), "time": (4, 20), "lavapipe": (32, 60), "winbuild": (16, 60),
+            "winrun": (4, 15), "wintime": (4, 20)}
 #: The awk filter between nextest and the job's log: every line up to the summary, then only the
 #: captured output of tests that did not pass, and the records of those that did.
 KEEP = r"""f == 0 { print; if ($0 ~ /^ *Summary \[/) f = 1; next }
@@ -120,7 +124,7 @@ def base_of(sha, leg_id):
 class Leg:
     def __init__(self, leg_id, node, gpu=None, icd=None, select=False):
         self.id, self.node, self.gpu, self.icd, self.select = leg_id, node, gpu, icd, select
-        self.job = None
+        self.jobs, self.parsed = [], dict(device={}, suites={})
         self.started = self.ended = None
 
 
@@ -182,25 +186,44 @@ lay_out() {{
 """
 
 
-def build_script(short, setup):
+def build_script(short, setup, harness):
+    """The GPU legs' files: the device tests' nextest archive, built at the per-commit path, and,
+    where the commit has the harness, its release command, built in the workspace (it finds the
+    tree through `CARGO_MANIFEST_DIR` where it runs)."""
+    timed = (f"""
+cargo build --release -p metal2vulkan-harness --bin harness && cp -f target/release/harness {HARNESS}
+h=$?""" if harness else "\nh=0")
     return linux_head(short, setup) + f"""W=$PWD
 lay_out || exit 3
 cd "$S" && RUSTFLAGS='--cfg m2v_gpu' CARGO_TARGET_DIR="$S/target/gpucfg" cargo nextest archive -p metal2vulkan-rt --all-features --archive-file "$W/{ARCHIVE}"
-rc=$?
-echo "M2V-BUILD exit $rc"
-cd "$W" && rm -rf "$S"
-exit $rc
+a=$?
+cd "$W" && rm -rf "$S"{timed}
+echo "M2V-BUILD exit $a $h"
+[ $a -eq 0 ] && [ $h -eq 0 ]
 """
 
 
-def gpu_script(short, setup, legs, mirror, rev):
-    """A node's legs in turn. The job removes its carry's mirror on the node when it is done (no
-    other job reads it; potluck never prunes one), and any left by a job that never ran."""
+def gpu_script(short, setup, legs, mirror, rev, suite, last):
+    """A node's legs in turn, running SUITE: `rt` (the device tests) or `harness` (the timed
+    workloads, one run per runtime). The node's LAST job removes the tree and its carry's mirror
+    there (no other job reads it; potluck never prunes one), and any left by a job that never ran."""
     runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(leg.id + "!" if leg.select else "")])
                      for leg in legs)
+    if suite == "rt":
+        file, body = ARCHIVE, f"""cargo nextest run --archive-file "$F" --workspace-remap "$S" {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+    exit ${{PIPESTATUS[0]}}"""
+    else:
+        file, body = HARNESS, f"""rc=0
+    for runtime in {" ".join(HARNESS_RUNTIMES)}; do
+      CARGO_MANIFEST_DIR="$S/crates/metal2vulkan-harness" "$F" --runtime $runtime || rc=1
+    done
+    exit $rc"""
+    tidy = """rm -rf "$S"
+m="${mirror}"; rm -rf "$m" "${{m%.git}}.lock" "${{m%.git}}.worktrees.lock"
+find "$POTLUCK_HOME/mirrors" -maxdepth 1 -name 'm2v-matrix-*' -mmin +720 -exec rm -rf {{}} +""".format(mirror=mirror) if last else ""
     return linux_head(short, setup) + f"""lay_out || exit 3
-A="$PWD/{ARCHIVE}"
-git --git-dir="${mirror}" cat-file blob "{rev}:{ARCHIVE}" > "$A" || exit 3
+F="$PWD/{file}"
+git --git-dir="${mirror}" cat-file blob "{rev}:{file}" > "$F" && chmod +x "$F" || exit 3
 KEEP='{KEEP}'
 all=0
 leg() {{
@@ -209,17 +232,15 @@ leg() {{
     export VK_DRIVER_FILES="/usr/share/vulkan/icd.d/$2_icd.json"
     if [ -n "$3" ]; then export MESA_VK_DEVICE_SELECT="$3"; fi
     {DEVICE_LINES.format(leg="$1")}
-    cargo nextest run --archive-file "$A" --workspace-remap "$S" {NEXTEST_OUT} 2>&1 | awk "$KEEP"
-    exit ${{PIPESTATUS[0]}}
+    {body}
   )
   rc=$?
-  echo "M2V-SUITE $1 rt exit $rc"
+  echo "M2V-SUITE $1 {suite} exit $rc"
   [ $rc -eq 0 ] || all=1
 }}
 {runs}
-rm -rf "$S" "$A"
-m="${mirror}"; rm -rf "$m" "${{m%.git}}.lock" "${{m%.git}}.worktrees.lock"
-find "$POTLUCK_HOME/mirrors" -maxdepth 1 -name 'm2v-matrix-*' -mmin +720 -exec rm -rf {{}} +
+rm -f "$F"
+{tidy}
 exit $all
 """
 
@@ -254,21 +275,29 @@ export RUSTFLAGS='--cfg m2v_gpu' CARGO_TARGET_DIR=target/gpucfg
 """
 
 
-def winbuild_script():
-    return windows_head() + """cargo nextest run -p metal2vulkan-rt --all-features --no-run
-rc=$?
-echo "M2V-BUILD exit $rc"
-exit $rc
+def winbuild_script(harness):
+    timed = "\ncargo build --release -p metal2vulkan-harness --bin harness\nh=$?" if harness else "\nh=0"
+    return windows_head() + f"""cargo nextest run -p metal2vulkan-rt --all-features --no-run
+a=$?{timed}
+echo "M2V-BUILD exit $a $h"
+[ $a -eq 0 ] && [ $h -eq 0 ]
 """
 
 
-def winrun_script(leg):
+def winrun_script(leg, suite):
+    if suite == "rt":
+        body = f"""cargo nextest run -p metal2vulkan-rt --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+rc=${{PIPESTATUS[0]}}"""
+    else:
+        body = f"""rc=0
+for runtime in {" ".join(HARNESS_RUNTIMES)}; do
+  CARGO_MANIFEST_DIR="$PWD/crates/metal2vulkan-harness" target/gpucfg/release/harness --runtime $runtime || rc=1
+done"""
     return windows_head() + f"""KEEP='{KEEP}'
 echo "M2V-LEG {leg.id} begin"
 {DEVICE_LINES.format(leg=leg.id)}
-cargo nextest run -p metal2vulkan-rt --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
-rc=${{PIPESTATUS[0]}}
-echo "M2V-SUITE {leg.id} rt exit $rc"
+{body}
+echo "M2V-SUITE {leg.id} {suite} exit $rc"
 exit $rc
 """
 
@@ -284,6 +313,9 @@ class Run:
         self.lock = threading.Lock()
         self.jobs, self.carries, self.failures = [], [], {}
         self.build_info = None
+        #: Whether the commit has the harness, whose timed workloads each GPU leg runs.
+        self.harness = subprocess.run(["git", "cat-file", "-e", f"{sha}:crates/metal2vulkan-harness/Cargo.toml"],
+                                      cwd=REPO, capture_output=True).returncode == 0
 
     def setup(self, node):
         return self.cfg.get("setup", {}).get(node, "")
@@ -300,10 +332,10 @@ class Run:
             minutes = max(5, math.ceil(1.5 * max(r["minutes"] for r in runs)))
         return max(ram, 2), minutes
 
-    def job(self, kind, node, script, name, gpus=(), carry=None, space=None):
+    def job(self, kind, node, script, name, gpus=(), carry=None, space=None, exclusive=False):
         """Dispatch SCRIPT on NODE, wait for it, and return (exit code, output, job record).
         SPACE names a workspace kept for this kind on this node across runs (incremental builds,
-        and no fresh checkout of the tree)."""
+        and no fresh checkout of the tree). A job that times anything is EXCLUSIVE."""
         ram, minutes = self.size(kind, node)
         args = ["dispatch", "--json", "--priority", "5", "--kill-on-stall", "--label", "agent=matrix",
                 "--label", f"matrix={self.short}", "--on", f"node={node}", "--ram", str(ram),
@@ -314,6 +346,8 @@ class Run:
             args += ["--gpu", gpu]
         if carry:
             args += ["--carry", carry]
+        if exclusive:
+            args += ["--exclusive"]
         key = f"{space}@{node}" if space else None
         if key:
             args += ["--hold", "24h"]
@@ -364,19 +398,21 @@ class Run:
         return None
 
     def carry(self, node, rec):
-        """Copy a finished build's archive out of its workspace into a git repository of its own,
+        """Copy a finished build's files out of its workspace into a git repository of its own,
         which GPU jobs name with --carry. Returns (--carry value, mirror variable, commit)."""
         name = f"m2v-matrix-{self.short}-{re.sub(r'[^A-Za-z0-9]', '', node)[-12:]}"
         cdir = STATE / "carry" / name
         shutil.rmtree(cdir, ignore_errors=True)
         cdir.mkdir(parents=True)
         git("init", "-q", cwd=cdir)
-        r = potluck("cp", f"{rec['workspace']}:{ARCHIVE}", str(cdir / ARCHIVE))
-        if r.returncode:
-            return None
-        git("add", ARCHIVE, cwd=cdir)
+        files = [ARCHIVE] + ([HARNESS] if self.harness else [])
+        for file in files:
+            if potluck("cp", f"{rec['workspace']}:{file}", str(cdir / file)).returncode:
+                return None
+        git("add", *files, cwd=cdir)
         git("-c", "user.name=matrix", "-c", "user.email=matrix@localhost", "commit", "-q", "-m", self.sha, cwd=cdir)
-        (cdir / ARCHIVE).unlink()
+        for file in files:
+            (cdir / file).unlink()
         with self.lock:
             self.carries.append(name)
         rev = git("rev-parse", "HEAD", cwd=cdir)
@@ -385,13 +421,14 @@ class Run:
     def fail(self, legs, why, rec=None):
         with self.lock:
             for leg in legs:
-                self.failures[leg.id] = why
+                self.failures.setdefault(leg.id, []).append(why)
                 if rec:
-                    leg.job = rec.get("id")
+                    leg.jobs.append(rec.get("id"))
 
     def linux_build(self, node, label):
         """Build the GPU legs' archive on NODE (no GPU held) and carry it: (carry, mirror, rev)."""
-        code, out, rec = self.job("build", node, build_script(self.short, self.setup(node)), label, space="build")
+        code, out, rec = self.job("build", node, build_script(self.short, self.setup(node), self.harness), label,
+                                  space="build")
         if code != 0 or not rec:
             return None, f"the build ({label}, job {rec and rec.get('id')}) failed: exit {code}"
         if node == self.build_node["node"]:
@@ -407,32 +444,45 @@ class Run:
         carry, mirror, rev = made
         for leg in legs:
             leg.started = time.time()
-        code, out, rec = self.job("gpu", node, gpu_script(self.short, self.setup(node), legs, mirror, rev),
-                                  f"gpu-{node}", gpus=[leg.gpu for leg in legs], carry=carry, space="gpu")
-        self.finish(legs, code, out, rec)
+        gpus = [leg.gpu for leg in legs]
+        suites = ["rt"] + (["harness"] if self.harness else [])
+        for suite in suites:
+            script = gpu_script(self.short, self.setup(node), legs, mirror, rev, suite, suite == suites[-1])
+            code, out, rec = self.job("gpu" if suite == "rt" else "time", node, script, f"{suite}-{node}",
+                                      gpus=gpus, carry=carry, space="gpu", exclusive=suite == "harness")
+            self.finish(legs, code, out, rec, suite)
 
-    def finish(self, legs, code, out, rec):
+    def finish(self, legs, code, out, rec, suite):
+        """Merge one job's legs into theirs: a leg it did not run fails."""
         parsed = results.parse_job(out or "")
         for leg in legs:
-            leg.ended, leg.job = time.time(), rec and rec.get("id")
+            leg.ended = time.time()
+            if rec:
+                leg.jobs.append(rec.get("id"))
             if leg.id not in parsed:
-                self.fail([leg], f"job {leg.job} ran no leg {leg.id} (exit {code}): {(out or '').strip()[-300:]}")
-            leg.parsed = parsed.get(leg.id)
+                self.fail([leg], f"{suite}: job {rec and rec.get('id')} ran no leg {leg.id} (exit {code}): "
+                                 f"{(out or '').strip()[-300:]}")
+                continue
+            leg.parsed["device"].update(parsed[leg.id]["device"])
+            leg.parsed["suites"].update(parsed[leg.id]["suites"])
 
     def windows(self, leg):
-        code, out, rec = self.job("winbuild", leg.node, winbuild_script(), f"winbuild-{leg.id}", space="win")
+        code, out, rec = self.job("winbuild", leg.node, winbuild_script(self.harness), f"winbuild-{leg.id}",
+                                  space="win")
         if code != 0:
             return self.fail([leg], f"the Windows build (job {rec and rec.get('id')}) failed: exit {code}", rec)
         leg.started = time.time()
-        code, out, rec = self.job("winrun", leg.node, winrun_script(leg), f"win-{leg.id}", gpus=[leg.gpu], space="win")
-        self.finish([leg], code, out, rec)
+        for suite in ["rt"] + (["harness"] if self.harness else []):
+            code, out, rec = self.job("winrun" if suite == "rt" else "wintime", leg.node, winrun_script(leg, suite),
+                                      f"win{suite}-{leg.id}", gpus=[leg.gpu], space="win", exclusive=suite == "harness")
+            self.finish([leg], code, out, rec, suite)
 
     def lavapipe(self, leg):
         leg.node = self.build_node["node"]
         leg.started = time.time()
         code, out, rec = self.job("lavapipe", leg.node, lavapipe_script(self.setup(leg.node)), "lavapipe",
                                   space="lavapipe")
-        self.finish([leg], code, out, rec)
+        self.finish([leg], code, out, rec, "lavapipe")
 
     def go(self):
         """Every chain of jobs at once: the builder (its build, its GPU legs if any, lavapipe),
@@ -503,16 +553,16 @@ class Run:
 
 def leg_entry(run, leg):
     """A leg's document in the note, judged against its base where only one leg is needed."""
-    parsed = getattr(leg, "parsed", None) or dict(device={}, suites={})
+    parsed = leg.parsed
     records, problems = results.leg_records(parsed)
     base_sha, base = base_of(run.sha, leg.id)
-    problems += [run.failures[leg.id]] if leg.id in run.failures else []
+    problems += run.failures.get(leg.id, [])
     problems += results.leg_problems(parsed, records, base and base["records"])
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
     dev = parsed["device"]
     return dict(
-        node=leg.node, gpu=leg.id if leg.id != "lavapipe" else None, job=leg.job,
+        node=leg.node, gpu=leg.id if leg.id != "lavapipe" else None, jobs=leg.jobs,
         device=dev.get("deviceName"), driver=" ".join(v for v in (dev.get("driverName"), dev.get("driverInfo"))
                                                 if v) + (f" ({dev['driverVersion']})" if dev.get("driverVersion") else "") or None,
         started=leg.started and datetime.fromtimestamp(leg.started, timezone.utc).isoformat(timespec="seconds"),

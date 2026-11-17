@@ -3,7 +3,8 @@ matrix"). Pure functions over text and dictionaries: `test_results.py` checks ea
 
 A job prints, per leg, `M2V-LEG <leg> begin`, `M2V-DEVICE <leg> <field> <value>` lines, then each
 suite's output followed by `M2V-SUITE <leg> <suite> exit <code>`. A test records a value as a line
-`M2V-MATRIX <kind> <test>/<name> <value>` on its standard output.
+`M2V-MATRIX <kind> <test>/<name> <value>` on its standard output: a count, or for `time`
+microseconds, decimals allowed.
 """
 
 import re
@@ -69,14 +70,15 @@ def parse_suite(lines):
             kind, key, value = m.groups()
             if kind not in KINDS:
                 problems.append(f"record {key}: unknown kind {kind}")
-            elif not value.isdigit():
-                problems.append(f"record {kind} {key}: {value} is not a count")
+            elif not (re.fullmatch(r"\d+(\.\d+)?", value) if kind == "time" else value.isdigit()):
+                problems.append(f"record {kind} {key}: {value} is not a "
+                                + ("duration" if kind == "time" else "count"))
             elif kind == "gauge" and key.rpartition("@")[2] not in GAUGE_POINTS:
                 problems.append(f"gauge {key}: the key ends in none of @100, @200, @drop")
             elif key in records[kind]:
                 problems.append(f"record {kind} {key}: recorded twice")
             else:
-                records[kind][key] = int(value)
+                records[kind][key] = float(value) if kind == "time" else int(value)
     return dict(run=run, passed=passed, failed=failed, records=records, problems=problems)
 
 
@@ -149,7 +151,7 @@ def leg_problems(leg, records, base):
 
 
 def time_outliers(times, bases):
-    """Timing fails only as a cross-GPU outlier. TIMES and BASES: {leg: {key: nanoseconds}} of
+    """Timing fails only as a cross-GPU outlier. TIMES and BASES: {leg: {key: microseconds}} of
     the GPU legs now and at their bases. For each key that at least TIME_MIN_GPUS legs timed at
     both, a leg whose slowdown (now over base) is more than TIME_OUTLIER times the legs' median
     slowdown fails. Returns {leg: [problems]}."""
@@ -176,7 +178,8 @@ def verdict_line(leg_id, leg):
     counted = sum(len(values) for values in leg.get("records", {}).values())
     where = " ".join(part for part in (leg.get("device"), leg.get("driver")) if part)
     head = f"{'PASS' if leg['verdict'] == 'pass' else 'FAIL'} {leg_id:10} {where or '?'} on {leg.get('node', '?')}"
-    tail = f"{tests or 'no suite ran'}; {counted} records; base {(leg.get('base') or 'none')[:10]}; job {leg.get('job', '?')}"
+    tail = (f"{tests or 'no suite ran'}; {counted} records; base {(leg.get('base') or 'none')[:10]}; "
+            f"jobs {' '.join(leg.get('jobs', [])) or '-'}")
     if leg["problems"]:
         tail += " | " + " | ".join(leg["problems"][:4]) + (" ..." if len(leg["problems"]) > 4 else "")
     return f"{head}: {tail}"

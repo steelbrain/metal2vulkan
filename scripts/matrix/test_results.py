@@ -25,7 +25,7 @@ NEXTEST = """\
     M2V-MATRIX gauge loop/buffers@100 12
     M2V-MATRIX gauge loop/buffers@200 12
     M2V-MATRIX gauge loop/buffers@drop 0
-    M2V-MATRIX time loop/gpu 1000
+    M2V-MATRIX time loop/gpu 1000.250
         FAIL [   0.002s] (1/3) metal2vulkan-rt tests::breaks
   stdout ───
     test tests::breaks ... FAILED
@@ -52,7 +52,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(suite["records"]["instructions"], {"compute/per_dispatch": 2000})
         self.assertEqual(suite["records"]["gauge"], {"loop/buffers@100": 12, "loop/buffers@200": 12,
                                                      "loop/buffers@drop": 0})
-        self.assertEqual(suite["records"]["time"], {"loop/gpu": 1000})
+        self.assertEqual(suite["records"]["time"], {"loop/gpu": 1000.25})
         self.assertEqual(suite["problems"], [])
         self.assertEqual(legs["1002:744c"]["device"]["driverInfo"], "Mesa 26.2.6")
 
@@ -75,11 +75,12 @@ class ParseTests(unittest.TestCase):
         suite = results.parse_suite([
             "M2V-MATRIX colour a/x 1",
             "M2V-MATRIX metric a/y 1.5",
+            "M2V-MATRIX time a/t 1.5us",
             "M2V-MATRIX gauge a/buffers 3",
             "M2V-MATRIX metric a/z 1",
             "M2V-MATRIX metric a/z 2",
         ])
-        self.assertEqual(len(suite["problems"]), 4, suite["problems"])
+        self.assertEqual(len(suite["problems"]), 5, suite["problems"])
         self.assertEqual(suite["records"]["metric"], {"a/z": 1})
 
 
