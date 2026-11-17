@@ -49,10 +49,12 @@ The test `tests::one_path` reads the crate's sources and fails on the first thre
 
 ## Floor
 
-The runtime requires Vulkan 1.3 and every extension, feature and limit below, of the instance and
-of every device. `floor::check` decides for one physical device: it returns what the device offers
-above the floor (`floor::Capabilities`), or `floor::BelowFloor`, a typed refusal that names every
-item the device lacks (`floor::Missing`: the version, an extension, a feature or a limit).
+The runtime requires Vulkan 1.3 and every extension, feature, limit, queue family and memory type
+below, of the instance and of every device. `floor::check` decides for one physical device: it
+returns what the device offers above the floor (`floor::Capabilities`), or `floor::BelowFloor`, a
+typed refusal that names every item the device lacks (`floor::Missing`: the version, an
+extension, a feature, a limit, the queue family or a memory type). `floor::memory_types` makes the
+last choice on the created device.
 
 ### Extensions
 
@@ -79,6 +81,13 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderSampledImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
 | `shaderStorageImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
 | `shaderStorageImageWriteWithoutFormat` | `VkPhysicalDeviceFeatures` | writes to array elements of any pixel format |
+| `shaderInt16` | `VkPhysicalDeviceFeatures` | `short` and `ushort` in shaders |
+| `shaderInt8` | `VkPhysicalDeviceVulkan12Features` | `char` and `uchar` in shaders |
+| `storageBuffer16BitAccess` | `VkPhysicalDeviceVulkan11Features` | 16-bit values in buffers |
+| `storageBuffer8BitAccess` | `VkPhysicalDeviceVulkan12Features` | 8-bit values in buffers |
+| `scalarBlockLayout` | `VkPhysicalDeviceVulkan12Features` | buffer and push-constant blocks laid out as Metal lays them, where std430 cannot |
+| `vulkanMemoryModel` | `VkPhysicalDeviceVulkan12Features` | the translator's atomics and barriers |
+| `vulkanMemoryModelDeviceScope` | `VkPhysicalDeviceVulkan12Features` | atomics and barriers of device scope |
 | `timelineSemaphore` | `VkPhysicalDeviceVulkan12Features` | submission and completion |
 | `synchronization2` | `VkPhysicalDeviceVulkan13Features` | barriers, layout changes and submission |
 | `dynamicRendering` | `VkPhysicalDeviceVulkan13Features` | render passes |
@@ -88,7 +97,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 The descriptor limits are what the runtime's fixed arrays need: 65,536 sampled textures, 4,096
 read-write textures and 4,000 samplers. 4,000 is Vulkan's minimum `maxSamplerAllocationCount`, so
 every slot can hold a live sampler on every device. The compute limits let a threadgroup take
-Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64.
+Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's minimum is 1,
+`VK_TRUE`; `timestampValidBits` is the queue family's.
 
 | Limit | Minimum | Used for |
 |---|---|---|
@@ -106,6 +116,22 @@ Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64.
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |
 | `maxComputeWorkGroupSize[2]` | `64` | a threadgroup's depth |
+| `timestampComputeAndGraphics` | `1` | GPU times of command buffers |
+| `timestampValidBits` | `36` | GPU times of command buffers |
+
+### Queue family and memory types
+
+The runtime submits to the first queue family with `VK_QUEUE_GRAPHICS_BIT` and
+`VK_QUEUE_COMPUTE_BIT` (`floor::Capabilities::queue_family`). It allocates buffers from two memory
+types, each the first with its flags that a buffer of `floor::BUFFER_USAGE` can use: every buffer
+usage Vulkan 1.3 defines, and device addresses. Vulkan answers which memory types a buffer can use
+only for a created device, so `floor::check` finds a type with each set of flags, and
+`floor::memory_types` chooses on the device (`floor::MemoryTypes`).
+
+| Memory type | Flags | Used for |
+|---|---|---|
+| Shared | `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`, `VK_MEMORY_PROPERTY_HOST_CACHED_BIT` | Shared storage, which the host maps and reads |
+| ring | `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`, `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT` | the parameter ring, which the host writes with no flush and the GPU reads |
 
 ### Chosen by a query
 

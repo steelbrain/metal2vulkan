@@ -45,7 +45,8 @@ cpu_icd_tests() {
     # otherwise rebuild the whole tree in place on every run.
     CARGO_TARGET_DIR="${CARGO_TARGET_DIR}-cpu-icd" \
         RUSTFLAGS='-Dwarnings --cfg m2v_cpu_icd' LP_NUM_THREADS=1 \
-        cargo nextest run -p metal2vulkan-validation --all-features --build-jobs "$jobs"
+        cargo nextest run -p metal2vulkan-validation -p metal2vulkan-rt --all-features \
+        --build-jobs "$jobs"
 }
 
 feature_clippy() {
@@ -96,6 +97,6 @@ step "Test metal2vulkan" \
 step "Test validation suite" \
     cargo nextest run -p metal2vulkan-validation --all-features --build-jobs "$jobs"
 step "Doc tests" cargo test --workspace --all-features --doc -j "$jobs"
-step "Test validation suite on the CPU Vulkan ICD (Linux)" cpu_icd_tests
+step "Test validation suite and the runtime on the CPU Vulkan ICD (Linux)" cpu_icd_tests
 step "Qualify public cases on native Vulkan (Linux)" qualify_public_cases
 echo "::: linux-gate: all ci.yml Linux steps passed ($((SECONDS - gate_start)) s)"

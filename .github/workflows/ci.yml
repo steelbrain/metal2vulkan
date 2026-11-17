@@ -218,15 +218,16 @@ jobs:
       - name: Doc tests
         run: cargo test --workspace --all-features --doc
 
-      # Device-executing validation tests on lavapipe. `DeviceType::Cpu` matches only a CPU
-      # physical device, so this never reaches a GPU even on a runner that has one. macOS CI runs
-      # no device tests.
-      - name: Test validation suite on the CPU Vulkan ICD (Linux)
+      # Device-executing validation tests, and the new runtime's floor check, on lavapipe.
+      # `DeviceType::Cpu` matches only a CPU physical device, and the runtime's device tests under
+      # `m2v_cpu_icd` check only CPU devices, so this never reaches a GPU even on a runner that has
+      # one. macOS CI runs no device tests.
+      - name: Test validation suite and the runtime on the CPU Vulkan ICD (Linux)
         if: runner.os == 'Linux'
         env:
           RUSTFLAGS: -Dwarnings --cfg m2v_cpu_icd
           LP_NUM_THREADS: "1"
-        run: cargo nextest run -p metal2vulkan-validation --all-features
+        run: cargo nextest run -p metal2vulkan-validation -p metal2vulkan-rt --all-features
 
       # The conformance suite's replay leg on lavapipe: it reads the committed recordings, runs the
       # runtime side and compares, with no Metal present. Its exit status is 0 only where the run

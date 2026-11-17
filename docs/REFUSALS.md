@@ -1,6 +1,6 @@
 # The refusal surface
 
-Every refusal of something Metal accepts, read from the code: the construction sites of the typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Sections 8 and 9 are the other half: what a call did wrong, each row a claim that Metal itself refuses an input, with the basis of that claim; section 9 holds the problem enums a `Problem` forwards to, where most of those claims live. Malformed input of no Metal call at all is misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no counterpart for at all.
+Every refusal of something Metal accepts, read from the code: the construction sites of the typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Sections 8 and 9 are the other half: what a call did wrong, each row a claim that Metal itself refuses an input, with the basis of that claim; section 9 holds the problem enums a `Problem` forwards to, where most of those claims live. Section 10 is the new runtime's floor: a device below it is refused when the device is made, with every item it lacks named. Malformed input of no Metal call at all is misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no counterpart for at all.
 
 Columns:
 
@@ -21,7 +21,7 @@ Columns:
   - `rare`: public API, but specialized: few apps reach it;
   - `none`: no public API path: malformed or non-Metal input, Apple-private calls, or a cap no valid program of ordinary size meets;
   - `?`: not assessed yet.
-  Metal's own refusals (sections 8 and 9) carry no reach mark: every one of them is an argument of a public call.
+  Metal's own refusals (sections 8 and 9) carry no reach mark: every one of them is an argument of a public call. Nor does the floor (section 10), which turns on the device whatever the program.
 
 ## Totals
 
@@ -36,6 +36,7 @@ Columns:
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
+| Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -50,6 +51,7 @@ Columns:
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
+| Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -588,6 +590,17 @@ Columns:
 | `RebindProblem::NotHostMemory` | The buffer is not a no-copy buffer of its own (a buffer of the runtime's memory, one over the caller's `VkBuffer`, or a heap's buffer, whose heap... | every device (a public call's own check of its arguments) | `ours`: from `Problem::Rebind` | 4: `crates/metal2vulkan-runtime/src/detach.rs (detach_backing, 2 sites)`, `crates/metal2vulkan-runtime/src/rebind.rs (rebind_bytes_no_copy, 2 sites)` | `-` |
 | `RebindProblem::EncodedUses` | A command buffer that is not yet committed has encoded a use of the buffer or heap, or of a resource placed in it, or has an encoder open that... | every device (a public call's own check of its arguments) | `ours`: from `Problem::Rebind` | 1: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (rebind_host_pages)` | `-` |
 
+## 10. Devices below the new runtime's floor (`floor::BelowFloor`: each `floor::Missing`)
+
+| Variant | What it blocks | Where | Basis | Sites | Reach |
+|---|---|---|---|---|---|
+| `Version` | The device's Vulkan version (`apiVersion`) is below 1.3 | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (decide)` | `-` |
+| `Extension` | A device extension | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (decide)` | `-` |
+| `Feature` | A feature | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (decide)` | `-` |
+| `Limit` | A limit below what the runtime uses | devices below the floor, at device creation | `device` | 2: `crates/metal2vulkan-rt/src/floor.rs (decide, 2 sites)` | `-` |
+| `QueueFamily` | A queue family with both `VK_QUEUE_GRAPHICS_BIT` and `VK_QUEUE_COMPUTE_BIT` | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (decide)` | `-` |
+| `MemoryType` | A memory type with these property flags, as Vulkan names them, for buffers of every usage the runtime gives them | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (choose)` | `-` |
+
 ## Appendix: every site
 
 Each refusal's sites, with the function that builds it.
@@ -1067,4 +1080,10 @@ Each refusal's sites, with the function that builds it.
 - `subproblem::BinaryFunctionProblem::CompiledStage`: `crates/metal2vulkan-runtime/src/pipeline/additions.rs (added)`
 - `subproblem::RebindProblem::NotHostMemory`: `crates/metal2vulkan-runtime/src/detach.rs (detach_backing, 2 sites)`; `crates/metal2vulkan-runtime/src/rebind.rs (rebind_bytes_no_copy, 2 sites)`
 - `subproblem::RebindProblem::EncodedUses`: `crates/metal2vulkan-runtime/src/buffer_descriptor.rs (rebind_host_pages)`
+- `floor::Version`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
+- `floor::Extension`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
+- `floor::Feature`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
+- `floor::Limit`: `crates/metal2vulkan-rt/src/floor.rs (decide, 2 sites)`
+- `floor::QueueFamily`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
+- `floor::MemoryType`: `crates/metal2vulkan-rt/src/floor.rs (choose)`
 

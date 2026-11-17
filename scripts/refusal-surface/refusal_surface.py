@@ -18,7 +18,9 @@ The refusal surface is read from the construction sites of the typed refusals, o
   `Error::Compile(Budget)`);
 - what a call did wrong (the runtime's `Problem`, carried by `Error::Metal`), and the problem enums
   it forwards to, found from the forwarding variants' payloads: each of these is a claim that Metal
-  itself refuses an input, so each carries a declared basis.
+  itself refuses an input, so each carries a declared basis;
+- the new runtime's floor (`floor::BelowFloor`, in crates/metal2vulkan-rt): each `floor::Missing`
+  item a device below the floor lacks.
 
 Each refusal is one row per variant, with what it blocks (the variant's doc comment), the device
 condition (from the constructor: every device, or the capabilities, driver defects or families
@@ -63,7 +65,11 @@ TREES = [
     ("air", CRATES / "metal2vulkan-air" / "src"),
     ("translator", CRATES / "metal2vulkan" / "src"),
     ("runtime", CRATES / "metal2vulkan-runtime" / "src"),
+    ("rt", CRATES / "metal2vulkan-rt" / "src"),
 ]
+
+# The new runtime's floor: the file that declares `Missing`, the items of `BelowFloor`.
+FLOOR_RS = CRATES / "metal2vulkan-rt" / "src" / "floor.rs"
 
 CONSTRUCTORS = {
     "not_implemented": "NotImplemented",
@@ -210,6 +216,8 @@ def derived_basis(section, kinds):
         return "device"
     if section in ("limit", "budget"):
         return "ours"
+    if section == "floor":
+        return "device"
     return ""
 
 
@@ -505,6 +513,12 @@ def scan(sub_problems=()):
                 if is_pattern(text, m.start(), m.end()):
                     continue
                 rows[("apple", m.group(1))]["sites"].append(site(m.start()))
+        if tree == "rt":
+            # `Missing`: an item of the floor a device lacks, built where the floor decides.
+            for m in re.finditer(r"(?<![A-Za-z0-9_])Missing::([A-Z][A-Za-z0-9_]*)", text):
+                if is_pattern(text, m.start(), m.end()):
+                    continue
+                rows[("floor", m.group(1))]["sites"].append(site(m.start()))
         for m in re.finditer(r"\bBindError::([A-Z][A-Za-z0-9_]*)", text):
             if m.group(1) not in BIND_REFUSALS or is_pattern(text, m.start(), m.end()):
                 continue
@@ -723,6 +737,7 @@ def build():
     ldocs = OrderedDict(enum_variants(CRATES / "metal2vulkan-air" / "src" / "error.rs", "Limit"))
     rdocs = OrderedDict(enum_variants(CRATES / "metal2vulkan" / "src" / "bind" / "rate_map.rs", "UnpinnedCompile"))
     tdocs = OrderedDict(enum_variants(CRATES / "metal2vulkan-air" / "src" / "error.rs", "BudgetExceeded"))
+    mdocs = OrderedDict(enum_variants(FLOOR_RS, "Missing"))
     for n, refs in feature_refs.items():
         if n in fdocs and not rows[("feature", n)]["sites"]:
             rows[("feature", n)]["indirect"] = refs
@@ -768,6 +783,7 @@ def build():
             sdocs,
             "What a call did wrong, in detail (the problem enums a `Problem` forwards to)",
         ),
+        ("floor", mdocs, "Devices below the new runtime's floor (`floor::BelowFloor`: each `floor::Missing`)"),
     ]
     sub_section = next(i for i, (s, _, _) in enumerate(sections, 1) if s == "subproblem")
     for section, docs, title in sections:
@@ -794,6 +810,8 @@ def build():
                 conds = ["every device (the attempt's deadline, 20 seconds by default)"]
             elif section in ("invalid", "subproblem"):
                 conds = ["every device (a public call's own check of its arguments)"]
+            elif section == "floor":
+                conds = ["devices below the floor, at device creation"]
             if not sites and not indirect and not (fam and fam["sites"]):
                 state = "no site"
             elif not sites and indirect:
@@ -801,9 +819,10 @@ def build():
             else:
                 state = "direct"
             notsched = " (not scheduled)" if "not scheduled" in doc.lower() else ""
-            if section in ("invalid", "subproblem"):
+            if section in ("invalid", "subproblem", "floor"):
                 # Reach is not marked here: every one of these is an argument of a public call,
-                # so a reach mark would say `app` for all of them.
+                # so a reach mark would say `app` for all of them; and the floor turns on the
+                # device, whatever the program.
                 rm = ("-", "")
             else:
                 rm = reach.get((section, name))
@@ -868,9 +887,11 @@ def render(tables):
         "file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). Sections 8 "
         "and 9 are the other half: what a call did wrong, each row a claim that Metal itself refuses "
         "an input, with the basis of that claim; section 9 holds the problem enums a `Problem` "
-        "forwards to, where most of those claims live. Malformed input of no Metal call at all is "
-        "misuse and is not listed. [`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the "
-        "runtime has no counterpart for at all."
+        "forwards to, where most of those claims live. Section 10 is the new runtime's floor: a "
+        "device below it is refused when the device is made, with every item it lacks named. "
+        "Malformed input of no Metal call at all is misuse and is not listed. "
+        "[`METAL-COVERAGE.md`](METAL-COVERAGE.md) lists the Metal API the runtime has no "
+        "counterpart for at all."
     )
     lines.append("")
     lines.append("Columns:")
@@ -914,7 +935,8 @@ def render(tables):
     lines.append("  - `?`: not assessed yet.")
     lines.append(
         "  Metal's own refusals (sections 8 and 9) carry no reach mark: every one of them is an "
-        "argument of a public call."
+        "argument of a public call. Nor does the floor (section 10), which turns on the device "
+        "whatever the program."
     )
     lines.append("")
     # totals

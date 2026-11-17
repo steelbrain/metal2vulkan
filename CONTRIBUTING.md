@@ -150,10 +150,12 @@ Edit the source, then regenerate:
 | `crates/metal2vulkan-validation/profiles/*.json` | `scripts/regen-device-profiles/` | gpuinfo reports and local captures |
 
 `crates/metal2vulkan/tests/api_signatures.tsv` is written the same way: the signature-level public
-surface of the three published crates, by `python3 scripts/api-signatures/signatures.py --bless`
-(`--check` to verify, `--selftest` for the derivation's own tests), from those crates' sources
-alone. `crates/metal2vulkan/tests/api_signatures.rs` says what it pins, what it cannot see, and
-what blessing it asserts; a removed or changed line is a breaking change of a published crate.
+surface of the three published crates and of `metal2vulkan-rt`, by
+`python3 scripts/api-signatures/signatures.py --bless` (`--check` to verify, `--selftest` for the
+derivation's own tests), from those crates' sources alone.
+`crates/metal2vulkan/tests/api_signatures.rs` says what it pins, what it cannot see, and what
+blessing it asserts; a removed or changed line is a breaking change of a published crate, or of the
+API `metal2vulkan-rt` is published with at the cutover.
 
 Four docs are checked by tests. `docs/REFUSALS.md` must be the surface the sources state, and
 every variant of the runtime's `Problem` must end its doc comment with a `Basis:` line that says

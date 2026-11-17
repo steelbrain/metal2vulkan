@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The signature-level public surface of the three published crates, against its committed table.
+"""The signature-level public surface of the three published crates and of `metal2vulkan-rt`,
+which is published under the runtime's name at the cutover, against its committed table.
 
     signatures.py --check     # derive it and compare with the table; the diff, and a bad status
     signatures.py --bless     # write the table, printing what moved
@@ -787,22 +788,24 @@ def collect(crate, names, real, home, extra=()):
 
 # ---------------------------------------------------------------- driver
 
-CRATES = ["metal2vulkan", "metal2vulkan-runtime", "metal2vulkan-air"]
+CRATES = ["metal2vulkan", "metal2vulkan-runtime", "metal2vulkan-air", "metal2vulkan-rt"]
 
 # A floor on each crate's record count. The table is the pin, so a parse that went blind shows as
 # thousands of removals and fails on its own; the floor is what makes a *blessed* collapse loud as
 # well, so a table of four items cannot pass quietly. It is a long way under the real counts and
 # is raised only when a crate's surface grows past it.
-FLOORS = {"metal2vulkan": 6000, "metal2vulkan-runtime": 2500, "metal2vulkan-air": 1800}
+FLOORS = {"metal2vulkan": 6000, "metal2vulkan-runtime": 2500, "metal2vulkan-air": 1800,
+          "metal2vulkan-rt": 25}
 
 HEADER = """\
-# The signature-level public surface of metal2vulkan, metal2vulkan-runtime and metal2vulkan-air:
-# one record a line, "kind<TAB>key<TAB>signature", derived from the sources by
+# The signature-level public surface of metal2vulkan, metal2vulkan-runtime, metal2vulkan-air and
+# metal2vulkan-rt: one record a line, "kind<TAB>key<TAB>signature", derived from the sources by
 # scripts/api-signatures/signatures.py and pinned by crates/metal2vulkan/tests/api_signatures.rs,
 # which says what it covers, what it cannot see, and what blessing a change here asserts.
 #
 # Write it with `python3 scripts/api-signatures/signatures.py --bless`, which prints what moved.
-# A removed or changed line is a breaking change of a published crate.
+# A removed or changed line is a breaking change of a published crate, or, for metal2vulkan-rt,
+# of the API it is published with at the cutover.
 """
 
 
@@ -811,7 +814,7 @@ def build(tree, want):
 
     `metal2vulkan`'s surface modules come from its own committed table
     (`crates/metal2vulkan/tests/api_surface.rs`), which is the crate's statement of which module
-    roots a consumer may write; a public submodule inside a root is not surface. The other two
+    roots a consumer may write; a public submodule inside a root is not surface. The other
     crates' roots are their `pub mod`s, which is the shape they have.
     """
     crates = {}

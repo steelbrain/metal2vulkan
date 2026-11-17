@@ -1,8 +1,10 @@
-//! The floor: the Vulkan version, extensions, features and limits the runtime requires of every
-//! device, and the four features it uses only where a device reports them.
+//! The floor: the Vulkan version, extensions, features, limits, queue family and memory types the
+//! runtime requires of every device, and the four features it uses only where a device reports
+//! them.
 //!
 //! [`check`] queries a physical device and decides; the decision is a pure function of what it
-//! read, so a test can hand it any set of answers.
+//! read, so a test can hand it any set of answers. Which memory types a buffer can use Vulkan
+//! answers only for a created device, so [`memory_types`] makes that last choice on the device.
 
 use ash::vk;
 use std::ffi::{CStr, CString};
@@ -38,12 +40,69 @@ pub(crate) const WORKGROUP_INVOCATIONS: u32 = 1024;
 /// axis; 64 along the third is the least a lab GPU offers.
 pub(crate) const WORKGROUP_SIZE: [u32; 3] = [1024, 1024, 64];
 
+/// The least `timestampValidBits` Vulkan allows a queue family that has timestamps.
+pub(crate) const TIMESTAMP_BITS: u32 = 36;
+
+/// The usage every buffer the runtime makes is created with: each buffer usage Vulkan 1.3 defines,
+/// and device addresses. A memory type that holds a buffer of these usages holds a buffer of any
+/// subset of them.
+pub const BUFFER_USAGE: vk::BufferUsageFlags = vk::BufferUsageFlags::from_raw(
+    vk::BufferUsageFlags::TRANSFER_SRC.as_raw()
+        | vk::BufferUsageFlags::TRANSFER_DST.as_raw()
+        | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw()
+        | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw()
+        | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw()
+        | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw()
+        | vk::BufferUsageFlags::INDEX_BUFFER.as_raw()
+        | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw()
+        | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw()
+        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw(),
+);
+
+/// The flags of the memory type Shared storage lives in: memory the host maps and reads at the
+/// speed of its own memory.
+pub(crate) const SHARED_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
+    vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw()
+        | vk::MemoryPropertyFlags::HOST_COHERENT.as_raw()
+        | vk::MemoryPropertyFlags::HOST_CACHED.as_raw(),
+);
+
+/// The flags of the memory type the parameter ring lives in: memory the GPU reads at its own speed
+/// and the host writes without a flush.
+pub(crate) const RING_MEMORY: vk::MemoryPropertyFlags = vk::MemoryPropertyFlags::from_raw(
+    vk::MemoryPropertyFlags::DEVICE_LOCAL.as_raw()
+        | vk::MemoryPropertyFlags::HOST_VISIBLE.as_raw()
+        | vk::MemoryPropertyFlags::HOST_COHERENT.as_raw(),
+);
+
+/// The Vulkan names of the memory property flags the floor asks for.
+pub(crate) const MEMORY_FLAG_NAMES: [(vk::MemoryPropertyFlags, &str); 4] = [
+    (
+        vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        "VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT",
+    ),
+    (
+        vk::MemoryPropertyFlags::HOST_VISIBLE,
+        "VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT",
+    ),
+    (
+        vk::MemoryPropertyFlags::HOST_COHERENT,
+        "VK_MEMORY_PROPERTY_HOST_COHERENT_BIT",
+    ),
+    (
+        vk::MemoryPropertyFlags::HOST_CACHED,
+        "VK_MEMORY_PROPERTY_HOST_CACHED_BIT",
+    ),
+];
+
 /// The feature structures of Vulkan 1.3 that the floor reads and device creation enables, each
 /// without its `p_next` link.
 #[derive(Clone, Copy, Default)]
 pub struct Features {
     /// `VkPhysicalDeviceFeatures`.
     pub core: vk::PhysicalDeviceFeatures,
+    /// `VkPhysicalDeviceVulkan11Features`.
+    pub vulkan11: vk::PhysicalDeviceVulkan11Features<'static>,
     /// `VkPhysicalDeviceVulkan12Features`.
     pub vulkan12: vk::PhysicalDeviceVulkan12Features<'static>,
     /// `VkPhysicalDeviceVulkan13Features`.
@@ -60,6 +119,9 @@ pub(crate) struct Feature {
 macro_rules! feature {
     (core . $member:ident) => {
         feature!(@ "VkPhysicalDeviceFeatures", core, $member)
+    };
+    (vulkan11 . $member:ident) => {
+        feature!(@ "VkPhysicalDeviceVulkan11Features", vulkan11, $member)
     };
     (vulkan12 . $member:ident) => {
         feature!(@ "VkPhysicalDeviceVulkan12Features", vulkan12, $member)
@@ -92,6 +154,16 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan12.shader_sampled_image_array_non_uniform_indexing),
     feature!(vulkan12.shader_storage_image_array_non_uniform_indexing),
     feature!(core.shader_storage_image_write_without_format),
+    // The translator's shaders: 8-, 16- and 64-bit integers, 8- and 16-bit values in buffers,
+    // scalar layout of buffer and push-constant blocks, and the Vulkan memory model with device
+    // scope for atomics and barriers.
+    feature!(core.shader_int16),
+    feature!(vulkan12.shader_int8),
+    feature!(vulkan11.storage_buffer16_bit_access),
+    feature!(vulkan12.storage_buffer8_bit_access),
+    feature!(vulkan12.scalar_block_layout),
+    feature!(vulkan12.vulkan_memory_model),
+    feature!(vulkan12.vulkan_memory_model_device_scope),
     // Submission, barriers and render passes.
     feature!(vulkan12.timeline_semaphore),
     feature!(vulkan13.synchronization2),
@@ -116,6 +188,8 @@ pub(crate) struct Queried {
     pub(crate) vulkan12: vk::PhysicalDeviceVulkan12Properties<'static>,
     pub(crate) features: Features,
     pub(crate) extensions: Vec<CString>,
+    pub(crate) families: Vec<vk::QueueFamilyProperties>,
+    pub(crate) memory: vk::PhysicalDeviceMemoryProperties,
 }
 
 /// One item of the floor that a device lacks.
@@ -134,7 +208,8 @@ pub enum Missing {
         /// The member, such as `bufferDeviceAddress`.
         member: String,
     },
-    /// A limit below what the runtime uses.
+    /// A limit below what the runtime uses. A Boolean limit reads as 0 or 1, and the queue
+    /// family's `timestampValidBits` is one of these.
     Limit {
         /// The limit's Vulkan name.
         name: &'static str,
@@ -142,6 +217,14 @@ pub enum Missing {
         device: u32,
         /// The least value the runtime uses.
         needed: u32,
+    },
+    /// A queue family with both `VK_QUEUE_GRAPHICS_BIT` and `VK_QUEUE_COMPUTE_BIT`.
+    QueueFamily,
+    /// A memory type with these property flags, as Vulkan names them, for buffers of every usage
+    /// the runtime gives them. [`BUFFER_USAGE`] is that usage.
+    MemoryType {
+        /// The flags, joined by ` | `.
+        flags: String,
     },
 }
 
@@ -162,6 +245,8 @@ impl fmt::Display for Missing {
                 device,
                 needed,
             } => write!(f, "{name} {device}, below {needed}"),
+            Missing::QueueFamily => f.write_str("a queue family with graphics and compute"),
+            Missing::MemoryType { flags } => write!(f, "a memory type with {flags} for buffers"),
         }
     }
 }
@@ -172,8 +257,8 @@ impl fmt::Display for Missing {
 /// runtime refuses a Vulkan device below its floor at creation, instead of refusing work later.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BelowFloor {
-    /// Each item the device lacks, in the floor's order: the version, extensions, features, then
-    /// limits.
+    /// Each item the device lacks, in the floor's order: the version, extensions, features,
+    /// limits, the queue family, then memory types.
     pub missing: Vec<Missing>,
 }
 
@@ -215,11 +300,30 @@ pub struct Capabilities {
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`].
     pub extensions: &'static [&'static CStr],
+    /// The first queue family with graphics and compute, whose timestamps the floor checked.
+    pub queue_family: u32,
+    /// The device's memory types and heaps, for [`memory_types`] to choose from.
+    pub memory: vk::PhysicalDeviceMemoryProperties,
+}
+
+/// The memory types the runtime allocates its buffers from, each the first memory type with its
+/// flags that a buffer of [`BUFFER_USAGE`] can use.
+///
+/// Metal's counterparts are storage modes: `MTLStorageModeShared` memory, and the memory
+/// `setBytes:length:atIndex:` copies into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemoryTypes {
+    /// Host-visible, host-coherent and host-cached: Shared storage.
+    pub shared: u32,
+    /// Device-local, host-visible and host-coherent: the parameter ring.
+    pub ring: u32,
 }
 
 /// Checks a physical device against the floor.
 ///
-/// Returns what the device offers above the floor, or every item of the floor it lacks.
+/// Returns what the device offers above the floor, or every item of the floor it lacks. For memory
+/// it checks only that a type with each set of flags exists; [`memory_types`] finishes the check
+/// on the created device.
 ///
 /// Metal has no counterpart; see [`BelowFloor`].
 ///
@@ -253,6 +357,8 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
             vulkan12: vk::PhysicalDeviceVulkan12Properties::default(),
             features: Features::default(),
             extensions: Vec::new(),
+            families: Vec::new(),
+            memory: vk::PhysicalDeviceMemoryProperties::default(),
         };
         if version < VERSION {
             return queried;
@@ -265,16 +371,22 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
 
         let Features {
             core,
+            vulkan11,
             vulkan12,
             vulkan13,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
+            .push_next(&mut *vulkan11)
             .push_next(&mut *vulkan12)
             .push_next(&mut *vulkan13);
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
+        vulkan11.p_next = std::ptr::null_mut();
         vulkan12.p_next = std::ptr::null_mut();
         vulkan13.p_next = std::ptr::null_mut();
+
+        queried.families = instance.get_physical_device_queue_family_properties(physical);
+        queried.memory = instance.get_physical_device_memory_properties(physical);
 
         // A device whose extensions cannot be listed offers none the floor can rely on.
         queried.extensions = instance
@@ -326,9 +438,29 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             });
         }
     }
-    if !missing.is_empty() {
-        return Err(BelowFloor { missing });
+    let family = (0u32..).zip(&device.families).find(|(_, family)| {
+        family
+            .queue_flags
+            .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+    });
+    match family {
+        None => missing.push(Missing::QueueFamily),
+        Some((_, family)) if family.timestamp_valid_bits < TIMESTAMP_BITS => {
+            missing.push(Missing::Limit {
+                name: "timestampValidBits",
+                device: family.timestamp_valid_bits,
+                needed: TIMESTAMP_BITS,
+            })
+        }
+        Some(_) => {}
     }
+    // Every memory type counts as one a buffer can use until the device answers.
+    if let Err(lacking) = choose(&device.memory, u32::MAX) {
+        missing.extend(lacking);
+    }
+    let Some((queue_family, _)) = family.filter(|_| missing.is_empty()) else {
+        return Err(BelowFloor { missing });
+    };
     for feature in OPTIONAL {
         *(feature.field)(&mut features) = *(feature.field)(&mut reported);
     }
@@ -341,12 +473,81 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
         float64: features.core.shader_float64 == vk::TRUE,
         features,
         extensions: DEVICE_EXTENSIONS,
+        queue_family,
+        memory: device.memory,
     })
+}
+
+/// Chooses the memory types on a device created from `capabilities`.
+///
+/// Vulkan answers which memory types a buffer can use only for a created device, so this is the
+/// floor's last step: it asks once for a buffer of [`BUFFER_USAGE`] and takes, for each of
+/// [`MemoryTypes`], the first memory type with its flags that such a buffer can use. A device whose
+/// buffers can use none of the types [`check`] found is below the floor.
+///
+/// Metal has no counterpart; see [`BelowFloor`].
+///
+/// # Safety
+///
+/// `device` was created from the physical device `capabilities` came from, with
+/// `capabilities.features` enabled.
+pub unsafe fn memory_types(
+    device: &ash::Device,
+    capabilities: &Capabilities,
+) -> Result<MemoryTypes, BelowFloor> {
+    let buffer = vk::BufferCreateInfo::default()
+        .size(65_536)
+        .usage(BUFFER_USAGE)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let question = vk::DeviceBufferMemoryRequirements::default().create_info(&buffer);
+    let mut answer = vk::MemoryRequirements2::default();
+    // SAFETY: the caller's contract; `BUFFER_USAGE`'s device addresses need
+    // `bufferDeviceAddress`, which the floor requires and `capabilities.features` enables.
+    unsafe { device.get_device_buffer_memory_requirements(&question, &mut answer) };
+    choose(
+        &capabilities.memory,
+        answer.memory_requirements.memory_type_bits,
+    )
+    .map_err(|missing| BelowFloor { missing })
+}
+
+/// For each of [`MemoryTypes`], the first memory type with its flags whose bit is set in `usable`,
+/// or a [`Missing::MemoryType`] for each that has none.
+pub(crate) fn choose(
+    memory: &vk::PhysicalDeviceMemoryProperties,
+    usable: u32,
+) -> Result<MemoryTypes, Vec<Missing>> {
+    let first = |flags: vk::MemoryPropertyFlags| {
+        (0u32..)
+            .zip(memory.memory_types_as_slice())
+            .find(|(index, kind)| usable & (1 << index) != 0 && kind.property_flags.contains(flags))
+            .map(|(index, _)| index)
+    };
+    match (first(SHARED_MEMORY), first(RING_MEMORY)) {
+        (Some(shared), Some(ring)) => Ok(MemoryTypes { shared, ring }),
+        (shared, ring) => Err([(shared, SHARED_MEMORY), (ring, RING_MEMORY)]
+            .into_iter()
+            .filter(|(index, _)| index.is_none())
+            .map(|(_, flags)| Missing::MemoryType {
+                flags: flag_names(flags),
+            })
+            .collect()),
+    }
+}
+
+/// The Vulkan names of `flags`, joined by ` | `.
+pub(crate) fn flag_names(flags: vk::MemoryPropertyFlags) -> String {
+    MEMORY_FLAG_NAMES
+        .iter()
+        .filter(|(flag, _)| flags.contains(*flag))
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
 /// uses.
-pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 14] {
+pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 15] {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
     [
@@ -420,6 +621,11 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 14] {
             "maxComputeWorkGroupSize[2]",
             limits.max_compute_work_group_size[2],
             WORKGROUP_SIZE[2],
+        ),
+        (
+            "timestampComputeAndGraphics",
+            limits.timestamp_compute_and_graphics,
+            vk::TRUE,
         ),
     ]
 }
