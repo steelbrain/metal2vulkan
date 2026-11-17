@@ -770,10 +770,14 @@ fn a_buffer_made_or_released_costs_the_live_buffers_no_upload() {
 
 /// 64 `Shared` and 64 `Private` buffers of the program's make at most one buffer with the
 /// device-address usage per memory class they or the runtime's own buffers took a new block of:
-/// each takes its address from its block's buffer of addresses (`memory.rs`).
+/// each takes its address from its block's buffer of addresses (`memory.rs`). Counted once the
+/// device's view check answered (`Device::settle_view_check`): with no record of it in the
+/// scratch cache, the check runs from the device's making, and its own buffers and imported
+/// pages take blocks of their own (one landed in the count on the RX 7900 XTX, 5 against 4).
 #[test]
 fn buffers_made_take_their_addresses_from_their_blocks() {
     on_device(|device, _| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let before = device.work_counts();
         let made: Vec<Buffer> = [ResourceOptions::shared(), ResourceOptions::private()]
             .into_iter()
