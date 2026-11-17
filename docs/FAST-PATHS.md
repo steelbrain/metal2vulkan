@@ -220,7 +220,10 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   first batch takes a turn: its later batches (split at a mid-buffer event wait or signal) go as
   each is ready, as Metal schedules a command buffer whole, so a command buffer whose first batch
   waits on the GPU for a signal not yet given reads `Scheduled` at once, and another queue's
-  command buffer waiting for its later signal goes at once too. The next batch goes in
+  command buffer waiting for its later signal goes at once too. Nor does a head take a turn
+  whose line holds a batch signalling a value another queue's head waits for and nothing
+  submitted or set reaches yet: that queue's command buffer goes at once, as on Metal. The next
+  batch goes in
   before the one ahead ends (the scheduler's thread woken at the completion that lets it go or
   makes its queue's batch whose run does so the oldest, and at the time that run brings the work
   left under the budget, no sleep slice's), so the GPU idles for the hold only

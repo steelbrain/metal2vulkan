@@ -262,6 +262,28 @@ impl<B> Order<B> {
             .map(|(sequence, head)| (*sequence, head))
     }
 
+    /// Each line's head, with its line's queue.
+    pub(crate) fn line_heads(&self) -> impl Iterator<Item = (u64, &B)> + '_ {
+        (self.lines.iter()).filter_map(|(queue, line)| line.front().map(|(_, head)| (*queue, head)))
+    }
+
+    /// Give each line's head to `mark` with whether `select` holds for a batch of its line, asked
+    /// of them in order from the head, with the line's queue and whether the batch is the head,
+    /// until it holds for one.
+    pub(crate) fn mark_heads(
+        &mut self,
+        mut select: impl FnMut(u64, &B, bool) -> bool,
+        mut mark: impl FnMut(&mut B, bool),
+    ) {
+        for (queue, line) in &mut self.lines {
+            let found =
+                (line.iter().enumerate()).any(|(at, (_, batch))| select(*queue, batch, at == 0));
+            if let Some((_, head)) = line.front_mut() {
+                mark(head, found);
+            }
+        }
+    }
+
     /// The commit sequence numbers of the line heads `select` holds for.
     pub(crate) fn heads_where(&self, mut select: impl FnMut(&B) -> bool) -> Vec<u64> {
         self.lines

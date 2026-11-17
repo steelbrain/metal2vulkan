@@ -49,6 +49,15 @@
 //!   submitted), where Metal schedules both at once (`runtime_lane::submission_checks`: a program
 //!   that gives the signal once the other command buffer is scheduled waited for the watchdog,
 //!   `command_buffer/stall.rs`).
+//! - **Awaited signals.** A head whose line holds a batch that signals a value another line's
+//!   head waits for, which no submitted signal or host set reaches yet, takes no turn
+//!   (`scheduler/mod.rs`'s `mark_awaited_signals`, asked at each look): holding it would hold the
+//!   waiting head too, the opposite of what a turn is for, and the batch of its queue in flight
+//!   may wait on the GPU for a signal the program gives only once that head is scheduled (the
+//!   caller's, `Event::reserve_vk_signal`), where Metal schedules both at once
+//!   (`runtime_lane::events`). Once the signal went, the line takes its turns again. Only lines
+//!   whose queue takes turns are read, one read of a command buffer's signals each, and only at
+//!   a look that found a head waiting so.
 //! - **When it goes.** A pass that holds such a batch leaves the scheduler's thread waiting for
 //!   the completion that lets it go, or that makes the batch of its queue whose run does so the
 //!   oldest on its `VkQueue` (`unshared_hold::turn_through`), not for each completion before it;

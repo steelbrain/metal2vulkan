@@ -14,13 +14,14 @@ use super::{
     run_with, validated_device_with, validated_plan_options, Messages, ScratchCache,
 };
 use crate::gpu::TEST_DEVICE;
+use ash::vk;
 use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use metal2vulkan_runtime::DeviceOptions;
 use metal2vulkan_runtime::{
     host_time, BlitCommandEncoder, BlitOption, Buffer, CommandBuffer, CommandBufferStatus,
-    CommandQueue, CommitFailure, CpuCacheMode, Device, Error, EventRef, HazardTrackingMode,
+    CommandQueue, CommitFailure, CpuCacheMode, Device, Error, Event, EventRef, HazardTrackingMode,
     Invalid, Origin, Problem, ResourceOptions, RuntimeGap, SharedEvent, SharedEventListener, Size,
-    StorageMode, Texture, TextureDescriptor,
+    StorageMode, Texture, TextureDescriptor, VkEventSignal,
 };
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -555,6 +556,134 @@ fn a_held_command_buffer_holds_back_only_its_own_queue() {
         completed(&held);
         completed(&behind);
         assert_eq!(*calls.lock().unwrap(), ["scheduled", "completed"]);
+    });
+}
+
+/// A plain event's first signal, the test's own (`Event::reserve_vk_signal`), given from the host
+/// once: by [`open`](Gate::open), or as it drops, so no command buffer waits for it for good.
+struct Gate {
+    device: Device,
+    event: Event,
+    counter: u64,
+    opened: bool,
+}
+
+impl Gate {
+    fn new(device: &Device) -> Gate {
+        let event = device.new_event().unwrap();
+        // SAFETY: the one signal of the reservation is given once, from the host, by `open`: a
+        // fresh event's first, so after nothing.
+        let reserved = unsafe { event.reserve_vk_signal(1) }.unwrap();
+        let VkEventSignal::Counter {
+            counter,
+            after: None,
+        } = reserved
+        else {
+            panic!("a fresh event's first signal reserved as {reserved:?}");
+        };
+        Gate {
+            device: device.clone(),
+            event,
+            counter,
+            opened: false,
+        }
+    }
+
+    /// Give the reserved signal from the host, once.
+    fn open(&mut self) -> Result<(), vk::Result> {
+        if self.opened {
+            return Ok(());
+        }
+        self.opened = true;
+        let info = vk::SemaphoreSignalInfo::default()
+            // SAFETY: the semaphore the event holds while it lives, signalled only as reserved.
+            .semaphore(unsafe { self.event.vk_semaphore() })
+            .value(self.counter);
+        // SAFETY: the reservation's one signal operation, from the host, of a semaphore of the
+        // live device; none of the device's objects is destroyed.
+        unsafe { self.device.raw().device.signal_semaphore(&info) }
+    }
+}
+
+impl Drop for Gate {
+    fn drop(&mut self) {
+        if let Err(error) = self.open() {
+            eprintln!("the gate's signal failed as it dropped: {error}");
+        }
+    }
+}
+
+/// A command buffer that signals what another queue's command buffer waits for is scheduled
+/// though the command buffer of its own queue before it waits on the GPU for a signal the program
+/// gives only once that waiter is scheduled, as Metal schedules them all: where the queues share
+/// a `VkQueue`, the signalling command buffer takes no turn there behind the earlier one
+/// (`queue_turns.rs`, "Awaited signals"), which would hold the waiter until the watchdog.
+#[test]
+fn a_signal_another_queue_waits_for_takes_no_turn_behind_a_gpu_wait() {
+    on_device(|device| {
+        let (signalling_queue, waiting_queue) = (
+            device.new_command_queue().unwrap(),
+            device.new_command_queue().unwrap(),
+        );
+        let shared = signalling_queue.vk_queue_sharing().0 == waiting_queue.vk_queue_sharing().0;
+        let mut gate = Gate::new(device);
+        let waited = device.new_event().unwrap();
+        let shared_buffer = || {
+            let buffer = device.new_buffer(16, ResourceOptions::default()).unwrap();
+            fill_on_host(&buffer, 0);
+            buffer
+        };
+        let (first, second, third) = (shared_buffer(), shared_buffer(), shared_buffer());
+        // The first command buffer of the signalling queue waits on the GPU for the gate: a wait
+        // for a reserved signal goes to its `VkQueue` at once.
+        let gated = signalling_queue.command_buffer().unwrap();
+        gated
+            .encode_wait_for_event(EventRef::from(&gate.event), 1)
+            .unwrap();
+        let mut encoder = gated.blit_command_encoder().unwrap();
+        encoder.fill_buffer(&first, 0..16, 1).unwrap();
+        encoder.end_encoding().unwrap();
+        gated.commit().unwrap();
+        gated.wait_until_scheduled().unwrap();
+        // The second signals what the other queue's command buffer waits for.
+        let signalling = blit(&signalling_queue, |encoder| {
+            encoder.fill_buffer(&second, 0..16, 2).unwrap()
+        });
+        signalling
+            .encode_signal_event(EventRef::from(&waited), 1)
+            .unwrap();
+        signalling.commit().unwrap();
+        let waiter = waiting_queue.command_buffer().unwrap();
+        waiter
+            .encode_wait_for_event(EventRef::from(&waited), 1)
+            .unwrap();
+        let mut encoder = waiter.blit_command_encoder().unwrap();
+        encoder.fill_buffer(&third, 0..16, 3).unwrap();
+        encoder.end_encoding().unwrap();
+        waiter.commit().unwrap();
+        // The gate opens only once the waiter is scheduled.
+        let start = Instant::now();
+        while waiter.status() == CommandBufferStatus::Committed && start.elapsed() < WAIT {
+            std::thread::sleep(Duration::from_micros(200));
+        }
+        let scheduled = waiter.status() != CommandBufferStatus::Committed;
+        println!(
+            "AWAITED-SIGNAL one VkQueue {shared}: the waiter scheduled {scheduled} after {:?}, \
+             the signalling command buffer {:?}, with the gate closed",
+            start.elapsed(),
+            signalling.status()
+        );
+        assert!(
+            scheduled,
+            "the waiter stays committed while the gate is closed"
+        );
+        gate.open().unwrap();
+        for command_buffer in [&gated, &signalling, &waiter] {
+            completed(command_buffer);
+        }
+        for (buffer, byte) in [(&first, 1), (&second, 2), (&third, 3)] {
+            assert_eq!(bytes_of(buffer), [byte; 16]);
+        }
     });
 }
 

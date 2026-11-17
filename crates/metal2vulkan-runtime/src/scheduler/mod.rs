@@ -754,6 +754,10 @@ pub(crate) struct State {
     /// turn there, may go there, found by the last look (`await_room`): the thread sleeps no
     /// later.
     wake_by: Option<Instant>,
+    /// The values a look found heads waiting for that nothing submitted or set reaches, each with
+    /// its head's logical queue ([`mark_awaited_signals`]): emptied after each look, kept with its
+    /// room.
+    awaited: Vec<(u64, Arc<EventShared>, u64)>,
 }
 
 impl State {
@@ -884,6 +888,10 @@ struct Held {
     /// `VkQueue` (`SlotShare::posted_unshared`): it holds another queue's batch there whose room
     /// came after it was posted while it is on its way ([`unshared_on_their_way`]).
     unshared_place: Option<u64>,
+    /// Where it leads its line, a batch of the line signals a value another line's head waits for
+    /// that no submitted signal or host set reaches yet, as this pass's look found
+    /// ([`mark_awaited_signals`]): it takes no turn (`queue_turns.rs`, "Awaited signals").
+    signals_awaited: bool,
 }
 
 impl Held {
@@ -960,6 +968,7 @@ impl Scheduler {
                 lists: BatchLists::default(),
                 group: Group::default(),
                 grouped: Vec::new(),
+                awaited: Vec::new(),
             }),
             sleep: Mutex::new(Sleep::default()),
             wake: Condvar::new(),
@@ -1783,6 +1792,7 @@ fn take_in(state: &mut State, commits: &mut Vec<Committed>, spent: &mut Spent) -
             held_since: None,
             unshared_noted: None,
             unshared_place: unshared.map(|(_, place)| place),
+            signals_awaited: false,
         });
         // Where the device notes queue times, a command buffer committed to an empty line is
         // its head as it is taken in.
@@ -1983,6 +1993,8 @@ fn submit_ready(
         let busy = exit_guard::enter().ok_or(Exiting)?;
         // What the heads wait for from the GPU is found again by this pass's looks.
         awaits.clear();
+        // The heads whose lines signal what another line's head waits for take no turn.
+        mark_awaited_signals(&mut state.order, &mut state.awaited);
         // The heads that wait behind a batch committed before them that keeps its place: no step,
         // check or submission of theirs before it is submitted (`order.rs`).
         // Of those whose host step or checks may start (`gate_heads`, `check_heads`), and of the
@@ -2039,8 +2051,12 @@ fn submit_ready(
             }
             // Held back from a `VkQueue` it shares with other command queues, while its own
             // queue's work enough is in flight there (`queue_turns.rs`): another queue's later
-            // commit goes ahead of it.
-            if let Some(room) = held.buffer.held_for_turn(held.index) {
+            // commit goes ahead of it. Not where another line's head waits for its line's signal.
+            let turn = match held.signals_awaited {
+                true => None,
+                false => held.buffer.held_for_turn(held.index),
+            };
+            if let Some(room) = turn {
                 held.held_for(HeldFor::QueueTurn);
                 await_room(held, room, awaits, &mut room_wake);
                 isolating = true;
@@ -2274,6 +2290,49 @@ fn holds_back(
 /// first, as the hold would have, had the pass come before the room did.
 fn goes_first(held: &Held) -> bool {
     held.buffer.goes_ahead_of_held_work()
+}
+
+/// Mark each line's head by whether a batch of its line signals a value another line's head waits
+/// for that no submitted signal or host set reaches yet (`EventShared::landing`): such a head
+/// takes no turn on its `VkQueue` (`queue_turns.rs`, "Awaited signals"), as holding it would hold
+/// the waiting head too, and the first batch of its queue in flight may wait on the GPU for a
+/// signal the program gives only once that head is scheduled. Asked again at each look, so a line
+/// whose awaited signal went takes its turns again. Where no head waits so, no batch's signals are
+/// read; else those of the lines whose queue takes turns, one read per command buffer (a command
+/// buffer's batches lie together in its line). `awaited` holds the values meanwhile, and is left
+/// empty.
+fn mark_awaited_signals(order: &mut Order<Held>, awaited: &mut Vec<(u64, Arc<EventShared>, u64)>) {
+    for (queue, head) in order.line_heads() {
+        for (event, value) in &head.waits {
+            if event.landing(*value).is_none() {
+                awaited.push((queue, Arc::clone(event), *value));
+            }
+        }
+    }
+    if awaited.is_empty() {
+        for head in order.heads_mut(&[]) {
+            head.signals_awaited = false;
+        }
+        return;
+    }
+    // Whether the line asked about takes turns, read at its head.
+    let mut turns = false;
+    order.mark_heads(
+        |queue, held, head| {
+            if head {
+                turns = held.buffer.takes_turns();
+            }
+            turns
+                && (head || held.index == 0)
+                && held.buffer.signals_any_from(held.index, |event, value| {
+                    (awaited.iter()).any(|(waiting, awaited, at_least)| {
+                        *waiting != queue && Arc::ptr_eq(awaited, event) && value >= *at_least
+                    })
+                })
+        },
+        |head, found| head.signals_awaited = found,
+    );
+    awaited.clear();
 }
 
 /// A head held back from `VkQueue` `queue` for an unshared queue there (`unshared_hold.rs`), or for

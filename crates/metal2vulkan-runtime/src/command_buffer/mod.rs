@@ -5553,13 +5553,10 @@ impl CommandBufferShared {
     /// queue's command buffer that waits for its later signal go meanwhile, where Metal schedules
     /// both at once (`queue_turns.rs`, "Whole command buffers").
     pub(crate) fn held_for_turn(&self, index: usize) -> Option<(usize, u64, Option<u64>)> {
-        if index > 0 || self.queue.unshared() || self.device.is_lost() {
+        if index > 0 || self.device.is_lost() || !self.takes_turns() {
             return None;
         }
         let index = self.queue.vk_queue();
-        if !self.device.takes_turns_on(index) {
-            return None;
-        }
         let shared = self.device.shared();
         let slot = &shared.queues[index];
         let own = (self.queue.id(), &**self.queue.expected());
@@ -5571,6 +5568,26 @@ impl CommandBufferShared {
             }
             crate::unshared_hold::Room::Hold { after, through } => Some((index, through, after)),
         }
+    }
+
+    /// Whether `reaches` holds for an event signal of batch `index` or a later one, given its event
+    /// and value (`scheduler/mod.rs`'s `mark_awaited_signals`).
+    pub(crate) fn signals_any_from(
+        &self,
+        index: usize,
+        mut reaches: impl FnMut(&Arc<EventShared>, u64) -> bool,
+    ) -> bool {
+        let state = lock(&self.state);
+        let batches = state.batches.all();
+        (batches.get(index..).unwrap_or_default().iter())
+            .flat_map(|batch| &batch.signals)
+            .any(|(event, value)| reaches(event, *value))
+    }
+
+    /// Whether its batches take turns on their `VkQueue` (`queue_turns.rs`): its queue is not
+    /// unshared, and the device's queues take turns on a `VkQueue` other command queues share.
+    pub(crate) fn takes_turns(&self) -> bool {
+        !self.queue.unshared() && self.device.takes_turns_on(self.queue.vk_queue())
     }
 
     /// Whether a batch of it goes before other queues' batches a pass finds ready with it
