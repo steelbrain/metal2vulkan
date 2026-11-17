@@ -2,7 +2,8 @@
 // standing for a class of compute work: bandwidth-bound, ALU-bound, threadgroup memory with
 // barriers, SIMD reductions, 2D image-like indexing, many tiny dispatches in a chain, narrow
 // integer arithmetic, sampling through a runtime sampler and through a constexpr one, products
-// by a constant zero of either sign, and many buffers bound for each of many dispatches. Written
+// by a constant zero of either sign, many buffers bound for each of many dispatches, and many
+// one-wave threadgroups that each do almost nothing. Written
 // from scratch for it; `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir harness` compiles
 // it. The harness holds a CPU reference of every result. No translator sweep reads this directory.
 #include <metal_stdlib>
@@ -231,6 +232,15 @@ kernel void wide_bindings(device const uint *b0 [[buffer(0)]],
     s = s * 3u + b21[index];
     s = s * 3u + b22[index];
     destination[index] = s;
+}
+
+// The fixed cost of a wave: threadgroups of 32 threads, one wave each, in a grid 5,600 threads
+// wide, each thread one load from a constant buffer argument and one 4-byte store.
+kernel void wave_store(device uint *destination [[buffer(0)]],
+                       constant uint &base [[buffer(1)]],
+                       uint2 position [[thread_position_in_grid]]) {
+    uint index = position.y * 5600u + position.x;
+    destination[index] = base + index;
 }
 
 // Products by a constant zero of either sign, in precise arithmetic: `rounds` steps a thread, each

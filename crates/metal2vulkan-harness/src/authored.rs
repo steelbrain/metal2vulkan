@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 16] = [
+pub const WORKLOADS: [Workload; 17] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -83,6 +83,10 @@ pub const WORKLOADS: [Workload; 16] = [
     Workload {
         name: "wide_bindings",
         plan: wide_bindings,
+    },
+    Workload {
+        name: "waves",
+        plan: waves,
     },
 ];
 
@@ -532,6 +536,44 @@ fn wide_bindings() -> Plan {
         dispatches: vec![dispatch; DISPATCHES],
         expect: vec![Expect {
             buffer: INPUTS,
+            values: Values::Words(output),
+        }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
+        outputs: Vec::new(),
+        per_command_buffer: None,
+        per_encoder: None,
+    }
+}
+
+/// The fixed cost of a wave: one dispatch of 175 by 4,200 threadgroups of 32 threads
+/// (`wave_store`), 735,000 one-wave threadgroups, each thread one load from a constant buffer
+/// argument (a 16-byte `Private` buffer) and one 4-byte store of `base + index` to a `Private`
+/// buffer of 94 MB. A run's GPU time over its 735,000 waves is a per-wave budget: what each wave
+/// costs to start and end, beside its 128 bytes of stores.
+fn waves() -> Plan {
+    const GROUPS: [u64; 2] = [175, 4200];
+    const WIDTH: u64 = 32 * GROUPS[0];
+    const THREADS: u64 = WIDTH * GROUPS[1];
+    const BASE: u32 = 0x9e37_79b9;
+    let output = (0..THREADS as u32)
+        .map(|index| BASE.wrapping_add(index))
+        .collect();
+    Plan {
+        name: "waves".to_owned(),
+        library: Source::Authored,
+        buffers: vec![unset(4 * THREADS), private(word_bytes(&[BASE, 0, 0, 0]))],
+        dispatches: vec![Dispatch {
+            function: "wave_store".to_owned(),
+            constants: Vec::new(),
+            bindings: vec![buffer(0, 0), buffer(1, 1)],
+            grid: Grid::Threadgroups {
+                groups: [GROUPS[0], GROUPS[1], 1],
+                threads: [32, 1, 1],
+            },
+        }],
+        expect: vec![Expect {
+            buffer: 0,
             values: Values::Words(output),
         }],
         textures: Vec::new(),

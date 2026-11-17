@@ -17,9 +17,9 @@ target triple = "air64_v28-apple-macosx26.0.0"
 define void @copy_words(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #0 {
   %4 = zext i32 %2 to i64
   %5 = getelementptr inbounds <4 x i32>, ptr addrspace(1) %0, i64 %4
-  %6 = load <4 x i32>, ptr addrspace(1) %5, align 16, !tbaa !107, !alias.scope !110, !noalias !113
+  %6 = load <4 x i32>, ptr addrspace(1) %5, align 16, !tbaa !110, !alias.scope !113, !noalias !116
   %7 = getelementptr inbounds <4 x i32>, ptr addrspace(1) %1, i64 %4
-  store <4 x i32> %6, ptr addrspace(1) %7, align 16, !tbaa !107, !alias.scope !113, !noalias !110
+  store <4 x i32> %6, ptr addrspace(1) %7, align 16, !tbaa !110, !alias.scope !116, !noalias !113
   ret void
 }
 
@@ -27,27 +27,27 @@ define void @copy_words(ptr addrspace(1) noundef readonly captures(none) "air-bu
 define void @scale_offset(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2, i32 noundef %3) local_unnamed_addr #0 {
   %5 = zext i32 %3 to i64
   %6 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %5
-  %7 = load <4 x float>, ptr addrspace(1) %6, align 16, !tbaa !107, !alias.scope !115, !noalias !118
-  %8 = load <2 x float>, ptr addrspace(2) %2, align 8, !alias.scope !121, !noalias !122
+  %7 = load <4 x float>, ptr addrspace(1) %6, align 16, !tbaa !110, !alias.scope !118, !noalias !121
+  %8 = load <2 x float>, ptr addrspace(2) %2, align 8, !alias.scope !124, !noalias !125
   %9 = shufflevector <2 x float> %8, <2 x float> undef, <4 x i32> zeroinitializer
   %10 = fmul fast <4 x float> %9, %7
   %11 = shufflevector <2 x float> %8, <2 x float> undef, <4 x i32> <i32 1, i32 1, i32 1, i32 1>
   %12 = fadd fast <4 x float> %10, %11
   %13 = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i64 %5
-  store <4 x float> %12, ptr addrspace(1) %13, align 16, !tbaa !107, !alias.scope !123, !noalias !124
+  store <4 x float> %12, ptr addrspace(1) %13, align 16, !tbaa !110, !alias.scope !126, !noalias !127
   ret void
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind memory(argmem: readwrite)
 define void @fma_chains(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #1 {
   %4 = and i32 %2, 31
-  %5 = tail call fast float @air.convert.f.f32.u.i32(i32 %4) #16
+  %5 = tail call fast float @air.convert.f.f32.u.i32(i32 %4) #17
   %6 = fmul fast float %5, 3.125000e-02
   %7 = lshr i32 %2, 5
   %8 = and i32 %7, 31
-  %9 = tail call fast float @air.convert.f.f32.u.i32(i32 %8) #16
+  %9 = tail call fast float @air.convert.f.f32.u.i32(i32 %8) #17
   %10 = fmul fast float %9, 3.125000e-02
-  %11 = load i32, ptr addrspace(2) %1, align 4, !tbaa !125, !alias.scope !127, !noalias !130
+  %11 = load i32, ptr addrspace(2) %1, align 4, !tbaa !128, !alias.scope !130, !noalias !133
   %12 = icmp eq i32 %11, 0
   br i1 %12, label %13, label %19
 
@@ -57,7 +57,7 @@ define void @fma_chains(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %16 = fadd fast float %15, %14
   %17 = zext i32 %2 to i64
   %18 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %17
-  store float %16, ptr addrspace(1) %18, align 4, !tbaa !132, !alias.scope !130, !noalias !127
+  store float %16, ptr addrspace(1) %18, align 4, !tbaa !135, !alias.scope !133, !noalias !130
   ret void
 
 19:                                               ; preds = %19, %3
@@ -65,12 +65,12 @@ define void @fma_chains(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %21 = phi float [ %26, %19 ], [ %10, %3 ]
   %22 = phi float [ %24, %19 ], [ %6, %3 ]
   %23 = fmul fast float %21, 6.250000e-02
-  %24 = tail call fast float @air.fma.f32(float %22, float 9.375000e-01, float %23) #16
+  %24 = tail call fast float @air.fma.f32(float %22, float 9.375000e-01, float %23) #17
   %25 = fmul fast float %24, 1.250000e-01
-  %26 = tail call fast float @air.fma.f32(float %21, float 8.750000e-01, float %25) #16
+  %26 = tail call fast float @air.fma.f32(float %21, float 8.750000e-01, float %25) #17
   %27 = add nuw i32 %20, 1
   %28 = icmp eq i32 %27, %11
-  br i1 %28, label %13, label %19, !llvm.loop !134
+  br i1 %28, label %13, label %19, !llvm.loop !137
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
@@ -80,16 +80,16 @@ declare float @air.convert.f.f32.u.i32(i32) local_unnamed_addr #2
 define void @block_scan(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, i32 noundef %2, i32 noundef %3) local_unnamed_addr #3 {
   %5 = zext i32 %2 to i64
   %6 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %5
-  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !125, !alias.scope !136, !noalias !139
+  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !128, !alias.scope !139, !noalias !142
   %8 = zext i32 %3 to i64
   %9 = getelementptr inbounds [256 x i32], ptr addrspace(3) @_ZZ10block_scanPU9MTLdeviceKjPU9MTLdevicejjjE4sums, i64 0, i64 %8
-  store i32 %7, ptr addrspace(3) %9, align 4, !tbaa !125
-  tail call void @air.wg.barrier(i32 2, i32 1) #17
+  store i32 %7, ptr addrspace(3) %9, align 4, !tbaa !128
+  tail call void @air.wg.barrier(i32 2, i32 1) #18
   br label %12
 
 10:                                               ; preds = %21
   %11 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %5
-  store i32 %23, ptr addrspace(1) %11, align 4, !tbaa !125, !alias.scope !139, !noalias !136
+  store i32 %23, ptr addrspace(1) %11, align 4, !tbaa !128, !alias.scope !142, !noalias !139
   ret void
 
 12:                                               ; preds = %21, %4
@@ -102,35 +102,35 @@ define void @block_scan(ptr addrspace(1) noundef readonly captures(none) "air-bu
   %17 = sub i32 %3, %14
   %18 = zext i32 %17 to i64
   %19 = getelementptr inbounds [256 x i32], ptr addrspace(3) @_ZZ10block_scanPU9MTLdeviceKjPU9MTLdevicejjjE4sums, i64 0, i64 %18
-  %20 = load i32, ptr addrspace(3) %19, align 4, !tbaa !125
+  %20 = load i32, ptr addrspace(3) %19, align 4, !tbaa !128
   br label %21
 
 21:                                               ; preds = %16, %12
   %22 = phi i32 [ %20, %16 ], [ 0, %12 ]
-  tail call void @air.wg.barrier(i32 2, i32 1) #17
+  tail call void @air.wg.barrier(i32 2, i32 1) #18
   %23 = add i32 %22, %13
-  store i32 %23, ptr addrspace(3) %9, align 4, !tbaa !125
-  tail call void @air.wg.barrier(i32 2, i32 1) #17
+  store i32 %23, ptr addrspace(3) %9, align 4, !tbaa !128
+  tail call void @air.wg.barrier(i32 2, i32 1) #18
   %24 = shl nuw nsw i32 %14, 1
   %25 = icmp ult i32 %14, 128
-  br i1 %25, label %12, label %10, !llvm.loop !141
+  br i1 %25, label %12, label %10, !llvm.loop !144
 }
 
 ; Function Attrs: convergent mustprogress nounwind
 define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2, i32 noundef %3, i32 noundef %4, i32 noundef %5, i32 noundef %6, i32 noundef %7, i32 noundef %8, i32 noundef %9) local_unnamed_addr #3 {
-  %11 = load <2 x i32>, ptr addrspace(2) %2, align 8, !alias.scope !142, !noalias !145
+  %11 = load <2 x i32>, ptr addrspace(2) %2, align 8, !alias.scope !145, !noalias !148
   %12 = extractelement <2 x i32> %11, i64 1
   %13 = mul i32 %12, %3
   %14 = add i32 %13, %12
   %15 = extractelement <2 x i32> %11, i64 0
-  %16 = tail call i32 @air.min.u.i32(i32 %14, i32 %15) #16
+  %16 = tail call i32 @air.min.u.i32(i32 %14, i32 %15) #17
   %17 = add i32 %13, %4
   %18 = icmp ult i32 %17, %16
   br i1 %18, label %23, label %19
 
 19:                                               ; preds = %23, %10
   %20 = phi i32 [ 0, %10 ], [ %29, %23 ]
-  %21 = tail call i32 @air.simd_sum.u.i32(i32 %20) #17
+  %21 = tail call i32 @air.simd_sum.u.i32(i32 %20) #18
   %22 = icmp eq i32 %6, 0
   br i1 %22, label %32, label %35
 
@@ -139,20 +139,20 @@ define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-bu
   %25 = phi i32 [ %29, %23 ], [ 0, %10 ]
   %26 = zext i32 %24 to i64
   %27 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %26
-  %28 = load i32, ptr addrspace(1) %27, align 4, !tbaa !125, !alias.scope !148, !noalias !149
+  %28 = load i32, ptr addrspace(1) %27, align 4, !tbaa !128, !alias.scope !151, !noalias !152
   %29 = add i32 %28, %25
   %30 = add i32 %24, %5
   %31 = icmp ult i32 %30, %16
-  br i1 %31, label %23, label %19, !llvm.loop !150
+  br i1 %31, label %23, label %19, !llvm.loop !153
 
 32:                                               ; preds = %19
   %33 = zext i32 %7 to i64
   %34 = getelementptr inbounds [256 x i32], ptr addrspace(3) @_ZZ10reduce_sumPU9MTLdeviceKjPU9MTLdevicejRU11MTLconstantKDv2_jjjjjjjjE7partial, i64 0, i64 %33
-  store i32 %21, ptr addrspace(3) %34, align 4, !tbaa !125
+  store i32 %21, ptr addrspace(3) %34, align 4, !tbaa !128
   br label %35
 
 35:                                               ; preds = %32, %19
-  tail call void @air.wg.barrier(i32 2, i32 1) #17
+  tail call void @air.wg.barrier(i32 2, i32 1) #18
   %36 = icmp eq i32 %7, 0
   br i1 %36, label %37, label %54
 
@@ -162,7 +162,7 @@ define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-bu
 
 39:                                               ; preds = %42, %37
   %40 = phi i32 [ 0, %37 ], [ %48, %42 ]
-  %41 = tail call i32 @air.simd_sum.u.i32(i32 %40) #17
+  %41 = tail call i32 @air.simd_sum.u.i32(i32 %40) #18
   br i1 %22, label %51, label %54
 
 42:                                               ; preds = %42, %37
@@ -170,16 +170,16 @@ define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-bu
   %44 = phi i32 [ %48, %42 ], [ 0, %37 ]
   %45 = zext i32 %43 to i64
   %46 = getelementptr inbounds [256 x i32], ptr addrspace(3) @_ZZ10reduce_sumPU9MTLdeviceKjPU9MTLdevicejRU11MTLconstantKDv2_jjjjjjjjE7partial, i64 0, i64 %45
-  %47 = load i32, ptr addrspace(3) %46, align 4, !tbaa !125
+  %47 = load i32, ptr addrspace(3) %46, align 4, !tbaa !128
   %48 = add i32 %47, %44
   %49 = add i32 %43, %9
   %50 = icmp ult i32 %49, %8
-  br i1 %50, label %42, label %39, !llvm.loop !151
+  br i1 %50, label %42, label %39, !llvm.loop !154
 
 51:                                               ; preds = %39
   %52 = zext i32 %3 to i64
   %53 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %52
-  store i32 %41, ptr addrspace(1) %53, align 4, !tbaa !125, !alias.scope !152, !noalias !153
+  store i32 %41, ptr addrspace(1) %53, align 4, !tbaa !128, !alias.scope !155, !noalias !156
   br label %54
 
 54:                                               ; preds = %51, %39, %35
@@ -189,7 +189,7 @@ define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-bu
 ; Function Attrs: mustprogress nofree nosync nounwind memory(argmem: readwrite)
 define void @binomial3x3(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2, <2 x i32> noundef %3) local_unnamed_addr #4 {
   %5 = extractelement <2 x i32> %3, i64 1
-  %6 = load <2 x i32>, ptr addrspace(2) %2, align 8, !alias.scope !154, !noalias !157
+  %6 = load <2 x i32>, ptr addrspace(2) %2, align 8, !alias.scope !157, !noalias !160
   %7 = extractelement <2 x i32> %6, i64 1
   %8 = add nsw i32 %7, -1
   %9 = extractelement <2 x i32> %3, i64 0
@@ -203,14 +203,14 @@ define void @binomial3x3(ptr addrspace(1) noundef readonly captures(none) "air-b
   %15 = add i32 %14, %9
   %16 = zext i32 %15 to i64
   %17 = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i64 %16
-  store <4 x float> %13, ptr addrspace(1) %17, align 16, !tbaa !107, !alias.scope !160, !noalias !161
+  store <4 x float> %13, ptr addrspace(1) %17, align 16, !tbaa !110, !alias.scope !163, !noalias !164
   ret void
 
 18:                                               ; preds = %26, %4
   %19 = phi <4 x float> [ zeroinitializer, %4 ], [ %44, %26 ]
   %20 = phi i32 [ -1, %4 ], [ %27, %26 ]
   %21 = add nsw i32 %20, %5
-  %22 = tail call i32 @air.clamp.s.i32(i32 %21, i32 0, i32 %8) #16
+  %22 = tail call i32 @air.clamp.s.i32(i32 %21, i32 0, i32 %8) #17
   %23 = icmp eq i32 %20, 0
   %24 = select fast i1 %23, float 2.000000e+00, float 1.000000e+00
   %25 = mul i32 %22, %10
@@ -219,38 +219,38 @@ define void @binomial3x3(ptr addrspace(1) noundef readonly captures(none) "air-b
 26:                                               ; preds = %29
   %27 = add nsw i32 %20, 1
   %28 = icmp eq i32 %27, 2
-  br i1 %28, label %12, label %18, !llvm.loop !162
+  br i1 %28, label %12, label %18, !llvm.loop !165
 
 29:                                               ; preds = %29, %18
   %30 = phi <4 x float> [ %19, %18 ], [ %44, %29 ]
   %31 = phi i32 [ -1, %18 ], [ %45, %29 ]
   %32 = add nsw i32 %31, %9
-  %33 = tail call i32 @air.clamp.s.i32(i32 %32, i32 0, i32 %11) #16
+  %33 = tail call i32 @air.clamp.s.i32(i32 %32, i32 0, i32 %11) #17
   %34 = icmp eq i32 %31, 0
   %35 = select fast i1 %34, float 2.000000e+00, float 1.000000e+00
   %36 = fmul fast float %35, %24
   %37 = add i32 %33, %25
   %38 = zext i32 %37 to i64
   %39 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %38
-  %40 = load <4 x float>, ptr addrspace(1) %39, align 16, !tbaa !107, !alias.scope !163, !noalias !164
+  %40 = load <4 x float>, ptr addrspace(1) %39, align 16, !tbaa !110, !alias.scope !166, !noalias !167
   %41 = insertelement <4 x float> poison, float %36, i64 0
   %42 = shufflevector <4 x float> %41, <4 x float> poison, <4 x i32> zeroinitializer
   %43 = fmul fast <4 x float> %42, %40
   %44 = fadd fast <4 x float> %43, %30
   %45 = add nsw i32 %31, 1
   %46 = icmp eq i32 %45, 2
-  br i1 %46, label %26, label %29, !llvm.loop !165
+  br i1 %46, label %26, label %29, !llvm.loop !168
 }
 
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(argmem: readwrite)
 define void @lcg_step(ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #0 {
   %4 = zext i32 %2 to i64
   %5 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %4
-  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !125, !alias.scope !166, !noalias !169
+  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !128, !alias.scope !169, !noalias !172
   %7 = mul i32 %6, 1664525
-  %8 = load i32, ptr addrspace(2) %1, align 4, !tbaa !125, !alias.scope !169, !noalias !166
+  %8 = load i32, ptr addrspace(2) %1, align 4, !tbaa !128, !alias.scope !172, !noalias !169
   %9 = add i32 %7, %8
-  store i32 %9, ptr addrspace(1) %5, align 4, !tbaa !125, !alias.scope !166, !noalias !169
+  store i32 %9, ptr addrspace(1) %5, align 4, !tbaa !128, !alias.scope !169, !noalias !172
   ret void
 }
 
@@ -261,7 +261,7 @@ define void @narrow_mix(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %6 = xor i16 %4, 23130
   %7 = trunc i32 %2 to i8
   %8 = lshr i32 %2, 3
-  %9 = load i32, ptr addrspace(2) %1, align 4, !tbaa !125, !alias.scope !171, !noalias !174
+  %9 = load i32, ptr addrspace(2) %1, align 4, !tbaa !128, !alias.scope !174, !noalias !177
   %10 = icmp eq i32 %9, 0
   br i1 %10, label %11, label %27
 
@@ -281,7 +281,7 @@ define void @narrow_mix(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %24 = xor i32 %21, %23
   %25 = zext i32 %2 to i64
   %26 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %25
-  store i32 %24, ptr addrspace(1) %26, align 4, !tbaa !125, !alias.scope !174, !noalias !171
+  store i32 %24, ptr addrspace(1) %26, align 4, !tbaa !128, !alias.scope !177, !noalias !174
   ret void
 
 27:                                               ; preds = %27, %3
@@ -306,53 +306,53 @@ define void @narrow_mix(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %46 = add nsw i32 %45, %42
   %47 = add nuw i32 %28, 1
   %48 = icmp eq i32 %47, %9
-  br i1 %48, label %11, label %27, !llvm.loop !176
+  br i1 %48, label %11, label %27, !llvm.loop !179
 }
 
 ; Function Attrs: mustprogress nounwind willreturn
 define void @texels_in(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, ptr addrspace(1) %2, <2 x i32> noundef %3) local_unnamed_addr #6 {
   %5 = extractelement <2 x i32> %3, i64 1
-  %6 = load i32, ptr addrspace(2) %1, align 4, !tbaa !125, !alias.scope !177, !noalias !180
+  %6 = load i32, ptr addrspace(2) %1, align 4, !tbaa !128, !alias.scope !180, !noalias !183
   %7 = mul i32 %6, %5
   %8 = extractelement <2 x i32> %3, i64 0
   %9 = add i32 %7, %8
   %10 = zext i32 %9 to i64
   %11 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %10
-  %12 = load <4 x float>, ptr addrspace(1) %11, align 16, !tbaa !107, !alias.scope !183, !noalias !184
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %2, <2 x i32> %3, <4 x float> %12, i32 0, i32 2) #18, !alias.scope !185, !noalias !186
+  %12 = load <4 x float>, ptr addrspace(1) %11, align 16, !tbaa !110, !alias.scope !186, !noalias !187
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %2, <2 x i32> %3, <4 x float> %12, i32 0, i32 2) #19, !alias.scope !188, !noalias !189
   ret void
 }
 
 ; Function Attrs: mustprogress nofree nounwind willreturn
 define void @texels_out(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %2, <2 x i32> noundef %3) local_unnamed_addr #7 {
-  %5 = tail call ptr addrspace(2) @air.get_read_sampler() #19
-  %6 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) %5, <2 x i32> %3, <2 x i32> zeroinitializer, i32 0, i32 1) #20
+  %5 = tail call ptr addrspace(2) @air.get_read_sampler() #20
+  %6 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) %5, <2 x i32> %3, <2 x i32> zeroinitializer, i32 0, i32 1) #21
   %7 = extractvalue { <4 x float>, i8 } %6, 0
   %8 = extractelement <2 x i32> %3, i64 1
-  %9 = load i32, ptr addrspace(2) %2, align 4, !tbaa !125, !alias.scope !187, !noalias !190
+  %9 = load i32, ptr addrspace(2) %2, align 4, !tbaa !128, !alias.scope !190, !noalias !193
   %10 = mul i32 %9, %8
   %11 = extractelement <2 x i32> %3, i64 0
   %12 = add i32 %10, %11
   %13 = zext i32 %12 to i64
   %14 = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i64 %13
-  store <4 x float> %7, ptr addrspace(1) %14, align 16, !tbaa !107, !alias.scope !193, !noalias !194
+  store <4 x float> %7, ptr addrspace(1) %14, align 16, !tbaa !110, !alias.scope !196, !noalias !197
   ret void
 }
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 define void @sample_down(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(2) readonly captures(none) %2, <2 x i32> noundef %3) local_unnamed_addr #8 {
-  %5 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #20, !alias.scope !195, !noalias !198
-  %6 = tail call fast float @air.convert.f.f32.u.i32(i32 %5) #16
+  %5 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #21, !alias.scope !198, !noalias !201
+  %6 = tail call fast float @air.convert.f.f32.u.i32(i32 %5) #17
   %7 = insertelement <2 x float> undef, float %6, i64 0
-  %8 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #20, !alias.scope !195, !noalias !198
-  %9 = tail call fast float @air.convert.f.f32.u.i32(i32 %8) #16
+  %8 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #21, !alias.scope !198, !noalias !201
+  %9 = tail call fast float @air.convert.f.f32.u.i32(i32 %8) #17
   %10 = insertelement <2 x float> %7, float %9, i64 1
-  %11 = tail call fast <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32> %3) #16
+  %11 = tail call fast <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32> %3) #17
   %12 = fadd fast <2 x float> %11, splat (float 5.000000e-01)
   %13 = fdiv fast <2 x float> %12, %10
-  %14 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) readonly captures(none) %2, <2 x float> %13, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #21, !alias.scope !200
+  %14 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) readonly captures(none) %2, <2 x float> %13, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #22, !alias.scope !203
   %15 = extractvalue { <4 x float>, i8 } %14, 0
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %3, <4 x float> %15, i32 0, i32 2) #18, !alias.scope !195, !noalias !198
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %3, <4 x float> %15, i32 0, i32 2) #19, !alias.scope !198, !noalias !201
   ret void
 }
 
@@ -361,18 +361,18 @@ declare <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32>) local_unnamed_addr #
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 define void @sample_up(ptr addrspace(1) %0, ptr addrspace(1) %1, <2 x i32> noundef %2) local_unnamed_addr #8 {
-  %4 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #20, !alias.scope !201
-  %5 = tail call fast float @air.convert.f.f32.u.i32(i32 %4) #16
+  %4 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #21, !alias.scope !204
+  %5 = tail call fast float @air.convert.f.f32.u.i32(i32 %4) #17
   %6 = insertelement <2 x float> undef, float %5, i64 0
-  %7 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #20, !alias.scope !201
-  %8 = tail call fast float @air.convert.f.f32.u.i32(i32 %7) #16
+  %7 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #21, !alias.scope !204
+  %8 = tail call fast float @air.convert.f.f32.u.i32(i32 %7) #17
   %9 = insertelement <2 x float> %6, float %8, i64 1
-  %10 = tail call fast <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32> %2) #16
+  %10 = tail call fast <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32> %2) #17
   %11 = fadd fast <2 x float> %10, splat (float 5.000000e-01)
   %12 = fdiv fast <2 x float> %11, %9
-  %13 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %12, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #21
+  %13 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %12, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #22
   %14 = extractvalue { <4 x float>, i8 } %13, 0
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %2, <4 x float> %14, i32 0, i32 2) #18, !alias.scope !201
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %2, <4 x float> %14, i32 0, i32 2) #19, !alias.scope !204
   ret void
 }
 
@@ -380,119 +380,133 @@ define void @sample_up(ptr addrspace(1) %0, ptr addrspace(1) %1, <2 x i32> nound
 define void @wide_bindings(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %2, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %3, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %4, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %5, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %6, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %7, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %8, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %9, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %10, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %11, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %12, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %13, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %14, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %15, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %16, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %17, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %18, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %19, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %20, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %21, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %22, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %23, i32 noundef %24) local_unnamed_addr #0 {
   %26 = zext i32 %24 to i64
   %27 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %26
-  %28 = load i32, ptr addrspace(1) %27, align 4, !tbaa !125, !alias.scope !204, !noalias !207
+  %28 = load i32, ptr addrspace(1) %27, align 4, !tbaa !128, !alias.scope !207, !noalias !210
   %29 = mul i32 %28, 3
   %30 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %26
-  %31 = load i32, ptr addrspace(1) %30, align 4, !tbaa !125, !alias.scope !231, !noalias !232
+  %31 = load i32, ptr addrspace(1) %30, align 4, !tbaa !128, !alias.scope !234, !noalias !235
   %32 = add i32 %29, %31
   %33 = mul i32 %32, 3
   %34 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %26
-  %35 = load i32, ptr addrspace(1) %34, align 4, !tbaa !125, !alias.scope !233, !noalias !234
+  %35 = load i32, ptr addrspace(1) %34, align 4, !tbaa !128, !alias.scope !236, !noalias !237
   %36 = add i32 %33, %35
   %37 = mul i32 %36, 3
   %38 = getelementptr inbounds i32, ptr addrspace(1) %3, i64 %26
-  %39 = load i32, ptr addrspace(1) %38, align 4, !tbaa !125, !alias.scope !235, !noalias !236
+  %39 = load i32, ptr addrspace(1) %38, align 4, !tbaa !128, !alias.scope !238, !noalias !239
   %40 = add i32 %37, %39
   %41 = mul i32 %40, 3
   %42 = getelementptr inbounds i32, ptr addrspace(1) %4, i64 %26
-  %43 = load i32, ptr addrspace(1) %42, align 4, !tbaa !125, !alias.scope !237, !noalias !238
+  %43 = load i32, ptr addrspace(1) %42, align 4, !tbaa !128, !alias.scope !240, !noalias !241
   %44 = add i32 %41, %43
   %45 = mul i32 %44, 3
   %46 = getelementptr inbounds i32, ptr addrspace(1) %5, i64 %26
-  %47 = load i32, ptr addrspace(1) %46, align 4, !tbaa !125, !alias.scope !239, !noalias !240
+  %47 = load i32, ptr addrspace(1) %46, align 4, !tbaa !128, !alias.scope !242, !noalias !243
   %48 = add i32 %45, %47
   %49 = mul i32 %48, 3
   %50 = getelementptr inbounds i32, ptr addrspace(1) %6, i64 %26
-  %51 = load i32, ptr addrspace(1) %50, align 4, !tbaa !125, !alias.scope !241, !noalias !242
+  %51 = load i32, ptr addrspace(1) %50, align 4, !tbaa !128, !alias.scope !244, !noalias !245
   %52 = add i32 %49, %51
   %53 = mul i32 %52, 3
   %54 = getelementptr inbounds i32, ptr addrspace(1) %7, i64 %26
-  %55 = load i32, ptr addrspace(1) %54, align 4, !tbaa !125, !alias.scope !243, !noalias !244
+  %55 = load i32, ptr addrspace(1) %54, align 4, !tbaa !128, !alias.scope !246, !noalias !247
   %56 = add i32 %53, %55
   %57 = mul i32 %56, 3
   %58 = getelementptr inbounds i32, ptr addrspace(1) %8, i64 %26
-  %59 = load i32, ptr addrspace(1) %58, align 4, !tbaa !125, !alias.scope !245, !noalias !246
+  %59 = load i32, ptr addrspace(1) %58, align 4, !tbaa !128, !alias.scope !248, !noalias !249
   %60 = add i32 %57, %59
   %61 = mul i32 %60, 3
   %62 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 %26
-  %63 = load i32, ptr addrspace(1) %62, align 4, !tbaa !125, !alias.scope !247, !noalias !248
+  %63 = load i32, ptr addrspace(1) %62, align 4, !tbaa !128, !alias.scope !250, !noalias !251
   %64 = add i32 %61, %63
   %65 = mul i32 %64, 3
   %66 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 %26
-  %67 = load i32, ptr addrspace(1) %66, align 4, !tbaa !125, !alias.scope !249, !noalias !250
+  %67 = load i32, ptr addrspace(1) %66, align 4, !tbaa !128, !alias.scope !252, !noalias !253
   %68 = add i32 %65, %67
   %69 = mul i32 %68, 3
   %70 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 %26
-  %71 = load i32, ptr addrspace(1) %70, align 4, !tbaa !125, !alias.scope !251, !noalias !252
+  %71 = load i32, ptr addrspace(1) %70, align 4, !tbaa !128, !alias.scope !254, !noalias !255
   %72 = add i32 %69, %71
   %73 = mul i32 %72, 3
   %74 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 %26
-  %75 = load i32, ptr addrspace(1) %74, align 4, !tbaa !125, !alias.scope !253, !noalias !254
+  %75 = load i32, ptr addrspace(1) %74, align 4, !tbaa !128, !alias.scope !256, !noalias !257
   %76 = add i32 %73, %75
   %77 = mul i32 %76, 3
   %78 = getelementptr inbounds i32, ptr addrspace(1) %13, i64 %26
-  %79 = load i32, ptr addrspace(1) %78, align 4, !tbaa !125, !alias.scope !255, !noalias !256
+  %79 = load i32, ptr addrspace(1) %78, align 4, !tbaa !128, !alias.scope !258, !noalias !259
   %80 = add i32 %77, %79
   %81 = mul i32 %80, 3
   %82 = getelementptr inbounds i32, ptr addrspace(1) %14, i64 %26
-  %83 = load i32, ptr addrspace(1) %82, align 4, !tbaa !125, !alias.scope !257, !noalias !258
+  %83 = load i32, ptr addrspace(1) %82, align 4, !tbaa !128, !alias.scope !260, !noalias !261
   %84 = add i32 %81, %83
   %85 = mul i32 %84, 3
   %86 = getelementptr inbounds i32, ptr addrspace(1) %15, i64 %26
-  %87 = load i32, ptr addrspace(1) %86, align 4, !tbaa !125, !alias.scope !259, !noalias !260
+  %87 = load i32, ptr addrspace(1) %86, align 4, !tbaa !128, !alias.scope !262, !noalias !263
   %88 = add i32 %85, %87
   %89 = mul i32 %88, 3
   %90 = getelementptr inbounds i32, ptr addrspace(1) %16, i64 %26
-  %91 = load i32, ptr addrspace(1) %90, align 4, !tbaa !125, !alias.scope !261, !noalias !262
+  %91 = load i32, ptr addrspace(1) %90, align 4, !tbaa !128, !alias.scope !264, !noalias !265
   %92 = add i32 %89, %91
   %93 = mul i32 %92, 3
   %94 = getelementptr inbounds i32, ptr addrspace(1) %17, i64 %26
-  %95 = load i32, ptr addrspace(1) %94, align 4, !tbaa !125, !alias.scope !263, !noalias !264
+  %95 = load i32, ptr addrspace(1) %94, align 4, !tbaa !128, !alias.scope !266, !noalias !267
   %96 = add i32 %93, %95
   %97 = mul i32 %96, 3
   %98 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 %26
-  %99 = load i32, ptr addrspace(1) %98, align 4, !tbaa !125, !alias.scope !265, !noalias !266
+  %99 = load i32, ptr addrspace(1) %98, align 4, !tbaa !128, !alias.scope !268, !noalias !269
   %100 = add i32 %97, %99
   %101 = mul i32 %100, 3
   %102 = getelementptr inbounds i32, ptr addrspace(1) %19, i64 %26
-  %103 = load i32, ptr addrspace(1) %102, align 4, !tbaa !125, !alias.scope !267, !noalias !268
+  %103 = load i32, ptr addrspace(1) %102, align 4, !tbaa !128, !alias.scope !270, !noalias !271
   %104 = add i32 %101, %103
   %105 = mul i32 %104, 3
   %106 = getelementptr inbounds i32, ptr addrspace(1) %20, i64 %26
-  %107 = load i32, ptr addrspace(1) %106, align 4, !tbaa !125, !alias.scope !269, !noalias !270
+  %107 = load i32, ptr addrspace(1) %106, align 4, !tbaa !128, !alias.scope !272, !noalias !273
   %108 = add i32 %105, %107
   %109 = mul i32 %108, 3
   %110 = getelementptr inbounds i32, ptr addrspace(1) %21, i64 %26
-  %111 = load i32, ptr addrspace(1) %110, align 4, !tbaa !125, !alias.scope !271, !noalias !272
+  %111 = load i32, ptr addrspace(1) %110, align 4, !tbaa !128, !alias.scope !274, !noalias !275
   %112 = add i32 %109, %111
   %113 = mul i32 %112, 3
   %114 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 %26
-  %115 = load i32, ptr addrspace(1) %114, align 4, !tbaa !125, !alias.scope !273, !noalias !274
+  %115 = load i32, ptr addrspace(1) %114, align 4, !tbaa !128, !alias.scope !276, !noalias !277
   %116 = add i32 %113, %115
   %117 = getelementptr inbounds i32, ptr addrspace(1) %23, i64 %26
-  store i32 %116, ptr addrspace(1) %117, align 4, !tbaa !125, !alias.scope !275, !noalias !276
+  store i32 %116, ptr addrspace(1) %117, align 4, !tbaa !128, !alias.scope !278, !noalias !279
+  ret void
+}
+
+; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(argmem: readwrite)
+define void @wave_store(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, <2 x i32> noundef %2) local_unnamed_addr #9 {
+  %4 = extractelement <2 x i32> %2, i64 1
+  %5 = mul i32 %4, 5600
+  %6 = extractelement <2 x i32> %2, i64 0
+  %7 = add i32 %5, %6
+  %8 = load i32, ptr addrspace(2) %1, align 4, !tbaa !128, !alias.scope !280, !noalias !283
+  %9 = add i32 %8, %7
+  %10 = zext i32 %7 to i64
+  %11 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %10
+  store i32 %9, ptr addrspace(1) %11, align 4, !tbaa !128, !alias.scope !283, !noalias !280
   ret void
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind
-define void @signed_zero_products(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #9 {
+define void @signed_zero_products(ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #10 {
   %4 = and i32 %2, 63
-  %5 = tail call float @air.convert.f.f32.u.i32(i32 %4) #16
+  %5 = tail call float @air.convert.f.f32.u.i32(i32 %4) #17
   %6 = lshr i32 %2, 6
   %7 = and i32 %6, 63
-  %8 = tail call float @air.convert.f.f32.u.i32(i32 %7) #16
+  %8 = tail call float @air.convert.f.f32.u.i32(i32 %7) #17
   %9 = fneg fast float %8
   %10 = insertelement <4 x float> <float poison, float poison, float 5.000000e-01, float -2.500000e-01>, float %5, i64 0
   %11 = insertelement <4 x float> %10, float %9, i64 1
-  %12 = load i32, ptr addrspace(2) %1, align 4, !tbaa !125, !alias.scope !277, !noalias !280
+  %12 = load i32, ptr addrspace(2) %1, align 4, !tbaa !128, !alias.scope !285, !noalias !288
   %13 = icmp eq i32 %12, 0
   br i1 %13, label %21, label %14
 
 14:                                               ; preds = %3
-  %15 = load float, ptr addrspace(2) @_ZL13positive_zero, align 4, !tbaa !132
+  %15 = load float, ptr addrspace(2) @_ZL13positive_zero, align 4, !tbaa !135
   %16 = insertelement <4 x float> poison, float %15, i64 0
   %17 = shufflevector <4 x float> %16, <4 x float> poison, <4 x i32> zeroinitializer
-  %18 = load float, ptr addrspace(2) @_ZL13negative_zero, align 4, !tbaa !132
+  %18 = load float, ptr addrspace(2) @_ZL13negative_zero, align 4, !tbaa !135
   %19 = insertelement <4 x float> poison, float %18, i64 0
   %20 = shufflevector <4 x float> %19, <4 x float> poison, <4 x i32> zeroinitializer
   br label %27
@@ -503,7 +517,7 @@ define void @signed_zero_products(ptr addrspace(1) noundef writeonly captures(no
   %24 = fadd <4 x float> %22, %23
   %25 = zext i32 %2 to i64
   %26 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %25
-  store <4 x float> %24, ptr addrspace(1) %26, align 16, !tbaa !107, !alias.scope !280, !noalias !277
+  store <4 x float> %24, ptr addrspace(1) %26, align 16, !tbaa !110, !alias.scope !288, !noalias !285
   ret void
 
 27:                                               ; preds = %27, %14
@@ -514,17 +528,17 @@ define void @signed_zero_products(ptr addrspace(1) noundef writeonly captures(no
   %32 = fmul <4 x float> %20, %28
   %33 = fadd <4 x float> %29, %31
   %34 = fsub <4 x float> %33, %32
-  %35 = tail call fast <4 x float> @air.fma.v4f32(<4 x float> %28, <4 x float> splat (float 9.687500e-01), <4 x float> splat (float 3.125000e-02)) #16
+  %35 = tail call fast <4 x float> @air.fma.v4f32(<4 x float> %28, <4 x float> splat (float 9.687500e-01), <4 x float> splat (float 3.125000e-02)) #17
   %36 = add nuw i32 %30, 1
   %37 = icmp eq i32 %36, %12
-  br i1 %37, label %21, label %27, !llvm.loop !282
+  br i1 %37, label %21, label %27, !llvm.loop !290
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare float @air.fma.f32(float, float, float) local_unnamed_addr #2
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
-declare void @air.wg.barrier(i32, i32) local_unnamed_addr #10
+declare void @air.wg.barrier(i32, i32) local_unnamed_addr #11
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
 declare i32 @air.min.u.i32(i32, i32) local_unnamed_addr #2
@@ -536,32 +550,32 @@ declare i32 @air.clamp.s.i32(i32, i32, i32) local_unnamed_addr #2
 declare <4 x float> @air.fma.v4f32(<4 x float>, <4 x float>, <4 x float>) local_unnamed_addr #2
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
-declare i32 @air.simd_sum.u.i32(i32) local_unnamed_addr #10
+declare i32 @air.simd_sum.u.i32(i32) local_unnamed_addr #11
 
 ; Function Attrs: mustprogress nounwind willreturn memory(argmem: readwrite)
-declare void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none), <2 x i32>, <4 x float>, i32, i32) local_unnamed_addr #11
+declare void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none), <2 x i32>, <4 x float>, i32, i32) local_unnamed_addr #12
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(inaccessiblemem: read)
-declare ptr addrspace(2) @air.get_read_sampler() local_unnamed_addr #12
+declare ptr addrspace(2) @air.get_read_sampler() local_unnamed_addr #13
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
-declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) readonly captures(none), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32) local_unnamed_addr #13
+declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) readonly captures(none), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32) local_unnamed_addr #14
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
-declare i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none), i32) local_unnamed_addr #13
+declare i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none), i32) local_unnamed_addr #14
 
 ; Function Attrs: mustprogress nofree nounwind willreturn memory(argmem: read)
-declare i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none), i32) local_unnamed_addr #13
+declare i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none), i32) local_unnamed_addr #14
 
 ; Function Attrs: convergent mustprogress nofree nounwind willreturn memory(argmem: read)
-declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none), ptr addrspace(2) readonly captures(none), <2 x float>, i1, <2 x i32>, i1, float, float, i32) local_unnamed_addr #14
+declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none), ptr addrspace(2) readonly captures(none), <2 x float>, i1, <2 x i32>, i1, float, float, i32) local_unnamed_addr #15
 
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(write)
-define internal void @_GLOBAL__sub_I__() #15 section "air.static_init" {
-  %1 = load float, ptr addrspace(2) @_Z13positive_zero.MTL_FC_INIT_0_f, align 4, !tbaa !132
-  store float %1, ptr addrspace(2) @_ZL13positive_zero, align 4, !tbaa !132
-  %2 = load float, ptr addrspace(2) @_Z13negative_zero.MTL_FC_INIT_1_f, align 4, !tbaa !132
-  store float %2, ptr addrspace(2) @_ZL13negative_zero, align 4, !tbaa !132
+define internal void @_GLOBAL__sub_I__() #16 section "air.static_init" {
+  %1 = load float, ptr addrspace(2) @_Z13positive_zero.MTL_FC_INIT_0_f, align 4, !tbaa !135
+  store float %1, ptr addrspace(2) @_ZL13positive_zero, align 4, !tbaa !135
+  %2 = load float, ptr addrspace(2) @_Z13negative_zero.MTL_FC_INIT_1_f, align 4, !tbaa !135
+  store float %2, ptr addrspace(2) @_ZL13negative_zero, align 4, !tbaa !135
   ret void
 }
 
@@ -574,28 +588,29 @@ attributes #5 = { mustprogress nofree norecurse nosync nounwind memory(argmem: r
 attributes #6 = { mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
 attributes #7 = { mustprogress nofree nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
 attributes #8 = { convergent mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #9 = { mustprogress nofree nosync nounwind "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="false" }
-attributes #10 = { convergent mustprogress nounwind willreturn }
-attributes #11 = { mustprogress nounwind willreturn memory(argmem: readwrite) }
-attributes #12 = { mustprogress nofree nounwind willreturn memory(inaccessiblemem: read) }
-attributes #13 = { mustprogress nofree nounwind willreturn memory(argmem: read) }
-attributes #14 = { convergent mustprogress nofree nounwind willreturn memory(argmem: read) }
-attributes #15 = { mustprogress nofree norecurse nosync nounwind willreturn memory(write) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
-attributes #16 = { nounwind willreturn memory(none) }
-attributes #17 = { convergent nounwind willreturn }
-attributes #18 = { nounwind willreturn memory(argmem: readwrite) }
-attributes #19 = { nounwind willreturn memory(inaccessiblemem: read) }
-attributes #20 = { nounwind willreturn memory(argmem: read) }
-attributes #21 = { convergent nounwind willreturn memory(argmem: read) }
+attributes #9 = { mustprogress nofree norecurse nosync nounwind willreturn memory(argmem: readwrite) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="64" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+attributes #10 = { mustprogress nofree nosync nounwind "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="128" "no-builtins" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="false" }
+attributes #11 = { convergent mustprogress nounwind willreturn }
+attributes #12 = { mustprogress nounwind willreturn memory(argmem: readwrite) }
+attributes #13 = { mustprogress nofree nounwind willreturn memory(inaccessiblemem: read) }
+attributes #14 = { mustprogress nofree nounwind willreturn memory(argmem: read) }
+attributes #15 = { convergent mustprogress nofree nounwind willreturn memory(argmem: read) }
+attributes #16 = { mustprogress nofree norecurse nosync nounwind willreturn memory(write) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
+attributes #17 = { nounwind willreturn memory(none) }
+attributes #18 = { convergent nounwind willreturn }
+attributes #19 = { nounwind willreturn memory(argmem: readwrite) }
+attributes #20 = { nounwind willreturn memory(inaccessiblemem: read) }
+attributes #21 = { nounwind willreturn memory(argmem: read) }
+attributes #22 = { convergent nounwind willreturn memory(argmem: read) }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.kernel = !{!9, !15, !21, !25, !30, !40, !44, !48, !51, !55, !60, !65, !68, !95}
-!air.compile_options = !{!98, !99, !100}
-!air.function_constants = !{!101, !102}
-!air.sampler_states = !{!103}
-!llvm.ident = !{!104}
-!air.version = !{!105}
-!air.language_version = !{!106}
+!air.kernel = !{!9, !15, !21, !25, !30, !40, !44, !48, !51, !55, !60, !65, !68, !95, !98}
+!air.compile_options = !{!101, !102, !103}
+!air.function_constants = !{!104, !105}
+!air.sampler_states = !{!106}
+!llvm.ident = !{!107}
+!air.version = !{!108}
+!air.language_version = !{!109}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -692,191 +707,199 @@ attributes #21 = { convergent nounwind willreturn memory(argmem: read) }
 !92 = !{i32 22, !"air.buffer", !"air.location_index", i32 22, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b22"}
 !93 = !{i32 23, !"air.buffer", !"air.location_index", i32 23, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"destination"}
 !94 = !{i32 24, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"index"}
-!95 = !{ptr @signed_zero_products, !10, !96}
-!96 = !{!97, !24, !14}
-!97 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"destination"}
-!98 = !{!"air.compile.denorms_disable"}
-!99 = !{!"air.compile.fast_math_enable"}
-!100 = !{!"air.compile.framebuffer_fetch_enable"}
-!101 = !{ptr addrspace(2) @_Z13positive_zero.MTL_FC_INIT_0_f, !"float", !"positive_zero", i32 0}
-!102 = !{ptr addrspace(2) @_Z13negative_zero.MTL_FC_INIT_1_f, !"float", !"negative_zero", i32 1}
-!103 = !{!"air.sampler_state", ptr addrspace(2) @__air_sampler_state}
-!104 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!105 = !{i32 2, i32 8, i32 0}
-!106 = !{!"Metal", i32 4, i32 0, i32 0}
-!107 = !{!108, !108, i64 0}
-!108 = !{!"omnipotent char", !109, i64 0}
-!109 = !{!"Simple C++ TBAA"}
-!110 = !{!111}
-!111 = distinct !{!111, !112, !"air-alias-scope-arg(0)"}
-!112 = distinct !{!112, !"air-alias-scopes(copy_words)"}
+!95 = !{ptr @wave_store, !10, !96}
+!96 = !{!50, !97, !67}
+!97 = !{i32 1, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"base"}
+!98 = !{ptr @signed_zero_products, !10, !99}
+!99 = !{!100, !24, !14}
+!100 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"destination"}
+!101 = !{!"air.compile.denorms_disable"}
+!102 = !{!"air.compile.fast_math_enable"}
+!103 = !{!"air.compile.framebuffer_fetch_enable"}
+!104 = !{ptr addrspace(2) @_Z13positive_zero.MTL_FC_INIT_0_f, !"float", !"positive_zero", i32 0}
+!105 = !{ptr addrspace(2) @_Z13negative_zero.MTL_FC_INIT_1_f, !"float", !"negative_zero", i32 1}
+!106 = !{!"air.sampler_state", ptr addrspace(2) @__air_sampler_state}
+!107 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!108 = !{i32 2, i32 8, i32 0}
+!109 = !{!"Metal", i32 4, i32 0, i32 0}
+!110 = !{!111, !111, i64 0}
+!111 = !{!"omnipotent char", !112, i64 0}
+!112 = !{!"Simple C++ TBAA"}
 !113 = !{!114}
-!114 = distinct !{!114, !112, !"air-alias-scope-arg(1)"}
-!115 = !{!116}
-!116 = distinct !{!116, !117, !"air-alias-scope-arg(0)"}
-!117 = distinct !{!117, !"air-alias-scopes(scale_offset)"}
-!118 = !{!119, !120}
-!119 = distinct !{!119, !117, !"air-alias-scope-arg(1)"}
-!120 = distinct !{!120, !117, !"air-alias-scope-arg(2)"}
-!121 = !{!120}
-!122 = !{!116, !119}
-!123 = !{!119}
-!124 = !{!116, !120}
-!125 = !{!126, !126, i64 0}
-!126 = !{!"int", !108, i64 0}
-!127 = !{!128}
-!128 = distinct !{!128, !129, !"air-alias-scope-arg(1)"}
-!129 = distinct !{!129, !"air-alias-scopes(fma_chains)"}
+!114 = distinct !{!114, !115, !"air-alias-scope-arg(0)"}
+!115 = distinct !{!115, !"air-alias-scopes(copy_words)"}
+!116 = !{!117}
+!117 = distinct !{!117, !115, !"air-alias-scope-arg(1)"}
+!118 = !{!119}
+!119 = distinct !{!119, !120, !"air-alias-scope-arg(0)"}
+!120 = distinct !{!120, !"air-alias-scopes(scale_offset)"}
+!121 = !{!122, !123}
+!122 = distinct !{!122, !120, !"air-alias-scope-arg(1)"}
+!123 = distinct !{!123, !120, !"air-alias-scope-arg(2)"}
+!124 = !{!123}
+!125 = !{!119, !122}
+!126 = !{!122}
+!127 = !{!119, !123}
+!128 = !{!129, !129, i64 0}
+!129 = !{!"int", !111, i64 0}
 !130 = !{!131}
-!131 = distinct !{!131, !129, !"air-alias-scope-arg(0)"}
-!132 = !{!133, !133, i64 0}
-!133 = !{!"float", !108, i64 0}
-!134 = distinct !{!134, !135}
-!135 = !{!"llvm.loop.mustprogress"}
-!136 = !{!137}
-!137 = distinct !{!137, !138, !"air-alias-scope-arg(0)"}
-!138 = distinct !{!138, !"air-alias-scopes(block_scan)"}
+!131 = distinct !{!131, !132, !"air-alias-scope-arg(1)"}
+!132 = distinct !{!132, !"air-alias-scopes(fma_chains)"}
+!133 = !{!134}
+!134 = distinct !{!134, !132, !"air-alias-scope-arg(0)"}
+!135 = !{!136, !136, i64 0}
+!136 = !{!"float", !111, i64 0}
+!137 = distinct !{!137, !138}
+!138 = !{!"llvm.loop.mustprogress"}
 !139 = !{!140}
-!140 = distinct !{!140, !138, !"air-alias-scope-arg(1)"}
-!141 = distinct !{!141, !135}
+!140 = distinct !{!140, !141, !"air-alias-scope-arg(0)"}
+!141 = distinct !{!141, !"air-alias-scopes(block_scan)"}
 !142 = !{!143}
-!143 = distinct !{!143, !144, !"air-alias-scope-arg(2)"}
-!144 = distinct !{!144, !"air-alias-scopes(reduce_sum)"}
-!145 = !{!146, !147}
-!146 = distinct !{!146, !144, !"air-alias-scope-arg(0)"}
-!147 = distinct !{!147, !144, !"air-alias-scope-arg(1)"}
-!148 = !{!146}
-!149 = !{!147, !143}
-!150 = distinct !{!150, !135}
-!151 = distinct !{!151, !135}
-!152 = !{!147}
-!153 = !{!146, !143}
-!154 = !{!155}
-!155 = distinct !{!155, !156, !"air-alias-scope-arg(2)"}
-!156 = distinct !{!156, !"air-alias-scopes(binomial3x3)"}
-!157 = !{!158, !159}
-!158 = distinct !{!158, !156, !"air-alias-scope-arg(0)"}
-!159 = distinct !{!159, !156, !"air-alias-scope-arg(1)"}
-!160 = !{!159}
-!161 = !{!158, !155}
-!162 = distinct !{!162, !135}
-!163 = !{!158}
-!164 = !{!159, !155}
-!165 = distinct !{!165, !135}
-!166 = !{!167}
-!167 = distinct !{!167, !168, !"air-alias-scope-arg(0)"}
-!168 = distinct !{!168, !"air-alias-scopes(lcg_step)"}
+!143 = distinct !{!143, !141, !"air-alias-scope-arg(1)"}
+!144 = distinct !{!144, !138}
+!145 = !{!146}
+!146 = distinct !{!146, !147, !"air-alias-scope-arg(2)"}
+!147 = distinct !{!147, !"air-alias-scopes(reduce_sum)"}
+!148 = !{!149, !150}
+!149 = distinct !{!149, !147, !"air-alias-scope-arg(0)"}
+!150 = distinct !{!150, !147, !"air-alias-scope-arg(1)"}
+!151 = !{!149}
+!152 = !{!150, !146}
+!153 = distinct !{!153, !138}
+!154 = distinct !{!154, !138}
+!155 = !{!150}
+!156 = !{!149, !146}
+!157 = !{!158}
+!158 = distinct !{!158, !159, !"air-alias-scope-arg(2)"}
+!159 = distinct !{!159, !"air-alias-scopes(binomial3x3)"}
+!160 = !{!161, !162}
+!161 = distinct !{!161, !159, !"air-alias-scope-arg(0)"}
+!162 = distinct !{!162, !159, !"air-alias-scope-arg(1)"}
+!163 = !{!162}
+!164 = !{!161, !158}
+!165 = distinct !{!165, !138}
+!166 = !{!161}
+!167 = !{!162, !158}
+!168 = distinct !{!168, !138}
 !169 = !{!170}
-!170 = distinct !{!170, !168, !"air-alias-scope-arg(1)"}
-!171 = !{!172}
-!172 = distinct !{!172, !173, !"air-alias-scope-arg(1)"}
-!173 = distinct !{!173, !"air-alias-scopes(narrow_mix)"}
+!170 = distinct !{!170, !171, !"air-alias-scope-arg(0)"}
+!171 = distinct !{!171, !"air-alias-scopes(lcg_step)"}
+!172 = !{!173}
+!173 = distinct !{!173, !171, !"air-alias-scope-arg(1)"}
 !174 = !{!175}
-!175 = distinct !{!175, !173, !"air-alias-scope-arg(0)"}
-!176 = distinct !{!176, !135}
+!175 = distinct !{!175, !176, !"air-alias-scope-arg(1)"}
+!176 = distinct !{!176, !"air-alias-scopes(narrow_mix)"}
 !177 = !{!178}
-!178 = distinct !{!178, !179, !"air-alias-scope-arg(1)"}
-!179 = distinct !{!179, !"air-alias-scopes(texels_in)"}
-!180 = !{!181, !182}
-!181 = distinct !{!181, !179, !"air-alias-scope-arg(0)"}
-!182 = distinct !{!182, !179, !"air-alias-scope-textures"}
-!183 = !{!181}
-!184 = !{!178, !182}
-!185 = !{!182}
-!186 = !{!181, !178}
-!187 = !{!188}
-!188 = distinct !{!188, !189, !"air-alias-scope-arg(2)"}
-!189 = distinct !{!189, !"air-alias-scopes(texels_out)"}
-!190 = !{!191, !192}
-!191 = distinct !{!191, !189, !"air-alias-scope-textures"}
-!192 = distinct !{!192, !189, !"air-alias-scope-arg(1)"}
-!193 = !{!192}
-!194 = !{!191, !188}
-!195 = !{!196}
-!196 = distinct !{!196, !197, !"air-alias-scope-textures"}
-!197 = distinct !{!197, !"air-alias-scopes(sample_down)"}
+!178 = distinct !{!178, !176, !"air-alias-scope-arg(0)"}
+!179 = distinct !{!179, !138}
+!180 = !{!181}
+!181 = distinct !{!181, !182, !"air-alias-scope-arg(1)"}
+!182 = distinct !{!182, !"air-alias-scopes(texels_in)"}
+!183 = !{!184, !185}
+!184 = distinct !{!184, !182, !"air-alias-scope-arg(0)"}
+!185 = distinct !{!185, !182, !"air-alias-scope-textures"}
+!186 = !{!184}
+!187 = !{!181, !185}
+!188 = !{!185}
+!189 = !{!184, !181}
+!190 = !{!191}
+!191 = distinct !{!191, !192, !"air-alias-scope-arg(2)"}
+!192 = distinct !{!192, !"air-alias-scopes(texels_out)"}
+!193 = !{!194, !195}
+!194 = distinct !{!194, !192, !"air-alias-scope-textures"}
+!195 = distinct !{!195, !192, !"air-alias-scope-arg(1)"}
+!196 = !{!195}
+!197 = !{!194, !191}
 !198 = !{!199}
-!199 = distinct !{!199, !197, !"air-alias-scope-samplers"}
-!200 = !{!196, !199}
+!199 = distinct !{!199, !200, !"air-alias-scope-textures"}
+!200 = distinct !{!200, !"air-alias-scopes(sample_down)"}
 !201 = !{!202}
-!202 = distinct !{!202, !203, !"air-alias-scope-textures"}
-!203 = distinct !{!203, !"air-alias-scopes(sample_up)"}
+!202 = distinct !{!202, !200, !"air-alias-scope-samplers"}
+!203 = !{!199, !202}
 !204 = !{!205}
-!205 = distinct !{!205, !206, !"air-alias-scope-arg(0)"}
-!206 = distinct !{!206, !"air-alias-scopes(wide_bindings)"}
-!207 = !{!208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!208 = distinct !{!208, !206, !"air-alias-scope-arg(1)"}
-!209 = distinct !{!209, !206, !"air-alias-scope-arg(2)"}
-!210 = distinct !{!210, !206, !"air-alias-scope-arg(3)"}
-!211 = distinct !{!211, !206, !"air-alias-scope-arg(4)"}
-!212 = distinct !{!212, !206, !"air-alias-scope-arg(5)"}
-!213 = distinct !{!213, !206, !"air-alias-scope-arg(6)"}
-!214 = distinct !{!214, !206, !"air-alias-scope-arg(7)"}
-!215 = distinct !{!215, !206, !"air-alias-scope-arg(8)"}
-!216 = distinct !{!216, !206, !"air-alias-scope-arg(9)"}
-!217 = distinct !{!217, !206, !"air-alias-scope-arg(10)"}
-!218 = distinct !{!218, !206, !"air-alias-scope-arg(11)"}
-!219 = distinct !{!219, !206, !"air-alias-scope-arg(12)"}
-!220 = distinct !{!220, !206, !"air-alias-scope-arg(13)"}
-!221 = distinct !{!221, !206, !"air-alias-scope-arg(14)"}
-!222 = distinct !{!222, !206, !"air-alias-scope-arg(15)"}
-!223 = distinct !{!223, !206, !"air-alias-scope-arg(16)"}
-!224 = distinct !{!224, !206, !"air-alias-scope-arg(17)"}
-!225 = distinct !{!225, !206, !"air-alias-scope-arg(18)"}
-!226 = distinct !{!226, !206, !"air-alias-scope-arg(19)"}
-!227 = distinct !{!227, !206, !"air-alias-scope-arg(20)"}
-!228 = distinct !{!228, !206, !"air-alias-scope-arg(21)"}
-!229 = distinct !{!229, !206, !"air-alias-scope-arg(22)"}
-!230 = distinct !{!230, !206, !"air-alias-scope-arg(23)"}
-!231 = !{!208}
-!232 = !{!205, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!233 = !{!209}
-!234 = !{!205, !208, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!235 = !{!210}
-!236 = !{!205, !208, !209, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!237 = !{!211}
-!238 = !{!205, !208, !209, !210, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!239 = !{!212}
-!240 = !{!205, !208, !209, !210, !211, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!241 = !{!213}
-!242 = !{!205, !208, !209, !210, !211, !212, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!243 = !{!214}
-!244 = !{!205, !208, !209, !210, !211, !212, !213, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!245 = !{!215}
-!246 = !{!205, !208, !209, !210, !211, !212, !213, !214, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!247 = !{!216}
-!248 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!249 = !{!217}
-!250 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!251 = !{!218}
-!252 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!253 = !{!219}
-!254 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!255 = !{!220}
-!256 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!257 = !{!221}
-!258 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !222, !223, !224, !225, !226, !227, !228, !229, !230}
-!259 = !{!222}
-!260 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !223, !224, !225, !226, !227, !228, !229, !230}
-!261 = !{!223}
-!262 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !224, !225, !226, !227, !228, !229, !230}
-!263 = !{!224}
-!264 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !225, !226, !227, !228, !229, !230}
-!265 = !{!225}
-!266 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !226, !227, !228, !229, !230}
-!267 = !{!226}
-!268 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !227, !228, !229, !230}
-!269 = !{!227}
-!270 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !228, !229, !230}
-!271 = !{!228}
-!272 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !229, !230}
-!273 = !{!229}
-!274 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !230}
-!275 = !{!230}
-!276 = !{!205, !208, !209, !210, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229}
-!277 = !{!278}
-!278 = distinct !{!278, !279, !"air-alias-scope-arg(1)"}
-!279 = distinct !{!279, !"air-alias-scopes(signed_zero_products)"}
+!205 = distinct !{!205, !206, !"air-alias-scope-textures"}
+!206 = distinct !{!206, !"air-alias-scopes(sample_up)"}
+!207 = !{!208}
+!208 = distinct !{!208, !209, !"air-alias-scope-arg(0)"}
+!209 = distinct !{!209, !"air-alias-scopes(wide_bindings)"}
+!210 = !{!211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!211 = distinct !{!211, !209, !"air-alias-scope-arg(1)"}
+!212 = distinct !{!212, !209, !"air-alias-scope-arg(2)"}
+!213 = distinct !{!213, !209, !"air-alias-scope-arg(3)"}
+!214 = distinct !{!214, !209, !"air-alias-scope-arg(4)"}
+!215 = distinct !{!215, !209, !"air-alias-scope-arg(5)"}
+!216 = distinct !{!216, !209, !"air-alias-scope-arg(6)"}
+!217 = distinct !{!217, !209, !"air-alias-scope-arg(7)"}
+!218 = distinct !{!218, !209, !"air-alias-scope-arg(8)"}
+!219 = distinct !{!219, !209, !"air-alias-scope-arg(9)"}
+!220 = distinct !{!220, !209, !"air-alias-scope-arg(10)"}
+!221 = distinct !{!221, !209, !"air-alias-scope-arg(11)"}
+!222 = distinct !{!222, !209, !"air-alias-scope-arg(12)"}
+!223 = distinct !{!223, !209, !"air-alias-scope-arg(13)"}
+!224 = distinct !{!224, !209, !"air-alias-scope-arg(14)"}
+!225 = distinct !{!225, !209, !"air-alias-scope-arg(15)"}
+!226 = distinct !{!226, !209, !"air-alias-scope-arg(16)"}
+!227 = distinct !{!227, !209, !"air-alias-scope-arg(17)"}
+!228 = distinct !{!228, !209, !"air-alias-scope-arg(18)"}
+!229 = distinct !{!229, !209, !"air-alias-scope-arg(19)"}
+!230 = distinct !{!230, !209, !"air-alias-scope-arg(20)"}
+!231 = distinct !{!231, !209, !"air-alias-scope-arg(21)"}
+!232 = distinct !{!232, !209, !"air-alias-scope-arg(22)"}
+!233 = distinct !{!233, !209, !"air-alias-scope-arg(23)"}
+!234 = !{!211}
+!235 = !{!208, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!236 = !{!212}
+!237 = !{!208, !211, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!238 = !{!213}
+!239 = !{!208, !211, !212, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!240 = !{!214}
+!241 = !{!208, !211, !212, !213, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!242 = !{!215}
+!243 = !{!208, !211, !212, !213, !214, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!244 = !{!216}
+!245 = !{!208, !211, !212, !213, !214, !215, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!246 = !{!217}
+!247 = !{!208, !211, !212, !213, !214, !215, !216, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!248 = !{!218}
+!249 = !{!208, !211, !212, !213, !214, !215, !216, !217, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!250 = !{!219}
+!251 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!252 = !{!220}
+!253 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!254 = !{!221}
+!255 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!256 = !{!222}
+!257 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!258 = !{!223}
+!259 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !224, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!260 = !{!224}
+!261 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !225, !226, !227, !228, !229, !230, !231, !232, !233}
+!262 = !{!225}
+!263 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !226, !227, !228, !229, !230, !231, !232, !233}
+!264 = !{!226}
+!265 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !227, !228, !229, !230, !231, !232, !233}
+!266 = !{!227}
+!267 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !228, !229, !230, !231, !232, !233}
+!268 = !{!228}
+!269 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !229, !230, !231, !232, !233}
+!270 = !{!229}
+!271 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !230, !231, !232, !233}
+!272 = !{!230}
+!273 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !231, !232, !233}
+!274 = !{!231}
+!275 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !232, !233}
+!276 = !{!232}
+!277 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !233}
+!278 = !{!233}
+!279 = !{!208, !211, !212, !213, !214, !215, !216, !217, !218, !219, !220, !221, !222, !223, !224, !225, !226, !227, !228, !229, !230, !231, !232}
 !280 = !{!281}
-!281 = distinct !{!281, !279, !"air-alias-scope-arg(0)"}
-!282 = distinct !{!282, !135}
+!281 = distinct !{!281, !282, !"air-alias-scope-arg(1)"}
+!282 = distinct !{!282, !"air-alias-scopes(wave_store)"}
+!283 = !{!284}
+!284 = distinct !{!284, !282, !"air-alias-scope-arg(0)"}
+!285 = !{!286}
+!286 = distinct !{!286, !287, !"air-alias-scope-arg(1)"}
+!287 = distinct !{!287, !"air-alias-scopes(signed_zero_products)"}
+!288 = !{!289}
+!289 = distinct !{!289, !287, !"air-alias-scope-arg(0)"}
+!290 = distinct !{!290, !138}
