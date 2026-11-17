@@ -503,10 +503,16 @@ impl super::DeviceShared {
                     }),
                     Err(_) => {
                         // A device test's slow call (`Device::slow_submit_calls`), a batch's
-                        // that submits command buffers.
+                        // that submits command buffers, but each of its fast ones
+                        // (`Device::fast_submit_call_every`).
                         let pause = self.submit_call_pause.load(Ordering::Relaxed);
                         if pause > 0 && value.is_some() && buffers > 0 {
-                            std::thread::sleep(std::time::Duration::from_nanos(pause));
+                            let (fast, counted) = &self.submit_call_fast;
+                            let every = fast.load(Ordering::Relaxed);
+                            let nth = counted.fetch_add(1, Ordering::Relaxed) + 1;
+                            if every == 0 || !nth.is_multiple_of(every) {
+                                std::thread::sleep(std::time::Duration::from_nanos(pause));
+                            }
                         }
                         f(vk_queue)
                     }

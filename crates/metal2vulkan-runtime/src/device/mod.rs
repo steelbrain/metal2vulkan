@@ -632,6 +632,11 @@ pub(super) struct DeviceShared {
     /// commands are slow (`Device::slow_submit_calls`).
     #[cfg(test)]
     pub(crate) submit_call_pause: AtomicU64,
+    /// Of those calls, each how manyth is not lengthened, and those counted since it was set: the
+    /// device tests' stand-in for a short call of commands among slow ones
+    /// (`Device::fast_submit_call_every`); 0 for none.
+    #[cfg(test)]
+    pub(crate) submit_call_fast: (AtomicU64, AtomicU64),
     /// The call floor at or above which a committing thread leaves a `VkQueue`'s batches to
     /// the scheduler's thread, where a device test set one (`Device::leave_calls_from`); 0 for
     /// `submit_calls::SLOW_NANOS`.
@@ -1742,6 +1747,16 @@ impl Device {
     pub(crate) fn slow_submit_calls(&self, pause: Option<std::time::Duration>) {
         let nanos = pause.map_or(0, |pause| pause.as_nanos() as u64);
         (self.shared().submit_call_pause).store(nanos, Ordering::Relaxed);
+    }
+
+    /// Of the calls [`slow_submit_calls`](Self::slow_submit_calls) lengthens, leave each `every`th
+    /// from now on at the driver's own time, the first the `every`th to come (`None`: lengthen
+    /// each): the tests' stand-in for a short call of commands among slow ones
+    /// (`submit_calls.rs`, "One short call set aside").
+    pub(crate) fn fast_submit_call_every(&self, every: Option<u64>) {
+        let (fast, counted) = &self.shared().submit_call_fast;
+        counted.store(0, Ordering::Relaxed);
+        fast.store(every.unwrap_or(0), Ordering::Relaxed);
     }
 
     /// A committing thread leaves a `VkQueue`'s batches to the scheduler's thread where their
@@ -3407,6 +3422,8 @@ impl Device {
             failing_result: Default::default(),
             #[cfg(test)]
             submit_call_pause: Default::default(),
+            #[cfg(test)]
+            submit_call_fast: Default::default(),
             #[cfg(test)]
             slow_calls_from: Default::default(),
             #[cfg(test)]

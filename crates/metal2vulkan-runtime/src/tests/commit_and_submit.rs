@@ -785,22 +785,24 @@ impl Drop for Pages {
 }
 
 /// A command buffer whose blit fills a no-copy buffer over host pages keeps its encoder's log for
-/// a rebind (`replay.rs`), so its batch holds segments, though no host step is due for it: on an
-/// idle device whose calls are not slow (`device/submit_calls.rs`), `commit_and_submit` submits
-/// it on the committing thread, as it submits one that fills a `Private` buffer (the plain leg),
-/// and no host step is recorded. Counted, in each leg: a batch at commit for most, none left for
-/// a host step (`WorkCounts::scheduler_at_commit_left_host_steps`); before the committing thread
-/// asked whether a step was due, every one of the host pages' leg was left so. A host under load
-/// can make a stretch of the queue's calls slow, which leaves those commits for slow calls
-/// (`WorkCounts::scheduler_at_commit_left_slow_calls`, which
-/// [`a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread`] proves): counted
-/// and printed here, not failed. Each leg prints its share of batches at commit, the time from each commit call to
-/// its submission's return, and the queue's floor of its last calls.
+/// a rebind (`replay.rs`), so its batch holds segments, though no host step is due for it:
+/// `commit_and_submit` submits it on the committing thread, as it submits one that fills a
+/// `Private` buffer (the plain leg), and no host step is recorded. Counted, in each leg: a batch at
+/// commit for most, none left for a host step (`WorkCounts::scheduler_at_commit_left_host_steps`);
+/// before the committing thread asked whether a step was due, every one of the host pages' leg was
+/// left so. No commit here is left for slow calls (`Device::leave_calls_from`): a loaded host makes
+/// a stretch of the queue's calls slow, which leaves those commits by that rule
+/// (`device/submit_calls.rs`, which
+/// [`a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread`] proves), not for a
+/// host step; on the Radeon 780M beside other jobs on its host, 160 of a leg's 200 were left so.
+/// Each leg prints its share of batches at commit, the time from each commit call to its
+/// submission's return, and the queue's floor of its last calls at the leg's end and at its least.
 #[test]
 fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
     let pages = Pages(super::host_os::private(PAGES));
     let device = device();
     device.shared().timing.note_queue_times();
+    device.leave_calls_from(Some(u64::MAX));
     let queue = device.new_command_queue().unwrap();
     // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
     let memory = unsafe { crate::HostMemory::new(pages.0) };
@@ -810,19 +812,14 @@ fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
         unsafe { device.new_buffer_with_bytes_no_copy(memory, PAGES as u64, shared, None) }
             .unwrap();
     let private = (device.new_buffer(PAGES as u64, ResourceOptions::private())).unwrap();
-    // A fresh device's first calls may be slow (lavapipe's beside other tests): the queue's call
-    // floor is read over its last calls once these went (`device/submit_calls.rs`).
-    for round in 0..CALLS {
-        let command_buffer = fill(&queue, &private, round as u8);
-        command_buffer.commit_and_submit().unwrap();
-        command_buffer.wait_until_completed().unwrap();
-    }
     for (leg, target, host_pages) in [
         ("plain", &private, false),
         ("host pages", &over_pages, true),
     ] {
         let before = device.work_counts();
         let mut to_submission = Vec::new();
+        let calls = &device.shared().queues[queue.vk_queue_sharing().0].calls;
+        let mut least = u64::MAX;
         for round in 0..PAGE_ROUNDS {
             let command_buffer = fill(&queue, target, round as u8);
             let committed = crate::gpu_time::host_nanos();
@@ -834,6 +831,10 @@ fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
             }
             let returned = command_buffer.submit_returned_time() * 1e9;
             to_submission.push((returned - committed as f64) / 1e3);
+            // 0 until the queue's first calls were timed.
+            if calls.floor() > 0 {
+                least = least.min(calls.floor());
+            }
         }
         let after = device.work_counts();
         let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
@@ -844,23 +845,17 @@ fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
         let steps = moved(|c| c.host_steps_recorded);
         to_submission.sort_by(f64::total_cmp);
         let at = |p: usize| to_submission[(to_submission.len() * p).div_ceil(100) - 1];
-        let floor = device.shared().queues[queue.vk_queue_sharing().0]
-            .calls
-            .floor();
         println!(
             "{leg} ({}): batches at commit {batches} of {PAGE_ROUNDS}; commit -> its submission \
              returned, us: p50 {:.1} p99 {:.1} max {:.1}; logs kept {logs}, left for a host step \
              {left}, for slow calls {slow}, host steps recorded {steps}; the queue's call floor \
-             {:.1} us",
+             {:.1} us at the leg's end, {:.1} us at its least",
             device.name(),
             at(50),
             at(99),
             at(100),
-            floor as f64 / 1e3,
-        );
-        assert!(
-            floor < SLOW_NANOS,
-            "{leg}: each of the queue's last calls took {floor} ns or more, past the bound"
+            calls.floor() as f64 / 1e3,
+            least as f64 / 1e3,
         );
         assert!(
             !host_pages || logs >= PAGE_ROUNDS,
@@ -872,7 +867,7 @@ fn a_command_buffer_naming_host_pages_is_submitted_at_its_commit() {
             "{leg}: a pass at commit left a batch for a host step none was due for"
         );
         // A pass of the scheduler's thread under way at the commit (a completion's nudge) takes it
-        // in instead: rarely, on an idle device; so does a stretch of slow calls on a loaded host.
+        // in instead: rarely, on an idle device.
         assert!(
             batches >= PAGE_ROUNDS / 2,
             "{leg}: {batches} of {PAGE_ROUNDS} batches at commit"
@@ -951,6 +946,73 @@ fn a_queue_whose_calls_are_slow_leaves_its_batches_to_the_scheduler_s_thread() {
     assert_eq!(batches, 0, "a committing thread made a slow call");
     assert_eq!(moved(|c| c.scheduler_at_commit_left_host_steps), 0);
     assert_eq!(moved(|c| c.host_steps_recorded), 0);
+    // A pass of the scheduler's thread under way at the commit (a completion's nudge) takes it
+    // in instead: rarely, on an idle device.
+    assert!(
+        slow >= SLOW_ROUNDS / 2,
+        "{slow} of {SLOW_ROUNDS} commits left for slow calls"
+    );
+}
+
+/// Where a `VkQueue`'s batches' calls of commands are slow (each made [`SLOW_CALL`] longer) but one
+/// in each [`CALLS`], which takes the driver's own time (`Device::fast_submit_call_every`), as one
+/// guest queue's smaller batches among another's, `commit_and_submit` still leaves them to the
+/// scheduler's thread: the queue's floor sets the shortest of its last calls aside
+/// (`device/submit_calls.rs`, "One short call set aside"), so no batch goes at commit and each
+/// commit that passed is counted as left for the slow calls
+/// (`WorkCounts::scheduler_at_commit_left_slow_calls`). Before, the floor was the least of the last
+/// calls: each short call held it under the bound for the next [`CALLS`] calls, and the committing
+/// thread made those slow calls itself, as it made 5 to 9% of a macOS guest's window drag's on the
+/// Radeon 780M.
+#[test]
+fn a_queue_whose_calls_of_commands_are_slow_but_one_in_each_leaves_them() {
+    let pages = Pages(super::host_os::private(PAGES));
+    let device = device();
+    let queue = device.new_command_queue().unwrap();
+    // SAFETY: the pages, read and write, outlive every buffer over them (made before the device).
+    let memory = unsafe { crate::HostMemory::new(pages.0) };
+    let shared = ResourceOptions::shared();
+    // SAFETY: `memory` is `PAGES` bytes of fresh pages.
+    let over_pages =
+        unsafe { device.new_buffer_with_bytes_no_copy(memory, PAGES as u64, shared, None) }
+            .unwrap();
+    device.slow_submit_calls(Some(SLOW_CALL));
+    device.fast_submit_call_every(Some(CALLS as u64));
+    let round = |value: u8| {
+        let command_buffer = fill(&queue, &over_pages, value);
+        command_buffer.commit_and_submit().unwrap();
+        command_buffer.wait_until_completed().unwrap();
+        assert_eq!(command_buffer.status(), CommandBufferStatus::Completed);
+        assert_eq!(first_byte(&over_pages), value, "round {value}");
+    };
+    // The last of these rounds' calls is a fast one.
+    for value in 0..CALLS as u8 {
+        round(value);
+    }
+    let calls = &device.shared().queues[queue.vk_queue_sharing().0].calls;
+    assert!(
+        calls.floor() >= SLOW_NANOS,
+        "the queue's call floor is {} ns with one fast call among its last",
+        calls.floor()
+    );
+    let before = device.work_counts();
+    for value in 0..SLOW_ROUNDS {
+        round(value as u8);
+    }
+    let after = device.work_counts();
+    let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
+    let batches = moved(|c| c.batches_submitted_at_commit);
+    let slow = moved(|c| c.scheduler_at_commit_left_slow_calls);
+    println!(
+        "slow calls but one in {CALLS} ({}): batches at commit {batches} of {SLOW_ROUNDS}; left \
+         for slow calls {slow}; the queue's call floor {:.1} us",
+        device.name(),
+        calls.floor() as f64 / 1e3,
+    );
+    assert_eq!(
+        batches, 0,
+        "a committing thread made a call among slow ones"
+    );
     // A pass of the scheduler's thread under way at the commit (a completion's nudge) takes it
     // in instead: rarely, on an idle device.
     assert!(

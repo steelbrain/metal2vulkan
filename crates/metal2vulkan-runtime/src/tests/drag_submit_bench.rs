@@ -9,7 +9,11 @@
 //! compositor's command buffer: each a dispatch, but the last, which encodes nothing but an
 //! event's signal, so its batch holds no command buffer (the empty last part reims's decoder cut
 //! from most of a window drag's buffers on the Radeon 780M; one that signals nothing makes no
-//! call); the frame's parts are waited for before the next frame.
+//! call); the frame's parts are waited for before the next frame. Each with the driver's calls,
+//! then with each call of commands made [`MIXED_PAUSE`] longer but one in each [`CALLS`]
+//! (`Device::slow_submit_calls`, `Device::fast_submit_call_every`): a short call among slow ones,
+//! as one guest queue's smaller batches come among another's (`device/submit_calls.rs`, "One
+//! short call set aside").
 //!
 //! Printed (`DRAG-SUBMIT`), each: the parts submitted at their commit and those left for slow
 //! calls (`WorkCounts::batches_submitted_at_commit`,
@@ -25,10 +29,11 @@ use super::blit_holds::{Scratch, WAIT};
 use super::compute_parked::Kernel;
 use super::host_residency::{udmabuf_openable, Ram};
 use super::submit_tax_bench::bind_all;
+use crate::device::submit_calls::CALLS;
 use crate::{Buffer, CommandBufferStatus, EventRef, HostMemory, ResourceOptions};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The imports of the first measurement, and of each more.
 const LISTED: usize = 140;
@@ -40,6 +45,9 @@ const PARTS: usize = 13;
 const WARM: usize = 20;
 /// The frames measured.
 const FRAMES: usize = 200;
+/// How much longer each call of commands but one in each [`CALLS`] takes in the second
+/// measurement of each.
+const MIXED_PAUSE: Duration = Duration::from_micros(100);
 
 /// The `at` quantile of `values`, sorted.
 fn quantile(values: &[f64], at: f64) -> f64 {
@@ -122,47 +130,57 @@ fn drag_submit_bench() {
                 empty.push(took[PARTS - 1]);
             }
         };
-        for _ in 0..WARM {
-            frame(None);
+        for (calls_were, pause) in [
+            ("the driver's", None),
+            ("100 us longer but one in each 15", Some(MIXED_PAUSE)),
+        ] {
+            device.slow_submit_calls(pause);
+            device.fast_submit_call_every(pause.map(|_| CALLS as u64));
+            for _ in 0..WARM {
+                frame(None);
+            }
+            let (mut work, mut empty) = (Vec::new(), Vec::new());
+            let before = device.work_counts();
+            let started = Instant::now();
+            for _ in 0..FRAMES {
+                frame(Some((&mut work, &mut empty)));
+            }
+            let elapsed = started.elapsed().as_secs_f64();
+            let after = device.work_counts();
+            let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
+            let parts = (FRAMES * PARTS) as f64;
+            let at_commit = moved(|c| c.batches_submitted_at_commit);
+            let slow = moved(|c| c.scheduler_at_commit_left_slow_calls);
+            let submissions = moved(|c| c.queue_submissions).max(1) as f64;
+            let floor = device.shared().queues[queue.vk_queue_sharing().0]
+                .calls
+                .floor();
+            println!(
+                "DRAG-SUBMIT listed {} (live dma-buf memories {}), calls of commands \
+                 {calls_were}, on {}: {} parts ({FRAMES} frames of {PARTS}, the last empty) in \
+                 {elapsed:.2} s; at commit {at_commit} ({:.1}%), left for slow calls {slow} \
+                 ({:.1}%); commit call a part, us: with work p50 {:.1} p90 {:.1} mean {:.1}, \
+                 empty mean {:.1}, all a frame {:.0}; batch calls {} of mean {:.1} us, {:.1} \
+                 VkCommandBuffers a call; the queue's call floor {:.1} us",
+                listed.len(),
+                after.dma_buf_memories_live,
+                device.name(),
+                parts,
+                100.0 * at_commit as f64 / parts,
+                100.0 * slow as f64 / parts,
+                quantile(&work, 0.5),
+                quantile(&work, 0.9),
+                mean(&work),
+                mean(&empty),
+                (work.iter().sum::<f64>() + empty.iter().sum::<f64>()) / FRAMES as f64,
+                submissions,
+                moved(|c| c.batch_submit_nanos) as f64 / submissions / 1e3,
+                moved(|c| c.command_buffers_submitted) as f64 / submissions,
+                floor as f64 / 1e3,
+            );
         }
-        let (mut work, mut empty) = (Vec::new(), Vec::new());
-        let before = device.work_counts();
-        let started = Instant::now();
-        for _ in 0..FRAMES {
-            frame(Some((&mut work, &mut empty)));
-        }
-        let elapsed = started.elapsed().as_secs_f64();
-        let after = device.work_counts();
-        let moved = |count: fn(&crate::WorkCounts) -> u64| count(&after) - count(&before);
-        let parts = (FRAMES * PARTS) as f64;
-        let at_commit = moved(|c| c.batches_submitted_at_commit);
-        let slow = moved(|c| c.scheduler_at_commit_left_slow_calls);
-        let submissions = moved(|c| c.queue_submissions).max(1) as f64;
-        let floor = device.shared().queues[queue.vk_queue_sharing().0]
-            .calls
-            .floor();
-        println!(
-            "DRAG-SUBMIT listed {} (live dma-buf memories {}) on {}: {} parts ({FRAMES} frames \
-             of {PARTS}, the last empty) in {elapsed:.2} s; at commit {at_commit} ({:.1}%), left \
-             for slow calls {slow} ({:.1}%); commit call a part, us: with work p50 {:.1} p90 \
-             {:.1} mean {:.1}, empty mean {:.1}, all a frame {:.0}; batch calls {} of mean \
-             {:.1} us, {:.1} VkCommandBuffers a call; the queue's call floor {:.1} us",
-            listed.len(),
-            after.dma_buf_memories_live,
-            device.name(),
-            parts,
-            100.0 * at_commit as f64 / parts,
-            100.0 * slow as f64 / parts,
-            quantile(&work, 0.5),
-            quantile(&work, 0.9),
-            mean(&work),
-            mean(&empty),
-            (work.iter().sum::<f64>() + empty.iter().sum::<f64>()) / FRAMES as f64,
-            submissions,
-            moved(|c| c.batch_submit_nanos) as f64 / submissions / 1e3,
-            moved(|c| c.command_buffers_submitted) as f64 / submissions,
-            floor as f64 / 1e3,
-        );
+        device.slow_submit_calls(None);
+        device.fast_submit_call_every(None);
     }
     drop(listed);
 }

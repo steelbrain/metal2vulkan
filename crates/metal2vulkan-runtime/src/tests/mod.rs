@@ -859,6 +859,7 @@ mod storage_form_recycle;
 mod store_out_device;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submission_turns;
+mod submit_calls;
 mod submit_check;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod submit_check_device;
