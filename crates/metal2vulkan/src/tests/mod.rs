@@ -208,6 +208,7 @@ mod engine_volatile;
 mod engine_wide;
 mod engine_widest_pin;
 mod engine_word_attachments;
+mod engine_word_phases;
 mod engine_ycbcr_in_place;
 mod engine_zero_factors;
 mod engine_zeroed_colors;

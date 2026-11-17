@@ -6,7 +6,9 @@
 //! checks reproduce, and the generated-program fuzzers ([`fuzz`]) the product's CPU-interpreter
 //! tests and validation's device tests both run, the extended-range bicubic table both check
 //! ([`xr_bicubic`]), the store-buffering litmus kernel both compile
-//! ([`litmus`]), and the counter of a thread's user-space instructions the matrix's
+//! ([`litmus`]), the inputs and answer of the vector word-phase fixture the product's
+//! interpreter test, the new runtime's device test and the conformance suite all hold
+//! ([`vector_word_phases`]), and the counter of a thread's user-space instructions the matrix's
 //! instructions-per-draw records are measured with ([`instructions`]).
 //!
 //! Scratch directories every suite's temporaries go in ([`scratch`]): one root under the OS temp
@@ -35,6 +37,7 @@ pub mod scratch;
 pub mod spirv;
 pub mod stitched;
 pub mod tools;
+pub mod vector_word_phases;
 pub mod xr_bicubic;
 
 #[cfg(test)]
