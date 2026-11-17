@@ -60,7 +60,11 @@ order, and a lower one never overrides a higher one.
    second form, for four features only: 16-bit floats, storage-image reads without a format,
    64-bit atomics and 64-bit floats. A second form chosen by anything else is not allowed.
 3. **Native-like speed.** Structure decides speed: driver-owned memory, optimal images in real
-   layouts, direct addresses, nothing copied that Metal would not copy.
+   layouts, direct addresses, nothing copied that Metal would not copy. The one exception to
+   optimal images is a texture over a Shared buffer: a linear image on that buffer's memory, in
+   the device's own layout, created so its first use keeps the bytes, with the alignment the guest
+   reads from Metal's minimum linear texture alignment, and where a format query offers no linear
+   image for the format and usage, a counted copy at commit. The exception does not grow.
 4. **Small.** Every cache is bounded, every feature has one form, and anything unused is deleted.
 
 **An accuracy note is logged, never fatal.** A precision note is recorded and announced, and the
