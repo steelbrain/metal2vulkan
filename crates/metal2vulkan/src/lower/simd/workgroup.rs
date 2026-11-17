@@ -10,14 +10,16 @@
 //! stores its words at `scratch[lin · W + i]`, a workgroup barrier makes them visible, each lane
 //! reads the words of the lanes it needs, and a second workgroup barrier keeps the next exchange
 //! from overwriting them before every lane has read. Under the identity domains the scratch holds
-//! two such regions, which the exchanges and votes take in turn by a per-invocation turn that
-//! flips at each ([`Declared::turn`]; every invocation executes the same exchanges, so the turn is
-//! workgroup uniform): an exchange writes the region the one before it did not, every lane read
-//! that region's last words before the barrier that opened the exchange in between, and that
-//! barrier orders those reads before this exchange's writes, so no exchange closes with a barrier
-//! (in Vulkan's memory model a control barrier's release in one invocation synchronizes with its
-//! acquire in every other, and a read that happens before a write is location-ordered before it,
-//! so it does not see it). `W` is the widest exchange of the function
+//! two such regions where they cost the kernel nothing Metal shows (`two_regions_fit`: they fit
+//! beside its threadgroup memory with as many threads per threadgroup as one, and it binds no
+//! `[[threadgroup(n)]]` region, whose length the encoder sets). The exchanges and votes take them
+//! in turn by a per-invocation turn that flips at each ([`Declared::turn`]; every invocation
+//! executes the same exchanges, so the turn is workgroup uniform): an exchange writes the region
+//! the one before it did not, every lane read that region's last words before the barrier that
+//! opened the exchange in between, and that barrier orders those reads before this exchange's
+//! writes, so no exchange closes with a barrier (in Vulkan's memory model a control barrier's
+//! release in one invocation synchronizes with its acquire in every other, and a read that happens
+//! before a write is location-ordered before it, so it does not see it). `W` is the widest exchange of the function
 //! (words per lane: one per lane of each value it moves; Metal moves no 64-bit value between
 //! lanes, so a 64-bit form is not lowered), and the scratch is a `u32` array of `W · ⌈N / 32⌉ · 32`
 //! words, `N = sx·sy·sz` the threadgroup's threads (the local-size specialization constants), so
@@ -92,7 +94,7 @@ use crate::lower::select::SelectCx;
 use crate::lower::strategy::Strategy;
 use crate::lower::sync::barrier::{self, BarrierStrategy};
 use crate::lower::sync::memory_model;
-use crate::memory::arena::MIN_ARENA_BYTES;
+use crate::memory::arena::{WorkgroupLimit, MIN_ARENA_BYTES};
 use crate::memory::leaf::Coherence;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{SpecKey, Stage};
@@ -409,15 +411,31 @@ pub fn check(
         words = words.max(1);
     }
     let identity = crate::lower::access::identity(cx.profile);
+    // The arena the module declares (`access::local::use_arena` checked its static part) and its
+    // typed threadgroup objects.
+    let arena = crate::lower::access::local::static_workgroup_bytes(cx);
+    let limit = crate::lower::mesh::workgroup_limit(cx);
+    let regions = cx
+        .families
+        .access
+        .local
+        .tg
+        .as_ref()
+        .is_some_and(|shape| !shape.regions.is_empty());
+    let alternating = identity
+        && words > 0
+        && !regions
+        && two_regions_fit(
+            limit,
+            arena_bytes(arena, 0),
+            bytes_per_simdgroup(words, false),
+        );
     let fact = if words == 0 {
         None
     } else {
-        let per_simdgroup = bytes_per_simdgroup(words, identity);
-        // The arena the module declares (`access::local::use_arena` checked its static part) and
-        // its typed threadgroup objects.
-        let arena = crate::lower::access::local::static_workgroup_bytes(cx);
+        let per_simdgroup = bytes_per_simdgroup(words, alternating);
         let required = arena_bytes(arena, 0).saturating_add(per_simdgroup);
-        crate::lower::mesh::workgroup_limit(cx).check(required)?;
+        limit.check(required)?;
         Some(RuntimeFact::SimdgroupEmulation {
             bytes_per_simdgroup: u32::try_from(per_simdgroup).unwrap_or(u32::MAX),
             arena,
@@ -432,7 +450,7 @@ pub fn check(
     }
     cx.families.simd.exchange_words = words;
     cx.families.simd.guarded_barriers = identity;
-    cx.families.simd.alternating = identity;
+    cx.families.simd.alternating = alternating;
     cx.families.simd.predication = predication;
     if let Some(fact) = fact {
         cx.facts.insert(fact);
@@ -441,6 +459,31 @@ pub fn check(
         cx.facts.insert(RuntimeFact::UnitAxes { axes: 0, relief });
     }
     Ok(())
+}
+
+/// Metal's most threads per threadgroup, 1024, as simdgroups.
+const METAL_SIMDGROUPS: u64 = 1024 / SIMD_WIDTH as u64;
+
+/// Whether a scratch of two regions of `per` bytes per simdgroup costs the kernel nothing Metal
+/// shows beside `fixed` bytes of its own threadgroup memory under `limit`: two regions of one
+/// simdgroup fit, and as many simdgroups fit beside it as with one region, up to Metal's 1024
+/// threads, so the kernel reports as many threads per threadgroup and runs every threadgroup one
+/// region runs.
+fn two_regions_fit(limit: WorkgroupLimit, fixed: u64, per: u64) -> bool {
+    if limit.check(fixed.saturating_add(2 * per)).is_err() {
+        return false;
+    }
+    let mut free = limit.available.saturating_sub(limit.wrapper);
+    if let Some(s) = limit.shared {
+        free = free.min(
+            s.available
+                .saturating_sub(limit.wrapper.saturating_add(s.payload)),
+        );
+    }
+    let free = free.saturating_sub(fixed);
+    let one = free / per.max(1);
+    let two = free / (2 * per).max(1);
+    two >= one.min(METAL_SIMDGROUPS)
 }
 
 /// The first synchronization of the tier (`divergent::is_sync`: an emulated site, or a

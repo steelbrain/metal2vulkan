@@ -282,9 +282,10 @@ pub struct SimdPlan {
     /// of one thread exchanges with itself alone, in program order, and executes none of them
     /// (`workgroup::Declared::several`).
     pub guarded_barriers: bool,
-    /// In the `Emulated` tier under the identity domains, the scratch holds two regions that the
-    /// tier's exchanges and votes take in turn, so none closes with a barrier
-    /// (`workgroup::Declared::turn`).
+    /// In the `Emulated` tier under the identity domains, where two regions cost the kernel
+    /// nothing Metal shows (`workgroup::two_regions_fit`, and no `[[threadgroup(n)]]` region), the
+    /// scratch holds two regions that the tier's exchanges and votes take in turn, so none closes
+    /// with a barrier (`workgroup::Declared::turn`).
     pub alternating: bool,
     /// The predicated walk of a kernel with a synchronization outside workgroup-uniform control
     /// flow: an emulated site or threadgroup barrier in the `Emulated` tier, a workgroup barrier in
