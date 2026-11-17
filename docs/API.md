@@ -112,8 +112,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
   them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
   pushed as `PushField::SlotGuestBase`, with no root table, no descriptor and no containment, as
-  Metal contains no device-address access. So far they lower a kernel that reaches memory only
-  through its buffer slots; any other function is refused as `Unsupported{IdentityDomains}`.
+  Metal contains no device-address access. Fields past the 128-byte push window go to a
+  parameter block in memory, read at the device address `PushField::ArgumentTableAddress`, which
+  the window always holds. So far they lower a kernel that reaches memory only through its buffer
+  slots; any other function is refused as `Unsupported{IdentityDomains}`.
 - **The model's linear sample of planes read in place** (`YCbCrInPlacePolicy::Model`, the
   default; changes emitted code). On an integrated GPU or a CPU device a function that only
   samples, gathers or sizes a `YCBCR8_420_2P` or `YCBCR10_420_2P` texture reads its planes' codes

@@ -65,7 +65,7 @@ use crate::lower::{
 use crate::memory::static_root::{self, MemoryPlan};
 use crate::pipeline::artifact::{PrecisionNote, SpecClause, SpecTest, SpecializedNote};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::interface::{AccessSet, BufferForm, PushPlacement, Window};
+use crate::pipeline::interface::{AccessSet, BufferForm, PushLoc, PushPlacement, Window};
 use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::sym::{PushField, SlotClass, SlotRef, SpecKey, Stage};
 use crate::spirv::ids::{DemoteTy, ScalarTy};
@@ -1863,13 +1863,15 @@ fn finish(
 }
 
 /// Under the identity domains, the plans lowered so far: a kernel that reaches memory only
-/// through its buffer slots' device addresses, all pushed, with no descriptor.
+/// through its buffer slots' device addresses, with no descriptor. Its fields past the push window
+/// are a parameter block, whose address the window holds.
 fn identity_admits(plan: &Plan) -> Result<(), Error> {
-    let pushed = plan.push.fields.iter().all(|f| {
-        matches!(
-            f.field,
+    let fields = plan.push.fields.iter().all(|f| match (f.field, f.loc) {
+        (PushField::ArgumentTableAddress, loc) => matches!(loc, PushLoc::Push { .. }),
+        (field, _) => matches!(
+            field,
             PushField::SlotGuestBase(_) | PushField::DispatchRegion
-        ) && matches!(f.loc, crate::pipeline::interface::PushLoc::Push { .. })
+        ),
     });
     let addressed = plan
         .slots
@@ -1877,9 +1879,8 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
         .flatten()
         .all(|c| c.form == BufferForm::Psb);
     if plan.stage == Stage::Kernel
-        && pushed
+        && fields
         && addressed
-        && plan.push.argument_table_size == 0
         && plan.descriptors == DescriptorCounts::default()
     {
         return Ok(());

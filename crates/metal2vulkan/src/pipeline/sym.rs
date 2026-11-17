@@ -987,6 +987,11 @@ impl DispatchKeys {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PushField {
+    /// Device address (`u64`) of the stage's parameter block under the identity domains: the
+    /// fields placed past the push window (`PushLoc::ArgumentTable`), at their placed offsets, in
+    /// memory the consumer writes for the call (16-byte aligned, `argument_table_size` bytes).
+    /// It sorts first, so the window always holds it.
+    ArgumentTableAddress,
     /// Device address of the resident root table.
     RootTableAddress,
     /// Device address of the `ExecutionStatus` buffer: a function that counts resident-set misses
@@ -1329,6 +1334,7 @@ mod tests {
     #[test]
     fn push_fields_order_by_d13_kind_order() {
         let ordered = [
+            PushField::ArgumentTableAddress,
             PushField::RootTableAddress,
             PushField::ExecutionStatusAddress,
             PushField::CaptureIndexAddress,

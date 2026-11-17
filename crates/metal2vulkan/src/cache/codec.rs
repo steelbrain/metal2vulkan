@@ -920,6 +920,7 @@ codec_enum! {
         RegionProbe,
         RegionBox,
         TexelRows(f0),
+        ArgumentTableAddress,
     }
     Symbol { Binding(f0), DescriptorSet(f0), Location(f0), Component(f0), SpecId(f0) }
 }

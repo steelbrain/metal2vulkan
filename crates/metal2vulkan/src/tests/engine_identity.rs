@@ -4,12 +4,18 @@
 //!   through its own device address, pushed (`SlotGuestBase`), with no root table and no
 //!   descriptor. It passes L3, and on the CPU interpreter, with its buffers above 4 GiB and bound
 //!   at offsets that are not 0, it computes the program's answer and writes nothing else.
+//! - A kernel whose slot addresses do not fit the 128-byte window (`many`, generated: 20 read
+//!   buffers and an output) pushes its parameter block's address first
+//!   (`ArgumentTableAddress`), the addresses that fit after it, and reads the rest from the block
+//!   at their placed offsets, with no descriptor; it passes L3 and computes its answer on the CPU
+//!   interpreter.
 //! - A kernel that reads a texture (`engine/a2_dynamic_texel_offset`) is still refused as
 //!   `Unsupported{IdentityDomains}`, not implemented, where the default domains compile it.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::device::profile::{HandleDomain, PointerDomain};
 use crate::device::DevicePolicy;
@@ -49,6 +55,22 @@ fn assembled(name: &str, r: Result<Vec<u8>, AssembleError>) -> Option<Vec<u8>> {
         }
         Err(e) => panic!("{name}: {e:?}"),
     }
+}
+
+/// `text` assembled in a scratch directory of its own, removed once `llvm-as` is done.
+fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "m2v-identity-{}-{}-{name}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch");
+    let ll = dir.join("k.ll");
+    std::fs::write(&ll, text).expect("write");
+    let r = llvm_assemble(&ll);
+    let _ = std::fs::remove_dir_all(&dir);
+    assembled(name, r)
 }
 
 /// The spec map of a dispatch of `group` threads a threadgroup, in one dimension.
@@ -209,5 +231,129 @@ fn a_texture_kernel_is_refused_under_the_identity_domains() {
             }
             other => panic!("{stem}: {other:?}"),
         }
+    }
+}
+
+/// The read buffers of [`many`]: with its output, 21 slot addresses of 8 bytes, past the window.
+const READS: u32 = 20;
+
+/// A kernel reading one `uint` from each of [`READS`] buffers and storing their ordered fold
+/// (`s · 3 + v`, so two swapped addresses change it) to the next buffer.
+fn many() -> String {
+    let mut params = Vec::new();
+    let mut body = String::new();
+    let mut meta = Vec::new();
+    for k in 0..=READS {
+        params.push(format!(
+            "ptr addrspace(1) noundef \"air-buffer-no-alias\" %{k}"
+        ));
+        let (access, name) = match k == READS {
+            true => ("air.read_write", "out".to_string()),
+            false => ("air.read", format!("b{k}")),
+        };
+        meta.push(format!(
+            "!{} = !{{i32 {k}, !\"air.buffer\", !\"air.location_index\", i32 {k}, i32 1, !\"{access}\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"{name}\"}}",
+            100 + k
+        ));
+    }
+    body.push_str("  %s0 = load i32, ptr addrspace(1) %0, align 4\n");
+    for k in 1..READS {
+        body.push_str(&format!(
+            "  %v{k} = load i32, ptr addrspace(1) %{k}, align 4\n  %m{k} = mul i32 %s{}, 3\n  %s{k} = add i32 %m{k}, %v{k}\n",
+            k - 1
+        ));
+    }
+    let last = READS - 1;
+    let args: Vec<String> = (0..=READS).map(|k| format!("!{}", 100 + k)).collect();
+    format!(
+        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @many({}) {{\nentry:\n{body}  store i32 %s{last}, ptr addrspace(1) %{READS}, align 4\n  ret void\n}}\n\n\
+!air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
+!9 = !{{ptr @many, !10, !11}}\n!10 = !{{}}\n!11 = !{{{}}}\n{}\n\
+!17 = !{{i32 2, i32 8, i32 0}}\n!18 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n",
+        params.join(", "),
+        args.join(", "),
+        meta.join("\n"),
+    )
+}
+
+/// A kernel whose slot addresses do not fit the push window reads the rest from its parameter
+/// block, whose address the window holds first, and computes its answer there.
+#[test]
+fn slot_addresses_past_the_window_are_read_from_the_pushed_parameter_block() {
+    let Some(bc) = assemble_text("many", &many()) else {
+        return;
+    };
+    // Buffer `k` at `BASE + k · STRIDE`, holding one word; the block at `BLOCK`.
+    const BASE: u64 = 0x5_0000_0000;
+    const STRIDE: u64 = 0x100;
+    const BLOCK: u64 = 0x7_0000_0000;
+    let value = |k: u32| 0x0101_0101u32.wrapping_mul(k + 1) ^ 0x5a5a;
+    let want = (1..READS).fold(value(0), |s, k| s.wrapping_mul(3).wrapping_add(value(k)));
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, plan, module) =
+            compile_kept(&bc, "many", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(a.interface.descriptors.is_empty(), "{stem}");
+        assert!(!a.interface.needs_pointer_translation, "{stem}");
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let first = plan.push.fields.first().map(|f| (f.field, f.loc));
+        assert_eq!(
+            first,
+            Some((PushField::ArgumentTableAddress, PushLoc::Push { offset: 0 })),
+            "{stem}"
+        );
+        let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+        let mut block = vec![0u8; plan.push.argument_table_size as usize];
+        let (mut pushed, mut spilled) = (Vec::new(), Vec::new());
+        for f in &plan.push.fields {
+            let (bytes, into, offset) = match (f.field, f.loc) {
+                (PushField::ArgumentTableAddress, PushLoc::Push { offset }) => {
+                    (BLOCK, &mut push, offset)
+                }
+                (PushField::SlotGuestBase(s), PushLoc::Push { offset }) => {
+                    pushed.push(s);
+                    (BASE + u64::from(s.index) * STRIDE, &mut push, offset)
+                }
+                (PushField::SlotGuestBase(s), PushLoc::ArgumentTable { offset }) => {
+                    spilled.push(s);
+                    (BASE + u64::from(s.index) * STRIDE, &mut block, offset)
+                }
+                other => panic!("{stem}: unexpected push field {other:?}"),
+            };
+            let o = offset as usize;
+            into[o..o + 8].copy_from_slice(&bytes.to_le_bytes());
+        }
+        // The window's 120 bytes past the block address hold 15 slot addresses.
+        assert_eq!(pushed.len(), 15, "{stem}");
+        assert_eq!(spilled.len(), (READS + 1) as usize - 15, "{stem}");
+        assert_eq!(plan.push.argument_table_size, 48, "{stem}");
+        let mut buffers: Vec<Buffer> = (0..=READS)
+            .map(|k| Buffer {
+                slot: None,
+                address: Some(BASE + u64::from(k) * STRIDE),
+                bytes: match k == READS {
+                    true => vec![0; 4],
+                    false => value(k).to_le_bytes().to_vec(),
+                },
+            })
+            .collect();
+        buffers.push(Buffer {
+            slot: None,
+            address: Some(BLOCK),
+            bytes: block,
+        });
+        let res = Resources {
+            buffers,
+            push,
+            spec: local_size(1),
+        };
+        let got = run(&module, &Config::default(), res).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(
+            got.buffers[READS as usize],
+            want.to_le_bytes(),
+            "{stem}: out"
+        );
     }
 }

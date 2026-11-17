@@ -1251,7 +1251,9 @@ impl Census {
     /// push fields spill.
     fn counts(&self, stage: crate::pipeline::sym::Stage) -> DescriptorCounts {
         DescriptorCounts {
-            uniform_buffers: u32::from(table::spills(stage, &self.fields))
+            // Under the identity domains the spilled fields are a parameter block at a pushed
+            // address, no descriptor.
+            uniform_buffers: u32::from(!self.identity && table::spills(stage, &self.fields))
                 .saturating_add(self.uniform),
             storage_buffers: self.storage,
             sampled_images: self.texel,
@@ -1630,6 +1632,9 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     let counts = census.counts(stage);
     cx.descriptors = cx.descriptors.plus(&counts);
     cx.families.access.argument_table = table::spills(stage, &cx.push);
+    if cx.families.access.argument_table && identity(p) {
+        cx.push.insert(PushField::ArgumentTableAddress);
+    }
     let mut sourced: Vec<pulled::PulledSlot> = own
         .iter()
         .map(|&(s, l)| pulled::PulledSlot {
@@ -1880,7 +1885,7 @@ pub fn accept_placement(cx: &SelectCx<'_>, placement: &PushPlacement) -> Result<
         );
     }
     let range = cx.profile.fields().limits.max_uniform_buffer_range;
-    if placement.argument_table_size > range {
+    if placement.argument_table_size > range && !cx.families.access.identity {
         return Err(Unsupported::needs(
             Feature::DescriptorCount,
             Capability::Limit {
@@ -1903,6 +1908,20 @@ pub fn table_field(
 ) -> BResult<SValue> {
     let read = match &cx.decl.families.access.table {
         Some(t) => table::read(fb, t, field)?,
+        // Under the identity domains the table is the parameter block at the pushed address.
+        None if cx.plan.families.access.identity => {
+            let offset = cx.plan.push.fields.iter().find_map(|f| match f.loc {
+                PushLoc::ArgumentTable { offset } if f.field == field => Some(offset),
+                _ => None,
+            });
+            match offset {
+                Some(offset) => {
+                    let block = cx.push_field(fb, PushField::ArgumentTableAddress)?;
+                    Some(table::read_block(fb, block, offset, field)?)
+                }
+                None => None,
+            }
+        }
         None => None,
     };
     match read {
@@ -1921,7 +1940,10 @@ pub fn declare(
 ) -> BResult<Declared> {
     let mut d = Declared {
         local: local::declare(mb, plan)?,
-        table: table::declare(mb, &plan.push)?,
+        table: match plan.families.access.identity {
+            true => None,
+            false => table::declare(mb, &plan.push)?,
+        },
         blob: match plan.families.access.blob {
             Some(_) => Some(crate::memory::blob::declare(mb, plan.stage)?),
             None => None,

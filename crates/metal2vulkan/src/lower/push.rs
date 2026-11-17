@@ -8,7 +8,10 @@
 //! that does not fit, every field goes to the stage's `ArgumentTable` uniform buffer
 //! (`ResourceSlot{stage, Synthetic(ArgumentTable)}`), at offsets fixed by the same order. The
 //! placement depends only on the function's own field set, so each field has one access form,
-//! emitted once, and link never changes it.
+//! emitted once, and link never changes it. Under the identity domains the `ArgumentTable` is no
+//! descriptor but a parameter block at a device address, which the function pushes first
+//! (`PushField::ArgumentTableAddress`) whenever its fields spill, and reads its spilled fields
+//! from at the same offsets.
 //!
 //! Field shapes are chosen so that the `ArgumentTable`'s std140 and std430 layouts agree (scalars,
 //! 2-vectors, and 16-byte-strided arrays only), so the table is a valid uniform block on every
@@ -68,7 +71,8 @@ impl FieldShape {
 /// The shape of field `f`.
 pub const fn shape(f: PushField) -> FieldShape {
     match f {
-        PushField::RootTableAddress
+        PushField::ArgumentTableAddress
+        | PushField::RootTableAddress
         | PushField::ExecutionStatusAddress
         | PushField::CaptureIndexAddress
         | PushField::MergedDrawAddress
@@ -401,12 +405,13 @@ mod tests {
     /// `ExecutionStatusAddress` is always in the push block, where its readers find it: the
     /// resident-miss count, and `spirv::requirements::writes`, which knows the `ExecutionStatus`
     /// buffer by a load of this member and so needs no `ArgumentTable` path. The kind order (the
-    /// derived `Ord` of `PushField`) puts it second, after `RootTableAddress`, the only kind that
-    /// sorts before it, and placement fills the window as a prefix of that order, so the field sits
-    /// in the first 16 bytes of its stage window whatever else the function pushes; every window
-    /// holds 64. Checked for every stage, with and without the root table address, alone and with
-    /// every later kind at its largest count (every buffer slot's residual and guest base, 31
-    /// strides), which spills.
+    /// derived `Ord` of `PushField`) puts it after `ArgumentTableAddress` and `RootTableAddress`,
+    /// the only kinds that sort before it, of which a function places one at most (the first is
+    /// the identity domains', the second the table domains'), and placement fills the window as a
+    /// prefix of that order, so the field sits in the first 16 bytes of its stage window whatever
+    /// else the function pushes; every window holds 64. Checked for every stage, with neither
+    /// address and with each, alone and with every later kind at its largest count (every buffer
+    /// slot's residual and guest base, 31 strides), which spills.
     #[test]
     fn the_status_address_is_always_placed_in_the_push_block() {
         for stage in [Stage::Vertex, Stage::Fragment, Stage::Kernel] {
@@ -416,6 +421,7 @@ mod tests {
                 index,
             };
             let kinds = [
+                PushField::ArgumentTableAddress,
                 PushField::RootTableAddress,
                 PushField::ExecutionStatusAddress,
                 PushField::DispatchRegion,
@@ -428,7 +434,10 @@ mod tests {
                 .into_iter()
                 .filter(|k| *k < PushField::ExecutionStatusAddress)
                 .collect();
-            assert_eq!(before, [PushField::RootTableAddress]);
+            assert_eq!(
+                before,
+                [PushField::ArgumentTableAddress, PushField::RootTableAddress]
+            );
             let mut later =
                 BTreeSet::from([PushField::DispatchRegion, PushField::BaseVertexInstance]);
             for i in 0..31 {
@@ -437,25 +446,28 @@ mod tests {
                 later.insert(PushField::VertexBufferStride(i));
             }
             let (start, end) = window(stage);
-            for root in [false, true] {
+            let firsts = [
+                None,
+                Some(PushField::RootTableAddress),
+                Some(PushField::ArgumentTableAddress),
+            ];
+            for first in firsts {
                 for rest in [BTreeSet::new(), later.clone()] {
                     let spills = !rest.is_empty();
                     let mut fields = rest;
                     fields.insert(PushField::ExecutionStatusAddress);
-                    if root {
-                        fields.insert(PushField::RootTableAddress);
-                    }
+                    fields.extend(first);
                     let placement = place(stage, &fields);
                     let status = placement
                         .fields
                         .iter()
                         .find(|f| f.field == PushField::ExecutionStatusAddress)
                         .expect("placed");
-                    let at = start + 8 * u32::from(root);
+                    let at = start + 8 * u32::from(first.is_some());
                     assert_eq!(
                         status.loc,
                         PushLoc::Push { offset: at },
-                        "{stage:?} root={root}"
+                        "{stage:?} {first:?}"
                     );
                     assert!(at + status.size <= end);
                     assert_eq!(placement.argument_table_size > 0, spills, "{stage:?}");

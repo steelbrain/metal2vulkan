@@ -15495,6 +15495,7 @@ variant	metal2vulkan::pipeline::PushField::AlphaTestReference	AlphaTestReference
 variant	metal2vulkan::pipeline::PushField::AmplificationId	AmplificationId
 variant	metal2vulkan::pipeline::PushField::AmplificationLayerOffset	AmplificationLayerOffset
 variant	metal2vulkan::pipeline::PushField::AmplificationViewportOffset	AmplificationViewportOffset
+variant	metal2vulkan::pipeline::PushField::ArgumentTableAddress	ArgumentTableAddress
 variant	metal2vulkan::pipeline::PushField::BaseVertexInstance	BaseVertexInstance
 variant	metal2vulkan::pipeline::PushField::CaptureIndexAddress	CaptureIndexAddress
 variant	metal2vulkan::pipeline::PushField::CaptureLayout	CaptureLayout

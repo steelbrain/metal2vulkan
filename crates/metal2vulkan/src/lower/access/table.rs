@@ -8,6 +8,10 @@
 //! out identically under std140 and std430), and [`read`] loads a member exactly as
 //! `EmitCx::push_field` loads a push member, so a family reading a field never knows where it was
 //! placed. The table's descriptor counts in the per-stage limits (`access::finish_slots`).
+//!
+//! Under the identity domains no uniform buffer is declared: the spilled fields are a parameter
+//! block in memory at the device address `PushField::ArgumentTableAddress` holds, which the
+//! window always places, and [`read_block`] loads each at its placed offset.
 
 use std::collections::BTreeSet;
 
@@ -18,7 +22,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    ConstBits, Constant, LayoutRule, MemAccess, MemberLayout, StorageClass, StructLayout, Type,
+    BinOp, ConstBits, Constant, LayoutRule, MemAccess, MemberLayout, StorageClass, StructLayout,
+    Type,
 };
 
 /// A declared `ArgumentTable`.
@@ -108,6 +113,36 @@ pub fn declare(mb: &mut ModuleBuilder, placement: &PushPlacement) -> BResult<Opt
         global,
         fields: spilled.into_iter().map(|(f, _)| f).collect(),
     }))
+}
+
+/// Load `field` from the parameter block at device address `block` (a `u64`), where it is placed
+/// at byte `offset`: the identity domains' `ArgumentTable`, which no descriptor binds.
+pub fn read_block(
+    fb: &mut FunctionBuilder<'_>,
+    block: Value,
+    offset: u32,
+    field: PushField,
+) -> BResult<Value> {
+    let sh = push::shape(field);
+    let ty = shape_type(fb.module(), sh)?;
+    let u64_ = fb.module().ty(Type::Int {
+        width: 64,
+        signed: false,
+    })?;
+    let offset = fb.module().constant(Constant::Scalar {
+        ty: u64_,
+        bits: ConstBits(u64::from(offset)),
+    })?;
+    let offset = fb.module().const_value(offset)?;
+    let at = fb.binary(BinOp::IAdd, block, offset)?;
+    let place = fb.device_place(at, ty)?;
+    fb.load(
+        place,
+        MemAccess {
+            aligned: Some(sh.align()),
+            ..MemAccess::default()
+        },
+    )
 }
 
 /// Load `field` from `table` in the open block, or `None` when the table does not hold it.

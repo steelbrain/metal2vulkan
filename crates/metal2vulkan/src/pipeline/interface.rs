@@ -1059,6 +1059,8 @@ pub struct PushPlacement {
     /// is the stage window's start (vertex 0, fragment 64, compute 0).
     pub push_range: Option<(u32, u32)>,
     /// Byte size of the stage's `ArgumentTable` uniform buffer (a multiple of 16); 0 without one.
+    /// Under the identity domains it is the size of the parameter block at
+    /// `PushField::ArgumentTableAddress`, which no descriptor binds.
     pub argument_table_size: u32,
 }
 
@@ -1105,7 +1107,8 @@ pub struct PlacedField {
 pub enum PushLoc {
     /// At this byte offset of the push-constant block (absolute, inside the stage window).
     Push { offset: u32 },
-    /// At this byte offset of the stage's `ArgumentTable` uniform buffer.
+    /// At this byte offset of the stage's `ArgumentTable` uniform buffer; under the identity
+    /// domains, of the parameter block at `PushField::ArgumentTableAddress`.
     ArgumentTable { offset: u32 },
 }
 
