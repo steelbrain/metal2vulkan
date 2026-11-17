@@ -19,6 +19,7 @@ mod on_device {
         DeviceOptions, DispatchType, FunctionDescriptor, Gauges, Instance, Library, MemoryClass,
         PrecisionNote, StageSource,
     };
+    use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
     use metal2vulkan::Budget;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
@@ -101,6 +102,54 @@ mod on_device {
                 }
                 panic!("{name}: {error}")
             })
+    }
+
+    /// The facts the runtime reads of `descriptor`'s kernel, one that observes its threadgroup
+    /// partition, on `device`, lowered as the state lowers it: of its plain module, under the
+    /// inputs the kernel reads, and of its emulated-SIMD-group variant, the same inputs with
+    /// emulated SIMD groups.
+    fn facts_read(
+        name: &str,
+        device: &Device,
+        descriptor: &ComputePipelineDescriptor,
+    ) -> [Vec<RuntimeFact>; 2] {
+        let StageSource::Function(function) = &descriptor.kernel else {
+            unreachable!("a fixture's kernel is a function");
+        };
+        let translator = &device.core().translator;
+        let budget = Budget::standard();
+        let entries = StageEntries::new();
+        let plain = translator
+            .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, &entries)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let mut emulated = plain.clone();
+        emulated.emulated_simdgroups = true;
+        [plain, emulated].map(|inputs| {
+            let compiled = translator
+                .compile_function_from_entries(function, &inputs, &budget, &entries)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut lowered = descriptor.clone();
+            lowered.kernel = StageSource::Compiled(compiled);
+            translator
+                .compile_compute_pipeline(&lowered, &budget)
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+                .dependencies
+                .iter()
+                .map(|dependency| dependency.fact)
+                .collect()
+        })
+    }
+
+    /// Whether the reaper made `state`'s emulated-SIMD-group module.
+    fn emulated_made(state: &ComputePipelineState) -> bool {
+        use crate::pipeline::Lowered;
+
+        state
+            .inner
+            .emulated
+            .as_ref()
+            .and_then(|emulated| emulated.lowered.get())
+            .is_some_and(|lowered| matches!(lowered, Lowered::Made(..)))
     }
 
     /// Zeroed Shared buffers in one block, each at a 256-byte boundary.
@@ -802,14 +851,8 @@ mod on_device {
     /// of its SIMD group whose own trip count exceeds `i`.
     #[test]
     fn every_device_runs_a_kernel_whose_walk_unit_axes_could_relieve() {
-        use crate::pipeline::Lowered;
-        use metal2vulkan::pipeline::RuntimeFact;
-
         let Some(descriptor) = descriptor("unit_axes_walk") else {
             return;
-        };
-        let StageSource::Function(function) = &descriptor.kernel else {
-            unreachable!("a fixture's kernel is a function");
         };
         each_device("compute_unit_axes", |name, _, device| {
             let state = state(name, &device, &descriptor);
@@ -850,35 +893,17 @@ mod on_device {
                     "{name}: the sums in a threadgroup of 8 x {rows}"
                 );
             }
-            // Which modules state the relief: the plain one, and the emulated variant.
-            let translator = &device.core().translator;
-            let budget = Budget::standard();
-            let relieved = |descriptor: &ComputePipelineDescriptor| {
-                translator
-                    .compile_compute_pipeline(descriptor, &budget)
-                    .unwrap_or_else(|error| panic!("{name}: {error}"))
-                    .dependencies
-                    .iter()
-                    .any(|dependency| match dependency.fact {
-                        RuntimeFact::UnitAxes { axes, relief } => axes == 0 && relief != 0,
-                        _ => false,
-                    })
+            // Which modules the runtime read the relief of: the plain one, and the emulated
+            // variant.
+            let relieved = |facts: &[RuntimeFact]| {
+                facts.iter().any(|fact| match *fact {
+                    RuntimeFact::UnitAxes { axes, relief } => axes == 0 && relief != 0,
+                    _ => false,
+                })
             };
-            let mut inputs = descriptor.lowering_inputs();
-            inputs.emulated_simdgroups = true;
-            let mut emulated = descriptor.clone();
-            emulated.kernel = StageSource::Compiled(
-                translator
-                    .compile_function(function, &inputs, &budget)
-                    .unwrap_or_else(|error| panic!("{name}: the emulated variant: {error}")),
-            );
-            let (plain, emulated) = (relieved(&descriptor), relieved(&emulated));
-            let made = state
-                .inner
-                .emulated
-                .as_ref()
-                .and_then(|emulated| emulated.lowered.get())
-                .is_some_and(|lowered| matches!(lowered, Lowered::Made(..)));
+            let [plain, emulated] = facts_read(name, &device, &descriptor);
+            let (plain, emulated) = (relieved(&plain), relieved(&emulated));
+            let made = emulated_made(&state);
             assert!(
                 plain || (emulated && made),
                 "{name}: a module that states unit axes with no axes ran (plain {plain}, emulated \
@@ -888,6 +913,93 @@ mod on_device {
                 "{name}: unit axes with no axes stated by the {} module, which ran; sums checked \
                  in threadgroups of 8 x 8 and 8 x 10",
                 if plain { "plain" } else { "emulated" }
+            );
+        });
+    }
+
+    /// `row_lockstep_tree`: a tree reduction over threadgroup memory indexed by the thread's
+    /// position along x, a workgroup barrier per step and none between a step's load and its
+    /// store, in four threadgroups each of 16 x 2, 32 x 1 and 12 x 2 threads. In a threadgroup of
+    /// two rows within one SIMD group the rows share x, and only the SIMD group's lockstep orders
+    /// one row's load of a word before the other row's store to it: the translator keeps that
+    /// order with barriers that order only pairs meeting across rows, and states it
+    /// (`RuntimeFact::RowLockstep`). Every device creates the state and runs the three shapes;
+    /// where the device pins a subgroup of 32 its plain module, the Direct tier, states the fact,
+    /// and where its emulated module states it and a shape ran on it, the reaper made that
+    /// module. Every answer is Metal's (M3 Max, macOS 27.0.1): each thread writes the sum of the
+    /// x below min(16, width), 120 or 66.
+    #[test]
+    fn every_device_runs_a_kernel_whose_lockstep_orders_rows() {
+        use ash::vk;
+
+        let Some(descriptor) = descriptor("row_lockstep_tree") else {
+            return;
+        };
+        const GROUPS: u32 = 4;
+        each_device("compute_row_lockstep", |name, _, device| {
+            let raw = device.raw();
+            let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
+            let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut vulkan13);
+            // SAFETY: the physical device is the instance's, a Vulkan 1.3 one.
+            unsafe {
+                raw.instance
+                    .get_physical_device_properties2(raw.physical_device, &mut properties)
+            };
+            let pinnable = vulkan13
+                .required_subgroup_size_stages
+                .contains(vk::ShaderStageFlags::COMPUTE)
+                && (vulkan13.min_subgroup_size..=vulkan13.max_subgroup_size).contains(&32);
+            let state = state(name, &device, &descriptor);
+            let multiples = state.inner.whole.interface.multiples.clone();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut on_emulated = Vec::new();
+            for (width, rows) in [(16, 2), (32, 1), (12, 2)] {
+                let threads = width * rows * GROUPS;
+                let mut buffers = Buffers::new(&device, 1 << 16);
+                let out = buffers.buffer(u64::from(threads) * 4);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                encoder
+                    .dispatch_threadgroups([GROUPS, 1, 1], [width, rows, 1])
+                    .unwrap_or_else(|error| panic!("{name}: {width} x {rows}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let want = vec![(0..width.min(16)).sum::<u32>(); threads as usize];
+                assert_eq!(
+                    words(&out, 0, want.len()),
+                    want,
+                    "{name}: threadgroups of {width} x {rows}"
+                );
+                if multiples
+                    .iter()
+                    .any(|&multiple| (width * rows) % multiple.max(1) != 0)
+                {
+                    on_emulated.push(format!("{width} x {rows}"));
+                }
+            }
+            let [plain, emulated] = facts_read(name, &device, &descriptor);
+            let (plain, emulated) = (
+                plain.contains(&RuntimeFact::RowLockstep),
+                emulated.contains(&RuntimeFact::RowLockstep),
+            );
+            if pinnable {
+                assert!(plain, "{name}: the Direct tier's module states RowLockstep");
+            }
+            if emulated && !on_emulated.is_empty() {
+                assert!(
+                    emulated_made(&state),
+                    "{name}: the emulated module, which states RowLockstep, ran {on_emulated:?}"
+                );
+            }
+            println!(
+                "{name}: sums checked in 16 x 2, 32 x 1 and 12 x 2; RowLockstep stated by the \
+                 plain module {plain}, by the emulated module {emulated}, which ran {on_emulated:?}"
             );
         });
     }
