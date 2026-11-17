@@ -36,6 +36,9 @@ mod engine_textures;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod engine_render;
 mod pipeline_contracts;
+// The widest-pin rule's emulated form against its pinned form on a GPU: exact integer answers.
+#[cfg(m2v_gpu)]
+mod widest_pin;
 
 /// The compile worker the device tests compile through: this test binary
 /// (`CompileWorker::lib_tests`), which installs the counting allocator and serves the worker through
