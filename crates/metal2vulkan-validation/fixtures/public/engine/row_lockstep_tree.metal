@@ -10,10 +10,11 @@
 using namespace metal;
 
 kernel void row_lockstep_tree(device uint *out [[buffer(0)]],
-                              ushort x [[thread_position_in_threadgroup]],
+                              ushort2 position [[thread_position_in_threadgroup]],
                               ushort t [[thread_index_in_threadgroup]],
                               ushort2 p [[thread_position_in_grid]],
                               ushort2 grid [[threads_per_grid]]) {
+    ushort x = position.x;
     threadgroup uint tg[64];
     if (t < 16u) {
         tg[t] = 0u;
