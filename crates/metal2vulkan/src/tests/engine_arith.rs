@@ -18,6 +18,7 @@
 use crate::air::{self, SpecRequest};
 use crate::device::profile::{DeviceProfile, DriverWorkaround, FloatFunctions};
 use crate::device::requirements::VkFeature;
+use crate::device::requirements::VkProperty;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, LowerFamily, Needs};
 use crate::library::FunctionConstantValues;
@@ -29,7 +30,8 @@ use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{plan_bitcode, EntryRef};
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, exact_maths, link_and_validate, llvm_assemble, meter, profile, AssembleError, Scratch,
+    compile, description, exact_maths, link_and_validate, llvm_assemble, meter, profile,
+    AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
@@ -1347,29 +1349,8 @@ fn fused_multiply_adds_take_the_profiles_route() {
         needs: &[],
         note: None,
     };
-    // 0x400a * 0x0bec + 0xbc9f: the exact sum rounds to 0xbc9f, the float sum to a half
-    // midpoint that rounds away.
-    let half_kernel = Kernel {
-        name: "fma_half_rounds_once",
-        body: format!(
-            "{}{}{}  %h = bitcast i16 %t to half\n  %g = bitcast i16 %s to half\n  %u = bitcast i16 %v to half\n  %x = call half @air.fma.f16(half %h, half %g, half %u)\n  %r = fpext half %x to float\n",
-            on("t", 16, 0x400A),
-            on("s", 16, 0x0BEC),
-            on("v", 16, 0xBC9F)
-        ),
-        float: true,
-        want: Some((-1183.0f32 / 1024.0).to_bits()),
-        needs: &[],
-        note: None,
-    };
-    let ks = [float_kernel, half_kernel];
-    let text = module(&ks).replace(
-        DECLS,
-        &format!(
-            "{DECLS}declare float @air.fma.f32(float, float, float)\ndeclare <2 x float> @air.fma.v2f32(<2 x float>, <2 x float>, <2 x float>)\ndeclare half @air.fma.f16(half, half, half)\n"
-        ),
-    );
-    let Some(bitcode) = assemble("fma-routes", &text) else {
+    let ks = [float_kernel, half_fma_kernel()];
+    let Some(bitcode) = assemble("fma-routes", &fma_module(&ks)) else {
         return;
     };
     // (profile, OpFmaKHR of the float kernel, whether the routes are the device's `Fma`).
@@ -1417,6 +1398,134 @@ fn fused_multiply_adds_take_the_profiles_route() {
             assert_eq!(Some(got), want, "{what}: {got:#x}");
         }
     }
+}
+
+/// The `half` fused multiply-add of `0x400a`, `0x0bec` and `0xbc9f`, read from their bits, stored
+/// widened: the exact sum rounds to `0xbc9f` (`-1183 / 1024`), the `float` sum to a `half`
+/// midpoint that rounds away (`-1182 / 1024`).
+fn half_fma_kernel() -> Kernel {
+    Kernel {
+        name: "fma_half_rounds_once",
+        body: format!(
+            "{}{}{}  %h = bitcast i16 %t to half\n  %g = bitcast i16 %s to half\n  %u = bitcast i16 %v to half\n  %x = call half @air.fma.f16(half %h, half %g, half %u)\n  %r = fpext half %x to float\n",
+            on("t", 16, 0x400A),
+            on("s", 16, 0x0BEC),
+            on("v", 16, 0xBC9F)
+        ),
+        float: true,
+        want: Some((-1183.0f32 / 1024.0).to_bits()),
+        needs: &[],
+        note: None,
+    }
+}
+
+/// The generated module with every kernel of `ks` and the fused multiply-adds they call.
+fn fma_module(ks: &[Kernel]) -> String {
+    module(ks).replace(
+        DECLS,
+        &format!(
+            "{DECLS}declare float @air.fma.f32(float, float, float)\ndeclare <2 x float> @air.fma.v2f32(<2 x float>, <2 x float>, <2 x float>)\ndeclare half @air.fma.f16(half, half, half)\n"
+        ),
+    )
+}
+
+/// The `GLSL.std.450 Fma`s of module `words` whose result is a 16-bit float or a vector of them,
+/// and its `NoContraction` decorations.
+fn fma16_and_marks(words: &[u32]) -> (usize, usize) {
+    const GLSL_FMA: u32 = 50;
+    const NO_CONTRACTION: u32 = 42;
+    let (mut half, mut fmas, mut marks) = (std::collections::BTreeSet::new(), 0, 0);
+    let mut i = 5;
+    while i < words.len() {
+        let (len, opcode) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
+        assert!(len > 0 && i + len <= words.len(), "malformed module");
+        let op = |o: crate::spv::Op| opcode == o as u32;
+        let float16 = op(crate::spv::Op::TypeFloat) && words[i + 2] == 16;
+        if float16 || (op(crate::spv::Op::TypeVector) && half.contains(&words[i + 2])) {
+            half.insert(words[i + 1]);
+        } else if op(crate::spv::Op::ExtInst) && words[i + 4] == GLSL_FMA {
+            fmas += usize::from(half.contains(&words[i + 1]));
+        } else if op(crate::spv::Op::Decorate) && words[i + 2] == NO_CONTRACTION {
+            marks += 1;
+        }
+        i += len;
+    }
+    (fmas, marks)
+}
+
+/// On `Device::from_queries`' profile (`HalfFma::Native`) a `half` fused multiply-add is the
+/// device's 16-bit `Fma` wherever the profile computes `half` under the 16-bit float controls
+/// (`fma::Route::F16Native`: RADV, ANV and NVIDIA's captures): the module computes it on 16-bit
+/// floats with no conversion around it, so no instruction is decorated `NoContraction`; it requires
+/// no `VkProperty::MetalHalfFma`, and it records `PrecisionNote::NativeFma`, as the device's
+/// `float` `Fma` rounded to `half` does where the profile lacks those controls (lavapipe, which
+/// does not keep 16-bit denormals, and vk12-floor, without `shaderFloat16`). The 16-bit `Fma`
+/// rounds [`half_fma_kernel`]'s sum once on the interpreter, the `float` one twice. The same
+/// captures through `Device::new` keep their routes ([`fused_multiply_adds_take_the_profiles_route`],
+/// `lower::arith::tests::fused`).
+#[test]
+fn a_half_fused_multiply_add_is_the_devices_16_bit_fma_on_from_queries() {
+    use crate::lower::arith::fma::{half_route, Route};
+    use crate::lower::arith::narrow::half_controls;
+    let ks = [half_fma_kernel()];
+    let Some(bitcode) = assemble("fma-from-queries", &fma_module(&ks)) else {
+        return;
+    };
+    let mut sixteen = Vec::new();
+    for stem in [
+        "amd-rdna3-radv",
+        "intel-irisxe-anv",
+        "nvidia-rtx50-linux",
+        "lavapipe",
+        "vk12-floor",
+    ] {
+        let what = format!("fma_half_rounds_once on {stem} (from_queries)");
+        let desc = description(stem).expect("description");
+        let device =
+            Device::from_queries(desc, exact_maths()).unwrap_or_else(|e| panic!("{what}: {e}"));
+        let p = device.profile();
+        let controls = half_controls(p);
+        let route = if controls {
+            Route::F16Native
+        } else {
+            Route::Native
+        };
+        assert_eq!(half_route(p), route, "{what}");
+        let a = compile(&bitcode, "fma_half_rounds_once", p)
+            .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+        let (_, words) = link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        assert!(
+            a.precision.contains(&PrecisionNote::NativeFma),
+            "{what}: {:?}",
+            a.precision
+        );
+        assert!(
+            !a.requirements
+                .properties
+                .contains(&VkProperty::MetalHalfFma),
+            "{what}"
+        );
+        let (fmas, marks) = fma16_and_marks(&a.module.words);
+        if controls {
+            assert_eq!((fmas, marks), (1, 0), "{what}: 16-bit Fma, NoContraction");
+            sixteen.push(stem);
+        } else {
+            assert_eq!(fmas, 0, "{what}: 16-bit Fma");
+        }
+        assert_eq!(
+            count_op(&words, crate::spv::Op::FmaKHR),
+            0,
+            "{what}: OpFmaKHR"
+        );
+        let got = interpret(&bitcode, "fma_half_rounds_once", p);
+        let want = if controls { -1183.0f32 } else { -1182.0f32 } / 1024.0;
+        assert_eq!(got, want.to_bits(), "{what}: {got:#x}");
+    }
+    assert_eq!(
+        sixteen,
+        ["amd-rdna3-radv", "intel-irisxe-anv", "nvidia-rtx50-linux"],
+        "the profiles under the 16-bit float controls"
+    );
 }
 
 /// `<n x ty>` `%name` of opaque lanes `vals` (each `fadd <v>, -0.0`, a `half` lane truncated

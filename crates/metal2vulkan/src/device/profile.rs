@@ -121,6 +121,11 @@ impl DeviceProfile {
         self.facts.push_window
     }
 
+    /// Which `half` fused multiply-adds take the device's 16-bit `Fma`.
+    pub(crate) fn half_fma(&self) -> HalfFma {
+        self.facts.half_fma
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -557,6 +562,8 @@ pub(crate) struct ProfileFacts {
     pub(crate) half_outputs: HalfOutputs,
     /// How many bytes of push constants a kernel's push window holds.
     pub(crate) push_window: PushWindow,
+    /// Which `half` fused multiply-adds take the device's 16-bit `Fma`.
+    pub(crate) half_fma: HalfFma,
 }
 
 impl ProfileFacts {
@@ -568,6 +575,7 @@ impl ProfileFacts {
         narrow_wrap: NarrowWrap::Every,
         half_outputs: HalfOutputs::Sixteen,
         push_window: PushWindow::Guaranteed,
+        half_fma: HalfFma::Measured,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -578,6 +586,7 @@ impl ProfileFacts {
         narrow_wrap: NarrowWrap::Read,
         half_outputs: HalfOutputs::Widened,
         push_window: PushWindow::Floor,
+        half_fma: HalfFma::Native,
     };
 }
 
@@ -604,6 +613,21 @@ pub(crate) enum PushWindow {
     /// 256 bytes, the new runtime's floor for `maxPushConstantsSize`, which every captured device
     /// reports: a dispatch region and 28 buffer addresses. `Device::from_queries`' profile.
     Floor,
+}
+
+/// Which `half` fused multiply-adds take the device's 16-bit `Fma` (`lower::arith::fma::half_route`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HalfFma {
+    /// Those on a driver measured to compute it as Metal's `half` `fma`
+    /// (`DriverDeviation::MetalHalfFma`), with no note; elsewhere `OpFmaKHR` on 16 bits where the
+    /// profile has `shaderFmaFloat16` and computes `half` under the 16-bit float controls, else the
+    /// device's `float` `Fma` rounded to `half`, noted `NativeFma`: `Device::new`'s profile.
+    Measured,
+    /// Every one where the profile computes `half` under the 16-bit float controls (it has
+    /// `shaderFloat16`, and the controls that make a 16-bit conversion Metal's), noted `NativeFma`
+    /// as the device's `Fma` is on every route; elsewhere the device's `float` `Fma` rounded to
+    /// `half`, noted the same. `Device::from_queries`' profile, keyed on no identity.
+    Native,
 }
 
 /// How a `half` color output (a scalar or vector of AIR's `half`) reaches the device

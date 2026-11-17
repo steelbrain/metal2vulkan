@@ -393,6 +393,15 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
   128-iteration loop of one 16-byte device read fully. On an RX 7900 XTX, with neighbouring
   threads 976 bytes apart in a 64 KiB table, that loop took 207 to 209 µs unrolled against 105 to
   113 µs rolled; over 16 KiB and 256 KiB tables the unrolled loop was 7 to 17% faster.
+- A `half` `fma` on a device that computes `half` in 16 bits under the 16-bit float controls
+  (`shaderFloat16`, with 16-bit `RoundingModeRTE`, `DenormPreserve` and
+  `SignedZeroInfNanPreserve`) is the device's 16-bit `Fma` (`PrecisionNote::NativeFma`). Vulkan
+  gives `Fma` the precision of a multiply followed by an add, each rounded, where Metal's rounds
+  once. RADV (Mesa 26.2.6) on an RX 7900 XTX does not round it once: over a chain of 1,024
+  dependent `half` `fma`s, 1,622,016 lanes ended up to 9 `half` ulp from Metal's. NVIDIA's driver
+  on an RTX 3090 and Intel's Windows driver on a UHD 630 matched Metal in every lane of the same
+  chains. Elsewhere a `half` `fma` is the device's `float` `Fma` on the operands, rounded to
+  `half`, within one `half` ulp.
 
 ## One path for every device
 

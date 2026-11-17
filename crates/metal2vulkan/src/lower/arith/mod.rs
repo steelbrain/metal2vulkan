@@ -715,8 +715,8 @@ pub struct ArithPlan {
     /// (`FloatFunctions::Metal`): the mode Metal compiles this entry in ([`libm::module_mode`],
     /// decided by [`finish`]). `None` on any other profile.
     pub metal_functions: Option<libm::Mode>,
-    /// Whether a selected fused multiply-add takes the device's `Fma` ([`fma::Route::Native`]),
-    /// whose note [`finish`] records.
+    /// Whether a selected fused multiply-add takes the device's `Fma` ([`fma::Route::Native`], or
+    /// [`fma::Route::F16Native`] on 16-bit floats), whose note [`finish`] records.
     pub native_fma: bool,
     /// How the module emits a multiply the device must round on its own, decided by [`finish`] from
     /// the same fact as [`ArithPlan::metal_functions`]: a device whose `float` functions are
@@ -808,11 +808,12 @@ impl ArithPlan {
         self.extended_range = true;
     }
 
-    /// Record fused multiply-add `fma`, selected: the device's 16-bit `Fma`
-    /// ([`ArithPlan::f16_fma`]), or the device's `Fma` ([`ArithPlan::native_fma`]).
+    /// Record fused multiply-add `fma`, selected: the device's 16-bit `Fma` measured to be Metal's
+    /// ([`ArithPlan::f16_fma`]), or the device's `Fma`, on `float` or on 16-bit floats
+    /// ([`ArithPlan::native_fma`]).
     pub fn take_fma(&mut self, fma: fma::Fma) {
         self.f16_fma |= fma.route == fma::Route::F16;
-        self.native_fma |= fma.route == fma::Route::Native;
+        self.native_fma |= matches!(fma.route, fma::Route::Native | fma::Route::F16Native);
     }
 }
 
@@ -2414,11 +2415,14 @@ fn function_notes(
 }
 
 /// The note of fused multiply-add `fma`: `NativeFma` where it takes the device's `Fma`
-/// ([`fma::Route::Native`]), which [`finish`] records for every such route a family takes.
+/// ([`fma::Route::Native`], [`fma::Route::F16Native`]), which [`finish`] records for every such
+/// route a family takes.
 fn native_fma(fma: fma::Fma) -> OpNotes {
     match fma.route {
-        fma::Route::Native => OpNotes::everywhere(BTreeSet::from([PrecisionNote::NativeFma])),
-        _ => OpNotes::default(),
+        fma::Route::Native | fma::Route::F16Native => {
+            OpNotes::everywhere(BTreeSet::from([PrecisionNote::NativeFma]))
+        }
+        fma::Route::Khr | fma::Route::F16 | fma::Route::F16Khr => OpNotes::default(),
     }
 }
 

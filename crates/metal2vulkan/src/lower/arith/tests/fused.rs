@@ -480,14 +480,15 @@ fn half_triples() -> Vec<[u64; 3]> {
     out
 }
 
-/// A `half` fused multiply-add on 16-bit floats, by the device's `Fma` ([`Route::F16`]) or by
-/// `OpFmaKHR` ([`Route::F16Khr`]), rounds once on the interpreter: the operands convert to 16 bits
-/// exactly and the result widens exactly. The device's `float` `Fma` rounded to `half`
+/// A `half` fused multiply-add on 16-bit floats, by the device's `Fma` ([`Route::F16`],
+/// [`Route::F16Native`]) or by `OpFmaKHR` ([`Route::F16Khr`]), rounds once on the interpreter,
+/// whose `Fma` rounds once (a device's on [`Route::F16Native`] may not, noted): the operands
+/// convert to 16 bits exactly and the result widens exactly. The device's `float` `Fma` rounded to `half`
 /// ([`Route::Native`]) rounds the sum twice, so it is within one `half` unit in the last place.
 #[test]
 fn half_fused_multiply_add_rounds_on_its_route() {
     let triples = half_triples();
-    for route in [Route::F16, Route::F16Khr] {
+    for route in [Route::F16, Route::F16Khr, Route::F16Native] {
         for lanes in [1u8, 2] {
             let fma = Fma {
                 form: vec(float(16), lanes),

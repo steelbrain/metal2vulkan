@@ -5219,7 +5219,11 @@ bound.
   `float` fused multiply-add on a device without `OpFmaKHR`, or a `half` one where the device's
   16-bit `Fma` is not measured to be Metal's and the device has no 16-bit `OpFmaKHR` under the
   16-bit float controls, is the device's `GLSL.std.450 Fma` (on the `half` operands held in
-  `float`, its result rounded to `half`), where Metal's rounds once.
+  `float`, its result rounded to `half`), where Metal's rounds once. On a device
+  `Device::from_queries` made that computes `half` in 16 bits under the 16-bit float controls, a
+  `half` one is the device's 16-bit `Fma` on the `half` operands. Recorded bound: a `half` result
+  held in `float` within one `half` ulp of Metal's; a `float` one, and a 16-bit one, within half an
+  ulp of the product plus half an ulp of the result, in its own format.
 - `metal2vulkan-degrade-device-texel-conversion` (precision).
   `PrecisionNote::DeviceTexelConversion`: Native device sampling (a texel conversion): the module
   hands a read, sample or gather with a `float` result the device's own conversion of the texel's
