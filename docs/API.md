@@ -2119,9 +2119,11 @@ match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard
 - `NotImplemented`: a gap of this version. `NotRepresentable`: no Vulkan mechanism exists.
 - `DriverDefect`: a defect the device's driver is measured to have. `RuntimeDriverDefect`: one in a
   command the runtime records.
-- `StageBound`: a stage that the device's plan writes heavier than the translator hands any
-  driver (the heaviest measured to compile within host-sized memory); `symbol` names its entry
-  weight and the bound. A device whose plan writes it lighter compiles it.
+- `StageBound`: on a device `Device::from_queries` made, a stage that the device's plan writes
+  heavier than the translator hands any driver (the heaviest measured to compile within
+  host-sized memory); `symbol` names its entry weight and the bound. A device whose plan writes it
+  lighter compiles it. A device `Device::new` made bounds a stage only where its driver is measured
+  to need it (`DriverDefect`).
 - `MetalGpuFamily`: a Metal GPU family the device does not claim, where Metal itself refuses the
   input without it.
 

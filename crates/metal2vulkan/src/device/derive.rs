@@ -17,7 +17,7 @@ use crate::device::profile::{
     BufferAccess, Containment, CubeGradientRoute, CubeGradients, DescriptorCaps, DeviceProfile,
     DriverWorkaround, EnabledCaps, FloatFunctions, FormatTable, FragmentCaps, GuestIsolation,
     HandleDomain, ImageCaps, Independence, LeafCaps, NanEncoding, PointerDomain, ProfileFields,
-    Robustness,
+    Robustness, StageBound,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -88,10 +88,11 @@ impl Device {
     /// on every device, whatever its type.
     pub fn from_queries(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error> {
         Device::derived(desc.without_identity(), policy, |desc, policy| {
-            ProfileFields {
+            let fields = ProfileFields {
                 ycbcr_in_place: true,
                 ..derive_fields(desc, policy, &BTreeSet::new())
-            }
+            };
+            (fields, StageBound::Every)
         })
     }
 
@@ -122,16 +123,19 @@ impl Device {
         deviations: BTreeSet<DriverDeviation>,
     ) -> Result<Device, Error> {
         Device::derived(desc, policy, |desc, policy| {
-            derive_fields(desc, policy, &deviations)
+            (
+                derive_fields(desc, policy, &deviations),
+                StageBound::Defects,
+            )
         })
     }
 
-    /// The device of `desc` under `policy`, its profile's fields as `fields` derives them, once
-    /// the description and the policy pass their checks.
+    /// The device of `desc` under `policy`, its profile's fields and stage bound as `fields`
+    /// derives them, once the description and the policy pass their checks.
     fn derived(
         desc: DeviceDescription,
         policy: DevicePolicy,
-        fields: impl FnOnce(&DeviceDescription, &DevicePolicy) -> ProfileFields,
+        fields: impl FnOnce(&DeviceDescription, &DevicePolicy) -> (ProfileFields, StageBound),
     ) -> Result<Device, Error> {
         if desc.api_version < ApiVersion::V1_2 {
             return Err(Unsupported::needs(
@@ -151,8 +155,8 @@ impl Device {
             ));
         }
         identity_domains(&desc, &policy)?;
-        let fields = fields(&desc, &policy);
-        let profile = DeviceProfile::of(fields);
+        let (fields, stage_bound) = fields(&desc, &policy);
+        let profile = DeviceProfile::bounded(fields, stage_bound);
         let metal = MetalDeviceProperties::derive(&profile, &desc.allocation);
         Ok(Device(Arc::new(DeviceInner {
             fingerprint: profile.fingerprint(),
@@ -475,11 +479,15 @@ fn by_identity(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
         {
             vec![DriverWorkaround::NarrowMaskAfterSignedClamp]
         }
-        // A register allocator that faults compiling a module past a word bound, and products of
-        // one value by zeros of opposite sign kept as one, on every GPU it drives.
+        // A register allocator that faults compiling a module past a word bound, products of one
+        // value by zeros of opposite sign kept as one, a stage past 2^20 objects of its
+        // serialized form corrupted, and a compiler whose memory outgrows the stage, on every GPU
+        // it drives.
         Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA) => vec![
             DriverWorkaround::RegisterAllocatorOverflowsLargeModules,
             DriverWorkaround::OppositeZeroProductsMerged,
+            DriverWorkaround::SerializedStageWrapsLargeModules,
+            DriverWorkaround::CompilerMemoryGrowsWithStageSize,
         ],
         _ => Vec::new(),
     }

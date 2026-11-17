@@ -226,7 +226,7 @@ fn a_warm_refusal_is_found_by_its_own_driver_only() {
     };
     let kept = Identity::new(0x8086, 0xa7a0, 0x6802006, [1; 16]);
     let (name, written) = entry(&kept, &NO_PROFILE);
-    let kind = "Unsupported{StageSize; StageBound}";
+    let kind = "Unsupported{StageSize; DriverDefect(SerializedStageWrapsLargeModules)}";
     store
         .write_soon(&written, refusal_record(&name, kind))
         .unwrap();

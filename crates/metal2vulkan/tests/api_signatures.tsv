@@ -14439,6 +14439,7 @@ variant	metal2vulkan::device::DriverWorkaround::BothBarycentricFormsRejected	Bot
 variant	metal2vulkan::device::DriverWorkaround::BufferAtomicsUncontained	BufferAtomicsUncontained
 variant	metal2vulkan::device::DriverWorkaround::ClippedCoverageNotMetals	ClippedCoverageNotMetals
 variant	metal2vulkan::device::DriverWorkaround::ClippedTrianglesSplitPixelFragments	ClippedTrianglesSplitPixelFragments
+variant	metal2vulkan::device::DriverWorkaround::CompilerMemoryGrowsWithStageSize	CompilerMemoryGrowsWithStageSize
 variant	metal2vulkan::device::DriverWorkaround::CompositeInsertsWrittenInPlace	CompositeInsertsWrittenInPlace
 variant	metal2vulkan::device::DriverWorkaround::DiscardDropsSimdgroupStores	DiscardDropsSimdgroupStores
 variant	metal2vulkan::device::DriverWorkaround::DontInlineKeepsCalls	DontInlineKeepsCalls
@@ -14456,6 +14457,7 @@ variant	metal2vulkan::device::DriverWorkaround::OppositeZeroProductsMerged	Oppos
 variant	metal2vulkan::device::DriverWorkaround::PerspectiveReadsExtrapolated	PerspectiveReadsExtrapolated
 variant	metal2vulkan::device::DriverWorkaround::PushReadsLengthenThreadPayload	PushReadsLengthenThreadPayload
 variant	metal2vulkan::device::DriverWorkaround::RegisterAllocatorOverflowsLargeModules	RegisterAllocatorOverflowsLargeModules
+variant	metal2vulkan::device::DriverWorkaround::SerializedStageWrapsLargeModules	SerializedStageWrapsLargeModules
 variant	metal2vulkan::device::DriverWorkaround::TessellatorNotMetals	TessellatorNotMetals
 variant	metal2vulkan::device::DriverWorkaround::UniformBufferPerLaneReadsSerialize	UniformBufferPerLaneReadsSerialize
 variant	metal2vulkan::device::DriverWorkaround::VertexGroupingNotApples	VertexGroupingNotApples

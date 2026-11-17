@@ -53,6 +53,8 @@ const SPIRV_VAL_RELAXATIONS: [(VkFeature, &str); 5] = [
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceProfile {
     fields: ProfileFields,
+    /// Which stages the compile holds under a stage bound ([`StageBound`]).
+    stage_bound: StageBound,
     /// [`DeviceProfile::fingerprint`], derived once here, where the fields are fixed.
     ///
     /// Deriving it renders every field of the profile -- a format table alone is tens of
@@ -66,13 +68,15 @@ pub struct DeviceProfile {
 }
 
 impl DeviceProfile {
-    /// The profile of `fields`, with its fingerprint derived (the only way to build one): the
-    /// fingerprint is a function of the fields, so holding them together is what keeps it true of
-    /// them. A test's edit goes through `edit`, which only the crate's tests build.
-    pub(crate) fn of(fields: ProfileFields) -> DeviceProfile {
-        let fingerprint = fingerprint_of(&fields);
+    /// The profile of `fields` whose stages are held under `stage_bound`, with its fingerprint
+    /// derived (the only way to build one): the fingerprint is a function of both, so holding them
+    /// together is what keeps it true of them. A test's edit goes through `edit`, which only the
+    /// crate's tests build.
+    pub(crate) fn bounded(fields: ProfileFields, stage_bound: StageBound) -> DeviceProfile {
+        let fingerprint = fingerprint_of(&fields, stage_bound);
         DeviceProfile {
             fields,
+            stage_bound,
             fingerprint,
         }
     }
@@ -83,8 +87,13 @@ impl DeviceProfile {
     #[cfg(test)]
     pub(crate) fn edit<T>(&mut self, change: impl FnOnce(&mut ProfileFields) -> T) -> T {
         let answer = change(&mut self.fields);
-        self.fingerprint = fingerprint_of(&self.fields);
+        self.fingerprint = fingerprint_of(&self.fields, self.stage_bound);
         answer
+    }
+
+    /// Which stages the compile holds under a stage bound.
+    pub(crate) fn stage_bound(&self) -> StageBound {
+        self.stage_bound
     }
 
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
@@ -481,7 +490,7 @@ pub(crate) fn fingerprints_derived() -> u64 {
 /// The fingerprint of `fields` ([`DeviceProfile::fingerprint`]): the rendering streams into the
 /// hash, because a materialized rendering of a profile with a format table is tens of kilobytes
 /// that no input-scaled ledger charge accounts for.
-fn fingerprint_of(fields: &ProfileFields) -> Hash256 {
+fn fingerprint_of(fields: &ProfileFields, stage_bound: StageBound) -> Hash256 {
     use sha2::{Digest, Sha256};
     use std::fmt::Write as _;
     struct Hashing(Sha256);
@@ -497,7 +506,29 @@ fn fingerprint_of(fields: &ProfileFields) -> Hash256 {
     // `Hashing` never fails, and `Debug` of these plain-data types only fails when the
     // writer does.
     let _ = write!(h, "{:?}", fields);
+    // A profile whose stage bounds are its defects' renders its fields alone, as every profile
+    // did before the bound became a fact of its own; the other renders the bound after them.
+    if stage_bound != StageBound::Defects {
+        let _ = write!(h, "{stage_bound:?}");
+    }
     h.0.finalize().into()
+}
+
+/// Which stages a profile's compile holds under a stage bound (`pipeline::compile`'s stage
+/// bounds): the entry weight past which a module is not handed to the driver, a kernel planned
+/// again keeping the widest mode's pin where only its emulation passed it, and every other module
+/// refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StageBound {
+    /// Only where the profile names a stage-size defect of its driver
+    /// (`DriverWorkaround::SerializedStageWrapsLargeModules`,
+    /// `DriverWorkaround::CompilerMemoryGrowsWithStageSize`), refused as that defect
+    /// (`Needs::DriverDefect`): `Device::new`'s profile.
+    Defects,
+    /// Every stage, on every device, at the heaviest entry measured to compile within host-sized
+    /// memory (`pipeline::compile::COMPILED_STAGE_WEIGHT`), refused as `Needs::StageBound`:
+    /// `Device::from_queries`' profile, keyed on no identity.
+    Every,
 }
 
 /// Every field of a profile, policy included. The fingerprint hashes all of them.
@@ -1524,6 +1555,36 @@ pub enum DriverWorkaround {
     /// `f32` constant with a `-0.0` component multiplies by `+0.0` in that component and negates
     /// it (`ProductForm::PositiveZeroFactors`), the same value on every device.
     OppositeZeroProductsMerged,
+    /// The driver's pipeline creation corrupts a stage of more than 2^20 objects of its own
+    /// intermediate form. Mesa's common pipeline runtime (`vk_pipeline.c`), which ANV's pipelines
+    /// go through, writes each stage after the driver's preprocessing into a precompiled shader
+    /// with `nir_serialize` and reads it back with `nir_deserialize` before compiling it, on every
+    /// pipeline it makes, cached or not. The serialized form names a value by a 20-bit index, and
+    /// the bound (`MAX_OBJECT_IDS`, `1 << 20`) is held only by an assertion, which a release build
+    /// leaves out: past it the indices wrap, and the reader takes other objects for them. Measured
+    /// with ANV (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, on the Iris Xe of RPL-P: a
+    /// kernel whose serialized stage held 1,096,128 objects faulted in `vkCreateComputePipelines`
+    /// (`SEGV_MAPERR` at address `0x40`, in the reader, at its 1,048,578th object), and so did a
+    /// synthetic compute module of 360,000 chained multiply-adds (about three objects each). Keyed
+    /// on the driver whatever its GPU and release, in `device::derive`. A module whose entry weighs more than
+    /// the bound the compile keeps under (`pipeline::compile`'s stage bound) is planned again in
+    /// the `Direct` simdgroup tier where it took the `Emulated` one only in place of the widest
+    /// mode's pin, and refused otherwise (`Needs::DriverDefect`), never handed to the driver.
+    SerializedStageWrapsLargeModules,
+    /// The driver's shader compiler takes memory that grows faster than the stage it compiles,
+    /// inside the process that creates the pipeline: past the largest stage measured to compile in
+    /// host-sized memory, one pipeline creation may take the host's memory. Measured with ANV
+    /// (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, on the Iris Xe of RPL-P, compute
+    /// kernels created cold through `vkCreateComputePipelines` (job m3-max-26147): modules of
+    /// entry weight 73,814, 75,886 and 99,109 were created in 45 s, 47 s and 132 s at peak
+    /// resident sets of 1.76, 2.24 and 3.65 GiB; one of entry weight 532,213 passed 16 GiB at
+    /// 358 s without finishing, where it was stopped. Keyed on the driver whatever its GPU and
+    /// release, in `device::derive`. A module whose entry weighs more than the largest measured
+    /// to compile (`pipeline::compile`'s stage bound) is planned again in the `Direct` simdgroup
+    /// tier where it took the `Emulated` one only in place of the widest mode's pin, and refused
+    /// otherwise (`Needs::DriverDefect`), never handed to the driver. The bound rises when a larger
+    /// compile is measured within host-sized memory.
+    CompilerMemoryGrowsWithStageSize,
     /// A compute shader that reads a push constant runs each thread with a longer payload, and so
     /// more slowly on a light kernel: a measured cost fact (`device::driver_facts`) that chooses
     /// between two exact encodings of a buffer slot's offset. ANV

@@ -324,6 +324,12 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
 - NVIDIA 615.71.09 on GA10x gives sign-extended bits for a mask over a signed clamp, to exactly N
   bits' range, of a sum or difference of two values sign-extended from N bits; not reproduced on
   620.70.06.
+- A kernel whose translated entry weighs more than 99,109 instructions (each call counted as its
+  callee's body) is made on no device: that is the heaviest stage measured to compile within
+  host-sized memory on the slowest compiler measured (ANV, Mesa 26.2.6, on the Iris Xe of RPL-P).
+  One that emulated its SIMD groups only in place of the 32-lane pin is translated again pinned,
+  and every other is refused (`Error::Translation`: `Feature::StageSize`, `Needs::StageBound`)
+  where Metal makes it.
 
 ## One path for every device
 

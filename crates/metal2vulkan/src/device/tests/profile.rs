@@ -1118,10 +1118,11 @@ fn half_rounding_follows_the_queries_alone() {
     }
 }
 
-/// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules` is keyed on ANV, whatever its GPU
-/// and release; every committed ANV profile carries it, and no other profile does. The Iris Xe's
-/// description under RADV or NVIDIA's driver loses it. The stage bound is no workaround: it holds
-/// on every device (`pipeline::compile`'s `stage_bound`).
+/// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules`,
+/// `DriverWorkaround::SerializedStageWrapsLargeModules` and
+/// `DriverWorkaround::CompilerMemoryGrowsWithStageSize` are keyed on ANV, whatever its GPU and
+/// release; every committed ANV profile carries them, and no other profile does. The Iris Xe's
+/// description under RADV or NVIDIA's driver loses them.
 #[test]
 fn large_module_defects_are_keyed_on_anv() {
     use crate::device::profile::DriverWorkaround;
@@ -1131,7 +1132,11 @@ fn large_module_defects_are_keyed_on_anv() {
             .profile()
             .clone()
     };
-    for fact in [DriverWorkaround::RegisterAllocatorOverflowsLargeModules] {
+    for fact in [
+        DriverWorkaround::RegisterAllocatorOverflowsLargeModules,
+        DriverWorkaround::SerializedStageWrapsLargeModules,
+        DriverWorkaround::CompilerMemoryGrowsWithStageSize,
+    ] {
         for (stem, text) in committed_profiles() {
             let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
             let anv = desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);
@@ -1145,6 +1150,29 @@ fn large_module_defects_are_keyed_on_anv() {
             let p = profile_of(&desc);
             assert!(!p.workarounds().contains(&fact), "{fact:?} under {other:?}");
         }
+    }
+}
+
+/// The stage bound is a fact of the profile: `Device::new` bounds a stage only where its driver's
+/// identity names a stage-size defect (`StageBound::Defects`), `Device::from_queries` bounds every
+/// stage (`StageBound::Every`), on every committed profile. The fact keys the fingerprint: a
+/// profile of the same fields bounded otherwise is another profile.
+#[test]
+fn the_stage_bound_is_a_fact_of_the_profile() {
+    use crate::device::profile::{DeviceProfile, StageBound};
+    for (stem, text) in committed_profiles() {
+        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
+        let old = Device::new(desc.clone(), DevicePolicy::default()).unwrap();
+        let queries = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+        assert_eq!(old.profile().stage_bound(), StageBound::Defects, "{stem}");
+        assert_eq!(queries.profile().stage_bound(), StageBound::Every, "{stem}");
+        let fields = queries.profile().fields().clone();
+        let other = DeviceProfile::bounded(fields, StageBound::Defects);
+        assert_ne!(
+            other.fingerprint(),
+            queries.profile().fingerprint(),
+            "{stem}"
+        );
     }
 }
 

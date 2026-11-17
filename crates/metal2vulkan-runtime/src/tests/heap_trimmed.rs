@@ -1,6 +1,7 @@
 //! The free heap a large making's compile leaves is handed back (`pipeline/compile_memory.rs`):
-//! a kernel of fused multiply-adds, each step's operand some values behind it ([`WIDE`]: a short
-//! chain of many values live), made as two `VkPipeline`s of its partial-threadgroups variant, which runs a large kernel's whole and ragged grids alike
+//! two kernels of fused multiply-adds, each step's operand some values behind it ([`KERNELS`]:
+//! a long chain of few values live, and a short one of many), each made as two `VkPipeline`s of
+//! its partial-threadgroups variant, which runs a large kernel's whole and ragged grids alike
 //! (`compute::partial_direct`), one per threadgroup size, each a large making. glibc keeps what
 //! the driver's compile frees in the compiling thread's arena; handed back after each, the
 //! process's resident set stays within [`BOUND_MIB`] of what it was before the first, and the
@@ -25,14 +26,18 @@
 //! | 320,000, 64 | 334 MB; 60.5 s, 18.4 s | 277 MB; 7.0 s, 3.7 s |
 //!
 //! NVIDIA's compile frees about 0.7 KB a step whatever the values live, fastest with few; RADV's
-//! leaves 200 to 280 MB with up to 256 live, at the floor or under it, and far more with 600.
-//! Every shape NVIDIA's compile frees past the floor is past the stage bound no device is handed
-//! (`Feature::StageSize`, an entry weight of 99,109; 320,000 steps weigh 320,038), and under it
-//! NVIDIA's frees 189 MB at most measured (80,000 steps, 600 live). So the test makes the wide
-//! chain alone, which RADV's and ANV's compiles free past the floor, and asks for a trim where its
-//! making left more than the floor free. Each shape made once in a process of its own on the Iris
-//! Xe of RPL-P (ANV, Mesa 26.2.6), the free heap after the making, its time and the process's peak
-//! resident set (one run, the host shared):
+//! leaves 200 to 280 MB with up to 256 live, at the floor or under it (0 trims at 320,000 and 64
+//! once), and far more with 600. So no one shape passes the floor fast on both: the test makes,
+//! on every device, the long chain NVIDIA's compile frees past it and the wide one RADV's does.
+//!
+//! On ANV the long chain is refused: its entry weighs 320,038, past the heaviest stage the driver
+//! is measured to compile (`Feature::StageSize`,
+//! `DriverWorkaround::CompilerMemoryGrowsWithStageSize`, a bound of 99,109), and the shapes
+//! NVIDIA's compile frees past the floor are past that bound (303 MB at 240,000 steps; 189 MB at
+//! 80,000 with 600 live), so no long chain serves both. The test takes that refusal, asserting it
+//! is the bound's, and the wide chain trims there. Each shape made once in a process of its own on
+//! the Iris Xe of RPL-P (ANV, Mesa 26.2.6), the free heap after the making, its time and the
+//! process's peak resident set (one run, the host shared):
 //!
 //! | steps, live | Iris Xe |
 //! |---|---|
@@ -54,16 +59,18 @@ use super::opencl_mode::words_buffer;
 use super::spares_bench::process_memory;
 use super::uniform_bind_offsets::idle;
 use crate::pipeline::compile_memory::heap_bytes;
-use crate::pipeline::compile_memory::FREE_FLOOR;
-use crate::{CommandBufferStatus, ComputePipelineState, Device, PipelineOptions, Size};
+use crate::{CommandBufferStatus, ComputePipelineState, Device, Error, PipelineOptions, Size};
+use metal2vulkan::device::DriverWorkaround;
+use metal2vulkan::error::{Feature, Needs};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use std::fmt::Write;
 use std::time::{Duration, Instant};
 
-/// The kernel's fused multiply-adds and the values each step's operand is behind (so many live
-/// at once): a short chain of many, whose compile RADV's and ANV's drivers free past the trim's
-/// floor (the module docs).
-const WIDE: (usize, usize) = (20_000, 600);
+/// The kernels' fused multiply-adds and the values each step's operand is behind (so many live
+/// at once): a long chain of few, whose compile NVIDIA's driver frees past the trim's floor and
+/// which ANV refuses as past its stage bound, and a short chain of many, whose compile RADV and
+/// ANV free past it (the module docs).
+const KERNELS: [(usize, usize); 2] = [(320_000, 64), (20_000, 600)];
 
 /// The longest a command buffer of a large making waits.
 const MAKING_WAIT: Duration = Duration::from_secs(300);
@@ -110,8 +117,11 @@ entry:\n{body}ret void\n}}\n\n\
     )
 }
 
-/// The state of `heavy` of `steps` steps, `window` live.
-fn state(device: &Device, (steps, window): (usize, usize)) -> ComputePipelineState {
+/// The state of `heavy` of `steps` steps, `window` live, or `None` where the device refuses it as
+/// past the heaviest stage its driver is measured to compile (`Feature::StageSize`,
+/// `DriverWorkaround::CompilerMemoryGrowsWithStageSize`), the refusal naming an entry weight past
+/// its bound. Every other refusal fails the test.
+fn state(device: &Device, (steps, window): (usize, usize)) -> Option<ComputePipelineState> {
     let air = metal2vulkan_devtools::llvm_assemble_text(&kernel(steps, window)).unwrap();
     let library = metal2vulkan::library::Library::from_air(&air).unwrap();
     let function = device
@@ -120,9 +130,28 @@ fn state(device: &Device, (steps, window): (usize, usize)) -> ComputePipelineSta
         .unwrap();
     let descriptor =
         ComputePipelineDescriptor::new(StageSource::Function(function.function_descriptor()));
-    device
-        .new_compute_pipeline_state(&descriptor, &PipelineOptions::default())
-        .unwrap_or_else(|e| panic!("{steps} steps, {window} live: {e:?}"))
+    let u = match device.new_compute_pipeline_state(&descriptor, &PipelineOptions::default()) {
+        Ok(state) => return Some(state),
+        Err(Error::Unsupported(u)) => u,
+        Err(other) => panic!("{steps} steps, {window} live: {other:?}"),
+    };
+    let bound = Needs::DriverDefect(DriverWorkaround::CompilerMemoryGrowsWithStageSize);
+    assert!(u.feature == Feature::StageSize && u.needs == bound, "{u:?}");
+    let named = u
+        .symbol
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_default();
+    let passed = (named.strip_prefix("entry weight "))
+        .and_then(|rest| rest.split_once(", past the bound "))
+        .and_then(|(weight, bound)| {
+            Some((weight.parse::<u64>().ok()?, bound.parse::<u64>().ok()?))
+        });
+    assert!(
+        matches!(passed, Some((weight, bound)) if weight > bound),
+        "{steps} steps, {window} live: {u:?}"
+    );
+    None
 }
 
 /// Dispatch `n` threads in threadgroups of `group` and wait.
@@ -158,31 +187,40 @@ fn a_large_makings_free_heap_is_handed_back() {
     let device = device(&scratch.0);
     let before = resident_mib();
     let trims = || device.work_counts().heap_trims;
-    let (steps, window) = WIDE;
-    let made = Instant::now();
-    let state = state(&device, WIDE);
-    dispatch(&device, &state, 128, 128);
-    // What the first making left glibc free (`compile_memory::FREE_FLOOR`'s measure).
-    let free = heap_bytes().map_or(0, |(_, free)| free);
-    idle(&device);
-    let first = resident_mib();
-    dispatch(&device, &state, 129, 64);
-    idle(&device);
-    println!(
-        "HEAP-TRIMMED {}: resident {before} MiB before; {steps} steps, {window} live: {free} bytes \
-         free and {first} MiB resident after the first making, {} MiB after the second, {} \
-         trims, {:.1} s",
-        device.name(),
-        resident_mib(),
-        trims(),
-        made.elapsed().as_secs_f64()
+    let mut line = format!(
+        "HEAP-TRIMMED {}: resident {before} MiB before",
+        device.name()
     );
+    for (steps, window) in KERNELS {
+        let made = Instant::now();
+        let Some(state) = state(&device, (steps, window)) else {
+            write!(
+                line,
+                "; {steps} steps, {window} live: refused past the stage bound"
+            )
+            .unwrap();
+            continue;
+        };
+        dispatch(&device, &state, 128, 128);
+        // What the first making left glibc free (`compile_memory::FREE_FLOOR`'s measure).
+        let free = heap_bytes().map_or(0, |(_, free)| free);
+        idle(&device);
+        let first = resident_mib();
+        dispatch(&device, &state, 129, 64);
+        idle(&device);
+        write!(
+            line,
+            "; {steps} steps, {window} live: {free} bytes free and {first} MiB resident after the \
+             first making, {} MiB after the second, {} trims, {:.1} s",
+            resident_mib(),
+            trims(),
+            made.elapsed().as_secs_f64()
+        )
+        .unwrap();
+    }
+    println!("{line}");
     let after = resident_mib();
-    // Only a making that left more than the floor free hands it back (the module docs).
-    assert!(
-        free <= FREE_FLOOR || trims() > 0,
-        "a making left {free} bytes free, and none was handed back"
-    );
+    assert!(trims() > 0, "no large making handed its free heap back");
     assert!(
         after <= before + BOUND_MIB,
         "the resident set grew from {before} MiB to {after} over the makings"
