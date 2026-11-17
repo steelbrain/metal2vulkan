@@ -399,6 +399,8 @@ def conditions(kind, needs_text):
         return {"drivers with defect " + w for w in ws} or {"drivers with a defect"}
     if kind == "MetalGpuFamily":
         return {"devices that do not claim the Metal GPU family"}
+    if kind == "StageBound":
+        return {"devices whose plan writes the stage past the stage bound"}
     return {"varies (" + kind + ")"}
 
 

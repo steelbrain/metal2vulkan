@@ -1524,36 +1524,6 @@ pub enum DriverWorkaround {
     /// `f32` constant with a `-0.0` component multiplies by `+0.0` in that component and negates
     /// it (`ProductForm::PositiveZeroFactors`), the same value on every device.
     OppositeZeroProductsMerged,
-    /// The driver's pipeline creation corrupts a stage of more than 2^20 objects of its own
-    /// intermediate form. Mesa's common pipeline runtime (`vk_pipeline.c`), which ANV's pipelines
-    /// go through, writes each stage after the driver's preprocessing into a precompiled shader
-    /// with `nir_serialize` and reads it back with `nir_deserialize` before compiling it, on every
-    /// pipeline it makes, cached or not. The serialized form names a value by a 20-bit index, and
-    /// the bound (`MAX_OBJECT_IDS`, `1 << 20`) is held only by an assertion, which a release build
-    /// leaves out: past it the indices wrap, and the reader takes other objects for them. Measured
-    /// with ANV (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, on the Iris Xe of RPL-P: a
-    /// kernel whose serialized stage held 1,096,128 objects faulted in `vkCreateComputePipelines`
-    /// (`SEGV_MAPERR` at address `0x40`, in the reader, at its 1,048,578th object), and so did a
-    /// synthetic compute module of 360,000 chained multiply-adds (about three objects each). Keyed
-    /// on the driver whatever its GPU and release, in `device::derive`. A module whose entry weighs more than
-    /// the bound the compile keeps under (`pipeline::compile`'s stage bound) is planned again in
-    /// the `Direct` simdgroup tier where it took the `Emulated` one only in place of the widest
-    /// mode's pin, and refused otherwise (`Needs::DriverDefect`), never handed to the driver.
-    SerializedStageWrapsLargeModules,
-    /// The driver's shader compiler takes memory that grows faster than the stage it compiles,
-    /// inside the process that creates the pipeline: past the largest stage measured to compile in
-    /// host-sized memory, one pipeline creation may take the host's memory. Measured with ANV
-    /// (`VK_DRIVER_ID_INTEL_OPEN_SOURCE_MESA`), Mesa 26.2.6, on the Iris Xe of RPL-P, compute
-    /// kernels created cold through `vkCreateComputePipelines` (job m3-max-26147): modules of
-    /// entry weight 73,814, 75,886 and 99,109 were created in 45 s, 47 s and 132 s at peak
-    /// resident sets of 1.76, 2.24 and 3.65 GiB; one of entry weight 532,213 passed 16 GiB at
-    /// 358 s without finishing, where it was stopped. Keyed on the driver whatever its GPU and
-    /// release, in `device::derive`. A module whose entry weighs more than the largest measured
-    /// to compile (`pipeline::compile`'s stage bound) is planned again in the `Direct` simdgroup
-    /// tier where it took the `Emulated` one only in place of the widest mode's pin, and refused
-    /// otherwise (`Needs::DriverDefect`), never handed to the driver. The bound rises when a larger
-    /// compile is measured within host-sized memory.
-    CompilerMemoryGrowsWithStageSize,
     /// A compute shader that reads a push constant runs each thread with a longer payload, and so
     /// more slowly on a light kernel: a measured cost fact (`device::driver_facts`) that chooses
     /// between two exact encodings of a buffer slot's offset. ANV

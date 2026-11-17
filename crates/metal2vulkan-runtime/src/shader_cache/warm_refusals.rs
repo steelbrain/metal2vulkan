@@ -134,7 +134,7 @@ mod tests {
             assert_ne!(refusal_name(&other, record), name, "{other:?}");
         }
         assert_ne!(refusal_name(&identity, b"another record"), name);
-        let kind = "Unsupported{StageSize; DriverDefect(SerializedStageWrapsLargeModules)}";
+        let kind = "Unsupported{StageSize; StageBound}";
         let bytes = refusal_record(&name, kind);
         assert_eq!(refusal_kind(&bytes, &name).unwrap(), kind);
         assert!(refusal_kind(&bytes, &refusal_name(&identity, b"another")).is_err());

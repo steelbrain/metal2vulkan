@@ -1118,11 +1118,10 @@ fn half_rounding_follows_the_queries_alone() {
     }
 }
 
-/// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules`,
-/// `DriverWorkaround::SerializedStageWrapsLargeModules` and
-/// `DriverWorkaround::CompilerMemoryGrowsWithStageSize` are keyed on ANV, whatever its GPU and
-/// release; every committed ANV profile carries them, and no other profile does. The Iris Xe's
-/// description under RADV or NVIDIA's driver loses them.
+/// `DriverWorkaround::RegisterAllocatorOverflowsLargeModules` is keyed on ANV, whatever its GPU
+/// and release; every committed ANV profile carries it, and no other profile does. The Iris Xe's
+/// description under RADV or NVIDIA's driver loses it. The stage bound is no workaround: it holds
+/// on every device (`pipeline::compile`'s `stage_bound`).
 #[test]
 fn large_module_defects_are_keyed_on_anv() {
     use crate::device::profile::DriverWorkaround;
@@ -1132,11 +1131,7 @@ fn large_module_defects_are_keyed_on_anv() {
             .profile()
             .clone()
     };
-    for fact in [
-        DriverWorkaround::RegisterAllocatorOverflowsLargeModules,
-        DriverWorkaround::SerializedStageWrapsLargeModules,
-        DriverWorkaround::CompilerMemoryGrowsWithStageSize,
-    ] {
+    for fact in [DriverWorkaround::RegisterAllocatorOverflowsLargeModules] {
         for (stem, text) in committed_profiles() {
             let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
             let anv = desc.driver_id == Some(vk::DriverId::INTEL_OPEN_SOURCE_MESA);

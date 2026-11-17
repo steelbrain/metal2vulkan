@@ -795,16 +795,16 @@ mod tests {
     }
 
     /// A refusal of the record on this device is kept for later passes: a typed refusal (a stage
-    /// past its driver's bound, or past the private memory a thread holds), and a translator
+    /// past the stage bound, or past the private memory a thread holds), and a translator
     /// outcome permanent for its input. A transient failure is not (a deadline, a cancellation, a
     /// host allocation that failed, out of memory, a lost device), nor a missing input that a
     /// later boot may supply, nor a runtime error that is no refusal.
     #[test]
     fn only_a_refusal_for_good_is_kept() {
-        use metal2vulkan::device::{DriverWorkaround, VkLimit};
-        use metal2vulkan::error::{Capability, InternalError, InternalKind, Limit};
-        let defect = DriverWorkaround::SerializedStageWrapsLargeModules;
-        let stage = Unsupported::driver_defect(Feature::StageSize, defect);
+        use metal2vulkan::device::VkLimit;
+        use metal2vulkan::error::{Capability, InternalError, InternalKind, Limit, Needs};
+        let mut stage = Unsupported::not_implemented(Feature::StageSize);
+        stage.needs = Needs::StageBound;
         let storage = Capability::Limit {
             limit: VkLimit::FunctionStorageBytesPerThread,
             required: 256 << 10,

@@ -3,8 +3,8 @@
 Compiles the owned MSL fixtures in `crates/metal2vulkan-validation/fixtures/public/engine/*.metal` with the
 macOS Metal toolchain and writes their companions next to each source. CPU only; nothing runs on
 a GPU. `--dir <directory>` does the same for `crates/metal2vulkan-validation/fixtures/public/<directory>/`, which has a
-TOOLCHAIN of its own: `reflection/` holds the reflection fixtures, which the
-translator's fixture sweeps do not read.
+TOOLCHAIN of its own: `reflection/` holds the reflection fixtures and `stage_bound/` the
+stage-bound fixture, which the translator's fixture sweeps do not read.
 
 | Output | Produced by | Committed |
 |---|---|---|

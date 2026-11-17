@@ -14,7 +14,9 @@
 //!   every capability of one set compiles it), [`Needs::NotImplemented`] is a gap of this
 //!   translator version on every device, [`Needs::NotRepresentable`] has no Vulkan 1.2+
 //!   mechanism, [`Needs::DriverDefect`] is a mechanism the device's driver is measured to run
-//!   wrong ([`Needs::RuntimeDriverDefect`] one the runtime records for itself). The runtime adds
+//!   wrong ([`Needs::RuntimeDriverDefect`] one the runtime records for itself), and
+//!   [`Needs::StageBound`] is a stage the device's plan writes heavier than the translator hands
+//!   any driver. The runtime adds
 //!   [`Needs::MetalGpuFamily`]: Metal's own refusal
 //!   on a device without the family, and [`Needs::MetalRefuses`]: Metal's own refusal of the
 //!   form on the devices it was measured on. The translator does not return different output in place
@@ -161,6 +163,7 @@ impl Error {
                 Needs::NotImplemented | Needs::NotRepresentable => Permanence::Input,
                 Needs::DriverDefect(_)
                 | Needs::RuntimeDriverDefect(_)
+                | Needs::StageBound
                 | Needs::DeviceCapability(_)
                 | Needs::MetalGpuFamily(_)
                 | Needs::MetalRefuses(_) => Permanence::InputAndDevice,
@@ -347,9 +350,9 @@ pub struct Unsupported {
     pub location: Option<Location>,
     /// The symbol the refused construct names, for diagnostics only: an unknown intrinsic, the
     /// callee of a call that needs linking, the pixel format a refused texture, view or copy
-    /// holds ([`naming_format`](Self::naming_format)), or, for a stage past the size its driver
-    /// is measured to compile ([`Feature::StageSize`]), the stage's entry weight and the bound it
-    /// passed (`entry weight 532213, past the bound 99109`). Opaque like every [`DiagName`].
+    /// holds ([`naming_format`](Self::naming_format)), or, for a stage past the size the
+    /// translator hands a driver ([`Feature::StageSize`]), the stage's entry weight and the bound
+    /// it passed (`entry weight 532213, past the bound 99109`). Opaque like every [`DiagName`].
     pub symbol: Option<DiagName>,
 }
 
@@ -538,6 +541,13 @@ pub enum Needs {
     /// record for itself: the runtime refuses rather than hand back what the driver would
     /// change. A device without the defect runs the input.
     RuntimeDriverDefect(RuntimeDriverDefect),
+    /// The stage, as this device's plan writes it, is heavier than the translator hands any
+    /// driver: its entry weight passes the heaviest stage measured to compile within host-sized
+    /// memory ([`Unsupported::symbol`] names the weight and the bound). The weight is the plan's,
+    /// so a device whose plan writes the stage lighter translates it: one that keeps its widest
+    /// simdgroup mode pinned where this one emulates simdgroups. A gap of the translator rather
+    /// than of the device: no device is handed a stage past the bound.
+    StageBound,
     /// A device that claims this Metal GPU family (`MTLGPUFamily`'s raw value, 1010 for Apple10),
     /// which the device does not: Metal itself refuses the input on a device without the family,
     /// so the refusal is Metal's own answer rather than a gap. Only the runtime refuses so, by the
@@ -1283,8 +1293,8 @@ pub enum Feature {
     ImageAtomics,
     /// Too many descriptors of one kind in a stage or pipeline.
     DescriptorCount,
-    /// A stage module larger than the device's driver is measured to compile, intact and within
-    /// host-sized memory (`Needs::DriverDefect` names the defect).
+    /// A stage module heavier than the translator hands any driver: past the heaviest measured to
+    /// compile within host-sized memory ([`Needs::StageBound`]).
     StageSize,
     /// A buffer window beyond the descriptor range limits.
     BufferRange,

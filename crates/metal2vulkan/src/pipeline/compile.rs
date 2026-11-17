@@ -62,7 +62,7 @@ use crate::reflection;
 use crate::spirv::ir::TypedModule;
 
 pub use entry::{EntryDescriptor, EntryPlan, StandaloneModule};
-pub(crate) use stage_bound::StageBounds;
+pub(crate) use stage_bound::COMPILED_STAGE_WEIGHT;
 
 /// Which entry of a bitcode module to compile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1683,36 +1683,36 @@ pub(crate) fn compile_bitcode_kept(
     })
 }
 
-/// [`compile_bitcode_kept`] under the stage bounds `bounds` in place of
-/// [`StageBounds::MEASURED`], so a test reaches each bound with a small module.
+/// [`compile_bitcode_kept`] under the stage bound `bound` in place of [`COMPILED_STAGE_WEIGHT`],
+/// so a test reaches the bound with a small module.
 #[cfg(test)]
 pub(crate) fn compile_bitcode_bounded(
     bitcode: &[u8],
     entry: EntryRef<'_>,
     p: &DeviceProfile,
     m: &mut Meter,
-    bounds: StageBounds,
+    bound: u64,
 ) -> Result<(CompiledFunction, Plan, TypedModule), Error> {
     guarded(|| {
         let consts = FunctionConstantValues::defaults();
         let inputs = LowerInputs::new();
         let r = Request::bitcode(bitcode, entry, &consts, &[], &inputs);
-        compile_bounded(&r, p, m, (SPIRV_WORDS, bounds), TypedModule::clone)
+        compile_bounded(&r, p, m, (SPIRV_WORDS, bound), TypedModule::clone)
             .map(|(artifact, plan, module)| (CompiledFunction::new(artifact), plan, module))
     })
 }
 
 /// Stage `fd` compiled with default lowering inputs as [`compile_stage`] compiles it, or as
-/// [`compile_stage_from`] compiles it reading `entries` where given, under the stage bounds
-/// `bounds` in place of [`StageBounds::MEASURED`]: so a test reaches each bound with a small
-/// module through either path.
+/// [`compile_stage_from`] compiles it reading `entries` where given, under the stage bound `bound`
+/// in place of [`COMPILED_STAGE_WEIGHT`]: so a test reaches the bound with a small module through
+/// either path.
 #[cfg(test)]
 pub(crate) fn compile_stage_bounded(
     fd: &FunctionDescriptor,
     p: &DeviceProfile,
     entries: Option<&StageEntries>,
     m: &mut Meter,
-    bounds: StageBounds,
+    bound: u64,
 ) -> Result<CompiledFunction, Error> {
     let inputs = LowerInputs::new();
     let shared = entries.map_or(Shared::Nothing, |e| Shared::Entry(e, fd));
@@ -1724,7 +1724,7 @@ pub(crate) fn compile_stage_bounded(
             InputsFrom::Given(&inputs),
             shared,
             |r| {
-                compile_bounded(r, p, m, (SPIRV_WORDS, bounds), |_| ())
+                compile_bounded(r, p, m, (SPIRV_WORDS, bound), |_| ())
                     .map(|(artifact, _, ())| CompiledFunction::new(artifact))
             },
         )
@@ -2928,16 +2928,16 @@ fn compile_kept<K>(
     word_cap: u64,
     keep: impl FnOnce(&TypedModule) -> K,
 ) -> Result<(Arc<FunctionArtifact>, Plan, K), Error> {
-    compile_bounded(r, p, m, (word_cap, StageBounds::MEASURED), keep)
+    compile_bounded(r, p, m, (word_cap, COMPILED_STAGE_WEIGHT), keep)
 }
 
-/// [`compile_kept`] under the stage bounds `bounds` where the profile has their defects
-/// (`stage_bound`; [`StageBounds::MEASURED`] in production).
+/// [`compile_kept`] under the stage bound `bound` (`stage_bound`; [`COMPILED_STAGE_WEIGHT`] in
+/// production).
 fn compile_bounded<K>(
     r: &Request<'_>,
     p: &DeviceProfile,
     m: &mut Meter,
-    (word_cap, bounds): (u64, StageBounds),
+    (word_cap, bound): (u64, u64),
     keep: impl FnOnce(&TypedModule) -> K,
 ) -> Result<(Arc<FunctionArtifact>, Plan, K), Error> {
     let (
@@ -2950,7 +2950,7 @@ fn compile_bounded<K>(
             unbound,
         },
         crate::lower::emit::Emitted { mut module, merged },
-    ) = stage_bound::emit(r, p, (word_cap, bounds), m)?;
+    ) = stage_bound::emit(r, p, (word_cap, bound), m)?;
     // On a driver whose compiler loses a simdgroup's storage writes after an `optnone` call only
     // its helper invocations make, those invocations take another arm where that is exact, and
     // each such call left is fenced once every analysis below has read the module.

@@ -344,9 +344,8 @@ pub const DEVICE_LOCKSTEP: &str = "barrier.lockstep.device";
 
 /// Whether [`widest_pin`] weighs a kernel for the `Emulated` tier, or the kernel keeps the
 /// `Direct` tier's pin to the device's widest mode whatever its pressure: a kernel whose emulated
-/// module passed a bound its driver compiles within is planned again keeping it
-/// (`pipeline::compile`'s stage bounds, `DriverWorkaround::SerializedStageWrapsLargeModules`,
-/// `DriverWorkaround::CompilerMemoryGrowsWithStageSize`).
+/// module passed the stage bound (`pipeline::compile`'s `stage_bound`) is planned again keeping
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WidestPin {
     /// [`widest_pin`] weighs the kernel.

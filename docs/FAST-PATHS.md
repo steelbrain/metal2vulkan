@@ -821,33 +821,29 @@ driver's. Each is open work.
   ANV then writes through a null state inside `vkCmdDraw*` instead of failing the command
   buffer. What spare pools keep of such recordings is freed as they go
   back (`RECORDED`); what command buffers alive at once record is not bounded.
-- **On ANV, a stage module heavier than the driver is measured to compile is refused, or keeps
-  the widest mode's pin** (`pipeline/compile/stage_bound.rs`,
-  `DriverWorkaround::SerializedStageWrapsLargeModules`,
-  `DriverWorkaround::CompilerMemoryGrowsWithStageSize`). Mesa's common pipeline runtime writes
-  each stage into a precompiled shader and reads it back before compiling it, naming each of its
-  objects by a 20-bit index that wraps without a word past 2^20 objects in a release build (Mesa
-  26.2.6: the driver faults inside `vkCreateComputePipelines`); and below that, the driver's
-  compiler takes memory that grows faster than the stage, inside the process that creates the
-  pipeline. A module whose entry weighs more than `COMPILED_STAGE_WEIGHT` (99,109 instructions,
-  every call counted as its callee's body), the heaviest measured to compile within host-sized
-  memory, is never handed to the driver: a kernel that emulated its simdgroups only in place of
-  the widest mode's pin is compiled pinned to 32 lanes again, and every other one is refused
-  (`Feature::StageSize`, naming the serialized stage's defect past `SERIALIZED_STAGE_WEIGHT`,
-  786,432, and the compiler's memory below it, and as its symbol the module's entry weight and
-  the bound it passed), where Metal compiles it. Measured on the Iris Xe
-  of RPL-P (ANV, Mesa 26.2.6), compute modules created cold through `vkCreateComputePipelines`
-  (job m3-max-26147): entry weights 73,814, 75,886 and 99,109 took 45 s, 47 s and 132 s and peak
-  resident sets of 1.76, 2.24 and 3.65 GiB; a module of entry weight 532,213 passed 16 GiB at
-  358 s without finishing, and one of 796,525, with its heap raw-texture arms dead (the
-  specialization a plan gives it where no texture its handles can name is held by its raw texels
-  alone), passed 20 GiB in under two minutes (job m3-max-26086), each where it was stopped.
+- **On every device, a stage module heavier than the heaviest measured to compile within
+  host-sized memory is refused, or keeps the widest mode's pin** (`pipeline/compile/stage_bound.rs`).
+  ANV's compiler takes memory that grows faster than the stage, inside the process that creates
+  the pipeline, and far above that its pipeline runtime faults on a stage past 2^20 objects of
+  its serialized form. A module whose entry weighs more than `COMPILED_STAGE_WEIGHT` (99,109
+  instructions, every call counted as its callee's body), the heaviest measured to compile there,
+  is handed to no driver: a kernel that emulated its simdgroups only in place of the widest
+  mode's pin, where the subgroup size range offers it, is compiled pinned to 32 lanes again, and
+  every other one is refused (`Feature::StageSize`, `Needs::StageBound`, and as its symbol the
+  module's entry weight and the bound it passed), where Metal compiles it. The bound is one form
+  for every device, the slowest compiler's: a device whose compiler would take a heavier stage is
+  refused it all the same. A kernel whose lockstep pair in
+  divergent flow makes it emulate its simdgroups where the device lacks maximal reconvergence has
+  no pin to keep: the owned fixture `stage_bound/stage_bound_matrix` (hundreds of simdgroup
+  matrix products beside such a pair) is planned again under the bound on the Iris Xe and refused
+  on that profile without maximal reconvergence. Measured on the Iris Xe of RPL-P (ANV, Mesa
+  26.2.6), compute modules created cold through `vkCreateComputePipelines` (job m3-max-26147):
+  entry weights 73,814, 75,886 and 99,109 took 45 s, 47 s and 132 s and peak resident sets of
+  1.76, 2.24 and 3.65 GiB; a module of entry weight 532,213 passed 16 GiB at 358 s without
+  finishing, and one of 796,525 passed 20 GiB in under two minutes (job m3-max-26086), each where
+  it was stopped; a kernel of entry weight 1,603,989 faulted inside `vkCreateComputePipelines`.
   Weights between 99,109 and 532,213 are unmeasured there. The bound rises when a larger compile
-  is measured within host-sized memory. The refusal follows what the driver compiles, not the
-  serialized form alone: a kernel of entry weight 1,603,989 created as a `VK_EXT_shader_object`
-  compute shader (`vkCreateShadersEXT`), which the driver compiles without that round trip, did
-  not finish: its peak resident set was 2.0 to 2.1 GiB from 60 s to 360 s and 5.3 GiB at 420 s,
-  and passed 20 GiB at 435 s, where it was stopped.
+  is measured within host-sized memory.
 
 - **A rate-mapped pass's work is cut into bounded pieces only between its executed commands'
   draws, and between ranges of a draw's indices where the draw is cut so**
