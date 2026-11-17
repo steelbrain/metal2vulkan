@@ -12,6 +12,9 @@
 //!   still in flight at once, where the unshared bound prices each at its submission's run.
 //! - **Unknown length.** A queue with no run seen keeps one batch in flight until it completes,
 //!   and holds no other queue back.
+//! - **Shares of a run.** A light batch seen complete together with another queue's long one keeps
+//!   a light run (`unshared_hold::Shares`), so a compositor's plain queue is never held behind its
+//!   own draw stuck behind an application's batch.
 //! - **The oldest's run.** What the oldest batch in flight ran counts against its own queue's work
 //!   alone, and only while no completion past it was published; the hold waits for the oldest
 //!   batch's completion, and, where that is its own queue's, for the time its run brings the work
@@ -250,4 +253,58 @@ fn a_published_completion_counts_its_batches_as_left() {
     flight.completed(2, 8 * MS);
     assert_eq!(turn(&flight, (A, &app), 0, T0), Room::Go);
     assert_eq!(flight.len(), 1);
+}
+
+/// A compositor's light draw seen complete together with the application's 30 ms batch it waited
+/// behind keeps its 0.1 ms, and the application its 30 ms: the compositor's next draw goes with
+/// one in flight. An equal share, 15 ms each, held each draw until the one before it completed,
+/// behind the application's next batch: a draw for each of the application's (RADV PHOENIX: a
+/// draw committed every 16 ms fell 2 s behind).
+#[test]
+fn a_light_batch_seen_complete_with_another_queue_s_long_one_keeps_its_light_run() {
+    let (app, compositor) = (queue(30 * MS), queue(MS / 10));
+    let mut flight = Flight::default();
+    flight.taken(1, Flies::Other(A, &app), T0);
+    flight.taken(2, Flies::Other(B, &compositor), T0);
+    flight.completed(2, 30 * MS + MS / 10);
+    assert_eq!(app.nanos(), Some(30 * MS));
+    assert_eq!(compositor.nanos(), Some(MS / 10));
+    flight.taken(3, Flies::Other(A, &app), T0);
+    flight.taken(4, Flies::Other(B, &compositor), T0);
+    assert_eq!(
+        turn(&flight, (B, &compositor), 0, T0),
+        Room::Go,
+        "0.1 ms of its own in flight"
+    );
+}
+
+/// A batch of a queue with no run seen, seen complete with another queue's, takes the run beyond
+/// the other's expected one, and 1 ns where the run is shorter than that; where every one is of
+/// unknown length, they share the run equally.
+#[test]
+fn a_batch_of_unknown_length_takes_the_run_beyond_the_others_expected_ones() {
+    let (app, new, newer) = (
+        queue(30 * MS),
+        Arc::new(Expected::default()),
+        Arc::new(Expected::default()),
+    );
+    let mut flight = Flight::default();
+    flight.taken(1, Flies::Other(A, &app), T0);
+    flight.taken(2, Flies::Other(B, &new), T0);
+    flight.completed(2, 30 * MS + MS / 2);
+    assert_eq!(app.nanos(), Some(30 * MS));
+    assert_eq!(new.nanos(), Some(MS / 2));
+    flight.taken(3, Flies::Other(A, &app), T0);
+    flight.taken(4, Flies::Other(B, &newer), T0);
+    flight.completed(4, 20 * MS);
+    assert_eq!(app.nanos(), Some(25 * MS), "halved toward the whole run");
+    assert_eq!(newer.nanos(), Some(1), "none of it left");
+    let (first, second) = (Arc::new(Expected::default()), Arc::new(Expected::default()));
+    flight.taken(5, Flies::Other(A, &first), T0);
+    flight.taken(6, Flies::Other(B, &second), T0);
+    flight.completed(6, 8 * MS);
+    assert_eq!(
+        (first.nanos(), second.nanos()),
+        (Some(4 * MS), Some(4 * MS))
+    );
 }

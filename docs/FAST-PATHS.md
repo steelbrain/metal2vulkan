@@ -205,27 +205,32 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   later commit of another queue that shares nothing with it goes ahead of it (one whose footprint
   runs in commit order with it still waits behind it). A batch's expected work is its queue's
   expected run now (`unshared_hold::Expected`: the host's view of how long its recent batches ran,
-  raised at once by a longer one and halved toward a shorter one), so a run longer than the
-  queue's recent ones prices every batch of it in flight at once, where the unshared bound above
-  prices each at the run its queue had at its submission; while a batch of a queue with no run
-  seen yet is in flight there, that queue's next batch waits for its completion, and no other
-  queue's does. So a command buffer another queue commits after one queue's burst (a long command
-  buffer cut into parts, a backlog of frames) goes in behind about 16 ms of it and one batch, not
-  the whole burst, and from its submission on, while that queue keeps submitting there, behind
-  about 2 ms and one batch of each busy queue. An unshared queue's batches are never held for
-  their turn, and count as another queue's. The next batch goes in before the one ahead ends (the
-  scheduler's thread woken at the oldest batch's completion and at the time its run brings the
-  work left under the budget), so the GPU idles for the hold only where that thread answers later
-  than the budget less one batch: a queue alone keeps about 16 ms queued, two queues submitting
-  keep 2 ms each. A committing or waiting thread's pass leaves a held batch to the scheduler's
-  thread (`WorkCounts::scheduler_at_commit_left_turns`). Counted:
+  raised at once by a longer one and halved toward a shorter one; a run several batches were seen
+  complete in is shared in proportion to their expected runs, so a compositor's light draw seen
+  complete with the application's long command buffer it waited behind keeps a light run), so a
+  run longer than the queue's recent ones prices every batch of it in flight at once, where the
+  unshared bound above prices each at the run its queue had at its submission; while a batch of
+  a queue with no run seen yet is in flight there, that queue's next batch waits for its
+  completion, and no other queue's does. So a command buffer another queue commits after one
+  queue's burst (a long command buffer cut into parts, a backlog of frames) goes in behind about
+  16 ms of it and one batch, not the whole burst, and from its submission on, while that queue
+  keeps submitting there, behind about 2 ms and one batch of each busy queue. An unshared queue's
+  batches are never held for their turn, and count as another queue's. The next batch goes in
+  before the one ahead ends (the scheduler's thread woken at the oldest batch's completion and at
+  the time its run brings the work left under the budget), so the GPU idles for the hold only
+  where that thread answers later than the budget less one batch: a queue alone keeps about 16 ms
+  queued, two queues submitting keep 2 ms each. A committing or waiting thread's pass leaves a
+  held batch to the scheduler's thread (`WorkCounts::scheduler_at_commit_left_turns`). Counted:
   `WorkCounts::heads_held_for_queue_turns` and `heads_let_go_turn_idle` (heads 2 ms would have
   held). `queue_turns = QueueTurnPolicy::CommitOrder` submits every ready batch at once, in commit
   order: a later commit of another queue waits behind every batch submitted before it there. Not
-  an accuracy choice: it trades a queue's work submitted ahead for the other queues' waits; the
-  value nearer Metal's, whose second queue's small command buffer ran beside a first queue's
-  200 ms one on the consumer's oracles (a UHD 630 and a Radeon Pro 5300M, macOS 26.7.1), and
-  `exact_answers()` keeps it. The runtime's choice: no pipeline differs. What stays is a batch
+  an accuracy choice: it trades a queue's work submitted ahead for the other queues' waits. A
+  second queue's small command buffer ran beside a first queue's 200 ms one on the consumer's
+  oracles (a UHD 630 and a Radeon Pro 5300M, macOS 26.7.1); behind a first queue's burst of 64
+  command buffers of about 4 ms each, the Macs disagree: an M3 Max (macOS 27.0.1) ran it ahead of
+  56 to 62 of them, the UHD 630 after 60 to 63 of them had ended
+  (`metal2vulkan-conformance`'s `probes/cross_queue_burst_turns.m`). `exact_answers()` keeps
+  `Fair`. The runtime's choice: no pipeline differs. What stays is a batch
   already submitted: it runs to its end (known gaps, below). On lavapipe, both values
   (`queue_share_device::a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst`:
   twelve command buffers of one queue sized for 10 ms each and committed at once, a small one of

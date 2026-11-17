@@ -41,8 +41,9 @@
 //!   recent batches ran as their `VkQueue`'s oldest in flight (`queue_wait.rs`'s runs), raised at
 //!   once by a longer one and halved toward a shorter one, so a queue whose batches got shorter
 //!   takes its new length within a few batches, while one long batch counts at once. A run several
-//!   batches complete in shares among the other queues' batches among them; an unshared queue's
-//!   takes no share.
+//!   batches were seen complete in shares among the other queues' batches among them in
+//!   proportion to their expected runs (`Shares`), so a light batch seen complete with a long one
+//!   keeps a light run; an unshared queue's takes no share.
 //! - **Unknown length.** A batch of a queue with no run seen yet may be of any length: while one
 //!   is in flight, no other batch of the other queues goes there until it is seen complete, which
 //!   gives its queue a run. So an application that commits several command buffers at once does
@@ -224,6 +225,53 @@ struct InFlight {
     of: Option<Arc<Expected>>,
 }
 
+/// How a run several batches were seen complete in shares among the other queues' batches among
+/// them ([`Flight::completed`]): in proportion to each one's expected run at its submission, so a
+/// light batch seen complete with a long one of another queue (a compositor's draw behind an
+/// application's command buffer, the two seen together) keeps a light run and the long one its
+/// own. The batches of queues with no run seen take the run beyond the others' expected runs, an
+/// equal part each (all of it, equally, where every one is of unknown length), the others then
+/// sharing the rest. An unshared queue's batch takes no share.
+#[derive(Clone, Copy, Debug)]
+struct Shares {
+    /// The run.
+    run: u64,
+    /// The expected runs at their submission of the batches of known length, summed.
+    known: u64,
+    /// How many are of unknown length.
+    unseen: u64,
+}
+
+impl Shares {
+    /// The shares of `run` among `batches`, which were seen complete together.
+    fn among<'a>(batches: impl Iterator<Item = &'a InFlight>, run: u64) -> Self {
+        let (known, unseen) =
+            (batches.filter(|batch| batch.of.is_some())).fold((0, 0), |(known, unseen), batch| {
+                match batch.unseen {
+                    true => (known, unseen + 1),
+                    false => (known + batch.expected, unseen),
+                }
+            });
+        Self { run, known, unseen }
+    }
+
+    /// `batch`'s share (the type's docs).
+    fn of(self, batch: &InFlight) -> u64 {
+        // What the batches of known length take: the whole run where none is of unknown length.
+        let known_run = match self.unseen {
+            0 => self.run,
+            _ => self.run.min(self.known),
+        };
+        match batch.unseen {
+            true => (self.run - known_run) / self.unseen.max(1),
+            false => {
+                let share = u128::from(known_run) * u128::from(batch.expected);
+                u64::try_from(share / u128::from(self.known.max(1))).unwrap_or(u64::MAX)
+            }
+        }
+    }
+}
+
 /// The batches taken on one `VkQueue` an unshared queue holds, or whose queues take turns
 /// (`queue_turns.rs`), and not seen complete (`queue_wait::Ahead::flight`), under that `VkQueue`'s
 /// waits' lock.
@@ -295,22 +343,20 @@ impl Flight {
 
     /// The host saw the timeline reach `value`, `run` nanoseconds after the oldest batch in flight
     /// became so: each batch at or below `value` leaves, and each other queue's among them updates
-    /// its queue's expected run with an equal share of `run`. An unshared queue's batch takes no
-    /// share: a compositor's light batch is seen complete with the application's batch ahead of
-    /// it, and a share of that batch's run would halve the application's expected one.
+    /// its queue's expected run with its share of `run` ([`Shares`]). An unshared queue's batch
+    /// takes no share: a compositor's light batch is seen complete with the application's batch
+    /// ahead of it, and a share of that batch's run would cut the application's expected one.
     pub(crate) fn completed(&mut self, value: u64, run: u64) {
         let done = self
             .batches
             .iter()
             .take_while(|batch| batch.value <= value)
             .count();
-        let others = (self.batches.iter().take(done))
-            .filter(|batch| batch.of.is_some())
-            .count();
-        let share = run / others.max(1) as u64;
+        let shares = Shares::among(self.batches.iter().take(done), run);
         for batch in self.batches.drain(..done) {
             self.expected -= batch.expected;
             self.unseen -= usize::from(batch.unseen);
+            let share = shares.of(&batch);
             if let Some(of) = batch.of {
                 of.observed(share);
                 if let Some(count) = self.turns.get_mut(&batch.queue) {
