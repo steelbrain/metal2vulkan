@@ -138,6 +138,11 @@ impl QueueInner {
         std::ptr::eq(self, queue)
     }
 
+    /// The device, while it lives.
+    pub(crate) fn core(&self) -> Option<Arc<Core>> {
+        self.core.upgrade()
+    }
+
     /// The command buffer holding `slot` retired, or was dropped uncommitted: the slot goes back.
     pub(crate) fn release(&self, slot: u32) {
         lock(&self.slots).free.push(slot);

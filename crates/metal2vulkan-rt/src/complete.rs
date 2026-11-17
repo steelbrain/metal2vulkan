@@ -10,6 +10,7 @@ use crate::submit::{Ended, Upload};
 use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,8 @@ pub(crate) struct Done {
     pub(crate) progress: vk::Semaphore,
     /// The host signals it to wake the completion thread from a GPU wait.
     wake: vk::Semaphore,
+    /// The highest progress value the completion thread has seen reached.
+    completed: AtomicU64,
 }
 
 struct DoneState {
@@ -141,6 +144,7 @@ impl Done {
             changed: Condvar::new(),
             progress,
             wake,
+            completed: AtomicU64::new(0),
         })
     }
 
@@ -159,6 +163,11 @@ impl Done {
 
     fn lock(&self) -> MutexGuard<'_, DoneState> {
         lock(&self.state)
+    }
+
+    /// The highest progress value the completion thread has seen reached.
+    pub(crate) fn completed(&self) -> u64 {
+        self.completed.load(Ordering::SeqCst)
     }
 
     /// Wakes the completion thread where it waits. With `flight_only` (the change is only more
@@ -348,6 +357,8 @@ pub(crate) fn run(core: Arc<Core>) {
                 match unsafe { device.get_semaphore_counter_value(done.progress) } {
                     Ok(reached) => {
                         seen = times::host_time();
+                        // Before the submit thread's mark is read (`Work::completed`).
+                        done.completed.fetch_max(reached, Ordering::SeqCst);
                         while state
                             .flight
                             .front()
@@ -380,6 +391,10 @@ pub(crate) fn run(core: Arc<Core>) {
             drop(state);
             if newly_lost {
                 core.work.lose();
+            }
+            if !retire.is_empty() {
+                // A batch kept while submissions were in flight may go.
+                core.work.completed();
             }
             // Handlers and listeners run with no lock held.
             for (cb, handlers) in scheduled {

@@ -1,5 +1,11 @@
 //! The submit thread: each queue's FIFO of command buffers, the holds at event waits, the upload
 //! that goes ahead of later commits, and the batches it passes to `vkQueueSubmit2`.
+//!
+//! A batch ends at most [`GROUP`] command buffers. A full one goes at once; one the thread runs out
+//! of ready segments for goes at once too, unless [`IN_FLIGHT`] submissions are not yet seen
+//! complete: then it is kept, and takes what is committed meanwhile, until one of them completes,
+//! it fills, or something waits for it (a host wait on one of its command buffers, an upload to
+//! flush, the device stopping).
 
 use crate::command::{CbInner, CommandBufferError, Pending, Segment};
 use crate::complete;
@@ -15,12 +21,21 @@ use crate::texture::{Image, Staging};
 use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+
+/// The command buffers one batch ends at most.
+const GROUP: usize = 4;
+
+/// The submissions not yet seen complete at which a batch not full is kept.
+const IN_FLIGHT: usize = 2;
 
 /// The submit side: the FIFOs and the upload, and the submit thread's wake-up.
 pub(crate) struct Work {
     state: Mutex<WorkState>,
     changed: Condvar,
+    /// The thread keeps a batch: the completion thread wakes it as submissions complete.
+    keeping: AtomicBool,
 }
 
 pub(crate) struct WorkState {
@@ -28,14 +43,20 @@ pub(crate) struct WorkState {
     fifos: Vec<Fifo>,
     /// The next command buffer's place in the commit order.
     next_seq: u64,
-    /// The progress value of the last batch.
+    /// The progress value of the last batch submitted.
     progress: u64,
+    /// The progress values of the submissions not yet seen complete, in order.
+    in_flight: VecDeque<u64>,
+    /// The batch staged and kept while [`IN_FLIGHT`] submissions are not seen complete.
+    kept: Option<Batch>,
     /// Zero fills recorded and not yet submitted.
     upload: Option<Upload>,
     /// Something changed that may let a held segment go.
     dirty: bool,
     /// The upload is to go at once, alone where no segment is ready ([`Work::flush`]).
     flush: bool,
+    /// The host waits for a command buffer committed: what is ready goes at once ([`Work::send`]).
+    send: bool,
     /// The submit thread is to end: it submits what is ready, then ends what is held.
     stop: bool,
     /// Quiesced or torn down: commits and uploads are refused.
@@ -113,14 +134,18 @@ impl Work {
                 fifos: Vec::new(),
                 next_seq: 0,
                 progress: 0,
+                in_flight: VecDeque::new(),
+                kept: None,
                 upload: None,
                 dirty: false,
                 flush: false,
+                send: false,
                 stop: false,
                 closed: false,
                 lost: false,
             }),
             changed: Condvar::new(),
+            keeping: AtomicBool::new(false),
         }
     }
 
@@ -136,6 +161,23 @@ impl Work {
     /// A host value rose: held segments may go.
     pub(crate) fn poke(&self) {
         self.lock().dirty = true;
+        self.wake();
+    }
+
+    /// Submissions completed: where the thread keeps a batch, it may go.
+    pub(crate) fn completed(&self) {
+        if self.keeping.load(Ordering::SeqCst) {
+            self.poke();
+        }
+    }
+
+    /// The host waits for a command buffer committed and not yet submitted: what is ready goes
+    /// at once, a batch not full included.
+    pub(crate) fn send(&self) {
+        let mut state = self.lock();
+        state.send = true;
+        state.dirty = true;
+        drop(state);
         self.wake();
     }
 
@@ -219,7 +261,7 @@ impl Work {
         }
         state.flush = true;
         state.dirty = true;
-        // The next batch takes the upload.
+        // The next batch submitted, the one kept included, takes the upload.
         let value = state.progress + 1;
         drop(state);
         self.wake();
@@ -258,7 +300,7 @@ impl Work {
         self.wake();
     }
 
-    /// The progress value of the last batch.
+    /// The progress value of the last batch submitted.
     pub(crate) fn progress(&self) -> u64 {
         self.lock().progress
     }
@@ -341,13 +383,20 @@ impl WorkState {
         best.map(|(index, _)| index)
     }
 
-    /// Takes every ready segment, in commit order, into one batch; None where none is ready.
+    /// Takes the ready segments, in commit order, into the batch kept or a new one, until it ends
+    /// [`GROUP`] command buffers; None where it holds nothing and no upload is to be flushed.
     fn stage(&mut self) -> Option<Batch> {
-        let value = self.progress + 1;
-        let mut segments = Vec::new();
-        let mut finished = Vec::new();
-        let mut watch = Vec::new();
-        while let Some(index) = self.next_ready() {
+        let mut batch = self.kept.take().unwrap_or_else(|| Batch {
+            value: self.progress + 1,
+            upload: None,
+            segments: Vec::new(),
+            finished: Vec::new(),
+            watch: Vec::new(),
+        });
+        while batch.finished.len() < GROUP {
+            let Some(index) = self.next_ready() else {
+                break;
+            };
             let fifo = &mut self.fifos[index];
             let Some(Entry {
                 pending: Some(pending),
@@ -356,34 +405,39 @@ impl WorkState {
             else {
                 break;
             };
-            segments.push(stage(&pending.gpu.segments[pending.next], &mut watch));
+            (batch.segments).push(stage(&pending.gpu.segments[pending.next], &mut batch.watch));
             pending.next += 1;
-            pending.value = value;
+            pending.value = batch.value;
             if pending.next == pending.gpu.segments.len() {
                 if let Some(Entry {
                     cb,
                     pending: Some(pending),
                 }) = fifo.entries.pop_front()
                 {
-                    finished.push((cb, pending));
+                    batch.finished.push((cb, pending));
                 }
                 if fifo.entries.is_empty() {
                     self.fifos.swap_remove(index);
                 }
             }
         }
-        if segments.is_empty() && !(self.flush && self.upload.is_some()) {
+        if batch.segments.is_empty() && !(self.flush && self.upload.is_some()) {
             return None;
         }
-        self.flush = false;
-        self.progress = value;
-        Some(Batch {
-            value,
-            upload: self.upload.take(),
-            segments,
-            finished,
-            watch,
-        })
+        Some(batch)
+    }
+
+    /// Whether `batch` goes now: it is full, or something waits for it, or fewer than
+    /// [`IN_FLIGHT`] submissions are not seen complete by `completed`.
+    fn goes(&mut self, batch: &Batch, completed: u64) -> bool {
+        while (self.in_flight.front()).is_some_and(|&value| value <= completed) {
+            self.in_flight.pop_front();
+        }
+        batch.finished.len() >= GROUP
+            || self.flush
+            || self.send
+            || self.stop
+            || self.in_flight.len() < IN_FLIGHT
     }
 }
 
@@ -461,9 +515,22 @@ pub(crate) fn run(core: Arc<Core>) {
     let mut state = work.lock();
     loop {
         if state.lost {
-            let ended = drain(&mut state, |pending| CommandBufferError::DeviceLost {
-                in_flight: pending.is_some_and(|pending| pending.value > 0),
-            });
+            // A kept batch never reached the GPU: its command buffers end as not in flight.
+            let mut ended: Vec<Ended> = (state.kept.take().into_iter())
+                .flat_map(|batch| batch.finished)
+                .map(|(cb, mut pending)| {
+                    pending.value = 0;
+                    let error = CommandBufferError::DeviceLost { in_flight: false };
+                    (cb, pending, error)
+                })
+                .collect();
+            let submitted = state.progress;
+            ended.extend(drain(&mut state, |pending| {
+                CommandBufferError::DeviceLost {
+                    in_flight: pending
+                        .is_some_and(|pending| (1..=submitted).contains(&pending.value)),
+                }
+            }));
             let upload = state.upload.take();
             drop(state);
             if let Some(upload) = upload {
@@ -471,11 +538,26 @@ pub(crate) fn run(core: Arc<Core>) {
             }
             core.done.end_all(&core, ended);
             state = work.lock();
-        } else if let Some(batch) = state.stage() {
-            drop(state);
-            submit(&core, batch);
-            state = work.lock();
-            continue;
+        } else if let Some(mut batch) = state.stage() {
+            // Marked before the completed value is read: a completion the read misses sees the
+            // mark and wakes the thread.
+            work.keeping.store(true, Ordering::SeqCst);
+            if state.goes(&batch, core.done.completed()) {
+                work.keeping.store(false, Ordering::SeqCst);
+                if batch.finished.len() < GROUP {
+                    // Everything ready goes in it: no wait is left to answer.
+                    state.send = false;
+                }
+                state.flush = false;
+                batch.upload = state.upload.take();
+                state.progress = batch.value;
+                state.in_flight.push_back(batch.value);
+                drop(state);
+                submit(&core, batch);
+                state = work.lock();
+                continue;
+            }
+            state.kept = Some(batch);
         }
         if state.stop {
             let ended = drain(&mut state, |_| CommandBufferError::NotRun);

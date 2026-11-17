@@ -256,9 +256,13 @@ made, with no lock, and never rewritten for layouts.
   the host out. No segment starts with a barrier.
   `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
   thread and returns. A committed command buffer holds no device handle.
-- The submit thread passes whatever is ready to one `vkQueueSubmit2`, in the device's commit
-  order, ahead of it the upload of zero fills, and the last submit info signals the progress
-  semaphore. It holds a segment whose event waits are not met, and its queue's later command
+- The submit thread passes what is ready to `vkQueueSubmit2` in the device's commit order,
+  ahead of it the upload of zero fills, and the last submit info signals the progress semaphore.
+  A submission ends at most four command buffers. A full one goes at once, and so does one the
+  thread runs out of ready work for, unless two submissions are not yet seen complete: then it is
+  kept, and takes what is committed meanwhile, until one of them completes, it fills, or a host
+  wait on one of its command buffers, an upload to flush or the device's teardown sends it.
+  Waiting for a place in the queue sends nothing. It holds a segment whose event waits are not met, and its queue's later command
   buffers behind it, while the segments before it run, so the host can see a signal the command
   buffer makes before its wait. Other queues go on. `Scheduled` means the last segment has passed
   `vkQueueSubmit2`.

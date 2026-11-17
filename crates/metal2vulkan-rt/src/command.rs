@@ -402,6 +402,7 @@ impl CommandBuffer {
     /// `waitUntilScheduled`: returns once the command buffer is scheduled, or has completed or
     /// ended.
     pub fn wait_until_scheduled(&self) {
+        self.send_if_held();
         let mut state = self.state();
         while !matches!(
             state.status,
@@ -416,9 +417,21 @@ impl CommandBuffer {
     /// `waitUntilCompleted`: returns once the command buffer has completed or ended and its
     /// handlers have run.
     pub fn wait_until_completed(&self) {
+        self.send_if_held();
         let mut state = self.state();
         while !state.finished {
             state = self.wait(state);
+        }
+    }
+
+    /// Before a host wait: a command buffer committed and not yet submitted goes at once, in a
+    /// batch the submit thread would otherwise keep while earlier submissions run.
+    fn send_if_held(&self) {
+        if self.state().status != CommandBufferStatus::Committed {
+            return;
+        }
+        if let Some(core) = self.inner.queue.core() {
+            core.work.send();
         }
     }
 

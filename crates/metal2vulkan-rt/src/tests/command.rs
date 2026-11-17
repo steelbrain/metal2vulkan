@@ -563,6 +563,56 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A burst of 64 command buffers committed back to back with no wait: each submission ends at
+    /// most four of them, and a batch kept while two submissions run goes once they complete, with
+    /// no host wait to send it.
+    #[test]
+    fn every_device_runs_a_burst_in_submissions_of_four_at_most() {
+        burst("command_burst", 64, 64);
+    }
+
+    /// The same burst through a queue of four places: each `command_buffer` past the fourth waits
+    /// for one to retire, which sends nothing, and every command buffer completes in commit order.
+    #[test]
+    fn every_device_runs_a_burst_through_a_queue_of_four_places() {
+        burst("command_places", 64, 4);
+    }
+
+    /// `count` command buffers, each filling the same word with its index, committed back to back
+    /// on a queue of `places`, then read once the last completes, which the test polls for.
+    fn burst(test: &str, count: u32, places: u32) {
+        each_device(test, |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = device.new_command_queue(places).expect("a queue");
+            let before = device.counters().metrics();
+            let burst: Vec<CommandBuffer> = (0..count)
+                .map(|index| {
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    fill(&command_buffer, &buffer, index);
+                    command_buffer.commit().expect("a commit");
+                    command_buffer
+                })
+                .collect();
+            let last = burst.last().expect("a burst");
+            within(name, || last.status() == CommandBufferStatus::Completed);
+            for command_buffer in &burst {
+                assert_eq!(
+                    command_buffer.status(),
+                    CommandBufferStatus::Completed,
+                    "{name}"
+                );
+            }
+            assert_eq!(word(&buffer), count - 1, "{name}");
+            let submissions = device.counters().metrics().submissions - before.submissions;
+            println!("{name}: {count} command buffers through {places} places in {submissions} submissions");
+            assert!(
+                submissions >= u64::from(count.div_ceil(4)),
+                "{name}: {submissions}"
+            );
+        });
+    }
+
     /// Abandon ends the queue's held and unsubmitted command buffers with NotRun and runs their
     /// handlers; the part already submitted ran, the rest never does, and the queue goes on.
     #[test]
