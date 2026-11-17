@@ -49,7 +49,7 @@ pub const LEAST_TIMED: usize = 5;
 pub struct Warmup {
     /// How many ran.
     pub runs: u32,
-    /// Whether the time settled: the medians of the last two windows of [`WINDOW`] runs within
+    /// Whether the time settled: the medians of the last two windows of 10 runs within
     /// 3% of each other.
     pub settled: bool,
 }
