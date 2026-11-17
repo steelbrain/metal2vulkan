@@ -30,6 +30,10 @@ pub(crate) enum Metric {
 pub(crate) enum Gauge {
     /// [`Gauges::buffers`].
     Buffers,
+    /// [`Gauges::textures`].
+    Textures,
+    /// [`Gauges::descriptor_slots`].
+    DescriptorSlots,
     /// [`Gauges::pipelines`].
     Pipelines,
     /// [`Gauges::blocks`].
@@ -110,6 +114,11 @@ impl Counters {
         a.first_use_wait_max_nanos.fetch_max(nanos, Relaxed);
     }
 
+    /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
+    pub(crate) fn copied(&self, bytes: u64) {
+        self.atomics.bytes_copied.fetch_add(bytes, Relaxed);
+    }
+
     /// One more live resource of `gauge`'s kind.
     pub(crate) fn rise(&self, gauge: Gauge) {
         self.gauge(gauge).fetch_add(1, Relaxed);
@@ -124,6 +133,8 @@ impl Counters {
         let a = &self.atomics;
         match gauge {
             Gauge::Buffers => &a.buffers,
+            Gauge::Textures => &a.textures,
+            Gauge::DescriptorSlots => &a.descriptor_slots,
             Gauge::Pipelines => &a.pipelines,
             Gauge::Blocks => &a.blocks,
             Gauge::CommandBuffers => &a.command_buffers,
@@ -215,7 +226,7 @@ pub struct Metrics {
 pub struct Gauges {
     /// Buffers.
     pub buffers: u64,
-    /// Textures, views included.
+    /// Textures: each one's image, its views and its memory, until the reaper frees them.
     pub textures: u64,
     /// Sampler states.
     pub samplers: u64,
@@ -223,7 +234,7 @@ pub struct Gauges {
     pub pipelines: u64,
     /// Command buffers not yet retired.
     pub command_buffers: u64,
-    /// Occupied entries of the descriptor arrays.
+    /// Occupied indices of set 1's arrays: one for each texture made at an index.
     pub descriptor_slots: u64,
     /// Live `VkDeviceMemory` allocations: blocks the consumer holds, blocks ready or idle in the
     /// pool, and the runtime's own.

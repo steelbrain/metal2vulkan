@@ -135,6 +135,9 @@ pub(crate) struct Core {
     consumer_features: Vec<ConsumerFeature>,
     pub(crate) queues: Queues,
     pub(crate) memory_types: floor::MemoryTypes,
+    /// The device-local memory types, one bit each: a texture's image takes the first its
+    /// requirements allow.
+    pub(crate) device_local: u32,
     unified_memory: bool,
     pub(crate) counters: Counters,
     /// What the device's timestamps count.
@@ -371,6 +374,13 @@ impl Device {
         let max_block_len = vulkan11
             .max_memory_allocation_size
             .min(vulkan13.max_buffer_size);
+        let device_local = (0u32..)
+            .zip(capabilities.memory.memory_types_as_slice())
+            .filter(|(_, kind)| {
+                kind.property_flags
+                    .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+            })
+            .fold(0, |bits, (index, _)| bits | 1 << index);
 
         let core = Arc::new(Core {
             instance,
@@ -381,6 +391,7 @@ impl Device {
             consumer_features,
             queues: Queues { runtime, present },
             memory_types,
+            device_local,
             unified_memory,
             counters,
             ticks,
@@ -875,6 +886,23 @@ pub(crate) struct ComputeLimits {
 
 impl Core {
     /// The memory type of a class's blocks.
+    /// What the device makes of an image of `info`'s format, type, tiling, usage and flags;
+    /// `None` where it makes none.
+    pub(crate) fn image_format_properties(
+        &self,
+        info: &vk::PhysicalDeviceImageFormatInfo2<'_>,
+    ) -> Option<vk::ImageFormatProperties> {
+        let mut properties = vk::ImageFormatProperties2::default();
+        // SAFETY: the physical device is the instance's, which is Vulkan 1.3.
+        unsafe {
+            self.instance
+                .vk()
+                .get_physical_device_image_format_properties2(self.physical, info, &mut properties)
+        }
+        .ok()
+        .map(|()| properties.image_format_properties)
+    }
+
     pub(crate) fn memory_type(&self, class: MemoryClass) -> u32 {
         match class {
             MemoryClass::Private => self.memory_types.private,

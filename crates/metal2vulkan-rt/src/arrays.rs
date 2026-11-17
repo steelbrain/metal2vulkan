@@ -92,33 +92,91 @@ impl IndexGrant {
     }
 }
 
-/// The indices granted, one bit per index of each class's array.
-pub(crate) struct Grants {
-    granted: [Vec<u64>; 3],
+/// No Metal counterpart: `MTLResourceID`, a texture's or a sampler state's `gpuResourceID`: its
+/// index in the low word and the translator's word in the high (`docs/RESOURCE-ID.md`). The guest
+/// computes the word from the Metal descriptor alone, so it needs no round trip for it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ResourceId {
+    /// The index in its class's arrays; 0 for nil.
+    pub index: u32,
+    /// The word: a texture's `TextureWord`, a sampler's `SamplerWord`.
+    pub word: u32,
 }
 
-impl Grants {
-    pub(crate) fn new() -> Grants {
-        let words = |len: u32| vec![0; len.div_ceil(64) as usize];
-        Grants {
-            granted: [
-                words(SAMPLED_IMAGES),
-                words(STORAGE_IMAGES),
-                words(SAMPLERS),
-            ],
-        }
+impl ResourceId {
+    /// `MTLResourceID`'s 64-bit value: `index | word << 32`.
+    pub fn to_bits(self) -> u64 {
+        u64::from(self.index) | u64::from(self.word) << 32
+    }
+}
+
+/// One bit per index of a class's array.
+struct Bits(Vec<u64>);
+
+impl Bits {
+    fn new(len: u32) -> Bits {
+        Bits(vec![0; len.div_ceil(64) as usize])
     }
 
-    fn bit(&self, class: IndexClass, index: u32) -> bool {
-        self.granted[class.slot()][(index / 64) as usize] & (1 << (index % 64)) != 0
+    fn get(&self, index: u32) -> bool {
+        self.0[(index / 64) as usize] & (1 << (index % 64)) != 0
     }
 
-    fn set(&mut self, class: IndexClass, index: u32, on: bool) {
-        let word = &mut self.granted[class.slot()][(index / 64) as usize];
+    fn put(&mut self, index: u32, on: bool) {
+        let word = &mut self.0[(index / 64) as usize];
         match on {
             true => *word |= 1 << (index % 64),
             false => *word &= !(1 << (index % 64)),
         }
+    }
+}
+
+/// The indices granted, and of those the indices an object lives at, one bit per index of each
+/// class's array.
+pub(crate) struct Grants {
+    granted: [Bits; 3],
+    occupied: [Bits; 3],
+}
+
+impl Grants {
+    pub(crate) fn new() -> Grants {
+        let bits = || {
+            [
+                Bits::new(SAMPLED_IMAGES),
+                Bits::new(STORAGE_IMAGES),
+                Bits::new(SAMPLERS),
+            ]
+        };
+        Grants {
+            granted: bits(),
+            occupied: bits(),
+        }
+    }
+
+    fn bit(&self, class: IndexClass, index: u32) -> bool {
+        self.granted[class.slot()].get(index)
+    }
+
+    fn set(&mut self, class: IndexClass, index: u32, on: bool) {
+        self.granted[class.slot()].put(index, on);
+    }
+
+    /// Takes `index` of `class` for an object, where it is granted and no object lives there.
+    pub(crate) fn occupy(&mut self, class: IndexClass, index: u32) -> Result<(), Error> {
+        if !class.range().contains(&index) || !self.bit(class, index) {
+            return Err(Error::Refused(Refusal::IndicesNotGranted { class, index }));
+        }
+        let occupied = &mut self.occupied[class.slot()];
+        if occupied.get(index) {
+            return Err(Error::Refused(Refusal::IndexInUse { class, index }));
+        }
+        occupied.put(index, true);
+        Ok(())
+    }
+
+    /// Gives back `index` of `class`, which [`Grants::occupy`] took.
+    pub(crate) fn vacate(&mut self, class: IndexClass, index: u32) {
+        self.occupied[class.slot()].put(index, false);
     }
 
     /// Grants `first..first + count` of `class` where the range is inside the class's and none of
@@ -154,7 +212,7 @@ impl Grants {
         Ok(grant)
     }
 
-    /// Returns `grant`, where every index of it is granted.
+    /// Returns `grant`, where every index of it is granted and no object lives at one.
     pub(crate) fn release(&mut self, grant: IndexGrant) -> Result<(), Error> {
         let IndexGrant { class, .. } = grant;
         let range = class.range();
@@ -169,6 +227,10 @@ impl Grants {
         };
         if let Some(index) = missing {
             return Err(Error::Refused(Refusal::IndicesNotGranted { class, index }));
+        }
+        let occupied = &self.occupied[class.slot()];
+        if let Some(index) = grant.indices().find(|&index| occupied.get(index)) {
+            return Err(Error::Refused(Refusal::IndicesInUse { class, index }));
         }
         for index in grant.indices() {
             self.set(class, index, false);
@@ -185,6 +247,8 @@ pub(crate) struct Arrays {
     layout: vk::DescriptorSetLayout,
     /// The pool of the one set, which destroying it frees.
     pool: vk::DescriptorPool,
+    /// The one set.
+    set: vk::DescriptorSet,
     /// The default sampler of the plain and integer-texture arrays.
     pub(crate) plain: vk::Sampler,
     /// The default sampler of the comparison array.
@@ -213,6 +277,58 @@ impl Arrays {
     /// The set layouts of every pipeline: the empty set 0, then set 1.
     pub(crate) fn set_layouts(&self) -> [vk::DescriptorSetLayout; 2] {
         [self.empty, self.layout]
+    }
+
+    /// Writes a texture's elements at `index` of `class`: the sampled-texture array's with
+    /// `sampled` and its layout, and for a storage-capable texture the storage-texture array's
+    /// with `storage`; a null descriptor where a view is `None`.
+    ///
+    /// # Safety
+    ///
+    /// The caller owns the elements (the index is occupied for it, or is being vacated by it), and
+    /// each view is live and of the device, of an image in that layout whenever work uses it.
+    pub(crate) unsafe fn write_texture(
+        &self,
+        device: &ash::Device,
+        class: IndexClass,
+        index: u32,
+        sampled: Option<(vk::ImageView, vk::ImageLayout)>,
+        storage: Option<vk::ImageView>,
+    ) {
+        let (view, layout) = sampled.unwrap_or((
+            vk::ImageView::null(),
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        ));
+        let sampled = [vk::DescriptorImageInfo::default()
+            .image_view(view)
+            .image_layout(layout)];
+        let storage = [vk::DescriptorImageInfo::default()
+            .image_view(storage.unwrap_or_default())
+            .image_layout(vk::ImageLayout::GENERAL)];
+        let writes = [
+            write(
+                self.set,
+                SAMPLED_BINDING,
+                vk::DescriptorType::SAMPLED_IMAGE,
+                &sampled,
+            )
+            .dst_array_element(index),
+            write(
+                self.set,
+                STORAGE_BINDING,
+                vk::DescriptorType::STORAGE_IMAGE,
+                &storage,
+            )
+            .dst_array_element(index),
+        ];
+        let count = match class {
+            IndexClass::StorageTexture => 2,
+            _ => 1,
+        };
+        // SAFETY: the caller's contract; the bindings are update-after-bind and
+        // update-unused-while-pending, so elements of other owners may be written meanwhile, and
+        // a null image view is a null descriptor under `nullDescriptor`.
+        unsafe { device.update_descriptor_sets(&writes[..count], &[]) };
     }
 
     /// Destroys set 1.
@@ -351,6 +467,7 @@ impl Made {
             empty,
             layout,
             pool,
+            set,
             plain,
             compare,
             grants: Mutex::new(Grants::new()),
@@ -402,18 +519,6 @@ unsafe fn fill(
     let samplers =
         |sampler| vec![vk::DescriptorImageInfo::default().sampler(sampler); SAMPLERS as usize];
     let (plains, compares) = (samplers(plain), samplers(compare));
-    fn write(
-        set: vk::DescriptorSet,
-        binding: u32,
-        ty: vk::DescriptorType,
-        infos: &[vk::DescriptorImageInfo],
-    ) -> vk::WriteDescriptorSet<'_> {
-        vk::WriteDescriptorSet::default()
-            .dst_set(set)
-            .dst_binding(binding)
-            .descriptor_type(ty)
-            .image_info(infos)
-    }
     let writes = [
         write(
             set,
@@ -451,6 +556,20 @@ unsafe fn fill(
     unsafe { device.update_descriptor_sets(&writes, &[]) };
 }
 
+/// The write of `infos` into `binding` of `set`, from its first element.
+fn write(
+    set: vk::DescriptorSet,
+    binding: u32,
+    ty: vk::DescriptorType,
+    infos: &[vk::DescriptorImageInfo],
+) -> vk::WriteDescriptorSet<'_> {
+    vk::WriteDescriptorSet::default()
+        .dst_set(set)
+        .dst_binding(binding)
+        .descriptor_type(ty)
+        .image_info(infos)
+}
+
 impl Device {
     /// No Metal counterpart: grants the consumer `first..first + count` of `class`, the range it
     /// names, so the resource IDs it chooses from it reproduce in replay. A texture or a sampler
@@ -472,7 +591,9 @@ impl Device {
     /// No Metal counterpart: returns a grant [`Device::grant_indices`] made, so its indices may be
     /// granted again.
     ///
-    /// Err: [`Refusal::IndicesNotGranted`] where one of its indices is not granted.
+    /// Err: [`Refusal::IndicesNotGranted`] where one of its indices is not granted;
+    /// [`Refusal::IndicesInUse`] where a texture or a sampler state lives at one, until its last
+    /// handle is gone.
     pub fn release_indices(&self, grant: IndexGrant) -> Result<(), Error> {
         lock(&self.core().arrays.grants).release(grant)
     }

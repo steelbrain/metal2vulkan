@@ -48,6 +48,17 @@ pub(crate) enum Free {
     Pipeline(vk::Pipeline),
     /// The shader module of a dropped pipeline state.
     ShaderModule(vk::ShaderModule),
+    /// A dropped texture's views, image and memory; the textures and blocks gauges fall with it.
+    Texture {
+        views: [Option<vk::ImageView>; 2],
+        image: vk::Image,
+        memory: vk::DeviceMemory,
+    },
+    /// A staging buffer of texture bytes, and its memory; the blocks gauge falls with it.
+    Staging {
+        buffer: vk::Buffer,
+        memory: vk::DeviceMemory,
+    },
 }
 
 impl Reaper {
@@ -148,6 +159,32 @@ fn free(core: &Core, object: Free) {
         }
         // SAFETY: its pipelines are made, and no more will be.
         Free::ShaderModule(module) => unsafe { device.destroy_shader_module(module, None) },
+        Free::Texture {
+            views,
+            image,
+            memory,
+        } => {
+            // SAFETY: no pending work uses them: every command buffer and upload that used the
+            // texture held it until it retired, and its elements of set 1 are null.
+            unsafe {
+                for view in views.into_iter().flatten() {
+                    device.destroy_image_view(view, None);
+                }
+                device.destroy_image(image, None);
+                device.free_memory(memory, None);
+            }
+            core.counters.fall(Gauge::Textures);
+            core.counters.fall(Gauge::Blocks);
+        }
+        Free::Staging { buffer, memory } => {
+            // SAFETY: the upload that copied through it retired, and no reader holds its mapping;
+            // freeing the memory unmaps it.
+            unsafe {
+                device.destroy_buffer(buffer, None);
+                device.free_memory(memory, None);
+            }
+            core.counters.fall(Gauge::Blocks);
+        }
     }
 }
 

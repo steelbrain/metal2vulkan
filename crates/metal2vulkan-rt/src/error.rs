@@ -4,6 +4,7 @@ use crate::arrays::IndexClass;
 use crate::floor::BelowFloor;
 use crate::memory::BlockId;
 use ash::vk;
+use metal2vulkan::metal::PixelFormat;
 use std::{fmt, io};
 
 /// What a failing call returns.
@@ -160,6 +161,118 @@ pub enum Refusal {
         /// The first index of the range that is not granted.
         index: u32,
     },
+    /// A texture at an index where a texture lives already
+    /// ([`Device::new_texture`](crate::Device::new_texture)). Metal has no counterpart: Metal
+    /// chooses its resource IDs itself.
+    ///
+    /// Basis: ours (an index names one object at a time, and its elements are that object's).
+    IndexInUse {
+        /// The class of the index.
+        class: IndexClass,
+        /// The index.
+        index: u32,
+    },
+    /// A release of a grant while a texture lives at one of its indices
+    /// ([`Device::release_indices`](crate::Device::release_indices)). Metal has no counterpart.
+    ///
+    /// Basis: ours (an object's index stays granted while the object lives).
+    IndicesInUse {
+        /// The class of the index.
+        class: IndexClass,
+        /// The first index of the grant where an object lives.
+        index: u32,
+    },
+    /// A texture whose usage shaders reach (read or write) made without an index, or one of no
+    /// such usage made with one ([`Device::new_texture`](crate::Device::new_texture)). Metal has
+    /// no counterpart: Metal gives every texture a resource ID itself.
+    ///
+    /// Basis: ours (an index is an element of set 1's texture arrays, which only shaders read).
+    TextureIndex {
+        /// The index given.
+        index: Option<u32>,
+    },
+    /// A texture with a width, height or depth of 0.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts
+    /// "MTLTextureDescriptor has width of zero", and the same for a height of zero).
+    TextureZeroExtent,
+    /// A texture with a height other than 1 of a 1D type, or a depth other than 1 of a type that
+    /// is not 3D.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type
+    /// MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2).
+    TextureExtentForType,
+    /// A cube texture whose width and height differ.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts
+    /// "MTLTextureDescriptor width must equal height for cube textures").
+    TextureCubeNotSquare,
+    /// A texture with an array length of 0, or other than 1 of a type that is not an array.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts
+    /// "MTLTextureDescriptor has arrayLength of zero", where an array length of 2 is made).
+    TextureArrayLength {
+        /// The array length asked for.
+        array_length: u32,
+    },
+    /// A texture with a mipmap level count of 0, more than its full chain's, or more than 1 of a
+    /// multisample or 1D type.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "requests 5
+    /// mipmap levels, but the dimensions (8, 8, 1) can only support a maxiumum of 4 levels", and
+    /// the same for 0).
+    TextureLevelCount {
+        /// The levels asked for.
+        levels: u32,
+        /// The most the type and extent take.
+        max: u32,
+    },
+    /// A texture with a sample count of 0, or other than 1 of a type that is not multisample.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "has sampleCount
+    /// set but is using a type that does not allow sampleCount" for 0 and for 2 of a 2D texture).
+    TextureSampleCount {
+        /// The sample count asked for.
+        sample_count: u32,
+    },
+    /// A texture with a swizzle other than each channel from itself and shader-write or
+    /// render-target usage.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1: plain Metal asserts "Texture swizzling
+    /// is not compatable with MTLTextureUsageShaderWrite", where a swizzle of read usage alone is
+    /// made).
+    TextureSwizzleWithWrites,
+    /// [`Texture::replace_region`](crate::Texture::replace_region) or
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) of a Private or Memoryless texture.
+    ///
+    /// Basis: metal-documented (Apple's documentation of `MTLStorageModePrivate`: "The resource is
+    /// accessible only to the GPU.").
+    TextureBytesPrivate,
+    /// [`Texture::replace_region`](crate::Texture::replace_region) or
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) of a level or slice past the texture's,
+    /// or of a region that leaves the level or is off the format's block grid.
+    ///
+    /// Basis: ours (no texel of the texture is there to copy).
+    TextureRegion {
+        /// The level asked for.
+        level: u32,
+        /// The slice asked for.
+        slice: u32,
+    },
+    /// [`Texture::replace_region`](crate::Texture::replace_region) or
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) with rows closer than a row of the
+    /// region, images closer than an image of it, or bytes too few for it.
+    ///
+    /// Basis: ours (the call would read or write past the bytes it is given, or one texel's
+    /// bytes over another's).
+    TextureBytesLayout {
+        /// The bytes from one row's start to the next's.
+        bytes_per_row: u64,
+        /// The bytes from one image's start to the next's.
+        bytes_per_image: u64,
+        /// The bytes given.
+        len: u64,
+    },
 }
 
 /// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
@@ -213,6 +326,46 @@ pub enum Gap {
         threads_per_grid: [u32; 3],
         /// The threadgroup size asked for.
         threads_per_threadgroup: [u32; 3],
+    },
+    /// A texture of `Memoryless` storage, which only render passes use.
+    ///
+    /// Basis: ours (render passes are not built).
+    MemorylessTexture,
+    /// A texture buffer (`MTLTextureTypeTextureBuffer`).
+    ///
+    /// Basis: ours (no texel-buffer array; no replay stream uses one).
+    TextureBuffer,
+    /// A texture of a pixel format the runtime makes no image of on this device for the
+    /// descriptor's usage: the device's format query lacks the format or one of the usages, or
+    /// the format's texels need a conversion in the shader that the translator's identity domains
+    /// do not make (an extended-range, bfloat, YCbCr, decoded or copies-only format, and 24-bit
+    /// depth held as 32-bit float depth).
+    ///
+    /// Basis: ours (the device's format query, or the identity domains' shaders read every
+    /// texture through its view alone).
+    TextureFormat {
+        /// The pixel format asked for.
+        pixel_format: PixelFormat,
+    },
+    /// [`Texture::replace_region`](crate::Texture::replace_region) or
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) of a texture whose image is no plain
+    /// copy of Metal's bytes in one aspect: a format of depth and stencil both, or a multisample
+    /// texture.
+    ///
+    /// Basis: ours (no copy between such an image and bytes is built).
+    TextureBytes {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// [`Texture::replace_region`](crate::Texture::replace_region) into a 32-bit float depth
+    /// (`Depth32Float`). Metal keeps any `float` there; Vulkan copies no depth outside `[0, 1]`
+    /// into a depth aspect without `VK_EXT_depth_range_unrestricted`, which the floor does not
+    /// require (the Intel devices measured lack it), and no recorded stream uploads one.
+    ///
+    /// Basis: ours (no upload of a 32-bit float depth is built).
+    FloatDepthUpload {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
     },
 }
 
@@ -283,6 +436,30 @@ pub enum Limit {
         /// How many indices.
         count: u32,
     },
+    /// A texture whose extent or array layers are past what the device makes of its format,
+    /// type, usage and sample count. A cube's layers are six a cube.
+    ///
+    /// Basis: device (the image format query's `maxExtent` and `maxArrayLayers`).
+    TextureSize {
+        /// The extent asked for.
+        extent: [u32; 3],
+        /// The array layers asked for.
+        layers: u32,
+        /// The device's most.
+        max_extent: [u32; 3],
+        /// The device's most layers.
+        max_layers: u32,
+    },
+    /// A multisample texture of a sample count the device does not make for its format, type and
+    /// usage.
+    ///
+    /// Basis: device (the image format query's `sampleCounts`).
+    TextureSamples {
+        /// The sample count asked for.
+        sample_count: u32,
+        /// The counts the device makes, one bit each (`VkSampleCountFlags`).
+        counts: u32,
+    },
 }
 
 impl Error {
@@ -348,6 +525,54 @@ impl fmt::Display for Refusal {
             Refusal::IndicesNotGranted { class, index } => {
                 write!(f, "{class:?} index {index} is not granted")
             }
+            Refusal::IndexInUse { class, index } => {
+                write!(f, "an object lives at {class:?} index {index} already")
+            }
+            Refusal::IndicesInUse { class, index } => {
+                write!(f, "an object lives at {class:?} index {index} of the grant")
+            }
+            Refusal::TextureIndex { index: Some(index) } => write!(
+                f,
+                "a texture no shader reaches takes no index, and {index} was given"
+            ),
+            Refusal::TextureIndex { index: None } => {
+                f.write_str("a texture shaders read or write takes an index, and none was given")
+            }
+            Refusal::TextureZeroExtent => f.write_str("a texture has a width, height or depth of 0"),
+            Refusal::TextureExtentForType => {
+                f.write_str("the texture's height or depth is not 1 where its type needs 1")
+            }
+            Refusal::TextureCubeNotSquare => f.write_str("a cube texture's width and height differ"),
+            Refusal::TextureArrayLength { array_length } => write!(
+                f,
+                "an array length of {array_length} does not suit the texture's type"
+            ),
+            Refusal::TextureLevelCount { levels, max } => write!(
+                f,
+                "{levels} mipmap levels are none or past the texture's {max}"
+            ),
+            Refusal::TextureSampleCount { sample_count } => write!(
+                f,
+                "a sample count of {sample_count} does not suit the texture's type"
+            ),
+            Refusal::TextureSwizzleWithWrites => {
+                f.write_str("a swizzled texture takes no shader-write or render-target usage")
+            }
+            Refusal::TextureBytesPrivate => {
+                f.write_str("the CPU reaches no Private or Memoryless texture")
+            }
+            Refusal::TextureRegion { level, slice } => write!(
+                f,
+                "the region of level {level}, slice {slice} is not inside the texture"
+            ),
+            Refusal::TextureBytesLayout {
+                bytes_per_row,
+                bytes_per_image,
+                len,
+            } => write!(
+                f,
+                "rows {bytes_per_row} and images {bytes_per_image} bytes apart in {len} bytes do not hold the region"
+            ),
         }
     }
 }
@@ -374,6 +599,20 @@ impl fmt::Display for Gap {
             } => write!(
                 f,
                 "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which this kernel's variant does not run"
+            ),
+            Gap::MemorylessTexture => f.write_str("Memoryless textures are not built"),
+            Gap::TextureBuffer => f.write_str("texture buffers are not built"),
+            Gap::TextureFormat { pixel_format } => write!(
+                f,
+                "no texture of {pixel_format:?} is made on this device for the usage"
+            ),
+            Gap::TextureBytes { pixel_format } => write!(
+                f,
+                "bytes are not copied to or from this texture of {pixel_format:?}"
+            ),
+            Gap::FloatDepthUpload { pixel_format } => write!(
+                f,
+                "bytes are not uploaded into the 32-bit float depth of this texture of {pixel_format:?}"
             ),
         }
     }
@@ -404,6 +643,22 @@ impl fmt::Display for Limit {
             } => write!(
                 f,
                 "{count} {class:?} indices from {first} are none or leave the class's range"
+            ),
+            Limit::TextureSize {
+                extent,
+                layers,
+                max_extent,
+                max_layers,
+            } => write!(
+                f,
+                "a texture of {extent:?} in {layers} layers is past the device's {max_extent:?} in {max_layers}"
+            ),
+            Limit::TextureSamples {
+                sample_count,
+                counts,
+            } => write!(
+                f,
+                "a sample count of {sample_count} is not among the device's ({counts:#x})"
             ),
         }
     }

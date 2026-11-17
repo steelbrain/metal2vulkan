@@ -4,8 +4,8 @@ The Metal API on Vulkan, with one path for every device. It replaces `metal2vulk
 takes its name when it does; until then it is unpublished.
 
 Its public API so far: the instance and the device, memory blocks and the buffers in them, the
-grants of texture and sampler indices, command queues, command buffers and events, the device's
-counters, and `floor`, the check of a Vulkan device against the floor below.
+grants of texture and sampler indices, textures, command queues, command buffers and events, the
+device's counters, and `floor`, the check of a Vulkan device against the floor below.
 
 ## Instance and device
 
@@ -139,7 +139,76 @@ made, with no lock, and never rewritten for layouts.
   one index valid in both texture arrays; other textures 4,096 to 65,535; samplers 1 to 3,999.
   Index 0 is nil and never granted. A range that is empty or leaves its class's is
   `Limit::IndexRange`, and one holding an index granted already `Refusal::IndicesGranted`.
-  `Device::release_indices` returns a grant; one not granted is `Refusal::IndicesNotGranted`.
+  `Device::release_indices` returns a grant; one not granted is `Refusal::IndicesNotGranted`, and
+  one where an object still lives `Refusal::IndicesInUse`.
+- An index holds one object at a time: making one where another lives is `Refusal::IndexInUse`,
+  and at an index not granted `Refusal::IndicesNotGranted`. The index is free again once the
+  object's last handle is gone, and with it the last command buffer that used it; its elements
+  read their default again from then.
+
+## Textures
+
+- `Device::new_texture(descriptor, index)` is `newTextureWithDescriptor:` at `index`: an
+  optimal-tiling image of the descriptor in device-local memory of its own (a dedicated
+  allocation), its contents undefined, as Metal's are. `index` is given exactly where shaders
+  reach the texture, shader-read or shader-write usage (`Refusal::TextureIndex` otherwise), from
+  a live grant of the class the usage picks: `IndexClass::StorageTexture` with shader-write
+  usage, else `IndexClass::Texture`. `TextureUsage` with no bits is Metal's unknown usage: shader
+  read and write, render target and pixel-format view.
+- The image's usage is the descriptor's plus transfer source and destination. Its home layout is
+  general where it has a storage element, shader-read-only where shaders only read it, and the
+  attachment layout where only render passes use it. Its elements of set 1 are written before the
+  call returns, with that layout, and never rewritten; the upload moves the image from undefined
+  to home ahead of every command buffer committed after the call.
+- The sampled element's view is the format's, through its component mapping with the
+  descriptor's swizzle composed over it; a depth or stencil format's view takes its depth, else
+  its stencil. The storage element is written where the usage has shader write and the device
+  stores the format through a storage image declared without a format; its view maps each
+  channel to itself.
+- A format is made where the translator's format table maps it for the usage on the device
+  (`vk_format`) to the format itself or to one whose view gives Metal's values (a swizzled or
+  rotated view, alpha held in red, an RGBX format, a depth or stencil aspect of a combined
+  format), and the device's image format query takes the image. Elsewhere it is
+  `Gap::TextureFormat`: the shaders of the identity domains read a texture through its view alone,
+  so a format whose texels the shader converts (extended range, bfloat, YCbCr, decoded,
+  copies-only, 24-bit depth held as 32-bit float) is not made. Past the query's extent, layers or
+  sample counts it is `Limit::TextureSize` or `Limit::TextureSamples`.
+- Refused as Metal refuses each descriptor (`Refusal::TextureZeroExtent`,
+  `TextureExtentForType`, `TextureCubeNotSquare`, `TextureArrayLength`, `TextureLevelCount`,
+  `TextureSampleCount`, `TextureSwizzleWithWrites`). Texture buffers (`Gap::TextureBuffer`) and
+  Memoryless storage (`Gap::MemorylessTexture`) are not built.
+- `Texture::gpu_resource_id` is its index (0 without one) and the translator's `TextureWord` of
+  its format and swizzle (`docs/RESOURCE-ID.md`), so the guest computes the ID itself.
+- `Texture::replace_region` and `Texture::get_bytes` take a Shared or Managed texture
+  (`Refusal::TextureBytesPrivate` otherwise), a region inside a level and slice on the format's
+  block grid (`Refusal::TextureRegion`), and rows and images apart as Metal's calls take them,
+  a compressed format's rows being rows of blocks (`Refusal::TextureBytesLayout` where they
+  overlap or the bytes are too few). `replace_region` copies the bytes into a staging buffer
+  before it returns, and the upload copies them into the image, leaving home for the transfer
+  layout and coming back, ahead of every command buffer committed after the call. `get_bytes`
+  records the copy out into the upload, submits it at once, waits for it and copies the bytes
+  out; as in Metal, the program has waited for the work that writes the texture.
+- A texture holds the device. Once its last handle and the last command buffer that used it are
+  gone, its elements read null and its index is free at once; the reaper frees its image once the
+  last upload that moves or copies it has retired. `Gauges::textures` counts images until then,
+  `Gauges::descriptor_slots` the indices held.
+
+### Known gaps of textures
+
+- `replace_region` and `get_bytes` go through a staging buffer: a copy Metal does not make, in
+  memory of its own for each call, counted in `Metrics::bytes_copied`.
+- A texture whose format the device does not store through a storage image without a format has
+  no storage element, so a shader write through its index is dropped, as a write to a nil
+  texture is.
+- `replace_region` takes no bytes into a 32-bit float depth (`Gap::FloatDepthUpload`): Metal
+  keeps any `float` there, Vulkan copies no depth outside `[0, 1]` into a depth aspect without
+  `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor
+  does not require, and no recorded stream uploads one.
+- Their bytes are not copied for a format of depth and stencil both or a multisample texture
+  (`Gap::TextureBytes`).
+- A texture's memory is device-local; where the device has none left, the call fails
+  (`Error::Vulkan`).
+- Texture views, heap textures and textures over a swapchain image are not built yet.
 
 ## Queues, command buffers and events
 
@@ -218,7 +287,9 @@ that touch blocks first.
 - Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through
-  arithmetic defined for every value and never later than its `gpu_end_time`. The parameter ring
+  arithmetic defined for every value and never later than its `gpu_end_time`; and
+  `Texture::get_bytes`'s copy out of its staging buffer, whose bytes reach only the caller's
+  buffer, at offsets and lengths from the call's checked region. The parameter ring
   and an indirect dispatch's arguments are read only by the GPU: the runtime writes the ring and
   never reads it back, and never reads the arguments.
 - Guest processes are not isolated from each other. One device serves every guest process, and

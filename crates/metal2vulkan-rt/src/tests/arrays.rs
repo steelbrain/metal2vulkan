@@ -7,8 +7,8 @@
 //!   is granted again.
 //! - Under a device cfg, on every device of the cfg's kind, the device writes every element of
 //!   set 1 its default at creation, and holds two `VkSampler`s for it; grants work through the
-//!   device; making and destroying a second set 1 is timed and reported, and its two samplers
-//!   are gone after it.
+//!   device; `Device::new`, and making and destroying a second set 1, are timed and reported,
+//!   and the second set's two samplers are gone after it.
 
 use crate::arrays::Grants;
 use crate::error::{Error, Limit, Refusal};
@@ -123,8 +123,11 @@ mod on_device {
             "the loader lists no device of this cfg's kind"
         );
         for (name, physical) in devices {
+            let opened = Instant::now();
             let device = Device::new(&physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let micros = opened.elapsed().as_micros();
+            println!("M2V-MATRIX device_new/{name} {micros} us");
             let counters = device.counters();
             assert_eq!(counters.gauges().device_samplers, 2, "{name}");
             let grant = device

@@ -11,6 +11,7 @@ use crate::fill;
 use crate::memory::Block;
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
+use crate::texture::{Image, Staging};
 use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
@@ -65,6 +66,10 @@ pub(crate) struct Upload {
 /// What an upload keeps until it retires.
 pub(crate) enum Held {
     Block(Arc<Block>),
+    /// A texture's image the upload moves to its home layout or copies bytes to or from.
+    Texture(Arc<Image>),
+    /// The staging buffer of such a copy.
+    Staging(Arc<Staging>),
 }
 
 impl Held {
@@ -72,6 +77,9 @@ impl Held {
     fn is(&self, other: &Held) -> bool {
         match (self, other) {
             (Held::Block(a), Held::Block(b)) => Arc::ptr_eq(a, b),
+            (Held::Texture(a), Held::Texture(b)) => Arc::ptr_eq(a, b),
+            (Held::Staging(a), Held::Staging(b)) => Arc::ptr_eq(a, b),
+            _ => false,
         }
     }
 }

@@ -46,6 +46,7 @@ assoc-const	metal2vulkan-air::metal::DataType::ALL	pub const ALL: [DataType; 17]
 assoc-const	metal2vulkan-rt::ResourceUsage::READ	pub const READ: ResourceUsage
 assoc-const	metal2vulkan-rt::ResourceUsage::SAMPLE	pub const SAMPLE: ResourceUsage
 assoc-const	metal2vulkan-rt::ResourceUsage::WRITE	pub const WRITE: ResourceUsage
+assoc-const	metal2vulkan-rt::TextureSwizzleChannels::DEFAULT	pub const DEFAULT: TextureSwizzleChannels
 assoc-const	metal2vulkan-runtime::AddressModeMap::IDENTITY	pub const IDENTITY: AddressModeMap
 assoc-const	metal2vulkan-runtime::FeatureRow::ALL	pub const ALL: [FeatureRow; 144]
 assoc-const	metal2vulkan-runtime::FormatCapabilities::NONE	pub const NONE: FormatCapabilities
@@ -573,6 +574,7 @@ assoc-const-value	metal2vulkan-air::metal::DataType::ALL	[DataType::Float32, Dat
 assoc-const-value	metal2vulkan-rt::ResourceUsage::READ	ResourceUsage(1)
 assoc-const-value	metal2vulkan-rt::ResourceUsage::SAMPLE	ResourceUsage(4)
 assoc-const-value	metal2vulkan-rt::ResourceUsage::WRITE	ResourceUsage(2)
+assoc-const-value	metal2vulkan-rt::TextureSwizzleChannels::DEFAULT	TextureSwizzleChannels
 assoc-const-value	metal2vulkan-runtime::AddressModeMap::IDENTITY	AddressModeMap
 assoc-const-value	metal2vulkan-runtime::FeatureRow::ALL	[FeatureRow::MetalKit, FeatureRow::MetalPerformanceShaders, FeatureRow::ProgrammableBlending, FeatureRow::SeparateDepthStencilAttachments, FeatureRow::PvrtcPixelFormats, FeatureRow::EacEtcPixelFormats, FeatureRow::AstcPixelFormats, FeatureRow::BcPixelFormats, FeatureRow::CompressedVolumeTextureFormats, FeatureRow::ExtendedRangePixelFormats, FeatureRow::WideColorPixelFormat, FeatureRow::Depth16PixelFormat, FeatureRow::LinearTextures, FeatureRow::MsaaDepthResolve, FeatureRow::ArrayOfTexturesRead, FeatureRow::ArrayOfTexturesWrite, FeatureRow::CubeMapTextureArrays, FeatureRow::StencilTextureViews, FeatureRow::ArrayOfSamplers, FeatureRow::SamplerMaxAnisotropy, FeatureRow::SamplerLodClamp, FeatureRow::SamplerCompareFunctions, FeatureRow::UnsignedShortCoordinates, FeatureRow::BorderColor, FeatureRow::CountingOcclusionQuery, FeatureRow::BaseVertexInstanceDrawing, FeatureRow::LayeredRendering, FeatureRow::LayeredRenderingToMultisampleTextures, FeatureRow::MemorylessRenderTargets, FeatureRow::DualSourceBlending, FeatureRow::StoreAndMultisampleResolve, FeatureRow::MsaaBlits, FeatureRow::ProgrammableSamplePositions, FeatureRow::DeferredStoreAction, FeatureRow::MemoryBarriers, FeatureRow::IcbComputeMemoryBarriers, FeatureRow::IcbRenderMemoryBarriers, FeatureRow::Tessellation, FeatureRow::IndirectTessellationArguments, FeatureRow::IcbTessellation, FeatureRow::ResourceHeaps, FeatureRow::FunctionSpecialization, FeatureRow::ReadWriteBuffers, FeatureRow::ReadWriteTextures, FeatureRow::ExtractInsertReverseBits, FeatureRow::SimdBarrier, FeatureRow::IndirectDrawDispatchArguments, FeatureRow::ArgumentBuffersTier1, FeatureRow::ArgumentBuffersTier2, FeatureRow::IcbRendering, FeatureRow::IcbCompute, FeatureRow::UniformType, FeatureRow::Imageblocks, FeatureRow::TileShaders, FeatureRow::ImageblockSampleCoverageControl, FeatureRow::PostDepthCoverage, FeatureRow::QuadPermute, FeatureRow::QuadBallot, FeatureRow::QuadReduction, FeatureRow::SimdPermute, FeatureRow::SimdReduction, FeatureRow::SimdMatrixMultiply, FeatureRow::RasterOrderGroups, FeatureRow::NonuniformThreadgroupSize, FeatureRow::MultipleViewports, FeatureRow::StencilFeedback, FeatureRow::StencilResolve, FeatureRow::NonsquareTileDispatch, FeatureRow::TextureSwizzle, FeatureRow::PlacementHeap, FeatureRow::PrimitiveId, FeatureRow::BarycentricCoordinates, FeatureRow::ReadWriteCubeMapTextures, FeatureRow::SparseTextures, FeatureRow::SparseDepthStencilTextures, FeatureRow::VariableRasterizationRate, FeatureRow::VertexAmplification, FeatureRow::Int64Math, FeatureRow::LossyTextureCompression, FeatureRow::SimdShiftAndFill, FeatureRow::RenderDynamicLibraries, FeatureRow::ComputeDynamicLibraries, FeatureRow::MeshShading, FeatureRow::IndirectMeshDrawArguments, FeatureRow::IcbMeshDraws, FeatureRow::MetalFxSpatialUpscaling, FeatureRow::MetalFxTemporalUpscaling, FeatureRow::MetalFxFrameInterpolation, FeatureRow::MetalFxDenoisedUpscaling, FeatureRow::FastResourceLoading, FeatureRow::RayTracingCompute, FeatureRow::RayTracingRender, FeatureRow::FloatAtomics, FeatureRow::TextureAtomics, FeatureRow::Int64Atomics, FeatureRow::QueryTextureLod, FeatureRow::BinaryArchives, FeatureRow::FunctionPointersCompute, FeatureRow::FunctionPointersRender, FeatureRow::DepthCompareBiasAndGradient, FeatureRow::NonprivateDepthStencilTextures, FeatureRow::DynamicAttributeStride, FeatureRow::PackedFloatAttributeFormats, FeatureRow::BFloat, FeatureRow::RelaxedMath, FeatureRow::GlobalBuiltinsAndBindings, FeatureRow::CoherentMemory, FeatureRow::ShaderValidation, FeatureRow::ShaderLogging, FeatureRow::ResidencySets, FeatureRow::RowMajorAccelerationStructures, FeatureRow::PerComponentMotionInterpolation, FeatureRow::IntersectionResultStorage, FeatureRow::VisibilityCountAccumulation, FeatureRow::ArgumentTables, FeatureRow::CommandAllocators, FeatureRow::DecoupledQueuesAndCommandBuffers, FeatureRow::TextureViewPools, FeatureRow::CommandBarriers, FeatureRow::PlacementSparseBuffers, FeatureRow::PlacementSparseTextures, FeatureRow::CompilationContexts, FeatureRow::PipelineDatasetSerialization, FeatureRow::FlexibleRenderPipelineState, FeatureRow::ColorAttachmentMapping, FeatureRow::MachineLearningEncoding, FeatureRow::Tensors, FeatureRow::PerformanceCounterHeaps, FeatureRow::AddressDrivenAccelerationStructureBuilds, FeatureRow::AccelerationStructureBuildOptions, FeatureRow::IntersectionFunctionBuffers, FeatureRow::SamplerMinMaxReduction, FeatureRow::SamplerLodBias, FeatureRow::PreRasterVertexValues, FeatureRow::DepthBoundsTesting, FeatureRow::IcbRasterAndDepthStencilState, FeatureRow::CubeMapAtomics, FeatureRow::UniversalTextureCompression, FeatureRow::AcquireReleaseAtomics, FeatureRow::BlockTextureReads, FeatureRow::ClampToEdgeTextureReads, FeatureRow::IntegerCoordinateOffsets, FeatureRow::TextureBarriers, FeatureRow::DeviceNotifications]
 assoc-const-value	metal2vulkan-runtime::FormatCapabilities::NONE	FormatCapabilities(0)
@@ -1405,6 +1407,7 @@ enum	metal2vulkan-rt::PrecisionNote	#[cfg_attr(feature = "serde", derive(serde::
 enum	metal2vulkan-rt::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Refusal
 enum	metal2vulkan-rt::Resource	#[derive(Clone, Copy)] #[non_exhaustive] pub enum Resource<'a>
 enum	metal2vulkan-rt::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
+enum	metal2vulkan-rt::StorageMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum StorageMode
 enum	metal2vulkan-rt::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
 enum	metal2vulkan-runtime::AddressPlacement	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AddressPlacement
 enum	metal2vulkan-runtime::AppleOnly	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AppleOnly
@@ -2262,6 +2265,25 @@ field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device
 field	metal2vulkan-rt::RawDevice.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
 field	metal2vulkan-rt::RawDevice.queue_family_index	pub queue_family_index: u32
+field	metal2vulkan-rt::Region.origin	pub origin: [u32; 3]
+field	metal2vulkan-rt::Region.size	pub size: [u32; 3]
+field	metal2vulkan-rt::ResourceId.index	pub index: u32
+field	metal2vulkan-rt::ResourceId.word	pub word: u32
+field	metal2vulkan-rt::TextureDescriptor.array_length	pub array_length: u32
+field	metal2vulkan-rt::TextureDescriptor.depth	pub depth: u32
+field	metal2vulkan-rt::TextureDescriptor.height	pub height: u32
+field	metal2vulkan-rt::TextureDescriptor.mipmap_level_count	pub mipmap_level_count: u32
+field	metal2vulkan-rt::TextureDescriptor.pixel_format	pub pixel_format: PixelFormat
+field	metal2vulkan-rt::TextureDescriptor.sample_count	pub sample_count: u32
+field	metal2vulkan-rt::TextureDescriptor.storage_mode	pub storage_mode: StorageMode
+field	metal2vulkan-rt::TextureDescriptor.swizzle	pub swizzle: TextureSwizzleChannels
+field	metal2vulkan-rt::TextureDescriptor.texture_type	pub texture_type: TextureType
+field	metal2vulkan-rt::TextureDescriptor.usage	pub usage: TextureUsage
+field	metal2vulkan-rt::TextureDescriptor.width	pub width: u32
+field	metal2vulkan-rt::TextureSwizzleChannels.alpha	pub alpha: TextureSwizzle
+field	metal2vulkan-rt::TextureSwizzleChannels.blue	pub blue: TextureSwizzle
+field	metal2vulkan-rt::TextureSwizzleChannels.green	pub green: TextureSwizzle
+field	metal2vulkan-rt::TextureSwizzleChannels.red	pub red: TextureSwizzle
 field	metal2vulkan-rt::floor::BelowFloor.missing	pub missing: Vec<Missing>
 field	metal2vulkan-rt::floor::Capabilities.buffer_int64_atomics	pub buffer_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.extensions	pub extensions: Vec<&'static CStr>
@@ -5982,6 +6004,10 @@ macro-decl	metal2vulkan-air::ir::Sym	ir_id! Sym
 macro-decl	metal2vulkan-air::ir::TypeId	id_type! TypeId
 macro-decl	metal2vulkan-air::ir::TypeId	ir_id! TypeId
 macro-decl	metal2vulkan-air::metal::DataType	metal_enum! DataType
+macro-decl	metal2vulkan-rt::PixelFormat	metal_enum! PixelFormat
+macro-decl	metal2vulkan-rt::TextureSwizzle	metal_enum! TextureSwizzle
+macro-decl	metal2vulkan-rt::TextureType	metal_enum! TextureType
+macro-decl	metal2vulkan-rt::TextureUsage	metal_flags! TextureUsage
 macro-decl	metal2vulkan-runtime::Degradation	degradations! Degradation
 macro-decl	metal2vulkan::metal::ArgumentBuffersTier	metal_enum! ArgumentBuffersTier
 macro-decl	metal2vulkan::metal::AttributeFormat	metal_enum! AttributeFormat
@@ -6200,6 +6226,341 @@ macro-member	metal2vulkan-air::metal::DataType::UShort3	UShort3 = 43, "MTLDataTy
 macro-member	metal2vulkan-air::metal::DataType::UShort4	UShort4 = 44, "MTLDataTypeUShort4";
 macro-member	metal2vulkan-air::metal::DataType::VisibleFunctionTable	VisibleFunctionTable = 115, "MTLDataTypeVisibleFunctionTable";
 macro-member	metal2vulkan-air::metal::DataType::aliases	aliases
+macro-member	metal2vulkan-rt::PixelFormat::A1BGR5Unorm	A1BGR5Unorm = 41, "MTLPixelFormatA1BGR5Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::A8Unorm	A8Unorm = 1, "MTLPixelFormatA8Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::ABGR4Unorm	ABGR4Unorm = 42, "MTLPixelFormatABGR4Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::ARGB8Unorm	ARGB8Unorm = 84, "MTLPixelFormatARGB8Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::ARGB8UnormSRGB	ARGB8UnormSRGB = 85, "MTLPixelFormatARGB8Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x10HDR	ASTC10x10HDR = 234, "MTLPixelFormatASTC_10x10_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x10LDR	ASTC10x10LDR = 216, "MTLPixelFormatASTC_10x10_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x10SRGB	ASTC10x10SRGB = 198, "MTLPixelFormatASTC_10x10_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x5HDR	ASTC10x5HDR = 231, "MTLPixelFormatASTC_10x5_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x5LDR	ASTC10x5LDR = 213, "MTLPixelFormatASTC_10x5_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x5SRGB	ASTC10x5SRGB = 195, "MTLPixelFormatASTC_10x5_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x6HDR	ASTC10x6HDR = 232, "MTLPixelFormatASTC_10x6_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x6LDR	ASTC10x6LDR = 214, "MTLPixelFormatASTC_10x6_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x6SRGB	ASTC10x6SRGB = 196, "MTLPixelFormatASTC_10x6_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x8HDR	ASTC10x8HDR = 233, "MTLPixelFormatASTC_10x8_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x8LDR	ASTC10x8LDR = 215, "MTLPixelFormatASTC_10x8_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC10x8SRGB	ASTC10x8SRGB = 197, "MTLPixelFormatASTC_10x8_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC12x10HDR	ASTC12x10HDR = 235, "MTLPixelFormatASTC_12x10_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC12x10LDR	ASTC12x10LDR = 217, "MTLPixelFormatASTC_12x10_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC12x10SRGB	ASTC12x10SRGB = 199, "MTLPixelFormatASTC_12x10_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC12x12HDR	ASTC12x12HDR = 236, "MTLPixelFormatASTC_12x12_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC12x12LDR	ASTC12x12LDR = 218, "MTLPixelFormatASTC_12x12_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC12x12SRGB	ASTC12x12SRGB = 200, "MTLPixelFormatASTC_12x12_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC4x2HDR	ASTC4x2HDR = 221, "MTLPixelFormatASTC_4x2_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC4x2LDR	ASTC4x2LDR = 203, "MTLPixelFormatASTC_4x2_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC4x2SRGB	ASTC4x2SRGB = 185, "MTLPixelFormatASTC_4x2_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC4x4HDR	ASTC4x4HDR = 222, "MTLPixelFormatASTC_4x4_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC4x4LDR	ASTC4x4LDR = 204, "MTLPixelFormatASTC_4x4_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC4x4SRGB	ASTC4x4SRGB = 186, "MTLPixelFormatASTC_4x4_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC5x4HDR	ASTC5x4HDR = 223, "MTLPixelFormatASTC_5x4_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC5x4LDR	ASTC5x4LDR = 205, "MTLPixelFormatASTC_5x4_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC5x4SRGB	ASTC5x4SRGB = 187, "MTLPixelFormatASTC_5x4_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC5x5HDR	ASTC5x5HDR = 224, "MTLPixelFormatASTC_5x5_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC5x5LDR	ASTC5x5LDR = 206, "MTLPixelFormatASTC_5x5_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC5x5SRGB	ASTC5x5SRGB = 188, "MTLPixelFormatASTC_5x5_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC6x5HDR	ASTC6x5HDR = 225, "MTLPixelFormatASTC_6x5_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC6x5LDR	ASTC6x5LDR = 207, "MTLPixelFormatASTC_6x5_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC6x5SRGB	ASTC6x5SRGB = 189, "MTLPixelFormatASTC_6x5_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC6x6HDR	ASTC6x6HDR = 226, "MTLPixelFormatASTC_6x6_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC6x6LDR	ASTC6x6LDR = 208, "MTLPixelFormatASTC_6x6_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC6x6SRGB	ASTC6x6SRGB = 190, "MTLPixelFormatASTC_6x6_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x4HDR	ASTC8x4HDR = 227, "MTLPixelFormatASTC_8x4_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x4LDR	ASTC8x4LDR = 209, "MTLPixelFormatASTC_8x4_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x4SRGB	ASTC8x4SRGB = 191, "MTLPixelFormatASTC_8x4_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x5HDR	ASTC8x5HDR = 228, "MTLPixelFormatASTC_8x5_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x5LDR	ASTC8x5LDR = 210, "MTLPixelFormatASTC_8x5_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x5SRGB	ASTC8x5SRGB = 192, "MTLPixelFormatASTC_8x5_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x6HDR	ASTC8x6HDR = 229, "MTLPixelFormatASTC_8x6_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x6LDR	ASTC8x6LDR = 211, "MTLPixelFormatASTC_8x6_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x6SRGB	ASTC8x6SRGB = 193, "MTLPixelFormatASTC_8x6_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x8HDR	ASTC8x8HDR = 230, "MTLPixelFormatASTC_8x8_HDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x8LDR	ASTC8x8LDR = 212, "MTLPixelFormatASTC_8x8_LDR";
+macro-member	metal2vulkan-rt::PixelFormat::ASTC8x8SRGB	ASTC8x8SRGB = 194, "MTLPixelFormatASTC_8x8_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::AnyDepth	AnyDepth = 651, "MTLPixelFormatAnyDepth";
+macro-member	metal2vulkan-rt::PixelFormat::AnyStencil	AnyStencil = 652, "MTLPixelFormatAnyStencil";
+macro-member	metal2vulkan-rt::PixelFormat::B5G6R5Unorm	B5G6R5Unorm = 40, "MTLPixelFormatB5G6R5Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::BC1RGBA	BC1RGBA = 130, "MTLPixelFormatBC1_RGBA";
+macro-member	metal2vulkan-rt::PixelFormat::BC1RGBASRGB	BC1RGBASRGB = 131, "MTLPixelFormatBC1_RGBA_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BC2RGBA	BC2RGBA = 132, "MTLPixelFormatBC2_RGBA";
+macro-member	metal2vulkan-rt::PixelFormat::BC2RGBASRGB	BC2RGBASRGB = 133, "MTLPixelFormatBC2_RGBA_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BC3RGBA	BC3RGBA = 134, "MTLPixelFormatBC3_RGBA";
+macro-member	metal2vulkan-rt::PixelFormat::BC3RGBASRGB	BC3RGBASRGB = 135, "MTLPixelFormatBC3_RGBA_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BC4RSnorm	BC4RSnorm = 141, "MTLPixelFormatBC4_RSnorm";
+macro-member	metal2vulkan-rt::PixelFormat::BC4RUnorm	BC4RUnorm = 140, "MTLPixelFormatBC4_RUnorm";
+macro-member	metal2vulkan-rt::PixelFormat::BC5RGSnorm	BC5RGSnorm = 143, "MTLPixelFormatBC5_RGSnorm";
+macro-member	metal2vulkan-rt::PixelFormat::BC5RGUnorm	BC5RGUnorm = 142, "MTLPixelFormatBC5_RGUnorm";
+macro-member	metal2vulkan-rt::PixelFormat::BC6HRGBFloat	BC6HRGBFloat = 150, "MTLPixelFormatBC6H_RGBFloat";
+macro-member	metal2vulkan-rt::PixelFormat::BC6HRGBUfloat	BC6HRGBUfloat = 151, "MTLPixelFormatBC6H_RGBUfloat";
+macro-member	metal2vulkan-rt::PixelFormat::BC7RGBAUnorm	BC7RGBAUnorm = 152, "MTLPixelFormatBC7_RGBAUnorm";
+macro-member	metal2vulkan-rt::PixelFormat::BC7RGBAUnormSRGB	BC7RGBAUnormSRGB = 153, "MTLPixelFormatBC7_RGBAUnorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BGR10A2Unorm	BGR10A2Unorm = 94, "MTLPixelFormatBGR10A2Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::BGR10A2UnormPQ	BGR10A2UnormPQ = 629, "MTLPixelFormatBGR10A2Unorm_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::BGR10A2UnormSRGB	BGR10A2UnormSRGB = 628, "MTLPixelFormatBGR10A2Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BGR10XR	BGR10XR = 554, "MTLPixelFormatBGR10_XR";
+macro-member	metal2vulkan-rt::PixelFormat::BGR10XRSRGB	BGR10XRSRGB = 555, "MTLPixelFormatBGR10_XR_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BGR5A1Unorm	BGR5A1Unorm = 43, "MTLPixelFormatBGR5A1Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10Uint	BGRA10Uint = 637, "MTLPixelFormatBGRA10Uint";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10UintPACKED	BGRA10UintPACKED = 630, "MTLPixelFormatBGRA10Uint_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10Unorm	BGRA10Unorm = 638, "MTLPixelFormatBGRA10Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10UnormHLG	BGRA10UnormHLG = 640, "MTLPixelFormatBGRA10Unorm_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10UnormPACKED	BGRA10UnormPACKED = 633, "MTLPixelFormatBGRA10Unorm_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10UnormPACKEDHLG	BGRA10UnormPACKEDHLG = 635, "MTLPixelFormatBGRA10Unorm_PACKED_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10UnormPACKEDPQ	BGRA10UnormPACKEDPQ = 636, "MTLPixelFormatBGRA10Unorm_PACKED_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10UnormPACKEDSRGB	BGRA10UnormPACKEDSRGB = 634, "MTLPixelFormatBGRA10Unorm_PACKED_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10UnormPQ	BGRA10UnormPQ = 641, "MTLPixelFormatBGRA10Unorm_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10UnormSRGB	BGRA10UnormSRGB = 639, "MTLPixelFormatBGRA10Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10XR	BGRA10XR = 552, "MTLPixelFormatBGRA10_XR";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10XRPACKED	BGRA10XRPACKED = 631, "MTLPixelFormatBGRA10_XR_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10XRPACKEDSRGB	BGRA10XRPACKEDSRGB = 632, "MTLPixelFormatBGRA10_XR_PACKED_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA10XRSRGB	BGRA10XRSRGB = 553, "MTLPixelFormatBGRA10_XR_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA4Unorm	BGRA4Unorm = 44, "MTLPixelFormatBGRA4Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA8Unorm	BGRA8Unorm = 80, "MTLPixelFormatBGRA8Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::BGRA8UnormSRGB	BGRA8UnormSRGB = 81, "MTLPixelFormatBGRA8Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::BGRG422	BGRG422 = 241, "MTLPixelFormatBGRG422";
+macro-member	metal2vulkan-rt::PixelFormat::Depth16Unorm	Depth16Unorm = 250, "MTLPixelFormatDepth16Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::Depth24UnormStencil8	Depth24UnormStencil8 = 255, "MTLPixelFormatDepth24Unorm_Stencil8";
+macro-member	metal2vulkan-rt::PixelFormat::Depth32Float	Depth32Float = 252, "MTLPixelFormatDepth32Float";
+macro-member	metal2vulkan-rt::PixelFormat::Depth32FloatStencil8	Depth32FloatStencil8 = 260, "MTLPixelFormatDepth32Float_Stencil8";
+macro-member	metal2vulkan-rt::PixelFormat::EACR11Snorm	EACR11Snorm = 172, "MTLPixelFormatEAC_R11Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::EACR11Unorm	EACR11Unorm = 170, "MTLPixelFormatEAC_R11Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::EACRG11Snorm	EACRG11Snorm = 176, "MTLPixelFormatEAC_RG11Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::EACRG11Unorm	EACRG11Unorm = 174, "MTLPixelFormatEAC_RG11Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::EACRGBA8	EACRGBA8 = 178, "MTLPixelFormatEAC_RGBA8";
+macro-member	metal2vulkan-rt::PixelFormat::EACRGBA8SRGB	EACRGBA8SRGB = 179, "MTLPixelFormatEAC_RGBA8_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ETC2RGB8	ETC2RGB8 = 180, "MTLPixelFormatETC2_RGB8";
+macro-member	metal2vulkan-rt::PixelFormat::ETC2RGB8A1	ETC2RGB8A1 = 182, "MTLPixelFormatETC2_RGB8A1";
+macro-member	metal2vulkan-rt::PixelFormat::ETC2RGB8A1SRGB	ETC2RGB8A1SRGB = 183, "MTLPixelFormatETC2_RGB8A1_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::ETC2RGB8SRGB	ETC2RGB8SRGB = 181, "MTLPixelFormatETC2_RGB8_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::GBGR422	GBGR422 = 240, "MTLPixelFormatGBGR422";
+macro-member	metal2vulkan-rt::PixelFormat::Invalid	Invalid = 0, "MTLPixelFormatInvalid";
+macro-member	metal2vulkan-rt::PixelFormat::PVRTCRGB2BPP	PVRTCRGB2BPP = 160, "MTLPixelFormatPVRTC_RGB_2BPP";
+macro-member	metal2vulkan-rt::PixelFormat::PVRTCRGB2BPPSRGB	PVRTCRGB2BPPSRGB = 161, "MTLPixelFormatPVRTC_RGB_2BPP_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::PVRTCRGB4BPP	PVRTCRGB4BPP = 162, "MTLPixelFormatPVRTC_RGB_4BPP";
+macro-member	metal2vulkan-rt::PixelFormat::PVRTCRGB4BPPSRGB	PVRTCRGB4BPPSRGB = 163, "MTLPixelFormatPVRTC_RGB_4BPP_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::PVRTCRGBA2BPP	PVRTCRGBA2BPP = 164, "MTLPixelFormatPVRTC_RGBA_2BPP";
+macro-member	metal2vulkan-rt::PixelFormat::PVRTCRGBA2BPPSRGB	PVRTCRGBA2BPPSRGB = 165, "MTLPixelFormatPVRTC_RGBA_2BPP_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::PVRTCRGBA4BPP	PVRTCRGBA4BPP = 166, "MTLPixelFormatPVRTC_RGBA_4BPP";
+macro-member	metal2vulkan-rt::PixelFormat::PVRTCRGBA4BPPSRGB	PVRTCRGBA4BPPSRGB = 167, "MTLPixelFormatPVRTC_RGBA_4BPP_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::PixelFormat	PixelFormat = "MTLPixelFormat"
+macro-member	metal2vulkan-rt::PixelFormat::R10UintPACKED	R10UintPACKED = 643, "MTLPixelFormatR10Uint_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::R10UintX6	R10UintX6 = 642, "MTLPixelFormatR10Uint_X6";
+macro-member	metal2vulkan-rt::PixelFormat::R10UnormPACKED	R10UnormPACKED = 588, "MTLPixelFormatR10Unorm_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::R10UnormX6	R10UnormX6 = 576, "MTLPixelFormatR10Unorm_X6";
+macro-member	metal2vulkan-rt::PixelFormat::R10UnormX6HLG	R10UnormX6HLG = 621, "MTLPixelFormatR10Unorm_X6_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::R10UnormX6PQ	R10UnormX6PQ = 606, "MTLPixelFormatR10Unorm_X6_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::R10UnormX6SRGB	R10UnormX6SRGB = 577, "MTLPixelFormatR10Unorm_X6_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::R12UintPACKED	R12UintPACKED = 647, "MTLPixelFormatR12Uint_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::R12UintX4	R12UintX4 = 646, "MTLPixelFormatR12Uint_X4";
+macro-member	metal2vulkan-rt::PixelFormat::R12UnormX4	R12UnormX4 = 603, "MTLPixelFormatR12Unorm_X4";
+macro-member	metal2vulkan-rt::PixelFormat::R12UnormX4HLG	R12UnormX4HLG = 622, "MTLPixelFormatR12Unorm_X4_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::R12UnormX4PQ	R12UnormX4PQ = 604, "MTLPixelFormatR12Unorm_X4_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::R16Bfloat	R16Bfloat = 26, "MTLPixelFormatR16Bfloat";
+macro-member	metal2vulkan-rt::PixelFormat::R16Float	R16Float = 25, "MTLPixelFormatR16Float";
+macro-member	metal2vulkan-rt::PixelFormat::R16Sint	R16Sint = 24, "MTLPixelFormatR16Sint";
+macro-member	metal2vulkan-rt::PixelFormat::R16Snorm	R16Snorm = 22, "MTLPixelFormatR16Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::R16Uint	R16Uint = 23, "MTLPixelFormatR16Uint";
+macro-member	metal2vulkan-rt::PixelFormat::R16Unorm	R16Unorm = 20, "MTLPixelFormatR16Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::R32Float	R32Float = 55, "MTLPixelFormatR32Float";
+macro-member	metal2vulkan-rt::PixelFormat::R32Sint	R32Sint = 54, "MTLPixelFormatR32Sint";
+macro-member	metal2vulkan-rt::PixelFormat::R32Uint	R32Uint = 53, "MTLPixelFormatR32Uint";
+macro-member	metal2vulkan-rt::PixelFormat::R8Sint	R8Sint = 14, "MTLPixelFormatR8Sint";
+macro-member	metal2vulkan-rt::PixelFormat::R8Snorm	R8Snorm = 12, "MTLPixelFormatR8Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::R8Uint	R8Uint = 13, "MTLPixelFormatR8Uint";
+macro-member	metal2vulkan-rt::PixelFormat::R8Unorm	R8Unorm = 10, "MTLPixelFormatR8Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::R8UnormSRGB	R8UnormSRGB = 11, "MTLPixelFormatR8Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::RG10UintPACKED	RG10UintPACKED = 645, "MTLPixelFormatRG10Uint_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::RG10UintX12	RG10UintX12 = 644, "MTLPixelFormatRG10Uint_X12";
+macro-member	metal2vulkan-rt::PixelFormat::RG10UnormPACKED	RG10UnormPACKED = 589, "MTLPixelFormatRG10Unorm_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::RG10UnormX12	RG10UnormX12 = 578, "MTLPixelFormatRG10Unorm_X12";
+macro-member	metal2vulkan-rt::PixelFormat::RG10UnormX12SRGB	RG10UnormX12SRGB = 579, "MTLPixelFormatRG10Unorm_X12_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::RG11B10Float	RG11B10Float = 92, "MTLPixelFormatRG11B10Float";
+macro-member	metal2vulkan-rt::PixelFormat::RG12UintPACKED	RG12UintPACKED = 649, "MTLPixelFormatRG12Uint_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::RG12UintX8	RG12UintX8 = 648, "MTLPixelFormatRG12Uint_X8";
+macro-member	metal2vulkan-rt::PixelFormat::RG12UnormX8	RG12UnormX8 = 605, "MTLPixelFormatRG12Unorm_X8";
+macro-member	metal2vulkan-rt::PixelFormat::RG16Bfloat	RG16Bfloat = 66, "MTLPixelFormatRG16Bfloat";
+macro-member	metal2vulkan-rt::PixelFormat::RG16Float	RG16Float = 65, "MTLPixelFormatRG16Float";
+macro-member	metal2vulkan-rt::PixelFormat::RG16Sint	RG16Sint = 64, "MTLPixelFormatRG16Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RG16Snorm	RG16Snorm = 62, "MTLPixelFormatRG16Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::RG16Uint	RG16Uint = 63, "MTLPixelFormatRG16Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RG16Unorm	RG16Unorm = 60, "MTLPixelFormatRG16Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::RG32Float	RG32Float = 105, "MTLPixelFormatRG32Float";
+macro-member	metal2vulkan-rt::PixelFormat::RG32Sint	RG32Sint = 104, "MTLPixelFormatRG32Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RG32Uint	RG32Uint = 103, "MTLPixelFormatRG32Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RG8Sint	RG8Sint = 34, "MTLPixelFormatRG8Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RG8Snorm	RG8Snorm = 32, "MTLPixelFormatRG8Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::RG8Uint	RG8Uint = 33, "MTLPixelFormatRG8Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RG8Unorm	RG8Unorm = 30, "MTLPixelFormatRG8Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::RG8UnormSRGB	RG8UnormSRGB = 31, "MTLPixelFormatRG8Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::RGB104202P	RGB104202P = 543, "MTLPixelFormatRGB10_420_2P";
+macro-member	metal2vulkan-rt::PixelFormat::RGB104202PPACKED	RGB104202PPACKED = 546, "MTLPixelFormatRGB10_420_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::RGB104222P	RGB104222P = 544, "MTLPixelFormatRGB10_422_2P";
+macro-member	metal2vulkan-rt::PixelFormat::RGB104222PPACKED	RGB104222PPACKED = 547, "MTLPixelFormatRGB10_422_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::RGB104442P	RGB104442P = 545, "MTLPixelFormatRGB10_444_2P";
+macro-member	metal2vulkan-rt::PixelFormat::RGB104442PPACKED	RGB104442PPACKED = 548, "MTLPixelFormatRGB10_444_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A2Uint	RGB10A2Uint = 91, "MTLPixelFormatRGB10A2Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A2Unorm	RGB10A2Unorm = 90, "MTLPixelFormatRGB10A2Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A2UnormHLG	RGB10A2UnormHLG = 623, "MTLPixelFormatRGB10A2Unorm_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A2UnormPQ	RGB10A2UnormPQ = 587, "MTLPixelFormatRGB10A2Unorm_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A2UnormSRGB	RGB10A2UnormSRGB = 586, "MTLPixelFormatRGB10A2Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A82P	RGB10A82P = 624, "MTLPixelFormatRGB10A8_2P";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A82PHLG	RGB10A82PHLG = 627, "MTLPixelFormatRGB10A8_2P_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A82PPQ	RGB10A82PPQ = 626, "MTLPixelFormatRGB10A8_2P_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A82PSRGB	RGB10A82PSRGB = 625, "MTLPixelFormatRGB10A8_2P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A82PXR10	RGB10A82PXR10 = 550, "MTLPixelFormatRGB10A8_2P_XR10";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A82PXR10SRGB	RGB10A82PXR10SRGB = 551, "MTLPixelFormatRGB10A8_2P_XR10_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::RGB10A8Uint2P	RGB10A8Uint2P = 650, "MTLPixelFormatRGB10A8Uint_2P";
+macro-member	metal2vulkan-rt::PixelFormat::RGB16Bfloat	RGB16Bfloat = 100, "MTLPixelFormatRGB16Bfloat";
+macro-member	metal2vulkan-rt::PixelFormat::RGB16Float	RGB16Float = 99, "MTLPixelFormatRGB16Float";
+macro-member	metal2vulkan-rt::PixelFormat::RGB16Sint	RGB16Sint = 98, "MTLPixelFormatRGB16Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGB16Snorm	RGB16Snorm = 96, "MTLPixelFormatRGB16Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGB16Uint	RGB16Uint = 97, "MTLPixelFormatRGB16Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGB16Unorm	RGB16Unorm = 95, "MTLPixelFormatRGB16Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGB32Float	RGB32Float = 122, "MTLPixelFormatRGB32Float";
+macro-member	metal2vulkan-rt::PixelFormat::RGB32Sint	RGB32Sint = 121, "MTLPixelFormatRGB32Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGB32Uint	RGB32Uint = 120, "MTLPixelFormatRGB32Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGB84202P	RGB84202P = 540, "MTLPixelFormatRGB8_420_2P";
+macro-member	metal2vulkan-rt::PixelFormat::RGB84222P	RGB84222P = 541, "MTLPixelFormatRGB8_422_2P";
+macro-member	metal2vulkan-rt::PixelFormat::RGB84442P	RGB84442P = 542, "MTLPixelFormatRGB8_444_2P";
+macro-member	metal2vulkan-rt::PixelFormat::RGB8Sint	RGB8Sint = 48, "MTLPixelFormatRGB8Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGB8Snorm	RGB8Snorm = 46, "MTLPixelFormatRGB8Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGB8Uint	RGB8Uint = 47, "MTLPixelFormatRGB8Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGB8Unorm	RGB8Unorm = 45, "MTLPixelFormatRGB8Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGB9E5Float	RGB9E5Float = 93, "MTLPixelFormatRGB9E5Float";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA16Bfloat	RGBA16Bfloat = 116, "MTLPixelFormatRGBA16Bfloat";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA16Float	RGBA16Float = 115, "MTLPixelFormatRGBA16Float";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA16FloatXR	RGBA16FloatXR = 556, "MTLPixelFormatRGBA16Float_XR";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA16Sint	RGBA16Sint = 114, "MTLPixelFormatRGBA16Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA16Snorm	RGBA16Snorm = 112, "MTLPixelFormatRGBA16Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA16Uint	RGBA16Uint = 113, "MTLPixelFormatRGBA16Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA16Unorm	RGBA16Unorm = 110, "MTLPixelFormatRGBA16Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA32Float	RGBA32Float = 125, "MTLPixelFormatRGBA32Float";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA32Sint	RGBA32Sint = 124, "MTLPixelFormatRGBA32Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA32Uint	RGBA32Uint = 123, "MTLPixelFormatRGBA32Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA8Sint	RGBA8Sint = 74, "MTLPixelFormatRGBA8Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA8Snorm	RGBA8Snorm = 72, "MTLPixelFormatRGBA8Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA8Uint	RGBA8Uint = 73, "MTLPixelFormatRGBA8Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA8Unorm	RGBA8Unorm = 70, "MTLPixelFormatRGBA8Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGBA8UnormSRGB	RGBA8UnormSRGB = 71, "MTLPixelFormatRGBA8Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX16Float	RGBX16Float = 315, "MTLPixelFormatRGBX16Float";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX16Sint	RGBX16Sint = 314, "MTLPixelFormatRGBX16Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX16Uint	RGBX16Uint = 313, "MTLPixelFormatRGBX16Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX32Float	RGBX32Float = 325, "MTLPixelFormatRGBX32Float";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX32Sint	RGBX32Sint = 324, "MTLPixelFormatRGBX32Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX32Uint	RGBX32Uint = 323, "MTLPixelFormatRGBX32Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX8Sint	RGBX8Sint = 304, "MTLPixelFormatRGBX8Sint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX8Snorm	RGBX8Snorm = 302, "MTLPixelFormatRGBX8Snorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX8Uint	RGBX8Uint = 303, "MTLPixelFormatRGBX8Uint";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX8Unorm	RGBX8Unorm = 300, "MTLPixelFormatRGBX8Unorm";
+macro-member	metal2vulkan-rt::PixelFormat::RGBX8UnormSRGB	RGBX8UnormSRGB = 301, "MTLPixelFormatRGBX8Unorm_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::Stencil8	Stencil8 = 253, "MTLPixelFormatStencil8";
+macro-member	metal2vulkan-rt::PixelFormat::Unspecialized	Unspecialized = 263, "MTLPixelFormatUnspecialized";
+macro-member	metal2vulkan-rt::PixelFormat::X24Stencil8	X24Stencil8 = 262, "MTLPixelFormatX24_Stencil8";
+macro-member	metal2vulkan-rt::PixelFormat::X32Stencil8	X32Stencil8 = 261, "MTLPixelFormatX32_Stencil8";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202P	YCBCR104202P = 505, "MTLPixelFormatYCBCR10_420_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PHLG	YCBCR104202PHLG = 608, "MTLPixelFormatYCBCR10_420_2P_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PPACKED	YCBCR104202PPACKED = 508, "MTLPixelFormatYCBCR10_420_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PPACKEDHLG	YCBCR104202PPACKEDHLG = 611, "MTLPixelFormatYCBCR10_420_2P_PACKED_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PPACKEDPQ	YCBCR104202PPACKEDPQ = 567, "MTLPixelFormatYCBCR10_420_2P_PACKED_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PPACKEDSRGB	YCBCR104202PPACKEDSRGB = 528, "MTLPixelFormatYCBCR10_420_2P_PACKED_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PPACKEDXR	YCBCR104202PPACKEDXR = 594, "MTLPixelFormatYCBCR10_420_2P_PACKED_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PPQ	YCBCR104202PPQ = 564, "MTLPixelFormatYCBCR10_420_2P_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PSRGB	YCBCR104202PSRGB = 525, "MTLPixelFormatYCBCR10_420_2P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104202PXR	YCBCR104202PXR = 591, "MTLPixelFormatYCBCR10_420_2P_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222P	YCBCR104222P = 506, "MTLPixelFormatYCBCR10_422_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PHLG	YCBCR104222PHLG = 609, "MTLPixelFormatYCBCR10_422_2P_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PPACKED	YCBCR104222PPACKED = 509, "MTLPixelFormatYCBCR10_422_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PPACKEDHLG	YCBCR104222PPACKEDHLG = 612, "MTLPixelFormatYCBCR10_422_2P_PACKED_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PPACKEDPQ	YCBCR104222PPACKEDPQ = 568, "MTLPixelFormatYCBCR10_422_2P_PACKED_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PPACKEDSRGB	YCBCR104222PPACKEDSRGB = 529, "MTLPixelFormatYCBCR10_422_2P_PACKED_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PPACKEDXR	YCBCR104222PPACKEDXR = 595, "MTLPixelFormatYCBCR10_422_2P_PACKED_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PPQ	YCBCR104222PPQ = 565, "MTLPixelFormatYCBCR10_422_2P_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PSRGB	YCBCR104222PSRGB = 526, "MTLPixelFormatYCBCR10_422_2P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104222PXR	YCBCR104222PXR = 592, "MTLPixelFormatYCBCR10_422_2P_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104441P	YCBCR104441P = 504, "MTLPixelFormatYCBCR10_444_1P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104441PHLG	YCBCR104441PHLG = 607, "MTLPixelFormatYCBCR10_444_1P_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104441PPQ	YCBCR104441PPQ = 563, "MTLPixelFormatYCBCR10_444_1P_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104441PSRGB	YCBCR104441PSRGB = 524, "MTLPixelFormatYCBCR10_444_1P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104441PXR	YCBCR104441PXR = 590, "MTLPixelFormatYCBCR10_444_1P_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442P	YCBCR104442P = 507, "MTLPixelFormatYCBCR10_444_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PHLG	YCBCR104442PHLG = 610, "MTLPixelFormatYCBCR10_444_2P_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PPACKED	YCBCR104442PPACKED = 510, "MTLPixelFormatYCBCR10_444_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PPACKEDHLG	YCBCR104442PPACKEDHLG = 613, "MTLPixelFormatYCBCR10_444_2P_PACKED_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PPACKEDPQ	YCBCR104442PPACKEDPQ = 569, "MTLPixelFormatYCBCR10_444_2P_PACKED_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PPACKEDSRGB	YCBCR104442PPACKEDSRGB = 530, "MTLPixelFormatYCBCR10_444_2P_PACKED_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PPACKEDXR	YCBCR104442PPACKEDXR = 596, "MTLPixelFormatYCBCR10_444_2P_PACKED_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PPQ	YCBCR104442PPQ = 566, "MTLPixelFormatYCBCR10_444_2P_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PSRGB	YCBCR104442PSRGB = 527, "MTLPixelFormatYCBCR10_444_2P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR104442PXR	YCBCR104442PXR = 593, "MTLPixelFormatYCBCR10_444_2P_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124202P	YCBCR124202P = 570, "MTLPixelFormatYCBCR12_420_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124202PHLG	YCBCR124202PHLG = 615, "MTLPixelFormatYCBCR12_420_2P_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124202PPACKED	YCBCR124202PPACKED = 580, "MTLPixelFormatYCBCR12_420_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124202PPACKEDHLG	YCBCR124202PPACKEDHLG = 618, "MTLPixelFormatYCBCR12_420_2P_PACKED_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124202PPACKEDPQ	YCBCR124202PPACKEDPQ = 583, "MTLPixelFormatYCBCR12_420_2P_PACKED_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124202PPACKEDXR	YCBCR124202PPACKEDXR = 600, "MTLPixelFormatYCBCR12_420_2P_PACKED_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124202PPQ	YCBCR124202PPQ = 573, "MTLPixelFormatYCBCR12_420_2P_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124202PXR	YCBCR124202PXR = 597, "MTLPixelFormatYCBCR12_420_2P_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124222P	YCBCR124222P = 571, "MTLPixelFormatYCBCR12_422_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124222PHLG	YCBCR124222PHLG = 616, "MTLPixelFormatYCBCR12_422_2P_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124222PPACKED	YCBCR124222PPACKED = 581, "MTLPixelFormatYCBCR12_422_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124222PPACKEDHLG	YCBCR124222PPACKEDHLG = 619, "MTLPixelFormatYCBCR12_422_2P_PACKED_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124222PPACKEDPQ	YCBCR124222PPACKEDPQ = 584, "MTLPixelFormatYCBCR12_422_2P_PACKED_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124222PPACKEDXR	YCBCR124222PPACKEDXR = 601, "MTLPixelFormatYCBCR12_422_2P_PACKED_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124222PPQ	YCBCR124222PPQ = 574, "MTLPixelFormatYCBCR12_422_2P_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124222PXR	YCBCR124222PXR = 598, "MTLPixelFormatYCBCR12_422_2P_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124442P	YCBCR124442P = 572, "MTLPixelFormatYCBCR12_444_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124442PHLG	YCBCR124442PHLG = 617, "MTLPixelFormatYCBCR12_444_2P_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124442PPACKED	YCBCR124442PPACKED = 582, "MTLPixelFormatYCBCR12_444_2P_PACKED";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124442PPACKEDHLG	YCBCR124442PPACKEDHLG = 620, "MTLPixelFormatYCBCR12_444_2P_PACKED_HLG";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124442PPACKEDPQ	YCBCR124442PPACKEDPQ = 585, "MTLPixelFormatYCBCR12_444_2P_PACKED_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124442PPACKEDXR	YCBCR124442PPACKEDXR = 602, "MTLPixelFormatYCBCR12_444_2P_PACKED_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124442PPQ	YCBCR124442PPQ = 575, "MTLPixelFormatYCBCR12_444_2P_PQ";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR124442PXR	YCBCR124442PXR = 599, "MTLPixelFormatYCBCR12_444_2P_XR";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84202P	YCBCR84202P = 500, "MTLPixelFormatYCBCR8_420_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84202PSRGB	YCBCR84202PSRGB = 520, "MTLPixelFormatYCBCR8_420_2P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84221P	YCBCR84221P = 501, "MTLPixelFormatYCBCR8_422_1P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84221PREV	YCBCR84221PREV = 562, "MTLPixelFormatYCBCR8_422_1P_REV";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84221PSRGB	YCBCR84221PSRGB = 521, "MTLPixelFormatYCBCR8_422_1P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84222P	YCBCR84222P = 502, "MTLPixelFormatYCBCR8_422_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84222PSRGB	YCBCR84222PSRGB = 522, "MTLPixelFormatYCBCR8_422_2P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84442P	YCBCR84442P = 503, "MTLPixelFormatYCBCR8_444_2P";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCR84442PSRGB	YCBCR84442PSRGB = 523, "MTLPixelFormatYCBCR8_444_2P_sRGB";
+macro-member	metal2vulkan-rt::PixelFormat::YCBCRA84441P	YCBCRA84441P = 560, "MTLPixelFormatYCBCRA8_444_1P";
+macro-member	metal2vulkan-rt::PixelFormat::aliases	aliases
+macro-member	metal2vulkan-rt::TextureSwizzle::Alpha	Alpha = 5, "MTLTextureSwizzleAlpha";
+macro-member	metal2vulkan-rt::TextureSwizzle::Blue	Blue = 4, "MTLTextureSwizzleBlue";
+macro-member	metal2vulkan-rt::TextureSwizzle::Green	Green = 3, "MTLTextureSwizzleGreen";
+macro-member	metal2vulkan-rt::TextureSwizzle::One	One = 1, "MTLTextureSwizzleOne";
+macro-member	metal2vulkan-rt::TextureSwizzle::Red	Red = 2, "MTLTextureSwizzleRed";
+macro-member	metal2vulkan-rt::TextureSwizzle::TextureSwizzle	TextureSwizzle = "MTLTextureSwizzle"
+macro-member	metal2vulkan-rt::TextureSwizzle::Zero	Zero = 0, "MTLTextureSwizzleZero";
+macro-member	metal2vulkan-rt::TextureSwizzle::aliases	aliases
+macro-member	metal2vulkan-rt::TextureType::Cube	Cube = 5, "MTLTextureTypeCube";
+macro-member	metal2vulkan-rt::TextureType::CubeArray	CubeArray = 6, "MTLTextureTypeCubeArray";
+macro-member	metal2vulkan-rt::TextureType::TextureBuffer	TextureBuffer = 9, "MTLTextureTypeTextureBuffer";
+macro-member	metal2vulkan-rt::TextureType::TextureType	TextureType = "MTLTextureType"
+macro-member	metal2vulkan-rt::TextureType::Type1D	Type1D = 0, "MTLTextureType1D";
+macro-member	metal2vulkan-rt::TextureType::Type1DArray	Type1DArray = 1, "MTLTextureType1DArray";
+macro-member	metal2vulkan-rt::TextureType::Type2D	Type2D = 2, "MTLTextureType2D";
+macro-member	metal2vulkan-rt::TextureType::Type2DArray	Type2DArray = 3, "MTLTextureType2DArray";
+macro-member	metal2vulkan-rt::TextureType::Type2DMultisample	Type2DMultisample = 4, "MTLTextureType2DMultisample";
+macro-member	metal2vulkan-rt::TextureType::Type2DMultisampleArray	Type2DMultisampleArray = 8, "MTLTextureType2DMultisampleArray";
+macro-member	metal2vulkan-rt::TextureType::Type3D	Type3D = 7, "MTLTextureType3D";
+macro-member	metal2vulkan-rt::TextureType::aliases	aliases
+macro-member	metal2vulkan-rt::TextureUsage::BLOCK_WRITES_ONLY	BLOCK_WRITES_ONLY = 0x10000, "MTLTextureUsageBlockWritesOnly";
+macro-member	metal2vulkan-rt::TextureUsage::NO_CONCURRENT_ACCESS	NO_CONCURRENT_ACCESS = 0x4000, "MTLTextureUsageNoConcurrentAccess";
+macro-member	metal2vulkan-rt::TextureUsage::PIXEL_FORMAT_VIEW	PIXEL_FORMAT_VIEW = 0x10, "MTLTextureUsagePixelFormatView";
+macro-member	metal2vulkan-rt::TextureUsage::RENDER_TARGET	RENDER_TARGET = 0x4, "MTLTextureUsageRenderTarget";
+macro-member	metal2vulkan-rt::TextureUsage::SHADER_ATOMIC	SHADER_ATOMIC = 0x20, "MTLTextureUsageShaderAtomic";
+macro-member	metal2vulkan-rt::TextureUsage::SHADER_READ	SHADER_READ = 0x1, "MTLTextureUsageShaderRead";
+macro-member	metal2vulkan-rt::TextureUsage::SHADER_WRITE	SHADER_WRITE = 0x2, "MTLTextureUsageShaderWrite";
+macro-member	metal2vulkan-rt::TextureUsage::TextureUsage	TextureUsage = "MTLTextureUsage"
+macro-member	metal2vulkan-rt::TextureUsage::UNKNOWN	UNKNOWN = 0x0, "MTLTextureUsageUnknown";
+macro-member	metal2vulkan-rt::TextureUsage::VIDEO	VIDEO = 0x8000, "MTLTextureUsageVideo";
+macro-member	metal2vulkan-rt::TextureUsage::aliases	aliases
+macro-member	metal2vulkan-rt::TextureUsage::dropped	dropped
 macro-member	metal2vulkan-runtime::Degradation::AbsentArgumentRead	AbsentArgumentRead = "absent-argument-read", Precision,
 macro-member	metal2vulkan-runtime::Degradation::AmplificationDraws	AmplificationDraws = "amplification-draws", Performance,
 macro-member	metal2vulkan-runtime::Degradation::AnisotropicFilter	AnisotropicFilter = "anisotropic-filter";
@@ -8372,8 +8733,11 @@ macro-template	metal2vulkan-air::vk_bit!	( $(#[$meta:meta])* $name:ident($raw:ty
 macro-template	metal2vulkan-air::vk_enum!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [$name] = &[$($name::$konst),*]; const NAMES: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub fn name(self) -> Option<&'static str> { Self::NAMES.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn is_known(self) -> bool { self.name().is_some() } pub fn from_name(name: &str) -> Option<$name> { Self::NAMES .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { match self.name() { Some(name) => f.write_str(name), None => write!(f, "{}({})", $vk, self.0), } } } };
 macro-template	metal2vulkan-air::vk_flags!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn empty() -> $name { $name(0) } pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub const fn is_empty(self) -> bool { self.0 == 0 } pub const fn contains(self, other: $name) -> bool { self.0 & other.0 == other.0 } pub const fn intersects(self, other: $name) -> bool { self.0 & other.0 != 0 } pub const fn union(self, other: $name) -> $name { $name(self.0 | other.0) } pub const fn intersection(self, other: $name) -> $name { $name(self.0 & other.0) } pub const fn difference(self, other: $name) -> $name { $name(self.0 & !other.0) } pub const fn known_bits() -> $name { let mut bits: $raw = 0; let mut i = 0; while i < Self::KNOWN.len() { let v = Self::KNOWN[i].0 .0; if v.count_ones() == 1 { bits |= v; } i += 1; } $name(bits) } pub fn name(self) -> Option<&'static str> { Self::KNOWN.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn from_name(name: &str) -> Option<$name> { Self::KNOWN .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::ops::BitOr for $name { type Output = $name; fn bitor(self, rhs: $name) -> $name { self.union(rhs) } } impl ::std::ops::BitOrAssign for $name { fn bitor_assign(&mut self, rhs: $name) { *self = self.union(rhs); } } impl ::std::ops::BitAnd for $name { type Output = $name; fn bitand(self, rhs: $name) -> $name { self.intersection(rhs) } } impl ::std::ops::BitAndAssign for $name { fn bitand_assign(&mut self, rhs: $name) { *self = self.intersection(rhs); } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { if let Some(name) = self.name() { return f.write_str(name); } let mut rest = self.0; let mut first = true; for (v, n) in Self::KNOWN { if v.0.count_ones() == 1 && rest & v.0 != 0 { if !first { f.write_str(" | ")?; } f.write_str(n)?; rest &= !v.0; first = false; } } if rest != 0 || first { if !first { f.write_str(" | ")?; } write!(f, "{:#x}", rest)?; } Ok(()) } } };
 macro-template	metal2vulkan-rt::exposures!	($($exposure:expr => [$($feature:ident),* $(,)?];)*) => { impl VkFeature { pub const ALL: &'static [VkFeature] = &[$($(VkFeature::$feature),*),*]; pub fn exposure(self) -> Exposure { match self { $($(VkFeature::$feature)|* => $exposure,)* } } } };
+macro-template	metal2vulkan-rt::flag_set!	( $(#[$doc:meta])* $name:ident { $($(#[$fdoc:meta])* $flag:ident = $bit:expr),* $(,)? } $(#[$all:meta])* ALL ) => { $(#[$doc])* #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct $name(u8); impl $name { pub const NONE: $name = $name(0); $($(#[$fdoc])* pub const $flag: $name = $name($bit);)* $(#[$all])* pub const ALL: &'static [($name, &'static str)] = &[$(($name::$flag, stringify!($flag))),*]; pub const fn union(self, other: $name) -> $name { $name(self.0 | other.0) } pub const fn contains(self, other: $name) -> bool { self.0 & other.0 == other.0 } #[cfg(test)] pub const fn bits(self) -> u8 { self.0 } } };
 macro-template	metal2vulkan-rt::id_type!	($(#[$doc:meta])* $name:ident) => { $(#[$doc])* #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct $name(pub u32); impl $name { pub const fn new(index: u32) -> $name { $name(index) } pub const fn index(self) -> usize { self.0 as usize } } };
+macro-template	metal2vulkan-rt::ir_id!	($(#[$doc:meta])* $name:ident, $prefix:literal) => { $(#[$doc])* #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct $name(u32); impl $name { pub const fn new(index: u32) -> $name { $name(index) } pub const fn raw(self) -> u32 { self.0 } } impl Idx for $name { fn from_index(index: usize) -> Option<$name> { u32::try_from(index).ok().map($name::new) } fn index(self) -> usize { self.raw() as usize } } impl fmt::Debug for $name { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, concat!($prefix, "{}"), self.0) } } };
 macro-template	metal2vulkan-rt::metal_enum!	( $(#[$meta:meta])* $name:ident = $metal:literal { $($(#[$vmeta:meta])* $variant:ident = $value:literal, $mname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(u32)] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] pub enum $name { $( #[doc = concat!("`", $mname, "`.")] $(#[$vmeta])* $variant = $value, )* } impl $name { pub const METAL_NAME: &'static str = $metal; pub const ALL: &'static [$name] = &[$($name::$variant),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn as_raw(self) -> u32 { self as u32 } pub const fn name(self) -> &'static str { match self { $($name::$variant => $mname,)* } } pub fn from_name(name: &str) -> Option<$name> { Self::ALL .iter() .copied() .find(|v| v.name() == name) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl From<$name> for u32 { fn from(value: $name) -> u32 { value.as_raw() } } impl TryFrom<u32> for $name { type Error = $crate::error::Error; fn try_from(value: u32) -> Result<$name, $crate::error::Error> { match value { $($value => Ok($name::$variant),)* _ => Err($crate::metal::unknown($metal, value)), } } } };
+macro-template	metal2vulkan-rt::metal_enum!	( $(#[$meta:meta])* $name:ident = $metal:literal { $($variant:ident = $value:literal, $mname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(u32)] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] pub enum $name { $( #[doc = concat!("`", $mname, "`.")] $variant = $value, )* } impl $name { pub const METAL_NAME: &'static str = $metal; pub const ALL: &'static [$name] = &[$($name::$variant),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn as_raw(self) -> u32 { self as u32 } pub const fn name(self) -> &'static str { match self { $($name::$variant => $mname,)* } } pub fn from_name(name: &str) -> Option<$name> { Self::ALL .iter() .copied() .find(|v| v.name() == name) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl From<$name> for u32 { fn from(value: $name) -> u32 { value.as_raw() } } impl TryFrom<u32> for $name { type Error = $crate::error::Error; fn try_from(value: u32) -> Result<$name, $crate::error::Error> { match value { $($value => Ok($name::$variant),)* _ => Err($crate::error::Error::InvalidRequest( $crate::error::RequestError::UnknownEnumValue { ty: $metal, value }, )), } } } };
 macro-template	metal2vulkan-rt::metal_flags!	( $(#[$meta:meta])* $name:ident = $metal:literal { $($konst:ident = $value:literal, $mname:literal;)* } aliases { $($alias:literal => $target:ident;)* } dropped { $($dropped:literal;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))] pub struct $name(u32); impl $name { $( #[doc = concat!("`", $mname, "`.")] pub const $konst: $name = $name($value); )* pub const METAL_NAME: &'static str = $metal; pub const KNOWN: &'static [($name, &'static str)] = &[$(($name::$konst, $mname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const ALL_KNOWN: $name = $name(0 $(| $value)*); pub const DROPPED: u32 = 0 $(| $dropped)*; pub const fn empty() -> $name { $name(0) } pub const fn as_raw(self) -> u32 { self.0 } pub const fn is_empty(self) -> bool { self.0 == 0 } pub const fn without_dropped(self) -> $name { $name(self.0 & !Self::DROPPED) } pub const fn contains(self, other: $name) -> bool { self.0 & other.0 == other.0 } pub const fn intersects(self, other: $name) -> bool { self.0 & other.0 != 0 } pub const fn union(self, other: $name) -> $name { $name(self.0 | other.0) } pub const fn intersection(self, other: $name) -> $name { $name(self.0 & other.0) } pub const fn difference(self, other: $name) -> $name { $name(self.0 & !other.0) } pub fn from_name(name: &str) -> Option<$name> { Self::KNOWN .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl From<$name> for u32 { fn from(value: $name) -> u32 { value.as_raw() } } impl TryFrom<u32> for $name { type Error = $crate::error::Error; fn try_from(value: u32) -> Result<$name, $crate::error::Error> { if value & !($name::ALL_KNOWN.0 | $name::DROPPED) == 0 { Ok($name(value)) } else { Err($crate::metal::unknown($metal, value)) } } } impl ::std::ops::BitOr for $name { type Output = $name; fn bitor(self, rhs: $name) -> $name { self.union(rhs) } } impl ::std::ops::BitOrAssign for $name { fn bitor_assign(&mut self, rhs: $name) { *self = self.union(rhs); } } impl ::std::ops::BitAnd for $name { type Output = $name; fn bitand(self, rhs: $name) -> $name { self.intersection(rhs) } } impl ::std::ops::BitAndAssign for $name { fn bitand_assign(&mut self, rhs: $name) { *self = self.intersection(rhs); } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { if let Some((_, name)) = Self::KNOWN.iter().find(|(v, _)| v == self) { return f.write_str(name); } let mut rest = self.0; let mut first = true; for (v, n) in Self::KNOWN { if v.0.count_ones() == 1 && rest & v.0 != 0 { if !first { f.write_str(" | ")?; } f.write_str(n)?; rest &= !v.0; first = false; } } if rest != 0 || first { if !first { f.write_str(" | ")?; } write!(f, "{:#x}", rest)?; } Ok(()) } } };
 macro-template	metal2vulkan-rt::vk_bit!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal in $flags:ident { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(try_from = "u32", into = "u32"))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [$name] = &[$($name::$konst),*]; const NAMES: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn from_raw(raw: $raw) -> Option<$name> { let mut i = 0; while i < Self::KNOWN.len() { if Self::KNOWN[i].0 == raw { return Some(Self::KNOWN[i]); } i += 1; } None } pub const fn from_flags(flags: $flags) -> Option<$name> { Self::from_raw(flags.as_raw()) } pub const fn as_raw(self) -> $raw { self.0 } pub const fn flags(self) -> $flags { $flags::from_raw(self.0) } pub fn name(self) -> &'static str { Self::NAMES .iter() .find(|(v, _)| *v == self) .map(|(_, n)| *n) .expect("a single-bit value is always a named bit") } pub fn from_name(name: &str) -> Option<$name> { Self::NAMES .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::convert::TryFrom<$raw> for $name { type Error = $raw; fn try_from(raw: $raw) -> Result<$name, $raw> { $name::from_raw(raw).ok_or(raw) } } impl From<$name> for $raw { fn from(bit: $name) -> $raw { bit.0 } } impl From<$name> for $flags { fn from(bit: $name) -> $flags { bit.flags() } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { f.write_str(self.name()) } } };
 macro-template	metal2vulkan-rt::vk_enum!	( $(#[$meta:meta])* $name:ident($raw:ty) = $vk:literal { $($konst:ident = $value:literal, $vkname:literal;)* } aliases { $($alias:literal => $target:ident;)* } ) => { $(#[$meta])* #[repr(transparent)] #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[cfg_attr(feature = "serde", serde(transparent))] pub struct $name($raw); impl $name { $( #[doc = concat!("`", $vkname, "`.")] pub const $konst: $name = $name($value); )* pub const VK_NAME: &'static str = $vk; pub const KNOWN: &'static [$name] = &[$($name::$konst),*]; const NAMES: &'static [($name, &'static str)] = &[$(($name::$konst, $vkname)),*]; const ALIASES: &'static [(&'static str, $name)] = &[$(($alias, $name::$target)),*]; pub const fn from_raw(raw: $raw) -> $name { $name(raw) } pub const fn as_raw(self) -> $raw { self.0 } pub fn name(self) -> Option<&'static str> { Self::NAMES.iter().find(|(v, _)| *v == self).map(|(_, n)| *n) } pub fn is_known(self) -> bool { self.name().is_some() } pub fn from_name(name: &str) -> Option<$name> { Self::NAMES .iter() .find(|(_, n)| *n == name) .map(|(v, _)| *v) .or_else(|| Self::ALIASES.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)) } } impl ::std::fmt::Debug for $name { fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result { match self.name() { Some(name) => f.write_str(name), None => write!(f, "{}({})", $vk, self.0), } } } };
@@ -8819,6 +9183,7 @@ method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: Block
 method	metal2vulkan-rt::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
 method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
 method	metal2vulkan-rt::Device::new_shared_event	pub fn new_shared_event(&self) -> Result<SharedEvent, Error>
+method	metal2vulkan-rt::Device::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>) -> Result<Texture, Error>
 method	metal2vulkan-rt::Device::quiesce	pub fn quiesce(&self, timeout: Duration) -> bool
 method	metal2vulkan-rt::Device::raw	pub fn raw(&self) -> RawDevice<'_>
 method	metal2vulkan-rt::Device::release_block	pub fn release_block(&self, block: BlockId) -> Result<(), Error>
@@ -8857,11 +9222,20 @@ method	metal2vulkan-rt::PhysicalDevice::check	pub fn check(&self) -> Result<floo
 method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
 method	metal2vulkan-rt::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-rt::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan-rt::ResourceId::to_bits	pub fn to_bits(self) -> u64
 method	metal2vulkan-rt::SharedEvent::as_event	pub fn as_event(&self) -> &Event
 method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&self, value: u64, listener: impl FnOnce(u64) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
 method	metal2vulkan-rt::SharedEvent::signaled_value	pub fn signaled_value(&self) -> u64
 method	metal2vulkan-rt::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> bool
+method	metal2vulkan-rt::Texture::descriptor	pub fn descriptor(&self) -> &TextureDescriptor
+method	metal2vulkan-rt::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u32, slice: u32) -> Result<(), Error>
+method	metal2vulkan-rt::Texture::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
+method	metal2vulkan-rt::Texture::replace_region	pub fn replace_region(&self, region: Region, level: u32, slice: u32, bytes: &[u8], bytes_per_row: u64, bytes_per_image: u64) -> Result<(), Error>
+method	metal2vulkan-rt::TextureDescriptor::new	pub fn new(texture_type: TextureType, pixel_format: PixelFormat, width: u32, height: u32) -> TextureDescriptor
+method	metal2vulkan-rt::TextureSwizzleChannels::compose	pub fn compose(self, format: crate::vk::ComponentMapping) -> crate::vk::ComponentMapping
+method	metal2vulkan-rt::TextureSwizzleChannels::is_default	pub fn is_default(self) -> bool
+method	metal2vulkan-rt::TextureSwizzleChannels::new	pub fn new(red: TextureSwizzle, green: TextureSwizzle, blue: TextureSwizzle, alpha: TextureSwizzle) -> TextureSwizzleChannels
 method	metal2vulkan-runtime::AddressModeMap::constexpr_mode	pub fn constexpr_mode(&self, from: SamplerAddressMode) -> Option<SamplerAddressMode>
 method	metal2vulkan-runtime::AddressModeMap::is_identity	pub fn is_identity(&self) -> bool
 method	metal2vulkan-runtime::AddressModeMap::mode	pub fn mode(&self, from: SamplerAddressMode) -> SamplerAddressMode
@@ -10899,8 +11273,13 @@ struct	metal2vulkan-rt::Library	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exh
 struct	metal2vulkan-rt::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Metrics
 struct	metal2vulkan-rt::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
 struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
+struct	metal2vulkan-rt::Region	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Region
+struct	metal2vulkan-rt::ResourceId	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct ResourceId
 struct	metal2vulkan-rt::ResourceUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct ResourceUsage(u32)
 struct	metal2vulkan-rt::SharedEvent	#[derive(Clone)] pub struct SharedEvent
+struct	metal2vulkan-rt::Texture	#[derive(Clone)] pub struct Texture
+struct	metal2vulkan-rt::TextureDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TextureDescriptor
+struct	metal2vulkan-rt::TextureSwizzleChannels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct TextureSwizzleChannels
 struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
 struct	metal2vulkan-rt::floor::Capabilities	pub struct Capabilities
 struct	metal2vulkan-rt::floor::Features	#[derive(Clone, Copy, Default)] pub struct Features
@@ -11451,6 +11830,7 @@ trait-impl	metal2vulkan-rt::Gap impl fmt::Display	impl fmt::Display for Gap
 trait-impl	metal2vulkan-rt::Limit impl fmt::Display	impl fmt::Display for Limit
 trait-impl	metal2vulkan-rt::Refusal impl fmt::Display	impl fmt::Display for Refusal
 trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsage
+trait-impl	metal2vulkan-rt::TextureSwizzleChannels impl Default	impl Default for TextureSwizzleChannels
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl std::error::Error	impl std::error::Error for BelowFloor
 trait-impl	metal2vulkan-rt::floor::Missing impl fmt::Display	impl fmt::Display for Missing
@@ -12777,10 +13157,15 @@ variant	metal2vulkan-rt::Error::Thread	Thread(io::Error)
 variant	metal2vulkan-rt::Error::Translation	Translation(metal2vulkan::error::Error)
 variant	metal2vulkan-rt::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
+variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
 variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
+variant	metal2vulkan-rt::Gap::MemorylessTexture	MemorylessTexture
 variant	metal2vulkan-rt::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_threadgroup: [u32; 3], width: u32 }
 variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
+variant	metal2vulkan-rt::Gap::TextureBuffer	TextureBuffer
+variant	metal2vulkan-rt::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }
+variant	metal2vulkan-rt::Gap::TextureFormat	TextureFormat { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
 variant	metal2vulkan-rt::IndexClass::StorageTexture	StorageTexture
 variant	metal2vulkan-rt::IndexClass::Texture	Texture
@@ -12788,6 +13173,8 @@ variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::IndexRange	IndexRange { class: IndexClass, first: u32, count: u32 }
+variant	metal2vulkan-rt::Limit::TextureSamples	TextureSamples { sample_count: u32, counts: u32 }
+variant	metal2vulkan-rt::Limit::TextureSize	TextureSize { extent: [u32; 3], layers: u32, max_extent: [u32; 3], max_layers: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupShape	ThreadgroupShape { size: [u32; 3], max: [u32; 3] }
 variant	metal2vulkan-rt::MemoryClass::Private	Private
@@ -12876,17 +13263,34 @@ variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64,
 variant	metal2vulkan-rt::Refusal::Committed	Committed
 variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
 variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen
+variant	metal2vulkan-rt::Refusal::IndexInUse	IndexInUse { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesGranted	IndicesGranted { class: IndexClass, index: u32 }
+variant	metal2vulkan-rt::Refusal::IndicesInUse	IndicesInUse { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesNotGranted	IndicesNotGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndirectOffset	IndirectOffset { offset: u64, length: u64 }
 variant	metal2vulkan-rt::Refusal::NoBufferAtIndex	NoBufferAtIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::NoCommandBuffers	NoCommandBuffers
 variant	metal2vulkan-rt::Refusal::NoPipeline	NoPipeline
 variant	metal2vulkan-rt::Refusal::OtherDevice	OtherDevice
+variant	metal2vulkan-rt::Refusal::TextureArrayLength	TextureArrayLength { array_length: u32 }
+variant	metal2vulkan-rt::Refusal::TextureBytesLayout	TextureBytesLayout { bytes_per_row: u64, bytes_per_image: u64, len: u64 }
+variant	metal2vulkan-rt::Refusal::TextureBytesPrivate	TextureBytesPrivate
+variant	metal2vulkan-rt::Refusal::TextureCubeNotSquare	TextureCubeNotSquare
+variant	metal2vulkan-rt::Refusal::TextureExtentForType	TextureExtentForType
+variant	metal2vulkan-rt::Refusal::TextureIndex	TextureIndex { index: Option<u32> }
+variant	metal2vulkan-rt::Refusal::TextureLevelCount	TextureLevelCount { levels: u32, max: u32 }
+variant	metal2vulkan-rt::Refusal::TextureRegion	TextureRegion { level: u32, slice: u32 }
+variant	metal2vulkan-rt::Refusal::TextureSampleCount	TextureSampleCount { sample_count: u32 }
+variant	metal2vulkan-rt::Refusal::TextureSwizzleWithWrites	TextureSwizzleWithWrites
+variant	metal2vulkan-rt::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
 variant	metal2vulkan-rt::Resource::Buffer	Buffer(&'a Buffer)
 variant	metal2vulkan-rt::StageSource::Compiled	Compiled(CompiledFunction)
 variant	metal2vulkan-rt::StageSource::Function	Function(FunctionDescriptor)
+variant	metal2vulkan-rt::StorageMode::Managed	Managed
+variant	metal2vulkan-rt::StorageMode::Memoryless	Memoryless
+variant	metal2vulkan-rt::StorageMode::Private	Private
+variant	metal2vulkan-rt::StorageMode::Shared	Shared
 variant	metal2vulkan-rt::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-rt::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-rt::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }

@@ -27,3 +27,30 @@ pub(crate) unsafe fn timestamps(
     };
     read.ok().map(|()| (values[0], values[1]))
 }
+
+/// Copies `rows` (each an offset in `bytes` and one in `staging`) of `row` bytes from a staging
+/// buffer the GPU copied a texture's bytes into, for `Texture::get_bytes`.
+///
+/// Bound: the bytes only reach the caller's buffer as the texture's bytes; the offsets and the
+/// length come from the call's checked region, never from the bytes, and the read does not wait.
+///
+/// # Safety
+///
+/// `staging` maps at least `offset + row` bytes for each row's staging offset, the copy into it
+/// completed and its writes are visible to the host, and each row's offset plus `row` lies in
+/// `bytes`.
+pub(crate) unsafe fn texels(
+    staging: *const u8,
+    bytes: &mut [u8],
+    rows: impl Iterator<Item = (usize, usize)>,
+    row: usize,
+) {
+    for (to, from) in rows {
+        // SAFETY: by the caller.
+        unsafe {
+            staging
+                .add(from)
+                .copy_to_nonoverlapping(bytes.as_mut_ptr().add(to), row)
+        };
+    }
+}

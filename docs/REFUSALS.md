@@ -37,9 +37,9 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 4 | 4 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 26 | 26 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -55,9 +55,9 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 2 | 5 | 0 | 0 | 6 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 3 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 9 | 6 | 0 | 0 | 11 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 5 | 3 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 9 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -624,7 +624,20 @@ Columns:
 | `ThreadgroupSize` | A threadgroup of no threads, or of more than the pipeline state's `maxTotalThreadsPerThreadgroup` | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)` | `-` |
 | `IndirectOffset` | An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer than 12 bytes (three 32-bit counts) in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset inside the buffer | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` | `-` |
 | `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
-| `IndicesNotGranted` | A release of an index that is not granted (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: a grant is returned once | 1: `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
+| `IndicesNotGranted` | A release of an index that is not granted (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: a grant is returned once | 2: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`, `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
+| `IndexInUse` | A texture at an index where a texture lives already (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index names one object at a time, and its elements are that object's | 1: `crates/metal2vulkan-rt/src/arrays.rs (occupy)` | `-` |
+| `IndicesInUse` | A release of a grant while a texture lives at one of its indices (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: an object's index stays granted while the object lives | 1: `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
+| `TextureIndex` | A texture whose usage shaders reach (read or write) made without an index, or one of no such usage made with one (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index is an element of set 1's texture arrays, which only shaders read | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture)` | `-` |
+| `TextureZeroExtent` | A texture with a width, height or depth of 0 | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has width of zero", and the same for a height of zero | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
+| `TextureExtentForType` | A texture with a height other than 1 of a 1D type, or a depth other than 1 of a type that is not 3D | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2 | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
+| `TextureCubeNotSquare` | A cube texture whose width and height differ | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor width must equal height for cube textures" | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
+| `TextureArrayLength` | A texture with an array length of 0, or other than 1 of a type that is not an array | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has arrayLength of zero", where an array length of 2 is made | 2: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)` | `-` |
+| `TextureLevelCount` | A texture with a mipmap level count of 0, more than its full chain's, or more than 1 of a multisample or 1D type | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "requests 5 mipmap levels, but the dimensions (8, 8, 1) can only support a maxiumum of 4 levels", and the same for 0 | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
+| `TextureSampleCount` | A texture with a sample count of 0, or other than 1 of a type that is not multisample | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "has sampleCount set but is using a type that does not allow sampleCount" for 0 and for 2 of a 2D texture | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
+| `TextureSwizzleWithWrites` | A texture with a swizzle other than each channel from itself and shader-write or render-target usage | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "Texture swizzling is not compatable with MTLTextureUsageShaderWrite", where a swizzle of read usage alone is made | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture)` | `-` |
+| `TextureBytesPrivate` | `Texture::replace_region` or `Texture::get_bytes` of a Private or Memoryless texture | every device (a public call's own check of its arguments) | `metal-documented`: Apple's documentation of `MTLStorageModePrivate`: "The resource is accessible only to the GPU." | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
+| `TextureRegion` | `Texture::replace_region` or `Texture::get_bytes` of a level or slice past the texture's, or of a region that leaves the level or is off the... | every device (a public call's own check of its arguments) | `ours`: no texel of the texture is there to copy | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
+| `TextureBytesLayout` | `Texture::replace_region` or `Texture::get_bytes` with rows closer than a row of the region, images closer than an image of it, or bytes too few... | every device (a public call's own check of its arguments) | `ours`: the call would read or write past the bytes it is given, or one texel's bytes over another's | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
 
 ## 12. The new runtime's `Limit` (`Error::Limit(Limit)`)
 
@@ -636,6 +649,8 @@ Columns:
 | `ThreadgroupMemory` | A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up to 16 bytes), is past the device's... | at the device's limit | `device`: the device's `maxComputeSharedMemorySize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)` | `-` |
 | `IndexRange` | A grant of no indices, or one past its class's range (`Device::grant_indices`, [`IndexClass::range`]) | every device (a public call's own check of its arguments) | `ours`: the descriptor arrays are 65,536 sampled textures, 4,096 storage textures and 4,000 samplers of each use, and index 0 is nil | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
+| `TextureSize` | A texture whose extent or array layers are past what the device makes of its format, type, usage and sample count | at the device's limit | `device`: the image format query's `maxExtent` and `maxArrayLayers` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
+| `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
 
@@ -645,6 +660,11 @@ Columns:
 | `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder binds buffers alone | 1: `crates/metal2vulkan-rt/src/pipeline.rs (gap)` | `-` |
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture)` | `-` |
+| `TextureBuffer` | A texture buffer (`MTLTextureTypeTextureBuffer`) | every device (a public call's own check of its arguments) | `ours`: no texel-buffer array; no replay stream uses one | 2: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)` | `-` |
+| `TextureFormat` | A texture of a pixel format the runtime makes no image of on this device for the descriptor's usage | every device (a public call's own check of its arguments) | `ours`: the device's format query, or the identity domains' shaders read every texture through its view alone | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
+| `TextureBytes` | `Texture::replace_region` or `Texture::get_bytes` of a texture whose image is no plain copy of Metal's bytes in one aspect | every device (a public call's own check of its arguments) | `ours`: no copy between such an image and bytes is built | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
+| `FloatDepthUpload` | `Texture::replace_region` into a 32-bit float depth (`Depth32Float`) | every device (a public call's own check of its arguments) | `ours`: no upload of a 32-bit float depth is built | 1: `crates/metal2vulkan-rt/src/texture.rs (replace_region)` | `-` |
 
 ## Appendix: every site
 
@@ -1144,15 +1164,35 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)`
 - `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`
 - `rt:Refusal::IndicesGranted`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
-- `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-rt/src/arrays.rs (release)`
+- `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`; `crates/metal2vulkan-rt/src/arrays.rs (release)`
+- `rt:Refusal::IndexInUse`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`
+- `rt:Refusal::IndicesInUse`: `crates/metal2vulkan-rt/src/arrays.rs (release)`
+- `rt:Refusal::TextureIndex`: `crates/metal2vulkan-rt/src/texture.rs (new_texture)`
+- `rt:Refusal::TextureZeroExtent`: `crates/metal2vulkan-rt/src/texture.rs (shape)`
+- `rt:Refusal::TextureExtentForType`: `crates/metal2vulkan-rt/src/texture.rs (shape)`
+- `rt:Refusal::TextureCubeNotSquare`: `crates/metal2vulkan-rt/src/texture.rs (shape)`
+- `rt:Refusal::TextureArrayLength`: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)`
+- `rt:Refusal::TextureLevelCount`: `crates/metal2vulkan-rt/src/texture.rs (shape)`
+- `rt:Refusal::TextureSampleCount`: `crates/metal2vulkan-rt/src/texture.rs (shape)`
+- `rt:Refusal::TextureSwizzleWithWrites`: `crates/metal2vulkan-rt/src/texture.rs (new_texture)`
+- `rt:Refusal::TextureBytesPrivate`: `crates/metal2vulkan-rt/src/texture.rs (copy)`
+- `rt:Refusal::TextureRegion`: `crates/metal2vulkan-rt/src/texture.rs (copy)`
+- `rt:Refusal::TextureBytesLayout`: `crates/metal2vulkan-rt/src/texture.rs (copy)`
 - `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)`
 - `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (number)`
 - `rt:Limit::ThreadgroupShape`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::ThreadgroupMemory`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`
 - `rt:Limit::IndexRange`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
+- `rt:Limit::TextureSize`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
+- `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)`
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Gap::MemorylessTexture`: `crates/metal2vulkan-rt/src/texture.rs (new_texture)`
+- `rt:Gap::TextureBuffer`: `crates/metal2vulkan-rt/src/texture.rs (shape, 2 sites)`
+- `rt:Gap::TextureFormat`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
+- `rt:Gap::TextureBytes`: `crates/metal2vulkan-rt/src/texture.rs (copy)`
+- `rt:Gap::FloatDepthUpload`: `crates/metal2vulkan-rt/src/texture.rs (replace_region)`
 

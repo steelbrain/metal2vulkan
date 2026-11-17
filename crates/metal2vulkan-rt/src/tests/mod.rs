@@ -13,6 +13,7 @@ mod null_descriptor;
 mod one_path;
 mod push_window;
 mod readback;
+mod texture;
 mod translate;
 
 /// This crate's directory: the test process's `CARGO_MANIFEST_DIR` where it holds the crate's
