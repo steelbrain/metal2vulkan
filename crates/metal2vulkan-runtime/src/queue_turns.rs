@@ -36,8 +36,19 @@
 //! - **Turns.** A held batch keeps its place in the scheduler's order (`scheduler/order.rs`), as
 //!   one held for an unshared queue does: a later commit of another queue whose footprint runs in
 //!   commit order with it waits behind it, and one that shares nothing with it goes ahead of it.
-//!   It waits for its own queue's work already submitted alone, never for a later commit, so the
-//!   turns add no wait that can close a cycle.
+//!   It waits for its own queue's work already submitted alone, never for a later commit.
+//! - **Whole command buffers.** Only a command buffer's first batch takes a turn
+//!   (`CommandBufferShared::held_for_turn`): once it went, each later batch of it (a command
+//!   buffer splits at an event wait after its work, or at a signal before more:
+//!   `command_buffer/batches.rs`) goes as it is ready, as Metal schedules a command buffer whole.
+//!   Held for the turn behind its own first batch, the rest would wait for that batch's
+//!   completion: a command buffer whose first batch waits on the GPU for a signal not yet given
+//!   (another `VkQueue`'s, or the caller's, `Event::reserve_vk_signal`) would read `Scheduled` only
+//!   once that signal came, and another queue's command buffer that waits for one of its later
+//!   signals would be held meanwhile (its wait goes to the `VkQueue` once the signal is
+//!   submitted), where Metal schedules both at once (`runtime_lane::submission_checks`: a program
+//!   that gives the signal once the other command buffer is scheduled waited for the watchdog,
+//!   `command_buffer/stall.rs`).
 //! - **When it goes.** A pass that holds such a batch leaves the scheduler's thread waiting for
 //!   the completion that lets it go, or that makes the batch of its queue whose run does so the
 //!   oldest on its `VkQueue` (`unshared_hold::turn_through`), not for each completion before it;

@@ -216,7 +216,11 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   queue's burst (a long command buffer cut into parts, a backlog of frames) goes in behind about
   16 ms of it and one batch, not the whole burst, and from its submission on, while that queue
   keeps submitting there, behind about 2 ms and one batch of each busy queue. An unshared queue's
-  batches are never held for their turn, and count as another queue's. The next batch goes in
+  batches are never held for their turn, and count as another queue's. Only a command buffer's
+  first batch takes a turn: its later batches (split at a mid-buffer event wait or signal) go as
+  each is ready, as Metal schedules a command buffer whole, so a command buffer whose first batch
+  waits on the GPU for a signal not yet given reads `Scheduled` at once, and another queue's
+  command buffer waiting for its later signal goes at once too. The next batch goes in
   before the one ahead ends (the scheduler's thread woken at the completion that lets it go or
   makes its queue's batch whose run does so the oldest, and at the time that run brings the work
   left under the budget, no sleep slice's), so the GPU idles for the hold only
