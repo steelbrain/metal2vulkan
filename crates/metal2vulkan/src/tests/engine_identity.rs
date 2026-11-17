@@ -14,6 +14,9 @@
 //!   pieces at a base, and indirect (a zero grid, its grid `NumWorkgroups · L`) store the same
 //!   answers. Its flat variant (`grid_flat`) reads its grid from the same pushed field, and its
 //!   invocations past the grid store nothing.
+//! - A kernel's partial-threadgroups variant (`partial`, generated) dispatched at its whole
+//!   threadgroup size over a ragged grid, its pushed region flagged `NONUNIFORM`, answers each
+//!   edge threadgroup's own size, and its invocations past the grid store nothing.
 //! - A kernel that reads a texture (`engine/a2_dynamic_texel_offset`) is still refused as
 //!   `Unsupported{IdentityDomains}`, not implemented, where the default domains compile it.
 //!
@@ -25,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::device::profile::{HandleDomain, PointerDomain};
 use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, Needs};
-use crate::lower::dispatch::region_bytes;
+use crate::lower::dispatch::{region_bytes, NONUNIFORM};
 use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, SlotClass, SlotRef, SpecKey, Stage};
@@ -523,6 +526,84 @@ fn a_flat_variant_reads_its_grid_from_its_pushed_region() {
         };
         let cfg = Config {
             workgroups: [3, 1, 1],
+            ..Config::default()
+        };
+        let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert_eq!(got.buffers[0], want, "{stem}");
+    }
+}
+
+/// A kernel storing, at its position in the grid `y · 7 + x` (the grid is 7 wide), its
+/// threadgroup's threads along `x` and `y` (bits 0-7, 8-15).
+fn partial_kernel() -> String {
+    "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @partial(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, <3 x i32> noundef %1, <3 x i32> noundef %2) {\n\
+entry:\n\
+  %tx = extractelement <3 x i32> %1, i64 0\n\
+  %ty = extractelement <3 x i32> %1, i64 1\n\
+  %row = mul i32 %ty, 7\n\
+  %idx = add i32 %row, %tx\n\
+  %sx = extractelement <3 x i32> %2, i64 0\n\
+  %sy = extractelement <3 x i32> %2, i64 1\n\
+  %hy = shl i32 %sy, 8\n\
+  %v = or i32 %sx, %hy\n\
+  %i = zext i32 %idx to i64\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %i\n\
+  store i32 %v, ptr addrspace(1) %p, align 4\n\
+  ret void\n\
+}\n\n\
+!air.kernel = !{!9}\n!air.version = !{!17}\n!air.language_version = !{!18}\n\
+!9 = !{ptr @partial, !10, !11}\n!10 = !{}\n!11 = !{!12, !13, !14}\n\
+!12 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}\n\
+!13 = !{i32 1, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"tid\"}\n\
+!14 = !{i32 2, !\"air.threads_per_threadgroup\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"size\"}\n\
+!17 = !{i32 2, i32 8, i32 0}\n!18 = !{!\"Metal\", i32 4, i32 0, i32 0}\n"
+        .to_string()
+}
+
+/// A partial-threadgroups variant over a ragged grid, its region flagged `NONUNIFORM`, answers
+/// each edge threadgroup's own size, and its invocations past the grid store nothing.
+#[test]
+fn a_partial_threadgroups_variant_answers_the_edge_threadgroups_of_a_ragged_grid() {
+    let Some(bc) = assemble_text("partial", &partial_kernel()) else {
+        return;
+    };
+    const L: [u32; 3] = [4, 2, 1];
+    const GRID: [u32; 3] = [7, 5, 1];
+    // 2 x 3 threadgroups of 8: 48 invocations over 35 threads, whose stores past the grid along
+    // `x` would land on the next row's first word, and along `y` past the 35 words.
+    let words = 48usize;
+    let mut want = vec![0u8; 4 * words];
+    for y in 0..GRID[1] {
+        for x in 0..GRID[0] {
+            let sx = L[0].min(GRID[0] - x / L[0] * L[0]);
+            let sy = L[1].min(GRID[1] - y / L[1] * L[1]);
+            let at = 4 * (y * GRID[0] + x) as usize;
+            want[at..at + 4].copy_from_slice(&(sx | sy << 8).to_le_bytes());
+        }
+    }
+    let mut inputs = LowerInputs::new();
+    inputs.partial_threadgroups = true;
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let a = compile_with(&bc, "partial", &p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let (plan, module) = typed_module_with(&bc, "partial", &p, &inputs)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let mut region = region_bytes([0; 3], GRID, L).expect("packs");
+        region[28..32].copy_from_slice(&NONUNIFORM.to_le_bytes());
+        let res = Resources {
+            buffers: vec![Buffer {
+                slot: None,
+                address: Some(OUT),
+                bytes: vec![0; 4 * words],
+            }],
+            push: grid_push(&plan, OUT, region),
+            spec: local_size3(L),
+        };
+        let cfg = Config {
+            workgroups: [2, 3, 1],
             ..Config::default()
         };
         let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
