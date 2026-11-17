@@ -791,21 +791,21 @@ mod on_device {
         });
     }
 
-    /// `trip_k` of `simd_divergent`: a loop whose trip count is the thread's, each iteration a
-    /// SIMD-group sum over the threads still in it, in threadgroups of 64 threads and of 80 (a
-    /// partial SIMD group of 16 last). Where its SIMD groups are emulated its walk is predicated,
-    /// and the translator states the unit axes that would make it less divergent
-    /// (`RuntimeFact::UnitAxes` with no axes): the module is the general one, and every device
-    /// creates the state and runs both sizes, on the module whose walk states it where its tier
-    /// emulates SIMD groups, and on the emulated module at 80 where it runs only whole ones. Every
-    /// answer is Metal's: thread `t` adds, at each iteration `i` below `t & 7`, `i + 1` times the
-    /// threads of its SIMD group still in the loop.
+    /// `unit_axes_walk`: a loop of `(y & 3) + 1` iterations at row `y`, each a SIMD-group sum over
+    /// the threads still in it, in one threadgroup of 8 x 8 threads and one of 8 x 10 (a partial
+    /// SIMD group of 16 last). Where its SIMD groups are emulated its walk is predicated, and the
+    /// translator states the unit axes that would make it less divergent (`RuntimeFact::UnitAxes`
+    /// with no axes): the module is the general one, and every device creates the state and runs
+    /// both sizes, on the module whose walk states it where its tier emulates SIMD groups, and on
+    /// the emulated module at 8 x 10 where it runs only whole ones. Every answer is Metal's (M3 Max,
+    /// macOS 27.0.1): thread `t` adds, at each iteration `i` of its own, `i + 1` times the threads
+    /// of its SIMD group whose own trip count exceeds `i`.
     #[test]
     fn every_device_runs_a_kernel_whose_walk_unit_axes_could_relieve() {
         use crate::pipeline::Lowered;
         use metal2vulkan::pipeline::RuntimeFact;
 
-        let Some(descriptor) = descriptor_of("simd_divergent", "trip_k") else {
+        let Some(descriptor) = descriptor("unit_axes_walk") else {
             return;
         };
         let StageSource::Function(function) = &descriptor.kernel else {
@@ -814,7 +814,8 @@ mod on_device {
         each_device("compute_unit_axes", |name, _, device| {
             let state = state(name, &device, &descriptor);
             let queue = device.new_command_queue(4).expect("a queue");
-            for size in [64, 80] {
+            for rows in [8, 10] {
+                let size = 8 * rows;
                 let mut buffers = Buffers::new(&device, 1 << 16);
                 let out = buffers.buffer(u64::from(size) * 4);
                 let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -824,19 +825,20 @@ mod on_device {
                 encoder.set_compute_pipeline_state(&state).expect("a state");
                 encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
                 encoder
-                    .dispatch_threadgroups([1, 1, 1], [size, 1, 1])
-                    .unwrap_or_else(|error| panic!("{name}: a threadgroup of {size}: {error}"));
+                    .dispatch_threadgroups([1, 1, 1], [8, rows, 1])
+                    .unwrap_or_else(|error| panic!("{name}: a threadgroup of 8 x {rows}: {error}"));
                 encoder.end_encoding();
                 command_buffer.commit().expect("a commit");
                 finished(name, &command_buffer);
                 assert_eq!(command_buffer.error(), None, "{name}");
+                let trip = |u: u32| ((u / 8) & 3) + 1;
                 let want: Vec<u32> = (0..size)
                     .map(|t| {
                         let base = t - t % 32;
                         let simdgroup = base..(base + 32).min(size);
-                        (0..(t & 7))
+                        (0..trip(t))
                             .map(|i| {
-                                let still = simdgroup.clone().filter(|&u| (u & 7) > i).count();
+                                let still = simdgroup.clone().filter(|&u| trip(u) > i).count();
                                 (i + 1) * still as u32
                             })
                             .sum()
@@ -845,7 +847,7 @@ mod on_device {
                 assert_eq!(
                     words(&out, 0, want.len()),
                     want,
-                    "{name}: the sums in a threadgroup of {size}"
+                    "{name}: the sums in a threadgroup of 8 x {rows}"
                 );
             }
             // Which modules state the relief: the plain one, and the emulated variant.
@@ -884,7 +886,7 @@ mod on_device {
             );
             println!(
                 "{name}: unit axes with no axes stated by the {} module, which ran; sums checked \
-                 in threadgroups of 64 and 80",
+                 in threadgroups of 8 x 8 and 8 x 10",
                 if plain { "plain" } else { "emulated" }
             );
         });
