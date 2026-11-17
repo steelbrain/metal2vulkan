@@ -3,8 +3,8 @@
 // threadgroup of two rows within one simdgroup (16 x 2, or 12 x 2), the rows' threads share x
 // and so word x: only the simdgroup's lockstep orders one row's load of tg[x] before the other
 // row's store to it, so both rows add the same words. A one-row threadgroup meets no such pair.
-// The first 16 words start at 0, then word x at x; every thread writes tg[0], the sum of
-// x below min(16, width): 120 at a width of 16 or more, 66 at 12. Written for this repository;
+// The first 16 words start at 0 (a threadgroup has at least 16 threads), then word x at x; every
+// thread writes tg[0], the sum of x below min(16, width): 120 at a width of 16 or more, 66 at 12. Written for this repository;
 // no third-party source.
 #include <metal_stdlib>
 using namespace metal;
@@ -12,11 +12,11 @@ using namespace metal;
 kernel void row_lockstep_tree(device uint *out [[buffer(0)]],
                               ushort x [[thread_position_in_threadgroup]],
                               ushort t [[thread_index_in_threadgroup]],
-                              ushort g [[threadgroup_position_in_grid]],
-                              ushort n [[threads_per_threadgroup]]) {
+                              ushort2 p [[thread_position_in_grid]],
+                              ushort2 grid [[threads_per_grid]]) {
     threadgroup uint tg[64];
-    for (uint i = t; i < 16u; i += n) {
-        tg[i] = 0u;
+    if (t < 16u) {
+        tg[t] = 0u;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     tg[x] = x;
@@ -27,5 +27,5 @@ kernel void row_lockstep_tree(device uint *out [[buffer(0)]],
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    out[uint(g) * uint(n) + uint(t)] = tg[0];
+    out[uint(p.y) * uint(grid.x) + uint(p.x)] = tg[0];
 }
