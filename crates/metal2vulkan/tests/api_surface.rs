@@ -1003,6 +1003,7 @@ surface! {
         fn extended_range_blend;
         fn x_channel;
         fn bound_texel_format;
+        fn integer_channels_word;
         struct YCbCrFormat N;
         enum ChromaSubsampling N;
         enum YCbCrReads N;

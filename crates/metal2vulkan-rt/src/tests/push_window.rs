@@ -95,7 +95,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
             each_device(&format!("push_window_{buffers}"), |name, _, device| {
                 let what = format!("{name}, {buffers} buffers");
                 let state = device
-                    .new_compute_pipeline_state(&descriptor)
+                    .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
                     .unwrap_or_else(|error| panic!("{what}: {error}"));
                 let block = device
                     .take_block(MemoryClass::Shared, u64::from(buffers) * len)

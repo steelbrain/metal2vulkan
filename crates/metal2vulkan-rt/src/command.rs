@@ -12,6 +12,8 @@ use crate::queue::QueueInner;
 use crate::readback;
 use crate::record::{self, Reach, Recorder};
 use crate::ring::Writes;
+use crate::sampler::SamplerState;
+use crate::texture::Texture;
 use crate::times::{self, Stamps, Times};
 use ash::vk;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -141,6 +143,10 @@ pub(crate) struct Gpu {
     pub(crate) blocks: Vec<Arc<Block>>,
     /// The pipeline states the commands use, once each, kept until the command buffer retires.
     pub(crate) pipelines: Vec<ComputePipelineState>,
+    /// The textures and sampler states the encoders bound or declared, once each, kept until the
+    /// command buffer retires: their elements of set 1 stay theirs while work may read them.
+    pub(crate) textures: Vec<Texture>,
+    pub(crate) samplers: Vec<SamplerState>,
     /// What the commands wrote into the parameter ring.
     pub(crate) ring: Writes,
 }
@@ -190,6 +196,8 @@ impl CommandBuffer {
                             segments: vec![Segment::default()],
                             blocks: Vec::new(),
                             pipelines: Vec::new(),
+                            textures: Vec::new(),
+                            samplers: Vec::new(),
                             ring: Writes::default(),
                         },
                         handlers: Handlers {
@@ -640,6 +648,11 @@ impl Building {
         }
     }
 
+    /// Whether the current command buffer has no pipeline bound yet.
+    pub(crate) fn unbound(&self) -> bool {
+        self.bound.is_none()
+    }
+
     /// Whether `pipeline` needs binding in the current command buffer; it is bound from now.
     pub(crate) fn bind(&mut self, pipeline: vk::Pipeline) -> bool {
         let needed = self.bound != Some(pipeline);
@@ -667,6 +680,22 @@ impl Building {
         let pipelines = &mut self.gpu.pipelines;
         if !pipelines.iter().rev().any(|kept| kept.is(state)) {
             pipelines.push(state.clone());
+        }
+    }
+
+    /// Keeps `texture` until the command buffer retires.
+    pub(crate) fn keep_texture(&mut self, texture: &Texture) {
+        let textures = &mut self.gpu.textures;
+        if !textures.iter().rev().any(|kept| kept.id() == texture.id()) {
+            textures.push(texture.clone());
+        }
+    }
+
+    /// Keeps `state` until the command buffer retires.
+    pub(crate) fn keep_sampler(&mut self, state: &SamplerState) {
+        let samplers = &mut self.gpu.samplers;
+        if !samplers.iter().rev().any(|kept| kept.is(state)) {
+            samplers.push(state.clone());
         }
     }
 }
@@ -735,13 +764,15 @@ pub(crate) fn retire(
         segments,
         blocks,
         pipelines,
+        textures,
+        samplers,
         ring,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
     ring.give_back(core);
-    drop((segments, blocks, pipelines));
+    drop((segments, blocks, pipelines, textures, samplers));
     inner.queue.release(inner.slot);
     let handle = CommandBuffer { inner };
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {

@@ -116,13 +116,124 @@ impl Drop for SamplerInner {
         // retired.
         unsafe {
             core.arrays
-                .write_samplers(&core.device, self.index, [None; 3])
+                .write_samplers(&core.device, self.index, &every([None; 3]))
         };
         lock(&core.arrays.grants).vacate(IndexClass::Sampler, self.index);
         core.counters.fall(Gauge::DescriptorSlots);
         core.counters.fall(Gauge::Samplers);
         give_back(core, &self.uses);
     }
+}
+
+/// Each sampler array's element at an index, plain, comparison and integer texture, from
+/// `samplers`.
+fn every(samplers: [Option<vk::Sampler>; 3]) -> [(usize, Option<vk::Sampler>); 3] {
+    [0, 1, 2].map(|array| (array, samplers[array]))
+}
+
+/// A constexpr sampler at an index of the sampler arrays: its state words, the create info of
+/// each array's element it holds there (plain, comparison, integer texture), and how many
+/// pipeline states number it there.
+pub(crate) struct Constexpr {
+    words: [u64; 2],
+    uses: [Option<SamplerDesc>; 3],
+    holders: u32,
+}
+
+/// One more pipeline state numbers the constexpr sampler of state words `words` at `index`, with
+/// the create info of each array's element it uses there (`None` for an array it does not use).
+/// The first holder occupies the index and writes its elements; a later one of the same words
+/// writes the elements of the arrays it adds and leaves the others, which pending work may read.
+///
+/// Err: [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted);
+/// [`Refusal::IndexInUse`](crate::Refusal::IndexInUse) where a sampler state or another
+/// constexpr sampler lives at the index; [`Limit::DeviceSamplers`]; [`Error::Vulkan`].
+pub(crate) fn hold_constexpr(
+    core: &Core,
+    index: u32,
+    words: [u64; 2],
+    uses: [Option<SamplerDesc>; 3],
+) -> Result<(), Error> {
+    let mut held = lock(&core.constexprs);
+    let present = match held.get(&index) {
+        Some(entry) if entry.words == words => Some(entry.uses),
+        Some(_) => {
+            return Err(Error::Refused(crate::Refusal::IndexInUse {
+                class: IndexClass::Sampler,
+                index,
+            }))
+        }
+        None => None,
+    };
+    if present.is_none() {
+        lock(&core.arrays.grants).occupy(IndexClass::Sampler, index)?;
+    }
+    let mut added: Vec<(usize, SamplerDesc, vk::Sampler)> = Vec::new();
+    for (array, desc) in uses.iter().enumerate() {
+        let Some(desc) = desc else { continue };
+        if present.is_some_and(|present| present[array].is_some()) {
+            continue;
+        }
+        match lock(&core.samplers).take(desc, || make(core, desc)) {
+            Ok(sampler) => added.push((array, *desc, sampler)),
+            Err(error) => {
+                let taken: Vec<Option<SamplerDesc>> =
+                    added.iter().map(|&(_, desc, _)| Some(desc)).collect();
+                give_back(core, &taken);
+                if present.is_none() {
+                    lock(&core.arrays.grants).vacate(IndexClass::Sampler, index);
+                }
+                return Err(error);
+            }
+        }
+    }
+    let elements: Vec<(usize, Option<vk::Sampler>)> = added
+        .iter()
+        .map(|&(array, _, sampler)| (array, Some(sampler)))
+        .collect();
+    // SAFETY: the index is occupied for the constexpr sampler, no work reads an element it had
+    // not written (no state numbering it there uses that array), and each sampler is held while
+    // its element holds it.
+    unsafe { core.arrays.write_samplers(&core.device, index, &elements) };
+    let entry = held.entry(index).or_insert_with(|| {
+        core.counters.rise(Gauge::DescriptorSlots);
+        Constexpr {
+            words,
+            uses: [None; 3],
+            holders: 0,
+        }
+    });
+    for (array, desc, _) in added {
+        entry.uses[array] = Some(desc);
+    }
+    entry.holders += 1;
+    Ok(())
+}
+
+/// One pipeline state fewer numbers the constexpr sampler at `index`: the last one's going writes
+/// the arrays' defaults there, frees the index and gives back its samplers.
+pub(crate) fn release_constexpr(core: &Core, index: u32) {
+    let mut held = lock(&core.constexprs);
+    let Some(entry) = held.get_mut(&index) else {
+        return;
+    };
+    entry.holders -= 1;
+    if entry.holders > 0 {
+        return;
+    }
+    let Some(entry) = held.remove(&index) else {
+        return;
+    };
+    // SAFETY: no pending work reads the elements: each command buffer that used a state
+    // numbering it held the state until it retired.
+    unsafe {
+        core.arrays
+            .write_samplers(&core.device, index, &every([None; 3]))
+    };
+    lock(&core.arrays.grants).vacate(IndexClass::Sampler, index);
+    core.counters.fall(Gauge::DescriptorSlots);
+    drop(held);
+    give_back(core, &entry.uses);
 }
 
 /// Gives up one hold of each sampler of `uses`, the reaper freeing each one no element holds.
@@ -198,7 +309,10 @@ impl Device {
         core.counters.rise(Gauge::Samplers);
         // SAFETY: the index is occupied for the state, and each sampler is live while the state
         // holds it.
-        unsafe { core.arrays.write_samplers(&core.device, index, samplers) };
+        unsafe {
+            core.arrays
+                .write_samplers(&core.device, index, &every(samplers))
+        };
         Ok(SamplerState {
             inner: Arc::new(SamplerInner {
                 device: self.clone(),
@@ -225,6 +339,16 @@ fn make(core: &Core, desc: &SamplerDesc) -> Result<vk::Sampler, Error> {
 }
 
 impl SamplerState {
+    /// Whether two handles are one state.
+    pub(crate) fn is(&self, other: &SamplerState) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    /// Whether `core` is the device this state was made on.
+    pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
+        Arc::ptr_eq(self.inner.device.core(), core)
+    }
+
     /// `gpuResourceID`: its index and the translator's `SamplerWord` of its descriptor.
     pub fn gpu_resource_id(&self) -> ResourceId {
         ResourceId {

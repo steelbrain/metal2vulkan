@@ -2080,10 +2080,10 @@ pub(crate) fn integer_channel_bits(f: vk::Format) -> Option<[u32; 4]> {
 
 /// The word `PushField::TextureIntegerChannels` carries for a texture of pixel format `pf`: byte
 /// `c` holds `32 - bits` for channel `c` (red to alpha) of an integer format whose channel is
-/// narrower than 32 bits ([`integer_channel_bits`]), else 0. A write saturates each lane to the
-/// range `bits` spans in the image's signedness, so a word of 0 (a float, 32-bit integer or
-/// unbound texture's) leaves every lane as it is.
-pub(crate) fn integer_channels_word(pf: PixelFormat) -> u32 {
+/// narrower than 32 bits, else 0. A write saturates each lane to the range `bits` spans in the
+/// image's signedness, so a word of 0 (a float, 32-bit integer or unbound texture's) leaves every
+/// lane as it is.
+pub fn integer_channels_word(pf: PixelFormat) -> u32 {
     direct_format(pf)
         .and_then(integer_channel_bits)
         .map_or(0, |bits| {

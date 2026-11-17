@@ -14,6 +14,7 @@ mod one_path;
 mod push_window;
 mod readback;
 mod sampler;
+mod sampling;
 mod texture;
 mod translate;
 
@@ -65,6 +66,22 @@ pub(crate) fn product_sources() -> Vec<(String, String)> {
             (label, text)
         })
         .collect()
+}
+
+/// The sampler indices of a test's states, whose kernels number no constexpr sampler: a read's
+/// or a write's sampler takes nothing at its index. A kernel that numbers a constexpr sampler is
+/// refused as one that reads what the test does not supply.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+pub(crate) fn no_constexpr_samplers(
+    samplers: &[crate::NumberedSampler],
+) -> Result<Vec<u32>, crate::Error> {
+    match samplers
+        .iter()
+        .any(|sampler| matches!(sampler, crate::NumberedSampler::Constexpr(_)))
+    {
+        true => Err(crate::Error::Unsupported(crate::Gap::KernelInput)),
+        false => Ok(vec![0; samplers.len()]),
+    }
 }
 
 /// Each physical device of the device cfg's kind the loader lists, with its name: CPU devices

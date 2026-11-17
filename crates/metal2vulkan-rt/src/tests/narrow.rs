@@ -151,7 +151,7 @@ entry:
         let out_len = u64::from(THREADS * WORDS * 4);
         each_device("narrow_clamps", |name, _, device| {
             let state = device
-                .new_compute_pipeline_state(&descriptor)
+                .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let block = device
                 .take_block(MemoryClass::Shared, 2 * out_len)

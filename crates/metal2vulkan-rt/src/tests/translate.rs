@@ -65,7 +65,7 @@ mod on_device {
         descriptor: &ComputePipelineDescriptor,
     ) -> ComputePipelineState {
         device
-            .new_compute_pipeline_state(descriptor)
+            .new_compute_pipeline_state(descriptor, crate::tests::no_constexpr_samplers)
             .unwrap_or_else(|error| {
                 let translator = &device.core().translator;
                 let budget = Budget::standard();
@@ -687,7 +687,9 @@ mod on_device {
                 .required_subgroup_size_stages
                 .contains(vk::ShaderStageFlags::COMPUTE)
                 && (vulkan13.min_subgroup_size..=vulkan13.max_subgroup_size).contains(&32);
-            let state = match device.new_compute_pipeline_state(&descriptor) {
+            let state = match device
+                .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
+            {
                 Ok(state) => state,
                 Err(Error::Unsupported(Gap::KernelInput)) if !pinnable => {
                     println!(
@@ -1006,7 +1008,9 @@ mod on_device {
         };
         each_device("compute_simd_quiesced", |name, _, device| {
             assert!(device.quiesce(std::time::Duration::from_secs(10)), "{name}");
-            let Ok(state) = device.new_compute_pipeline_state(&descriptor) else {
+            let Ok(state) =
+                device.new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
+            else {
                 println!("{name}: the kernel is refused; nothing to mark");
                 return;
             };

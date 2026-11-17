@@ -24,21 +24,25 @@
 //! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)). No translation runs on an
 //! encoding thread.
 
+use crate::arrays::BINDINGS;
 use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
-use crate::error::{Error, Gap};
+use crate::error::{Error, Gap, Refusal};
 use crate::hazard::Access;
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
+use crate::sampler::{canonical, hold_constexpr, release_constexpr};
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::error::{Error as TranslationError, Feature};
 use metal2vulkan::library::CompiledFunction;
 use metal2vulkan::pipeline::{
-    arena_bytes, AccessSet, Axis, BufferKind, ComputePipeline, ComputePipelineDescriptor,
-    FunctionDescriptor, LoweringInputs, PrecisionNote, PushField, PushLoc, RuntimeFact, SlotClass,
-    SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource,
+    arena_bytes, AccessSet, Axis, BindingSource, BufferKind, CombinedSampler, ComputePipeline,
+    ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, LoweringInputs,
+    NumberedSampler, PrecisionNote, PushField, PushLoc, RuntimeFact, SamplerRef, SlotClass,
+    SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, TextureAccess,
 };
+use metal2vulkan::vk::SamplerDesc;
 use metal2vulkan::Budget;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -88,6 +92,106 @@ pub(crate) struct PipelineInner {
     /// The translator's notes of where the kernel's answers may differ from Metal's, of the
     /// modules made with the state.
     notes: Vec<PrecisionNote>,
+    /// The samplers the state numbers and the indices the consumer gave them.
+    pub(crate) numbered: Numbered,
+}
+
+/// The samplers a state numbers ([`Interface::numbered`]), the index the consumer gave each, and
+/// the constexpr samplers' elements the state holds at theirs.
+#[derive(Default)]
+pub(crate) struct Numbered {
+    samplers: Vec<NumberedSampler>,
+    pub(crate) ids: Vec<u32>,
+    /// Each constexpr sampler the state holds, by its place in `samplers`, with the create info
+    /// of each array's element it uses (plain, comparison, integer texture).
+    held: Vec<(usize, [Option<SamplerDesc>; 3])>,
+}
+
+impl Numbered {
+    /// Whether the state holds every constexpr sampler use of `kernel`, a module of the same
+    /// entry lowered later.
+    fn covers(&self, kernel: &Interface) -> bool {
+        kernel.numbered == self.samplers
+            && kernel.constexprs.iter().all(|(at, sampler)| {
+                self.held
+                    .iter()
+                    .any(|(held, uses)| held == at && uses[sampler_array(sampler)].is_some())
+            })
+    }
+}
+
+/// The sampler array of a constexpr sampler's use: 0 plain, 1 comparison, 2 integer texture.
+fn sampler_array(sampler: &CombinedSampler) -> usize {
+    match (sampler.compare, sampler.integer) {
+        (true, _) => 1,
+        (false, true) => 2,
+        (false, false) => 0,
+    }
+}
+
+/// The state's numbered samplers: `sampler_ids` gives an index to each of `kernels`' (the
+/// state's modules, which number alike), and each constexpr sampler a module samples through
+/// takes the device sampler of each use at its index.
+fn number(
+    core: &Core,
+    kernels: &[&Kernel],
+    sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
+) -> Result<Numbered, Error> {
+    let samplers = kernels[0].interface.numbered.clone();
+    if kernels
+        .iter()
+        .any(|kernel| kernel.interface.numbered != samplers)
+    {
+        return Err(gap());
+    }
+    let ids = sampler_ids(&samplers)?;
+    if ids.len() != samplers.len() {
+        return Err(Error::Refused(Refusal::SamplerIds {
+            numbered: samplers.len(),
+            given: ids.len(),
+        }));
+    }
+    let profile = core.translator.profile();
+    let mut numbered = Numbered {
+        samplers,
+        ids,
+        held: Vec::new(),
+    };
+    for (at, sampler) in numbered.samplers.iter().enumerate() {
+        let NumberedSampler::Constexpr(words) = *sampler else {
+            continue;
+        };
+        let mut uses = [None; 3];
+        let used = kernels
+            .iter()
+            .flat_map(|kernel| &kernel.interface.constexprs)
+            .filter(|(place, _)| *place == at);
+        for (_, sampler) in used {
+            let desc = sampler
+                .constexpr_sampler(profile)
+                .map_err(Error::Translation)?
+                .ok_or_else(gap)?;
+            uses[sampler_array(sampler)] = Some(canonical(desc));
+        }
+        if uses.iter().all(Option::is_none) {
+            continue;
+        }
+        if let Err(error) = hold_constexpr(core, numbered.ids[at], words, uses) {
+            numbered.release(core);
+            return Err(error);
+        }
+        numbered.held.push((at, uses));
+    }
+    Ok(numbered)
+}
+
+impl Numbered {
+    /// Gives up the constexpr samplers' elements the state holds.
+    fn release(&mut self, core: &Core) {
+        for (at, _) in self.held.drain(..) {
+            release_constexpr(core, self.ids[at]);
+        }
+    }
 }
 
 /// A kernel's emulated-SIMD-group variant (`LoweringInputs::emulated_simdgroups`): what it is
@@ -136,6 +240,14 @@ pub(crate) struct Kernel {
 pub(crate) struct Interface {
     /// Each buffer slot the kernel uses, with its access.
     pub(crate) buffers: Vec<(u32, Access)>,
+    /// Each texture slot the kernel uses, with its access.
+    pub(crate) textures: Vec<(u32, Access)>,
+    /// The samplers a state of the kernel numbers, in Metal's order
+    /// (`PipelineInterface::numbered_samplers`).
+    pub(crate) numbered: Vec<NumberedSampler>,
+    /// Each constexpr sampler the kernel samples through, by its place in
+    /// [`Interface::numbered`], with its use.
+    pub(crate) constexprs: Vec<(usize, CombinedSampler)>,
     /// Whether the kernel reads through an address that is not one of its bound slots.
     pub(crate) reads_unbound: bool,
     /// Whether the kernel writes through an address that is not one of its bound slots.
@@ -241,6 +353,16 @@ pub(crate) enum FieldValue {
     /// A `u64`: the address of the buffer bound at the slot plus its offset, the address of the
     /// slot's `set_bytes` copy, or 0 where nothing is bound.
     BufferAddress(u32),
+    /// A `u64`: the `gpuResourceID` of the texture bound at the slot, 0 where none is.
+    TextureId(u32),
+    /// A `u64`: the `gpuResourceID` of the sampler state bound at the slot, 0 where none is.
+    SamplerId(u32),
+    /// A `u32`: the channel widths of the texture bound at the slot, as an integer write
+    /// saturates to them (`metal::format::integer_channels_word`), 0 where none is.
+    IntegerChannels(u32),
+    /// A `u32`: the sampler index the consumer gave the constexpr sampler at this place of the
+    /// state's numbered samplers.
+    ConstexprSampler(usize),
     /// The dispatch's region, 32 bytes read as two `uvec4`: the first threadgroup of the dispatch
     /// in Metal's grid (0 for a whole dispatch) with the threadgroup size packed as
     /// `(x-1) | (y-1) << 10 | (z-1) << 20`, then Metal's threads per grid (exact for
@@ -273,12 +395,29 @@ impl crate::Device {
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     ///
+    /// The state numbers samplers as Metal's pipeline creation does
+    /// (`PipelineInterface::numbered_samplers`): its constexpr samplers, then one for a texture
+    /// read and one for a texture write. Once the kernel is lowered, `sampler_ids` takes them in
+    /// Metal's order and answers the sampler index the consumer gives each, from its live
+    /// [`IndexClass::Sampler`](crate::IndexClass::Sampler) grants. Each constexpr sampler the
+    /// kernel samples through takes the device sampler of each use it has
+    /// (`CombinedSampler::constexpr_sampler`, shared by create info as a sampler state's are) at
+    /// its index of the sampler arrays before the call returns, and every dispatch pushes the
+    /// index; states that number one constexpr sampler at one index share its elements, and the
+    /// last of them to go gives them back. The read and write samplers take nothing at their
+    /// indices. What `sampler_ids` answers as an error, the call answers; once it has answered,
+    /// a failing call holds none of the indices.
+    ///
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that reads what the
-    /// compute encoder does not supply yet; [`Error::Vulkan`].
+    /// compute encoder does not supply yet; [`Refusal::SamplerIds`] where `sampler_ids` answers
+    /// another count; [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted) and
+    /// [`Refusal::IndexInUse`](crate::Refusal::IndexInUse) for a constexpr sampler's index;
+    /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
     pub fn new_compute_pipeline_state(
         &self,
         descriptor: &ComputePipelineDescriptor,
+        sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
     ) -> Result<ComputePipelineState, Error> {
         if descriptor.support_indirect_command_buffers {
             return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
@@ -392,6 +531,7 @@ impl crate::Device {
             },
             emulated,
             notes,
+            numbered: Numbered::default(),
         };
         if let Some(pipeline) = partial {
             let partial = Kernel::new(&inner.core, pipeline, required)?;
@@ -407,6 +547,14 @@ impl crate::Device {
             let made = inner.whole.make(&inner.core, &variant)?;
             lock(&inner.whole.variants).push((variant, made));
         }
+        let mut kernels = vec![&inner.whole];
+        if let Form::Sized {
+            partial: Some(partial),
+        } = &inner.form
+        {
+            kernels.push(&**partial);
+        }
+        inner.numbered = number(&inner.core, &kernels, sampler_ids)?;
         let inner = Arc::new(inner);
         if inner.emulated.is_some() {
             inner.core.reaper.lower(Arc::downgrade(&inner));
@@ -449,24 +597,17 @@ fn interface(
 ) -> Result<Interface, Error> {
     let translated = &pipeline.interface;
     let stage = &pipeline.stage;
-    // Every argument is a pushed address or a specialization: no descriptor, no table the binder
-    // builds, no constant data; the stage's flags are its subgroups'.
+    // Every argument is a pushed address, a pushed resource ID or index, or a specialization: no
+    // descriptor but set 1's, no table the binder builds, no constant data; the stage's flags are
+    // its subgroups'.
     let stage_flags = vk::PipelineShaderStageCreateFlags::from_raw(stage.stage_flags.as_raw());
     let subgroups = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
         | vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE;
     if translated.needs_pointer_translation
         || translated.needs_handle_translation
         || translated.reaches_command_buffers
-        || translated
-            .numbered_samplers
-            .iter()
-            .any(|(_, samplers)| !samplers.is_empty())
         || !translated.stage_in.is_empty()
-        || pipeline
-            .layout
-            .sets
-            .iter()
-            .any(|set| !set.bindings.is_empty())
+        || !pipeline.layout.sets.iter().all(of_the_device)
         || stage.constant_blob.is_some()
         || !subgroups.contains(stage_flags)
     {
@@ -512,6 +653,7 @@ fn interface(
         }
     }
     let mut buffers = Vec::new();
+    let mut textures = Vec::new();
     for (slot, used) in &translated.slots {
         match (slot.stage, slot.class, used) {
             (Stage::Kernel, SlotClass::Buffer, SlotInterface::Buffer(buffer))
@@ -519,9 +661,21 @@ fn interface(
             {
                 buffers.push((slot.index, access(buffer.access)));
             }
+            (Stage::Kernel, SlotClass::Texture, SlotInterface::Texture(texture)) => {
+                textures.push((slot.index, texture_access(texture.access)));
+            }
+            (Stage::Kernel, SlotClass::Sampler, SlotInterface::Sampler(_)) => {}
             _ => return Err(gap()),
         }
     }
+    // The samplers a state of the kernel numbers, in Metal's order.
+    let numbered: Vec<NumberedSampler> = translated
+        .numbered_samplers
+        .iter()
+        .filter(|(stage, _)| *stage == Stage::Kernel)
+        .flat_map(|(_, samplers)| samplers.iter().copied())
+        .collect();
+    let mut constexprs = Vec::new();
     let mut fields = Vec::new();
     let mut push_len = 0;
     let mut block_len = 0;
@@ -548,11 +702,37 @@ fn interface(
                 (
                     PushField::SlotGuestBase(SlotRef {
                         stage: Stage::Kernel,
-                        class: SlotClass::Buffer,
+                        class,
                         index,
                     }),
                     _,
-                ) => FieldValue::BufferAddress(index),
+                ) => match class {
+                    SlotClass::Buffer => FieldValue::BufferAddress(index),
+                    SlotClass::Texture => FieldValue::TextureId(index),
+                    SlotClass::Sampler => FieldValue::SamplerId(index),
+                },
+                (
+                    PushField::TextureIntegerChannels(SlotRef {
+                        stage: Stage::Kernel,
+                        class: SlotClass::Texture,
+                        index,
+                    }),
+                    _,
+                ) => FieldValue::IntegerChannels(index),
+                (PushField::ConstexprSampler(sampler), _) => {
+                    let SamplerRef::Constexpr(words) = sampler.sampler else {
+                        return Err(gap());
+                    };
+                    let at = numbered
+                        .iter()
+                        .position(|&numbered| numbered == NumberedSampler::Constexpr(words))
+                        .ok_or_else(gap)?;
+                    if sampler.unnormalized {
+                        return Err(gap());
+                    }
+                    constexprs.push((at, sampler));
+                    FieldValue::ConstexprSampler(at)
+                }
                 (PushField::DispatchRegion, _) => FieldValue::DispatchRegion,
                 _ => return Err(gap()),
             };
@@ -616,6 +796,9 @@ fn interface(
     };
     Ok(Interface {
         buffers,
+        textures,
+        numbered,
+        constexprs,
         reads_unbound: translated.reads_unbound_resources,
         writes_unbound: translated.writes_unbound_resources,
         push_len,
@@ -635,6 +818,28 @@ fn interface(
 /// The refusal of a kernel that reads what the compute encoder does not supply.
 fn gap() -> Error {
     Error::Unsupported(Gap::KernelInput)
+}
+
+/// Whether `set` of a kernel's layout is the device's: set 1 the device's texture and sampler
+/// arrays (those of them the kernel reads), any other set empty.
+fn of_the_device(set: &DescriptorSetLayout) -> bool {
+    match set.set {
+        1 => set.bindings.iter().all(|binding| {
+            let ty: vk::DescriptorType = binding.ty.into();
+            binding.source == BindingSource::IdentityArray
+                && BINDINGS.contains(&(binding.binding, ty, binding.count))
+        }),
+        _ => set.bindings.is_empty(),
+    }
+}
+
+/// The hazard table's access of a texture slot the kernel samples, reads, writes, or several.
+fn texture_access(used: TextureAccess) -> Access {
+    match (used.sample || used.read, used.write) {
+        (_, false) => Access::Read,
+        (false, true) => Access::Write,
+        (true, true) => Access::ReadWrite,
+    }
 }
 
 /// The hazard table's access of a slot the kernel reads, writes, or both.
@@ -697,6 +902,7 @@ impl ComputePipelineState {
                 form: Form::Sized { partial: None },
                 emulated: None,
                 notes: Vec::new(),
+                numbered: Numbered::default(),
             }),
         })
     }
@@ -715,7 +921,9 @@ impl PipelineInner {
     /// On the reaper: lowers the state's emulated variant, where it has one not lowered yet.
     pub(crate) fn lower_emulated(&self) {
         if let Some(emulated) = &self.emulated {
-            emulated.lowered.get_or_init(|| emulated.lower(&self.core));
+            emulated
+                .lowered
+                .get_or_init(|| emulated.lower(&self.core, &self.numbered));
         }
     }
 
@@ -771,7 +979,7 @@ impl PipelineInner {
 impl Emulated {
     /// The variant lowered, on the reaper: the lowering a device kept in the cache directory, or
     /// one made now and kept; the translator's refusal is kept too.
-    fn lower(&self, core: &Core) -> Lowered {
+    fn lower(&self, core: &Core, numbered: &Numbered) -> Lowered {
         let translator = &core.translator;
         let budget = Budget::standard();
         let key = *translator
@@ -797,6 +1005,12 @@ impl Emulated {
         };
         let notes = pipeline.stage.precision_notes.clone();
         match Kernel::new(core, pipeline, descriptor.required_threads_per_threadgroup) {
+            // A module that samples a constexpr sampler in a use the state does not hold reads
+            // what the encoder does not supply.
+            Ok(mut kernel) if !numbered.covers(&kernel.interface) => {
+                kernel.release(core);
+                Lowered::Refused
+            }
             Ok(kernel) => Lowered::Made(Box::new(kernel), notes),
             Err(Error::Vulkan { result, .. }) => Lowered::Failed(result),
             Err(_) => Lowered::Refused,
@@ -927,6 +1141,7 @@ impl Kernel {
 impl Drop for PipelineInner {
     fn drop(&mut self) {
         // No command buffer that used it is left: each kept the state until it retired.
+        self.numbered.release(&self.core);
         self.whole.release(&self.core);
         if let Form::Sized {
             partial: Some(partial),

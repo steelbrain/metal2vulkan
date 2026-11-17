@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 26 | 26 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 29 | 29 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 9 | 6 | 0 | 0 | 11 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 9 | 8 | 0 | 0 | 12 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 6 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 |
 
@@ -615,17 +615,20 @@ Columns:
 | `EmptyBuffer` | A buffer of no bytes (`Device::new_buffer` with a length of 0) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: newBufferWithLength:0 answers nil | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
 | `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
 | `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
-| `OtherDevice` | An event, a buffer or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block and a pipeline belong to the `VkDevice` that made them | 5: `crates/metal2vulkan-rt/src/command.rs (check)`, `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` (+3) | `-` |
+| `OtherDevice` | An event, a buffer or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block and a pipeline belong to the `VkDevice` that made them | 8: `crates/metal2vulkan-rt/src/command.rs (check)`, `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` (+5) | `-` |
 | `NoCommandBuffers` | A queue that may hold no command buffer (`Device::new_command_queue` with a count of 0) | every device (a public call's own check of its arguments) | `ours`: its first `commandBuffer` call would wait forever | 1: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)` | `-` |
 | `EncoderOpen` | A second encoder, an encode call, or a commit or enqueue, while an encoder of the command buffer is open | every device (a public call's own check of its arguments) | `metal-documented`: a command buffer has one active encoder at a time, ended by `endEncoding` before another is made or the command buffer is committed | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
 | `NoPipeline` | A dispatch with no pipeline state set | every device (a public call's own check of its arguments) | `metal-documented`: a compute dispatch needs a compute pipeline state set first | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `BufferIndex` | A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`, `setBufferOffset`, `setThreadgroupMemoryLength`) | every device (a public call's own check of its arguments) | `metal-documented`: the buffer argument table has 31 entries per stage | 1: `crates/metal2vulkan-rt/src/encoder.rs (slot)` | `-` |
+| `TextureArgumentIndex` | A texture argument index past Metal's 128 entries (`setTexture`) | every device (a public call's own check of its arguments) | `metal-documented`: the texture argument table has 128 entries per stage on Apple GPUs | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_texture)` | `-` |
+| `SamplerArgumentIndex` | A sampler argument index past Metal's 16 entries (`setSamplerState`) | every device (a public call's own check of its arguments) | `metal-documented`: the sampler argument table has 16 entries per stage | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)` | `-` |
+| `SamplerIds` | A consumer's answer to `Device::new_compute_pipeline_state`'s numbered samplers with another count of indices | every device (a public call's own check of its arguments) | `ours`: each numbered sampler takes one index | 1: `crates/metal2vulkan-rt/src/pipeline.rs (number)` | `-` |
 | `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)` | `-` |
 | `ThreadgroupSize` | A threadgroup of no threads, or of more than the pipeline state's `maxTotalThreadsPerThreadgroup` | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)` | `-` |
 | `IndirectOffset` | An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer than 12 bytes (three 32-bit counts) in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset inside the buffer | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` | `-` |
 | `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
 | `IndicesNotGranted` | A release of an index that is not granted (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: a grant is returned once | 2: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`, `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
-| `IndexInUse` | A texture or a sampler state at an index where an object lives already (`Device::new_texture`, `Device::new_sampler_state`) | every device (a public call's own check of its arguments) | `ours`: an index names one object at a time, and its elements are that object's | 1: `crates/metal2vulkan-rt/src/arrays.rs (occupy)` | `-` |
+| `IndexInUse` | A texture, a sampler state or a pipeline state's constexpr sampler at an index where another object lives already (`Device::new_texture`,... | every device (a public call's own check of its arguments) | `ours`: an index names one object at a time, and its elements are that object's | 2: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`, `crates/metal2vulkan-rt/src/sampler.rs (hold_constexpr)` | `-` |
 | `IndicesInUse` | A release of a grant while a texture or a sampler state lives at one of its indices (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: an object's index stays granted while the object lives | 1: `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
 | `TextureIndex` | A texture whose usage shaders reach (read or write) made without an index, or one of no such usage made with one (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index is an element of set 1's texture arrays, which only shaders read | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture)` | `-` |
 | `TextureZeroExtent` | A texture with a width, height or depth of 0 | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has width of zero", and the same for a height of zero | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
@@ -658,7 +661,7 @@ Columns:
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
 | `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 1: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)` | `-` |
-| `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder binds buffers alone | 1: `crates/metal2vulkan-rt/src/pipeline.rs (gap)` | `-` |
+| `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 1: `crates/metal2vulkan-rt/src/pipeline.rs (gap)` | `-` |
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture)` | `-` |
@@ -1157,17 +1160,20 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
 - `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
 - `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (open)`
-- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource)`
+- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource, 2 sites)`
 - `rt:Refusal::NoCommandBuffers`: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)`
 - `rt:Refusal::EncoderOpen`: `crates/metal2vulkan-rt/src/command.rs (open)`
 - `rt:Refusal::NoPipeline`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Refusal::BufferIndex`: `crates/metal2vulkan-rt/src/encoder.rs (slot)`
+- `rt:Refusal::TextureArgumentIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`
+- `rt:Refusal::SamplerArgumentIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`
+- `rt:Refusal::SamplerIds`: `crates/metal2vulkan-rt/src/pipeline.rs (number)`
 - `rt:Refusal::NoBufferAtIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)`
 - `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)`
 - `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`
 - `rt:Refusal::IndicesGranted`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
 - `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`; `crates/metal2vulkan-rt/src/arrays.rs (release)`
-- `rt:Refusal::IndexInUse`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`
+- `rt:Refusal::IndexInUse`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`; `crates/metal2vulkan-rt/src/sampler.rs (hold_constexpr)`
 - `rt:Refusal::IndicesInUse`: `crates/metal2vulkan-rt/src/arrays.rs (release)`
 - `rt:Refusal::TextureIndex`: `crates/metal2vulkan-rt/src/texture.rs (new_texture)`
 - `rt:Refusal::TextureZeroExtent`: `crates/metal2vulkan-rt/src/texture.rs (shape)`

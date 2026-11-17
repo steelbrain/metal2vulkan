@@ -114,6 +114,33 @@ pub enum Refusal {
         /// The index asked for.
         index: u32,
     },
+    /// A texture argument index past Metal's 128 entries (`setTexture`).
+    ///
+    /// Basis: metal-documented (the texture argument table has 128 entries per stage on Apple
+    /// GPUs).
+    TextureArgumentIndex {
+        /// The index asked for.
+        index: u32,
+    },
+    /// A sampler argument index past Metal's 16 entries (`setSamplerState`).
+    ///
+    /// Basis: metal-documented (the sampler argument table has 16 entries per stage).
+    SamplerArgumentIndex {
+        /// The index asked for.
+        index: u32,
+    },
+    /// A consumer's answer to
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state)'s
+    /// numbered samplers with another count of indices. Metal has no counterpart: Metal numbers
+    /// the samplers itself.
+    ///
+    /// Basis: ours (each numbered sampler takes one index).
+    SamplerIds {
+        /// The samplers the state numbers.
+        numbered: usize,
+        /// The indices given.
+        given: usize,
+    },
     /// `setBufferOffset` at an index where no buffer is bound.
     ///
     /// Basis: ours (there is no buffer whose offset to change).
@@ -163,10 +190,12 @@ pub enum Refusal {
         /// The first index of the range that is not granted.
         index: u32,
     },
-    /// A texture or a sampler state at an index where an object lives already
-    /// ([`Device::new_texture`](crate::Device::new_texture),
-    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state)). Metal has no
-    /// counterpart: Metal chooses its resource IDs itself.
+    /// A texture, a sampler state or a pipeline state's constexpr sampler at an index where
+    /// another object lives already ([`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state),
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state); states
+    /// that number one constexpr sampler share its index). Metal has no counterpart: Metal
+    /// chooses its resource IDs itself.
     ///
     /// Basis: ours (an index names one object at a time, and its elements are that object's).
     IndexInUse {
@@ -288,12 +317,13 @@ pub enum Gap {
     ///
     /// Basis: ours (indirect command buffers are not built).
     IndirectCommandBuffers,
-    /// A kernel that reads something the compute encoder does not supply yet: a texture or a
-    /// sampler slot, a function table, a `[[stage_in]]` fetch, a parameter the runtime does not
-    /// fill, or a specialization the runtime does not set. Buffers, `setBytes` data, threadgroup
-    /// memory lengths, the dispatch's grid and a pinned subgroup size are supplied.
+    /// A kernel that reads something the compute encoder does not supply yet: a function table,
+    /// a `[[stage_in]]` fetch, a parameter the runtime does not fill, or a specialization the
+    /// runtime does not set. Buffers, `setBytes` data, textures and sampler states by their
+    /// resource IDs, constexpr samplers by their indices, an integer write's channel widths,
+    /// threadgroup memory lengths, the dispatch's grid and a pinned subgroup size are supplied.
     ///
-    /// Basis: ours (the encoder binds buffers alone).
+    /// Basis: ours (the encoder supplies only those).
     KernelInput,
     /// A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD
     /// group as one subgroup of `width` threads (a pinned subgroup of 32, or the device's own
@@ -530,6 +560,16 @@ impl fmt::Display for Refusal {
                 write!(f, "buffer index {index} is past the 31 entries")
             }
             Refusal::NoBufferAtIndex { index } => write!(f, "no buffer is bound at index {index}"),
+            Refusal::TextureArgumentIndex { index } => {
+                write!(f, "texture index {index} is past the 128 entries")
+            }
+            Refusal::SamplerArgumentIndex { index } => {
+                write!(f, "sampler index {index} is past the 16 entries")
+            }
+            Refusal::SamplerIds { numbered, given } => write!(
+                f,
+                "{given} sampler indices were given for the {numbered} samplers the state numbers"
+            ),
             Refusal::ThreadgroupSize { size, max } => write!(
                 f,
                 "a threadgroup of {size:?} threads is empty or past the state's {max}"

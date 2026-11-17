@@ -34,6 +34,9 @@ mod on_device {
     fn interface(buffers: Vec<(u32, Access)>, fields: Vec<Field>, push_len: u32) -> Interface {
         Interface {
             buffers,
+            textures: Vec::new(),
+            numbered: Vec::new(),
+            constexprs: Vec::new(),
             reads_unbound: false,
             writes_unbound: false,
             push_len,

@@ -63,10 +63,10 @@ pub use metal2vulkan::metal::{
 pub use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
 };
-/// `MTLComputePipelineDescriptor`, its kernel, and a pipeline's precision notes: the
-/// translator's.
+/// `MTLComputePipelineDescriptor`, its kernel, a pipeline's precision notes, and the samplers a
+/// pipeline state numbers: the translator's.
 pub use metal2vulkan::pipeline::{
-    ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote, StageSource,
+    ComputePipelineDescriptor, FunctionDescriptor, NumberedSampler, PrecisionNote, StageSource,
 };
 pub use pipeline::ComputePipelineState;
 pub use queue::CommandQueue;

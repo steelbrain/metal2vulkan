@@ -133,6 +133,8 @@ struct TextureInner {
     /// Its class and index; `None` for a texture no shader reaches.
     index: Option<(IndexClass, u32)>,
     word: u32,
+    /// Its resource id in the encoders' hazard sets.
+    id: u32,
 }
 
 /// A texture's Vulkan objects: its image, its memory and its views. The texture and each upload
@@ -187,6 +189,7 @@ pub(crate) struct Shape {
 impl Drop for TextureInner {
     fn drop(&mut self) {
         let core = self.device.core();
+        core.ids.give_back(self.id);
         if let Some((class, index)) = self.index {
             // SAFETY: the texture owns its elements until it vacates the index below, and no
             // work that reads them is pending: each command buffer that used the texture held it
@@ -295,6 +298,7 @@ impl Device {
             unit: plan.unit,
             index,
             word: plan.word,
+            id: core.ids.take(),
         };
         if let Some((class, index)) = index {
             // SAFETY: the index is occupied for the texture, whose views are live; its image is
@@ -996,6 +1000,16 @@ impl TextureInner {
 }
 
 impl Texture {
+    /// Its resource id in the encoders' hazard sets.
+    pub(crate) fn id(&self) -> u32 {
+        self.inner.id
+    }
+
+    /// Whether `core` is the device this texture was made on.
+    pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
+        Arc::ptr_eq(self.inner.device.core(), core)
+    }
+
     /// `gpuResourceID`: its index (0 for a texture no shader reaches) and the translator's
     /// `TextureWord` of its pixel format and swizzle.
     pub fn gpu_resource_id(&self) -> ResourceId {

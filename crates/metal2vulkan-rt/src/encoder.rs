@@ -10,13 +10,20 @@ use crate::pipeline::{
 };
 use crate::record::Reach;
 use crate::ring::CHUNK;
+use crate::sampler::SamplerState;
+use crate::texture::Texture;
 use ash::vk;
+use metal2vulkan::metal::format::integer_channels_word;
 use metal2vulkan::pipeline::{nonuniform_region_bytes, region_bytes};
 use std::ops::BitOr;
 use std::sync::Arc;
 
 /// Metal's count of buffer argument table entries per stage.
 const BUFFER_SLOTS: u32 = 31;
+/// Metal's count of texture argument table entries per stage.
+const TEXTURE_SLOTS: u32 = 128;
+/// Metal's count of sampler argument table entries per stage.
+const SAMPLER_SLOTS: u32 = 16;
 
 /// `MTLDispatchType`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +76,8 @@ impl BitOr for ResourceUsage {
 pub enum Resource<'a> {
     /// An `MTLBuffer`.
     Buffer(&'a Buffer),
+    /// An `MTLTexture`.
+    Texture(&'a Texture),
 }
 
 /// What a buffer slot holds.
@@ -136,6 +145,10 @@ pub struct ComputeCommandEncoder {
     serial: bool,
     pipeline: Option<ComputePipelineState>,
     slots: Vec<Slot>,
+    /// The texture argument table.
+    textures: Vec<Option<Texture>>,
+    /// The sampler argument table.
+    samplers: Vec<Option<SamplerState>>,
     /// Threadgroup memory lengths by index, as set.
     threadgroup_lengths: Vec<(u32, u32)>,
     /// `use_resource` declarations, by resource id.
@@ -184,6 +197,8 @@ impl CommandBuffer {
             serial: dispatch_type == DispatchType::Serial,
             pipeline: None,
             slots: vec![Slot::Empty; BUFFER_SLOTS as usize],
+            textures: vec![None; TEXTURE_SLOTS as usize],
+            samplers: vec![None; SAMPLER_SLOTS as usize],
             threadgroup_lengths: Vec::new(),
             declared: Vec::new(),
             last: None,
@@ -249,6 +264,53 @@ impl ComputeCommandEncoder {
         Ok(())
     }
 
+    /// `setTexture:atIndex:` (`setTextures:withRange:` is a loop of it). `None` unbinds the slot.
+    /// A dispatch pushes the texture's `gpuResourceID` for each texture slot its kernel reads,
+    /// and the channel widths an integer write saturates to where its kernel takes them. The
+    /// command buffer keeps the texture until it retires.
+    ///
+    /// Err: [`Refusal::TextureArgumentIndex`] for an index of 128 or more;
+    /// [`Refusal::OtherDevice`] for another device's texture.
+    pub fn set_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error> {
+        if index >= TEXTURE_SLOTS {
+            return Err(Error::Refused(Refusal::TextureArgumentIndex { index }));
+        }
+        if let Some(texture) = texture {
+            let building = self.building();
+            if !texture.is_of(building.device.core()) {
+                return Err(Error::Refused(Refusal::OtherDevice));
+            }
+            building.keep_texture(texture);
+        }
+        self.textures[index as usize] = texture.cloned();
+        Ok(())
+    }
+
+    /// `setSamplerState:atIndex:` (`setSamplerStates:withRange:` is a loop of it). `None`
+    /// unbinds the slot. A dispatch pushes the state's `gpuResourceID` for each sampler slot its
+    /// kernel samples through. The command buffer keeps the state until it retires.
+    ///
+    /// Err: [`Refusal::SamplerArgumentIndex`] for an index of 16 or more;
+    /// [`Refusal::OtherDevice`] for another device's state.
+    pub fn set_sampler_state(
+        &mut self,
+        sampler: Option<&SamplerState>,
+        index: u32,
+    ) -> Result<(), Error> {
+        if index >= SAMPLER_SLOTS {
+            return Err(Error::Refused(Refusal::SamplerArgumentIndex { index }));
+        }
+        if let Some(sampler) = sampler {
+            let building = self.building();
+            if !sampler.is_of(building.device.core()) {
+                return Err(Error::Refused(Refusal::OtherDevice));
+            }
+            building.keep_sampler(sampler);
+        }
+        self.samplers[index as usize] = sampler.cloned();
+        Ok(())
+    }
+
     /// `setBufferOffset:atIndex:`.
     ///
     /// Err: [`Refusal::BufferIndex`] for an index of 31 or more; [`Refusal::NoBufferAtIndex`]
@@ -301,7 +363,8 @@ impl ComputeCommandEncoder {
     }
 
     /// `useResource:usage:` (`useResources:count:usage:` is a loop of it): the resource joins every
-    /// later dispatch's accesses. The command buffer keeps a buffer's block until it retires.
+    /// later dispatch's accesses. The command buffer keeps a buffer's block, or a texture, until
+    /// it retires.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's resource.
     pub fn use_resource(
@@ -309,16 +372,26 @@ impl ComputeCommandEncoder {
         resource: Resource<'_>,
         usage: ResourceUsage,
     ) -> Result<(), Error> {
-        let Resource::Buffer(buffer) = resource;
         let building = self.building();
-        if !buffer.is_of(building.device.core()) {
-            return Err(Error::Refused(Refusal::OtherDevice));
-        }
-        building.keep(buffer.held_block());
+        let id = match resource {
+            Resource::Buffer(buffer) => {
+                if !buffer.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                building.keep(buffer.held_block());
+                buffer.id()
+            }
+            Resource::Texture(texture) => {
+                if !texture.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                building.keep_texture(texture);
+                texture.id()
+            }
+        };
         let Some(access) = usage.access() else {
             return Ok(());
         };
-        let id = buffer.id();
         match self
             .declared
             .iter_mut()
@@ -581,6 +654,7 @@ impl ComputeCommandEncoder {
         let wrote = {
             let accesses = Accesses {
                 slots: &self.slots,
+                textures: &self.textures,
                 declared: &self.declared,
                 indirect: match grid {
                     Grid::Indirect(buffer, _) => Some(buffer.id()),
@@ -613,7 +687,11 @@ impl ComputeCommandEncoder {
                             let count = std::array::from_fn(|axis| {
                                 limit[axis].min(groups[axis] - base[axis])
                             });
-                            self.fill_parameters(kernel, &region(base, threads, ragged)?);
+                            self.fill_parameters(
+                                kernel,
+                                &inner.numbered.ids,
+                                &region(base, threads, ragged)?,
+                            );
                             self.record(vk_pipeline, Launch::Direct(count))?;
                         }
                     }
@@ -621,7 +699,7 @@ impl ComputeCommandEncoder {
                 Ok(())
             }
             (None, Grid::Indirect(buffer, offset)) => {
-                self.fill_parameters(kernel, &region([0; 3], [0; 3], false)?);
+                self.fill_parameters(kernel, &inner.numbered.ids, &region([0; 3], [0; 3], false)?);
                 self.record(vk_pipeline, Launch::Indirect(buffer, offset))
             }
             (None, Grid::Direct { .. }) => Ok(()),
@@ -646,9 +724,10 @@ impl ComputeCommandEncoder {
     }
 
     /// Fills the push window and the ring block of one launch of `kernel` whose region is
-    /// `region`, the `DispatchRegion` push field's bytes. The block's address is written by
-    /// [`Building::record_dispatch`] once the block is in the ring.
-    fn fill_parameters(&mut self, kernel: &Kernel, region: &[u8; 32]) {
+    /// `region`, the `DispatchRegion` push field's bytes, and whose state gave its numbered
+    /// samplers `sampler_ids`. The block's address is written by [`Building::record_dispatch`]
+    /// once the block is in the ring.
+    fn fill_parameters(&mut self, kernel: &Kernel, sampler_ids: &[u32], region: &[u8; 32]) {
         let interface: &Interface = &kernel.interface;
         let parameters = &mut self.parameters;
         parameters.push.clear();
@@ -672,6 +751,33 @@ impl ComputeCommandEncoder {
                         Some(Slot::Empty) | None => 0,
                     };
                     bytes[at..at + 8].copy_from_slice(&address.to_le_bytes());
+                }
+                FieldValue::TextureId(slot) => {
+                    let id = match self.textures.get(slot as usize) {
+                        Some(Some(texture)) => texture.gpu_resource_id().to_bits(),
+                        _ => 0,
+                    };
+                    bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
+                }
+                FieldValue::SamplerId(slot) => {
+                    let id = match self.samplers.get(slot as usize) {
+                        Some(Some(sampler)) => sampler.gpu_resource_id().to_bits(),
+                        _ => 0,
+                    };
+                    bytes[at..at + 8].copy_from_slice(&id.to_le_bytes());
+                }
+                FieldValue::IntegerChannels(slot) => {
+                    let word = match self.textures.get(slot as usize) {
+                        Some(Some(texture)) => {
+                            integer_channels_word(texture.descriptor().pixel_format)
+                        }
+                        _ => 0,
+                    };
+                    bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
+                }
+                FieldValue::ConstexprSampler(place) => {
+                    let index = sampler_ids.get(place).copied().unwrap_or(0);
+                    bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
                 }
                 FieldValue::DispatchRegion => bytes[at..at + 32].copy_from_slice(region),
             }
@@ -707,24 +813,29 @@ fn merge(a: Access, b: Access) -> Access {
 /// What a dispatch touches besides its pipeline's own facts.
 pub(crate) struct Accesses<'a> {
     slots: &'a [Slot],
+    textures: &'a [Option<Texture>],
     declared: &'a [(u32, Access)],
     indirect: Option<u32>,
 }
 
 impl Accesses<'_> {
-    /// Each resource the dispatch touches, by id, with its access.
+    /// Each resource the dispatch of a kernel of `interface` touches, by id, with its access.
     pub(crate) fn each<'b>(
         &'b self,
-        bound: &'b [(u32, Access)],
+        interface: &'b Interface,
     ) -> impl Iterator<Item = (u32, Access)> + 'b {
-        let slots =
-            bound
-                .iter()
-                .filter_map(|&(slot, access)| match self.slots.get(slot as usize) {
-                    Some(Slot::Buffer { buffer, .. }) => Some((buffer.id(), access)),
-                    _ => None,
-                });
+        let slots = interface.buffers.iter().filter_map(|&(slot, access)| {
+            match self.slots.get(slot as usize) {
+                Some(Slot::Buffer { buffer, .. }) => Some((buffer.id(), access)),
+                _ => None,
+            }
+        });
+        let textures = interface.textures.iter().filter_map(|&(slot, access)| {
+            let texture = self.textures.get(slot as usize)?.as_ref()?;
+            Some((texture.id(), access))
+        });
         slots
+            .chain(textures)
             .chain(self.declared.iter().copied())
             .chain(self.indirect.map(|id| (id, Access::Read)))
     }
@@ -736,7 +847,7 @@ impl Building {
     fn dispatch_hazards(
         &mut self,
         serial: bool,
-        interface: &crate::pipeline::Interface,
+        interface: &Interface,
         accesses: &Accesses<'_>,
     ) -> Result<bool, Error> {
         let indirect = accesses.indirect.is_some();
@@ -745,7 +856,7 @@ impl Building {
         let hazards = self.hazards();
         let conflict = serial
             && (accesses
-                .each(&interface.buffers)
+                .each(interface)
                 .any(|(id, access)| hazards.conflicts(id, access))
                 || (interface.reads_unbound && hazards.wrote())
                 || (interface.writes_unbound && hazards.touched()));
@@ -757,7 +868,7 @@ impl Building {
         }
         let hazards = self.hazards();
         let mut wrote = false;
-        for (id, access) in accesses.each(&interface.buffers) {
+        for (id, access) in accesses.each(interface) {
             hazards.mark(id, access);
             wrote |= access.writes();
         }
@@ -798,10 +909,23 @@ impl Building {
         let command = self.command(Reach::Dispatches {
             indirect: matches!(launch, Launch::Indirect(..)),
         })?;
-        // SAFETY: the command buffer is recording outside any render pass; the pipeline and the
-        // layout are the device's, and the push range of the layout spans every stage's first 128
-        // bytes.
+        // Set 1, which every pipeline's layout shares, is bound once in each command buffer,
+        // before its first pipeline; it stays bound across the pipelines after it.
+        let first = self.unbound();
+        // SAFETY: the command buffer is recording outside any render pass; the pipeline, the
+        // layout and set 1 are the device's, set 1 of that layout and update-after-bind, and the
+        // push range of the layout spans every stage's first 128 bytes.
         unsafe {
+            if first {
+                device.cmd_bind_descriptor_sets(
+                    command,
+                    vk::PipelineBindPoint::COMPUTE,
+                    core.layout,
+                    1,
+                    &[core.arrays.set()],
+                    &[],
+                );
+            }
             if self.bind(pipeline) {
                 device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
             }

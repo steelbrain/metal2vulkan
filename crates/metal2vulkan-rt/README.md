@@ -340,10 +340,19 @@ that touch blocks first.
   While it is open, the encoder holds the command buffer's recording: another encoder, an encode
   call, `enqueue` and `commit` are refused (`Refusal::EncoderOpen`). `end_encoding`, or dropping
   the encoder, gives it back.
-- Each dispatch records at once. What it touches is its pipeline's bound buffer slots, with the
-  access the translator states for each, the `use_resource` declarations, and an indirect
-  dispatch's arguments buffer (a read). The hazard sets (resources read and resources written
-  since the last barrier) are kept by resource, a buffer being one resource, in a table indexed by
+- `set_texture` (128 slots, `Refusal::TextureArgumentIndex` past them) and `set_sampler_state`
+  (16 slots, `Refusal::SamplerArgumentIndex`) bind as Metal's calls do; `use_resource` takes a
+  texture as it takes a buffer. A dispatch pushes, for each texture and sampler slot its kernel
+  reads, the bound object's `gpuResourceID` (0 for none), whose index names its elements of set
+  1; for a texture slot an integer write saturates through, the channel widths of the bound
+  texture's format (`metal::format::integer_channels_word`); and for each constexpr sampler it
+  samples through, the index the consumer gave it at the state's creation. Nothing is written
+  into set 1 at bind or dispatch time, and every texture stays in its home layout.
+- Each dispatch records at once. What it touches is its pipeline's bound buffer and texture
+  slots, with the access the translator states for each (a texture's sample and read are reads),
+  the `use_resource` declarations, and an indirect dispatch's arguments buffer (a read). The
+  hazard sets (resources read and resources written since the last barrier) are kept by resource,
+  a buffer or a texture being one resource, in a table indexed by
   a small resource id with a generation counter, so clearing them is one increment. They carry
   across the encoders of a command buffer until a barrier.
 - A `Serial` encoder places one global memory barrier before a dispatch that reads or writes a
@@ -369,16 +378,31 @@ that touch blocks first.
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
   64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block
   is made when no chunk is free and kept for the device's life.
-- The command buffer keeps each pipeline state it dispatches with until it retires.
+- The command buffer keeps each pipeline state it dispatches with, and each texture and sampler
+  state an encoder binds or declares, until it retires, so their elements of set 1 stay theirs
+  while work may read them.
 
 ## Compute pipeline states
 
-- `Device::new_compute_pipeline_state(&ComputePipelineDescriptor)` is
+- `Device::new_compute_pipeline_state(&ComputePipelineDescriptor, sampler_ids)` is
   `newComputePipelineStateWithDescriptor:options:reflection:error:` without reflection. The
   translator compiles the kernel on the calling thread, which waits for it, within its 20-second
   budget per lowering, for what device creation enabled and under its identity domains: each
-  buffer argument is the guest address of the bound buffer plus its offset, pushed. A refusal of
-  the translator is `Error::Translation`.
+  buffer argument is the guest address of the bound buffer plus its offset, and each texture and
+  sampler argument the bound object's resource ID, pushed; set 1 is the only descriptor set a
+  kernel reads. A refusal of the translator is `Error::Translation`.
+- A state numbers samplers as Metal's pipeline creation does (`NumberedSampler`, in Metal's
+  order): each constexpr sampler its kernel uses, then one where it reads a texture and one where
+  it writes one. `sampler_ids` takes that list once the kernel is lowered and answers an index
+  for each, which the consumer numbers as Metal does, from its sampler grants
+  (`Refusal::SamplerIds` for another count; an error it answers is the call's). A constexpr
+  sampler the kernel samples through takes, before the call returns, the device sampler of each
+  use the kernel has (`CombinedSampler::constexpr_sampler`, normalized; a pixel sampler's
+  coordinate is scaled in the shader) at its index of the three sampler arrays, shared by create
+  info with the sampler states'. States that number one constexpr sampler at one index share its
+  elements (another sampler there is `Refusal::IndexInUse`); the last of them to go writes the
+  arrays' defaults back and frees the index. The read and write samplers take nothing at their
+  indices. Once `sampler_ids` has answered, a call that fails holds none of the indices.
 - Every kernel is lowered first as its partial-threadgroups variant. A kernel that does not
   observe its threadgroup partition (it holds no threadgroup memory, barrier, fence or atomic of
   threadgroup or SIMD-group scope, SIMD-group or quad function, and reads no builtin of the
@@ -449,9 +473,10 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
   its plain module). For the observing kernel the device tests run, a grid template over
   threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole creation 2.7 to
   2.9 ms on an RX 7900 XTX in a release build; a larger kernel's lowering takes longer.
-- A kernel that reads anything the encoder does not supply yet, a texture, a sampler, a function
-  table, a `[[stage_in]]` fetch or constant data, is refused (`Gap::KernelInput`). So is a state
-  for indirect command buffers (`Gap::IndirectCommandBuffers`).
+- A kernel that reads anything the encoder does not supply yet, a function table, a
+  `[[stage_in]]` fetch, constant data, or a sampler or texture state the translator would take
+  from the bound object rather than from its resource ID, is refused (`Gap::KernelInput`). So is
+  a state for indirect command buffers (`Gap::IndirectCommandBuffers`).
 - A threadgroup that is not whole SIMD groups of a kernel whose SIMD groups run one per subgroup
   of 32 is refused (`Gap::PartialSimdgroups`) where the state has no emulated-SIMD-group module:
   for a kernel the consumer compiled (`StageSource::Compiled`), and where the translator refuses

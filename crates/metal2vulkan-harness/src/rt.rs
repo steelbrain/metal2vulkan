@@ -15,16 +15,22 @@
 //! up to date on a Mac with a discrete GPU. It has no CPU copy: its `contents` is `None`.
 //!
 //! Its known gaps and the device's limits (`Error::Unsupported`, `Error::Limit`) are typed
-//! refusals ([`Refused`]); its other errors are failures. It makes no texture or sampler state
-//! yet: a plan with either is refused when it is made, so its texture and sampler types have no
-//! value.
+//! refusals ([`Refused`]); its other errors are failures.
+//!
+//! The runtime places a texture or a sampler state at the index its consumer gives, from the
+//! consumer's grants, and asks it for the index of each sampler a pipeline state numbers. The
+//! harness grants itself every storage-capable texture index and every sampler index once the
+//! device is made ([`Indices`]): each texture (`ShaderRead | ShaderWrite`) and each sampler state
+//! takes the next index in turn, passing over one an earlier object still holds, and a constexpr
+//! sampler the index the first state that numbered its state words took, as Metal gives an equal
+//! one the same ID. A texture read's or write's numbered sampler takes nothing at its index: 0.
 
 use crate::plan::{self, Constant, Filter};
 use crate::{Code, Refused, Result, Size, Storage, Waits};
 use ash::vk;
 use metal2vulkan_rt as rt;
 use std::cell::RefCell;
-use std::convert::Infallible;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -86,14 +92,19 @@ pub fn system_default() -> Result<Device> {
     for (_, name, physical) in candidates {
         match rt::Device::new(&physical, rt::DeviceOptions::default()) {
             Ok(device) => {
+                for class in [rt::IndexClass::StorageTexture, rt::IndexClass::Sampler] {
+                    let range = class.range();
+                    device.grant_indices(class, range.start, range.end - range.start)?;
+                }
                 return Ok(Device {
+                    indices: RefCell::new(Indices::default()),
                     heap: Rc::new(RefCell::new(Heap {
                         device: device.clone(),
                         blocks: Vec::new(),
                     })),
                     device,
                     name,
-                })
+                });
             }
             Err(why) => refused.push(format!("{name}: {why}")),
         }
@@ -106,6 +117,67 @@ pub struct Device {
     device: rt::Device,
     name: String,
     heap: Rc<RefCell<Heap>>,
+    indices: RefCell<Indices>,
+}
+
+/// The texture and sampler indices the harness hands out (the module's docs): the last texture
+/// and sampler index taken, and each constexpr sampler's index by its state words.
+#[derive(Default)]
+struct Indices {
+    texture: u32,
+    sampler: u32,
+    constexprs: HashMap<[u64; 2], u32>,
+}
+
+impl Indices {
+    /// The next index of `class` after `last`, past the end back to its first; a sampler index a
+    /// constexpr sampler took is passed over.
+    fn next(&self, class: rt::IndexClass, last: u32) -> u32 {
+        let range = class.range();
+        let mut index = last;
+        loop {
+            index = match index + 1 {
+                next if range.contains(&next) => next,
+                _ => range.start,
+            };
+            if class != rt::IndexClass::Sampler || !self.constexprs.values().any(|&i| i == index) {
+                return index;
+            }
+        }
+    }
+}
+
+impl Device {
+    /// `make` at the next index of `class` that no earlier object still holds.
+    fn place<T>(
+        &self,
+        class: rt::IndexClass,
+        make: impl Fn(u32) -> std::result::Result<T, rt::Error>,
+    ) -> Result<T> {
+        let range = class.range();
+        for _ in range.clone() {
+            let index = {
+                let mut indices = self.indices.borrow_mut();
+                let last = match class {
+                    rt::IndexClass::Sampler => indices.sampler,
+                    _ => indices.texture,
+                };
+                let index = indices.next(class, last);
+                match class {
+                    rt::IndexClass::Sampler => indices.sampler = index,
+                    _ => indices.texture = index,
+                }
+                index
+            };
+            match make(index) {
+                Err(rt::Error::Refused(rt::Refusal::IndexInUse { .. })) => continue,
+                made => return made.map_err(error),
+            }
+        }
+        Err(Box::new(Refused(format!(
+            "every {class:?} index is in use"
+        ))))
+    }
 }
 
 /// `MTLBuffer`: the runtime's buffer, and its place, freed when it is dropped.
@@ -308,8 +380,8 @@ impl crate::ComputeDevice for Device {
     type CommandQueue = rt::CommandQueue;
     type CommandBuffer = rt::CommandBuffer;
     type ComputeCommandEncoder = rt::ComputeCommandEncoder;
-    type Texture = Infallible;
-    type SamplerState = Infallible;
+    type Texture = rt::Texture;
+    type SamplerState = rt::SamplerState;
 
     fn new_library(&self, code: Code<'_>) -> Result<rt::Library> {
         Ok(match code {
@@ -324,8 +396,26 @@ impl crate::ComputeDevice for Device {
     ) -> Result<rt::ComputePipelineState> {
         let descriptor =
             rt::ComputePipelineDescriptor::new(rt::StageSource::Function(function.clone()));
+        // A constexpr sampler takes the index its state words took first; a read's or a write's
+        // sampler takes nothing at its index.
+        let sampler_ids = |samplers: &[rt::NumberedSampler]| {
+            let mut indices = self.indices.borrow_mut();
+            let ids = samplers.iter().map(|sampler| match sampler {
+                rt::NumberedSampler::Constexpr(words) => match indices.constexprs.get(words) {
+                    Some(&index) => index,
+                    None => {
+                        let index = indices.next(rt::IndexClass::Sampler, indices.sampler);
+                        indices.sampler = index;
+                        indices.constexprs.insert(*words, index);
+                        index
+                    }
+                },
+                _ => 0,
+            });
+            Ok(ids.collect())
+        };
         (self.device)
-            .new_compute_pipeline_state(&descriptor)
+            .new_compute_pipeline_state(&descriptor, sampler_ids)
             .map_err(error)
     }
 
@@ -335,18 +425,31 @@ impl crate::ComputeDevice for Device {
             .map_err(error)
     }
 
-    /// A typed refusal: the runtime makes no texture yet.
-    fn new_texture(&self, _width: u32, _height: u32) -> Result<Infallible> {
-        Err(Box::new(Refused(
-            "the new runtime makes no texture yet".to_owned(),
-        )))
+    fn new_texture(&self, width: u32, height: u32) -> Result<rt::Texture> {
+        let mut descriptor = rt::TextureDescriptor::new(
+            rt::TextureType::Type2D,
+            rt::PixelFormat::RGBA16Float,
+            width,
+            height,
+        );
+        descriptor.usage = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
+        descriptor.storage_mode = rt::StorageMode::Private;
+        self.place(rt::IndexClass::StorageTexture, |index| {
+            self.device.new_texture(&descriptor, Some(index))
+        })
     }
 
-    /// A typed refusal: the runtime makes no sampler state yet.
-    fn new_sampler_state(&self, _filter: Filter) -> Result<Infallible> {
-        Err(Box::new(Refused(
-            "the new runtime makes no sampler state yet".to_owned(),
-        )))
+    fn new_sampler_state(&self, filter: Filter) -> Result<rt::SamplerState> {
+        let mut descriptor = rt::SamplerDescriptor::new();
+        let filter = match filter {
+            Filter::Nearest => rt::SamplerMinMagFilter::Nearest,
+            Filter::Linear => rt::SamplerMinMagFilter::Linear,
+        };
+        descriptor.min_filter = filter;
+        descriptor.mag_filter = filter;
+        self.place(rt::IndexClass::Sampler, |index| {
+            self.device.new_sampler_state(&descriptor, index)
+        })
     }
 }
 
@@ -414,12 +517,12 @@ impl crate::ComputeCommandEncoder<Device> for rt::ComputeCommandEncoder {
         rt::ComputeCommandEncoder::set_bytes(self, bytes, index).map_err(error)
     }
 
-    fn set_texture(&mut self, texture: &Infallible, _index: u32) -> Result<()> {
-        match *texture {}
+    fn set_texture(&mut self, texture: &rt::Texture, index: u32) -> Result<()> {
+        rt::ComputeCommandEncoder::set_texture(self, Some(texture), index).map_err(error)
     }
 
-    fn set_sampler_state(&mut self, sampler: &Infallible, _index: u32) -> Result<()> {
-        match *sampler {}
+    fn set_sampler_state(&mut self, sampler: &rt::SamplerState, index: u32) -> Result<()> {
+        rt::ComputeCommandEncoder::set_sampler_state(self, Some(sampler), index).map_err(error)
     }
 
     fn dispatch_threadgroups(&mut self, groups: Size, threads: Size) -> Result<()> {

@@ -16,7 +16,7 @@ use crate::pipeline::PUSH_BYTES;
 use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
 use crate::ring::Ring;
-use crate::sampler::SamplerTable;
+use crate::sampler::{Constexpr, SamplerTable};
 use crate::submit::{self, Work};
 use crate::times::Ticks;
 use ash::vk;
@@ -162,6 +162,8 @@ pub(crate) struct Core {
     pub(crate) arrays: Arrays,
     /// The sampler states' device samplers, shared by create info.
     pub(crate) samplers: Mutex<SamplerTable>,
+    /// The constexpr samplers the live pipeline states number, by index.
+    pub(crate) constexprs: Mutex<HashMap<u32, Constexpr>>,
     /// The device's compute limits.
     pub(crate) limits: ComputeLimits,
     /// The parameter ring.
@@ -411,6 +413,7 @@ impl Device {
             layout,
             arrays,
             samplers: Mutex::new(SamplerTable::new(sampler_cap)),
+            constexprs: Mutex::new(HashMap::new()),
             limits,
             ring: Ring::new(),
             ids: Ids::new(),

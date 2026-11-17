@@ -40,6 +40,32 @@ pub(crate) const STORAGE_BINDING: u32 = 1;
 /// follow in that order.
 pub(crate) const FIRST_SAMPLER_BINDING: u32 = 2;
 
+/// Set 1's bindings, each its binding, descriptor type and count: the arrays a kernel's layout
+/// names under the identity domains, which every pipeline's layout takes from this set.
+pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 5] = [
+    (
+        SAMPLED_BINDING,
+        vk::DescriptorType::SAMPLED_IMAGE,
+        SAMPLED_IMAGES,
+    ),
+    (
+        STORAGE_BINDING,
+        vk::DescriptorType::STORAGE_IMAGE,
+        STORAGE_IMAGES,
+    ),
+    (FIRST_SAMPLER_BINDING, vk::DescriptorType::SAMPLER, SAMPLERS),
+    (
+        FIRST_SAMPLER_BINDING + 1,
+        vk::DescriptorType::SAMPLER,
+        SAMPLERS,
+    ),
+    (
+        FIRST_SAMPLER_BINDING + 2,
+        vk::DescriptorType::SAMPLER,
+        SAMPLERS,
+    ),
+];
+
 /// No Metal counterpart: the class of a texture or sampler index, which sets the range its grants
 /// are taken from (`docs/RESOURCE-ID.md`).
 #[non_exhaustive]
@@ -274,6 +300,11 @@ impl Arrays {
         arrays
     }
 
+    /// Set 1, which each command buffer binds once, before its first pipeline.
+    pub(crate) fn set(&self) -> vk::DescriptorSet {
+        self.set
+    }
+
     /// The set layouts of every pipeline: the empty set 0, then set 1.
     pub(crate) fn set_layouts(&self) -> [vk::DescriptorSetLayout; 2] {
         [self.empty, self.layout]
@@ -331,34 +362,41 @@ impl Arrays {
         unsafe { device.update_descriptor_sets(&writes[..count], &[]) };
     }
 
-    /// Writes a sampler state's elements at `index` of the three sampler arrays, plain,
-    /// comparison and integer texture: each array's default where a sampler is `None`.
+    /// Writes elements at `index` of the sampler arrays, each `(array, sampler)`, the array 0
+    /// plain, 1 comparison and 2 integer texture: the array's default where the sampler is `None`.
+    /// The elements not listed are left as they are.
     ///
     /// # Safety
     ///
-    /// The caller owns the elements (the index is occupied for it, or is being vacated by it), and
-    /// each sampler is live and of the device whenever work uses it.
+    /// The caller owns the elements (the index is occupied for it, or is being vacated by it), no
+    /// pending work uses one it writes, and each sampler is live and of the device whenever work
+    /// uses it.
     pub(crate) unsafe fn write_samplers(
         &self,
         device: &ash::Device,
         index: u32,
-        samplers: [Option<vk::Sampler>; 3],
+        elements: &[(usize, Option<vk::Sampler>)],
     ) {
         let defaults = [self.plain, self.compare, self.plain];
-        let infos =
-            [0, 1, 2].map(|array| {
-                [vk::DescriptorImageInfo::default()
-                    .sampler(samplers[array].unwrap_or(defaults[array]))]
-            });
-        let writes = [0, 1, 2].map(|array| {
-            write(
-                self.set,
-                FIRST_SAMPLER_BINDING + array as u32,
-                vk::DescriptorType::SAMPLER,
-                &infos[array],
-            )
-            .dst_array_element(index)
-        });
+        let infos: Vec<[vk::DescriptorImageInfo; 1]> = elements
+            .iter()
+            .map(|&(array, sampler)| {
+                [vk::DescriptorImageInfo::default().sampler(sampler.unwrap_or(defaults[array]))]
+            })
+            .collect();
+        let writes: Vec<vk::WriteDescriptorSet> = elements
+            .iter()
+            .zip(&infos)
+            .map(|(&(array, _), info)| {
+                write(
+                    self.set,
+                    FIRST_SAMPLER_BINDING + array as u32,
+                    vk::DescriptorType::SAMPLER,
+                    info,
+                )
+                .dst_array_element(index)
+            })
+            .collect();
         // SAFETY: the caller's contract; the bindings are update-after-bind and
         // update-unused-while-pending, so elements of other owners may be written meanwhile.
         unsafe { device.update_descriptor_sets(&writes, &[]) };
@@ -402,35 +440,13 @@ impl Made {
         let empty = unsafe { device.create_descriptor_set_layout(&empty, None) }
             .map_err(Error::vulkan("vkCreateDescriptorSetLayout"))?;
         self.empty = Some(empty);
-        let array = |binding, ty, count| {
+        let bindings = BINDINGS.map(|(binding, ty, count)| {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(binding)
                 .descriptor_type(ty)
                 .descriptor_count(count)
                 .stage_flags(vk::ShaderStageFlags::ALL)
-        };
-        let sampler = |use_: u32| {
-            array(
-                FIRST_SAMPLER_BINDING + use_,
-                vk::DescriptorType::SAMPLER,
-                SAMPLERS,
-            )
-        };
-        let bindings = [
-            array(
-                SAMPLED_BINDING,
-                vk::DescriptorType::SAMPLED_IMAGE,
-                SAMPLED_IMAGES,
-            ),
-            array(
-                STORAGE_BINDING,
-                vk::DescriptorType::STORAGE_IMAGE,
-                STORAGE_IMAGES,
-            ),
-            sampler(0),
-            sampler(1),
-            sampler(2),
-        ];
+        });
         let flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND
             | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
             | vk::DescriptorBindingFlags::UPDATE_UNUSED_WHILE_PENDING; 5];
