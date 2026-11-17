@@ -682,10 +682,13 @@ impl ComputeCommandEncoder {
                 .building
                 .as_mut()
                 .expect("an encoder holds its command buffer's recording until it ends");
+            let wrote = building.dispatch_hazards(serial, &kernel.interface, &accesses)?;
+            // Marked after the hazards' barrier, which may have split the recording at a signal:
+            // the mark is the dispatch's own segment's.
             if host {
                 building.wrote_host();
             }
-            building.dispatch_hazards(serial, &kernel.interface, &accesses)?
+            wrote
         };
         self.wrote |= wrote;
         let region = |base, threads, ragged| {
