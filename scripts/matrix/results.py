@@ -174,7 +174,8 @@ def time_outliers(times, bases):
 
 def verdict_line(leg_id, leg):
     """The one line `run` and `show` print for a leg of a note."""
-    tests = ", ".join(f"{name} {s['passed']}/{s['run']}" for name, s in leg.get("suites", {}).items())
+    tests = ", ".join(f"{name} {s['passed']}/{s['run']}" if s["run"] else f"{name} exit {s['exit']}"
+                      for name, s in leg.get("suites", {}).items())
     counted = sum(len(values) for values in leg.get("records", {}).values())
     where = " ".join(part for part in (leg.get("device"), leg.get("driver")) if part)
     head = f"{'PASS' if leg['verdict'] == 'pass' else 'FAIL'} {leg_id:10} {where or '?'} on {leg.get('node', '?')}"

@@ -607,12 +607,21 @@ def run_cmd(sha, only, dry):
     finally:
         run.cleanup()
     entries = {leg.id: leg_entry(run, leg) for leg in legs}
-    gpu = {k: e for k, e in entries.items() if e["gpu"]}
-    for leg_id, problems in results.time_outliers(
-            {k: e["records"]["time"] for k, e in gpu.items()},
-            {k: (e["base_records"] or {}).get("time", {}) for k, e in gpu.items()}).items():
-        entries[leg_id]["problems"] += problems
     doc = note(sha) or dict(sha=sha, runs=[], legs={})
+    # The cross-GPU median takes every GPU leg of the note, so a run of some legs (--legs) is
+    # judged against the GPUs it did not run again; only this run's legs are judged.
+    times, bases = {}, {}
+    for leg_id, e in doc["legs"].items():
+        if e.get("gpu") and leg_id not in entries:
+            times[leg_id] = e["records"]["time"]
+            bases[leg_id] = ((base_of(sha, leg_id)[1] or {}).get("records") or {}).get("time", {})
+    for leg_id, e in entries.items():
+        if e["gpu"]:
+            times[leg_id] = e["records"]["time"]
+            bases[leg_id] = (e["base_records"] or {}).get("time", {})
+    for leg_id, problems in results.time_outliers(times, bases).items():
+        if leg_id in entries:
+            entries[leg_id]["problems"] += problems
     for leg_id, e in entries.items():
         e.pop("base_records")
         e["verdict"] = "fail" if e["problems"] else "pass"
