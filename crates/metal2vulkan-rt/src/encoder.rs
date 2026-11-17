@@ -340,7 +340,7 @@ impl ComputeCommandEncoder {
         for axis in 0..3 {
             groups[axis] = match threads_per_threadgroup[axis] {
                 0 => 0,
-                size if threads_per_grid[axis] % size != 0 => {
+                size if !threads_per_grid[axis].is_multiple_of(size) => {
                     return Err(Error::Unsupported(Gap::PartialThreadgroups {
                         threads_per_grid,
                         threads_per_threadgroup,
