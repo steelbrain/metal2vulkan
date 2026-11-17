@@ -87,41 +87,51 @@ impl Described {
             expect: Vec::new(),
             outputs: Vec::new(),
         };
-        // The bindings read since the last dispatch, which the next one takes.
-        let mut pending = Vec::new();
-        for (number, words) in &self.lines {
+        let mut lines = self.lines.iter().map(|(number, words)| {
             let words: Vec<&str> = words.iter().map(String::as_str).collect();
-            let at = |why: String| format!("line {number}: {why}");
-            match line(&words).map_err(at)? {
-                Line::Buffer(buffer) => plan.buffers.push(buffer),
-                Line::Binding(binding) => pending.push(binding),
-                Line::Output(output) => plan.outputs.push(output),
-                Line::Dispatch {
-                    function,
-                    grid,
-                    repeat,
-                } => {
-                    plan.dispatches.push(Dispatch {
-                        function: function.clone(),
-                        bindings: pending.drain(..).collect(),
+            line(&words).map_err(|why| format!("line {number}: {why}"))
+        });
+        // A dispatch at a time: the lines up to it, its bindings among them.
+        loop {
+            let mut bindings = Vec::new();
+            let dispatch = loop {
+                match lines.next().transpose()? {
+                    None => break None,
+                    Some(Line::Buffer(buffer)) => plan.buffers.push(buffer),
+                    Some(Line::Binding(binding)) => bindings.push(binding),
+                    Some(Line::Output(output)) => plan.outputs.push(output),
+                    Some(Line::Dispatch {
+                        function,
                         grid,
-                    });
-                    for _ in 1..repeat {
-                        plan.dispatches.push(Dispatch {
-                            function: function.clone(),
-                            bindings: Vec::new(),
-                            grid,
-                        });
-                    }
+                        repeat,
+                    }) => break Some((function, grid, repeat)),
                 }
+            };
+            let Some((function, grid, repeat)) = dispatch else {
+                if !bindings.is_empty() {
+                    let name = &self.name;
+                    return Err(
+                        format!("workload {name} sets a binding after its last dispatch").into(),
+                    );
+                }
+                break;
+            };
+            plan.dispatches.push(Dispatch {
+                function: function.clone(),
+                bindings,
+                grid,
+            });
+            for _ in 1..repeat {
+                plan.dispatches.push(Dispatch {
+                    function: function.clone(),
+                    bindings: Vec::new(),
+                    grid,
+                });
             }
         }
         let name = &self.name;
         if plan.dispatches.is_empty() {
             return Err(format!("workload {name} has no dispatch").into());
-        }
-        if !pending.is_empty() {
-            return Err(format!("workload {name} sets a binding after its last dispatch").into());
         }
         plan.validate()?;
         Ok(plan)
