@@ -270,9 +270,10 @@ mod on_device {
         Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"))
     }
 
-    fn print_gauges(test: &str, gauges: Gauges) {
+    /// The matrix's leak records: each kind's live count after the device dropped.
+    fn print_gauges_at_drop(test: &str, gauges: Gauges) {
         for (kind, value) in [("buffers", gauges.buffers), ("blocks", gauges.blocks)] {
-            println!("M2V-MATRIX gauge {test}/{kind} {value}");
+            println!("M2V-MATRIX gauge {test}/{kind}@drop {value}");
         }
     }
 
@@ -361,7 +362,6 @@ mod on_device {
             );
             let clone = view.clone();
             let live = counters.gauges();
-            print_gauges("blocks_live", live);
             assert_eq!(live.buffers, 2, "{name}: a clone is the same buffer");
             assert!(live.blocks >= ZERO_SOURCE + 2, "{name}: {live:?}");
             assert!(counters.metrics().blocks_made >= ZERO_SOURCE + 2);
@@ -477,7 +477,7 @@ mod on_device {
             drop((view, whole, gpu));
             drop(device);
             let gauges = counters.gauges();
-            print_gauges("blocks_teardown", gauges);
+            print_gauges_at_drop("blocks_teardown", gauges);
             assert_eq!(gauges, Gauges::default(), "{name}: gauges after teardown");
             assert_each_unmapped_once(name, &hook, &[shared.id, private.id, dedicated.id]);
             for unmapped in &hook.unmapped()[1..] {
@@ -525,7 +525,6 @@ mod on_device {
             wait_until("a ready block of each class", || {
                 counters.gauges().blocks == ZERO_SOURCE + 2 + 3
             });
-            print_gauges("pool_full", counters.gauges());
             for block in &taken {
                 device.release_block(block.id).expect("a release");
             }
@@ -533,7 +532,6 @@ mod on_device {
             wait_until("the pool settled", || {
                 counters.gauges().blocks == ZERO_SOURCE + 1 + 2
             });
-            print_gauges("pool_settled", counters.gauges());
             let unmapped = hook.unmapped();
             for unmapped in &unmapped {
                 assert_eq!(unmapped.thread.as_deref(), Some("m2v-blocks"));
