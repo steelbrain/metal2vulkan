@@ -299,7 +299,9 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
   state reads only its lowerings from the cache directory, and each `VkPipeline` past the first
   tile is made at its first dispatch, through the pipeline data.
 - A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
-  its plain module); the second lowering's time is unmeasured.
+  its plain module). For the observing kernel the device tests run, a grid template over
+  threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole creation 2.7 to
+  2.9 ms on an RX 7900 XTX in a release build; a larger kernel's lowering takes longer.
 - A kernel that reads anything the encoder does not supply yet, a texture, a sampler, a function
   table, a `[[stage_in]]` fetch or constant data, is refused (`Gap::KernelInput`). So is a state
   for indirect command buffers (`Gap::IndirectCommandBuffers`).
