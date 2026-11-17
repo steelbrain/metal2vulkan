@@ -148,7 +148,7 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
             ("blocks", gauges.blocks),
             ("events", gauges.events),
         ] {
-            println!("M2V-MATRIX gauge device_teardown/{kind} {value}");
+            println!("M2V-MATRIX gauge device_teardown/{kind}@drop {value}");
         }
         assert_eq!(gauges, Gauges::default(), "{name}: gauges after teardown");
         println!(
