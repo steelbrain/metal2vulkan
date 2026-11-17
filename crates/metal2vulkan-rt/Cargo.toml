@@ -18,11 +18,7 @@ name = "metal2vulkan_rt"
 path = "src/lib.rs"
 
 [dependencies]
-# The Vulkan API. Nothing is linked at build time.
-ash = { workspace = true, features = ["std"] }
-
-[dev-dependencies]
-# The device tests open the Vulkan loader with `dlopen`.
+# The Vulkan API. Nothing is linked at build time: the instance opens the loader with `dlopen`.
 ash = { workspace = true, features = ["std", "loaded"] }
 
 # The device tests compile only under the validation crate's device cfgs (docs/VALIDATION.md).

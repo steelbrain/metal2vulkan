@@ -8,6 +8,15 @@
 
 #![warn(missing_docs)]
 
+mod counters;
+mod device;
+mod error;
 pub mod floor;
+mod instance;
 #[cfg(test)]
 mod tests;
+
+pub use counters::{Counters, Gauges, Metrics};
+pub use device::{Device, RawDevice};
+pub use error::Error;
+pub use instance::{Instance, PhysicalDevice};
