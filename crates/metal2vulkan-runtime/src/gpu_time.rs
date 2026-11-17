@@ -28,7 +28,9 @@
 //!   copies in: `texture/first_move.rs`) writes the start in that work's command buffer instead,
 //!   after a barrier from every command before and before the work, which runs in the batch's
 //!   submission ahead of its commands, so its GPU time is the command buffer's
-//!   (`command_buffer/submit.rs`). Elsewhere (a barrier planned
+//!   (`command_buffer/submit.rs`); with no barrier where that work is `Managed` uploads alone
+//!   that the end of the batch before orders (`first_move::Earlier::Ended`), which holds the
+//!   start as it holds the prefix's. Elsewhere (a barrier planned
 //!   there, a caller's image moved first, the encoder run again or not at all) a command buffer of
 //!   barriers writes the first start before the barrier, as without a prefix, and that start is
 //!   read; the prefix's is written after it and never read. A Metal counter sample buffer's slot

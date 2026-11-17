@@ -115,6 +115,11 @@
 //!   host. Work that is a `Managed` buffer's uploads alone (copies or inline writes into its
 //!   device copy, which the host never reads) waits for the commands before by a barrier to
 //!   transfers alone, and is made visible by one to every later command but not to the host.
+//!   A batch's such work on a device that orders its batches by their ends (`batch_order.rs`),
+//!   where no internal submission may still run, takes no barrier from the commands before at
+//!   all, nor does its GPU start ([`Earlier::Ended`], `WorkCounts::managed_uploads_unbarriered`):
+//!   the end of the batch before it on its `VkQueue` already orders every command before it
+//!   ahead of the uploads.
 //!   Commands after it on the same `VkQueue`, in this submission or a later one, see each image
 //!   in `GENERAL` and each fill done. On a device of several `VkQueue`s the batch that did it is
 //!   kept with what owns the memory its work wrote ([`Taken::owners`]) until it completed
@@ -2203,6 +2208,36 @@ pub(crate) struct Taken<'a> {
     _order: MutexGuard<'a, ()>,
 }
 
+/// What orders a submission's first work after the commands before it on its `VkQueue`
+/// ([`Taken::record`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Earlier {
+    /// The work's own barrier from every command before it.
+    Barriered,
+    /// The end of the batch before it on its `VkQueue`, for a batch's first work of uploads
+    /// alone ([`Taken::uploads_only`]) on a device that orders its batches by their ends, where
+    /// no internal submission may still run (`command_buffer/submit.rs`): the work records no
+    /// barrier of its own from the commands before it. Every command before it on that
+    /// `VkQueue` is a batch's, each followed in submission order by its batch's end,
+    /// `Barrier::to_all` (`batch_order.rs`: `ALL_COMMANDS` and `MEMORY_WRITE` to `ALL_COMMANDS`
+    /// and `MEMORY_READ | MEMORY_WRITE`), or an internal submission's that the host saw complete
+    /// before the batch took its place in the order, which no internal submission can then
+    /// take until the batch's submission was made (`DeviceShared::internal_running`). "If
+    /// vkCmdPipelineBarrier was recorded outside a render pass instance, the first
+    /// synchronization scope includes all commands that occur earlier in submission order" and
+    /// "the second synchronization scope includes all commands that occur later in submission
+    /// order" (the Vulkan specification, `vkCmdPipelineBarrier`), the uploads among them: every
+    /// earlier read of the device copy runs before them ("Write-after-read hazards can be solved
+    /// with just an execution dependency", Execution and Memory Dependencies), and every earlier
+    /// write of it is made available and visible to their writes (`MEMORY_WRITE` "specifies all
+    /// write accesses"), as the batch's own commands rely on it there
+    /// (`Tracker::by_ends`). An internal submission seen complete was waited for on the host
+    /// before the batch's `vkQueueSubmit`, whose first synchronization scope includes "anything
+    /// that happened-before it". A command buffer of another `VkQueue` is ordered by the
+    /// batch's semaphore waits, as before.
+    Ended,
+}
+
 impl<'a> Taken<'a> {
     /// Whether it took every fill waiting: it took them all ([`FillTake::All`]), or took a move of
     /// an image in memory another resource owns, or a staged copy, each of which comes after every
@@ -2225,6 +2260,14 @@ impl<'a> Taken<'a> {
         (self.held.iter()).any(|held| {
             matches!(held, Held::Moves(_, moves, _) if moves.iter().any(|first| first.keep.is_some()))
         })
+    }
+
+    /// Whether its work is uploads alone (`FirstFill::upload`): copies or inline writes of
+    /// `Managed` buffers' host copies into their device copies, and nothing else.
+    pub(crate) fn uploads_only(&self) -> bool {
+        !self.held.is_empty()
+            && (self.held.iter())
+                .all(|held| matches!(held, Held::Fill(_, _, fill) if fill.upload.is_some()))
     }
 
     /// Whether it took host calls' staged copies ([`record_staged`](Self::record_staged)'s).
@@ -2313,18 +2356,21 @@ impl<'a> Taken<'a> {
     /// the heap's fill) and the copies out, then the copies of the kept spans back and the
     /// images' copies of zeros, then the barrier that makes every write visible to every command
     /// after and to the host; to every command after alone where the work is uploads alone,
-    /// which write device copies the host never reads ([`uploaded_barrier`]).
+    /// which write device copies the host never reads ([`uploaded_barrier`]). Uploads alone take
+    /// no barrier from the commands before where `earlier` is [`Earlier::Ended`].
     ///
     /// # Safety
     ///
     /// `command_buffer` is recording, outside a render pass, for one of the device's queue
     /// families, of `family`'s flags; the submission that runs it is made before any that uses
-    /// one of the resources, on the same `VkQueue` or waited for.
+    /// one of the resources, on the same `VkQueue` or waited for; [`Earlier::Ended`] only as its
+    /// docs say.
     pub(crate) unsafe fn record(
         &self,
         (device, counts): (&Vk, &Counters),
         command_buffer: vk::CommandBuffer,
         family: vk::QueueFlags,
+        earlier: Earlier,
     ) {
         if self.held.is_empty() {
             return;
@@ -2348,7 +2394,7 @@ impl<'a> Taken<'a> {
             })
         };
         // SAFETY: the caller's contract.
-        unsafe { record_fills((device, counts), command_buffer, &fills) };
+        unsafe { record_fills((device, counts), command_buffer, &fills, earlier) };
         let keeps: Vec<&GpuKeep> = moves().filter_map(|first| first.keep.as_ref()).collect();
         if !keeps.is_empty() {
             // The spans out, after every command before (the fills and staged copies above
@@ -2502,9 +2548,10 @@ unsafe fn uploaded_barrier(device: &Vk, command_buffer: vk::CommandBuffer) {
 
 /// Record `fills` into `command_buffer`: a barrier after every command before (memory other
 /// commands wrote, a heap's included), carrying the acquires among them (to the transfers alone
-/// where they are uploads alone, which carry none: [`uploads_only`]), then the fills with zeros,
-/// then, after a barrier, their copies of staged bytes, each copy into bytes a copy before it
-/// wrote after a barrier.
+/// where they are uploads alone, which carry none: [`uploads_only`]; none where `earlier`, the
+/// end of the batch before, orders them: [`Earlier::Ended`]), then the fills with zeros, then,
+/// after a barrier, their copies of staged bytes, each copy into bytes a copy before it wrote
+/// after a barrier.
 ///
 /// # Safety
 ///
@@ -2514,6 +2561,7 @@ unsafe fn record_fills(
     (device, counts): (&Vk, &Counters),
     command_buffer: vk::CommandBuffer,
     fills: &[&FirstFill],
+    earlier: Earlier,
 ) {
     let all = vk::PipelineStageFlags::ALL_COMMANDS;
     let written = || {
@@ -2528,9 +2576,16 @@ unsafe fn record_fills(
         // scope ("its second access scope only includes memory accesses performed by pipeline
         // stages explicitly specified in the destination stage mask", the Vulkan specification,
         // Execution and Memory Dependencies). What runs after them waits for them by the barrier
-        // after them (`Taken::record`) or by the submission's signal (`Fills::record`).
-        transfer_barrier(device, command_buffer, true);
-        exit_guard::called(Call::CmdPipelineBarrier);
+        // after them (`Taken::record`) or by the submission's signal (`Fills::record`). None
+        // where the end of the batch before them orders every command before them
+        // ([`Earlier::Ended`]).
+        match earlier {
+            Earlier::Ended => counts.managed_upload_unbarriered(),
+            Earlier::Barriered => {
+                transfer_barrier(device, command_buffer, true);
+                exit_guard::called(Call::CmdPipelineBarrier);
+            }
+        }
     } else if !fills.is_empty() {
         let acquires: Vec<vk::BufferMemoryBarrier<'_>> = fills
             .iter()
@@ -2711,7 +2766,7 @@ impl Fills<'_> {
             })
             .collect();
         // SAFETY: the caller's contract; none is an acquire ([`Taken::take_fills`]).
-        unsafe { record_fills(counted, command_buffer, &fills) };
+        unsafe { record_fills(counted, command_buffer, &fills, Earlier::Barriered) };
     }
 
     /// What owns the memory the fills write, as the batch that took them found it

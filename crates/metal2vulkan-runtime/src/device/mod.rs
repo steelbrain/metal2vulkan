@@ -674,6 +674,12 @@ pub(super) struct DeviceShared {
     /// is), for the tests and the bench of `tests/managed_inline.rs`.
     #[cfg(test)]
     pub(crate) managed_inline_bound: std::sync::atomic::AtomicU64,
+    /// A batch's first work of uploads alone takes no barrier from the commands before it on any
+    /// device, its batches ordered by their ends or not (`first_move::Earlier::Ended`): the
+    /// negative control of `tests/managed_inline.rs`'s write-after-read test, under the exact
+    /// batch order.
+    #[cfg(test)]
+    pub(crate) uploads_unbarriered_forced: AtomicBool,
     /// Its encoders record a command that writes a read twin, which they refuse otherwise: the
     /// negative control of the tests of `tests/read_twin_device.rs` (`read_twin::refuses_writes`).
     #[cfg(test)]
@@ -1207,6 +1213,15 @@ impl DeviceShared {
     /// (`image_barrier::MemoryReads`): its family's.
     pub(crate) fn memory_reads_of(&self, index: usize) -> MemoryReads {
         self.queues[index].reads
+    }
+
+    /// Whether an internal submission (`submit.rs`) was made that the host has not seen
+    /// complete: its commands may still run on the device's first `VkQueue`, and end with no
+    /// barrier to the commands after them there. Read where no internal submission can be made
+    /// meanwhile (a batch's place in the first work's order, `texture/first_move.rs`), it holds
+    /// until that place goes.
+    pub(crate) fn internal_running(&self) -> bool {
+        self.internal_done.running()
     }
 
     /// How many of its `VkQueue`s, the first, the round robin lends logical queues; the rest are
@@ -3403,6 +3418,8 @@ impl Device {
             sampled_costs_forced: Default::default(),
             #[cfg(test)]
             managed_inline_bound: crate::managed::INLINE_BYTES.into(),
+            #[cfg(test)]
+            uploads_unbarriered_forced: Default::default(),
             #[cfg(test)]
             read_twin_unguarded: Default::default(),
             #[cfg(test)]

@@ -645,6 +645,7 @@ pub(crate) struct Counters {
     managed_bytes_staged_in: AtomicU64,
     managed_bytes_copied_in_from_ram: AtomicU64,
     managed_ranges_inlined: AtomicU64,
+    managed_uploads_unbarriered: AtomicU64,
     managed_pages_alone_refused: AtomicU64,
     managed_pages_alone_over_imports: AtomicU64,
     managed_pages_alone_unwritable: AtomicU64,
@@ -5485,6 +5486,13 @@ impl Counters {
     /// its device copy inline, as a submission was recorded (`texture/first_move.rs`).
     pub(crate) fn managed_range_inlined(&self) {
         (self.managed_ranges_inlined).fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A batch's first work, uploads alone into `Managed` buffers' device copies, was recorded
+    /// with no barrier of its own from the commands before it: the end of the batch before it on
+    /// its `VkQueue` orders them (`texture/first_move.rs`).
+    pub(crate) fn managed_upload_unbarriered(&self) {
+        (self.managed_uploads_unbarriered).fetch_add(1, Ordering::Relaxed);
     }
 
     /// A two-copy buffer's host copy was made its pages alone, no import of their own mapping
@@ -10964,6 +10972,13 @@ pub struct WorkCounts {
     /// is recorded and written by `vkCmdUpdateBuffer`s in its command stream, with no copy from
     /// the host copy (`managed.rs`). Counted as each is recorded.
     pub managed_ranges_inlined: u64,
+    /// The batches whose first work was uploads alone into such buffers' device copies (copies
+    /// or inline writes) and was recorded with no barrier of its own from the commands before
+    /// it, nor one before the batch's GPU start: on a device that orders its batches by their
+    /// ends, where the end of the batch before it on its `VkQueue` already orders every command
+    /// before it ahead of them and no internal submission of the device's may still be running
+    /// (`texture/first_move.rs`). Counted as each is recorded.
+    pub managed_uploads_unbarriered: u64,
     /// Host copies of such buffers made (with the buffer, at a rebind, at a recovery) that are
     /// their pages alone, no import of their own mapping them, because the caller's gate refused
     /// their import, the device refused their pointer and no dma-buf of them served, or the import
@@ -13480,6 +13495,8 @@ impl Device {
             managed_bytes_copied_in_from_ram: (counters.managed_bytes_copied_in_from_ram)
                 .load(Ordering::Relaxed),
             managed_ranges_inlined: counters.managed_ranges_inlined.load(Ordering::Relaxed),
+            managed_uploads_unbarriered: (counters.managed_uploads_unbarriered)
+                .load(Ordering::Relaxed),
             managed_pages_alone_refused: (counters.managed_pages_alone_refused)
                 .load(Ordering::Relaxed),
             managed_pages_alone_over_imports: (counters.managed_pages_alone_over_imports)

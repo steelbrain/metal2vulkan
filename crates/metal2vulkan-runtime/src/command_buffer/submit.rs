@@ -250,7 +250,7 @@ use crate::sparse::encoder::SparseUpdate;
 use crate::submit_failure::{Carried, TypeFlags};
 use crate::texture::decoded_twin::{SecondDecode, TwinWrite};
 use crate::texture::faces::FaceFix;
-use crate::texture::first_move::{last_of_each, FillTake};
+use crate::texture::first_move::{last_of_each, Earlier, FillTake};
 use crate::texture::wrapped::Transition;
 use crate::texture::Texture;
 use crate::tracker::{Barrier, Point, Summary};
@@ -999,22 +999,37 @@ impl CommandBufferShared {
         // `WorkCounts::command_buffers_begun_batch_work`).
         let has_first = first_work.has_first();
         let has_staged = first_work.has_staged();
+        // First work of uploads alone takes no barrier from the commands before it, nor does the
+        // start written before it, where the device orders its batches by their ends and no
+        // internal submission may still run: the end of the batch before it on its `VkQueue`
+        // orders every command before it ahead of them (`first_move::Earlier::Ended`), and holds
+        // the start as it holds a first encoder's prefix's (`gpu_time.rs`). Read while the batch
+        // holds its place in the first work's order, which an internal submission takes before
+        // it is made, so none is made between this and the batch's submission.
+        let ended = shared.by_ends || unbarriered_forced(shared);
+        let earlier = match ended && first_work.uploads_only() && !shared.internal_running() {
+            true => Earlier::Ended,
+            false => Earlier::Barriered,
+        };
         let recorded = (has_first || has_staged)
             .then(|| {
                 self.record_raw(&mut state, |_, buffer| {
                     if let Some((queries, first, _)) = first_start {
                         // SAFETY: the command buffer is recording, outside a render pass, and is
                         // submitted first in the batch; the slot is the command buffer's, which
-                        // only its batches write.
-                        unsafe { record_first_start(shared, buffer, queries, first) };
+                        // only its batches write; with no barrier only after the end of the batch
+                        // before (`Earlier::Ended`).
+                        let barrier = earlier == Earlier::Barriered;
+                        unsafe { record_first_start(shared, buffer, (queries, first), barrier) };
                     }
                     if has_first {
                         // SAFETY: the command buffer is recording, outside a render pass; it is
                         // submitted first in the batch, before any later one, and every batch on
-                        // another `VkQueue` waits for the batch (`FirstMoves::waits`).
+                        // another `VkQueue` waits for the batch (`FirstMoves::waits`); `earlier`
+                        // as `Earlier::Ended` says (above).
                         unsafe {
                             let family = shared.queue_flags_of(queue);
-                            first_work.record((raw, &shared.counts), buffer, family);
+                            first_work.record((raw, &shared.counts), buffer, family, earlier);
                         };
                     }
                     if has_staged {
@@ -2321,20 +2336,36 @@ fn bind_error(device: &crate::Device, failure: BindFailure) -> CommandBufferErro
     }
 }
 
+/// Whether a test forces first work of uploads alone to take no barrier from the commands before
+/// it, the batches not ordered by their ends (`DeviceShared::uploads_unbarriered_forced`).
+#[cfg(test)]
+fn unbarriered_forced(shared: &crate::device::DeviceShared) -> bool {
+    (shared.uploads_unbarriered_forced).load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// No test forces it.
+#[cfg(not(test))]
+fn unbarriered_forced(_: &crate::device::DeviceShared) -> bool {
+    false
+}
+
 /// Record a first batch's start into `buffer`, the command buffer of its first work, before that
 /// work: the reset of the slot's start and end where the device does not reset it on the host as
-/// it is taken, an execution barrier from every command before to every command after, then the
-/// start into query `first` of `queries` at the top of the pipe (**GPU times**, the module docs).
+/// it is taken, where `barrier` an execution barrier from every command before to every command
+/// after, then the start into query `first` of `queries` at the top of the pipe (**GPU times**,
+/// the module docs).
 ///
 /// # Safety
 ///
 /// `buffer` is recording, outside a render pass, and is submitted first in its batch; the slot is
-/// the command buffer's, which no other command buffer writes meanwhile.
+/// the command buffer's, which no other command buffer writes meanwhile; with no `barrier` only
+/// where the end of the batch before it on its `VkQueue` orders every command before it
+/// (`first_move::Earlier::Ended`).
 unsafe fn record_first_start(
     shared: &crate::device::DeviceShared,
     buffer: vk::CommandBuffer,
-    queries: vk::QueryPool,
-    first: u32,
+    (queries, first): (vk::QueryPool, u32),
+    barrier: bool,
 ) {
     let raw = shared.vk();
     let all = vk::PipelineStageFlags::ALL_COMMANDS;
@@ -2344,16 +2375,18 @@ unsafe fn record_first_start(
             raw.cmd_reset_query_pool(buffer, queries, first, 2);
             exit_guard::called(Call::CmdResetQueryPool);
         }
-        raw.cmd_pipeline_barrier(
-            buffer,
-            all,
-            all,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            &[],
-        );
-        exit_guard::called(Call::CmdPipelineBarrier);
+        if barrier {
+            raw.cmd_pipeline_barrier(
+                buffer,
+                all,
+                all,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[],
+            );
+            exit_guard::called(Call::CmdPipelineBarrier);
+        }
         let top = vk::PipelineStageFlags::TOP_OF_PIPE;
         raw.cmd_write_timestamp(buffer, top, queries, first);
         exit_guard::called(Call::CmdWriteTimestamp);

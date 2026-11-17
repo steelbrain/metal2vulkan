@@ -14,6 +14,19 @@
 //!   bytes (one, one, two and two `vkCmdUpdateBuffer`s) land whole.
 //! - **The negative control.** Under a test's bound of 0 the same steps read the same bytes and
 //!   count none.
+//! - **Behind a batch still reading the device copy** (`MANAGED-INLINE-WAR`): a kernel spins on
+//!   the buffer's first word, 0, loading it until its cap unless it reads another value; while it
+//!   runs (its command buffer not complete once the next batch's submission was made), the CPU
+//!   writes 1 there and names the word, and the next command buffer's kernel reads 1 at once.
+//!   The spinning kernel makes every load of its cap: the upload landed after its reads. Under
+//!   the default batch order on a device that orders batches by their ends, the upload takes no
+//!   barrier of its own (`WorkCounts::managed_uploads_unbarriered`, the end of the batch before
+//!   orders it); under the exact order it keeps its barrier (counted none). It proves the bytes
+//!   and their order where a driver runs one queue's submissions side by side; on one that runs
+//!   them one after another it cannot fail, as RADV on an RX 7900 XTX ran them (`batch_order.rs`).
+//!   The negative control (ignored, run alone) forces the upload unbarriered under the exact order,
+//!   whose batches end with no barrier to later commands: it fails only on a driver that runs the
+//!   two side by side, and passed on that XTX (the reader made every load of its cap).
 //! - **The bench** (ignored, `MANAGED-INLINE`; run in release): one-dispatch command buffers
 //!   reading a `Managed` buffer after a `did_modify_range` of 64 B, 4 KiB, 16 KiB and 64 KiB,
 //!   written inline or copied, and with no range named: the commit call's CPU time and the
@@ -293,6 +306,193 @@ fn no_range_is_written_inline_under_a_bound_of_0() {
     }
 }
 
+/// The spinning kernel's loads at most: on the RX 7900 XTX and the RTX 2080 well under a second,
+/// and far longer than the next batch's commit and submission.
+const SPIN_CAP: u32 = 1 << 21;
+
+/// What [`upload_behind_a_reader`] saw.
+#[derive(Debug)]
+struct Behind {
+    /// The loads the spinning kernel made: [`SPIN_CAP`] where it read the old word throughout.
+    reader_loads: u32,
+    /// The loads the next command buffer's kernel made: 0 where it read the new word.
+    next_loads: u32,
+    /// The spinning kernel's command buffer had not completed once the next batch's
+    /// submission was made.
+    overlapped: bool,
+    /// The uploads the next batch recorded with no barrier of their own
+    /// (`WorkCounts::managed_uploads_unbarriered`).
+    unbarriered: u64,
+    /// The device orders its batches by their ends (`batch_order.rs`).
+    by_ends: bool,
+}
+
+/// The spinning kernel (`kernel_spin_on_an_unraised_word`): it loads the word at its slot 0 until
+/// it reads a value other than 0 or made as many loads as the cap at its slot 2, and stores how
+/// many it made into its slot 1.
+fn spin(device: &Device) -> crate::ComputePipelineState {
+    let ll = metal2vulkan_devtools::engine_dir().join("kernel_spin_on_an_unraised_word.ll");
+    let bitcode = metal2vulkan_devtools::llvm_assemble(&ll).unwrap();
+    let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
+    let library = device.new_library_with_compile_library(library);
+    let function = library
+        .new_function_with_name("spin_on_an_unraised_word")
+        .unwrap();
+    device
+        .new_compute_pipeline_state_with_function(&function, &PipelineOptions::default())
+        .unwrap()
+}
+
+/// A command buffer of `queue`'s whose one kernel spins on `buffer`'s first word up to `cap`
+/// loads, storing how many into `loads`, committed.
+fn spinning(
+    queue: &CommandQueue,
+    state: &crate::ComputePipelineState,
+    (buffer, loads): (&Buffer, &Buffer),
+    cap: u32,
+) -> crate::CommandBuffer {
+    let command_buffer = queue.command_buffer().unwrap();
+    let mut encoder = command_buffer.compute_command_encoder().unwrap();
+    encoder.set_compute_pipeline_state(state).unwrap();
+    encoder.set_buffer(Some(buffer), 0, 0).unwrap();
+    encoder.set_buffer(Some(loads), 0, 1).unwrap();
+    encoder.set_bytes(&cap.to_le_bytes(), 2).unwrap();
+    encoder
+        .dispatch_threadgroups(Size::new(1, 1, 1), Size::new(1, 1, 1))
+        .unwrap();
+    encoder.end_encoding().unwrap();
+    command_buffer.commit().unwrap();
+    command_buffer
+}
+
+/// The first word of `loads`, a `Shared` buffer no command writes now.
+fn loads_of(loads: &Buffer) -> u32 {
+    // SAFETY: a word of the buffer's bytes, aligned, which no command writes now.
+    unsafe { loads.contents().unwrap().cast::<u32>().as_ptr().read() }
+}
+
+/// The write-after-read steps (the module docs) on a device of the default policy but `exact`'s
+/// batch order, its uploads forced unbarriered where `forced`; `None` on a device with unified
+/// memory.
+fn upload_behind_a_reader(exact: bool, forced: bool) -> Option<Behind> {
+    let scratch = Scratch::new("managed-inline-war");
+    let mut options = super::blit_holds::options(&scratch.0);
+    if exact {
+        options.policy.batch_order = metal2vulkan::device::BatchOrderPolicy::Exact;
+    }
+    let device = Device::system_default_with(&options).unwrap();
+    if device.properties().has_unified_memory {
+        let name = device.name();
+        eprintln!("MANAGED-INLINE-WAR {name}: unified memory, one copy; nothing is copied in");
+        return None;
+    }
+    (device.shared().uploads_unbarriered_forced).store(forced, Ordering::Relaxed);
+    let pages = Pages::new();
+    let queue = device.new_command_queue().unwrap();
+    let state = spin(&device);
+    let buffer = buffer(&device, Host::Own, &pages);
+    let reader_loads = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    let next_loads = device.new_buffer(16, ResourceOptions::shared()).unwrap();
+    // Every buffer's first work (a new buffer's fill) done first, so the next batch's first work
+    // is the upload alone.
+    for loads in [&reader_loads, &next_loads] {
+        let warm = spinning(&queue, &state, (&buffer, loads), 1);
+        warm.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(warm.status(), CommandBufferStatus::Completed);
+    }
+    let word = |value: u32| {
+        // SAFETY: the host copy's first word, aligned, which no command reads (the GPU reads the
+        // device copy).
+        unsafe { (buffer.contents().unwrap().cast::<u32>().as_ptr()).write(value) };
+        buffer.did_modify_range(0..4).unwrap();
+    };
+    word(0);
+    let reader = spinning(&queue, &state, (&buffer, &reader_loads), SPIN_CAP);
+    let deadline = Instant::now() + WAIT;
+    while reader.kernel_start_time() == 0.0 {
+        assert!(Instant::now() < deadline, "the reader was never submitted");
+        std::thread::yield_now();
+    }
+    word(1);
+    let before = device.work_counts();
+    let next = spinning(&queue, &state, (&buffer, &next_loads), SPIN_CAP);
+    while device.work_counts().queue_submissions == before.queue_submissions {
+        assert!(
+            Instant::now() < deadline,
+            "the next batch was never submitted"
+        );
+        std::thread::yield_now();
+    }
+    let overlapped = reader.status() != CommandBufferStatus::Completed;
+    for command_buffer in [&reader, &next] {
+        command_buffer.wait_until_completed_for(WAIT).unwrap();
+        assert_eq!(
+            (command_buffer.status(), command_buffer.error()),
+            (CommandBufferStatus::Completed, None)
+        );
+    }
+    let after = device.work_counts();
+    let behind = Behind {
+        reader_loads: loads_of(&reader_loads),
+        next_loads: loads_of(&next_loads),
+        overlapped,
+        unbarriered: after.managed_uploads_unbarriered - before.managed_uploads_unbarriered,
+        by_ends: device.shared().by_ends,
+    };
+    eprintln!(
+        "MANAGED-INLINE-WAR {}: exact order {exact}, forced {forced}: {behind:?}",
+        device.name()
+    );
+    drop((buffer, state, queue, device, pages));
+    Some(behind)
+}
+
+/// An upload behind a batch still reading the device copy lands after its reads, with no
+/// barrier of its own where the device orders its batches by their ends (the module docs): a
+/// proof where the driver runs one queue's submissions side by side, none where it does not.
+#[test]
+fn an_upload_behind_a_batch_reading_the_device_copy_lands_after_its_reads() {
+    let Some(behind) = upload_behind_a_reader(false, false) else {
+        return;
+    };
+    assert!(behind.overlapped, "the reader completed first: {behind:?}");
+    assert_eq!(
+        (behind.reader_loads, behind.next_loads),
+        (SPIN_CAP, 0),
+        "the reader read the old word throughout, the next batch the new one: {behind:?}"
+    );
+    assert_eq!(
+        behind.unbarriered,
+        u64::from(behind.by_ends),
+        "the upload unbarriered where batches are ordered by their ends: {behind:?}"
+    );
+}
+
+/// Under the exact batch order the upload keeps its barrier, with the same bytes.
+#[test]
+fn under_the_exact_batch_order_an_upload_keeps_its_barrier() {
+    let Some(behind) = upload_behind_a_reader(true, false) else {
+        return;
+    };
+    assert!(behind.overlapped, "the reader completed first: {behind:?}");
+    assert_eq!((behind.reader_loads, behind.next_loads), (SPIN_CAP, 0));
+    assert_eq!(behind.unbarriered, 0, "{behind:?}");
+}
+
+/// The negative control (the module docs): the upload forced unbarriered under the exact batch
+/// order, whose batches end with no barrier to later commands. It fails where the driver runs the
+/// next batch beside the reader (the reader then reads the new word and stops early); a driver
+/// that runs one queue's submissions one after another passes it.
+#[test]
+#[ignore = "a negative control, run alone"]
+fn negative_control_an_unbarriered_upload_under_the_exact_order() {
+    let Some(behind) = upload_behind_a_reader(true, true) else {
+        return;
+    };
+    assert_eq!(behind.unbarriered, 1, "{behind:?}");
+    assert_eq!((behind.reader_loads, behind.next_loads), (SPIN_CAP, 0));
+}
+
 /// The 50th and 90th percentiles of `values`, nearest rank.
 fn percentiles(mut values: Vec<f64>) -> [f64; 2] {
     values.sort_by(f64::total_cmp);
@@ -380,8 +580,9 @@ fn managed_inline_bench() {
                 eprintln!(
                     "MANAGED-INLINE {name} {host:?} {size} B {mode}: n {FRAMES} commit_us p50 \
                      {commit50:.1} p90 {commit90:.1} gpu_us p50 {gpu50:.1} p90 {gpu90:.1}, \
-                     inlined {}",
+                     inlined {}, unbarriered {}",
                     after.managed_ranges_inlined - before.managed_ranges_inlined,
+                    after.managed_uploads_unbarriered - before.managed_uploads_unbarriered,
                 );
             }
         }

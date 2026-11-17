@@ -28,7 +28,7 @@ use crate::exit_guard::{self, Call};
 use crate::release;
 use crate::resource::ResourceKey;
 use crate::submit_failure::{submit_failed, Failed};
-use crate::texture::first_move::{last_of_each, FirstMoves, Mine, Taken};
+use crate::texture::first_move::{last_of_each, Earlier, FirstMoves, Mine, Taken};
 use crate::tracker::Point;
 use crate::work_counts::Begun;
 use ash::vk;
@@ -71,6 +71,10 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 pub(crate) struct OwnTimeline {
     semaphore: OnceLock<vk::Semaphore>,
     completed: AtomicU64,
+    /// The value the last submission whose completion the host waits for to note it
+    /// ([`reached`](Self::reached)) signals, once that submission was made: the internal
+    /// submissions' ([`Device::submit_internal_taking`]).
+    submitted: AtomicU64,
 }
 
 impl OwnTimeline {
@@ -101,6 +105,18 @@ impl OwnTimeline {
     /// The host saw the timeline reach `value`.
     pub(super) fn reached(&self, value: u64) {
         self.completed.fetch_max(value, Ordering::AcqRel);
+    }
+
+    /// A submission that signals `value` was made, whose completion the host waits for and notes
+    /// ([`reached`](Self::reached)).
+    fn submitted(&self, value: u64) {
+        self.submitted.fetch_max(value, Ordering::AcqRel);
+    }
+
+    /// Whether a submission noted as made ([`submitted`](Self::submitted)) may still run: the
+    /// host has not seen the timeline reach its value.
+    pub(super) fn running(&self) -> bool {
+        self.submitted.load(Ordering::Acquire) > self.completed.load(Ordering::Acquire)
     }
 }
 
@@ -236,7 +252,14 @@ impl Device {
             // buffers alone, each shared with that family, as their sources are (`sharing.rs`);
             // the submission is made before any that uses them (the order is held) and waited
             // for below.
-            unsafe { taken.record((raw, &shared.counts), command_buffer, flags) }
+            unsafe {
+                taken.record(
+                    (raw, &shared.counts),
+                    command_buffer,
+                    flags,
+                    Earlier::Barriered,
+                )
+            }
         })?;
         // What it works on, held until it completed.
         let _held = taken.submitted(None);
@@ -327,7 +350,12 @@ impl Device {
             // resources is submitted after it.
             unsafe {
                 let family = shared.queue_flags_of(0);
-                taken.record((raw, &shared.counts), objects.buffer, family);
+                taken.record(
+                    (raw, &shared.counts),
+                    objects.buffer,
+                    family,
+                    Earlier::Barriered,
+                );
             };
         }
         // Host calls' staged copies, after the first work, before the work.
@@ -434,6 +462,9 @@ impl Device {
             return Err(self.failed(error));
         }
         objects.signalled = value;
+        // Noted before its place in the first work's order goes (as `taken` is consumed below):
+        // a batch holding that place reads it (`DeviceShared::internal_running`).
+        shared.internal_done.submitted(value);
         shared.counts.internal_submission();
         // What it works on, held until it completed.
         let _held = taken.submitted_internally(objects.timeline, value);
