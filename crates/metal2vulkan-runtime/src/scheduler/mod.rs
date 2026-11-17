@@ -2040,7 +2040,7 @@ fn submit_ready(
             // Held back from a `VkQueue` it shares with other command queues, while its own
             // queue's work enough is in flight there (`queue_turns.rs`): another queue's later
             // commit goes ahead of it.
-            if let Some(room) = held.buffer.held_for_turn() {
+            if let Some(room) = held.buffer.held_for_turn(held.index) {
                 held.held_for(HeldFor::QueueTurn);
                 await_room(held, room, awaits, &mut room_wake);
                 isolating = true;
@@ -2972,7 +2972,7 @@ fn plain(
     if unshared {
         return Err(LeftAtCommit::Unshared);
     }
-    if held.buffer.held_for_turn().is_some() {
+    if held.buffer.held_for_turn(held.index).is_some() {
         return Err(LeftAtCommit::Turn);
     }
     // A batch whose `VkQueue`'s calls are slow is the scheduler thread's to submit, which the

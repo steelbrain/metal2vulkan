@@ -5500,8 +5500,15 @@ impl CommandBufferShared {
     /// as on a lost device, whose submissions fail at once, and for an unshared queue's. The
     /// budget is 2 ms while another command queue took a batch there within
     /// `unshared_hold::ACTIVE`, else 16 ms (counted where only that let it go).
-    pub(crate) fn held_for_turn(&self) -> Option<(usize, u64, Option<u64>)> {
-        if self.queue.unshared() || self.device.is_lost() {
+    ///
+    /// Only its first batch (`index` 0) takes a turn: once that one went, each later batch goes as
+    /// it is ready, as Metal schedules a command buffer whole. Held behind its own first batch,
+    /// a command buffer whose first batch waits on the GPU for a signal still to come would not
+    /// read `Scheduled` (its last batch's submission) until that signal came, nor could another
+    /// queue's command buffer that waits for its later signal go meanwhile, where Metal schedules
+    /// both at once (`queue_turns.rs`, "Whole command buffers").
+    pub(crate) fn held_for_turn(&self, index: usize) -> Option<(usize, u64, Option<u64>)> {
+        if index > 0 || self.queue.unshared() || self.device.is_lost() {
             return None;
         }
         let index = self.queue.vk_queue();
