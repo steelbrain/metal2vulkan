@@ -693,9 +693,11 @@ pub enum UnsharedIsolationPolicy {
 /// submissions in order, so a command buffer there waits for every batch submitted before it:
 /// where one command queue commits a burst of command buffers (a long one cut into parts, a
 /// backlog of frames) on the one graphics queue of RADV, ANV, lavapipe or another driver that
-/// lends one, a command buffer another queue commits after it waits for the whole burst, where
-/// Metal ran a second queue's small command buffer beside a first queue's 200 ms one (an Intel
-/// UHD 630 and an AMD Radeon Pro 5300M, macOS 26.7.1). A queue made with
+/// lends one, a command buffer another queue commits after it waits for the whole burst. Metal's
+/// GPUs differ there: an Apple M3 Max (macOS 27.0.1) ran a second queue's small command buffer
+/// among a first queue's burst of 64; an AMD Radeon Pro 5300M (macOS 26.7.1) a blit or render one
+/// so, a compute one after the burst; an Intel UHD 630 (macOS 26.7.1) after the burst in every
+/// case. A queue made with
 /// `new_command_queue_unshared` is never held under either value; `UnsharedIsolationPolicy`
 /// bounds the other queues' work ahead of it. The runtime's choice alone: no emitted code
 /// changes.

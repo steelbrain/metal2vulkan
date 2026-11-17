@@ -225,14 +225,16 @@ known. The rest of the differences are docs/API.md section 9's precision notes.
   `WorkCounts::heads_held_for_queue_turns` and `heads_let_go_turn_idle` (heads 2 ms would have
   held). `queue_turns = QueueTurnPolicy::CommitOrder` submits every ready batch at once, in commit
   order: a later commit of another queue waits behind every batch submitted before it there. Not
-  an accuracy choice: it trades a queue's work submitted ahead for the other queues' waits. A
-  second queue's small command buffer ran beside a first queue's 200 ms one on the consumer's
-  oracles (a UHD 630 and a Radeon Pro 5300M, macOS 26.7.1); behind a first queue's burst of 64
-  command buffers of about 4 ms each, the Macs disagree: an M3 Max (macOS 27.0.1) ran it ahead of
-  56 to 62 of them, the UHD 630 after 60 to 63 of them had ended
-  (`metal2vulkan-conformance`'s `probes/cross_queue_burst_turns.m`). `exact_answers()` keeps
-  `Fair`. The runtime's choice: no pipeline differs. What stays is a batch
-  already submitted: it runs to its end (known gaps, below). On lavapipe, both values
+  an accuracy choice: it trades a queue's work submitted ahead for the other queues' waits.
+  Metal's GPUs differ there (`metal2vulkan-conformance`'s `probes/cross_queue_burst_turns.m`: a
+  second queue's small command buffer committed 5 ms after a first queue's 64 command buffers of
+  about 4 ms each, or after one command buffer of their 64 dispatches): an M3 Max (macOS 27.0.1)
+  ran it 0.1 to 4.4 ms after its commit, ahead of 56 to 62 of the 64, and beside the one long
+  command buffer; a Radeon Pro 5300M (macOS 26.7.1) ran a blit or render one ahead of 59 to 61 of
+  the 64, but a compute one after the 64 and after the long one; a UHD 630 (macOS 26.7.1) ran it
+  after them in every case. `Fair` is the nearer to the M3's, `CommitOrder` to the 630's;
+  `exact_answers()` keeps `Fair`. The runtime's choice: no pipeline differs. What stays is a
+  batch already submitted: it runs to its end (known gaps, below). On lavapipe, both values
   (`queue_share_device::a_later_queue_s_command_buffer_takes_its_turn_ahead_of_another_queue_s_burst`:
   twelve command buffers of one queue sized for 10 ms each and committed at once, a small one of
   another queue after the first was scheduled): under `Fair` the small one goes before the
@@ -1443,20 +1445,21 @@ driver's. Each is open work.
   about 2 ms of its own while another queue submits there (`queue_turns =
   QueueTurnPolicy::Fair`, above), so a burst of short batches no longer queues a later command
   buffer behind all of it; but a batch already submitted runs to its end: a command buffer
-  committed behind another queue's 200 ms one starts after it, where Metal runs the compositor's
-  beside it, and one behind a batch longer than its queue's recent ones waits for the rest of that
-  one too. On the Iris Xe (ANV, Mesa 26.2.6, i915) work of
-  another `VkDevice` (its own kernel context) ran only between submissions, never inside one,
-  whatever its global priority (`HIGH` is refused without privilege; `MEDIUM` against `LOW`
-  answered as equal priorities did): a light submission waited the whole of a 440 ms command
-  buffer, and 14 ms where the same work was 32 submissions. Neither a second `VkDevice` for such
-  queues nor splitting long command buffers into submissions is built. Each command buffer whose
-  first batch goes behind another command queue's batch not yet seen complete is counted
-  (`WorkCounts::command_buffers_behind_other_queues`, those whose wait ran over 16 and 33 ms, the
-  longest wait, and the same four for unshared queues), its wait timed on the host from its
-  submission to that batch's observed completion: an upper bound; for an unshared queue's waits
-  over 16 ms, also the batches in flight ahead of each and its longest single run
-  (`WorkCounts::unshared_waits_over_16ms_batches_ahead` and kin).
+  committed behind another queue's 200 ms one starts after it, where an M3 Max ran a second
+  queue's small command buffer beside a first queue's 244 ms one (a Radeon Pro 5300M and a UHD
+  630 ran a compute one after it; `probes/cross_queue_burst_turns.m`), and one behind a batch
+  longer than its queue's recent ones waits for the rest of that one too. On the Iris Xe (ANV,
+  Mesa 26.2.6, i915) work of another `VkDevice` (its own kernel context) ran only between
+  submissions, never inside one, whatever its global priority (`HIGH` is refused without
+  privilege; `MEDIUM` against `LOW` answered as equal priorities did): a light submission waited
+  the whole of a 440 ms command buffer, and 14 ms where the same work was 32 submissions. Neither
+  a second `VkDevice` for such queues nor splitting long command buffers into submissions is
+  built. Each command buffer whose first batch goes behind another command queue's batch not yet
+  seen complete is counted (`WorkCounts::command_buffers_behind_other_queues`, those whose wait
+  ran over 16 and 33 ms, the longest wait, and the same four for unshared queues), its wait timed
+  on the host from its submission to that batch's observed completion: an upper bound; for an
+  unshared queue's waits over 16 ms, also the batches in flight ahead of each and its longest
+  single run (`WorkCounts::unshared_waits_over_16ms_batches_ahead` and kin).
 - **On Asahi Linux, the kernel can keep a freed dma-buf import, and its pages, past the process's
   exit**: the asahi DRM driver (its source at tag `asahi-6.19.14-2`; Honeykrisp in Mesa 25.3.6)
   makes an imported object without the driver's close callback, so a freed import stays mapped in

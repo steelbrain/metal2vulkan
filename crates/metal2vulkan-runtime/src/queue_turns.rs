@@ -7,9 +7,11 @@
 //!   of command buffers (a long command buffer cut into parts, a backlog of frames) on the one
 //!   graphics `VkQueue` of RADV, ANV, lavapipe or another driver that lends one, every ready batch
 //!   went to the `VkQueue` at its commit, and a command buffer another queue committed after the
-//!   burst waited for the whole of it. Metal ran a second queue's small command buffer beside a
-//!   first queue's 200 ms one (the consumer's oracles, an Intel UHD 630 and an AMD Radeon Pro
-//!   5300M under macOS 26.7.1).
+//!   burst waited for the whole of it. An M3 Max (macOS 27.0.1) ran a second queue's small
+//!   command buffer among a first queue's burst of 64, ahead of 56 to 62 of them; a Radeon Pro
+//!   5300M (macOS 26.7.1) a blit or render one so, a compute one after the burst; a UHD 630
+//!   (macOS 26.7.1) after the burst in every case (`metal2vulkan-conformance`'s
+//!   `probes/cross_queue_burst_turns.m`).
 //! - **Where.** A batch of a command queue not made unshared, on a `VkQueue` two or more command
 //!   queues hold (`SlotShare::held_by_several`: the round robin's queues and the unshared ones
 //!   placed there), on a device whose policy is `Fair`. An unshared queue's batch is never held for

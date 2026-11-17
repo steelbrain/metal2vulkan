@@ -26,14 +26,25 @@
 // far below Metal's 5 s command buffer timeout; no fault, no untracked write, no wait that can
 // hang.
 //
-// WHAT IT MEASURED (MTL_DEBUG_LAYER unset; five rounds a case, one process a case):
+// WHAT IT MEASURED (MTL_DEBUG_LAYER unset; five rounds a case, one process a case; times from B's
+// commit to its GPU start; "ahead of" counts A's command buffers that began after B's end):
 //
-//   M3 Max, macOS 27.0.1: B's GPU start 0.1-0.2 ms after its commit for compute and blit, 4.2-4.4
-//     ms for render, ahead of 56-62 of A's 64 command buffers (they began after B's end): the M3
-//     runs the second queue's command buffer among the first queue's burst.
-//   UHD 630, macOS 26.7.1: B's GPU start only after 60-63 of A's 64 had ended, 77-240 ms after
-//     its commit, compute, blit and render alike: the 630 runs the burst first.
-//   Not measured yet: same-queue and one-long on either, and every case on the Radeon Pro 5300M.
+//   M3 Max, macOS 27.0.1: compute and blit 0.1-0.2 ms, render 4.2-4.4 ms, ahead of 56-62 of A's
+//     64; same-queue 20.9 ms (34.0 in the first round), after 22-27 of A's 64 ended and ahead of
+//     34 of them; one-long 0.16-0.21 ms, while A's one 244 ms command buffer ran.
+//   Radeon Pro 5300M, macOS 26.7.1: compute 98-111 ms, after 60-64 of A's 64 ended, ahead of
+//     none; blit and render 0.07-0.33 ms (6.9 and 7.1 ms in the first round), ahead of 59-61;
+//     same-queue 98.8-110.3 ms, after 60-64, ahead of none; one-long 92.3-99.4 ms, after A's
+//     command buffer ended.
+//   UHD 630, macOS 26.7.1: compute, blit and render 77-240 ms, after 60-63 of A's 64 ended;
+//     same-queue 77-194 ms, after 60-63, ahead of none; one-long 231-234 ms, 0.05 ms after A's
+//     command buffer ended.
+//
+// So the M3 runs a second queue's command buffer among the first queue's burst and beside its one
+// long command buffer, and runs the same queue's later command buffer, which shares nothing with
+// the burst, among it too; the 5300M runs a second queue's blit or render among the burst, but its
+// compute after the burst and after the long command buffer; the 630 runs the burst and the long
+// command buffer first in every case.
 //
 // A's queue allows BURST + 2 command buffers (`newCommandQueueWithMaxCommandBufferCount:`): at
 // the default 64, same-queue's B, made on A's queue while A's 64 were not yet committed, would
