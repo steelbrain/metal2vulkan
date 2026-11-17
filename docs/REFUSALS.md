@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 5 | 5 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 2 | 2 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -54,7 +54,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 2 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 2 | 1 | 0 | 0 | 2 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -611,6 +611,9 @@ Columns:
 |---|---|---|---|---|---|
 | `EmptyBuffer` | A buffer of no bytes (`Device::new_buffer` with a length of 0) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: newBufferWithLength:0 answers nil | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
 | `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
+| `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 3: `crates/metal2vulkan-rt/src/command.rs (building)`, `crates/metal2vulkan-rt/src/command.rs (commit)` (+1) | `-` |
+| `OtherDevice` | An event of another device in an encode call (`CommandBuffer::encode_wait_for_event` or `CommandBuffer::encode_signal_event`) | every device (a public call's own check of its arguments) | `ours`: an event's semaphore belongs to the `VkDevice` that made it | 1: `crates/metal2vulkan-rt/src/command.rs (check)` | `-` |
+| `NoCommandBuffers` | A queue that may hold no command buffer (`Device::new_command_queue` with a count of 0) | every device (a public call's own check of its arguments) | `ours`: its first `commandBuffer` call would wait forever | 1: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)` | `-` |
 
 ## 12. The new runtime's `Limit` (`Error::Limit(Limit)`)
 
@@ -1106,6 +1109,9 @@ Each refusal's sites, with the function that builds it.
 - `floor::MemoryType`: `crates/metal2vulkan-rt/src/floor.rs (choose)`
 - `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
 - `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
+- `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (building)`; `crates/metal2vulkan-rt/src/command.rs (commit)`; `crates/metal2vulkan-rt/src/command.rs (enqueue)`
+- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/command.rs (check)`
+- `rt:Refusal::NoCommandBuffers`: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)`
 - `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)`
 - `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (number)`
 

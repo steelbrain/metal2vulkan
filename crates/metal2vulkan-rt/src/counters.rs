@@ -9,6 +9,8 @@ use std::sync::Arc;
 pub(crate) enum Metric {
     /// [`Metrics::submissions`].
     Submissions,
+    /// [`Metrics::barriers`].
+    Barriers,
     /// [`Metrics::blocks_made`].
     BlocksMade,
 }
@@ -20,6 +22,10 @@ pub(crate) enum Gauge {
     Buffers,
     /// [`Gauges::blocks`].
     Blocks,
+    /// [`Gauges::command_buffers`].
+    CommandBuffers,
+    /// [`Gauges::events`].
+    Events,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -63,6 +69,7 @@ impl Counters {
         let a = &self.atomics;
         let atomic = match metric {
             Metric::Submissions => &a.submissions,
+            Metric::Barriers => &a.barriers,
             Metric::BlocksMade => &a.blocks_made,
         };
         atomic.fetch_add(1, Relaxed);
@@ -83,6 +90,8 @@ impl Counters {
         match gauge {
             Gauge::Buffers => &a.buffers,
             Gauge::Blocks => &a.blocks,
+            Gauge::CommandBuffers => &a.command_buffers,
+            Gauge::Events => &a.events,
         }
     }
 

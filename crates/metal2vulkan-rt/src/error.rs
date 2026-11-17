@@ -36,6 +36,9 @@ pub enum Error {
     NoSuchBlock(BlockId),
     /// The runtime could not start one of its threads. Metal has no counterpart.
     Thread(io::Error),
+    /// A call that needs one of the runtime's threads, after
+    /// [`Device::quiesce`](crate::Device::quiesce) stopped them. Metal has no counterpart.
+    Quiesced,
 }
 
 /// A call Metal refuses, with what it was asked.
@@ -60,6 +63,24 @@ pub enum Refusal {
         /// The block's length.
         block_len: u64,
     },
+    /// A call on a command buffer already committed: encoding, adding a handler, enqueueing or
+    /// committing again.
+    ///
+    /// Basis: metal-documented (Metal's validation asserts "commit an already committed command
+    /// buffer", "Completed handler provided after commit call" and "Scheduled handler provided
+    /// after commit call").
+    Committed,
+    /// An event of another device in an encode call
+    /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event) or
+    /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event)).
+    ///
+    /// Basis: ours (an event's semaphore belongs to the `VkDevice` that made it).
+    OtherDevice,
+    /// A queue that may hold no command buffer
+    /// ([`Device::new_command_queue`](crate::Device::new_command_queue) with a count of 0).
+    ///
+    /// Basis: ours (its first `commandBuffer` call would wait forever).
+    NoCommandBuffers,
 }
 
 /// A limit a call ran into, with what it was asked.
@@ -104,6 +125,7 @@ impl fmt::Display for Error {
                 write!(f, "block {} is not one the consumer holds", block.get())
             }
             Error::Thread(error) => write!(f, "a runtime thread did not start: {error}"),
+            Error::Quiesced => f.write_str("the device is quiesced"),
         }
     }
 }
@@ -120,6 +142,11 @@ impl fmt::Display for Refusal {
                 f,
                 "a buffer of {length} bytes at offset {offset} leaves its block of {block_len} bytes"
             ),
+            Refusal::Committed => f.write_str("the command buffer is already committed"),
+            Refusal::OtherDevice => f.write_str("the event is another device's"),
+            Refusal::NoCommandBuffers => {
+                f.write_str("a command queue must hold at least one command buffer")
+            }
         }
     }
 }
@@ -143,7 +170,7 @@ impl std::error::Error for Error {
             Error::BelowFloor(below) => Some(below),
             Error::Vulkan { result, .. } => Some(result),
             Error::Thread(error) => Some(error),
-            Error::Refused(_) | Error::Limit(_) | Error::NoSuchBlock(_) => None,
+            Error::Refused(_) | Error::Limit(_) | Error::NoSuchBlock(_) | Error::Quiesced => None,
         }
     }
 }

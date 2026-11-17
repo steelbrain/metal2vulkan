@@ -3,8 +3,9 @@
 //! down with its gauges at zero, and enables the consumer's extensions it offers.
 
 use crate::{
-    BlockId, BlockInfo, BlockMappings, Buffer, Counters, Device, DeviceExtension, DeviceOptions,
-    Gauges, Instance, Metrics, PhysicalDevice,
+    BlockId, BlockInfo, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
+    CommandBufferStatus, CommandQueue, Counters, Device, DeviceExtension, DeviceOptions, Event,
+    Gauges, Instance, Metrics, PhysicalDevice, SharedEvent,
 };
 
 #[test]
@@ -20,6 +21,12 @@ fn the_handles_cross_threads() {
     send_sync::<BlockInfo>();
     send_sync::<Buffer>();
     send_sync::<std::sync::Arc<dyn BlockMappings>>();
+    send_sync::<CommandQueue>();
+    send_sync::<CommandBuffer>();
+    send_sync::<CommandBufferStatus>();
+    send_sync::<CommandBufferError>();
+    send_sync::<Event>();
+    send_sync::<SharedEvent>();
 }
 
 #[test]

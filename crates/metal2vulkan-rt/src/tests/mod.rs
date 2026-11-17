@@ -1,3 +1,4 @@
+mod command;
 mod device;
 mod floor;
 mod memory;

@@ -3,8 +3,9 @@
 The Metal API on Vulkan, with one path for every device. It replaces `metal2vulkan-runtime` and
 takes its name when it does; until then it is unpublished.
 
-Its public API so far: the instance and the device, memory blocks and the buffers in them, the
-device's counters, and `floor`, the check of a Vulkan device against the floor below.
+Its public API so far: the instance and the device, memory blocks and the buffers in them, command
+queues, command buffers and events, the device's counters, and `floor`, the check of a Vulkan
+device against the floor below.
 
 ## Instance and device
 
@@ -29,13 +30,19 @@ device's counters, and `floor`, the check of a Vulkan device against the floor b
 
 ### Teardown
 
-A device is torn down when its last handle, and the last handle of every object made from it, is
-dropped. Blocks the consumer holds do not keep it alive. Teardown joins the block-maker thread
-and waits until the GPU is idle; then, on the dropping thread, it frees every block, calling
-`BlockMappings::unmap` first for each block the consumer was handed, and destroys the `VkDevice`.
-A physical device and a device each hold their instance. No thread of the runtime outlives its
-device and nothing relies on a static destructor or an `atexit` handler, so the consumer drops
-every handle before the process exits: a driver may unmap device memory inside `exit()`.
+The runtime runs three threads per device: the block-maker, the submit thread and the completion
+thread. A device is torn down when its last handle, and the last handle of every object made from
+it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
+Teardown stops the submit thread, which submits what is ready and ends what it holds with
+`CommandBufferError::NotRun`; the completion thread retires the rest as the GPU completes it and
+runs the handlers; the threads are joined and the GPU goes idle. Then every block is freed,
+`BlockMappings::unmap` first for each block the consumer was handed, and the `VkDevice` is
+destroyed. Teardown runs on the thread that drops the last handle, or, where that is a handler or
+a listener, on the completion thread once the handler returns. A physical device and a device
+each hold their instance. No thread of the runtime outlives its device, and nothing relies on a
+static destructor or an `atexit` handler: the consumer drops every handle, or calls
+`Device::quiesce`, before the process exits, since a driver may unmap device memory inside
+`exit()`.
 
 ### Counters
 
@@ -68,22 +75,85 @@ in its memory.
 - `Device::new_buffer(block, offset, length, zeroed)` makes a `Buffer`: a view of the range, with
   no Vulkan object of its own. Its `gpu_address` is the block's address plus the offset, and its
   `contents` the block's mapping plus the offset, or `None` in a Private block. `zeroed` zeroes the
-  range before the call returns, as `newBufferWithLength:options:` does: through the mapping for
-  Shared, by a GPU fill submitted and waited for in Private, which writes exactly the range. A
-  buffer placed in a heap passes false, since Metal does not zero heap memory. A length of 0 and a
-  range past the block are refused, as Metal answers nil for both.
+  range, as `newBufferWithLength:options:` does: through the mapping for Shared, before the call
+  returns; in Private by a GPU fill of exactly the range, recorded into the upload, which goes
+  ahead of every command buffer committed after the call (each command buffer's commands start
+  with a barrier after every earlier submission) and holds the block until it completes. A buffer
+  placed in a heap passes false, since Metal does not zero heap memory. A length of 0 and a range
+  past the block are refused, as Metal answers nil for both.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
-the buffer there before has completed.
+the buffer there before has completed. A command buffer keeps each block it uses until it retires,
+so a block released meanwhile goes back to the pool only then.
 
 ### The consumer's mappings
 
 A consumer that maps blocks itself, into a guest for instance, passes `DeviceOptions::block_mappings`.
 Before the runtime frees a block it handed out, it calls `BlockMappings::unmap(block)`, which
 returns once every mapping the consumer made of it is gone and none of its threads touches the
-block. The memory stays mapped and valid until then. It runs on the block-maker thread, or at
-teardown on the dropping thread after the runtime's threads are joined, and it never calls into the
-runtime. Blocks the consumer never took are freed without it.
+block. The memory stays mapped and valid until then. It runs once per block: on the block-maker
+thread; in `Device::quiesce`, on the calling thread, for every block still handed out; or at
+teardown, on the thread that ends it, after the runtime's other threads are joined. It never calls
+into the runtime. Blocks the consumer never took are freed without it, and so is every block freed
+after a quiesce.
+
+## Queues, command buffers and events
+
+- `Device::new_command_queue(max)` is `newCommandQueueWithMaxCommandBufferCount:`
+  (`newCommandQueue` is 64). Every queue submits to the device's one `VkQueue`.
+  `CommandQueue::command_buffer` waits, as Metal does, while `max` of the queue's command buffers
+  are made and not yet completed.
+- A `CommandBuffer` records at once, with no replay log. Event waits and signals split it into
+  segments, one `VkCommandBuffer` each where it has commands; their commands start with a barrier
+  after every earlier submission and end with a barrier that makes their writes visible to the
+  host. `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
+  thread and returns. A committed command buffer holds no device handle.
+- The submit thread passes whatever is ready to one `vkQueueSubmit2`, in the device's commit
+  order, ahead of it the upload of zero fills, and the last submit info signals the progress
+  semaphore. It holds a segment whose event waits are not met, and its queue's later command
+  buffers behind it, while the segments before it run, so the host can see a signal the command
+  buffer makes before its wait. Other queues go on. `Scheduled` means the last segment has passed
+  `vkQueueSubmit2`.
+- The completion thread retires command buffers as the progress semaphore reaches them: the
+  status, the blocks they kept, their recorders and their place in the queue, then the handlers.
+  Scheduled and completed handlers run on it, every device's in turn, so no handler waits for a
+  command buffer.
+- `Event` and `SharedEvent` are timeline semaphores whose values are Metal's values. A host set
+  (`SharedEvent::set_signaled_value`) raises a floor and never signals the semaphore; a wait the
+  floor meets is submitted with no semaphore wait, and a GPU signal not above the highest value
+  submitted or set is left out, so the semaphore only rises and never races a host set.
+  `signaled_value` is the higher of the semaphore and the floor. `notify_listener` runs its
+  listener on the completion thread when the value is reached, at a signal in the middle of a
+  command buffer as well as at its end; `wait_until_signaled_value` wakes then too.
+- `CommandQueue::abandon` ends every command buffer of the queue that is held or not yet submitted
+  with `NotRun` and runs its handlers, as a Mac drops a dead process's held work. Segments already
+  submitted still complete; the queue stays usable.
+- At a loss of the device (or a failed submission, which the runtime takes as one), the submit
+  thread ends what it holds, the completion thread ends what is in flight once the device is idle
+  (at once on a lost device), host waits for pending signals end false, and every later commit
+  ends at once. `CommandBufferError::DeviceLost { in_flight }` tells the command buffers that had
+  passed `vkQueueSubmit2` from the rest. Teardown then completes, and a new device can be made on
+  the same instance.
+
+### Quiesce and exit
+
+`Device::quiesce(timeout)` is for a process that exits with the device alive. With every wait
+bounded by the timeout, it stops the submit thread (ready work is submitted, held work ends
+`NotRun`) and the block-maker, waits for the GPU to complete what was submitted, lets the
+completion thread retire it and end, and then runs `BlockMappings::unmap` on the calling thread for
+every block still handed out. It frees nothing: every block's memory and mapping stays valid until
+the process ends. After it, no runtime thread touches a block; later calls that need a thread
+return `Error::Quiesced`. It answers true once the GPU went idle and every thread ended in time. A
+second call returns at once.
+
+It is safe in an `atexit` handler on whichever thread calls `exit()`: it joins a thread only once
+that thread has ended, reads no thread-local that `exit()` tears down, and takes no lock a
+consumer's thread can hold. The consumer parks its own threads that touch blocks first.
+
+### Known gaps
+
+- `GPUStartTime` and `GPUEndTime` are not built yet.
+- Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 
 ## One path for every device
 

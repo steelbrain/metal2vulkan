@@ -6,6 +6,7 @@ use crate::device::{lock, Core};
 use crate::error::{Error, Limit};
 use crate::floor;
 use ash::vk;
+use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -97,9 +98,10 @@ pub trait BlockMappings: Send + Sync {
     /// Returns only once every mapping of `block` the consumer made is gone and none of its
     /// threads touches the block's memory. The memory stays mapped and valid until it returns.
     ///
-    /// It runs on the block-maker thread, or at teardown on the thread that drops the device's
-    /// last handle, after the runtime's threads are joined. It makes no call into the runtime and
-    /// drops no runtime handle.
+    /// It runs once per block: on the block-maker thread; in
+    /// [`Device::quiesce`](crate::Device::quiesce), on the thread that calls it, for every block
+    /// still handed out; or at teardown, on the thread that ends it, once the runtime's other
+    /// threads are joined. It makes no call into the runtime and drops no runtime handle.
     fn unmap(&self, block: BlockId);
 }
 
@@ -161,8 +163,9 @@ impl Mapping {
     }
 }
 
-/// A block that has been handed out. The consumer's hold on it and each buffer of it is one
-/// reference; the last one dropped gives it back to the pool.
+/// A block that has been handed out. The consumer's hold on it, each buffer of it, and each
+/// command buffer and upload that uses it until it retires are one reference each; the last one
+/// dropped gives it back to the pool.
 pub(crate) struct Block {
     pub(crate) memory: Memory,
     core: Arc<Core>,
@@ -192,7 +195,7 @@ pub(crate) struct Pool {
 
 struct State {
     /// Per class, zeroed blocks no one holds, the latest last.
-    idle: [Vec<Idle>; 2],
+    idle: [Vec<Memory>; 2],
     /// Blocks given back, for the block-maker thread.
     returned: Vec<Memory>,
     /// Per class, why the block-maker thread could not make the last block it tried, for the
@@ -200,12 +203,10 @@ struct State {
     failed: [Option<Error>; 2],
     stop: bool,
     next_id: u32,
-}
-
-struct Idle {
-    memory: Memory,
-    /// Whether the consumer has held it, so that freeing it calls the hook.
-    handed: bool,
+    /// The blocks `take_block` returned that are not yet freed: freeing one calls the hook.
+    handed: HashSet<BlockId>,
+    /// The hook has run for every block handed out ([`Pool::unmap_all`]); it never runs again.
+    unmapped: bool,
 }
 
 impl Pool {
@@ -217,6 +218,8 @@ impl Pool {
                 failed: [None, None],
                 stop: false,
                 next_id: 1,
+                handed: HashSet::new(),
+                unmapped: false,
             }),
             changed: Condvar::new(),
             mappings,
@@ -239,20 +242,48 @@ impl Pool {
     }
 
     /// Takes a ready block of `class`, waiting for the block-maker thread where none is ready.
-    /// Err: why the block-maker thread could not make one.
+    /// Err: why the block-maker thread could not make one; [`Error::Quiesced`] once it is stopped.
     pub(crate) fn take(&self, class: MemoryClass) -> Result<Memory, Error> {
         let index = class.index();
         let mut state = self.lock();
         loop {
-            if let Some(idle) = state.idle[index].pop() {
+            if state.stop {
+                return Err(Error::Quiesced);
+            }
+            if let Some(memory) = state.idle[index].pop() {
                 self.changed.notify_all();
-                return Ok(idle.memory);
+                return Ok(memory);
             }
             if let Some(error) = state.failed[index].take() {
                 self.changed.notify_all();
                 return Err(error);
             }
             state = self.wait(state);
+        }
+    }
+
+    /// Records a block as handed to the consumer, so that freeing it calls the hook.
+    pub(crate) fn hand(&self, block: BlockId) {
+        let mut state = self.lock();
+        if !state.unmapped {
+            state.handed.insert(block);
+        }
+    }
+
+    /// In [`Device::quiesce`](crate::Device::quiesce), once the block-maker thread is stopped:
+    /// calls the hook for every block handed out and not yet freed, on this thread. No block's
+    /// hook runs again: a block freed later is freed without it.
+    pub(crate) fn unmap_all(&self) {
+        let mut handed: Vec<BlockId> = {
+            let mut state = self.lock();
+            state.unmapped = true;
+            state.handed.drain().collect()
+        };
+        handed.sort_unstable();
+        if let Some(mappings) = &self.mappings {
+            for block in handed {
+                mappings.unmap(block);
+            }
         }
     }
 
@@ -267,18 +298,24 @@ impl Pool {
         self.changed.notify_all();
     }
 
-    /// At teardown, after the block-maker thread is joined: every block the pool still has, and
-    /// whether the consumer held it.
-    pub(crate) fn remaining(&mut self) -> Vec<(Memory, bool)> {
+    /// At teardown, after the block-maker thread is joined: every block the pool still has.
+    pub(crate) fn remaining(&mut self) -> Vec<Memory> {
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
-        let mut remaining: Vec<(Memory, bool)> = state
-            .idle
-            .iter_mut()
-            .flat_map(|idle| idle.drain(..))
-            .map(|idle| (idle.memory, idle.handed))
-            .collect();
-        remaining.extend(state.returned.drain(..).map(|memory| (memory, true)));
+        let mut remaining: Vec<Memory> = state.idle.iter().flatten().copied().collect();
+        remaining.extend(state.returned.iter().copied());
         remaining
+    }
+
+    /// For the device tests: whether the pool has the block back, idle or still to be zeroed.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn holds(&self, block: BlockId) -> bool {
+        let state = self.lock();
+        state
+            .idle
+            .iter()
+            .flatten()
+            .chain(&state.returned)
+            .any(|memory| memory.id == block)
     }
 }
 
@@ -306,14 +343,11 @@ pub(crate) fn run(core: Arc<Core>) {
             // block that cannot be zeroed is freed.
             let kept = room && zero(&core, &memory, 0, memory.len).is_ok();
             if !kept {
-                free(&core, memory, true);
+                free(&core, memory);
             }
             state = pool.lock();
             if kept {
-                state.idle[memory.class.index()].push(Idle {
-                    memory,
-                    handed: true,
-                });
+                state.idle[memory.class.index()].push(memory);
                 pool.changed.notify_all();
             }
             continue;
@@ -327,10 +361,7 @@ pub(crate) fn run(core: Arc<Core>) {
             let made = id.and_then(|id| make(&core, class, BLOCK_LEN, id, true));
             state = pool.lock();
             match made {
-                Ok(memory) => state.idle[class.index()].push(Idle {
-                    memory,
-                    handed: false,
-                }),
+                Ok(memory) => state.idle[class.index()].push(memory),
                 Err(error) => state.failed[class.index()] = Some(error),
             }
             pool.changed.notify_all();
@@ -406,7 +437,7 @@ pub(crate) fn make(
     match finish(core, &mut block) {
         Ok(()) => Ok(block),
         Err(error) => {
-            free(core, block, false);
+            free(core, block);
             Err(error)
         }
     }
@@ -434,7 +465,7 @@ fn finish(core: &Core, block: &mut Memory) -> Result<(), Error> {
 
 /// Zeroes `offset..end` of a block: through the mapping for Shared, by a GPU fill for Private.
 /// The bytes belong to no one else: a block no one holds, or the range of a buffer being made.
-pub(crate) fn zero(core: &Core, memory: &Memory, offset: u64, end: u64) -> Result<(), Error> {
+fn zero(core: &Core, memory: &Memory, offset: u64, end: u64) -> Result<(), Error> {
     match memory.mapping {
         Some(mapping) => {
             // SAFETY: `offset..end` lies in the block, which the mapping spans.
@@ -450,17 +481,19 @@ pub(crate) fn zero(core: &Core, memory: &Memory, offset: u64, end: u64) -> Resul
     }
 }
 
-/// Frees a block, calling the consumer's hook first where it held the block. Freeing the memory
-/// also unmaps it.
-pub(crate) fn free(core: &Core, memory: Memory, handed: bool) {
+/// Frees a block, calling the consumer's hook first where it was handed out and the hook has not
+/// run for it. Freeing the memory also unmaps it.
+pub(crate) fn free(core: &Core, memory: Memory) {
+    let handed = core.pool.lock().handed.remove(&memory.id);
     if handed {
         if let Some(mappings) = &core.pool.mappings {
             mappings.unmap(memory.id);
         }
     }
     let device = &core.device;
-    // SAFETY: no GPU work that uses the block is pending: the only GPU work on a block is its
-    // zero fills, each waited for. The consumer's mappings are gone.
+    // SAFETY: no GPU work that uses the block is pending: a command buffer or upload that uses it
+    // holds it until it retires, and the fills of the block-maker thread are waited for. The
+    // consumer's mappings are gone.
     unsafe {
         device.destroy_buffer(memory.buffer, None);
         device.free_memory(memory.memory, None);

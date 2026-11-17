@@ -1382,6 +1382,8 @@ enum	metal2vulkan-air::tensor_ops::Mode	#[derive(Clone, Copy, Debug, PartialEq, 
 enum	metal2vulkan-air::tensor_ops::OperandForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum OperandForm
 enum	metal2vulkan-air::tensor_ops::OperandIndex	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum OperandIndex
 enum	metal2vulkan-air::tensor_ops::TensorSpace	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TensorSpace
+enum	metal2vulkan-rt::CommandBufferError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CommandBufferError
+enum	metal2vulkan-rt::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum CommandBufferStatus
 enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
 enum	metal2vulkan-rt::Limit	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Limit
 enum	metal2vulkan-rt::MemoryClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum MemoryClass
@@ -8709,6 +8711,19 @@ method	metal2vulkan-rt::Buffer::contents	pub fn contents(&self) -> Option<NonNul
 method	metal2vulkan-rt::Buffer::gpu_address	pub fn gpu_address(&self) -> u64
 method	metal2vulkan-rt::Buffer::length	pub fn length(&self) -> u64
 method	metal2vulkan-rt::Buffer::offset	pub fn offset(&self) -> u64
+method	metal2vulkan-rt::CommandBuffer::add_completed_handler	pub fn add_completed_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::add_scheduled_handler	pub fn add_scheduled_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::commit	pub fn commit(&self) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::encode_signal_event	pub fn encode_signal_event(&self, event: &Event, value: u64) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::encode_wait_for_event	pub fn encode_wait_for_event(&self, event: &Event, value: u64) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::enqueue	pub fn enqueue(&self) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::error	pub fn error(&self) -> Option<CommandBufferError>
+method	metal2vulkan-rt::CommandBuffer::status	pub fn status(&self) -> CommandBufferStatus
+method	metal2vulkan-rt::CommandBuffer::wait_until_completed	pub fn wait_until_completed(&self)
+method	metal2vulkan-rt::CommandBuffer::wait_until_scheduled	pub fn wait_until_scheduled(&self)
+method	metal2vulkan-rt::CommandQueue::abandon	pub fn abandon(&self)
+method	metal2vulkan-rt::CommandQueue::command_buffer	pub fn command_buffer(&self) -> Result<CommandBuffer, Error>
+method	metal2vulkan-rt::CommandQueue::device	pub fn device(&self) -> &Device
 method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
@@ -8717,6 +8732,10 @@ method	metal2vulkan-rt::Device::has_unified_memory	pub fn has_unified_memory(&se
 method	metal2vulkan-rt::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error>
 method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: BlockId, offset: u64, length: u64, zeroed: bool) -> Result<Buffer, Error>
+method	metal2vulkan-rt::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
+method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
+method	metal2vulkan-rt::Device::new_shared_event	pub fn new_shared_event(&self) -> Result<SharedEvent, Error>
+method	metal2vulkan-rt::Device::quiesce	pub fn quiesce(&self, timeout: Duration) -> bool
 method	metal2vulkan-rt::Device::raw	pub fn raw(&self) -> RawDevice<'_>
 method	metal2vulkan-rt::Device::release_block	pub fn release_block(&self, block: BlockId) -> Result<(), Error>
 method	metal2vulkan-rt::Device::take_block	pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<BlockInfo, Error>
@@ -8724,11 +8743,17 @@ method	metal2vulkan-rt::Device::with_present_queue	pub fn with_present_queue<R>(
 method	metal2vulkan-rt::DeviceExtension::name	pub fn name(&self) -> &CStr
 method	metal2vulkan-rt::DeviceExtension::new	pub fn new(name: &CStr) -> DeviceExtension
 method	metal2vulkan-rt::DeviceExtension::with_features	pub fn with_features<T>(name: &CStr, wanted: T, needs: fn(&T) -> bool) -> DeviceExtension where T: vk::ExtendsPhysicalDeviceFeatures2 + vk::ExtendsDeviceCreateInfo + Copy + Default + Send + Sync + 'static,
+method	metal2vulkan-rt::Event::device	pub fn device(&self) -> &Device
 method	metal2vulkan-rt::Instance::extensions	pub fn extensions(&self) -> &[CString]
 method	metal2vulkan-rt::Instance::new	pub fn new(extensions: &[&CStr]) -> Result<Instance, Error>
 method	metal2vulkan-rt::Instance::physical_devices	pub fn physical_devices(&self) -> Result<Vec<PhysicalDevice>, Error>
 method	metal2vulkan-rt::Instance::raw	pub fn raw(&self) -> (&ash::Entry, &ash::Instance)
 method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
+method	metal2vulkan-rt::SharedEvent::as_event	pub fn as_event(&self) -> &Event
+method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&self, value: u64, listener: impl FnOnce(u64) + Send + 'static) -> Result<(), Error>
+method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
+method	metal2vulkan-rt::SharedEvent::signaled_value	pub fn signaled_value(&self) -> u64
+method	metal2vulkan-rt::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> bool
 method	metal2vulkan-runtime::AddressModeMap::constexpr_mode	pub fn constexpr_mode(&self, from: SamplerAddressMode) -> Option<SamplerAddressMode>
 method	metal2vulkan-runtime::AddressModeMap::is_identity	pub fn is_identity(&self) -> bool
 method	metal2vulkan-runtime::AddressModeMap::mode	pub fn mode(&self, from: SamplerAddressMode) -> SamplerAddressMode
@@ -10744,15 +10769,19 @@ struct	metal2vulkan-air::tensor_ops::RunForm	#[derive(Clone, Copy, Debug, Partia
 struct	metal2vulkan-rt::BlockId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub struct BlockId(u32)
 struct	metal2vulkan-rt::BlockInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct BlockInfo
 struct	metal2vulkan-rt::Buffer	#[derive(Clone)] pub struct Buffer
+struct	metal2vulkan-rt::CommandBuffer	#[derive(Clone)] pub struct CommandBuffer
+struct	metal2vulkan-rt::CommandQueue	#[derive(Clone)] pub struct CommandQueue
 struct	metal2vulkan-rt::Counters	#[derive(Clone)] pub struct Counters
 struct	metal2vulkan-rt::Device	#[derive(Clone)] pub struct Device
 struct	metal2vulkan-rt::DeviceExtension	#[derive(Clone)] pub struct DeviceExtension
 struct	metal2vulkan-rt::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
+struct	metal2vulkan-rt::Event	#[derive(Clone)] pub struct Event
 struct	metal2vulkan-rt::Gauges	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Gauges
 struct	metal2vulkan-rt::Instance	#[derive(Clone)] pub struct Instance
 struct	metal2vulkan-rt::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Metrics
 struct	metal2vulkan-rt::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
 struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
+struct	metal2vulkan-rt::SharedEvent	#[derive(Clone)] pub struct SharedEvent
 struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
 struct	metal2vulkan-rt::floor::Capabilities	pub struct Capabilities
 struct	metal2vulkan-rt::floor::Features	#[derive(Clone, Copy, Default)] pub struct Features
@@ -12605,10 +12634,19 @@ variant	metal2vulkan-air::tensor_ops::OperandIndex::Right	Right
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Device	Device
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Thread	Thread
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Threadgroup	Threadgroup
+variant	metal2vulkan-rt::CommandBufferError::DeviceLost	DeviceLost { in_flight: bool }
+variant	metal2vulkan-rt::CommandBufferError::NotRun	NotRun
+variant	metal2vulkan-rt::CommandBufferStatus::Committed	Committed
+variant	metal2vulkan-rt::CommandBufferStatus::Completed	Completed
+variant	metal2vulkan-rt::CommandBufferStatus::Enqueued	Enqueued
+variant	metal2vulkan-rt::CommandBufferStatus::Error	Error
+variant	metal2vulkan-rt::CommandBufferStatus::NotEnqueued	NotEnqueued
+variant	metal2vulkan-rt::CommandBufferStatus::Scheduled	Scheduled
 variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)
 variant	metal2vulkan-rt::Error::Limit	Limit(Limit)
 variant	metal2vulkan-rt::Error::Loader	Loader(ash::LoadingError)
 variant	metal2vulkan-rt::Error::NoSuchBlock	NoSuchBlock(BlockId)
+variant	metal2vulkan-rt::Error::Quiesced	Quiesced
 variant	metal2vulkan-rt::Error::Refused	Refused(Refusal)
 variant	metal2vulkan-rt::Error::Thread	Thread(io::Error)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
@@ -12617,7 +12655,10 @@ variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::MemoryClass::Private	Private
 variant	metal2vulkan-rt::MemoryClass::Shared	Shared
 variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64, length: u64, block_len: u64 }
+variant	metal2vulkan-rt::Refusal::Committed	Committed
 variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
+variant	metal2vulkan-rt::Refusal::NoCommandBuffers	NoCommandBuffers
+variant	metal2vulkan-rt::Refusal::OtherDevice	OtherDevice
 variant	metal2vulkan-rt::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-rt::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-rt::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }

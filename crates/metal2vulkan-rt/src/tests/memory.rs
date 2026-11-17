@@ -68,8 +68,8 @@ mod on_device {
     use crate::device::lock;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        BlockId, BlockInfo, BlockMappings, Buffer, Device, DeviceOptions, Error, Gauges, Instance,
-        Limit, MemoryClass, Refusal, BLOCK_LEN,
+        BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus, Device, DeviceOptions,
+        Error, Gauges, Instance, Limit, MemoryClass, Refusal, BLOCK_LEN,
     };
     use ash::vk;
     use std::collections::HashMap;
@@ -383,17 +383,33 @@ mod on_device {
                 );
             }
             drop(zeroed);
+            // A zeroed Private range is filled ahead of the next command buffer committed, whose
+            // commands see the fill.
+            let queue = device.new_command_queue(1).expect("a queue");
             for (offset, length) in [(4097, 13), (8001, 2), (4096, 64), (4099, 1), (1, 8000)] {
                 gpu.fill(vk_buffer(&device, private.id), 0, 8192, u32::MAX);
                 let zeroed = device
                     .new_buffer(private.id, offset, length, true)
                     .expect("a zeroed Private buffer");
-                gpu.copy(
+                let (from, to) = (
                     vk_buffer(&device, private.id),
                     vk_buffer(&device, shared.id),
-                    0,
-                    8192,
                 );
+                let copy = queue.command_buffer().expect("a command buffer");
+                copy.record_for_test(&[], |device, command| {
+                    let region = [vk::BufferCopy {
+                        src_offset: 0,
+                        dst_offset: 0,
+                        size: 8192,
+                    }];
+                    // SAFETY: the command buffer is recording; both blocks are held and span the
+                    // region.
+                    unsafe { device.cmd_copy_buffer(command, from, to, &region) };
+                })
+                .expect("a copy");
+                copy.commit().expect("a commit");
+                copy.wait_until_completed();
+                assert_eq!(copy.status(), CommandBufferStatus::Completed, "{name}");
                 let range = offset as usize..(offset + length) as usize;
                 for (index, &byte) in host[..8192].iter().enumerate() {
                     let expected = if range.contains(&index) { 0 } else { 0xFF };
@@ -474,7 +490,7 @@ mod on_device {
             );
 
             // Teardown unmaps the rest on this thread, and frees every block.
-            drop((view, whole, gpu));
+            drop((view, whole, gpu, queue));
             drop(device);
             let gauges = counters.gauges();
             print_gauges_at_drop("blocks_teardown", gauges);

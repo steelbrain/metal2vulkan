@@ -1,5 +1,6 @@
-//! Zero fills of memory the host does not map: one command buffer of fill and copy commands,
-//! submitted on the runtime's queue and waited for.
+//! Zero fills of memory the host does not map: fill and copy commands, recorded into the
+//! upload that goes ahead of later commits, or into a command buffer of the fill's own, submitted
+//! on the runtime's queue and waited for.
 
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
@@ -42,8 +43,46 @@ pub(crate) fn plan(offset: u64, end: u64) -> Plan {
     }
 }
 
-/// The objects one zero fill uses, behind a lock: fills run one at a time.
+/// Records the commands that zero `offset..end` of `buffer` into `command`.
+///
+/// # Safety
+///
+/// `command` is recording; `zeros` is the zero source; `buffer` has transfer-destination usage and
+/// `offset..end` lies in it.
+pub(crate) unsafe fn record(
+    device: &ash::Device,
+    command: vk::CommandBuffer,
+    zeros: vk::Buffer,
+    buffer: vk::Buffer,
+    offset: u64,
+    end: u64,
+) {
+    let plan = plan(offset, end);
+    let copies: Vec<vk::BufferCopy> = plan
+        .copies
+        .iter()
+        .map(|&(start, end)| vk::BufferCopy {
+            src_offset: 0,
+            dst_offset: start,
+            size: end - start,
+        })
+        .collect();
+    // SAFETY: the caller's contract.
+    unsafe {
+        if let Some((start, end)) = plan.fill {
+            device.cmd_fill_buffer(command, buffer, start, end - start, 0);
+        }
+        if !copies.is_empty() {
+            device.cmd_copy_buffer(command, zeros, buffer, &copies);
+        }
+    }
+}
+
+/// The zero source, and the objects of a fill submitted and waited for, behind a lock: such fills
+/// run one at a time.
 pub(crate) struct Filler {
+    /// The zero source, [`ZEROS`] bytes that read zero; `state` owns it.
+    zeros: vk::Buffer,
     state: Mutex<Objects>,
 }
 
@@ -74,6 +113,7 @@ impl Filler {
         // SAFETY: the caller's contract.
         match unsafe { objects.make(device, family, host_type, counters) } {
             Ok(()) => Ok(Filler {
+                zeros: objects.zeros,
                 state: Mutex::new(objects),
             }),
             Err(error) => {
@@ -84,6 +124,11 @@ impl Filler {
         }
     }
 
+    /// The zero source, for [`record`].
+    pub(crate) fn zeros(&self) -> vk::Buffer {
+        self.zeros
+    }
+
     /// Zeroes `offset..end` of `buffer` and waits for it.
     pub(crate) fn zero(
         &self,
@@ -92,21 +137,11 @@ impl Filler {
         offset: u64,
         end: u64,
     ) -> Result<(), Error> {
-        let plan = plan(offset, end);
         let objects = lock(&self.state);
         let device = &core.device;
         let command = objects.command;
         let begin = vk::CommandBufferBeginInfo::default()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        let copies: Vec<vk::BufferCopy> = plan
-            .copies
-            .iter()
-            .map(|&(start, end)| vk::BufferCopy {
-                src_offset: 0,
-                dst_offset: start,
-                size: end - start,
-            })
-            .collect();
         let commands = [vk::CommandBufferSubmitInfo::default().command_buffer(command)];
         let submit = vk::SubmitInfo2::default().command_buffer_infos(&commands);
         // SAFETY: the lock gives this call the pool, command buffer and fence, and the previous
@@ -119,12 +154,7 @@ impl Filler {
             device
                 .begin_command_buffer(command, &begin)
                 .map_err(Error::vulkan("vkBeginCommandBuffer"))?;
-            if let Some((start, end)) = plan.fill {
-                device.cmd_fill_buffer(command, buffer, start, end - start, 0);
-            }
-            if !copies.is_empty() {
-                device.cmd_copy_buffer(command, objects.zeros, buffer, &copies);
-            }
+            record(device, command, objects.zeros, buffer, offset, end);
             device
                 .end_command_buffer(command)
                 .map_err(Error::vulkan("vkEndCommandBuffer"))?;

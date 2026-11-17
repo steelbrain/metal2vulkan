@@ -3,7 +3,7 @@
 use crate::counters::Gauge;
 use crate::device::Device;
 use crate::error::{Error, Refusal};
-use crate::memory::{self, Block, BlockId, Mapping};
+use crate::memory::{Block, BlockId, Mapping};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -36,13 +36,16 @@ impl Device {
     /// holds. The consumer chooses the range; it reuses a range only once the work that named the
     /// buffer there before has completed, as Metal frees a buffer's memory only then.
     ///
-    /// `zeroed` zeroes the range before the call returns, as `newBufferWithLength:options:` does
-    /// in Metal: through the mapping in a Shared block, by a GPU fill submitted and waited for in a
-    /// Private one. A buffer placed in a heap passes false: Metal does not zero heap memory.
+    /// `zeroed` zeroes the range, as `newBufferWithLength:options:` does in Metal: in a Shared
+    /// block through the mapping, before the call returns; in a Private block by a GPU fill in the
+    /// upload, which is submitted ahead of every command buffer committed after this call and
+    /// holds the block until it completes. A buffer placed in a heap passes false: Metal does not
+    /// zero heap memory.
     ///
     /// Err: [`Refusal::EmptyBuffer`] for a length of 0 and [`Refusal::BufferPastBlock`] for a
     /// range that leaves the block, where Metal answers nil; [`Error::NoSuchBlock`] for a block the
-    /// consumer does not hold; [`Error::Vulkan`] where a Private fill fails.
+    /// consumer does not hold; for a zeroed Private buffer, [`Error::Quiesced`], and
+    /// [`Error::Vulkan`] where the upload's command buffer cannot be made.
     pub fn new_buffer(
         &self,
         block: BlockId,
@@ -63,13 +66,19 @@ impl Device {
                 length,
                 block_len,
             }))?;
-        if zeroed {
-            memory::zero(self.core(), &block.memory, offset, end)?;
-        }
         let contents = block.memory.mapping.map(|mapping| {
             // SAFETY: `offset` is inside the block.
             Mapping::new(unsafe { mapping.at(offset) })
         });
+        if zeroed {
+            match contents {
+                // SAFETY: `offset..end` lies in the block, and the range is the new buffer's.
+                Some(contents) => unsafe {
+                    contents.get().as_ptr().write_bytes(0, length as usize)
+                },
+                None => self.core().work.zero(self.core(), &block, offset, end)?,
+            }
+        }
         self.core().counters.rise(Gauge::Buffers);
         Ok(Buffer {
             inner: Arc::new(Inner {
@@ -108,5 +117,11 @@ impl Buffer {
     /// No Metal counterpart: the buffer's offset in its block.
     pub fn offset(&self) -> u64 {
         self.inner.offset
+    }
+
+    /// For the device tests: the block, for a command buffer to keep.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn block_for_test(&self) -> &Arc<Block> {
+        &self.inner.block
     }
 }

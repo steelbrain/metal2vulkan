@@ -1,6 +1,7 @@
 //! The device: one `VkDevice` for every command queue, every guest process and the compositor;
-//! its queues, its memory blocks and its teardown.
+//! its queues, its memory blocks, its threads, quiesce and teardown.
 
+use crate::complete::{self, Done};
 use crate::counters::Counters;
 use crate::error::Error;
 use crate::extension::{self, DeviceExtension};
@@ -8,22 +9,34 @@ use crate::fill::Filler;
 use crate::floor;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, MemoryClass, Pool, BLOCK_LEN};
+use crate::record::Recorders;
+use crate::submit::{self, Work};
 use ash::vk;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{c_char, CString};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 /// `MTLDevice`, over one `VkDevice` that every command queue, every guest process and the
 /// compositor share.
 ///
-/// A cheap handle: clones share one device, and every object made from it holds a clone. Blocks
-/// the consumer holds do not. The device is torn down when the last handle is dropped: the
-/// block-maker thread is joined and the GPU goes idle; then, on the dropping thread, every block
-/// is freed, after [`BlockMappings::unmap`] for each the consumer was handed, and the `VkDevice`
-/// is destroyed, with every gauge at zero. No thread of the runtime outlives it,
-/// and nothing relies on a static destructor or an `atexit` handler, so the consumer drops every
-/// handle before the process exits (a driver may unmap device memory inside `exit()`).
+/// A cheap handle: clones share one device, and every object made from it holds a clone, except
+/// a committed command buffer. Blocks the consumer holds do not.
+///
+/// The runtime runs three threads: the block-maker, the submit thread and the completion thread,
+/// which runs every handler and listener. The device is torn down when the last handle is
+/// dropped: the submit thread submits what is ready and ends what it holds with
+/// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun); the completion thread
+/// retires the rest as the GPU completes it; the threads are joined; then every block is freed,
+/// after [`BlockMappings::unmap`] for each the consumer was handed, and the `VkDevice` is
+/// destroyed, with every gauge at zero. Where the last handle drops in a handler or a listener,
+/// the completion thread finishes the teardown itself once the handler returns. No thread of the
+/// runtime outlives the teardown, and nothing relies on a static destructor or an `atexit`
+/// handler: the consumer drops every handle, or calls [`quiesce`](Device::quiesce), before the
+/// process exits (a driver may unmap device memory inside `exit()`).
 #[derive(Clone)]
 pub struct Device {
     shared: Arc<Shared>,
@@ -34,7 +47,44 @@ pub struct Device {
 struct Shared {
     core: Arc<Core>,
     claims: Mutex<HashMap<BlockId, Arc<Block>>>,
-    threads: Vec<JoinHandle<()>>,
+    threads: Mutex<Threads>,
+}
+
+/// The runtime's threads, each until it is stopped.
+#[derive(Default)]
+struct Threads {
+    blocks: Option<Runner>,
+    submit: Option<Runner>,
+    complete: Option<Runner>,
+}
+
+struct Runner {
+    handle: JoinHandle<()>,
+    ended: Arc<Ended>,
+}
+
+/// Set as a runtime thread ends, so a stop can wait for it with a deadline.
+#[derive(Default)]
+struct Ended {
+    flag: Mutex<bool>,
+    changed: Condvar,
+}
+
+/// Marks its thread ended when dropped, after the thread's body, panics included.
+struct Ending(Arc<Ended>);
+
+impl Drop for Ending {
+    fn drop(&mut self) {
+        *lock(&self.0.flag) = true;
+        self.0.changed.notify_all();
+    }
+}
+
+thread_local! {
+    /// The core a runtime thread serves, by address; 0 on every other thread. Constant and without
+    /// a destructor, so it reads the same while the thread's other thread-locals are torn down
+    /// (in `exit()`).
+    static SERVES: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The device itself: what the runtime's threads and every block hold.
@@ -53,7 +103,23 @@ pub(crate) struct Core {
     max_block_len: u64,
     pub(crate) pool: Pool,
     pub(crate) filler: Filler,
+    pub(crate) recorders: Recorders,
+    pub(crate) work: Work,
+    pub(crate) done: Done,
+    /// Quiesced or torn down: calls that need a thread are refused.
+    closed: AtomicBool,
+    /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
+    halt: AtomicU8,
 }
+
+/// No stop has begun.
+const RUNNING: u8 = 0;
+/// A stop is running.
+const HALTING: u8 = 1;
+/// A stop ended with the GPU idle and every thread joined.
+const HALTED_IDLE: u8 = 2;
+/// A stop ended at its deadline.
+const HALTED_LATE: u8 = 3;
 
 /// The device's queues, each behind the lock that Vulkan's external synchronization of a queue
 /// needs. Where the family has a second queue, presenting has it to itself; where it has one, the
@@ -90,7 +156,8 @@ impl Device {
     /// the consumer needs, and chooses its memory types on it ([`floor::memory_types`]). It takes one queue of the floor's queue
     /// family for the runtime and, where that family has a second queue, a queue for presenting;
     /// where it has one, presenting shares the runtime's queue and its lock. It starts the
-    /// block-maker thread, which makes one block of each memory class ready.
+    /// block-maker thread, which makes one block of each memory class ready, the submit thread and
+    /// the completion thread.
     ///
     /// Err: [`Error::BelowFloor`] with every item the device lacks; [`Error::Vulkan`] where a
     /// Vulkan call fails; [`Error::Thread`].
@@ -155,9 +222,9 @@ impl Device {
         let counters = Counters::new();
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
-        let memory = unsafe { memory_types_and_filler(&device, &capabilities, family, &counters) };
-        let (memory_types, filler) = match memory {
-            Ok(memory) => memory,
+        let made = unsafe { objects(&device, &capabilities, family, &counters) };
+        let (memory_types, filler, done) = match made {
+            Ok(made) => made,
             Err(error) => {
                 // SAFETY: nothing made from the device is left.
                 unsafe { device.destroy_device(None) };
@@ -201,19 +268,28 @@ impl Device {
             max_block_len,
             pool: Pool::new(options.block_mappings),
             filler,
+            recorders: Recorders::new(family),
+            work: Work::new(),
+            done,
+            closed: AtomicBool::new(false),
+            halt: AtomicU8::new(RUNNING),
         });
-        let maker = Arc::clone(&core);
-        let blocks = thread::Builder::new()
-            .name("m2v-blocks".to_string())
-            .spawn(move || memory::run(maker))
-            .map_err(Error::Thread)?;
-        Ok(Device {
+        let device = Device {
             shared: Arc::new(Shared {
                 core,
                 claims: Mutex::new(HashMap::new()),
-                threads: vec![blocks],
+                threads: Mutex::new(Threads::default()),
             }),
-        })
+        };
+        // A thread that does not start drops the device, which stops those that did.
+        let core = &device.shared.core;
+        let blocks = spawn("m2v-blocks", core, memory::run)?;
+        lock(&device.shared.threads).blocks = Some(blocks);
+        let submit = spawn("m2v-submit", core, submit::run)?;
+        lock(&device.shared.threads).submit = Some(submit);
+        let complete = spawn("m2v-complete", core, complete::run)?;
+        lock(&device.shared.threads).complete = Some(complete);
+        Ok(device)
     }
 
     /// `hasUnifiedMemory`: true where Vulkan's device type is integrated or CPU, false for a
@@ -281,9 +357,12 @@ impl Device {
     ///
     /// Err: [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's largest allocation or
     /// buffer; [`Limit::BlockIds`](crate::Limit::BlockIds); [`Error::Vulkan`] where the device is
-    /// out of memory or lost.
+    /// out of memory or lost; [`Error::Quiesced`].
     pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<BlockInfo, Error> {
         let core = &self.shared.core;
+        if core.closed() {
+            return Err(Error::Quiesced);
+        }
         let memory = if len <= BLOCK_LEN {
             core.pool.take(class)?
         } else {
@@ -291,14 +370,41 @@ impl Device {
             memory::make(core, class, len, core.pool.number()?, false)?
         };
         let info = memory.info();
+        core.pool.hand(memory.id);
         lock(&self.shared.claims).insert(memory.id, Arc::new(Block::new(memory, Arc::clone(core))));
         Ok(info)
     }
 
+    /// No Metal counterpart: stops the runtime's threads and its GPU work, for a process about to
+    /// exit with the device still alive. True once the GPU went idle and every thread ended
+    /// within `timeout`; false where the timeout passed first, or the call ran in a handler or a
+    /// listener (the completion thread cannot wait for itself).
+    ///
+    /// In order, each wait bounded by `timeout`: the submit thread submits what is ready, ends
+    /// every command buffer it holds or has not yet submitted with
+    /// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun), and ends; the
+    /// block-maker thread ends; the GPU completes everything submitted; the completion thread
+    /// retires it, runs the handlers, and ends; then [`BlockMappings::unmap`] runs on this thread
+    /// for every block still handed out. After it, no runtime thread touches a block, unless the
+    /// call answered false.
+    ///
+    /// It frees nothing: every block's memory and mapping stays valid until the process ends, or
+    /// until the device's last handle drops, which then frees it without the hook. Later calls
+    /// that need a runtime thread return [`Error::Quiesced`]: taking a block, a command buffer,
+    /// an enqueue or commit, a zeroed Private buffer, and a listener.
+    ///
+    /// Safe in an `atexit` handler on whichever thread calls `exit()`: it joins a thread only once
+    /// that thread has ended, reads no thread-local that `exit()` tears down, and takes no lock a
+    /// consumer's thread can hold. A second call returns at once, with the first call's answer,
+    /// or false while the first is still running.
+    pub fn quiesce(&self, timeout: Duration) -> bool {
+        self.shared.halt(Instant::now().checked_add(timeout), true)
+    }
+
     /// No Metal counterpart: gives a block back.
     ///
-    /// It takes effect once no [`Buffer`](crate::Buffer) of the block remains. A pooled block is
-    /// then zeroed and kept ready, with the same number, address and mapping, while its class has
+    /// It takes effect once no [`Buffer`](crate::Buffer) of the block remains and every command
+    /// buffer that used it has retired. A pooled block is then zeroed and kept ready, with the same number, address and mapping, while its class has
     /// fewer than two idle; otherwise the block-maker thread frees it, after
     /// [`BlockMappings::unmap`]. A dedicated block is always freed that way.
     ///
@@ -329,26 +435,141 @@ impl Device {
     pub(crate) fn with_runtime_queue<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R {
         f(*lock(&self.shared.core.queues.runtime))
     }
+
+    /// For the device tests: the runtime acts as at a loss of the device.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn lose_for_test(&self) {
+        complete::lose(&self.shared.core);
+    }
 }
 
-/// The memory types the floor chooses on a new device, and the zero fill's objects.
+/// Starts a runtime thread that serves `core`.
+fn spawn(name: &str, core: &Arc<Core>, body: fn(Arc<Core>)) -> Result<Runner, Error> {
+    let ended = Arc::new(Ended::default());
+    let ending = Ending(Arc::clone(&ended));
+    let core = Arc::clone(core);
+    let handle = thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            let _ending = ending;
+            SERVES.set(Arc::as_ptr(&core) as usize);
+            body(core);
+        })
+        .map_err(Error::Thread)?;
+    Ok(Runner { handle, ended })
+}
+
+impl Ended {
+    /// Waits for the thread to end, up to `deadline`. True once it has.
+    fn wait(&self, deadline: Option<Instant>) -> bool {
+        let mut flag = lock(&self.flag);
+        while !*flag {
+            flag = match deadline {
+                None => self
+                    .changed
+                    .wait(flag)
+                    .unwrap_or_else(PoisonError::into_inner),
+                Some(deadline) => {
+                    let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                        return false;
+                    };
+                    self.changed
+                        .wait_timeout(flag, left)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                }
+            };
+        }
+        true
+    }
+}
+
+impl Shared {
+    /// Stops the runtime's threads and its GPU work: for [`Device::quiesce`] (`quiesce`, with its
+    /// deadline) and for teardown. Only the first call stops anything; a later one answers at
+    /// once. True once the GPU went idle and every thread ended by `deadline`.
+    fn halt(&self, deadline: Option<Instant>, quiesce: bool) -> bool {
+        let core = &self.core;
+        match core
+            .halt
+            .compare_exchange(RUNNING, HALTING, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => {}
+            Err(halt) => return halt == HALTED_IDLE,
+        }
+        core.closed.store(true, Ordering::Release);
+        let (blocks, submit, complete) = {
+            let mut threads = lock(&self.threads);
+            (
+                threads.blocks.take(),
+                threads.submit.take(),
+                threads.complete.take(),
+            )
+        };
+        // Submission stops: what is ready goes, and what is held ends.
+        core.work.stop();
+        let mut idle = finish(submit, deadline);
+        core.pool.stop();
+        idle &= finish(blocks, deadline);
+        if quiesce {
+            idle &= core.wait_progress(core.work.progress(), deadline);
+        }
+        core.done.stop(core, deadline);
+        // Only the completion thread runs the consumer's code among the runtime's threads. Where
+        // this call runs on it (a handler or listener dropped the last handle, or quiesced), it
+        // ends itself once the call returns, and is not waited for.
+        let on_completion = SERVES.get() == Arc::as_ptr(core) as usize;
+        idle &= !on_completion && finish(complete, deadline) && core.done.drained();
+        if quiesce {
+            core.pool.unmap_all();
+        }
+        let answer = if idle { HALTED_IDLE } else { HALTED_LATE };
+        core.halt.store(answer, Ordering::Release);
+        idle
+    }
+}
+
+/// Waits for a thread to end, up to `deadline`, and joins it once it has; a thread past the
+/// deadline is left to end alone. True once it ended.
+fn finish(runner: Option<Runner>, deadline: Option<Instant>) -> bool {
+    let Some(Runner { handle, ended }) = runner else {
+        return true;
+    };
+    let done = ended.wait(deadline);
+    if done {
+        // A thread that panicked has ended all the same.
+        let _ = handle.join();
+    }
+    done
+}
+
+/// The memory types the floor chooses on a new device, the zero fill's objects, and the
+/// completion thread's semaphores.
 ///
 /// # Safety
 ///
 /// `device` was made with `capabilities.features`, and `family` is its queues' family.
-unsafe fn memory_types_and_filler(
+unsafe fn objects(
     device: &ash::Device,
     capabilities: &floor::Capabilities,
     family: u32,
     counters: &Counters,
-) -> Result<(floor::MemoryTypes, Filler), Error> {
+) -> Result<(floor::MemoryTypes, Filler, Done), Error> {
     // SAFETY: the caller's contract.
     let memory_types =
         unsafe { floor::memory_types(device, capabilities) }.map_err(Error::BelowFloor)?;
     // SAFETY: the caller's contract; the Shared type is host-visible and host-coherent, and the
     // floor chose it for buffers of every usage.
-    let filler = unsafe { Filler::new(device, family, memory_types.shared, counters) }?;
-    Ok((memory_types, filler))
+    let mut filler = unsafe { Filler::new(device, family, memory_types.shared, counters) }?;
+    // SAFETY: the device is live.
+    match unsafe { Done::new(device) } {
+        Ok(done) => Ok((memory_types, filler, done)),
+        Err(error) => {
+            // SAFETY: the fill's objects are unused.
+            unsafe { filler.destroy(device, counters) };
+            Err(error)
+        }
+    }
 }
 
 impl Core {
@@ -358,6 +579,21 @@ impl Core {
             MemoryClass::Private => self.memory_types.private,
             MemoryClass::Shared => self.memory_types.shared,
         }
+    }
+
+    /// Quiesced or torn down.
+    pub(crate) fn closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
+    /// Waits for the device to go idle. A lost device does so at once.
+    pub(crate) fn wait_idle(&self) {
+        // `vkDeviceWaitIdle` needs every queue of the device externally synchronized.
+        let _runtime = lock(&self.queues.runtime);
+        let _present = (!Arc::ptr_eq(&self.queues.runtime, &self.queues.present))
+            .then(|| lock(&self.queues.present));
+        // SAFETY: every queue is held. A lost device fails the wait, and then nothing is pending.
+        let _ = unsafe { self.device.device_wait_idle() };
     }
 }
 
@@ -376,11 +612,7 @@ pub struct RawDevice<'a> {
 
 impl Drop for Shared {
     fn drop(&mut self) {
-        self.core.pool.stop();
-        for thread in self.threads.drain(..) {
-            // A thread that panicked has stopped all the same.
-            let _ = thread.join();
-        }
+        self.halt(None, false);
         // The blocks the consumer still holds go back to the pool, for the core to free. No
         // buffer of them is left: each holds a handle of the device.
         self.claims
@@ -392,20 +624,16 @@ impl Drop for Shared {
 
 impl Drop for Core {
     fn drop(&mut self) {
-        {
-            // `vkDeviceWaitIdle` needs every queue of the device externally synchronized.
-            let _runtime = lock(&self.queues.runtime);
-            let _present = (!Arc::ptr_eq(&self.queues.runtime, &self.queues.present))
-                .then(|| lock(&self.queues.present));
-            // SAFETY: every queue is held. A lost device fails the wait; teardown goes on.
-            let _ = unsafe { self.device.device_wait_idle() };
+        self.wait_idle();
+        // The runtime's threads have ended: the core is dropped only once none holds it, and with
+        // it every command buffer and upload, each of which held what it used.
+        for memory in self.pool.remaining() {
+            memory::free(self, memory);
         }
-        // The runtime's threads are joined: the core is dropped only once none holds it.
-        for (memory, handed) in self.pool.remaining() {
-            memory::free(self, memory, handed);
-        }
-        // SAFETY: the device is idle, and nothing made from it is left but the fill's objects.
+        self.recorders.destroy_all(&self.device);
+        // SAFETY: the device is idle, and nothing made from it is left but these objects.
         unsafe {
+            self.done.destroy(&self.device);
             self.filler.destroy(&self.device, &self.counters);
             self.device.destroy_device(None);
         }
