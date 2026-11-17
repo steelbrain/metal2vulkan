@@ -9,6 +9,11 @@
 //! buffer's memory only then. So a buffer made after one of the same length was dropped takes
 //! the same range, which the runtime zeroes as `newBufferWithLength:options:` does.
 //!
+//! The new runtime has no `Managed` storage, so a `Managed` buffer is a `Private` one here: the
+//! GPU's copy in device memory, which the harness writes as it writes a `Private` buffer, through
+//! a `Shared` buffer and its copy kernel, as `didModifyRange:` brings a `Managed` buffer's GPU copy
+//! up to date on a Mac with a discrete GPU. It has no CPU copy: its `contents` is `None`.
+//!
 //! Its known gaps and the device's limits (`Error::Unsupported`, `Error::Limit`) are typed
 //! refusals ([`Refused`]); its other errors are failures. It makes no texture or sampler state
 //! yet: a plan with either is refused when it is made, so its texture and sampler types have no
@@ -234,7 +239,7 @@ impl crate::Device for Device {
     fn new_buffer(&self, length: u64, storage: Storage) -> Result<Buffer> {
         let class = match storage {
             Storage::Shared => rt::MemoryClass::Shared,
-            Storage::Private => rt::MemoryClass::Private,
+            Storage::Private | Storage::Managed => rt::MemoryClass::Private,
         };
         let placed = self.heap.borrow_mut().place(class, length)?;
         let start = placed.range.as_ref().map_or(0, |range| range.start);
@@ -447,5 +452,10 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
 impl crate::Buffer for Buffer {
     fn contents(&self) -> Option<NonNull<u8>> {
         self.buffer.contents()
+    }
+
+    /// Nothing: a `Managed` buffer has no CPU copy here (the module's docs).
+    fn did_modify_range(&self, _: u64, _: u64) -> Result<()> {
+        Ok(())
     }
 }

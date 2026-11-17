@@ -131,6 +131,10 @@ pub enum Storage {
     Shared,
     /// `MTLStorageModePrivate`: the GPU's alone.
     Private,
+    /// `MTLStorageModeManaged`: the CPU writes it through `contents` and calls
+    /// `didModifyRange:`, which brings the GPU's copy up to date. The new runtime has no such
+    /// mode; its harness keeps the GPU's copy in a `Private` buffer (`rt`).
+    Managed,
 }
 
 /// A library's code.
@@ -228,6 +232,10 @@ pub trait ComputeDevice: Device {
 pub trait Buffer {
     /// `contents`: the CPU address of the buffer's bytes; `None` for `Private` storage.
     fn contents(&self) -> Option<NonNull<u8>>;
+
+    /// `didModifyRange:` of the `length` bytes at `offset`: the CPU wrote them. Nothing for
+    /// storage other than `Managed`.
+    fn did_modify_range(&self, offset: u64, length: u64) -> Result<()>;
 }
 
 /// `MTLLibrary`.

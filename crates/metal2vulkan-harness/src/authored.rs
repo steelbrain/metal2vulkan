@@ -19,7 +19,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 15] = [
+pub const WORKLOADS: [Workload; 16] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -51,6 +51,10 @@ pub const WORKLOADS: [Workload; 15] = [
     Workload {
         name: "burst_160",
         plan: burst_160,
+    },
+    Workload {
+        name: "burst_160_shared",
+        plan: burst_160_shared,
     },
     Workload {
         name: "burst_2000",
@@ -401,15 +405,6 @@ fn private(contents: Vec<u8>) -> BufferPlan {
     }
 }
 
-/// A `Shared` buffer starting with `contents`, written through `contents`.
-fn shared(contents: Vec<u8>) -> BufferPlan {
-    BufferPlan {
-        length: contents.len() as u64,
-        storage: Storage::Shared,
-        contents: Some(contents),
-    }
-}
-
 /// A `Private` buffer of `length` bytes whose first run writes before it reads.
 fn unset(length: u64) -> BufferPlan {
     BufferPlan {
@@ -423,34 +418,47 @@ fn unset(length: u64) -> BufferPlan {
 /// a frame, two at the 90th percentile, a few dispatches each), in compute alone: a run is one
 /// command buffer of four `lcg_step` dispatches ([`lcg_frame`]).
 fn frame() -> Plan {
-    lcg_frame("frame", 1, 4, None)
+    lcg_frame("frame", 1, 4, None, Storage::Managed)
 }
 
 /// A burst of small command buffers: a run is 160 command buffers of two `lcg_step` dispatches
 /// each ([`lcg_frame`]).
 fn burst_160() -> Plan {
-    lcg_frame("burst_160", 160, 2, None)
+    lcg_frame("burst_160", 160, 2, None, Storage::Managed)
+}
+
+/// `burst_160` with its increment in a `Shared` buffer, kept for the record: the recordings bind
+/// few small constant arguments from `Shared` memory ([`lcg_frame`]).
+fn burst_160_shared() -> Plan {
+    lcg_frame("burst_160_shared", 160, 2, None, Storage::Shared)
 }
 
 /// The burst a recording commits most: a run is 2,000 command buffers of one compute encoder of
 /// one `lcg_step` dispatch each ([`lcg_frame`]).
 fn burst_2000() -> Plan {
-    lcg_frame("burst_2000", 2000, 1, None)
+    lcg_frame("burst_2000", 2000, 1, None, Storage::Managed)
 }
 
 /// That burst at five compute encoders a command buffer: a run is 2,000 command buffers of five
 /// compute encoders of one `lcg_step` dispatch each ([`lcg_frame`]).
 fn burst_2000x5() -> Plan {
-    lcg_frame("burst_2000x5", 2000, 5, Some(1))
+    lcg_frame("burst_2000x5", 2000, 5, Some(1), Storage::Managed)
 }
 
 /// A run of `command_buffers` command buffers of `per` tiny dispatches each, in compute encoders
 /// of `per_encoder` dispatches (or one of them all), committed with no wait between and waited
 /// for once: `lcg_step` over 256 words of `Private` storage, each dispatch setting its bindings,
 /// since an encoder starts with none. Both are buffers (`setBuffer:offset:atIndex:`): the words,
-/// and the increment in a `Shared` buffer written once; the run makes no `setBytes` call
-/// (`dispatch_chain` measures those).
-fn lcg_frame(name: &str, command_buffers: usize, per: usize, per_encoder: Option<usize>) -> Plan {
+/// and the increment in a buffer of `storage` written once, a `Managed` one then flushed with
+/// `didModifyRange:`, as the recordings bind their small constant arguments; the run makes no
+/// `setBytes` call (`dispatch_chain` measures those).
+fn lcg_frame(
+    name: &str,
+    command_buffers: usize,
+    per: usize,
+    per_encoder: Option<usize>,
+    storage: Storage,
+) -> Plan {
     const WORDS: usize = 256;
     let steps = per * command_buffers;
     let increment = words(14, 1)[0];
@@ -473,7 +481,11 @@ fn lcg_frame(name: &str, command_buffers: usize, per: usize, per_encoder: Option
         library: Source::Authored,
         buffers: vec![
             private(word_bytes(&input)),
-            shared(word_bytes(&[increment, 0, 0, 0])),
+            BufferPlan {
+                length: 16,
+                storage,
+                contents: Some(word_bytes(&[increment, 0, 0, 0])),
+            },
         ],
         dispatches: vec![dispatch; steps],
         expect: vec![Expect {

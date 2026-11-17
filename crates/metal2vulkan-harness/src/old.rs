@@ -31,6 +31,11 @@ impl crate::Device for runtime::Device {
         let options = match storage {
             Storage::Shared => ResourceOptions::shared(),
             Storage::Private => ResourceOptions::private(),
+            Storage::Managed => ResourceOptions::new(
+                runtime::StorageMode::Managed,
+                runtime::CpuCacheMode::DefaultCache,
+                runtime::HazardTrackingMode::Default,
+            ),
         };
         Ok(runtime::Device::new_buffer(self, length, options)?)
     }
@@ -131,6 +136,13 @@ impl crate::ComputeDevice for runtime::Device {
 impl crate::Buffer for runtime::Buffer {
     fn contents(&self) -> Option<NonNull<u8>> {
         runtime::Buffer::contents(self)
+    }
+
+    fn did_modify_range(&self, offset: u64, length: u64) -> Result<()> {
+        Ok(runtime::Buffer::did_modify_range(
+            self,
+            offset..offset + length,
+        )?)
     }
 }
 

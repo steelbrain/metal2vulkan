@@ -393,6 +393,10 @@ impl Buffer for HostBuffer {
     fn contents(&self) -> Option<NonNull<u8>> {
         NonNull::new(self.0.as_ptr().cast_mut().cast())
     }
+
+    fn did_modify_range(&self, _: u64, _: u64) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[test]

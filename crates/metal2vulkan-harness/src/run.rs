@@ -420,16 +420,22 @@ impl<D: ComputeDevice> Harness<D> {
     }
 
     /// Every buffer's starting contents: a `Shared` one's written through `contents`, a
-    /// `Private` one's copied in from a `Shared` buffer, all in one command buffer, waited for.
+    /// `Managed` one's too, then `didModifyRange:` over them, and a `Private` one's, or a
+    /// `Managed` one's without a CPU copy, copied in from a `Shared` buffer, all in one command
+    /// buffer, waited for.
     fn fill(&self, plans: &[BufferPlan], buffers: &[D::Buffer]) -> Result<()> {
         let mut staged = Vec::new();
         for (plan, buffer) in plans.iter().zip(buffers) {
             let Some(contents) = &plan.contents else {
                 continue;
             };
-            match plan.storage {
-                Storage::Shared => write(buffer, contents)?,
-                Storage::Private => {
+            match (plan.storage, buffer.contents()) {
+                (Storage::Shared, _) => write(buffer, contents)?,
+                (Storage::Managed, Some(_)) => {
+                    write(buffer, contents)?;
+                    buffer.did_modify_range(0, plan.length)?;
+                }
+                (Storage::Private | Storage::Managed, _) => {
                     let stage = self.device.new_buffer(plan.length, Storage::Shared)?;
                     write(&stage, contents)?;
                     staged.push((stage, buffer, plan.length));
