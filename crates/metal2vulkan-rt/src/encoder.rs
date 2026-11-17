@@ -9,7 +9,7 @@ use crate::pipeline::{
     padded, tile, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant,
     PUSH_BYTES,
 };
-use crate::record::{self, Reach};
+use crate::record::Reach;
 use crate::ring::CHUNK;
 use ash::vk;
 use metal2vulkan::pipeline::{nonuniform_region_bytes, region_bytes};
