@@ -578,7 +578,8 @@ fn a_command_buffer_held_on_an_event_does_not_hold_the_others() {
 }
 
 /// The CPU waiting for a command buffer that only a later record lets run, a stream that ends with
-/// one held, and a selector the backend refuses each stop the play; a check reads what it names.
+/// one held, and a selector the backend refuses each stop the play, the calls played counted; a
+/// check reads what it names.
 #[test]
 fn a_play_stops_where_the_stream_or_the_backend_cannot_go_on() {
     let held = |w: &mut StreamWriter<File>| {
@@ -611,11 +612,12 @@ fn a_play_stops_where_the_stream_or_the_backend_cannot_go_on() {
     ended.unwrap();
     assert_eq!(report.checks.len(), 1);
 
-    let (_, ended) = played(&mut Kept::default(), |w| {
+    let (report, ended) = played(&mut Kept::default(), |w| {
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
         w.call("notPlayed", 1, 0, &[], &[])
     });
     assert!(matches!(ended, Err(PlayError::Refused { .. })), "{ended:?}");
+    assert_eq!(report.calls, 1, "the refused call is the next");
 }
 
 /// A present closes a frame of the groups since the last, reading nothing (its texture may be

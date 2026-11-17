@@ -337,6 +337,7 @@ and the (name id, value) answer pairs.
 
 `report.txt` holds one line per item: `device NAME`, `completed IDS KEY=VALUE ...`,
 `frame N KEY=VALUE ...`, `check ID SHA256 match|differs|unrecorded`, `total KEY=VALUE ...`,
+`calls N` (the calls played; where the play stopped, the stopping call is the next),
 `cut SEGMENT OFFSET` where the last segment ends in a record cut short, then `ok` or
 `error WHAT`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
 failure (a bad command line or an unreadable stream).

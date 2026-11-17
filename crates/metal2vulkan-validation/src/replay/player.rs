@@ -103,6 +103,8 @@ pub struct Report {
     pub checks: Vec<Check>,
     /// The counters' growth over the whole play, the player's readbacks left out.
     pub total: Counters,
+    /// The stream's calls played: where a play stopped, the stopping call is the next.
+    pub calls: u64,
 }
 
 fn counted(counters: &Counters) -> String {
@@ -133,6 +135,7 @@ impl Report {
             lines.push(format!("check #{} {sha} {verdict}", check.object));
         }
         lines.push(format!("total{}", counted(&self.total)));
+        lines.push(format!("calls {}", self.calls));
         lines
     }
 }
@@ -347,6 +350,7 @@ impl<'b, B: Backend> Player<'b, B> {
     ) -> Result<(), PlayError> {
         while let Some(call) = stream.next_call()? {
             self.step(stream, call, readbacks)?;
+            self.report.calls += 1;
         }
         Ok(())
     }
