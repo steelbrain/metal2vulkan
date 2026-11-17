@@ -15,6 +15,16 @@ mod push_window;
 mod readback;
 mod translate;
 
+/// This crate's directory: the test process's `CARGO_MANIFEST_DIR` where it holds the crate's
+/// sources (cargo and nextest set it for each test, and an archive run elsewhere remaps it to the
+/// workspace it runs in), else the directory the tests were built in.
+pub(crate) fn crate_dir() -> std::path::PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|dir| dir.join("src").join("lib.rs").is_file())
+        .unwrap_or_else(|| env!("CARGO_MANIFEST_DIR").into())
+}
+
 /// Every product source file under `src/`, the tests excepted, with its path under `src/`, in
 /// path order.
 pub(crate) fn product_sources() -> Vec<(String, String)> {
@@ -36,7 +46,7 @@ pub(crate) fn product_sources() -> Vec<(String, String)> {
             }
         }
     }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let root = crate_dir().join("src");
     let mut files = Vec::new();
     walk(&root, &mut files);
     assert!(!files.is_empty(), "no source under {}", root.display());

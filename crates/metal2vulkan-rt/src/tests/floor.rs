@@ -11,7 +11,6 @@ use crate::floor::{
 use ash::vk;
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
 
 /// Memory with the given types, each in heap 0.
 fn memory(types: &[vk::MemoryPropertyFlags]) -> vk::PhysicalDeviceMemoryProperties {
@@ -841,7 +840,7 @@ fn table(section: &[&str], header: &[&str]) -> Vec<Vec<String>> {
 
 #[test]
 fn the_readme_states_the_floor() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
+    let path = crate::tests::crate_dir().join("README.md");
     let readme = fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
     let section: Vec<&str> = readme
