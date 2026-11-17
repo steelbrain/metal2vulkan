@@ -188,11 +188,12 @@ fn a_plan_with_a_part_tile_texture_a_missing_texture_or_too_many_texels_is_refus
 /// in order, the last one shorter.
 #[test]
 fn parts_cut_a_range_in_order_the_last_one_shorter() {
-    let cut = |range, per| parts(range, per).collect::<Vec<_>>();
-    assert_eq!(cut(0..5, Some(2)), [0..2, 2..4, 4..5]);
-    assert_eq!(cut(10..20, Some(5)), [10..15, 15..20]);
-    assert_eq!(cut(4..10, None), [4..10]);
-    assert_eq!(cut(3..4, Some(8)), [3..4]);
+    let cut =
+        |range, per| (parts(range, per).map(|part| (part.start, part.end))).collect::<Vec<_>>();
+    assert_eq!(cut(0..5, Some(2)), [(0, 2), (2, 4), (4, 5)]);
+    assert_eq!(cut(10..20, Some(5)), [(10, 15), (15, 20)]);
+    assert_eq!(cut(4..10, None), [(4, 10)]);
+    assert_eq!(cut(3..4, Some(8)), [(3, 4)]);
 }
 
 /// Each authored plan is whole: its builder's inputs, kernels and references agree in shape.
