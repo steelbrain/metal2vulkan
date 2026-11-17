@@ -55,7 +55,10 @@ order, and a lower one never overrides a higher one.
    decided at run time.
 2. **One path for every device.** Differences come only from Vulkan feature, property, format,
    limit and memory-type queries. Product code holds no vendor, device or driver ID, and no
-   runtime policy switch: every feature has one form. A test enforces this for `metal2vulkan-rt`.
+   runtime policy switch. A test enforces this for `metal2vulkan-rt`. One form means one form per
+   Vulkan capability: where the floor cannot require a feature, that feature's query may choose a
+   second form, for four features only: 16-bit floats, storage-image reads without a format,
+   64-bit atomics and 64-bit floats. A second form chosen by anything else is not allowed.
 3. **Native-like speed.** Structure decides speed: driver-owned memory, optimal images in real
    layouts, direct addresses, nothing copied that Metal would not copy.
 4. **Small.** Every cache is bounded, every feature has one form, and anything unused is deleted.
@@ -71,10 +74,10 @@ operation that cannot run at all may fail or end anything.
 2. Decide by a Vulkan query.
 3. If it is a driver bug: write a minimal repro, report it upstream, and prefer not using that
    feature at all. Stay on the Vulkan paths games exercise.
-4. Explicit calibration: a call the consumer makes at install time, cached, never at device
-   start. Allowed only for a cost choice worth 2x or more on a guest workload, and for at most
-   three choices in total.
-5. Record a known gap: a typed refusal or a static note.
+4. Record a known gap: a typed refusal or a static note.
+
+There is no calibration. Where no single form wins on every device, take the form that is best on
+the slowest GPU and record the loss on the others as a known gap.
 
 **Never:**
 - an identity-keyed branch;
@@ -84,7 +87,11 @@ operation that cannot run at all may fail or end anything.
 - a second permanent form behind a switch.
 
 **Thresholds.** No performance lane below 5% on a guest-visible workload. A single-vendor
-investigation gets a time box, then rung 5.
+investigation gets a time box, then rung 4.
+
+**Copies.** Nothing is copied that Metal would not copy. A copy is never the answer to a design
+question: it is allowed only as the last form on a device that has no other, and it is reported
+as a known gap.
 
 **The old runtime and old switches.** `metal2vulkan-runtime` takes regression fixes only, from at
 most one lane, until the cutover deletes it. The same goes for the translator's `DevicePolicy`
