@@ -469,18 +469,12 @@ fn by_identity(desc: &DeviceDescription) -> Vec<DriverWorkaround> {
         Some(vk::DriverId::MESA_LLVMPIPE) => {
             vec![DriverWorkaround::ClippedTrianglesSplitPixelFragments]
         }
-        // A `half` round trip folded on every GPU it drives, and on the 3090's generation a
-        // narrow integer's mask dropped.
-        Some(vk::DriverId::NVIDIA_PROPRIETARY) => {
-            let mut found = vec![DriverWorkaround::HalfConversionPairFolded];
-            if super::NVIDIA_AMPERE_GA10X.contains(&desc.device_id) {
-                found.push(DriverWorkaround::NarrowMaskAfterSignedClamp);
-            }
-            found
+        // On the 3090's generation, a narrow integer's mask dropped.
+        Some(vk::DriverId::NVIDIA_PROPRIETARY)
+            if super::NVIDIA_AMPERE_GA10X.contains(&desc.device_id) =>
+        {
+            vec![DriverWorkaround::NarrowMaskAfterSignedClamp]
         }
-        // An `f32` operation fused into the conversion of its result to `half`, on every GPU it
-        // drives.
-        Some(vk::DriverId::MESA_RADV) => vec![DriverWorkaround::HalfConversionFusedWithArithmetic],
         // A register allocator that faults compiling a module past a word bound, products of one
         // value by zeros of opposite sign kept as one, a stage past 2^20 objects of its
         // serialized form corrupted, and a compiler whose memory outgrows the stage, on every GPU

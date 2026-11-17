@@ -2209,9 +2209,8 @@ enum F16Basis {
     Measured,
     /// The 16-bit float controls ([`narrow::half_controls`]), which its entry then declares
     /// ([`narrow::computes_in_16_bits`]): no fact. Its `half` roundings take them too
-    /// ([`QuantizeForm::Controlled`]) but on a driver that folds the conversion's round trip
-    /// (`DriverWorkaround::HalfConversionPairFolded`), which leaves a 16-bit instruction's
-    /// rounding as it is.
+    /// ([`QuantizeForm::Controlled`]); a driver that folds the conversion's round trip (NVIDIA's)
+    /// leaves a 16-bit instruction's rounding as it is.
     Controlled,
 }
 

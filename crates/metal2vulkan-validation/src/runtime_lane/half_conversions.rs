@@ -14,10 +14,11 @@
 //! the profile takes the deviation (MoltenVK on the Apple M3 Max's macOS 27 identity) the
 //! conversion kernels record no `PrecisionNote::NativeHalfConversion` and every lane is Metal's
 //! word; the `tanh` kernel records it there, as a `half` function computed in `float`. Under the
-//! float controls (ANV, RADV) the conversion is Metal's and records no note, but where the driver
-//! fuses the sum, the product or the fused multiply-add into it and rounds the exact result once
-//! (RADV, `DriverWorkaround::HalfConversionFusedWithArithmetic`), which records it. Elsewhere a
-//! kernel that rounds through the conversion records the note. A kernel that records it may answer
+//! float controls (ANV, RADV, NVIDIA) the conversion and its widening are Metal's by the Vulkan
+//! spec, but a driver's compiler may fold the pair (NVIDIA's) or fuse the sum, the product or the
+//! fused multiply-add into the narrowing and round the exact result once (RADV's), so each kernel
+//! that rounds through the pair records the note on every device, as it does elsewhere. A kernel
+//! that records it may answer
 //! the device's lanes, which the test prints as `HALF-CONVERSIONS` lines.
 
 use super::degrade_notices::on_device_with;

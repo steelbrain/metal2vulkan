@@ -3044,14 +3044,13 @@ fn compile_bounded<K>(
         && quantize == crate::spirv::builder::QuantizeForm::Converted
         && p.takes_driver_deviation(crate::error::DriverDeviation::MetalHalfArithmetic);
     let native_widening = widens && !controls && !measured_widening;
-    // A `half` rounded from `float` arithmetic through the conversion under the float controls,
-    // on a driver that fuses the operation into the narrowing
-    // (`DriverWorkaround::HalfConversionFusedWithArithmetic`): its exact result rounded once,
-    // where Metal rounds the `float` result; the module records the native note.
-    let fused = quantize == crate::spirv::builder::QuantizeForm::Controlled
-        && p.workarounds()
-            .contains(&crate::device::profile::DriverWorkaround::HalfConversionFusedWithArithmetic)
-        && crate::lower::arith::narrow::rounds_arithmetic(&module, m)?;
+    // A `half` rounded through the conversion and its widening under the float controls: Metal's
+    // `half(float)` by the Vulkan spec, but a driver's compiler may fold the pair into the value it
+    // started from (NVIDIA's) or fuse the `float` operation computing the value into the narrowing
+    // and round its exact result once (RADV's), so the module records the native note on every
+    // device, a static note of the rounding.
+    let controlled_pair = quantize == crate::spirv::builder::QuantizeForm::Controlled
+        && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?;
     // Its NaN's bits, and those of a `half` held widened that a widening to `float` or a `half`
     // `fabs` moves: Metal's where the device's widening and narrowing are measured to answer
     // them (`DriverDeviation::MetalNanMoves`) and the module moves its `half` values only as
@@ -3067,15 +3066,10 @@ fn compile_bounded<K>(
     // `NoContraction`, under the float controls that make it Metal's, computed by the device's
     // 16-bit arithmetic, which they make Metal's too, or read from its bits by the device's
     // widening, which they make exact but for a NaN's bits: the entry declares them, and so
-    // requires the device's float-controls properties for them, and no fact. On a driver that
-    // folds the round trip (`DriverWorkaround::HalfConversionPairFolded`, so `Converted`) the
-    // pair's rounding is the device's whatever the entry declares, recorded below, and the rest
-    // is Metal's under them as elsewhere.
+    // requires the device's float-controls properties for them, and no fact. The pair's rounding
+    // is noted below all the same.
     let declares_controls = controls
-        && (widens
-            || crate::lower::arith::narrow::computes_in_16_bits(&module)
-            || (quantize == crate::spirv::builder::QuantizeForm::Controlled
-                && crate::lower::arith::narrow::rounds_by_conversion(&module, m)?));
+        && (widens || crate::lower::arith::narrow::computes_in_16_bits(&module) || controlled_pair);
     if declares_controls {
         let modes = crate::lower::arith::narrow::controlled_modes(p).unwrap_or_default();
         module.declare_modes(&modes)?;
@@ -3090,7 +3084,7 @@ fn compile_bounded<K>(
         ),
         (device_quantize, PrecisionNote::NativeHalfQuantize),
         (
-            (converts && !measured_conversion) || native_widening || fused,
+            (converts && !measured_conversion) || native_widening || controlled_pair,
             PrecisionNote::NativeHalfConversion,
         ),
     ];

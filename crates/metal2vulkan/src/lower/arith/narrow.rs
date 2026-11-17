@@ -7,12 +7,11 @@
 //! Vulkan spec (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits, and
 //! the modes the device's independence ties to them), it is that conversion and its widening, each
 //! decorated `NoContraction`, in an entry declaring those modes ([`QuantizeForm::Controlled`],
-//! [`controlled_modes`]), where the driver keeps the pair (not NVIDIA's,
-//! `DriverWorkaround::HalfConversionPairFolded`, whose round trip is the device's conversion,
-//! [`quantize_form`]): exact, with no fact and no note, but for the result of
-//! `float` arithmetic on a driver that fuses the operation into the narrowing (RADV's,
-//! `DriverWorkaround::HalfConversionFusedWithArithmetic`, [`rounds_arithmetic`]), which the module
-//! records as `PrecisionNote::NativeHalfConversion`. Elsewhere, where the
+//! [`controlled_modes`]): Metal's `half(float)` by the Vulkan spec, but a driver's compiler may
+//! fold the pair into the value it started from (NVIDIA's) or fuse the `float` operation
+//! computing the value into the narrowing and round its exact result once (RADV's), so every such
+//! module records `PrecisionNote::NativeHalfConversion` on every device, a static note of the
+//! rounding (`pipeline::compile`). Elsewhere, where the
 //! profile has `shaderFloat16`, it is the device's conversion to 16 bits and its widening
 //! ([`QuantizeForm::Converted`]), recording `PrecisionNote::NativeHalfConversion`; without it, the
 //! device's `OpQuantizeToF16` alone ([`QuantizeForm::Device`]), whose result below the smallest
@@ -25,7 +24,7 @@
 //! that instruction between exact conversions instead, with no rounding here (`ops::f16_binary`):
 //! where it is measured to be (`DriverDeviation::MetalHalfArithmetic`), and under those float
 //! controls ([`half_controls`]), which make it so by the Vulkan spec and which the entry then
-//! declares ([`computes_in_16_bits`]), on a driver that folds the conversion's round trip too
+//! declares ([`computes_in_16_bits`]), a driver that folds the conversion's round trip included
 //! (NVIDIA's: the fold is the pair's, a 16-bit instruction keeps its rounding); there the emitted
 //! module holds every exact `half` at 16 bits, its moves, minimums, maximums and clamps, its
 //! demotion variables and thread arrays, and its `dot` and `mix`, 16-bit instructions
@@ -59,7 +58,7 @@
 mod merges;
 
 use crate::budget::Meter;
-use crate::device::profile::{DriverWorkaround, Independence};
+use crate::device::profile::Independence;
 use crate::device::DeviceProfile;
 use crate::error::Error;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
@@ -142,14 +141,13 @@ pub fn round(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> 
 
 /// How profile `p`'s modules round an `f32` to `half` ([`QuantizeForm`]): the device's conversion
 /// to 16 bits and back under the float controls that make it Metal's by the Vulkan spec where the
-/// profile computes under them ([`half_controls`]) and its driver keeps the pair, not one that
-/// folds it (`DriverWorkaround::HalfConversionPairFolded`, NVIDIA's) ([`QuantizeForm::Controlled`]),
-/// else that conversion as it is where the profile has `shaderFloat16`
-/// ([`QuantizeForm::Converted`]), else the device's `OpQuantizeToF16` ([`QuantizeForm::Device`]).
+/// profile computes under them ([`half_controls`]) ([`QuantizeForm::Controlled`]), else that
+/// conversion as it is where the profile has `shaderFloat16` ([`QuantizeForm::Converted`]), else the
+/// device's `OpQuantizeToF16` ([`QuantizeForm::Device`]). Each is the device's own rounding, noted
+/// (`pipeline::compile`).
 pub fn quantize_form(p: &DeviceProfile) -> QuantizeForm {
     let float16 = p.fields().leaf.float16;
-    let folds = (p.fields().workarounds).contains(&DriverWorkaround::HalfConversionPairFolded);
-    if half_controls(p) && !folds {
+    if half_controls(p) {
         QuantizeForm::Controlled
     } else if float16 {
         QuantizeForm::Converted
@@ -161,8 +159,9 @@ pub fn quantize_form(p: &DeviceProfile) -> QuantizeForm {
 /// The precision note of a module whose `half` roundings take `form`, the device's own rounding:
 /// `NativeHalfConversion` for [`QuantizeForm::Converted`], `NativeHalfQuantize` for
 /// [`QuantizeForm::Device`] (a quantize's result below the smallest normal half is the device's on
-/// every profile, which no measurement covers). `None` for the float controls' conversion, Metal's
-/// by the Vulkan spec.
+/// every profile, which no measurement covers). `None` for the float controls' conversion, whose
+/// note a module records where it keeps the conversion and its widening as a pair
+/// ([`rounds_by_conversion`], `pipeline::compile`).
 pub fn native_rounding(form: QuantizeForm) -> Option<PrecisionNote> {
     match form {
         QuantizeForm::Converted => Some(PrecisionNote::NativeHalfConversion),
@@ -237,9 +236,8 @@ fn controlled(fb: &mut FunctionBuilder<'_>, wide: Form, x: Value) -> BResult<Val
 /// Vulkan spec, so a `half` `+ - *`, `/`, `sqrt` and fused multiply-add are the device's 16-bit
 /// instructions (`super::f16_arithmetic`, `super::divide`, `super::math`, `super::fma`), the module
 /// holds its `half` values at 16 bits (`spirv::half_hold`), and a widening from bits or a narrowing
-/// to them records no note. Whether its `f32` results round through the conversion and its widening
-/// too is [`quantize_form`]'s: not on a driver that folds that pair
-/// (`DriverWorkaround::HalfConversionPairFolded`).
+/// to them records no note. Its `f32` results round through the conversion and its widening under
+/// them too ([`quantize_form`]).
 pub fn half_controls(p: &DeviceProfile) -> bool {
     p.fields().leaf.float16 && controlled_modes(p).is_some()
 }
@@ -451,84 +449,6 @@ pub fn rounds_unmeasured(m: &TypedModule, meter: &mut Meter) -> Result<bool, Err
             && has_bit(&widened, r)
             && !m.measured_roundings().contains(&r)
             && !texel(a)
-    });
-    drop((def, widened));
-    meter.release(bytes);
-    Ok(found)
-}
-
-/// Whether module `m` rounds to `half` the result of `float` arithmetic through a conversion pair
-/// (an `OpFConvert` of an `f32` to 16 bits whose result another widens back, as
-/// [`rounds_by_conversion`] finds them): an `f32` addition, subtraction, multiply or fused
-/// multiply-add (`OpFAdd`, `OpFSub`, `OpFMul`, `OpFmaKHR` or `GLSL.std.450 Fma`) whose result the
-/// pair narrows. A driver that fuses that operation into the narrowing
-/// (`DriverWorkaround::HalfConversionFusedWithArithmetic`) rounds its exact result to `half` once,
-/// where Metal rounds the `float` result: the neighbouring `half` where that result lies on a
-/// `half` midpoint, within `PrecisionNote::NativeHalfConversion`'s bound, which the module then
-/// records. One pass over the instructions to find each value's definition and two over the
-/// conversions, with a word and a bit per value of the module charged to `meter` while they run.
-pub fn rounds_arithmetic(m: &TypedModule, meter: &mut Meter) -> Result<bool, Error> {
-    let width = |v: Value| -> Option<u8> {
-        let ty = m.value(v).ok()?.ty;
-        let ty = match m.types().get(ty).ok()? {
-            Type::Vector { elem, .. } => *elem,
-            _ => ty,
-        };
-        match m.types().get(ty).ok()? {
-            Type::Float { width } => Some(*width),
-            _ => None,
-        }
-    };
-    let words = m.values().len().div_ceil(64);
-    let bytes = 8 * m.values().len() + 8 * words;
-    meter.charge(bytes)?;
-    // Each instruction result's definition.
-    let mut def: Vec<Option<&Inst>> = vec![None; m.values().len()];
-    for n in m.blocks().iter().flat_map(|b| &b.insts) {
-        if let Some(slot) = n.result.and_then(|r| def.get_mut(r.index())) {
-            *slot = Some(&n.inst);
-        }
-    }
-    let arithmetic = |v: Value| {
-        matches!(
-            def.get(v.index()).copied().flatten(),
-            Some(
-                Inst::Binary {
-                    op: BinOp::FAdd | BinOp::FSub | BinOp::FMul,
-                    ..
-                } | Inst::Fma { .. }
-                    | Inst::Glsl {
-                        op: GlslOp::Fma,
-                        ..
-                    }
-            )
-        )
-    };
-    let fconverts = || {
-        m.blocks()
-            .iter()
-            .flat_map(|b| &b.insts)
-            .filter_map(|n| match (&n.inst, n.result) {
-                (
-                    Inst::Convert {
-                        op: ConvOp::FConvert,
-                        a,
-                        ..
-                    },
-                    Some(r),
-                ) => Some((*a, r)),
-                _ => None,
-            })
-    };
-    // The narrowings some conversion widens back.
-    let mut widened = vec![0u64; words];
-    for (a, r) in fconverts() {
-        if width(a) == Some(16) && width(r) == Some(32) {
-            set_bit(&mut widened, a);
-        }
-    }
-    let found = fconverts().any(|(a, r)| {
-        width(a) == Some(32) && width(r) == Some(16) && has_bit(&widened, r) && arithmetic(a)
     });
     drop((def, widened));
     meter.release(bytes);

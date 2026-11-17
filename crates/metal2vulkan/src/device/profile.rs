@@ -1270,39 +1270,6 @@ pub enum DriverWorkaround {
     /// emitted as `OpBitFieldUExtract(x, 0, N)` there (`lower::arith::ops::mask`), which is the
     /// same bits on every device.
     NarrowMaskAfterSignedClamp,
-    /// The driver's compiler folds a `half` round trip, an `OpFConvert` from 32- to 16-bit floats
-    /// and its widening back, each decorated `NoContraction`, into the 32-bit value it started
-    /// from, in an entry declaring `RoundingModeRTE`, `DenormPreserve` and
-    /// `SignedZeroInfNanPreserve` for 16 bits. Vulkan assumes no value-changing transform of an
-    /// operation decorated `NoContraction`, and rounds a conversion between types correctly
-    /// ("Precision and Operation of SPIR-V Instructions"). Measured on the GeForce RTX 3090
-    /// (`deviceID` 0x2204) under NVIDIA's 615.71.09 (`VK_DRIVER_ID_NVIDIA_PROPRIETARY`): of the
-    /// 2^32 `f32` values, the round trip left 2,231,288,832 off Metal's `half(float)`, under each
-    /// combination of those modes and with or without the decoration. Keyed on NVIDIA's driver
-    /// on every GPU, the others unmeasured. Such a profile rounds an `f32` to `half` in another
-    /// form (`lower::arith::narrow::quantize_form`), and computes under those controls all the
-    /// same (`lower::arith::narrow::half_controls`): its 16-bit instructions and a single
-    /// conversion between 16 and 32 bits are no round trip.
-    HalfConversionPairFolded,
-    /// The driver's compiler fuses an `f32` addition, subtraction, multiply or fused multiply-add
-    /// into the `OpFConvert` to 16 bits of its result, rounding the exact result to `half` once,
-    /// though both are decorated `NoContraction` (which forbids combining the operation with
-    /// another instruction into a single operation), in an entry declaring `RoundingModeRTE`,
-    /// `DenormPreserve` and `SignedZeroInfNanPreserve` for 16 bits. Metal rounds the `float` result
-    /// to `half`, so where that result lies on a `half` midpoint the two differ by one unit in the
-    /// last place of the `half`. Measured with Mesa 26.2.6 on the Radeon 780M (RADV PHOENIX,
-    /// GFX11): ACO compiled the product's `OpFMul` and the narrowing as one `v_fma_mixlo_f16` (a
-    /// sum's narrowing too), and the product of 2.6822087e-7 and 1.0000001 answered `0x0005` where
-    /// Metal's `half` of the `float` product is `0x0004`; the Radeon RX 7900 XTX (RADV NAVI31,
-    /// GFX11) answered as the 780M did, 4,542 of the 253,958 product lanes off Metal's on each
-    /// (`runtime_lane::half_conversions`). On the Radeon RX 550 (RADV POLARIS12, GFX8) the
-    /// narrowing alone answers its own way (8,185 of the 253,958 lanes of a loaded `float`), every
-    /// narrowing there records `PrecisionNote::NativeHalfConversion` already, and no fusion is told
-    /// apart. A fact of RADV's compiler, keyed on RADV (`VK_DRIVER_ID_MESA_RADV`) on every GPU;
-    /// other drivers unmeasured. Such a profile keeps the conversion under the float controls, and
-    /// a module that rounds such an operation's result through it records
-    /// `PrecisionNote::NativeHalfConversion` (`lower::arith::narrow::rounds_arithmetic`).
-    HalfConversionFusedWithArithmetic,
     /// The driver refuses a fragment shader that reads both barycentric builtins,
     /// `BaryCoordKHR` and `BaryCoordNoPerspKHR`, at pipeline creation, where Metal compiles a
     /// fragment function that declares both `[[barycentric_coord, center_perspective]]` and

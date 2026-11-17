@@ -1919,20 +1919,18 @@ pub enum PrecisionNote {
     /// Native half rounding (a conversion): the module rounds a `half` result it computes in
     /// `float` (a `half` operation's, a function's, a conversion from `float`'s, a texel's) by
     /// the device's conversion of the `float` to 16 bits and its widening (`OpFConvert` of the
-    /// value itself), on a device with `shaderFloat16` whose float controls do not make that
+    /// value itself), on every device with `shaderFloat16`. Where its float controls make that
     /// conversion Metal's (`RoundingModeRTE`, `DenormPreserve` and `SignedZeroInfNanPreserve` for
-    /// 16 bits, under which ANV and RADV round through the conversion exactly and record no
-    /// note): NVIDIA, whose driver folds the conversion's round trip even under those controls
-    /// (`DriverWorkaround::HalfConversionPairFolded`), MoltenVK, lavapipe, and any device
-    /// without them. NVIDIA's modules compute under those controls all the same: a `half` `+`,
-    /// `-`, `*`, `/` and `sqrt` there are the device's 16-bit instructions, whose results take
-    /// no such rounding. Without them Vulkan leaves the conversion's rounding mode and its 16-bit
-    /// denormals to the device. Also recorded under those controls on RADV where the `half` is the
-    /// result of an `f32` addition, subtraction, multiply or fused multiply-add: its compiler fuses
-    /// the operation into the conversion and rounds the exact result once
-    /// (`DriverWorkaround::HalfConversionFusedWithArithmetic`), one unit in the last place from
-    /// Metal's `half` of the `float` result where that result lies on a `half` midpoint. The
-    /// recorded
+    /// 16 bits) the module declares them and decorates the pair `NoContraction`, and still records
+    /// this note, a static note of the rounding on every device: a driver's compiler may fold the
+    /// pair into the value it started from (NVIDIA's, under those controls too) or fuse the `f32`
+    /// addition, subtraction, multiply or fused multiply-add computing the value into the
+    /// narrowing and round its exact result once (RADV's), one unit in the last place from Metal's
+    /// `half` of the `float` result where that result lies on a `half` midpoint; ANV's answered
+    /// every `f32` exactly. Under those controls a `half` `+`, `-`, `*`, `/` and `sqrt` are the
+    /// device's 16-bit instructions, whose results take no such rounding. Without them Vulkan
+    /// leaves the conversion's rounding mode and its 16-bit denormals to the device (MoltenVK,
+    /// lavapipe, and any device without them). The recorded
     /// bound, against Metal's `half(float)` (to nearest even on the half grid, half denormals kept,
     /// infinity from 65520 up, `0x7E00` for a NaN):
     /// - a finite result within one unit in the last place of the `half`: NVIDIA's 615.71.09
