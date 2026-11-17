@@ -1926,11 +1926,35 @@ fn many_reference(queue: &CommandQueue, pipeline: &RenderPipelineState, width: u
 /// (`linear_merge.rs`), the passes form a run or two merged once each (`pass_runs.rs`), each
 /// merge taking one scratch; where it is a shadow merged back (`shadow_merge.rs`), the passes
 /// form one run after the first, which merges in place: kept before the first and the second,
-/// and merged after the first and the last (`pass_runs.rs`).
+/// and merged after the first and the last (`pass_runs.rs`); but where its merges go on the host
+/// ([`merges_on_host`]), each pass keeps every texel and merges for itself. Over host pages the
+/// device's in-place check is settled first, so that every pass takes the same verdicts.
 /// Either way the device's memory grows by less than an eighth of a scratch a pass while they are
 /// encoded.
 fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
     on_device(|device, _| {
+        if over == ManyOver::HostPages {
+            assert!(
+                device.settle_in_place_checks(CHECK_WAIT),
+                "the check settles"
+            );
+            // The verdicts [`merges_on_host`] reads, and the check's notes on them.
+            let read: Vec<String> = (device.in_place_check_report().into_iter())
+                .filter(|line| !line.contains("rows on lines"))
+                .filter(|line| {
+                    line.split_once(": ").is_some_and(|(what, _)| {
+                        !what.contains(' ')
+                            || what.ends_with(" copies")
+                            || what.ends_with(" writes")
+                    })
+                })
+                .collect();
+            println!(
+                "LINEAR-ATTACHMENT in-place check on {}, texels in lines beside other bytes: {}",
+                device.name(),
+                read.join("; ")
+            );
+        }
         let queue = device.new_command_queue().unwrap();
         let pipeline = rects_beside(
             device,
@@ -1939,13 +1963,21 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
             Some(PixelFormat::Depth32Float),
         );
         let expected = many_reference(&queue, &pipeline, width);
+        let copied = device.work_counts().copied_host_buffers_made;
         let Some((buffer, mapping, texture)) = many_target(&queue, over, (width, row)) else {
             return;
         };
+        // Over a copy of the pages (`copied-host-pages`), which no CPU writes while the passes
+        // run, the merges stay the GPU's.
+        let copied = device.work_counts().copied_host_buffers_made > copied;
         let apart = by_the_rule(device) && aliased(&texture);
         // A shadow merged back: one over bytes another writer may write, all but a tracked
         // `Private` buffer's, whose shadow is copied back.
         let shadow = !aliased(&texture) && over != ManyOver::Private;
+        let on_host = match shadow && over == ManyOver::HostPages && !copied {
+            true => merges_on_host(device),
+            false => Some(false),
+        };
         let before = device.work_counts();
         let encoded = many_passes(&queue, &pipeline, &texture);
         let after = device.work_counts();
@@ -1965,7 +1997,8 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
              apart by the rule {apart}, shadow {shadow}; {through} passes through copies, linear \
              merges {recorded} recorded and {taken_over} taken over, linear scratches {made} made \
              and {reused} reused, shadow scratches {shadow_reused} reused, shadow texels kept \
-             {kept}; device memory grew {grown} bytes while encoding",
+             {kept}, merges on the host {on_host:?}; device memory grew {grown} bytes while \
+             encoding",
             device.name()
         );
         // One run (`pass_runs.rs`), or two where the second pass's box reaches past the
@@ -1988,13 +2021,20 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
             );
         }
         // One run of passes (`pass_runs.rs`): kept twice, every texel, before the first pass,
-        // which merges in place, and before the second, which opens the run.
-        if shadow {
-            assert_eq!(
-                kept,
-                2 * width * MANY_H,
-                "the passes keep twice, as one run"
-            );
+        // which merges in place, and before the second, which opens the run; where the merges go
+        // on the host, every pass keeps every texel for itself.
+        let (run, alone) = (2 * width * MANY_H, MANY as u64 * width * MANY_H);
+        match (shadow, on_host) {
+            (true, Some(false)) => assert_eq!(kept, run, "the passes keep twice, as one run"),
+            (true, Some(true)) => assert_eq!(
+                kept, alone,
+                "each pass keeps for itself, merged on the host"
+            ),
+            (true, None) => assert!(
+                kept == run || kept == alone,
+                "the passes keep {kept} texels: twice as one run, or each for itself"
+            ),
+            (false, _) => {}
         }
         assert!(
             grown < scratch * MANY as u64 / 8,
@@ -2011,6 +2051,29 @@ fn many_passes_over(over: ManyOver, (width, row): (u64, u64)) {
         drop((texture, buffer));
         drop(mapping);
     });
+}
+
+/// Whether the merges of a shadow over a no-copy buffer's host pages (`PagesClass::Pointer`) go
+/// on the host (`shadow_splice.rs`, **Merges**), by the device's settled check of such pages: they
+/// do where it failed, or did not answer, a copy's or a shader write's texels that share a line
+/// with bytes beside them (`shadow_splice::splices`); such a texture joins no run of passes
+/// (`pass_runs.rs`). `None` where those passed but another class of host pages failed its copies
+/// and passed its reads: that failure carries to these pages' copies where both lay in memory of
+/// the same property flags (`in_place::copies_verdict`), which the report does not state.
+fn merges_on_host(device: &Device) -> Option<bool> {
+    let report = device.in_place_check_report();
+    let states = |line: String| report.contains(&line);
+    let kept =
+        |what: &str| states(format!("{what}: Passed")) || states(format!("{what}: Unchecked"));
+    if !kept("Pointer writes") || !kept("Pointer copies") {
+        return Some(true);
+    }
+    let carried = ["Fresh", "DmaBuf", "DmaBufInImport"]
+        .into_iter()
+        .any(|class| {
+            states(format!("{class} copies: Failed")) && states(format!("{class}: Passed"))
+        });
+    (!carried).then_some(false)
 }
 
 /// Over a `Private` buffer, packed rows of 320 texels: 1280 bytes, a multiple of 256 (rows
