@@ -2,6 +2,7 @@ mod command;
 mod device;
 mod floor;
 mod memory;
+mod null_descriptor;
 mod one_path;
 mod readback;
 
