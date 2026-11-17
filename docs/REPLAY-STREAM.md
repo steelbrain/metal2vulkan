@@ -353,8 +353,7 @@ and the (name id, value) answer pairs.
   same way. A fence of its own orders each of these encoders after the one before it. Once the
   command buffer completed, it reads the bytes after back and counts the 4-byte words of each
   range that differ from the recording's, relocated the same way. A difference is reported, and
-  the play goes on. Its own objects take ids from 2^63 + 1. The report counts the encoders it split
-  (`split`).
+  the play goes on. Its own objects take ids from 2^63 + 1.
 - It reports, for each group of command buffers it waited for (normally the one just committed),
   for each frame and in total, two sets of counts:
   - **Fixed by the stream** (`stream`), the same on every play of the stream on any runtime: the
@@ -377,9 +376,12 @@ and the (name id, value) answer pairs.
     plays can move a few draws and barriers from one group or frame to another. Only the stream's
     counts are compared between plays.
 
-  Its own work is in no count: its readbacks, and around a dispatch an `m2v.privateBytes` record
-  names, its buffer, fence, blits and the encoders it ends and makes again. What the runtime
-  counted while the player's own calls ran is left out of the executed counts.
+  Its own readbacks are not counted. Its own work around a dispatch an `m2v.privateBytes` record
+  names (its buffer, fence and blits and the encoders it ends and makes again) is in none of the
+  stream's counts. The runtime's work for it cannot be told apart from the program's (a runtime
+  may record the barriers a split needs at the program's next command or at the commit), so a
+  group that held such a dispatch reports no executed counts: they are added up apart, on the
+  report's `split` line, and no frame or total holds them.
 - A selector, argument or descriptor key the runtime's backend does not implement is a typed
   refusal naming it; the run stops there and the report keeps what ran. The old runtime's backend
   refuses rate maps, stage inputs, dynamic libraries, OpenCL mode, indirect command buffers,
@@ -392,7 +394,8 @@ and the (name id, value) answer pairs.
 `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
 runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
-`m2v.privateBytes` range compared, `split N` where the player split compute encoders around them,
+`m2v.privateBytes` range compared, `split N executed COUNTS` where the player split compute
+encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
 `total COUNTS` (its `calls` the calls played: where
 the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed

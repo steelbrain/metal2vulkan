@@ -902,8 +902,9 @@ const OWN: u64 = (1 << 63) + 1;
 /// with every call that set its state, dispatches, and the same with a blit that copies the ranges
 /// out, each encoder after a fence the one before updated. At the completion it reads the bytes
 /// after back and counts the words that differ from the recording's (here, the dispatch changed
-/// nothing). The report counts the two splits; no count holds the player's calls or what the
-/// runtime counted for them (its copies); a later dispatch plays as it is.
+/// nothing). The stream's counts hold none of the player's calls; the report counts the two
+/// splits, and the executed counts of the group that held them (its copies among them) are
+/// reported apart, in no group, frame or total; a later dispatch plays as it is.
 #[test]
 fn a_dispatch_plays_between_its_private_bytes() {
     let before: Vec<u8> = (0..24).collect();
@@ -1027,15 +1028,14 @@ fn a_dispatch_plays_between_its_private_bytes() {
     );
     assert_eq!(stream["written_bytes"], 28);
     assert_eq!((kept.copies, report.splits), (4, 2));
-    assert!(lines.contains(&"split 2".to_string()));
-    let groups = report.completed.iter().map(|(_, counts)| &counts.executed);
-    for executed in groups.chain([&report.total.executed]) {
-        assert_eq!(
-            executed.get("copies").copied().unwrap_or(0),
-            0,
-            "{executed:?}"
-        );
-    }
+    let split = Counters::from([("copies", 4), ("submissions", 1)]);
+    assert_eq!(report.split_executed, split);
+    assert!(lines.contains(&"split 2 executed copies=4 submissions=1".to_string()));
+    assert_eq!(report.completed.len(), 1);
+    assert!(report.completed[0].1.executed.is_empty());
+    assert!(report.frames.is_empty());
+    let total = &report.total.executed;
+    assert!(total.values().all(|&value| value == 0), "{total:?}");
 }
 
 /// A record must name an earlier call, and that call a compute encoder's dispatch; a blob must hold

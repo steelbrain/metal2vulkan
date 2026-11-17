@@ -647,8 +647,9 @@ fn a_copied_buffer_starts_with_its_contents_and_ids_are_compared() {
 /// encoder, each with `m2v.privateBytes` records of the whole buffer: before each, the player puts
 /// the case's input in, and after each it compares what the kernel left with the bytes after, the
 /// case's Metal output for the first and that output with one word changed for the second, which
-/// is the one word the report counts. The player's splits are in no count: the same stream
-/// without the records executes the same counts, group by group.
+/// is the one word the report counts. The group that held the splits reports its executed counts
+/// apart, in no group, frame or total: they hold the program's two dispatches and one
+/// submission, as the same stream without the records executes them.
 #[test]
 fn a_private_buffer_takes_its_bytes_before_a_dispatch_and_is_compared_after() {
     let case = public_case("copy-twelve-bytes-through-a-four-byte-element-pointer").unwrap();
@@ -730,18 +731,15 @@ fn a_private_buffer_takes_its_bytes_before_a_dispatch_and_is_compared_after() {
     assert_eq!(differing, [(10, 0), (11, 1)], "{:?}", report.private);
     assert_eq!(report.total.stream["written_bytes"], 64);
     assert_eq!((report.splits, plain.splits), (4, 0));
-    let executed = |report: &Report| {
-        let groups = report
-            .completed
-            .iter()
-            .map(|(_, counts)| counts.executed.clone());
-        groups
-            .chain([report.total.executed.clone()])
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(
-        executed(report),
-        executed(plain),
-        "the splits are in no count"
-    );
+    assert!(plain.split_executed.is_empty());
+    assert_eq!(report.completed.len(), 1);
+    assert!(report.completed[0].1.executed.is_empty());
+    // The pipeline the runtime makes in the background may land in any span.
+    for key in ["barriers", "copies", "dispatches", "submissions"] {
+        assert_eq!(report.total.executed[key], 0, "{key}");
+    }
+    for key in ["dispatches", "submissions"] {
+        let (split, alone) = (report.split_executed[key], plain.total.executed[key]);
+        assert_eq!(split, alone, "{key}");
+    }
 }

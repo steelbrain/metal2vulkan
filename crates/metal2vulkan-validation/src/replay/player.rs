@@ -173,9 +173,13 @@ pub struct Report {
     pub ids: Vec<IdDiffers>,
     pub private: Vec<PrivateBytes>,
     /// How many times the player ended a program's compute encoder and made it again around a
-    /// dispatch an `m2v.privateBytes` record names (twice a dispatch): its own work, which no
-    /// count holds.
+    /// dispatch an `m2v.privateBytes` record names (twice a dispatch).
     pub splits: u64,
+    /// The executed counts of the groups that held such a dispatch, which no group, frame or total
+    /// holds: the runtime's work for the player's splits is not told apart from the program's
+    /// there (a runtime may record the barriers a split needs at the program's next command or at
+    /// the commit).
+    pub split_executed: Counters,
     /// The whole play's counts, the player's own work left out. Its calls are the calls played:
     /// where a play stopped, the stopping call is the next.
     pub total: Counts,
@@ -230,7 +234,11 @@ impl Report {
             ));
         }
         if self.splits > 0 {
-            lines.push(format!("split {}", self.splits));
+            let executed = self.split_executed.iter();
+            let executed: String = executed
+                .map(|(key, value)| format!(" {key}={value}"))
+                .collect();
+            lines.push(format!("split {} executed{executed}", self.splits));
         }
         lines.push(format!("total{}", counted(&self.total)));
         lines
@@ -555,8 +563,10 @@ impl<'b, B: Backend> Player<'b, B> {
         let ended = ended.and_then(|()| self.compare(stream, &mut left_out));
         let now = self.backend.counters();
         let mut executed = grown(&now, &start);
+        let split = &self.report.split_executed;
         for (key, value) in &mut executed {
-            *value = value.saturating_sub(left_out.get(key).copied().unwrap_or(0));
+            let out = [&left_out, split].map(|out| out.get(key).copied().unwrap_or(0));
+            *value = value.saturating_sub(out.iter().sum());
         }
         let mut stream = self.fixed.clone();
         for (_, group) in &self.report.completed {
@@ -1086,29 +1096,25 @@ impl<'b, B: Backend> Player<'b, B> {
             let (buffer, location) = (around.buffer, around.location);
             [staging, at, buffer, location, around.length]
         };
-        self.uncounted(left_out, |player| {
-            let length = [Value::Uint((2 * half).max(16)), Value::Uint(0)];
-            player.own(device, "newBufferWithLength:options:", staging, &length)?;
-            player.own(device, "newFence", fence, &[])?;
-            for &(around, at) in &placed {
-                let mut before = stream.blob(&around.before)?;
-                sized(&around, &before)?;
-                if player.addresses.holds(around.buffer) {
-                    player.relocate(&mut before, around.location);
-                }
-                *player.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
-                player.backend.write(staging, at, &before)?;
+        let length = [Value::Uint((2 * half).max(16)), Value::Uint(0)];
+        self.own(device, "newBufferWithLength:options:", staging, &length)?;
+        self.own(device, "newFence", fence, &[])?;
+        for &(around, at) in &placed {
+            let mut before = stream.blob(&around.before)?;
+            sized(&around, &before)?;
+            if self.addresses.holds(around.buffer) {
+                self.relocate(&mut before, around.location);
             }
-            player.blit_between(&made, fence, placed.iter().map(copy_in))
-        })?;
+            *self.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
+            self.backend.write(staging, at, &before)?;
+        }
+        self.blit_between(&made, fence, placed.iter().map(copy_in))?;
         self.step(stream, call, left_out)?;
         let copy_out = |&(around, at): &(Around, u64)| {
             let (buffer, location) = (around.buffer, around.location);
             [buffer, location, staging, half + at, around.length]
         };
-        self.uncounted(left_out, |player| {
-            player.blit_between(&made, fence, placed.iter().map(copy_out))
-        })?;
+        self.blit_between(&made, fence, placed.iter().map(copy_out))?;
         let pending = self.pending.get_mut(&command_buffer);
         let pending = pending.ok_or_else(|| invalid("a dispatch of no open command buffer"))?;
         pending.snapshots.push(Snapshot {
@@ -1281,15 +1287,18 @@ impl<'b, B: Backend> Player<'b, B> {
             .collect()
     }
 
-    /// Wait for every command buffer that can complete, and record the counters' growth for them.
+    /// Wait for every command buffer that can complete, and record the counters' growth for them:
+    /// for a group that held a split (`split`), in the report's split counts instead.
     fn drain(&mut self) -> Result<(), PlayError> {
         let ready = self.runnable();
         if ready.is_empty() {
             return Ok(());
         }
+        let mut split = false;
         for id in &ready {
             self.backend.wait(*id)?;
             let pending = self.pending.remove(id).expect("a pending command buffer");
+            split |= !pending.snapshots.is_empty();
             self.done.extend(pending.snapshots);
             for (event, value) in pending.signals {
                 let known = self.events.entry(event).or_default();
@@ -1302,6 +1311,13 @@ impl<'b, B: Backend> Player<'b, B> {
         self.committed.retain(|id| !ready.contains(id));
         let now = self.backend.counters();
         let executed = grown(&now, &self.baseline);
+        let executed = match split {
+            false => executed,
+            true => {
+                add(&mut self.report.split_executed, &executed);
+                Counters::new()
+            }
+        };
         let group = Counts {
             stream: self.fixed.clone(),
             executed,
