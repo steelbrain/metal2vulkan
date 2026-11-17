@@ -287,8 +287,8 @@ fn a_bounded_constant_buffer_is_a_uniform_view() {
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let (plan, m) = typed_module(&bc, "buffer_end_byte_load_constant", &p).expect("module");
             for r in [0u32, 4] {
-                // The uniform view spans `uniform_range(1, align)` bytes. The interpreter models
-                // no robustness, so this in-bounds run binds that much.
+                // The interpreter models no descriptor robustness; this run pads the
+                // bound bytes past every word it reads.
                 let mut ubo = bound(0, r, &data, 0x44);
                 ubo.bytes.resize(ubo.bytes.len().max(512), 0x44);
                 let res = Resources {
@@ -368,14 +368,11 @@ entry:
 !18 = !{!"Metal", i32 4, i32 0, i32 0}
 "#;
 
-/// A uniform view is sized for a descriptor base aligned to `max(minUniformBufferOffsetAlignment,
-/// 16)`. A window starting at byte 0 is bound from the multiple of that alignment at or below the
-/// bind offset, so its residual is any value below it: on `amd-rdna3-radv` (an alignment of 4)
-/// residuals 12 and 15 put the struct's last byte in words 4 and 5, past the 16 bytes an alignment
-/// of 4 alone would declare. The view covers them and reads both ends exactly, with
-/// `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`).
+/// A shared uniform descriptor can start before the aligned base nearest the bind offset.
+/// Its residual can exceed the descriptor alignment, and the fixed array must cover both
+/// ends of the window there, with `uniformBufferStandardLayout` and without it.
 #[test]
-fn a_uniform_view_covers_every_residual_of_a_sixteen_aligned_base() {
+fn a_uniform_view_covers_shared_descriptor_residuals() {
     let Some(bc) = assemble_text("constant_ends", CONSTANT_ENDS) else {
         return;
     };
@@ -397,7 +394,7 @@ fn a_uniform_view_covers_every_residual_of_a_sixteen_aligned_base() {
             assert_eq!(form, BufferForm::Descriptor(want), "{what}");
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let (plan, m) = typed_module(&bc, "constant_ends", &p).expect("module");
-            for r in [0u32, 4, 12, 15] {
+            for r in [0u32, 4, 12, 15, 256, 4096] {
                 let res = Resources {
                     buffers: vec![bound(0, r, &data, 0x44), bound(1, 0, &[0; 4], 0)],
                     push: push_bytes(&plan, &[(0, r)]),
