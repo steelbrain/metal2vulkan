@@ -10,8 +10,7 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::kernels;
     use crate::{
-        Buffer, CommandBuffer, ComputePipelineState, Device, DispatchType, Error, Gap, Limit,
-        Refusal,
+        Buffer, CommandBuffer, ComputePipelineState, Device, DispatchType, Error, Gap, Refusal,
     };
 
     /// Words in each test buffer: 256 bytes.
@@ -353,25 +352,7 @@ mod on_device {
                     max: 1024
                 }
             );
-            // An axis whose count the device bounds below `u32::MAX`: a group count past it.
-            let raw = device.raw();
-            // SAFETY: the physical device is the instance's.
-            let limits = unsafe {
-                raw.instance
-                    .get_physical_device_properties(raw.physical_device)
-                    .limits
-            };
-            if let Some(axis) =
-                (0..3).find(|&axis| limits.max_compute_work_group_count[axis] < u32::MAX)
-            {
-                let mut count = [1; 3];
-                count[axis] = limits.max_compute_work_group_count[axis] + 1;
-                assert!(matches!(
-                    encoder.dispatch_threadgroups(count, [1, 1, 1]),
-                    Err(Error::Limit(Limit::GroupCount { .. }))
-                ));
-            }
-            // Partial threadgroups are not built.
+            // A kernel without a partial-threadgroups variant runs no partial threadgroup.
             assert!(matches!(
                 encoder.dispatch_threads([60, 1, 1], [16, 1, 1]),
                 Err(Error::Unsupported(Gap::PartialThreadgroups { .. }))

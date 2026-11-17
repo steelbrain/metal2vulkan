@@ -267,7 +267,7 @@ impl Device {
     /// The key of the compute pipeline `d` (no decode).
     pub fn compute_pipeline_key(&self, d: &ComputePipelineDescriptor) -> crate::cache::PipelineKey {
         let stage = match &d.kernel {
-            StageSource::Function(f) => self.function_compile_key(f, &kernel_inputs(d)),
+            StageSource::Function(f) => self.function_compile_key(f, &d.lowering_inputs()),
             StageSource::Compiled(c) => *c.key(),
         };
         pipeline_key(
@@ -289,7 +289,7 @@ impl Device {
         b: &Budget,
     ) -> Result<ComputePipeline, Error> {
         guarded(|| {
-            let inputs = kernel_inputs(d);
+            let inputs = d.lowering_inputs();
             self.compute_pipeline(d, &inputs, &mut Meter::new(b))
         })
     }
@@ -1372,15 +1372,6 @@ fn invariant(detail: &str) -> Error {
 /// The lowering inputs a `Function` kernel of compute pipeline `d` compiles under: its
 /// stage-input descriptor, its `maxCallStackDepth` when not Metal's default, 1, and its OpenCL
 /// mode.
-fn kernel_inputs(d: &ComputePipelineDescriptor) -> LoweringInputs {
-    LoweringInputs {
-        stage_input: d.stage_input.clone(),
-        max_call_stack_depth: (d.max_call_stack_depth > 1).then_some(d.max_call_stack_depth),
-        open_cl_mode: d.open_cl_mode_enabled,
-        ..LowerInputs::new()
-    }
-}
-
 /// The lowering inputs a `Function` tile function of tile pipeline `d` compiles under: its color
 /// attachments' pixel formats, and its `maxCallStackDepth` when not Metal's default, 1.
 fn tile_inputs(d: &TileRenderPipelineDescriptor) -> LoweringInputs {

@@ -171,11 +171,16 @@ pub enum Gap {
         /// The threads every threadgroup must be a multiple of.
         width: u32,
     },
-    /// `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis:
-    /// Metal runs the last threadgroup of such an axis with the threads left. The runtime does
-    /// not dispatch Metal's partial threadgroups yet.
+    /// `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of
+    /// a kernel that observes its threadgroup partition and whose partial-threadgroups variant the
+    /// translator refused: Metal runs the last threadgroup of such an axis with the threads left.
+    /// The translator refuses the variant of a kernel whose simdgroups it emulates (a lockstep
+    /// pair in divergent flow on a device without `VK_KHR_shader_maximal_reconvergence`), and of
+    /// one whose uniform barriers' vote word its workgroup memory cannot hold. Refused at the
+    /// dispatch; the state's whole grids run.
     ///
-    /// Basis: ours (partial threadgroups are not built).
+    /// Basis: ours (the translator's partial-threadgroups variant does not take emulated
+    /// simdgroups).
     PartialThreadgroups {
         /// The grid asked for.
         threads_per_grid: [u32; 3],
@@ -205,16 +210,6 @@ pub enum Limit {
     ///
     /// Basis: ours (block numbers are 32 bits).
     BlockIds,
-    /// A dispatch of more threadgroups on an axis than the device's `maxComputeWorkGroupCount`.
-    /// Metal's grids go further.
-    ///
-    /// Basis: device (the device's `maxComputeWorkGroupCount`).
-    GroupCount {
-        /// The threadgroups asked for.
-        count: [u32; 3],
-        /// The device's most.
-        max: [u32; 3],
-    },
     /// A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds
     /// 1,024 by 1,024 by 64). Metal's go to 1,024 on every axis.
     ///
@@ -319,7 +314,7 @@ impl fmt::Display for Gap {
                 threads_per_threadgroup,
             } => write!(
                 f,
-                "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which are not built"
+                "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which this kernel's variant does not run"
             ),
         }
     }
@@ -333,9 +328,6 @@ impl fmt::Display for Limit {
                 "a block of {len} bytes is past the device's largest, {max} bytes"
             ),
             Limit::BlockIds => f.write_str("every block number has been used"),
-            Limit::GroupCount { count, max } => {
-                write!(f, "{count:?} threadgroups are past the device's {max:?}")
-            }
             Limit::ThreadgroupShape { size, max } => {
                 write!(f, "a threadgroup of {size:?} is past the device's {max:?}")
             }

@@ -17,6 +17,7 @@ use crate::library::dynamic::DynamicLibrary;
 use crate::library::function::{Function, FunctionConstantValues};
 use crate::metal;
 use crate::pipeline::compile::StageEntries;
+use crate::pipeline::lower_inputs::LoweringInputs;
 
 /// A function plus its constant values and the functions its pipeline links
 /// (`MTLFunctionDescriptor` and the stage's `MTLLinkedFunctions`).
@@ -712,6 +713,21 @@ pub struct ComputePipelineDescriptor {
 }
 
 impl ComputePipelineDescriptor {
+    /// The lowering inputs a `Function` kernel of this descriptor compiles under
+    /// ([`Device::compile_compute_pipeline`](crate::device::Device::compile_compute_pipeline)):
+    /// the stage-input descriptor, `maxCallStackDepth` where it is not Metal's 1, and OpenCL mode.
+    /// A consumer that compiles a variant of the kernel itself
+    /// (`LoweringInputs::partial_threadgroups`) starts from them.
+    pub fn lowering_inputs(&self) -> LoweringInputs {
+        LoweringInputs {
+            stage_input: self.stage_input.clone(),
+            max_call_stack_depth: (self.max_call_stack_depth > 1)
+                .then_some(self.max_call_stack_depth),
+            open_cl_mode: self.open_cl_mode_enabled,
+            ..LoweringInputs::new()
+        }
+    }
+
     /// A descriptor with Metal's defaults.
     pub fn new(kernel: StageSource) -> ComputePipelineDescriptor {
         ComputePipelineDescriptor {

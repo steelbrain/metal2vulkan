@@ -148,6 +148,9 @@ pub use compile::{
     EntryDescriptor, EntryPlan, EntryRef, LinkedSource, StageEntries, StandaloneModule,
 };
 pub use facts::{Mechanism, RuntimeFact, UniformViewChoice};
+// The `DispatchRegion` push field's bytes, which a consumer of the identity domains pushes with
+// each dispatch.
+pub use crate::lower::dispatch::{nonuniform_region_bytes, region_bytes, NONUNIFORM};
 pub use sym::{
     AccelerationStructureLevel, AirUserKey, Axis, CombinedSampler, HandleClass, ImageAccess,
     ImageDim, ImageHandleClass, PushField, ResourceKind, ResourceSlot, SampledType, SamplerRef,

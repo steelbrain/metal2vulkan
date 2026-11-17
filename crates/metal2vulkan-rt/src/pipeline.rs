@@ -1,11 +1,20 @@
-//! Compute pipeline states: the translator's kernel and its interface, and its `VkPipeline`s, one
-//! per threadgroup size and threadgroup memory lengths, each made by the encoding call that first
-//! needs it.
+//! Compute pipeline states: the translator's kernel and its interface, and its `VkPipeline`s.
+//!
+//! The translator lowers every kernel first as its partial-threadgroups variant, through one
+//! decode and specialization of its entry. A kernel that does not observe its threadgroup
+//! partition keeps that module alone: every direct dispatch runs in tiles of 256 threads, one
+//! `VkPipeline` per tile shape ([`tile`]), the 256-wide tile made with the state; an indirect
+//! dispatch runs at its own threadgroup size. A kernel that observes its partition is lowered
+//! once more, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that
+//! module at their own threadgroup size, and a `dispatchThreads` grid that is not a whole number
+//! of threadgroups runs the partial-threadgroups variant at its size, where the translator made
+//! one. Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
 //!
 //! Nothing the runtime records depends on when a compile finishes: an encoding call whose
 //! `VkPipeline` is not made yet makes it and waits for it, then records, so there is one recorded
 //! form. Each such wait is a first-use wait, counted with its time
-//! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)).
+//! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)). No translation runs on an
+//! encoding thread.
 
 use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
@@ -15,9 +24,12 @@ use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
 use crate::times::host_time;
 use ash::vk;
+use metal2vulkan::error::{Error as TranslationError, Feature};
+use metal2vulkan::library::CompiledFunction;
 use metal2vulkan::pipeline::{
     AccessSet, Axis, BufferKind, ComputePipeline, ComputePipelineDescriptor, PrecisionNote,
     PushField, PushLoc, RuntimeFact, SlotClass, SlotInterface, SlotRef, SpecKey, Stage,
+    StageEntries, StageSource,
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
@@ -27,6 +39,23 @@ use std::sync::{Arc, Mutex};
 /// as 128 bytes is what Vulkan guarantees. Fields past it go to a block in the parameter ring,
 /// whose address is a field in the window.
 pub(crate) const PUSH_BYTES: u32 = 128;
+
+/// The threads of a tile: a kernel that does not observe its threadgroup partition runs every
+/// direct dispatch in tiles of this many threads.
+pub(crate) const TILE_THREADS: u32 = 256;
+
+/// The tile a direct dispatch of a kernel that does not observe its threadgroup partition runs
+/// over a grid of `threads`: 256 by 1 for a grid 256 threads wide or wider, and for a narrower
+/// one the 256-thread tile whose width is the grid's width rounded down to a power of two, so at
+/// most nine shapes per kernel.
+pub(crate) fn tile(threads: [u32; 3]) -> [u32; 3] {
+    let width = match threads[0] {
+        0 => TILE_THREADS,
+        wide if wide >= TILE_THREADS => TILE_THREADS,
+        narrow => 1 << narrow.ilog2(),
+    };
+    [width, TILE_THREADS / width, 1]
+}
 
 /// `MTLComputePipelineState`.
 ///
@@ -39,12 +68,33 @@ pub struct ComputePipelineState {
 
 pub(crate) struct PipelineInner {
     core: Arc<Core>,
+    /// The module of whole grids, threadgroup dispatches and indirect dispatches; for a kernel
+    /// that does not observe its threadgroup partition, of every dispatch.
+    pub(crate) whole: Kernel,
+    /// How a direct dispatch runs.
+    pub(crate) form: Form,
+    /// The translator's notes of where the kernel's answers may differ from Metal's, of every
+    /// module the state runs.
+    notes: Vec<PrecisionNote>,
+}
+
+/// How a state runs a direct dispatch.
+pub(crate) enum Form {
+    /// The kernel does not observe its threadgroup partition: `whole`, its partial-threadgroups
+    /// variant, runs every direct dispatch in [`tile`]s, whatever the threadgroup size.
+    Tiled,
+    /// The kernel observes its partition: a dispatch runs at its own threadgroup size, and a
+    /// `dispatchThreads` grid that is not a whole number of threadgroups on the
+    /// partial-threadgroups variant, where the translator made one.
+    Sized { partial: Option<Kernel> },
+}
+
+/// One translated module of a state, its interface, and the `VkPipeline`s made of it so far.
+pub(crate) struct Kernel {
     module: vk::ShaderModule,
     /// The module's entry point.
     entry: CString,
     pub(crate) interface: Interface,
-    /// The translator's notes of where the kernel's answers may differ from Metal's.
-    notes: Vec<PrecisionNote>,
     /// The `VkPipeline`s made so far, by their specialization.
     variants: Mutex<Vec<(Variant, vk::Pipeline)>>,
 }
@@ -134,9 +184,11 @@ impl crate::Device {
     /// `newComputePipelineStateWithDescriptor:options:reflection:error:`, without reflection.
     ///
     /// The translator compiles the kernel on the calling thread, which waits for it, within the
-    /// translator's 20-second budget. Each call compiles anew: no cache keeps a state made before.
-    /// The state's `VkPipeline`s are made later, each by the first encoding call that needs it
-    /// ([`ComputePipelineState`]).
+    /// translator's 20-second budget per lowering: once for a kernel that does not observe its
+    /// threadgroup partition, whose 256-wide tile's `VkPipeline` is made here too, and twice for
+    /// one that does (its partial-threadgroups variant and its plain module). Each call compiles
+    /// anew: no cache keeps a state made before. The state's other `VkPipeline`s are made later,
+    /// each by the first encoding call that needs it ([`ComputePipelineState`]).
     ///
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that reads what the
@@ -149,27 +201,99 @@ impl crate::Device {
             return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
         }
         let core = Arc::clone(self.core());
-        let pipeline = core
-            .translator
-            .compile_compute_pipeline(descriptor, &Budget::standard())
-            .map_err(Error::Translation)?;
-        let interface = interface(&pipeline, descriptor.required_threads_per_threadgroup)?;
-        let stage = pipeline.stage;
-        // The translator's entry points hold no NUL; one that did would name no entry point.
-        let entry = CString::new(stage.entry_point).map_err(|_| gap())?;
-        let info = vk::ShaderModuleCreateInfo::default().code(&stage.spirv[..]);
-        // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
-        let module = unsafe { core.device.create_shader_module(&info, None) }
-            .map_err(Error::vulkan("vkCreateShaderModule"))?;
+        let budget = Budget::standard();
+        let translator = &core.translator;
+        let compiled = |function: CompiledFunction| {
+            let mut compiled = descriptor.clone();
+            compiled.kernel = StageSource::Compiled(function);
+            translator.compile_compute_pipeline(&compiled, &budget)
+        };
+        let (whole, partial, observes) = match &descriptor.kernel {
+            StageSource::Function(function) => {
+                let entries = StageEntries::new();
+                let plain = translator
+                    .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, &entries)
+                    .map_err(Error::Translation)?;
+                let mut inputs = plain.clone();
+                inputs.partial_threadgroups = true;
+                let lower = |inputs| {
+                    translator.compile_function_from_entries(function, inputs, &budget, &entries)
+                };
+                match lower(&inputs) {
+                    Ok(variant) if !variant.observes_threadgroup_partition() => {
+                        (compiled(variant).map_err(Error::Translation)?, None, false)
+                    }
+                    Ok(variant) => {
+                        let plain = lower(&plain).and_then(compiled);
+                        let variant = compiled(variant);
+                        (
+                            plain.map_err(Error::Translation)?,
+                            Some(variant.map_err(Error::Translation)?),
+                            true,
+                        )
+                    }
+                    // The translator's refusal of the variant (emulated simdgroups, a vote word its
+                    // workgroup memory cannot hold): the kernel keeps its plain module.
+                    Err(TranslationError::Unsupported(refused))
+                        if refused.feature == Feature::GpuEncodedIndirectCommands =>
+                    {
+                        let plain = lower(&plain).and_then(compiled);
+                        (plain.map_err(Error::Translation)?, None, true)
+                    }
+                    Err(error) => return Err(Error::Translation(error)),
+                }
+            }
+            // A kernel the consumer compiled: the variant it was compiled under.
+            StageSource::Compiled(function) => {
+                let pipeline = translator
+                    .compile_compute_pipeline(descriptor, &budget)
+                    .map_err(Error::Translation)?;
+                let partial = pipeline
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.fact == RuntimeFact::PartialThreadgroups);
+                // Only a non-observer's partial variant runs every dispatch in tiles.
+                (
+                    pipeline,
+                    None,
+                    !(partial && !function.observes_threadgroup_partition()),
+                )
+            }
+        };
+        let required = descriptor.required_threads_per_threadgroup;
+        let mut notes = whole.stage.precision_notes.clone();
+        if let Some(pipeline) = &partial {
+            notes.extend(&pipeline.stage.precision_notes);
+        }
+        notes.sort_unstable();
+        notes.dedup();
+        let whole = Kernel::new(&core, whole, required)?;
+        // Made whole before anything else can fail, so dropping it releases what was made.
+        let mut inner = PipelineInner {
+            core,
+            whole,
+            form: match observes {
+                false => Form::Tiled,
+                true => Form::Sized { partial: None },
+            },
+            notes,
+        };
+        if let Some(pipeline) = partial {
+            let partial = Kernel::new(&inner.core, pipeline, required)?;
+            inner.form = Form::Sized {
+                partial: Some(partial),
+            };
+        }
+        if let Form::Tiled = inner.form {
+            let variant = Variant {
+                size: [TILE_THREADS, 1, 1],
+                threadgroup_lengths: vec![0; inner.whole.interface.threadgroups.len()],
+            };
+            let made = inner.whole.make(&inner.core, &variant)?;
+            lock(&inner.whole.variants).push((variant, made));
+        }
         Ok(ComputePipelineState {
-            inner: Arc::new(PipelineInner {
-                core,
-                module,
-                entry,
-                interface,
-                notes: stage.precision_notes,
-                variants: Mutex::new(Vec::new()),
-            }),
+            inner: Arc::new(inner),
         })
     }
 }
@@ -215,6 +339,7 @@ fn interface(
             | RuntimeFact::LocalSizeLimits
             | RuntimeFact::DispatchGrid
             | RuntimeFact::IndirectGroupCount
+            | RuntimeFact::PartialThreadgroups
             | RuntimeFact::DeviceAddresses { .. } => {}
             _ => return Err(gap()),
         }
@@ -350,16 +475,18 @@ impl ComputePipelineState {
     /// `requiredThreadsPerThreadgroup`, that size's threads, as Metal answers. A dispatch of
     /// another size within it runs at the size it gives, where Metal's validation stops it.
     pub fn max_total_threads_per_threadgroup(&self) -> u32 {
-        self.inner.interface.max_total_threads
+        self.inner.whole.interface.max_total_threads
     }
 
     /// No Metal counterpart: where the kernel's answers may differ from Metal's on this device,
-    /// fixed per operation when the state is made. Metal's answers are its own GPU's.
+    /// fixed per operation when the state is made, for every module the state runs. Metal's
+    /// answers are its own GPU's.
     pub fn precision_notes(&self) -> &[PrecisionNote] {
         &self.inner.notes
     }
 
-    /// For the device tests: a state of a hand-made kernel and its interface.
+    /// For the device tests: a state of a hand-made kernel and its interface, run at each
+    /// dispatch's own threadgroup size.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn for_test(
         device: &crate::Device,
@@ -367,18 +494,19 @@ impl ComputePipelineState {
         interface: Interface,
     ) -> Result<ComputePipelineState, Error> {
         let core = Arc::clone(device.core());
-        let info = vk::ShaderModuleCreateInfo::default().code(words);
         // SAFETY: the words are a valid SPIR-V module.
-        let module = unsafe { core.device.create_shader_module(&info, None) }
-            .map_err(Error::vulkan("vkCreateShaderModule"))?;
+        let module = unsafe { Kernel::module(&core, words) }?;
         Ok(ComputePipelineState {
             inner: Arc::new(PipelineInner {
                 core,
-                module,
-                entry: c"main".to_owned(),
-                interface,
+                whole: Kernel {
+                    module,
+                    entry: c"main".to_owned(),
+                    interface,
+                    variants: Mutex::new(Vec::new()),
+                },
+                form: Form::Sized { partial: None },
                 notes: Vec::new(),
-                variants: Mutex::new(Vec::new()),
             }),
         })
     }
@@ -393,24 +521,57 @@ impl PipelineInner {
     pub(crate) fn core(&self) -> &Arc<Core> {
         &self.core
     }
+}
+
+impl Kernel {
+    /// The translator's `pipeline` as a module of the device, with its interface.
+    fn new(
+        core: &Core,
+        pipeline: ComputePipeline,
+        required_size: Option<[u32; 3]>,
+    ) -> Result<Kernel, Error> {
+        let interface = interface(&pipeline, required_size)?;
+        let stage = pipeline.stage;
+        // The translator's entry points hold no NUL; one that did would name no entry point.
+        let entry = CString::new(stage.entry_point).map_err(|_| gap())?;
+        // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
+        let module = unsafe { Kernel::module(core, &stage.spirv) }?;
+        Ok(Kernel {
+            module,
+            entry,
+            interface,
+            variants: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// A shader module of `words`.
+    ///
+    /// # Safety
+    ///
+    /// `words` are a valid SPIR-V module for the features device creation enabled.
+    unsafe fn module(core: &Core, words: &[u32]) -> Result<vk::ShaderModule, Error> {
+        let info = vk::ShaderModuleCreateInfo::default().code(words);
+        // SAFETY: the caller's contract.
+        unsafe { core.device.create_shader_module(&info, None) }
+            .map_err(Error::vulkan("vkCreateShaderModule"))
+    }
 
     /// The `VkPipeline` of `variant`, made now where it is not yet: the calling thread waits for
     /// it, a first-use wait, so what is recorded never depends on when a compile finishes.
-    pub(crate) fn pipeline(&self, variant: &Variant) -> Result<vk::Pipeline, Error> {
+    pub(crate) fn pipeline(&self, core: &Core, variant: &Variant) -> Result<vk::Pipeline, Error> {
         let mut variants = lock(&self.variants);
         if let Some((_, pipeline)) = variants.iter().find(|(made, _)| made == variant) {
             return Ok(*pipeline);
         }
         let began = host_time();
-        let pipeline = self.make(variant)?;
-        self.core
-            .counters
+        let pipeline = self.make(core, variant)?;
+        core.counters
             .first_use_wait(host_time().saturating_sub(began));
         variants.push((variant.clone(), pipeline));
         Ok(pipeline)
     }
 
-    fn make(&self, variant: &Variant) -> Result<vk::Pipeline, Error> {
+    fn make(&self, core: &Core, variant: &Variant) -> Result<vk::Pipeline, Error> {
         let constants = &self.interface.constants;
         let entries: Vec<vk::SpecializationMapEntry> = constants
             .iter()
@@ -451,8 +612,8 @@ impl PipelineInner {
         }
         let info = vk::ComputePipelineCreateInfo::default()
             .stage(stage)
-            .layout(self.core.layout);
-        let device = &self.core.device;
+            .layout(core.layout);
+        let device = &core.device;
         // SAFETY: the module and the layout are the device's, and the specialization gives each
         // of the kernel's constants a 4-byte value.
         let made =
@@ -461,24 +622,33 @@ impl PipelineInner {
             call: "vkCreateComputePipelines",
             result,
         })?[0];
-        self.core.counters.count(Metric::PipelinesCreated);
-        self.core.counters.rise(Gauge::Pipelines);
+        core.counters.count(Metric::PipelinesCreated);
+        core.counters.rise(Gauge::Pipelines);
         Ok(pipeline)
+    }
+
+    /// Gives the module and its `VkPipeline`s to the reaper.
+    fn release(&mut self, core: &Core) {
+        let variants = self
+            .variants
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (_, pipeline) in variants.drain(..) {
+            core.reaper.give(Job::Free(Free::Pipeline(pipeline)));
+        }
+        core.reaper.give(Job::Free(Free::ShaderModule(self.module)));
     }
 }
 
 impl Drop for PipelineInner {
     fn drop(&mut self) {
         // No command buffer that used it is left: each kept the state until it retired.
-        let variants = self
-            .variants
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for (_, pipeline) in variants.drain(..) {
-            self.core.reaper.give(Job::Free(Free::Pipeline(pipeline)));
+        self.whole.release(&self.core);
+        if let Form::Sized {
+            partial: Some(partial),
+        } = &mut self.form
+        {
+            partial.release(&self.core);
         }
-        self.core
-            .reaper
-            .give(Job::Free(Free::ShaderModule(self.module)));
     }
 }

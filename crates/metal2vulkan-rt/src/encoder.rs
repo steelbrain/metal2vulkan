@@ -5,10 +5,13 @@ use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::hazard::Access;
-use crate::pipeline::{ComputePipelineState, FieldValue, Place, Variant, PUSH_BYTES};
+use crate::pipeline::{
+    tile, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
+};
 use crate::record::{self, Reach};
 use crate::ring::CHUNK;
 use ash::vk;
+use metal2vulkan::pipeline::{nonuniform_region_bytes, region_bytes};
 use std::ops::BitOr;
 use std::sync::Arc;
 
@@ -83,8 +86,22 @@ enum Slot {
 
 /// The grid of a dispatch.
 enum Grid<'a> {
-    /// Threadgroups per grid, and the grid in threads.
-    Direct([u32; 3], [u32; 3]),
+    /// Threadgroups per grid at the call's threadgroup size, the grid in threads, and whether the
+    /// last threadgroup along some axis is partial (a `dispatchThreads` grid that is not a whole
+    /// number of threadgroups).
+    Direct {
+        groups: [u32; 3],
+        threads: [u32; 3],
+        ragged: bool,
+    },
+    /// The arguments' buffer and offset.
+    Indirect(&'a Buffer, u64),
+}
+
+/// What one `vkCmdDispatch*` launches.
+enum Launch<'a> {
+    /// Workgroups.
+    Direct([u32; 3]),
     /// The arguments' buffer and offset.
     Indirect(&'a Buffer, u64),
 }
@@ -119,9 +136,10 @@ pub struct ComputeCommandEncoder {
     threadgroup_lengths: Vec<(u32, u32)>,
     /// `use_resource` declarations, by resource id.
     declared: Vec<(u32, Access)>,
-    /// The threadgroup size and `VkPipeline` of the last dispatch, while the state and the
+    /// The module (the partial-threadgroups variant of an observing kernel, or the state's whole
+    /// module), workgroup size and `VkPipeline` of the last dispatch, while the state and the
     /// threadgroup memory lengths are unchanged.
-    last: Option<([u32; 3], vk::Pipeline)>,
+    last: Option<(bool, [u32; 3], vk::Pipeline)>,
     /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
     /// Whether a dispatch of the encoder wrote anything.
@@ -306,53 +324,57 @@ impl ComputeCommandEncoder {
 
     /// `dispatchThreadgroups:threadsPerThreadgroup:`.
     ///
+    /// A count above the device's `maxComputeWorkGroupCount` is split into dispatches within it,
+    /// each reading Metal's whole grid from its region.
+    ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`]; [`Limit::ThreadgroupShape`];
     /// [`Gap::PartialSimdgroups`] for a threadgroup that is not whole SIMD groups of a kernel
-    /// whose tier needs them; [`Limit::GroupCount`] for a count above the device's
-    /// `maxComputeWorkGroupCount`;
+    /// whose tier needs them;
     /// [`Error::Vulkan`] where the pipeline's compile, the ring or recording fails.
     pub fn dispatch_threadgroups(
         &mut self,
         threadgroups_per_grid: [u32; 3],
         threads_per_threadgroup: [u32; 3],
     ) -> Result<(), Error> {
-        let grid = threadgroups_per_grid
-            .iter()
-            .zip(threads_per_threadgroup)
-            .map(|(&groups, size)| groups.saturating_mul(size));
-        let grid: Vec<u32> = grid.collect();
+        let threads = std::array::from_fn(|axis| {
+            threadgroups_per_grid[axis].saturating_mul(threads_per_threadgroup[axis])
+        });
         self.dispatch(
-            Grid::Direct(threadgroups_per_grid, [grid[0], grid[1], grid[2]]),
+            Grid::Direct {
+                groups: threadgroups_per_grid,
+                threads,
+                ragged: false,
+            },
             threads_per_threadgroup,
         )
     }
 
-    /// `dispatchThreads:threadsPerThreadgroup:`: the grid in whole threadgroups, with the grid's
-    /// extent a parameter of the kernel.
+    /// `dispatchThreads:threadsPerThreadgroup:`: the threadgroups the grid's threads fill, the
+    /// last along an axis running only the threads left, with the grid's extent a parameter of
+    /// the kernel. A kernel that observes its threadgroup partition runs a grid that is not a
+    /// whole number of threadgroups on its partial-threadgroups variant.
     ///
     /// Err: as [`dispatch_threadgroups`](Self::dispatch_threadgroups);
-    /// [`Gap::PartialThreadgroups`] for a grid that is not a whole number of threadgroups on some
-    /// axis.
+    /// [`Gap::PartialThreadgroups`] for such a grid of a kernel whose partial-threadgroups
+    /// variant the translator refused.
     pub fn dispatch_threads(
         &mut self,
         threads_per_grid: [u32; 3],
         threads_per_threadgroup: [u32; 3],
     ) -> Result<(), Error> {
-        let mut groups = [0; 3];
-        for axis in 0..3 {
-            groups[axis] = match threads_per_threadgroup[axis] {
-                0 => 0,
-                size if !threads_per_grid[axis].is_multiple_of(size) => {
-                    return Err(Error::Unsupported(Gap::PartialThreadgroups {
-                        threads_per_grid,
-                        threads_per_threadgroup,
-                    }))
-                }
-                size => threads_per_grid[axis] / size,
-            };
-        }
+        let groups = std::array::from_fn(|axis| {
+            threads_per_grid[axis].div_ceil(threads_per_threadgroup[axis].max(1))
+        });
+        let ragged = (0..3).any(|axis| {
+            threads_per_threadgroup[axis] != 0
+                && !threads_per_grid[axis].is_multiple_of(threads_per_threadgroup[axis])
+        });
         self.dispatch(
-            Grid::Direct(groups, threads_per_grid),
+            Grid::Direct {
+                groups,
+                threads: threads_per_grid,
+                ragged,
+            },
             threads_per_threadgroup,
         )
     }
@@ -416,23 +438,11 @@ impl ComputeCommandEncoder {
             .pipeline
             .clone()
             .ok_or(Error::Refused(Refusal::NoPipeline))?;
-        let interface = &pipeline.inner.interface;
+        let inner = &pipeline.inner;
+        let max = inner.whole.interface.max_total_threads;
         let total = size.iter().map(|&axis| u64::from(axis)).product::<u64>();
-        if total == 0 || total > u64::from(interface.max_total_threads) {
-            return Err(Error::Refused(Refusal::ThreadgroupSize {
-                size,
-                max: interface.max_total_threads,
-            }));
-        }
-        if let Some(&width) = interface
-            .multiples
-            .iter()
-            .find(|&&multiple| !total.is_multiple_of(u64::from(multiple.max(1))))
-        {
-            return Err(Error::Unsupported(Gap::PartialSimdgroups {
-                threads_per_threadgroup: size,
-                width,
-            }));
+        if total == 0 || total > u64::from(max) {
+            return Err(Error::Refused(Refusal::ThreadgroupSize { size, max }));
         }
         let core = Arc::clone(self.building().device.core());
         let limits = &core.limits;
@@ -446,38 +456,75 @@ impl ComputeCommandEncoder {
                 max: limits.max_group_size,
             }));
         }
-        if let Grid::Direct(groups, _) = grid {
-            if groups
-                .iter()
-                .zip(limits.max_group_count)
-                .any(|(&count, max)| count > max)
-            {
-                return Err(Error::Limit(Limit::GroupCount {
-                    count: groups,
-                    max: limits.max_group_count,
-                }));
+        // What runs: the module, whether it is an observing kernel's partial-threadgroups
+        // variant, its workgroup size, and for a direct dispatch Metal's grid, the workgroups,
+        // and whether the last along some axis is partial.
+        let (kernel, partial, local, direct) = match (&grid, &inner.form) {
+            (Grid::Indirect(..), _) => (&inner.whole, false, size, None),
+            (&Grid::Direct { threads, .. }, Form::Tiled) => {
+                let local = tile(threads);
+                let ragged = (0..3).any(|axis| !threads[axis].is_multiple_of(local[axis]));
+                let groups = std::array::from_fn(|axis| threads[axis].div_ceil(local[axis]));
+                (&inner.whole, false, local, Some((threads, groups, ragged)))
             }
-            // No thread runs: nothing is recorded, so a zero grid stays the kernel's mark of an
-            // indirect dispatch.
-            if groups.contains(&0) {
-                return Ok(());
-            }
+            (
+                &Grid::Direct {
+                    groups,
+                    threads,
+                    ragged: false,
+                },
+                Form::Sized { .. },
+            ) => (&inner.whole, false, size, Some((threads, groups, false))),
+            (
+                &Grid::Direct {
+                    groups,
+                    threads,
+                    ragged: true,
+                },
+                Form::Sized { partial },
+            ) => match partial {
+                Some(kernel) => (kernel, true, size, Some((threads, groups, true))),
+                None => {
+                    return Err(Error::Unsupported(Gap::PartialThreadgroups {
+                        threads_per_grid: threads,
+                        threads_per_threadgroup: size,
+                    }))
+                }
+            },
+        };
+        let threads = local.iter().map(|&axis| u64::from(axis)).product::<u64>();
+        if let Some(&width) = kernel
+            .interface
+            .multiples
+            .iter()
+            .find(|&&multiple| !threads.is_multiple_of(u64::from(multiple.max(1))))
+        {
+            return Err(Error::Unsupported(Gap::PartialSimdgroups {
+                threads_per_threadgroup: size,
+                width,
+            }));
+        }
+        // No thread runs: nothing is recorded, so a zero grid stays the kernel's mark of an
+        // indirect dispatch.
+        if direct.is_some_and(|(_, groups, _)| groups.contains(&0)) {
+            return Ok(());
         }
         let vk_pipeline = match self.last {
-            Some((last, made)) if last == size => made,
+            Some((module, at, made)) if module == partial && at == local => made,
             _ => {
                 let variant = Variant {
-                    size,
-                    threadgroup_lengths: interface
+                    size: local,
+                    threadgroup_lengths: kernel
+                        .interface
                         .threadgroups
                         .iter()
                         .map(|&index| self.threadgroup_length(index))
                         .collect(),
                 };
-                pipeline.inner.pipeline(&variant)?
+                kernel.pipeline(&core, &variant)?
             }
         };
-        self.last = Some((size, vk_pipeline));
+        self.last = Some((partial, local, vk_pipeline));
         let serial = self.serial;
         let wrote = {
             let accesses = Accesses {
@@ -485,22 +532,57 @@ impl ComputeCommandEncoder {
                 declared: &self.declared,
                 indirect: match grid {
                     Grid::Indirect(buffer, _) => Some(buffer.id()),
-                    Grid::Direct(..) => None,
+                    Grid::Direct { .. } => None,
                 },
             };
             let building = self
                 .building
                 .as_mut()
                 .expect("an encoder holds its command buffer's recording until it ends");
-            building.dispatch_hazards(serial, interface, &accesses)?
+            building.dispatch_hazards(serial, &kernel.interface, &accesses)?
         };
         self.wrote |= wrote;
-        self.fill_parameters(&pipeline, &grid, size);
+        let region = |base, threads, ragged| {
+            match ragged {
+                true => nonuniform_region_bytes(base, threads, local),
+                false => region_bytes(base, threads, local),
+            }
+            .ok_or(Error::Refused(Refusal::ThreadgroupSize { size, max }))
+        };
+        match (direct, grid) {
+            (Some((threads, groups, ragged)), _) => {
+                // A count past the device's limit on an axis is split: each piece starts at its
+                // first threadgroup in Metal's grid, which its region carries.
+                let limit = limits.max_group_count;
+                for z in (0..groups[2]).step_by(limit[2] as usize) {
+                    for y in (0..groups[1]).step_by(limit[1] as usize) {
+                        for x in (0..groups[0]).step_by(limit[0] as usize) {
+                            let base = [x, y, z];
+                            let count = std::array::from_fn(|axis| {
+                                limit[axis].min(groups[axis] - base[axis])
+                            });
+                            self.fill_parameters(kernel, &region(base, threads, ragged)?);
+                            self.record(vk_pipeline, Launch::Direct(count))?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            (None, Grid::Indirect(buffer, offset)) => {
+                self.fill_parameters(kernel, &region([0; 3], [0; 3], false)?);
+                self.record(vk_pipeline, Launch::Indirect(buffer, offset))
+            }
+            (None, Grid::Direct { .. }) => Ok(()),
+        }
+    }
+
+    /// Records one launch of the parameters filled last.
+    fn record(&mut self, pipeline: vk::Pipeline, launch: Launch<'_>) -> Result<(), Error> {
         let building = self
             .building
             .as_mut()
             .expect("an encoder holds its command buffer's recording until it ends");
-        building.record_dispatch(vk_pipeline, &mut self.parameters, &grid)
+        building.record_dispatch(pipeline, &mut self.parameters, &launch)
     }
 
     /// The length set for threadgroup memory index `index`, 0 where none was.
@@ -511,16 +593,11 @@ impl ComputeCommandEncoder {
             .map_or(0, |(_, length)| *length)
     }
 
-    /// Fills the push window and the ring block of a dispatch of `pipeline` over `grid` in
-    /// threadgroups of `size`, each axis 1 to 1,024. The block's address is written by
+    /// Fills the push window and the ring block of one launch of `kernel` whose region is
+    /// `region`, the `DispatchRegion` push field's bytes. The block's address is written by
     /// [`Building::record_dispatch`] once the block is in the ring.
-    fn fill_parameters(
-        &mut self,
-        pipeline: &ComputePipelineState,
-        grid: &Grid<'_>,
-        size: [u32; 3],
-    ) {
-        let interface = &pipeline.inner.interface;
+    fn fill_parameters(&mut self, kernel: &Kernel, region: &[u8; 32]) {
+        let interface: &Interface = &kernel.interface;
         let parameters = &mut self.parameters;
         parameters.push.clear();
         parameters
@@ -544,18 +621,7 @@ impl ComputeCommandEncoder {
                     };
                     bytes[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }
-                FieldValue::DispatchRegion => {
-                    let threads = match grid {
-                        Grid::Direct(_, threads) => *threads,
-                        Grid::Indirect(..) => [0; 3],
-                    };
-                    let packed = (size[0] - 1) | (size[1] - 1) << 10 | (size[2] - 1) << 20;
-                    let words = [0, 0, 0, packed, threads[0], threads[1], threads[2], 0];
-                    for (index, word) in words.iter().enumerate() {
-                        let at = at + index * 4;
-                        bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
-                    }
-                }
+                FieldValue::DispatchRegion => bytes[at..at + 32].copy_from_slice(region),
             }
         }
         parameters.block_address = (interface.block_len > 0).then_some(interface.block_address);
@@ -661,7 +727,7 @@ impl Building {
         &mut self,
         pipeline: vk::Pipeline,
         parameters: &mut Parameters,
-        grid: &Grid<'_>,
+        launch: &Launch<'_>,
     ) -> Result<(), Error> {
         let core = Arc::clone(self.device.core());
         let device = &core.device;
@@ -683,11 +749,11 @@ impl Building {
             if !push.is_empty() {
                 device.cmd_push_constants(command, core.layout, vk::ShaderStageFlags::ALL, 0, push);
             }
-            match *grid {
-                Grid::Direct(groups, _) => {
+            match *launch {
+                Launch::Direct(groups) => {
                     device.cmd_dispatch(command, groups[0], groups[1], groups[2]);
                 }
-                Grid::Indirect(buffer, offset) => {
+                Launch::Indirect(buffer, offset) => {
                     let block = &buffer.held_block().memory;
                     device.cmd_dispatch_indirect(command, block.buffer, buffer.offset() + offset);
                 }

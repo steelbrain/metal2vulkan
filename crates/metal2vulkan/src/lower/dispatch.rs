@@ -1004,7 +1004,7 @@ pub const NOMINAL_AXIS_BITS: u32 = 10;
 /// `region[1].w`'s flag of a draw or dispatch whose last threadgroup along an axis runs only the
 /// threads left (`drawMeshThreads` with an object function, or a kernel's ragged
 /// `dispatchThreads` on its partial-threadgroups variant, the module docs): a function of
-/// [`DispatchPlan::partial_groups`] answers that threadgroup's threads.
+/// `DispatchPlan::partial_groups` answers that threadgroup's threads.
 pub const NONUNIFORM: u32 = 1;
 
 /// Pack Metal's nominal threads per threadgroup `l` into `region[0].w` (each axis 1..=1024).
