@@ -483,7 +483,7 @@ impl ComputeCommandEncoder {
                 },
                 Form::Sized { partial },
             ) => match partial {
-                Some(kernel) => (kernel, true, size, Some((threads, groups, true))),
+                Some(kernel) => (&**kernel, true, size, Some((threads, groups, true))),
                 None => {
                     return Err(Error::Unsupported(Gap::PartialThreadgroups {
                         threads_per_grid: threads,

@@ -86,7 +86,7 @@ pub(crate) enum Form {
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, and a
     /// `dispatchThreads` grid that is not a whole number of threadgroups on the
     /// partial-threadgroups variant, where the translator made one.
-    Sized { partial: Option<Kernel> },
+    Sized { partial: Option<Box<Kernel>> },
 }
 
 /// One translated module of a state, its interface, and the `VkPipeline`s made of it so far.
@@ -298,7 +298,7 @@ impl crate::Device {
         if let Some(pipeline) = partial {
             let partial = Kernel::new(&inner.core, pipeline, required)?;
             inner.form = Form::Sized {
-                partial: Some(partial),
+                partial: Some(Box::new(partial)),
             };
         }
         if let Form::Tiled = inner.form {

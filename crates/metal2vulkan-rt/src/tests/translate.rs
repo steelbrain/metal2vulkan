@@ -674,8 +674,10 @@ mod on_device {
             let dir = std::env::temp_dir().join(format!("m2v-rt-cache-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             for round in 0..2 {
-                let mut options = DeviceOptions::default();
-                options.pipeline_cache_dir = Some(dir.clone());
+                let options = DeviceOptions {
+                    pipeline_cache_dir: Some(dir.clone()),
+                    ..DeviceOptions::default()
+                };
                 let device = Device::new(physical, options)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 let counters = device.counters();
