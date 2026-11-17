@@ -108,7 +108,7 @@ impl Described {
                 }
             };
             let Some((function, grid, repeat)) = dispatch else {
-                if !bindings.is_empty() {
+                if !bindings.is_empty() && !plan.dispatches.is_empty() {
                     let name = &self.name;
                     return Err(
                         format!("workload {name} sets a binding after its last dispatch").into(),
