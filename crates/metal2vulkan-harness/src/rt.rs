@@ -164,7 +164,7 @@ pub(crate) struct Ranges(pub(crate) Vec<Range<u64>>);
 impl Ranges {
     /// A block of `len` bytes, all free.
     pub(crate) fn new(len: u64) -> Ranges {
-        Ranges(vec![0..len])
+        Ranges(std::iter::once(0..len).collect())
     }
 
     /// The start of the lowest free range at least `len` bytes long, its first `len` bytes taken;
