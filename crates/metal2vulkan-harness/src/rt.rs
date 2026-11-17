@@ -20,7 +20,7 @@
 //! The runtime places a texture or a sampler state at the index its consumer gives, from the
 //! consumer's grants, and asks it for the index of each sampler a pipeline state numbers. The
 //! harness grants itself every storage-capable texture index and every sampler index once the
-//! device is made ([`Indices`]): each texture (`ShaderRead | ShaderWrite`) and each sampler state
+//! device is made (`Indices`): each texture (`ShaderRead | ShaderWrite`) and each sampler state
 //! takes the next index in turn, passing over one an earlier object still holds, and a constexpr
 //! sampler the index the first state that numbered its state words took, as Metal gives an equal
 //! one the same ID. A texture read's or write's numbered sampler takes nothing at its index: 0.
