@@ -255,9 +255,12 @@ that touch blocks first.
 - Each call translates anew: no cache returns a state made before, and no translation or
   `VkPipeline` compile runs ahead of the call or the dispatch that needs it.
 - A kernel that reads anything the encoder does not supply yet, a texture, a sampler, a function
-  table, a `[[stage_in]]` fetch, constant data, or a stage that pins a subgroup size, is refused
-  (`Gap::KernelInput`). So is a state for indirect command buffers
-  (`Gap::IndirectCommandBuffers`).
+  table, a `[[stage_in]]` fetch or constant data, is refused (`Gap::KernelInput`). So is a state
+  for indirect command buffers (`Gap::IndirectCommandBuffers`).
+- A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
+  `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32) runs only
+  threadgroups of whole SIMD groups; a dispatch of another size is refused
+  (`Gap::PartialSimdgroups`): its emulated-SIMD-group variant is not built.
 - `dispatch_threads` with a grid that is not a whole number of threadgroups on some axis is
   refused (`Gap::PartialThreadgroups`): Metal's partial threadgroups are not built.
 - A kernel runs at the threadgroup size each dispatch gives. Every size makes its own
@@ -326,6 +329,9 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `workgroupMemoryExplicitLayout16BitAccess` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | 16-bit values in threadgroup blocks |
 | `vulkanMemoryModel` | `VkPhysicalDeviceVulkan12Features` | the translator's atomics and barriers |
 | `vulkanMemoryModelDeviceScope` | `VkPhysicalDeviceVulkan12Features` | atomics and barriers of device scope |
+| `subgroupSizeControl` | `VkPhysicalDeviceVulkan13Features` | a kernel's SIMD groups at Metal's width of 32, where the device lists compute in `requiredSubgroupSizeStages` |
+| `computeFullSubgroups` | `VkPhysicalDeviceVulkan13Features` | a kernel's subgroups required full, so each SIMD group is one subgroup |
+| `robustImageAccess` | `VkPhysicalDeviceVulkan13Features` | an image write or atomic out of range dropped and a read out of range zero, with no guard in the shader |
 | `timelineSemaphore` | `VkPhysicalDeviceVulkan12Features` | submission and completion |
 | `synchronization2` | `VkPhysicalDeviceVulkan13Features` | barriers, layout changes and submission |
 | `dynamicRendering` | `VkPhysicalDeviceVulkan13Features` | render passes |

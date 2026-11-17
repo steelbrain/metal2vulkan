@@ -290,3 +290,38 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
         println!("features: {name}: {:?}", device.features());
     }
 }
+
+/// The translator's profile on every device of the cfg's kind holds only what device creation
+/// enabled: the floor's `robustImageAccess`, and none of the robustness features the runtime
+/// leaves off, whatever the device reports.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[test]
+fn every_device_of_the_cfgs_kind_gives_the_translator_only_what_it_enables() {
+    use crate::tests::devices_of_the_cfgs_kind;
+    use metal2vulkan::device::VkFeature;
+
+    let instance = Instance::new(&[]).expect("an instance at the floor");
+    let devices = devices_of_the_cfgs_kind(&instance);
+    assert!(
+        !devices.is_empty(),
+        "the loader lists no device of this cfg's kind"
+    );
+    for (name, physical) in &devices {
+        let device = Device::new(physical, DeviceOptions::default())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let enabled = &device.core().translator.profile().enabled().features;
+        assert!(
+            enabled.contains(&VkFeature::RobustImageAccess),
+            "{name}: robustImageAccess"
+        );
+        for off in [
+            VkFeature::RobustImageAccess2,
+            VkFeature::RobustBufferAccess,
+            VkFeature::RobustBufferAccess2,
+            VkFeature::NullDescriptor,
+        ] {
+            assert!(!enabled.contains(&off), "{name}: {off:?}");
+        }
+        println!("profile: {name}: robustImageAccess alone of the robustness features");
+    }
+}

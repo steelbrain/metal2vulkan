@@ -153,11 +153,24 @@ pub enum Gap {
     IndirectCommandBuffers,
     /// A kernel that reads something the compute encoder does not supply yet: a texture or a
     /// sampler slot, a function table, a `[[stage_in]]` fetch, a parameter the runtime does not
-    /// fill, a specialization the runtime does not set, or a stage that pins a subgroup size.
-    /// Buffers, `setBytes` data, threadgroup memory lengths and the dispatch's grid are supplied.
+    /// fill, or a specialization the runtime does not set. Buffers, `setBytes` data, threadgroup
+    /// memory lengths, the dispatch's grid and a pinned subgroup size are supplied.
     ///
     /// Basis: ours (the encoder binds buffers alone).
     KernelInput,
+    /// A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD
+    /// group as one subgroup of `width` threads (a pinned subgroup of 32, or the device's own
+    /// 32): Metal runs the last SIMD group of such a threadgroup partly filled. The kernel's
+    /// emulated-SIMD-group variant, which runs every threadgroup size, is not built. Refused at
+    /// the dispatch; the state's other sizes run.
+    ///
+    /// Basis: ours (the emulated-SIMD-group variant is not built).
+    PartialSimdgroups {
+        /// The threadgroup size asked for.
+        threads_per_threadgroup: [u32; 3],
+        /// The threads every threadgroup must be a multiple of.
+        width: u32,
+    },
     /// `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis:
     /// Metal runs the last threadgroup of such an axis with the threads left. The runtime does
     /// not dispatch Metal's partial threadgroups yet.
@@ -294,6 +307,13 @@ impl fmt::Display for Gap {
             Gap::KernelInput => {
                 f.write_str("the kernel reads an input the compute encoder does not supply yet")
             }
+            Gap::PartialSimdgroups {
+                threads_per_threadgroup,
+                width,
+            } => write!(
+                f,
+                "a threadgroup of {threads_per_threadgroup:?} is not whole SIMD groups of {width} threads, whose emulated variant is not built"
+            ),
             Gap::PartialThreadgroups {
                 threads_per_grid,
                 threads_per_threadgroup,

@@ -12758,6 +12758,7 @@ variant	metal2vulkan-rt::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
 variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
 variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
+variant	metal2vulkan-rt::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_threadgroup: [u32; 3], width: u32 }
 variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }

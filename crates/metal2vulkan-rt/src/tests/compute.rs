@@ -47,6 +47,9 @@ mod on_device {
             ],
             threadgroups: Vec::new(),
             max_total_threads: 1024,
+            multiples: Vec::new(),
+            required_subgroup_size: None,
+            stage_flags: ash::vk::PipelineShaderStageCreateFlags::empty(),
         }
     }
 

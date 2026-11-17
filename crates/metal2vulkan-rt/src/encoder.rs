@@ -307,7 +307,9 @@ impl ComputeCommandEncoder {
     /// `dispatchThreadgroups:threadsPerThreadgroup:`.
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`]; [`Limit::ThreadgroupShape`];
-    /// [`Limit::GroupCount`] for a count above the device's `maxComputeWorkGroupCount`;
+    /// [`Gap::PartialSimdgroups`] for a threadgroup that is not whole SIMD groups of a kernel
+    /// whose tier needs them; [`Limit::GroupCount`] for a count above the device's
+    /// `maxComputeWorkGroupCount`;
     /// [`Error::Vulkan`] where the pipeline's compile, the ring or recording fails.
     pub fn dispatch_threadgroups(
         &mut self,
@@ -420,6 +422,16 @@ impl ComputeCommandEncoder {
             return Err(Error::Refused(Refusal::ThreadgroupSize {
                 size,
                 max: interface.max_total_threads,
+            }));
+        }
+        if let Some(&width) = interface
+            .multiples
+            .iter()
+            .find(|&&multiple| !total.is_multiple_of(u64::from(multiple.max(1))))
+        {
+            return Err(Error::Unsupported(Gap::PartialSimdgroups {
+                threads_per_threadgroup: size,
+                width,
             }));
         }
         let core = Arc::clone(self.building().device.core());

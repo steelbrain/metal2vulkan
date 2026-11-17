@@ -73,6 +73,14 @@ pub(crate) struct Interface {
     pub(crate) threadgroups: Vec<u32>,
     /// `maxTotalThreadsPerThreadgroup`.
     pub(crate) max_total_threads: u32,
+    /// What every threadgroup's threads must be a multiple of: the subgroup size of a tier that
+    /// runs each SIMD group as one subgroup, where the local size is flattened.
+    pub(crate) multiples: Vec<u32>,
+    /// The subgroup size the kernel's tier pins
+    /// (`VkPipelineShaderStageRequiredSubgroupSizeCreateInfo`), where it pins one.
+    pub(crate) required_subgroup_size: Option<u32>,
+    /// The stage's create flags (`REQUIRE_FULL_SUBGROUPS`).
+    pub(crate) stage_flags: vk::PipelineShaderStageCreateFlags,
 }
 
 /// What sets a specialization constant.
@@ -175,7 +183,9 @@ fn interface(
     let translated = &pipeline.interface;
     let stage = &pipeline.stage;
     // Every argument is a pushed address or a specialization: no descriptor, no table the binder
-    // builds, no constant data, no pinned subgroup size.
+    // builds, no constant data; the stage's flags are its subgroups'.
+    let subgroups = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
+        | vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE;
     if translated.needs_pointer_translation
         || translated.needs_handle_translation
         || translated.reaches_command_buffers
@@ -190,14 +200,15 @@ fn interface(
             .iter()
             .any(|set| !set.bindings.is_empty())
         || stage.constant_blob.is_some()
-        || stage.required_subgroup_size.is_some()
-        || !stage.stage_flags.is_empty()
+        || !subgroups.contains(stage.stage_flags)
     {
         return Err(gap());
     }
     // The bind-time facts the encoder supplies.
+    let mut multiples = Vec::new();
     for dependency in &pipeline.dependencies {
         match dependency.fact {
+            RuntimeFact::LocalSizeConstraint { multiple } => multiples.push(multiple),
             RuntimeFact::ThreadsPerThreadgroup
             | RuntimeFact::ThreadgroupMemoryLength { .. }
             | RuntimeFact::LocalSizeLimits
@@ -289,6 +300,14 @@ fn interface(
         };
         constants.push((constant.id, set));
     }
+    // A multiple outside a flattened local size is a derivative group's, which a kernel over
+    // buffers alone does not take.
+    let flat = constants
+        .iter()
+        .any(|(_, set)| matches!(set, Constant::Threads));
+    if !multiples.is_empty() && !flat {
+        return Err(gap());
+    }
     let max_total_threads = match required_size {
         Some(size) => size.iter().product(),
         None => pipeline.metal_info.max_total_threads_per_threadgroup,
@@ -304,6 +323,9 @@ fn interface(
         constants,
         threadgroups,
         max_total_threads,
+        multiples,
+        required_subgroup_size: stage.required_subgroup_size,
+        stage_flags: stage.stage_flags,
     })
 }
 
@@ -410,11 +432,22 @@ impl PipelineInner {
         let specialization = vk::SpecializationInfo::default()
             .map_entries(&entries)
             .data(&values);
-        let stage = vk::PipelineShaderStageCreateInfo::default()
+        // The translator pins a size only for a stage the device lists in
+        // `requiredSubgroupSizeStages`, and the encoder dispatches such a kernel only in whole
+        // subgroups of it, so its full-subgroups flag holds.
+        let mut required = self.interface.required_subgroup_size.map(|size| {
+            vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default()
+                .required_subgroup_size(size)
+        });
+        let mut stage = vk::PipelineShaderStageCreateInfo::default()
+            .flags(self.interface.stage_flags)
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(self.module)
             .name(&self.entry)
             .specialization_info(&specialization);
+        if let Some(required) = &mut required {
+            stage = stage.push_next(required);
+        }
         let info = vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(self.core.layout);

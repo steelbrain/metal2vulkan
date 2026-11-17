@@ -229,6 +229,14 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(workgroup_layout.workgroup_memory_explicit_layout16_bit_access => WorkgroupMemoryExplicitLayout16BitAccess),
     feature!(vulkan12.vulkan_memory_model => VulkanMemoryModel),
     feature!(vulkan12.vulkan_memory_model_device_scope => VulkanMemoryModelDeviceScope),
+    // SIMD groups at Metal's width of 32: a kernel's subgroup size pinned where the device lists
+    // compute in `requiredSubgroupSizeStages`, and its subgroups required full. Both are Vulkan
+    // 1.3's.
+    feature!(vulkan13.subgroup_size_control => SubgroupSizeControl),
+    feature!(vulkan13.compute_full_subgroups => ComputeFullSubgroups),
+    // An image access out of range: a write or an atomic is dropped and a read answers zero, as
+    // Metal's, with no guard in the shader. Vulkan 1.3's.
+    feature!(vulkan13.robust_image_access => RobustImageAccess),
     // Submission, barriers and render passes.
     feature!(vulkan12.timeline_semaphore),
     feature!(vulkan13.synchronization2 => Synchronization2),

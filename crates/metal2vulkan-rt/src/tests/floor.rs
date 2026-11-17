@@ -68,6 +68,9 @@ fn at_the_floor() -> Queried {
     layout.workgroup_memory_explicit_layout16_bit_access = vk::TRUE;
     features.vulkan12.vulkan_memory_model = vk::TRUE;
     features.vulkan12.vulkan_memory_model_device_scope = vk::TRUE;
+    features.vulkan13.subgroup_size_control = vk::TRUE;
+    features.vulkan13.compute_full_subgroups = vk::TRUE;
+    features.vulkan13.robust_image_access = vk::TRUE;
     features.vulkan12.timeline_semaphore = vk::TRUE;
     features.vulkan13.synchronization2 = vk::TRUE;
     features.vulkan13.dynamic_rendering = vk::TRUE;
@@ -129,6 +132,35 @@ fn holds(features: &Features, feature: &crate::floor::Feature) -> bool {
     *(feature.field)(&mut features) == vk::TRUE
 }
 
+/// The translator's description is restricted to what device creation enables: a feature or an
+/// extension the device reports beyond the floor is outside the enable set, so the translator's
+/// profile never relies on it, and the floor's `robustImageAccess` is in it.
+#[test]
+fn the_translator_sees_only_what_device_creation_enables() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::{VkExtension, VkFeature};
+    let mut device = at_the_floor();
+    device.features.core.geometry_shader = vk::TRUE;
+    device.features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
+    device.features.vulkan13.robust_image_access = vk::TRUE;
+    device
+        .extensions
+        .push(ash::ext::robustness2::NAME.to_owned());
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    let enables = shader_enables(&capabilities);
+    assert!(enables.features.contains(&VkFeature::RobustImageAccess));
+    for reported in [
+        VkFeature::GeometryShader,
+        VkFeature::SamplerMirrorClampToEdge,
+        VkFeature::RobustImageAccess2,
+        VkFeature::RobustBufferAccess2,
+        VkFeature::RobustBufferAccess,
+    ] {
+        assert!(!enables.features.contains(&reported), "{reported:?}");
+    }
+    assert!(!enables.extensions.contains(&VkExtension::ExtRobustness2));
+}
+
 #[test]
 fn a_device_at_the_floor_is_above_it() {
     let mut device = at_the_floor();
@@ -136,7 +168,6 @@ fn a_device_at_the_floor_is_above_it() {
     device.features.core.geometry_shader = vk::TRUE;
     device.features.vulkan11.storage_input_output16 = vk::TRUE;
     device.features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
-    device.features.vulkan13.robust_image_access = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
     assert!(!capabilities.float16);
     assert!(!capabilities.storage_read_without_format);
@@ -169,7 +200,7 @@ fn a_device_at_the_floor_is_above_it() {
     assert_eq!(enabled.core.geometry_shader, vk::FALSE);
     assert_eq!(enabled.vulkan11.storage_input_output16, vk::FALSE);
     assert_eq!(enabled.vulkan12.sampler_mirror_clamp_to_edge, vk::FALSE);
-    assert_eq!(enabled.vulkan13.robust_image_access, vk::FALSE);
+    assert_eq!(enabled.vulkan13.robust_image_access, vk::TRUE);
 }
 
 #[test]
@@ -180,7 +211,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const LAYOUT: &str = "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 27] = [
+    let cases: [(Clear, Missing); 30] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -295,6 +326,18 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan12.timeline_semaphore = vk::FALSE,
             feature(V12, "timelineSemaphore"),
+        ),
+        (
+            |f| f.vulkan13.subgroup_size_control = vk::FALSE,
+            feature(V13, "subgroupSizeControl"),
+        ),
+        (
+            |f| f.vulkan13.compute_full_subgroups = vk::FALSE,
+            feature(V13, "computeFullSubgroups"),
+        ),
+        (
+            |f| f.vulkan13.robust_image_access = vk::FALSE,
+            feature(V13, "robustImageAccess"),
         ),
         (
             |f| f.vulkan13.synchronization2 = vk::FALSE,

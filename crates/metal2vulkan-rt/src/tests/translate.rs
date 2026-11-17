@@ -193,4 +193,126 @@ mod on_device {
             );
         });
     }
+
+    /// Lane `lane`'s input of the SIMD-group products: two of magnitude 2 and six of 0.5 at most
+    /// in a SIMD group, so every product and prefix product is exact in any order.
+    fn simd_input(lane: u32) -> f32 {
+        let sign = if lane % 2 == 0 { 1.0 } else { -1.0 };
+        match lane {
+            0..8 => 2.0 * sign,
+            8..14 => 0.5 * sign,
+            _ if lane % 3 == 0 => -1.0,
+            _ => 1.0,
+        }
+    }
+
+    /// `simd_float_products` of `gsm2_simd_products`: SIMD-group products and prefix products
+    /// over each thread's input. Where the device lets compute pin a subgroup of 32 (compute in
+    /// `requiredSubgroupSizeStages`, 32 between its sizes), the translator's tier for it is
+    /// Direct: a pinned subgroup of 32 per SIMD group, its local size flattened to whole SIMD
+    /// groups. The state runs whole SIMD groups with Metal's answers and refuses a threadgroup of
+    /// a partial one. A device that cannot pin 32 takes another tier, which may be refused.
+    #[test]
+    fn every_device_runs_simd_groups_at_metals_width() {
+        use crate::{Error, Gap};
+        use ash::vk;
+
+        let bitcode = match llvm_assemble(&engine_dir().join("gsm2_simd_products.ll")) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("gsm2_simd_products: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("simd_float_products").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        const THREADS: u32 = 128;
+        const GROUP: u32 = 64;
+        each_device("compute_simd", |name, _, device| {
+            let raw = device.raw();
+            let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
+            let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut vulkan13);
+            // SAFETY: the physical device is the instance's, a Vulkan 1.3 one.
+            unsafe {
+                raw.instance
+                    .get_physical_device_properties2(raw.physical_device, &mut properties)
+            };
+            let pinnable = vulkan13
+                .required_subgroup_size_stages
+                .contains(vk::ShaderStageFlags::COMPUTE)
+                && (vulkan13.min_subgroup_size..=vulkan13.max_subgroup_size).contains(&32);
+            let state = match device.new_compute_pipeline_state(&descriptor) {
+                Ok(state) => state,
+                Err(Error::Unsupported(Gap::KernelInput)) if !pinnable => {
+                    println!(
+                        "{name}: SIMD groups not pinnable at 32; the tier's kernel is refused"
+                    );
+                    return;
+                }
+                Err(error) => panic!("{name}: {error}"),
+            };
+            let interface = &state.inner.interface;
+            if pinnable {
+                assert_eq!(
+                    (interface.required_subgroup_size, &interface.multiples[..]),
+                    (Some(32), &[32][..]),
+                    "{name}: the Direct tier, a pinned subgroup of 32 per SIMD group"
+                );
+            }
+            let input: Vec<u8> = (0..THREADS)
+                .flat_map(|t| simd_input(t % 32).to_le_bytes())
+                .collect();
+            let block = device
+                .take_block(crate::MemoryClass::Shared, 1)
+                .expect("a block");
+            let a = device
+                .new_buffer(block.id, 0, u64::from(THREADS) * 4, true)
+                .expect("a buffer");
+            let out = device
+                .new_buffer(block.id, 4096, u64::from(THREADS) * 16, true)
+                .expect("a buffer");
+            write(&a, 0, &input);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            encoder.set_buffer(Some(&a), 0, 0).expect("a buffer");
+            encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
+            if pinnable {
+                assert!(matches!(
+                    encoder.dispatch_threads([THREADS, 1, 1], [16, 1, 1]),
+                    Err(Error::Unsupported(Gap::PartialSimdgroups { width: 32, .. }))
+                ));
+            }
+            encoder
+                .dispatch_threads([THREADS, 1, 1], [GROUP, 1, 1])
+                .expect("a dispatch of whole SIMD groups");
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let mut want = Vec::new();
+            for t in 0..THREADS {
+                let lanes = (t - t % 32..t - t % 32 + 32).map(|lane| simd_input(lane % 32));
+                let product: f32 = lanes.clone().product();
+                let inclusive: f32 = lanes.clone().take((t % 32 + 1) as usize).product();
+                let exclusive: f32 = lanes.take((t % 32) as usize).product();
+                want.extend([product, inclusive, exclusive, product].map(f32::to_bits));
+            }
+            assert_eq!(words(&out, 0, want.len()), want, "{name}: the products");
+            println!(
+                "{name}: SIMD-group products checked over {THREADS} threads; {}",
+                match interface.required_subgroup_size {
+                    Some(size) => format!("Direct, pinned at {size}"),
+                    None => String::from("not pinned"),
+                }
+            );
+        });
+    }
 }
