@@ -205,6 +205,7 @@ mod engine_vertex_variants;
 mod engine_viewport_compensation;
 mod engine_volatile;
 mod engine_wide;
+mod engine_widest_pin;
 mod engine_word_attachments;
 mod engine_ycbcr_in_place;
 mod engine_zero_factors;
