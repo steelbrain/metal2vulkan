@@ -7,6 +7,7 @@
 //!   Two plays on two devices report the same.
 //! - A command buffer waiting on an event the CPU signals later does not stop another queue's.
 //! - Textures are made at their recorded resource IDs, and read back as written.
+//! - The guest RAM copies and a device copy's fill land where their runs say.
 //!
 //! Each device takes its queue plan ([`at_plan`]): the player's readbacks take a command queue of
 //! their own beside the stream's.
@@ -314,5 +315,65 @@ fn textures_are_made_at_their_recorded_resource_ids() {
     on_device_with(at_plan, |device| {
         let report = play("texture-ids", device, &path);
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    });
+}
+
+/// The guest RAM copies and a device copy's fill land their bytes where their runs say, in order
+/// with a fill before them, and a copy back to guest RAM runs: the buffer reads back as laid out.
+#[test]
+fn guest_ram_copies_land_where_their_runs_say() {
+    let dir = ScratchDir::new("replay-guest-ram").unwrap();
+    let mut expected = vec![0u8; 64];
+    expected[8..24].copy_from_slice(&(1..=16).collect::<Vec<u8>>());
+    expected[32..40].copy_from_slice(&(105..=112).collect::<Vec<u8>>());
+    expected[40..44].copy_from_slice(&(101..=104).collect::<Vec<u8>>());
+    expected[60..64].copy_from_slice(&[0xaa; 4]);
+    let run = |start: u64, length: u64| {
+        Value::List(vec![Value::Uint(start), Value::Uint(start + length)])
+    };
+    let placed = |at: u64, run: Value| Value::List(vec![Value::Uint(at), run]);
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let shared = [Value::Uint(64), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 3, &shared, &[])?;
+        w.call("commandBuffer", 2, 4, &[], &[])?;
+        w.call("blitCommandEncoder", 4, 5, &[], &[])?;
+        let range = Value::List(vec![Value::Uint(0), Value::Uint(64)]);
+        let fill = [Value::Object(3), range, Value::Uint(0)];
+        w.call("fillBuffer:range:value:", 5, 0, &fill, &[])?;
+        let runs = Value::List(vec![run(0x1000, 8), run(0x2000, 8)]);
+        let data = Value::Bytes((1..=16).collect());
+        let args = [runs, Value::Object(3), Value::Uint(8), data];
+        w.call("m2v.copyFromGuestRam", 5, 0, &args, &[])?;
+        let runs = Value::List(vec![placed(40, run(0x3000, 4)), placed(32, run(0x4000, 8))]);
+        let args = [runs, Value::Object(3), Value::Bytes((101..=112).collect())];
+        w.call("m2v.copyFromGuestRamAt", 5, 0, &args, &[])?;
+        let args = [
+            Value::Bytes(vec![0xaa; 4]),
+            Value::Object(3),
+            Value::Uint(60),
+        ];
+        w.call("m2v.copyBytes:toBuffer:offset:", 5, 0, &args, &[])?;
+        let runs = Value::List(vec![
+            placed(0, run(0x5000, 16)),
+            placed(48, run(0x6000, 16)),
+        ]);
+        w.call("m2v.copyToGuestRam", 5, 0, &[Value::Object(3), runs], &[])?;
+        w.call("endEncoding", 5, 0, &[], &[])?;
+        w.call("commit", 4, 0, &[], &[])?;
+        w.call(
+            "m2v.check",
+            0,
+            0,
+            &[Value::Object(3)],
+            &[("sha256", sha(&expected))],
+        )
+    });
+    on_device_with(at_plan, |device| {
+        let report = play("guest-ram", device, &path);
+        assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+        assert_eq!(report.total["written_bytes"], 16 + 12 + 4);
+        assert_eq!(report.total["relocated_words"], 0);
     });
 }

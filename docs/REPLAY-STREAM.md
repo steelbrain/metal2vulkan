@@ -108,15 +108,15 @@ and the (name id, value) answer pairs.
   buffer is the buffer's `newTextureWithDescriptor:offset:bytesPerRow:`.
 - **The address map** is the ranges `[gpuAddress, gpuAddress + gpuLength)` of the live objects that
   answered them; `release` removes an object's range.
-- **Relocation.** The player makes each object where its runtime has room. In every bytes value it
-  writes (`m2v.write`) into an object that answered a `gpuAddress`, in the data of every
+- **Relocation.** The player makes each object where its runtime has room. In the bytes it puts
+  into an object that answered a `gpuAddress` (`m2v.write`, `m2v.copyBytes:toBuffer:offset:`,
+  `m2v.copyFromGuestRam` and `m2v.copyFromGuestRamAt`), in the data of every
   `set*Bytes:length:atIndex:` and in every address value, each 8-byte word at an offset that is a
   multiple of 8 from the target's start, whose value lies in a live range, becomes the player's
   address of that range's object plus the word's offset into the range. The innermost range wins:
   a buffer in a block moves with its own new address. Words outside every live range stay as they
-  are. Writes into an object with no address (a surface's pages), the data of
-  `m2v.copyBytes:toBuffer:offset:` and `replaceRegion:...`, library bytes and function constants
-  are never rewritten. The player counts the words it rewrote; a data word that is no address but
+  are. Bytes put into an object with no address (a surface's pages or device copy), the data of
+  `replaceRegion:...`, library bytes and function constants are never rewritten. The player counts the words it rewrote; a data word that is no address but
   lies in a live range is rewritten too, and the count shows it.
 - **Resource IDs** are reproduced: the player makes each object at its recorded `gpuResourceID`
   and refuses the stream where the runtime gives another.
@@ -154,8 +154,20 @@ A surface is recorded as the host's runtime sees it:
   `ChromaOffset`, `ChromaBytesPerRow`, `YCbCrMatrix` as `601`, `709` or `2020`).
 - **A device copy** of a surface is an ordinary buffer. Its fill from the CPU side is
   `m2v.copyBytes:toBuffer:offset:` on a blit encoder (`[data, buffer, offset]`, the data taken at
-  the call and never relocated); its copy back to the CPU side is `m2v.copyToHost:` on a blit
-  encoder (`[buffer, offset, length]`, no data), where the guest's lock asked for it.
+  the call); its copy back to the CPU side is `m2v.copyToHost:` on a blit encoder (`[buffer,
+  offset, length]`, no data), where the guest's lock asked for it.
+- **Copies between the guest's RAM and a buffer** are blit-encoder commands, ordered against the
+  encoder's others as a buffer-to-buffer copy is. A run is `[start, end]`, a range of host
+  addresses in the host's mapping of the guest's RAM, which the player never reads; only its
+  length counts. A copy the host did not encode is not recorded.
+  - `m2v.copyFromGuestRam` (`[runs, buffer, offset, data]`): the runs' bytes, in order, land in the
+    buffer from the offset. `data` is those bytes as the copy read them, bytes or blob, as long as
+    the runs together.
+  - `m2v.copyFromGuestRamAt` (`[placed runs, buffer, data]`): each placed run, `[at, run]`, lands
+    its bytes in the buffer from byte `at`. `data` is the runs' bytes in the order given.
+  - `m2v.copyToGuestRam` (`[buffer, placed runs]`): the buffer's bytes from each run's `at`, as long
+    as its run, go back to the guest's RAM. It carries no data; the player copies them into memory
+    of its own that nothing reads.
 - `IOSurfaceCreate`, `IOSurfaceLock` and `IOSurfaceUnlock` are kept for a host whose runtime makes
   surfaces device images synced at lock and unlock: `IOSurfaceCreate` (receiver 0) takes the
   `kIOSurface` properties as a map, each key without its prefix, and the lock calls their
@@ -182,7 +194,9 @@ A surface is recorded as the host's runtime sees it:
   `m2v.commitPart` commits its receiver as a part. `m2v.fold`, `m2v.setCompletionJoinsNext:`,
   `m2v.holdsNoPredication` and `m2v.rebind` are recorded where the host made them; the last
   three change nothing a program sees.
-- `m2v.present` (arguments: the texture shown) ends a frame.
+- `m2v.present` (arguments: the texture shown, nil where the stream never made it) is recorded
+  where the device's display shows a guest present, with or without a window. It ends a frame:
+  the player waits for what can complete and closes the frame's counters; it reads nothing.
 - `m2v.check` (arguments: objects) asks the player to read those objects there and report their
   checksums. Its optional answer `sha256` is a list of the recording's own, one per object.
 
@@ -212,7 +226,8 @@ A surface is recorded as the host's runtime sees it:
   for each frame and in total, the counters the runtime exposes (submissions, render passes,
   barriers, dispatches, draws, copies, pipelines made), the words it relocated, the 8-byte values
   at offsets 4 past a multiple of 8 that lie in a live range (left as they are), and the bytes it
-  wrote. Its own readbacks are not counted.
+  wrote or copied in (`m2v.write`, `m2v.copyBytes:toBuffer:offset:` and the copies from guest RAM).
+  Its own readbacks are not counted.
 - `m2v.setCompletionJoinsNext:`, `m2v.holdsNoPredication` and `m2v.rebind` change nothing it plays.
 - A selector, argument or descriptor key the runtime's backend does not implement is a typed
   refusal naming it; the run stops there and the report keeps what ran.

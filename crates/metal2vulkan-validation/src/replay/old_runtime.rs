@@ -3,7 +3,7 @@
 //! all of it that writes go through; a texture is made at its recorded resource ID. A selector,
 //! an argument or a descriptor key this file does not name is refused, naming it.
 
-use super::player::{Backend, Counters, Made, PlayError};
+use super::player::{placed_runs, upload, Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::value::Value;
 use metal2vulkan::metal::{
@@ -48,7 +48,8 @@ pub struct OldRuntime {
     objects: HashMap<u64, Object>,
     /// The queue of the player's readbacks.
     readback: Option<CommandQueue>,
-    /// What `m2v.copyToHost:` copies into: the host's memory, which nothing in a replay reads.
+    /// What `m2v.copyToHost:` and `m2v.copyToGuestRam` copy into: the host's memory, which nothing
+    /// in a replay reads.
     host: Option<Buffer>,
 }
 
@@ -386,14 +387,26 @@ impl OldRuntime {
                 };
                 self.blit(id).synchronize_resource(resource.as_ref())
             }
-            "m2v.copyBytes:toBuffer:offset:" => {
-                let bytes = data(call, 0)?;
+            "m2v.copyBytes:toBuffer:offset:"
+            | "m2v.copyFromGuestRam"
+            | "m2v.copyFromGuestRamAt" => {
+                let Some(upload) = upload(call)? else {
+                    unreachable!("an upload's selector");
+                };
                 let to = self.buffer(call, 1)?;
-                let at = uint(call, 2)?;
+                let bytes = data(call, upload.data)?;
+                if bytes.is_empty() {
+                    return Ok(());
+                }
                 let shared = ResourceOptions::shared();
                 let from =
                     (self.device.new_buffer_with_bytes(bytes, shared)).map_err(failed(call))?;
-                (self.blit(id)).copy_from_buffer_to_buffer(&from, 0, &to, at, bytes.len() as u64)
+                let blit = self.blit(id);
+                let mut pieces = upload.pieces.iter().filter(|(_, piece)| !piece.is_empty());
+                pieces.try_for_each(|(at, piece)| {
+                    let (start, length) = (piece.start as u64, piece.len() as u64);
+                    blit.copy_from_buffer_to_buffer(&from, start, &to, *at, length)
+                })
             }
             "m2v.copyToHost:" => {
                 let from = self.buffer(call, 0)?;
@@ -401,12 +414,37 @@ impl OldRuntime {
                 let host = self.host(call, length)?;
                 (self.blit(id)).copy_from_buffer_to_buffer(&from, at, &host, 0, length)
             }
+            "m2v.copyToGuestRam" => {
+                let from = self.buffer(call, 0)?;
+                let runs = placed_runs(arg(call, 1)?).ok_or_else(|| {
+                    PlayError::Invalid(format!(
+                        "{}: argument 1 is no list of placed runs",
+                        call.selector
+                    ))
+                })?;
+                let total = runs
+                    .iter()
+                    .try_fold(0u64, |sum, &(_, length)| sum.checked_add(length));
+                let total =
+                    total.ok_or_else(|| PlayError::Invalid("runs past 2^64 bytes".into()))?;
+                if total == 0 {
+                    return Ok(());
+                }
+                let host = self.host(call, total)?;
+                let blit = self.blit(id);
+                let mut into = 0;
+                runs.into_iter().try_for_each(|(at, length)| {
+                    let copied = blit.copy_from_buffer_to_buffer(&from, at, &host, into, length);
+                    into += length;
+                    copied
+                })
+            }
             _ => return Err(refuse(call, "not played on a blit encoder")),
         };
         result.map_err(failed(call))
     }
 
-    /// The host memory `m2v.copyToHost:` copies `length` bytes into.
+    /// The host memory `m2v.copyToHost:` and `m2v.copyToGuestRam` copy `length` bytes into.
     fn host(&mut self, call: &Call, length: u64) -> Result<Buffer, PlayError> {
         match &self.host {
             Some(host) if host.length() >= length => Ok(host.clone()),

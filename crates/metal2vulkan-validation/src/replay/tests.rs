@@ -256,8 +256,8 @@ fn the_address_map_relocates_by_the_innermost_live_range() {
 #[derive(Default)]
 struct Kept {
     calls: Vec<String>,
-    /// The last call's arguments.
-    args: Vec<Value>,
+    /// Each call's arguments.
+    args: Vec<Vec<Value>>,
     waits: Vec<u64>,
     writes: Vec<(u64, u64, Vec<u8>)>,
     bases: HashMap<u64, u64>,
@@ -269,7 +269,7 @@ struct Kept {
 impl Backend for Kept {
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         self.calls.push(call.to_string());
-        self.args = call.args.clone();
+        self.args.push(call.args.clone());
         let mut made = Made {
             resource_id: call
                 .answer("gpuResourceID")
@@ -411,10 +411,83 @@ fn uploads_are_relocated_and_counted() {
         (4, 0, pointer.to_vec()),
         "no address: untouched"
     );
-    assert_eq!(kept.args.first(), Some(&Value::Bytes(moved.to_vec())));
+    let constants = kept.args.last().and_then(|args| args.first());
+    assert_eq!(constants, Some(&Value::Bytes(moved.to_vec())));
     assert_eq!(report.total["relocated_words"], 2);
     assert_eq!(report.total["misaligned_address_words"], 1);
     assert_eq!(report.total["written_bytes"], 8 + 16 + 8);
+}
+
+/// The guest RAM copies land their data where their runs say: into a block, an address is
+/// relocated at a multiple of 8 and counted apart 4 past one; into a buffer of no address, nothing
+/// moves. Data of another length than its runs stops the play.
+#[test]
+fn guest_ram_copies_are_relocated_where_their_buffer_has_an_address() {
+    let pointer = (BLOCK + 0x10).to_le_bytes();
+    let moved = (0x1000_0000u64 + 0x10).to_le_bytes();
+    let run = |start: u64, length: u64| {
+        Value::List(vec![Value::Uint(start), Value::Uint(start + length)])
+    };
+    let placed = |at: u64, start: u64| Value::List(vec![Value::Uint(at), run(start, 8)]);
+    let twice = [pointer, pointer].concat();
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let block = [Value::Uint(0x1_0000), Value::Uint(0)];
+        let at = addressed(BLOCK, 0x1_0000);
+        w.call("m2v.newBlockWithLength:storageMode:", 1, 2, &block, &at)?;
+        w.call(
+            "newBufferWithBytesNoCopy:length:options:deallocator:",
+            1,
+            3,
+            &[],
+            &[],
+        )?;
+        let data = w.blob(&[pointer.to_vec(), vec![0; 8]].concat())?;
+        let runs = Value::List(vec![run(0x7000, 4), run(0x9000, 12)]);
+        let args = [runs, Value::Object(2), Value::Uint(8), Value::Blob(data)];
+        w.call("m2v.copyFromGuestRam", 9, 0, &args, &[])?;
+        let runs = Value::List(vec![placed(0x10, 0x7000), placed(0x24, 0x9000)]);
+        let args = [runs, Value::Object(2), Value::Bytes(twice.clone())];
+        w.call("m2v.copyFromGuestRamAt", 9, 0, &args, &[])?;
+        let runs = Value::List(vec![run(0x7000, 8)]);
+        let args = [
+            runs,
+            Value::Object(3),
+            Value::Uint(0),
+            Value::Bytes(pointer.to_vec()),
+        ];
+        w.call("m2v.copyFromGuestRam", 9, 0, &args, &[])
+    });
+    ended.unwrap();
+    let data = |call: usize, at: usize| kept.args[call][at].clone();
+    let copied = [moved.to_vec(), vec![0; 8]].concat();
+    assert_eq!(data(3, 3), Value::Bytes(copied));
+    assert_eq!(
+        data(4, 2),
+        Value::Bytes([moved, pointer].concat()),
+        "4 past 8 stays"
+    );
+    assert_eq!(
+        data(5, 3),
+        Value::Bytes(pointer.to_vec()),
+        "no address: untouched"
+    );
+    assert_eq!(report.total["relocated_words"], 2);
+    assert_eq!(report.total["misaligned_address_words"], 1);
+    assert_eq!(report.total["written_bytes"], 16 + 16 + 8);
+
+    let (_, ended) = played(&mut Kept::default(), |w| {
+        let runs = Value::List(vec![run(0x7000, 4)]);
+        let args = [
+            runs,
+            Value::Object(2),
+            Value::Uint(0),
+            Value::Bytes(pointer.to_vec()),
+        ];
+        w.call("m2v.copyFromGuestRam", 9, 0, &args, &[])
+    });
+    assert!(matches!(ended, Err(PlayError::Invalid(_))), "{ended:?}");
 }
 
 /// A command buffer that waits on an event the CPU signals later is not waited for until then; a
@@ -515,9 +588,9 @@ fn a_play_stops_where_the_stream_or_the_backend_cannot_go_on() {
     assert!(matches!(ended, Err(PlayError::Refused { .. })), "{ended:?}");
 }
 
-/// A present reads the texture shown and closes a frame of the groups since the last; a released
-/// device releases what it made, last made first; the host's split commits its command buffer and
-/// makes the next part on the same queue.
+/// A present closes a frame of the groups since the last, reading nothing (its texture may be
+/// nil); a released device releases what it made, last made first; the host's split commits its
+/// command buffer and makes the next part on the same queue.
 #[test]
 fn frames_releases_and_splits() {
     let mut kept = Kept::default();
@@ -527,7 +600,7 @@ fn frames_releases_and_splits() {
         w.call("commandBuffer", 2, 3, &[], &[])?;
         w.call("m2v.split", 3, 4, &[], &[])?;
         w.call("commit", 4, 0, &[], &[])?;
-        w.call("m2v.present", 1, 0, &[Value::Object(3)], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
         w.call("release", 1, 0, &[], &[])
     });
     ended.unwrap();
@@ -541,7 +614,7 @@ fn frames_releases_and_splits() {
             ("written_bytes", 0),
         ])]
     );
-    assert_eq!(report.checks.len(), 1);
+    assert!(report.checks.is_empty());
     let released: Vec<&str> = kept
         .calls
         .iter()

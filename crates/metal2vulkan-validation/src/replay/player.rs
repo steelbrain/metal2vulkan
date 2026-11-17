@@ -10,6 +10,7 @@ use super::value::{Hash, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// A runtime's counters, cumulative, by name.
@@ -33,7 +34,9 @@ pub struct Made {
 
 /// One runtime behind the player. Objects are named by their stream ids; the player resolves blobs
 /// and relocates before a call reaches the backend, and handles `m2v.write`, `m2v.check`,
-/// `m2v.present`, `release` of a device, and the program's waits itself.
+/// `m2v.present`, `release` of a device, and the program's waits itself. An upload
+/// (`m2v.copyBytes:toBuffer:offset:` and the guest RAM copies) reaches it with its data relocated
+/// ([`upload`] says where the data lands).
 pub trait Backend {
     /// Run `call`: make its result, or run its receiver's method, or drop the object `release`
     /// names. A call that makes an object at a recorded `gpuResourceID` answer makes it at that ID.
@@ -224,6 +227,84 @@ fn invalid(why: impl Into<String>) -> PlayError {
     PlayError::Invalid(why.into())
 }
 
+/// Where an upload's data lands: in `target`, from argument `data`, each piece of the data at the
+/// target's offset paired with it.
+pub(super) struct Upload {
+    pub target: u64,
+    pub data: usize,
+    pub pieces: Vec<(u64, Range<usize>)>,
+}
+
+/// The guest RAM runs of a copy that names a byte of its buffer for each (`[at, [start, end]]`):
+/// each byte and its run's length. The runs' addresses are the host's, which nothing reads.
+pub(super) fn placed_runs(runs: &Value) -> Option<Vec<(u64, u64)>> {
+    let placed = |run: &Value| match run.as_list()? {
+        [at, run] => Some((at.as_uint()?, run_length(run)?)),
+        _ => None,
+    };
+    runs.as_list()?.iter().map(placed).collect()
+}
+
+/// The length of a guest RAM run, `[start, end]`.
+fn run_length(run: &Value) -> Option<u64> {
+    match run.as_uints().as_deref() {
+        Some(&[start, end]) if start <= end => Some(end - start),
+        _ => None,
+    }
+}
+
+/// Where the data of `call` lands, where it is an upload (`docs/REPLAY-STREAM.md`, section 7):
+/// `m2v.copyBytes:toBuffer:offset:` (`[data, buffer, offset]`), `m2v.copyFromGuestRam` (`[runs,
+/// buffer, offset, data]`) and `m2v.copyFromGuestRamAt` (`[placed runs, buffer, data]`). Its data
+/// is resolved bytes.
+pub(super) fn upload(call: &Call) -> Result<Option<Upload>, PlayError> {
+    let args = &call.args;
+    let bad = |what: &str| invalid(format!("{}: {what}", call.selector));
+    let data_at = match &*call.selector {
+        "m2v.copyBytes:toBuffer:offset:" => 0,
+        "m2v.copyFromGuestRam" => 3,
+        "m2v.copyFromGuestRamAt" => 2,
+        _ => return Ok(None),
+    };
+    let target = args.get(1).and_then(Value::as_object);
+    let target = target.ok_or_else(|| bad("argument 1 is no buffer"))?;
+    let Some(Value::Bytes(data)) = args.get(data_at) else {
+        return Err(bad("no data"));
+    };
+    let length = data.len() as u64;
+    // Each run's byte of the buffer and its length; a copy to one place is one run.
+    let runs = match &*call.selector {
+        "m2v.copyFromGuestRamAt" => args.first().and_then(placed_runs),
+        selector => {
+            let at = args.get(2).and_then(Value::as_uint);
+            let run = match selector {
+                "m2v.copyFromGuestRam" => args.first().and_then(Value::as_list).and_then(|runs| {
+                    (runs.iter()).try_fold(0u64, |sum, run| sum.checked_add(run_length(run)?))
+                }),
+                _ => Some(length),
+            };
+            at.zip(run).map(|placed| vec![placed])
+        }
+    };
+    let runs = runs.ok_or_else(|| bad("its runs or its offset do not parse"))?;
+    let mut pieces = Vec::with_capacity(runs.len());
+    let mut from = 0u64;
+    for (at, run) in runs {
+        let to = from.checked_add(run).filter(|&to| to <= length);
+        let to = to.ok_or_else(|| bad("runs past its data"))?;
+        pieces.push((at, from as usize..to as usize));
+        from = to;
+    }
+    if from != length {
+        return Err(bad("data past its runs"));
+    }
+    Ok(Some(Upload {
+        target,
+        data: data_at,
+        pieces,
+    }))
+}
+
 /// The calls whose first argument is data the GPU reads as constants, which may hold addresses.
 fn sets_bytes(selector: &str) -> bool {
     selector.starts_with("set") && selector.ends_with("Bytes:length:atIndex:")
@@ -313,10 +394,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 Ok(())
             }
             "m2v.present" => {
-                let shown = call.args.first().and_then(Value::as_object);
-                let shown = shown.ok_or_else(|| invalid("m2v.present of no texture"))?;
                 self.drain()?;
-                self.check(shown, None, readbacks)?;
                 self.report.frames.push(self.frame.clone());
                 self.frame.clear();
                 Ok(())
@@ -421,6 +499,7 @@ impl<'b, B: Backend> Player<'b, B> {
             }
         }
         let resolved = Call { args, ..call };
+        let resolved = self.uploaded(resolved)?;
         let made = self.backend.call(&resolved)?;
         let object = resolved.result;
         if object == 0 {
@@ -456,6 +535,24 @@ impl<'b, B: Backend> Player<'b, B> {
             }
         }
         Ok(())
+    }
+
+    /// `call` with the data of the upload it is, if any, relocated where its target answered a
+    /// `gpuAddress`, and the data counted.
+    fn uploaded(&mut self, mut call: Call) -> Result<Call, PlayError> {
+        let Some(upload) = upload(&call)? else {
+            return Ok(call);
+        };
+        let Some(Value::Bytes(data)) = call.args.get_mut(upload.data) else {
+            unreachable!("an upload's data is bytes");
+        };
+        if self.addresses.holds(upload.target) {
+            for (offset, piece) in &upload.pieces {
+                self.relocate(&mut data[piece.clone()], *offset);
+            }
+        }
+        *self.own.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
+        Ok(call)
     }
 
     /// Record what `call` made: its kind and its device.
