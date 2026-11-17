@@ -595,6 +595,9 @@ fn interface(
                     .position(|&argument| argument == index)
                     .ok_or_else(gap)?,
             ),
+            // Left at its default, 0: every launch's region states the pipeline's own threadgroup
+            // size, so the kernel takes `L` from its workgroup size and reads no decode.
+            SpecKey::MultiRegion => continue,
             _ => return Err(gap()),
         };
         constants.push((constant.id, set));

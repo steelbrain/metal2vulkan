@@ -117,9 +117,13 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   `maxPushConstantsSize`: a dispatch region and 28 buffer addresses) go to a parameter block in
   memory, read at the device address `PushField::ArgumentTableAddress`, which
   the window always holds. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
-  every dispatch, with no `MultiRegion` constant: a dispatch the host knows states Metal's grid
-  and its piece's first threadgroup there, and an indirect dispatch a zero grid, whose kernel
-  takes `NumWorkgroups` times its workgroup size. A texture slot's `gpuResourceID` is pushed as
+  every dispatch: a dispatch the host knows states Metal's grid and its piece's first threadgroup
+  there, and an indirect dispatch a zero grid, whose kernel takes `NumWorkgroups` times its
+  workgroup size. On a device made by `Device::new` it declares no `MultiRegion` constant. On one
+  made by `Device::from_queries` it reads its first threadgroup from every region (0 where the
+  dispatch is not split, and for an indirect one) and declares `MultiRegion`, default 0: at 0
+  Metal's threadgroup size is the pipeline's workgroup size; at 1 it is the region's, for a region
+  whose workgroup size is not Metal's (an edge region). A texture slot's `gpuResourceID` is pushed as
   its `PushField::SlotGuestBase`, and its texture is the element at the ID's index of set 1's two
   fixed arrays, the same layout for every pipeline ([RESOURCE-ID.md](RESOURCE-ID.md)); it binds no
   descriptor of its own and declares no specialization constant. An argument buffer's texture is

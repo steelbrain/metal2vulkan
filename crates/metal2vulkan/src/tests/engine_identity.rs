@@ -13,7 +13,10 @@
 //! - A kernel that reads grid builtins (`grid`, generated) declares no `MultiRegion` constant and
 //!   reads Metal's grid from its pushed `DispatchRegion` on every dispatch: whole, split in two
 //!   pieces at a base, and indirect (a zero grid, its grid `NumWorkgroups · L`) store the same
-//!   answers.
+//!   answers. On `Device::from_queries`' profile it declares `MultiRegion`, default 0, and reads
+//!   its base from every region: at 0 the same dispatches store the same answers, and a ragged
+//!   grid split into a region of its threadgroup size and an edge region of fewer threads, at 1
+//!   with Metal's threadgroup size in the region, stores Metal's answers.
 //! - A kernel's partial-threadgroups variant (`partial`, generated) dispatched at its whole
 //!   threadgroup size over a ragged grid, its pushed region flagged `NONUNIFORM`, answers each
 //!   edge threadgroup's own size, and its invocations past the grid store nothing.
@@ -1242,6 +1245,86 @@ fn every_dispatch_reads_metals_grid_from_its_pushed_region() {
                     }],
                     push: grid_push(&plan, OUT, region),
                     spec: local_size3(L),
+                };
+                let cfg = Config {
+                    workgroups,
+                    ..Config::default()
+                };
+                let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem} {what}: {e}"));
+                out = got.buffers.into_iter().next().expect("out");
+            }
+            assert_eq!(out, want, "{stem} {what}");
+        }
+    }
+}
+
+/// On `Device::from_queries`' profile (`IdentityRegion::Sized`) the same kernel declares
+/// `MultiRegion`, default 0, and reads its base from every region and its threadgroup size from
+/// its pipeline unless `MultiRegion` is 1. At 0 the whole, split and indirect dispatches of
+/// [`every_dispatch_reads_metals_grid_from_its_pushed_region`] store the same answers; a ragged
+/// grid split as the binder splits it, a region of the threadgroup size at 0 and an edge region
+/// of fewer threads at 1, stores Metal's answers for the ragged grid.
+#[test]
+fn from_queries_reads_every_regions_base_and_its_size_by_multi_region() {
+    let Some(bc) = assemble_text("grid", &grid_kernel("grid")) else {
+        return;
+    };
+    const L: [u32; 3] = [4, 2, 1];
+    // Each form's grid and dispatches: (region base, region grid, local size, `MultiRegion`,
+    // workgroups).
+    type Dispatch = ([u32; 3], [u32; 3], [u32; 3], u64, [u32; 3]);
+    const GRID: [u32; 3] = [8, 6, 1];
+    const RAGGED: [u32; 3] = [7, 6, 1];
+    let forms: [(&str, [u32; 3], &[Dispatch]); 4] = [
+        ("whole", GRID, &[([0; 3], GRID, L, 0, [2, 3, 1])]),
+        (
+            "split",
+            GRID,
+            &[
+                ([0; 3], GRID, L, 0, [2, 1, 1]),
+                ([0, 1, 0], GRID, L, 0, [2, 2, 1]),
+            ],
+        ),
+        ("indirect", GRID, &[([0; 3], [0; 3], L, 0, [2, 3, 1])]),
+        (
+            "edge",
+            RAGGED,
+            &[
+                ([0; 3], RAGGED, L, 0, [1, 3, 1]),
+                ([1, 0, 0], RAGGED, [3, 2, 1], 1, [1, 3, 1]),
+            ],
+        ),
+    ];
+    for stem in PROFILES {
+        let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let p = device.profile();
+        let (a, plan, module) =
+            compile_kept(&bc, "grid", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let declared: Vec<u64> = (a.interface.spec.iter())
+            .filter(|c| c.key == SpecKey::MultiRegion)
+            .map(|c| c.default)
+            .collect();
+        assert_eq!(declared, [0], "{stem}");
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        for (what, grid, dispatches) in forms {
+            let groups = [grid[0].div_ceil(L[0]), grid[1].div_ceil(L[1])];
+            let value = grid[0] | grid[1] << 8 | groups[0] << 16 | groups[1] << 24;
+            let threads = (grid[0] * grid[1]) as usize;
+            let want: Vec<u8> = (0..threads).flat_map(|_| value.to_le_bytes()).collect();
+            let mut out = vec![0u8; 4 * threads];
+            for &(base, region_grid, local, multi, workgroups) in dispatches {
+                let region = region_bytes(base, region_grid, L).expect("packs");
+                let mut spec = local_size3(local);
+                spec.insert(SpecKey::MultiRegion, multi);
+                let res = Resources {
+                    buffers: vec![Buffer {
+                        slot: None,
+                        address: Some(OUT),
+                        bytes: out,
+                    }],
+                    push: grid_push(&plan, OUT, region),
+                    spec,
                 };
                 let cfg = Config {
                     workgroups,

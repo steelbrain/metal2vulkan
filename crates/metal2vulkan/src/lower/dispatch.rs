@@ -65,13 +65,20 @@
 //! as Metal's object grid is (measured: an indirect draw runs every threadgroup and reports the
 //! grid its wrapped threads fill); it is `NumWorkgroups` wherever no axis wraps.
 //!
-//! Under the identity domains no kernel declares `MultiRegion` ([`DispatchPlan::region_by_grid`]):
-//! the region's grid selects the form. A dispatch the host knows (`dispatchThreads`,
-//! `dispatchThreadgroups`, and each piece of a split of either) states its region with Metal's
-//! `threads_per_grid` in `region[1].xyz`, and its first threadgroup in `region[0].xyz`, so the
-//! pieces of a split read Metal's whole grid; an indirect dispatch states `region[1].xyz = 0` and
-//! takes the single-region form, its grid `NumWorkgroups · L`, which needs its workgroup size to be
-//! Metal's threadgroup size. So one pipeline runs every dispatch of a threadgroup size.
+//! Under the identity domains ([`DispatchPlan::identity_region`]) every dispatch states its region,
+//! and the region's grid selects the grid builtins' form: a dispatch the host knows
+//! (`dispatchThreads`, `dispatchThreadgroups`, and each piece of a split of either) states Metal's
+//! `threads_per_grid` in `region[1].xyz`, so the pieces of a split read Metal's whole grid; an
+//! indirect dispatch states `region[1].xyz = 0` and takes the single-region form, its grid
+//! `NumWorkgroups · L`, which needs its workgroup size to be Metal's threadgroup size. So one
+//! pipeline runs every dispatch of a threadgroup size. The base and `L` take one of two forms
+//! (`IdentityRegion`). On `Device::new`'s profile the grid selects them too, and the kernel
+//! declares no `MultiRegion`. On `Device::from_queries`' the base is `region[0].xyz` on every
+//! dispatch (0 for one that is not split and for an indirect one), and `MultiRegion` says only
+//! whether `L` is the region's nominal size (1, a region whose threadgroup size is not its
+//! pipeline's, as the binder's edge regions are) or the pipeline's `(sx, sy, sz)` (0, the
+//! default): a dispatch at its pipeline's size computes its positions from that size and the base
+//! alone, and the driver folds the region's decode away when it specializes.
 //!
 //! **Partial object threadgroups** ([`DispatchPlan::partial_groups`]). Metal's `drawMeshThreads`
 //! with an object function launches the object threadgroups its threads fill, rounded up, the
@@ -147,6 +154,7 @@
 
 use crate::air::abi::{Builtin, ParamBinding, ParamRole};
 use crate::air::ir::{ArgIdx, Value};
+use crate::device::profile::IdentityRegion;
 use crate::device::subgroup::{self, SimdClass, Tier};
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith;
@@ -415,10 +423,16 @@ pub struct PlannedParam {
 enum RegionSelect {
     /// The `MultiRegion` specialization constant.
     Spec(ConstId),
-    /// Under the identity domains, the region's grid: `region[1].xyz` is Metal's
-    /// `threads_per_grid` for every dispatch the host knows, and all 0 for an indirect one. So one
-    /// pipeline runs both, with no constant to specialize.
+    /// Under the identity domains on `Device::new`'s profile (`IdentityRegion::Grid`), the
+    /// region's grid: `region[1].xyz` is Metal's `threads_per_grid` for every dispatch the host
+    /// knows, and all 0 for an indirect one. So one pipeline runs both, with no constant to
+    /// specialize.
     Grid,
+    /// Under the identity domains on `Device::from_queries`' profile (`IdentityRegion::Sized`):
+    /// the region's grid as [`RegionSelect::Grid`], but the base is the region's on every
+    /// dispatch, and the `MultiRegion` constant says only whether `L` is the region's nominal
+    /// size.
+    Sized(ConstId),
 }
 
 /// How a kernel's Vulkan workgroup size is expressed.
@@ -480,8 +494,9 @@ pub struct DispatchPlan {
     /// declares `MultiRegion` and reads the region whatever builtins it reads.
     pub partial_groups: bool,
     /// Under the identity domains a kernel tells a region from an indirect dispatch by the
-    /// region's grid, not by `MultiRegion`, which it does not declare ([`RegionSelect::Grid`]).
-    pub region_by_grid: bool,
+    /// region's grid, and reads its base and `L` as the profile's form says
+    /// ([`RegionSelect::Grid`], [`RegionSelect::Sized`]). `None` outside them.
+    pub identity_region: Option<IdentityRegion>,
 }
 
 /// The words a flat grid adds: its thread's index, position, and early return, derived once for the
@@ -668,7 +683,8 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         wrapper_groups: crate::lower::mesh::wrapper_groups(&cx.families.mesh),
         object_grid: !folded_groups && cx.stage == crate::pipeline::sym::Stage::Object,
         partial_groups,
-        region_by_grid: crate::lower::access::identity(cx.profile),
+        identity_region: crate::lower::access::identity(cx.profile)
+            .then(|| cx.profile.identity_region()),
     })
 }
 
@@ -1086,16 +1102,20 @@ impl KernelDecl {
                 mb.workgroup_size(sn, one, one)?;
             }
         }
-        let multi_region = match (dp.multi_region, dp.region_by_grid) {
+        let multi_region = match (dp.multi_region, dp.identity_region) {
             (false, _) => None,
-            (true, true) => Some(RegionSelect::Grid),
-            (true, false) => {
+            (true, Some(IdentityRegion::Grid)) => Some(RegionSelect::Grid),
+            (true, form) => {
                 let b = mb.ty(Type::Bool)?;
-                Some(RegionSelect::Spec(mb.spec(
+                let mr = mb.spec(
                     keys.multi_region,
                     b,
                     ConstBits(u64::from(defaults.multi_region)),
-                )?))
+                )?;
+                Some(match form {
+                    Some(_) => RegionSelect::Sized(mr),
+                    None => RegionSelect::Spec(mr),
+                })
             }
         };
         let needs = Needs::of(dp);
@@ -1527,7 +1547,9 @@ impl KernelDecl {
     }
 
     /// The region base and Metal's nominal threadgroup size `L` under `MultiRegion`, or `(0, (sx,
-    /// sy, sz))` when the kernel reads no grid builtin.
+    /// sy, sz))` when the kernel reads no grid builtin. Under [`RegionSelect::Sized`] the base is
+    /// the region's whatever `MultiRegion` says, and `L` the region's nominal size only under it,
+    /// so a pipeline specialized at 0 reads the base alone.
     fn region(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -1537,7 +1559,6 @@ impl KernelDecl {
         let Some(sel) = self.multi_region else {
             return Ok((None, s));
         };
-        let mr = self.selected(fb, sel, region)?;
         let r = region(fb)?;
         let r0 = fb.composite_extract(r, &[0])?;
         let base = fb.vector_shuffle(r0, r0, &[0, 1, 2])?;
@@ -1552,10 +1573,20 @@ impl KernelDecl {
             axes.push(fb.binary(BinOp::IAdd, bits, one)?);
         }
         let nominal = fb.composite_construct(self.uvec3, &axes)?;
-        let zero = self.splat(fb, 0)?;
-        let base = fb.select(mr, base, zero)?;
-        let l = fb.select(mr, nominal, s)?;
-        Ok((Some(base), l))
+        match sel {
+            RegionSelect::Spec(_) | RegionSelect::Grid => {
+                let mr = self.selected(fb, sel, region)?;
+                let zero = self.splat(fb, 0)?;
+                let base = fb.select(mr, base, zero)?;
+                let l = fb.select(mr, nominal, s)?;
+                Ok((Some(base), l))
+            }
+            RegionSelect::Sized(sized) => {
+                let sized = fb.module().const_value(sized)?;
+                let l = fb.select(sized, nominal, s)?;
+                Ok((Some(base), l))
+            }
+        }
     }
 
     /// `threads_per_grid` under `MultiRegion`: `region[1].xyz`.
@@ -1583,7 +1614,7 @@ impl KernelDecl {
     ) -> BResult<SValue> {
         match sel {
             RegionSelect::Spec(mr) => fb.module().const_value(mr),
-            RegionSelect::Grid => {
+            RegionSelect::Grid | RegionSelect::Sized(_) => {
                 let r = region(fb)?;
                 let r1 = fb.composite_extract(r, &[1])?;
                 let [x, y, z] = [0, 1, 2].map(|i| fb.composite_extract(r1, &[i]));

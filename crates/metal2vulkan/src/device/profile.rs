@@ -126,6 +126,12 @@ impl DeviceProfile {
         self.facts.half_fma
     }
 
+    /// How a kernel under the identity domains reads its dispatch region's base and threadgroup
+    /// size.
+    pub(crate) fn identity_region(&self) -> IdentityRegion {
+        self.facts.identity_region
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -564,6 +570,9 @@ pub(crate) struct ProfileFacts {
     pub(crate) push_window: PushWindow,
     /// Which `half` fused multiply-adds take the device's 16-bit `Fma`.
     pub(crate) half_fma: HalfFma,
+    /// How a kernel under the identity domains reads its dispatch region's base and threadgroup
+    /// size.
+    pub(crate) identity_region: IdentityRegion,
 }
 
 impl ProfileFacts {
@@ -576,6 +585,7 @@ impl ProfileFacts {
         half_outputs: HalfOutputs::Sixteen,
         push_window: PushWindow::Guaranteed,
         half_fma: HalfFma::Measured,
+        identity_region: IdentityRegion::Grid,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -587,6 +597,7 @@ impl ProfileFacts {
         half_outputs: HalfOutputs::Widened,
         push_window: PushWindow::Floor,
         half_fma: HalfFma::Native,
+        identity_region: IdentityRegion::Sized,
     };
 }
 
@@ -613,6 +624,21 @@ pub(crate) enum PushWindow {
     /// 256 bytes, the new runtime's floor for `maxPushConstantsSize`, which every captured device
     /// reports: a dispatch region and 28 buffer addresses. `Device::from_queries`' profile.
     Floor,
+}
+
+/// How a kernel under the identity domains reads the base and Metal's threadgroup size `L` of its
+/// dispatch region (`lower::dispatch`'s `RegionSelect`). Either way the region's grid tells a
+/// region of a dispatch the host knows from an indirect dispatch, for the grid builtins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IdentityRegion {
+    /// The grid selects them too: the region's base and nominal size where it states a grid, else
+    /// 0 and the pipeline's size. The kernel declares no `MultiRegion`: `Device::new`'s profile.
+    Grid,
+    /// The base is the region's on every dispatch, and `L` is its nominal size where `MultiRegion`
+    /// is 1, else the pipeline's, which the driver folds when it specializes: every dispatch the
+    /// consumer launches at its pipeline's own size reads no decode. `Device::from_queries`'
+    /// profile.
+    Sized,
 }
 
 /// Which `half` fused multiply-adds take the device's 16-bit `Fma` (`lower::arith::fma::half_route`).

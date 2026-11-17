@@ -400,9 +400,11 @@ that touch blocks first.
   the lowering, which the reaper takes next: a first-use wait. In a threadgroup of one thread the
   module's exchanges pass no barrier.
 - The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
-  threadgroup (0), the threadgroup size packed as `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's
-  threads per grid; an indirect dispatch pushes a zero grid, and its kernel takes the grid from its
-  threadgroup count.
+  threadgroup (0, or a split piece's), the threadgroup size packed as
+  `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's threads per grid; an indirect dispatch pushes a
+  zero grid, and its kernel takes the grid from its threadgroup count. The packed size is always
+  the pipeline's own workgroup size, so the kernel's `MultiRegion` constant stays at its default,
+  0, and the kernel takes the size from its workgroup size, with no decode.
 - A state makes one `VkPipeline` per module, threadgroup size and threadgroup memory lengths, on
   the encoding thread that first dispatches with them, which waits for it. Nothing the runtime records
   depends on when a compile finishes: there is one recorded form, made after the wait. Each such
