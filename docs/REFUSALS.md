@@ -640,7 +640,7 @@ Columns:
 |---|---|---|---|---|---|
 | `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 1: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)` | `-` |
 | `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder binds buffers alone | 1: `crates/metal2vulkan-rt/src/pipeline.rs (gap)` | `-` |
-| `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: the emulated-SIMD-group variant is not built | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
+| `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 
 ## Appendix: every site
@@ -1147,6 +1147,6 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
-- `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
+- `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)`
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 

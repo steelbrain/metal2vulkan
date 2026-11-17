@@ -299,8 +299,8 @@ pub fn bytes_per_simdgroup(words: u32) -> u64 {
 
 /// The threadgroup memory beside the scratch when the module's arena, whose static part is
 /// `arena` (`None`: no arena is declared), holds `regions` more bytes of specialized
-/// `[[threadgroup(n)]]` regions: the arena's `u32` array, whole words and at least
-/// `MIN_ARENA_BYTES` (`memory::arena`).
+/// `[[threadgroup(n)]]` regions: the arena's `u32` array, whole words and at least 32 bytes
+/// (`MIN_ARENA_BYTES`).
 pub fn arena_bytes(arena: Option<u32>, regions: u64) -> u64 {
     match arena {
         Some(s) => (u64::from(s).saturating_add(regions))

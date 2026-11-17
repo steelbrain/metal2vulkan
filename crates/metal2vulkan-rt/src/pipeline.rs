@@ -10,9 +10,15 @@
 //! of threadgroups runs the partial-threadgroups variant at its size, where the translator made
 //! one. Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
 //!
+//! A kernel whose tier runs each SIMD group as one subgroup runs only threadgroups of whole SIMD
+//! groups. Once its state is made, the reaper lowers its emulated-SIMD-group variant, whose SIMD
+//! groups exchange through threadgroup memory: a threadgroup that is not whole SIMD groups runs
+//! that module at its own size, whose last SIMD group is partly filled, as Metal runs it.
+//!
 //! Nothing the runtime records depends on when a compile finishes: an encoding call whose
 //! `VkPipeline` is not made yet makes it and waits for it, then records, so there is one recorded
-//! form. Each such wait is a first-use wait, counted with its time
+//! form; one whose emulated module the reaper has not lowered yet waits for that lowering, which
+//! the reaper takes next. Each such wait is a first-use wait, counted with its time
 //! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)). No translation runs on an
 //! encoding thread.
 
@@ -27,13 +33,13 @@ use ash::vk;
 use metal2vulkan::error::{Error as TranslationError, Feature};
 use metal2vulkan::library::CompiledFunction;
 use metal2vulkan::pipeline::{
-    AccessSet, Axis, BufferKind, ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor,
-    LoweringInputs, PrecisionNote, PushField, PushLoc, RuntimeFact, SlotClass, SlotInterface,
-    SlotRef, SpecKey, Stage, StageEntries, StageSource,
+    arena_bytes, AccessSet, Axis, BufferKind, ComputePipeline, ComputePipelineDescriptor,
+    FunctionDescriptor, LoweringInputs, PrecisionNote, PushField, PushLoc, RuntimeFact, SlotClass,
+    SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource,
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// The push window: the parameters a kernel reads from push constants, `[0, 128)` on every device,
 /// as 128 bytes is what Vulkan guarantees. Fields past it go to a block in the parameter ring,
@@ -73,9 +79,33 @@ pub(crate) struct PipelineInner {
     pub(crate) whole: Kernel,
     /// How a direct dispatch runs.
     pub(crate) form: Form,
-    /// The translator's notes of where the kernel's answers may differ from Metal's, of every
-    /// module the state runs.
+    /// The emulated-SIMD-group module of a kernel whose `whole` module runs only whole SIMD
+    /// groups, which the reaper lowers once the state is made.
+    pub(crate) emulated: Option<Emulated>,
+    /// The translator's notes of where the kernel's answers may differ from Metal's, of the
+    /// modules made with the state.
     notes: Vec<PrecisionNote>,
+}
+
+/// A kernel's emulated-SIMD-group variant (`LoweringInputs::emulated_simdgroups`): what it is
+/// lowered from, and once the reaper has lowered it, the module or why there is none.
+pub(crate) struct Emulated {
+    descriptor: ComputePipelineDescriptor,
+    function: FunctionDescriptor,
+    inputs: LoweringInputs,
+    pub(crate) lowered: OnceLock<Lowered>,
+}
+
+/// What the reaper's lowering of an emulated variant gave.
+pub(crate) enum Lowered {
+    /// The module, and the translator's notes of it.
+    Made(Kernel, Vec<PrecisionNote>),
+    /// The translator refused the variant, or it reads what the compute encoder does not supply.
+    Refused,
+    /// `vkCreateShaderModule` failed.
+    Failed(vk::Result),
+    /// The device was quiesced before the reaper lowered it.
+    Quiesced,
 }
 
 /// How a state runs a direct dispatch.
@@ -123,9 +153,9 @@ pub(crate) struct Interface {
     pub(crate) threadgroups: Vec<u32>,
     /// `maxTotalThreadsPerThreadgroup`.
     pub(crate) max_total_threads: u32,
-    /// The threadgroup memory every threadgroup takes beside the lengths set: Metal's static part
-    /// and a predicated walk's vote word.
-    pub(crate) static_threadgroup_bytes: u32,
+    /// The threadgroup memory every threadgroup takes beside the lengths set: Metal's static part,
+    /// or an emulated module's arena and scratch; and a predicated walk's vote word.
+    pub(crate) memory: Memory,
     /// What every threadgroup's threads must be a multiple of: the subgroup size of a tier that
     /// runs each SIMD group as one subgroup, where the local size is flattened.
     pub(crate) multiples: Vec<u32>,
@@ -134,6 +164,47 @@ pub(crate) struct Interface {
     pub(crate) required_subgroup_size: Option<u32>,
     /// The stage's create flags (`REQUIRE_FULL_SUBGROUPS`).
     pub(crate) stage_flags: vk::PipelineShaderStageCreateFlags,
+}
+
+/// The threadgroup memory of a module beside the lengths set.
+#[derive(Clone, Copy)]
+pub(crate) struct Memory {
+    pub(crate) own: OwnMemory,
+    /// A predicated walk's vote word: 4 bytes, or 0.
+    pub(crate) vote: u32,
+}
+
+/// A module's own threadgroup memory.
+#[derive(Clone, Copy)]
+pub(crate) enum OwnMemory {
+    /// Metal's static part (`staticThreadgroupMemoryLength`), the lengths set after it.
+    Static(u32),
+    /// An emulated module's (`RuntimeFact::SimdgroupEmulation`): its arena, whose static part is
+    /// `arena`, holding the lengths set, and `per_simdgroup` bytes of scratch for each SIMD group
+    /// of a threadgroup.
+    Emulated {
+        arena: Option<u32>,
+        per_simdgroup: u32,
+    },
+}
+
+impl Memory {
+    /// The threadgroup memory a threadgroup of `threads` threads takes with the lengths `lengths`
+    /// set, each rounded up to 16 bytes.
+    pub(crate) fn bytes(&self, lengths: &[u32], threads: u64) -> u64 {
+        let regions = lengths
+            .iter()
+            .map(|&length| u64::from(length).next_multiple_of(16))
+            .sum::<u64>();
+        let own = match self.own {
+            OwnMemory::Static(bytes) => u64::from(bytes) + regions,
+            OwnMemory::Emulated {
+                arena,
+                per_simdgroup,
+            } => arena_bytes(arena, regions) + u64::from(per_simdgroup) * threads.div_ceil(32),
+        };
+        own + u64::from(self.vote)
+    }
 }
 
 /// What sets a specialization constant.
@@ -193,7 +264,9 @@ impl crate::Device {
     /// has a cache directory ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made
     /// before is read from it in place of lowering again, and every `VkPipeline` is made through
     /// the pipeline data it keeps. The state's other `VkPipeline`s are made later, each by the
-    /// first encoding call that needs it ([`ComputePipelineState`]).
+    /// first encoding call that needs it ([`ComputePipelineState`]). For a kernel whose tier runs
+    /// only whole SIMD groups, the reaper lowers its emulated-SIMD-group variant after this
+    /// returns, through the cache directory too.
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     ///
@@ -215,12 +288,15 @@ impl crate::Device {
             compiled.kernel = StageSource::Compiled(function);
             translator.compile_compute_pipeline(&compiled, &budget)
         };
-        let (whole, partial, observes) = match &descriptor.kernel {
+        let (whole, partial, observes, source) = match &descriptor.kernel {
             StageSource::Function(function) => {
                 let entries = StageEntries::new();
                 let plain = translator
                     .kernel_inputs_read(function, &descriptor.lowering_inputs(), &budget, &entries)
                     .map_err(Error::Translation)?;
+                let mut emulated = plain.clone();
+                emulated.emulated_simdgroups = true;
+                let source = (function.clone(), emulated);
                 let mut inputs = plain.clone();
                 inputs.partial_threadgroups = true;
                 let lower =
@@ -245,9 +321,12 @@ impl crate::Device {
                     }
                 };
                 match variant {
-                    Some(variant) if !variant.observes_threadgroup_partition() => {
-                        (compiled(variant).map_err(Error::Translation)?, None, false)
-                    }
+                    Some(variant) if !variant.observes_threadgroup_partition() => (
+                        compiled(variant).map_err(Error::Translation)?,
+                        None,
+                        false,
+                        Some(source),
+                    ),
                     Some(variant) => {
                         let plain = lower(&plain).and_then(compiled);
                         let variant = compiled(variant);
@@ -255,11 +334,12 @@ impl crate::Device {
                             plain.map_err(Error::Translation)?,
                             Some(variant.map_err(Error::Translation)?),
                             true,
+                            Some(source),
                         )
                     }
                     None => {
                         let plain = lower(&plain).and_then(compiled);
-                        (plain.map_err(Error::Translation)?, None, true)
+                        (plain.map_err(Error::Translation)?, None, true, Some(source))
                     }
                 }
             }
@@ -272,11 +352,13 @@ impl crate::Device {
                     .dependencies
                     .iter()
                     .any(|dependency| dependency.fact == RuntimeFact::PartialThreadgroups);
-                // Only a non-observer's partial variant runs every dispatch in tiles.
+                // Only a non-observer's partial variant runs every dispatch in tiles. It has no
+                // emulated variant: the kernel keeps the variant it was compiled under.
                 (
                     pipeline,
                     None,
                     !(partial && !function.observes_threadgroup_partition()),
+                    None,
                 )
             }
         };
@@ -289,6 +371,15 @@ impl crate::Device {
         notes.dedup();
         let whole = Kernel::new(&core, whole, required)?;
         // Made whole before anything else can fail, so dropping it releases what was made.
+        // A module that runs only whole SIMD groups has its emulated variant for the others.
+        let emulated = source
+            .filter(|_| !whole.interface.multiples.is_empty())
+            .map(|(function, inputs)| Emulated {
+                descriptor: descriptor.clone(),
+                function,
+                inputs,
+                lowered: OnceLock::new(),
+            });
         let mut inner = PipelineInner {
             core,
             whole,
@@ -296,6 +387,7 @@ impl crate::Device {
                 false => Form::Tiled,
                 true => Form::Sized { partial: None },
             },
+            emulated,
             notes,
         };
         if let Some(pipeline) = partial {
@@ -312,9 +404,11 @@ impl crate::Device {
             let made = inner.whole.make(&inner.core, &variant)?;
             lock(&inner.whole.variants).push((variant, made));
         }
-        Ok(ComputePipelineState {
-            inner: Arc::new(inner),
-        })
+        let inner = Arc::new(inner);
+        if inner.emulated.is_some() {
+            inner.core.reaper.lower(Arc::downgrade(&inner));
+        }
+        Ok(ComputePipelineState { inner })
     }
 }
 
@@ -378,12 +472,24 @@ fn interface(
     // The bind-time facts the encoder supplies.
     let mut multiples = Vec::new();
     let mut vote = 0;
+    let mut own = OwnMemory::Static(pipeline.metal_info.static_threadgroup_memory_length);
     for dependency in &pipeline.dependencies {
         match dependency.fact {
             RuntimeFact::LocalSizeConstraint { multiple } => multiples.push(multiple),
             // The walk's vote word: 4 bytes beside the threadgroup memory.
             RuntimeFact::PredicationVote => vote = 4,
-            RuntimeFact::ThreadsPerThreadgroup
+            // The emulated tier's arena and scratch, in place of Metal's static part.
+            RuntimeFact::SimdgroupEmulation {
+                bytes_per_simdgroup,
+                arena,
+            } => {
+                own = OwnMemory::Emulated {
+                    arena,
+                    per_simdgroup: bytes_per_simdgroup,
+                }
+            }
+            RuntimeFact::EmulatedSimdgroups
+            | RuntimeFact::ThreadsPerThreadgroup
             | RuntimeFact::ThreadgroupMemoryLength { .. }
             | RuntimeFact::LocalSizeLimits
             | RuntimeFact::DispatchGrid
@@ -504,7 +610,7 @@ fn interface(
         constants,
         threadgroups,
         max_total_threads,
-        static_threadgroup_bytes: pipeline.metal_info.static_threadgroup_memory_length + vote,
+        memory: Memory { own, vote },
         multiples,
         required_subgroup_size: stage.required_subgroup_size,
         stage_flags,
@@ -535,10 +641,22 @@ impl ComputePipelineState {
     }
 
     /// No Metal counterpart: where the kernel's answers may differ from Metal's on this device,
-    /// fixed per operation when the state is made, for every module the state runs. Metal's
-    /// answers are its own GPU's.
-    pub fn precision_notes(&self) -> &[PrecisionNote] {
-        &self.inner.notes
+    /// fixed per operation by the translator, for every module the state runs: those made with
+    /// the state, and once the reaper has lowered it, the emulated-SIMD-group module that runs
+    /// threadgroups of partial SIMD groups. Metal's answers are its own GPU's.
+    pub fn precision_notes(&self) -> Vec<PrecisionNote> {
+        let mut notes = self.inner.notes.clone();
+        if let Some(Lowered::Made(_, emulated)) = self
+            .inner
+            .emulated
+            .as_ref()
+            .and_then(|emulated| emulated.lowered.get())
+        {
+            notes.extend(emulated);
+            notes.sort_unstable();
+            notes.dedup();
+        }
+        notes
     }
 
     /// For the device tests: a state of a hand-made kernel and its interface, run at each
@@ -562,6 +680,7 @@ impl ComputePipelineState {
                     variants: Mutex::new(Vec::new()),
                 },
                 form: Form::Sized { partial: None },
+                emulated: None,
                 notes: Vec::new(),
             }),
         })
@@ -576,6 +695,97 @@ impl ComputePipelineState {
 impl PipelineInner {
     pub(crate) fn core(&self) -> &Arc<Core> {
         &self.core
+    }
+
+    /// On the reaper: lowers the state's emulated variant, where it has one not lowered yet.
+    pub(crate) fn lower_emulated(&self) {
+        if let Some(emulated) = &self.emulated {
+            emulated.lowered.get_or_init(|| emulated.lower(&self.core));
+        }
+    }
+
+    /// Where the reaper ended before lowering it: the state's emulated variant is not lowered.
+    pub(crate) fn quiesce_emulated(&self) {
+        if let Some(emulated) = &self.emulated {
+            emulated.lowered.get_or_init(|| Lowered::Quiesced);
+        }
+    }
+
+    /// The emulated module a threadgroup of `size`, which is not whole SIMD groups of `width`
+    /// threads, runs on: where the reaper has not lowered it yet, the calling thread waits for
+    /// the lowering, which the reaper takes next, a first-use wait.
+    ///
+    /// Err: [`Gap::PartialSimdgroups`] where the state has no emulated module;
+    /// [`Error::Quiesced`]; [`Error::Vulkan`] where its shader module failed.
+    pub(crate) fn emulated_kernel(
+        self: &Arc<Self>,
+        size: [u32; 3],
+        width: u32,
+    ) -> Result<&Kernel, Error> {
+        let refused = Error::Unsupported(Gap::PartialSimdgroups {
+            threads_per_threadgroup: size,
+            width,
+        });
+        let Some(emulated) = &self.emulated else {
+            return Err(refused);
+        };
+        let lowered = match emulated.lowered.get() {
+            Some(lowered) => lowered,
+            None => {
+                let began = host_time();
+                self.core.reaper.hurry(self);
+                let lowered = emulated.lowered.wait();
+                self.core
+                    .counters
+                    .first_use_wait(host_time().saturating_sub(began));
+                lowered
+            }
+        };
+        match lowered {
+            Lowered::Made(kernel, _) => Ok(kernel),
+            Lowered::Refused => Err(refused),
+            &Lowered::Failed(result) => Err(Error::Vulkan {
+                call: "vkCreateShaderModule",
+                result,
+            }),
+            Lowered::Quiesced => Err(Error::Quiesced),
+        }
+    }
+}
+
+impl Emulated {
+    /// The variant lowered, on the reaper: the lowering a device kept in the cache directory, or
+    /// one made now and kept; the translator's refusal is kept too.
+    fn lower(&self, core: &Core) -> Lowered {
+        let translator = &core.translator;
+        let budget = Budget::standard();
+        let key = *translator
+            .function_compile_key(&self.function, &self.inputs)
+            .digest();
+        if core.caches.refused(&key) {
+            core.counters.count(Metric::TranslationsLoaded);
+            return Lowered::Refused;
+        }
+        let entries = StageEntries::new();
+        let compiled = match lower(core, &self.function, &self.inputs, &budget, &entries) {
+            Ok(compiled) => compiled,
+            Err(TranslationError::Unsupported(_)) => {
+                core.caches.keep_refusal(&key);
+                return Lowered::Refused;
+            }
+            Err(_) => return Lowered::Refused,
+        };
+        let mut descriptor = self.descriptor.clone();
+        descriptor.kernel = StageSource::Compiled(compiled);
+        let Ok(pipeline) = translator.compile_compute_pipeline(&descriptor, &budget) else {
+            return Lowered::Refused;
+        };
+        let notes = pipeline.stage.precision_notes.clone();
+        match Kernel::new(core, pipeline, descriptor.required_threads_per_threadgroup) {
+            Ok(kernel) => Lowered::Made(kernel, notes),
+            Err(Error::Vulkan { result, .. }) => Lowered::Failed(result),
+            Err(_) => Lowered::Refused,
+        }
     }
 }
 
@@ -708,6 +918,13 @@ impl Drop for PipelineInner {
         } = &mut self.form
         {
             partial.release(&self.core);
+        }
+        if let Some(Lowered::Made(kernel, _)) = self
+            .emulated
+            .as_mut()
+            .and_then(|emulated| emulated.lowered.get_mut())
+        {
+            kernel.release(&self.core);
         }
     }
 }

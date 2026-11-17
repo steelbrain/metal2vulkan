@@ -5953,6 +5953,7 @@ fn	metal2vulkan::metal::state::stencil_op	pub fn stencil_op(op: StencilOperation
 fn	metal2vulkan::metal::vertex::attribute_fetch	pub fn attribute_fetch(format: VertexFormat, step: VertexStepFunction, step_rate: u32, profile: &DeviceProfile) -> Result<AttributeFetch, Error>
 fn	metal2vulkan::metal::vertex::vertex_alignment	pub fn vertex_alignment(format: VertexFormat) -> Result<u32, Error>
 fn	metal2vulkan::metal::vertex::vk_vertex_format	pub fn vk_vertex_format(format: VertexFormat) -> Result<vk::Format, Error>
+fn	metal2vulkan::pipeline::arena_bytes	pub fn arena_bytes(arena: Option<u32>, regions: u64) -> u64
 fn	metal2vulkan::pipeline::heap_sampler_capacity	pub fn heap_sampler_capacity(p: &DeviceProfile) -> u32
 fn	metal2vulkan::pipeline::heap_unused_while_pending	pub fn heap_unused_while_pending(p: &DeviceProfile) -> bool
 fn	metal2vulkan::pipeline::nonuniform_region_bytes	pub fn nonuniform_region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]>
@@ -8797,7 +8798,7 @@ method	metal2vulkan-rt::ComputePipelineDescriptor::reflection	pub fn reflection(
 method	metal2vulkan-rt::ComputePipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
 method	metal2vulkan-rt::ComputePipelineDescriptor::uses_direct_arguments	pub fn uses_direct_arguments(&self, budget: &crate::Budget) -> Result<bool, Error>
 method	metal2vulkan-rt::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
-method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> &[PrecisionNote]
+method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
 method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters

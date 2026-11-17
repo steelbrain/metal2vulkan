@@ -6,7 +6,7 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::hazard::Access;
-    use crate::pipeline::{Constant, Field, FieldValue, Interface, Place};
+    use crate::pipeline::{Constant, Field, FieldValue, Interface, Memory, OwnMemory, Place};
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::kernels;
     use crate::{
@@ -46,7 +46,10 @@ mod on_device {
             ],
             threadgroups: Vec::new(),
             max_total_threads: 1024,
-            static_threadgroup_bytes: 0,
+            memory: Memory {
+                own: OwnMemory::Static(0),
+                vote: 0,
+            },
             multiples: Vec::new(),
             required_subgroup_size: None,
             stage_flags: ash::vk::PipelineShaderStageCreateFlags::empty(),

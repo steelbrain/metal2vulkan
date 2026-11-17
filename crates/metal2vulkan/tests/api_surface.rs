@@ -333,6 +333,7 @@ surface! {
     "pipeline" => metal2vulkan::pipeline {
         fn heap_sampler_capacity;
         fn heap_unused_while_pending;
+        fn arena_bytes;
         fn region_bytes;
         fn nonuniform_region_bytes;
         const NONUNIFORM;

@@ -151,6 +151,9 @@ pub use facts::{Mechanism, RuntimeFact, UniformViewChoice};
 // The `DispatchRegion` push field's bytes, which a consumer of the identity domains pushes with
 // each dispatch.
 pub use crate::lower::dispatch::{nonuniform_region_bytes, region_bytes, NONUNIFORM};
+// The threadgroup memory of an emulated-simdgroup module's arena (`RuntimeFact::SimdgroupEmulation`),
+// which a consumer of the identity domains counts with each dispatch's scratch.
+pub use crate::lower::simd::workgroup::arena_bytes;
 pub use sym::{
     AccelerationStructureLevel, AirUserKey, Axis, CombinedSampler, HandleClass, ImageAccess,
     ImageDim, ImageHandleClass, PushField, ResourceKind, ResourceSlot, SampledType, SamplerRef,

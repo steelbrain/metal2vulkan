@@ -35,16 +35,21 @@ mod on_device {
 
     /// The kernel `name` of the engine fixture `name.ll`, or None where `llvm-as` is missing.
     fn descriptor(name: &str) -> Option<ComputePipelineDescriptor> {
-        let bitcode = match llvm_assemble(&engine_dir().join(format!("{name}.ll"))) {
+        descriptor_of(name, name)
+    }
+
+    /// The kernel `entry` of the engine fixture `fixture.ll`, or None where `llvm-as` is missing.
+    fn descriptor_of(fixture: &str, entry: &str) -> Option<ComputePipelineDescriptor> {
+        let bitcode = match llvm_assemble(&engine_dir().join(format!("{fixture}.ll"))) {
             Ok(bitcode) => bitcode,
             Err(AssembleError::Missing(why)) => {
                 eprintln!("SKIPPED: {why}");
                 return None;
             }
-            Err(error) => panic!("{name}: {error:?}"),
+            Err(error) => panic!("{fixture}: {error:?}"),
         };
         let library = Library::from_air(&bitcode).expect("the library");
-        let function = library.function(name).expect("the kernel");
+        let function = library.function(entry).expect("the kernel");
         Some(ComputePipelineDescriptor::new(StageSource::Function(
             FunctionDescriptor::new(function),
         )))
@@ -599,31 +604,26 @@ mod on_device {
     }
 
     /// `simd_float_products` of `gsm2_simd_products`: SIMD-group products and prefix products
-    /// over each thread's input. Where the device lets compute pin a subgroup of 32 (compute in
-    /// `requiredSubgroupSizeStages`, 32 between its sizes), the translator's tier for it is
-    /// Direct: a pinned subgroup of 32 per SIMD group, its local size flattened to whole SIMD
-    /// groups. The state runs whole SIMD groups with Metal's answers and refuses a threadgroup of
-    /// a partial one. A device that cannot pin 32 takes another tier, which may be refused.
+    /// over each thread's input, in threadgroups of 64 threads (two whole SIMD groups), of 32, of
+    /// 80 (a partial SIMD group of 16 last) and of one. Where the device lets compute pin a
+    /// subgroup of 32 (compute in `requiredSubgroupSizeStages`, 32 between its sizes), the
+    /// translator's tier for it is Direct: a pinned subgroup of 32 per SIMD group, its local size
+    /// flattened to whole SIMD groups, which runs the 64 and the 32. A device of 64-lane
+    /// subgroups that cannot pin runs each SIMD group as half of one, and only whole subgroups:
+    /// the 64. Whatever the module runs only whole groups of, a threadgroup of another size runs
+    /// the emulated-SIMD-group module the reaper lowered. Every answer is Metal's: the products
+    /// over each SIMD group's threads, exact in any order for these inputs. A device that cannot
+    /// pin 32 may take a tier that is refused.
     #[test]
     fn every_device_runs_simd_groups_at_metals_width() {
+        use crate::pipeline::Lowered;
         use crate::{Error, Gap};
         use ash::vk;
 
-        let bitcode = match llvm_assemble(&engine_dir().join("gsm2_simd_products.ll")) {
-            Ok(bitcode) => bitcode,
-            Err(AssembleError::Missing(why)) => {
-                eprintln!("SKIPPED: {why}");
-                return;
-            }
-            Err(error) => panic!("gsm2_simd_products: {error:?}"),
+        let Some(descriptor) = descriptor_of("gsm2_simd_products", "simd_float_products") else {
+            return;
         };
-        let library = Library::from_air(&bitcode).expect("the library");
-        let function = library.function("simd_float_products").expect("the kernel");
-        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-            FunctionDescriptor::new(function),
-        ));
-        const THREADS: u32 = 128;
-        const GROUP: u32 = 64;
+        const GROUPS: u32 = 3;
         each_device("compute_simd", |name, _, device| {
             let raw = device.raw();
             let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
@@ -655,56 +655,96 @@ mod on_device {
                     "{name}: the Direct tier, a pinned subgroup of 32 per SIMD group"
                 );
             }
-            let input: Vec<u8> = (0..THREADS)
-                .flat_map(|t| simd_input(t % 32).to_le_bytes())
-                .collect();
-            let block = device
-                .take_block(crate::MemoryClass::Shared, 1)
-                .expect("a block");
-            let a = device
-                .new_buffer(block.id, 0, u64::from(THREADS) * 4, true)
-                .expect("a buffer");
-            let out = device
-                .new_buffer(block.id, 4096, u64::from(THREADS) * 16, true)
-                .expect("a buffer");
-            write(&a, 0, &input);
             let queue = device.new_command_queue(4).expect("a queue");
-            let command_buffer = queue.command_buffer().expect("a command buffer");
-            let mut encoder = command_buffer
-                .compute_command_encoder(DispatchType::Serial)
-                .expect("an encoder");
-            encoder.set_compute_pipeline_state(&state).expect("a state");
-            encoder.set_buffer(Some(&a), 0, 0).expect("a buffer");
-            encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
-            if pinnable {
-                assert!(matches!(
-                    encoder.dispatch_threads([THREADS, 1, 1], [16, 1, 1]),
-                    Err(Error::Unsupported(Gap::PartialSimdgroups { width: 32, .. }))
-                ));
+            for size in [64, 32, 80, 1] {
+                let threads = GROUPS * size;
+                let input: Vec<u8> = (0..threads)
+                    .flat_map(|t| simd_input(t % 32).to_le_bytes())
+                    .collect();
+                let mut buffers = Buffers::new(&device, 1 << 16);
+                let a = buffers.buffer(u64::from(threads) * 4);
+                let out = buffers.buffer(u64::from(threads) * 16);
+                write(&a, 0, &input);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&a), 0, 0).expect("a buffer");
+                encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
+                encoder
+                    .dispatch_threadgroups([GROUPS, 1, 1], [size, 1, 1])
+                    .unwrap_or_else(|error| panic!("{name}: threadgroups of {size}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let mut want = Vec::new();
+                for t in 0..threads {
+                    let first = t - t % size;
+                    let base = t - (t - first) % 32;
+                    let group = (base..(first + size).min(base + 32)).map(|u| simd_input(u % 32));
+                    let product: f32 = group.clone().product();
+                    let inclusive: f32 = group.clone().take((t - base + 1) as usize).product();
+                    let exclusive: f32 = group.clone().take((t - base) as usize).product();
+                    let negated: f32 = group.map(|x| -x).product();
+                    want.extend([product, inclusive, exclusive, negated].map(f32::to_bits));
+                }
+                assert_eq!(
+                    words(&out, 0, want.len()),
+                    want,
+                    "{name}: the products in threadgroups of {size}"
+                );
             }
-            encoder
-                .dispatch_threads([THREADS, 1, 1], [GROUP, 1, 1])
-                .expect("a dispatch of whole SIMD groups");
-            encoder.end_encoding();
-            command_buffer.commit().expect("a commit");
-            finished(name, &command_buffer);
-            assert_eq!(command_buffer.error(), None, "{name}");
-            let mut want = Vec::new();
-            for t in 0..THREADS {
-                let lanes = (t - t % 32..t - t % 32 + 32).map(|lane| simd_input(lane % 32));
-                let product: f32 = lanes.clone().product();
-                let inclusive: f32 = lanes.clone().take((t % 32 + 1) as usize).product();
-                let exclusive: f32 = lanes.take((t % 32) as usize).product();
-                want.extend([product, inclusive, exclusive, product].map(f32::to_bits));
+            let emulated = state
+                .inner
+                .emulated
+                .as_ref()
+                .and_then(|emulated| emulated.lowered.get());
+            if !interface.multiples.is_empty() {
+                assert!(
+                    matches!(emulated, Some(Lowered::Made(..))),
+                    "{name}: the sizes that are not whole groups of {:?} ran the emulated module",
+                    interface.multiples
+                );
             }
-            assert_eq!(words(&out, 0, want.len()), want, "{name}: the products");
             println!(
-                "{name}: SIMD-group products checked over {THREADS} threads; {}",
-                match interface.required_subgroup_size {
-                    Some(size) => format!("Direct, pinned at {size}"),
-                    None => String::from("not pinned"),
+                "{name}: SIMD-group products checked in threadgroups of 64, 32, 80 and 1; pinned \
+                 at {:?}, whole groups of {:?}, the others {}",
+                interface.required_subgroup_size,
+                interface.multiples,
+                match emulated {
+                    Some(Lowered::Made(..)) => "emulated",
+                    _ => "on the same module",
                 }
             );
+        });
+    }
+
+    /// A state made after the device was quiesced has its emulated-SIMD-group variant marked not
+    /// lowered at once, as the reaper has ended: no dispatch waits for it.
+    #[test]
+    fn every_device_marks_the_emulated_variant_of_a_state_made_after_quiesce() {
+        use crate::pipeline::Lowered;
+
+        let Some(descriptor) = descriptor_of("gsm2_simd_products", "simd_float_products") else {
+            return;
+        };
+        each_device("compute_simd_quiesced", |name, _, device| {
+            assert!(device.quiesce(std::time::Duration::from_secs(10)), "{name}");
+            let Ok(state) = device.new_compute_pipeline_state(&descriptor) else {
+                println!("{name}: the kernel is refused; nothing to mark");
+                return;
+            };
+            let Some(emulated) = &state.inner.emulated else {
+                println!("{name}: no emulated variant");
+                return;
+            };
+            assert!(
+                matches!(emulated.lowered.get(), Some(Lowered::Quiesced)),
+                "{name}: marked at once"
+            );
+            println!("{name}: the emulated variant is marked not lowered");
         });
     }
 

@@ -1,13 +1,15 @@
 //! The reaper thread: it frees what the runtime's other threads give up, one object at a time, runs
-//! a teardown that starts on the completion thread, and writes the pipeline data to the cache
-//! directory when it is due. No driver free runs on the completion thread, so no completion waits
-//! behind one, and a submission on another thread waits behind at most one free.
+//! a teardown that starts on the completion thread, lowers the pipeline states' emulated-SIMD-group
+//! variants after their creation returned, and writes the pipeline data to the cache directory
+//! when it is due. No driver free runs on the completion thread, so no completion waits behind
+//! one, and a submission on another thread waits behind at most one free.
 
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
+use crate::pipeline::PipelineInner;
 use ash::vk;
 use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
 /// The reaper's queue.
 pub(crate) struct Reaper {
@@ -17,7 +19,11 @@ pub(crate) struct Reaper {
 
 struct State {
     jobs: VecDeque<Job>,
-    /// The reaper ends once the queue is empty.
+    /// The states whose emulated variant the reaper lowers, in order, after every job: no one waits
+    /// for them, except for one an encoding call waits for, which goes first
+    /// ([`Reaper::hurry`]).
+    lowerings: VecDeque<Weak<PipelineInner>>,
+    /// The reaper ends once the queue is empty, lowering nothing more.
     stop: bool,
 }
 
@@ -49,6 +55,7 @@ impl Reaper {
         Reaper {
             state: Mutex::new(State {
                 jobs: VecDeque::new(),
+                lowerings: VecDeque::new(),
                 stop: false,
             }),
             changed: Condvar::new(),
@@ -59,6 +66,37 @@ impl Reaper {
     pub(crate) fn give(&self, job: Job) {
         lock(&self.state).jobs.push_back(job);
         self.changed.notify_one();
+    }
+
+    /// Queues the lowering of `state`'s emulated variant. Once the reaper has ended, the variant
+    /// is not lowered.
+    pub(crate) fn lower(&self, state: Weak<PipelineInner>) {
+        let mut queue = lock(&self.state);
+        if queue.stop {
+            drop(queue);
+            if let Some(state) = state.upgrade() {
+                state.quiesce_emulated();
+            }
+            return;
+        }
+        queue.lowerings.push_back(state);
+        drop(queue);
+        self.changed.notify_one();
+    }
+
+    /// Puts `state`'s lowering first, for an encoding call that waits for it; nothing where the
+    /// reaper took it already.
+    pub(crate) fn hurry(&self, state: &Arc<PipelineInner>) {
+        let mut queue = lock(&self.state);
+        let lowerings = &mut queue.lowerings;
+        if let Some(at) = lowerings
+            .iter()
+            .position(|queued| std::ptr::eq(queued.as_ptr(), Arc::as_ptr(state)))
+        {
+            if let Some(hurried) = lowerings.remove(at) {
+                lowerings.push_front(hurried);
+            }
+        }
     }
 
     /// Wakes the reaper to time the pipeline data's next write.
@@ -116,8 +154,12 @@ fn free(core: &Core, object: Free) {
 /// What the reaper does next.
 enum Next {
     Job(Job),
+    /// Lower a state's emulated variant.
+    Lower(Weak<PipelineInner>),
     /// Write the pipeline data.
     Save,
+    /// End, after telling the states whose lowering is left that it will not run.
+    End(VecDeque<Weak<PipelineInner>>),
 }
 
 /// The reaper thread, until it is stopped and its queue is empty. The device's end writes the
@@ -132,7 +174,10 @@ pub(crate) fn run(core: Arc<Core>) {
                     break Next::Job(job);
                 }
                 if state.stop {
-                    return;
+                    break Next::End(state.lowerings.drain(..).collect());
+                }
+                if let Some(lowering) = state.lowerings.pop_front() {
+                    break Next::Lower(lowering);
                 }
                 state = match core.caches.due_in() {
                     Some(wait) if wait.is_zero() => break Next::Save,
@@ -153,7 +198,18 @@ pub(crate) fn run(core: Arc<Core>) {
         match next {
             Next::Job(Job::Free(object)) => free(&core, object),
             Next::Job(Job::Teardown(teardown)) => teardown(&core),
+            Next::Lower(lowering) => {
+                if let Some(state) = lowering.upgrade() {
+                    state.lower_emulated();
+                }
+            }
             Next::Save => core.caches.save(&core.device),
+            Next::End(left) => {
+                for state in left.iter().filter_map(Weak::upgrade) {
+                    state.quiesce_emulated();
+                }
+                return;
+            }
         }
     }
 }

@@ -136,14 +136,24 @@ pub struct ComputeCommandEncoder {
     threadgroup_lengths: Vec<(u32, u32)>,
     /// `use_resource` declarations, by resource id.
     declared: Vec<(u32, Access)>,
-    /// The module (the partial-threadgroups variant of an observing kernel, or the state's whole
-    /// module), workgroup size and `VkPipeline` of the last dispatch, while the state and the
+    /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state and the
     /// threadgroup memory lengths are unchanged.
-    last: Option<(bool, [u32; 3], vk::Pipeline)>,
+    last: Option<(Module, [u32; 3], vk::Pipeline)>,
     /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
     /// Whether a dispatch of the encoder wrote anything.
     wrote: bool,
+}
+
+/// Which of its state's modules a dispatch runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Module {
+    /// The state's whole module.
+    Whole,
+    /// An observing kernel's partial-threadgroups variant.
+    Partial,
+    /// The emulated-SIMD-group variant.
+    Emulated,
 }
 
 impl CommandBuffer {
@@ -327,9 +337,14 @@ impl ComputeCommandEncoder {
     /// A count above the device's `maxComputeWorkGroupCount` is split into dispatches within it,
     /// each reading Metal's whole grid from its region.
     ///
+    /// A threadgroup that is not whole SIMD groups of a kernel whose tier runs only whole ones
+    /// runs the kernel's emulated-SIMD-group module, waiting for the reaper's lowering of it
+    /// where that is not done.
+    ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`]; [`Limit::ThreadgroupShape`];
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
-    /// whole SIMD groups of a kernel whose tier needs them;
+    /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
+    /// [`Error::Quiesced`] where the device was quiesced before that module was lowered;
     /// [`Error::Vulkan`] where the pipeline's compile, the ring or recording fails.
     pub fn dispatch_threadgroups(
         &mut self,
@@ -356,7 +371,8 @@ impl ComputeCommandEncoder {
     ///
     /// Err: as [`dispatch_threadgroups`](Self::dispatch_threadgroups);
     /// [`Gap::PartialThreadgroups`] for such a grid of a kernel whose partial-threadgroups
-    /// variant the translator refused.
+    /// variant the translator refused, or at a threadgroup that is not whole SIMD groups of a
+    /// kernel whose tier needs them.
     pub fn dispatch_threads(
         &mut self,
         threads_per_grid: [u32; 3],
@@ -456,16 +472,27 @@ impl ComputeCommandEncoder {
                 max: limits.max_group_size,
             }));
         }
-        // What runs: the module, whether it is an observing kernel's partial-threadgroups
-        // variant, its workgroup size, and for a direct dispatch Metal's grid, the workgroups,
-        // and whether the last along some axis is partial.
-        let (kernel, partial, local, direct) = match (&grid, &inner.form) {
-            (Grid::Indirect(..), _) => (&inner.whole, false, size, None),
+        // What runs: the module, which of the state's it is, its workgroup size, and for a
+        // direct dispatch Metal's grid, the workgroups, and whether the last along some axis is
+        // partial.
+        let partial_threadgroups = |threads| {
+            Error::Unsupported(Gap::PartialThreadgroups {
+                threads_per_grid: threads,
+                threads_per_threadgroup: size,
+            })
+        };
+        let (kernel, module, local, direct) = match (&grid, &inner.form) {
+            (Grid::Indirect(..), _) => (&inner.whole, Module::Whole, size, None),
             (&Grid::Direct { threads, .. }, Form::Tiled) => {
                 let local = tile(threads);
                 let ragged = (0..3).any(|axis| !threads[axis].is_multiple_of(local[axis]));
                 let groups = std::array::from_fn(|axis| threads[axis].div_ceil(local[axis]));
-                (&inner.whole, false, local, Some((threads, groups, ragged)))
+                (
+                    &inner.whole,
+                    Module::Whole,
+                    local,
+                    Some((threads, groups, ragged)),
+                )
             }
             (
                 &Grid::Direct {
@@ -474,7 +501,12 @@ impl ComputeCommandEncoder {
                     ragged: false,
                 },
                 Form::Sized { .. },
-            ) => (&inner.whole, false, size, Some((threads, groups, false))),
+            ) => (
+                &inner.whole,
+                Module::Whole,
+                size,
+                Some((threads, groups, false)),
+            ),
             (
                 &Grid::Direct {
                     groups,
@@ -483,34 +515,39 @@ impl ComputeCommandEncoder {
                 },
                 Form::Sized { partial },
             ) => match partial {
-                Some(kernel) => (&**kernel, true, size, Some((threads, groups, true))),
-                None => {
-                    return Err(Error::Unsupported(Gap::PartialThreadgroups {
-                        threads_per_grid: threads,
-                        threads_per_threadgroup: size,
-                    }))
-                }
+                Some(kernel) => (
+                    &**kernel,
+                    Module::Partial,
+                    size,
+                    Some((threads, groups, true)),
+                ),
+                None => return Err(partial_threadgroups(threads)),
             },
         };
+        // A threadgroup that is not whole SIMD groups of a module that runs only whole ones runs
+        // the emulated module; the partial-threadgroups variant has none.
         let threads = local.iter().map(|&axis| u64::from(axis)).product::<u64>();
-        if let Some(&width) = kernel
+        let (kernel, module) = match kernel
             .interface
             .multiples
             .iter()
             .find(|&&multiple| !threads.is_multiple_of(u64::from(multiple.max(1))))
         {
-            return Err(Error::Unsupported(Gap::PartialSimdgroups {
-                threads_per_threadgroup: size,
-                width,
-            }));
-        }
+            None => (kernel, module),
+            Some(_) if module == Module::Partial => {
+                return Err(partial_threadgroups(
+                    direct.map_or([0; 3], |(threads, ..)| threads),
+                ))
+            }
+            Some(&width) => (inner.emulated_kernel(size, width)?, Module::Emulated),
+        };
         // No thread runs: nothing is recorded, so a zero grid stays the kernel's mark of an
         // indirect dispatch.
         if direct.is_some_and(|(_, groups, _)| groups.contains(&0)) {
             return Ok(());
         }
         let vk_pipeline = match self.last {
-            Some((module, at, made)) if module == partial && at == local => made,
+            Some((last, at, made)) if last == module && at == local => made,
             _ => {
                 let variant = Variant {
                     size: local,
@@ -521,12 +558,10 @@ impl ComputeCommandEncoder {
                         .map(|&index| self.threadgroup_length(index))
                         .collect(),
                 };
-                let length = variant
-                    .threadgroup_lengths
-                    .iter()
-                    .map(|&length| u64::from(length).next_multiple_of(16))
-                    .sum::<u64>()
-                    + u64::from(kernel.interface.static_threadgroup_bytes);
+                let length = kernel
+                    .interface
+                    .memory
+                    .bytes(&variant.threadgroup_lengths, threads);
                 if length > u64::from(limits.max_shared_memory) {
                     return Err(Error::Limit(Limit::ThreadgroupMemory {
                         length,
@@ -536,7 +571,7 @@ impl ComputeCommandEncoder {
                 kernel.pipeline(&core, &variant)?
             }
         };
-        self.last = Some((partial, local, vk_pipeline));
+        self.last = Some((module, local, vk_pipeline));
         let serial = self.serial;
         let wrote = {
             let accesses = Accesses {

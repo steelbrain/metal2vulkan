@@ -37,6 +37,7 @@ device against the floor below.
 The runtime runs four threads per device: the block-maker, the submit thread, the completion
 thread, and the reaper, which frees the semaphores and command pools the others give up, one at a
 time, so no driver free runs on the completion thread and a submission waits behind at most one,
+lowers the compute pipeline states' emulated-SIMD-group variants after their creation returned,
 and writes the pipeline data to the cache directory when it is due.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
@@ -256,6 +257,14 @@ that touch blocks first.
   kernel that observes its partition is lowered a second time, plainly: its whole grids,
   `dispatch_threadgroups` and indirect dispatches run that module at their own size, and a
   `dispatch_threads` grid that is not a whole number of threadgroups runs the variant.
+- A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
+  `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32) has an
+  emulated-SIMD-group variant, whose SIMD groups exchange through threadgroup memory between
+  workgroup barriers. The reaper lowers it once the state is made, through the cache directory,
+  and a threadgroup that is not whole SIMD groups runs it at its own size, the last SIMD group
+  partly filled, as Metal runs it. A dispatch of such a size before the reaper is done waits for
+  the lowering, which the reaper takes next: a first-use wait. In a threadgroup of one thread the
+  module's exchanges pass no barrier.
 - The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
   threadgroup (0), the threadgroup size packed as `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's
   threads per grid; an indirect dispatch pushes a zero grid, and its kernel takes the grid from its
@@ -266,7 +275,8 @@ that touch blocks first.
   wait is counted in `Metrics::first_use_waits`, with its time in `first_use_wait_nanos` and the
   longest in `first_use_wait_max_nanos`.
 - `ComputePipelineState::precision_notes` carries the translator's notes of where the kernel's
-  answers may differ from Metal's on this device, fixed when the state is made. A kernel compiled
+  answers may differ from Metal's on this device, fixed per operation: those of the modules made
+  with the state, and the emulated-SIMD-group module's once it is lowered. A kernel compiled
   with fast math carries `FastMathRewrites`: a driver may fold its arithmetic differently per
   `VkPipeline`, so its answers in a tile and at another size may differ in the last place.
 
@@ -295,9 +305,10 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
 
 ### Known gaps of pipeline states
 
-- No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it: a
-  state reads only its lowerings from the cache directory, and each `VkPipeline` past the first
-  tile is made at its first dispatch, through the pipeline data.
+- No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it, but
+  the emulated-SIMD-group variant's lowering on the reaper: a state reads only its lowerings from
+  the cache directory, and each `VkPipeline` past the first tile is made at its first dispatch,
+  through the pipeline data.
 - A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
   its plain module). For the observing kernel the device tests run, a grid template over
   threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole creation 2.7 to
@@ -305,18 +316,21 @@ on disk; the `VkPipelineCache` still serves the device's own pipelines.
 - A kernel that reads anything the encoder does not supply yet, a texture, a sampler, a function
   table, a `[[stage_in]]` fetch or constant data, is refused (`Gap::KernelInput`). So is a state
   for indirect command buffers (`Gap::IndirectCommandBuffers`).
-- A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
-  `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32) runs only
-  threadgroups of whole SIMD groups; a dispatch of another size is refused
-  (`Gap::PartialSimdgroups`): its emulated-SIMD-group variant is not built.
+- A threadgroup that is not whole SIMD groups of a kernel whose SIMD groups run one per subgroup
+  of 32 is refused (`Gap::PartialSimdgroups`) where the state has no emulated-SIMD-group module:
+  for a kernel the consumer compiled (`StageSource::Compiled`), and where the translator refuses
+  the emulated variant. The emulated module's scratch counts in the dispatch's threadgroup memory
+  (`Limit::ThreadgroupMemory`).
 - `dispatch_threads` with a grid that is not a whole number of threadgroups on some axis is
-  refused (`Gap::PartialThreadgroups`) for a kernel that observes its threadgroup partition and
-  whose partial-threadgroups variant the translator refuses. It refuses the variant of a kernel
-  whose SIMD groups it emulates: one with SIMD-group operations where the device's compute
-  subgroups are neither 32 lanes nor 64 or 128 split into 32-lane clusters, and one with a
-  lockstep pair in divergent flow where the device lacks `VK_KHR_shader_maximal_reconvergence`.
-  It refuses the variant of a kernel whose barriers in a loop need a vote word that does not fit
-  beside its threadgroup memory in `maxComputeSharedMemorySize`.
+  refused (`Gap::PartialThreadgroups`) at a threadgroup that is not whole SIMD groups of a kernel
+  whose SIMD groups run one per subgroup of 32, and for a kernel that observes its threadgroup
+  partition and whose partial-threadgroups variant the translator refuses. It refuses the
+  variant of a kernel whose SIMD groups it emulates: one with SIMD-group operations where the
+  device's compute subgroups are neither 32 lanes nor 64 or 128 split into 32-lane clusters, and
+  one with a lockstep pair in divergent flow where the device lacks
+  `VK_KHR_shader_maximal_reconvergence`. It refuses the variant of a kernel whose barriers in a
+  loop need a vote word that does not fit beside its threadgroup memory in
+  `maxComputeSharedMemorySize`.
 - A kernel that observes its threadgroup partition makes a `VkPipeline` per threadgroup size it
   is dispatched at.
 - A dispatch of a size other than the descriptor's `requiredThreadsPerThreadgroup`, which Metal's

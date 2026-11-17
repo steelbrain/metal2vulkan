@@ -160,11 +160,14 @@ pub enum Gap {
     KernelInput,
     /// A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD
     /// group as one subgroup of `width` threads (a pinned subgroup of 32, or the device's own
-    /// 32): Metal runs the last SIMD group of such a threadgroup partly filled. The kernel's
-    /// emulated-SIMD-group variant, which runs every threadgroup size, is not built. Refused at
-    /// the dispatch; the state's other sizes run.
+    /// 32), where the state has no emulated-SIMD-group module to run it on: Metal runs the last
+    /// SIMD group of such a threadgroup partly filled. A kernel the consumer compiled
+    /// (`StageSource::Compiled`) keeps the variant it was compiled under, and the translator may
+    /// refuse a kernel's emulated variant (where its static threadgroup memory and one SIMD
+    /// group's scratch are past the device's). Refused at the dispatch; the state's other sizes
+    /// run.
     ///
-    /// Basis: ours (the emulated-SIMD-group variant is not built).
+    /// Basis: ours (no emulated-SIMD-group module).
     PartialSimdgroups {
         /// The threadgroup size asked for.
         threads_per_threadgroup: [u32; 3],
@@ -173,10 +176,11 @@ pub enum Gap {
     },
     /// `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of
     /// a kernel that observes its threadgroup partition and whose partial-threadgroups variant the
-    /// translator refused: Metal runs the last threadgroup of such an axis with the threads left.
-    /// The translator refuses the variant of a kernel whose SIMD groups it emulates (SIMD-group
-    /// operations where the device's compute subgroups are neither 32 lanes nor 64 or 128 split
-    /// into 32-lane clusters, or a lockstep pair in divergent flow on a device without
+    /// translator refused, or at a threadgroup that is not whole SIMD groups of a kernel whose
+    /// tier runs only whole ones: Metal runs the last threadgroup of such an axis with the threads
+    /// left. The translator refuses the variant of a kernel whose SIMD groups it emulates
+    /// (SIMD-group operations where the device's compute subgroups are neither 32 lanes nor 64 or
+    /// 128 split into 32-lane clusters, or a lockstep pair in divergent flow on a device without
     /// `VK_KHR_shader_maximal_reconvergence`), and of one whose barriers in a loop need a vote
     /// word its workgroup memory cannot hold. Refused at the dispatch; the state's whole grids
     /// run.
@@ -223,8 +227,9 @@ pub enum Limit {
         max: [u32; 3],
     },
     /// A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up
-    /// to 16 bytes), is past the device's `maxComputeSharedMemorySize`. Metal's counterpart is
-    /// `maxThreadgroupMemoryLength`, past which its validation stops the dispatch.
+    /// to 16 bytes), is past the device's `maxComputeSharedMemorySize`; for a threadgroup that
+    /// runs the emulated-SIMD-group module, with the scratch of its SIMD groups. Metal's
+    /// counterpart is `maxThreadgroupMemoryLength`, past which its validation stops the dispatch.
     ///
     /// Basis: device (the device's `maxComputeSharedMemorySize`).
     ThreadgroupMemory {
@@ -320,7 +325,7 @@ impl fmt::Display for Gap {
                 width,
             } => write!(
                 f,
-                "a threadgroup of {threads_per_threadgroup:?} is not whole SIMD groups of {width} threads, whose emulated variant is not built"
+                "a threadgroup of {threads_per_threadgroup:?} is not whole SIMD groups of {width} threads, and the state has no emulated module for it"
             ),
             Gap::PartialThreadgroups {
                 threads_per_grid,
