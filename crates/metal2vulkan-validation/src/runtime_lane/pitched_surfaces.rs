@@ -1440,7 +1440,11 @@ fn a_shadowed_color_beside_a_memoryless_scratch_blends_over_part_of_it() {
 /// new resources' first work, which writes the command buffer's start stamp itself, and the second
 /// records the kept barrier command buffer that writes a start stamp, which each later command
 /// buffer with no first work takes again; `command_buffer/kept_barriers.rs`,
-/// `WorkCounts::stamped_buffers_kept`). The buffer holds each
+/// `WorkCounts::stamped_buffers_kept`), once the device's view check answered
+/// (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs from
+/// the device's making, and each of its internal submissions records a barrier, which beside other
+/// work landed in the counted passes (2 and 15 of them in the last, on the RTX 5080 Laptop GPU
+/// beside the runtime lane). The buffer holds each
 /// texture's texels inside its rectangle, as the draws read them, and every other byte as it
 /// was. Printed: `SHADOW-RUN`.
 #[test]
@@ -1453,6 +1457,7 @@ fn a_pass_s_copies_in_share_their_barriers() {
     let messages = Messages::default();
     {
         let device = validated_device(TEST_DEVICE, &messages, cache.path()).unwrap();
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let queue = device.new_command_queue().unwrap();
         let len = stride * (most + 1);
         let buffer = device.new_buffer(len, ResourceOptions::default()).unwrap();

@@ -440,12 +440,17 @@ fn scenario(
 
 /// Run each of `draws`'s scenarios on the test device and check it against `expected`.
 /// Its devices take their queue plan (`at_plan`): the work of the tests that call it
-/// changes placements under the lane's queue limits.
+/// changes placements under the lane's queue limits. The scenarios begin once the device's view
+/// check answered (`Device::settle_view_check`): with no record of it in the scratch cache, the
+/// check runs from the device's making, and beside other work its pipelines' making and rounds
+/// ran into the first scenario, whose other queue's command buffer read `Scheduled` 103.2 ms
+/// after its commit, past the hang (RTX 5080 Laptop GPU, beside the runtime lane).
 fn answers_as_metal_does(draws: &[Draw], expected: Expected) {
     let cache = ScratchCache::new().unwrap();
     let messages = Messages::default();
     {
         let device = validated_device_with(TEST_DEVICE, &messages, cache.path(), at_plan).unwrap();
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let name = device.name().to_owned();
         let lane = Lane::new(device);
         let pipeline = lane.pipeline("pt_plain");
