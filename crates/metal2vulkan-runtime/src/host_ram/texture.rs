@@ -52,7 +52,9 @@
 //!   chunk that takes no import while it runs are staged through the CPU as the buffer forms
 //!   stage them (`StagedGather`, `StagedScatter`), the GPU's copy between the arena's region and
 //!   the texture one `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` of the region's rows at
-//!   the surface's pitch; an encoding again stages them again as the buffer forms do.
+//!   the surface's pitch (`staged_regions`: one region of them all, or one a row, `bufferRowLength`
+//!   0, where the pitch is past 2^31 - 1 bytes and joins no rows); an encoding again stages them
+//!   again as the buffer forms do.
 //! - **The texture's contract**: an image of its own (not a texture over a buffer, a texture
 //!   buffer or a texture whose blits take a shadow's copies), one sample, a colour format of
 //!   uncompressed texels the image holds one to a texel (no block-compressed, depth, stencil,
@@ -214,6 +216,49 @@ pub(crate) fn joined_rows(pieces: &[Rows], pitch: Option<u64>) -> Vec<Rows> {
         }
     }
     out
+}
+
+/// The pitch at which a region's `rows` rows, `bytes_per_row` bytes apart, are one region of a
+/// copy, its `bufferRowLength` the pitch's texels: a region of more than one row, its pitch of at
+/// most 2^31 - 1 bytes (`VUID-vkCmdCopyBufferToImage-bufferRowLength-09108`,
+/// `VUID-vkCmdCopyImageToBuffer-bufferRowLength-09108`), a whole number of texels at least a
+/// row's (`check_layout`: `VUID-VkBufferImageCopy-bufferRowLength-09101`). `None`: each row is a
+/// region of its own, `bufferRowLength` 0.
+fn joining_pitch(rows: u64, bytes_per_row: u64) -> Option<u64> {
+    (rows > 1 && bytes_per_row <= i32::MAX as u64).then_some(bytes_per_row)
+}
+
+/// A staged copy's regions between the arena's region and `image` (a region of one image of
+/// `texel`-byte texels, one to a texel), its rows `bytes_per_row` apart from the arena region's
+/// first byte: one region of them all where they join (`joining_pitch`), else one a row at its
+/// row's byte, `bufferRowLength` 0. The same bytes either way.
+pub(crate) fn staged_regions(
+    image: ImageRegion,
+    bytes_per_row: u64,
+    texel: u64,
+) -> Vec<BufferImageRegion> {
+    let [x, y, z] = image.origin;
+    let [width, height, depth] = image.size;
+    match joining_pitch(u64::from(height), bytes_per_row) {
+        Some(pitch) => vec![BufferImageRegion {
+            buffer_offset: 0,
+            row_length: (pitch / texel) as u32,
+            image_height: 0,
+            image,
+        }],
+        None => (0..height)
+            .map(|row| BufferImageRegion {
+                buffer_offset: u64::from(row) * bytes_per_row,
+                row_length: 0,
+                image_height: 0,
+                image: ImageRegion {
+                    origin: [x, y + row, z],
+                    size: [width, 1, depth],
+                    ..image
+                },
+            })
+            .collect(),
+    }
 }
 
 impl BlitCommandEncoder {
@@ -446,20 +491,12 @@ impl BlitCommandEncoder {
             // The first encoding's staging, which an encoding again finds set.
             let _ = call.staged.set(staging);
             // The region's rows at the surface's pitch in the arena's region, from its first.
-            let texels_per_row = match rows.rows {
-                1 => Some(0),
-                _ => u32::try_from(bytes_per_row / texel).ok(),
-            };
-            let row_length = texels_per_row.ok_or_else(refused)?;
-            let staged = BufferImageRegion {
-                buffer_offset: 0,
-                row_length,
-                image_height: 0,
-                image,
-            };
+            let regions = (staged_regions(image, bytes_per_row, texel).into_iter())
+                .map(|staged| buffer_image_region(&image_buffer_region(plan, staged)))
+                .collect();
             let target = Target::Image {
                 image: raw_image,
-                regions: vec![buffer_image_region(&image_buffer_region(plan, staged))],
+                regions,
             };
             let from_first: Vec<Piece> = (pieces.iter())
                 .map(|piece| Piece {
@@ -503,11 +540,8 @@ impl BlitCommandEncoder {
                 FreshUnwritten::reads(&device, texture, &read)?
             }
         };
-        // Rows of one region at the surface's pitch, `bufferRowLength` its texels: a pitch of whole
-        // texels at least a row's (`check_layout`: `VUID-VkBufferImageCopy-bufferRowLength-09101`)
-        // and of at most 2^31 - 1 bytes (`VUID-vkCmdCopyBufferToImage-bufferRowLength-09108`,
-        // `VUID-vkCmdCopyImageToBuffer-bufferRowLength-09108`).
-        let pitch = (rows.rows > 1 && bytes_per_row <= i32::MAX as u64).then_some(bytes_per_row);
+        // Rows of one region at the surface's pitch, `bufferRowLength` its texels.
+        let pitch = joining_pitch(rows.rows, bytes_per_row);
         let mut regions_recorded = 0u64;
         for round in &by_round {
             // The round's pieces, each a row's texels from its byte of its import, in order.
