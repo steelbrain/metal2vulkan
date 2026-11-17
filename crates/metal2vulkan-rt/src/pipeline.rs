@@ -179,7 +179,10 @@ fn interface(
     if translated.needs_pointer_translation
         || translated.needs_handle_translation
         || translated.reaches_command_buffers
-        || !translated.numbered_samplers.is_empty()
+        || translated
+            .numbered_samplers
+            .iter()
+            .any(|(_, samplers)| !samplers.is_empty())
         || !translated.stage_in.is_empty()
         || pipeline
             .layout

@@ -105,9 +105,8 @@ mod on_device {
                         .compile_compute_pipeline(&descriptor, &Budget::standard());
                     if let Ok(pipeline) = translated {
                         eprintln!(
-                            "{name}: slots {:?}\npush {:?}\nconstants {:?}\ndependencies {:?}\nsets {:?}\nflags {:?} subgroup {:?} blob {}",
-                            pipeline.interface.slots,
-                            pipeline.interface.push,
+                            "{name}: interface {:?}\nconstants {:?}\ndependencies {:?}\nsets {:?}\nflags {:?} subgroup {:?} blob {}",
+                            pipeline.interface,
                             pipeline.stage.specialization.constants,
                             pipeline.dependencies,
                             pipeline.layout.sets,
