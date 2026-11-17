@@ -1,12 +1,12 @@
 //! Command queues: Metal's bound on a queue's uncompleted command buffers, and abandoning a queue.
 
 use crate::command::CommandBuffer;
-use crate::counters::Gauge;
+use crate::counters::{Counters, Gauge};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::reaper::{Free, Job};
 use crate::times::Stamps;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
 /// `MTLCommandQueue`: one FIFO on the submit thread. Every queue submits to the device's one
 /// `VkQueue`.
@@ -27,7 +27,10 @@ pub(crate) struct QueueInner {
     room: Condvar,
     /// Two timestamp queries per slot.
     pub(crate) stamps: Stamps,
-    pub(crate) core: Arc<Core>,
+    counters: Counters,
+    /// The device, without keeping it: a command buffer handle that outlives the device's
+    /// handles holds its queue, and neither keeps the device from its teardown.
+    core: Weak<Core>,
 }
 
 /// A queue's slots: each command buffer made and not yet retired holds one, and with it its pair
@@ -67,7 +70,8 @@ impl Device {
                 }),
                 room: Condvar::new(),
                 stamps: Stamps::new(core, max_command_buffer_count)?,
-                core: Arc::clone(core),
+                counters: core.counters.clone(),
+                core: Arc::downgrade(core),
             }),
             device: self.clone(),
         })
@@ -138,15 +142,17 @@ impl QueueInner {
     pub(crate) fn release(&self, slot: u32) {
         lock(&self.slots).free.push(slot);
         self.room.notify_one();
-        self.core.counters.fall(Gauge::CommandBuffers);
+        self.counters.fall(Gauge::CommandBuffers);
     }
 }
 
 impl Drop for QueueInner {
     fn drop(&mut self) {
-        // No command buffer of the queue is left, so no work names the pool.
-        self.core
-            .reaper
-            .give(Job::Free(Free::QueryPool(self.stamps.pool)));
+        // No command buffer of the queue is left, so no work names the pool. Where the device is
+        // already gone, its teardown destroyed the pool.
+        if let Some(core) = self.core.upgrade() {
+            core.reaper
+                .give(Job::Free(Free::QueryPool(self.stamps.pool)));
+        }
     }
 }

@@ -8,7 +8,7 @@
 //! timestamps, so ends never decrease in completion order. The kernel times are the host time at
 //! commit and when the submit call that passed the last segment returned.
 
-use crate::device::Core;
+use crate::device::{lock, Core};
 use crate::error::Error;
 use ash::vk;
 
@@ -125,6 +125,7 @@ impl Stamps {
         // SAFETY: the info is complete.
         let pool = unsafe { core.device.create_query_pool(&info, None) }
             .map_err(Error::vulkan("vkCreateQueryPool"))?;
+        lock(&core.query_pools).push(pool);
         Ok(Stamps { pool })
     }
 

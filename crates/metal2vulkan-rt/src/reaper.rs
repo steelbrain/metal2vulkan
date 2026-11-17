@@ -87,8 +87,11 @@ fn free(core: &Core, object: Free) {
         }
         // SAFETY: no command buffer of the pool is pending: its work retired, or never ran.
         Free::CommandPool(pool) => unsafe { device.destroy_command_pool(pool, None) },
-        // SAFETY: every command buffer of the queue retired or never ran.
-        Free::QueryPool(pool) => unsafe { device.destroy_query_pool(pool, None) },
+        Free::QueryPool(pool) => {
+            lock(&core.query_pools).retain(|&live| live != pool);
+            // SAFETY: every command buffer of the queue retired or never ran.
+            unsafe { device.destroy_query_pool(pool, None) };
+        }
     }
 }
 

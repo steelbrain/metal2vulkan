@@ -137,6 +137,9 @@ pub(crate) struct Core {
     pub(crate) work: Work,
     pub(crate) done: Done,
     pub(crate) reaper: Reaper,
+    /// Every queue's timestamp pool not yet destroyed: one whose queue outlives the device is
+    /// destroyed with it.
+    pub(crate) query_pools: Mutex<Vec<vk::QueryPool>>,
     /// Quiesced or torn down: calls that need a thread are refused.
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
@@ -308,6 +311,7 @@ impl Device {
             work: Work::new(),
             done,
             reaper: Reaper::new(),
+            query_pools: Mutex::new(Vec::new()),
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
         });
@@ -712,8 +716,18 @@ impl Drop for Core {
             memory::free(self, memory);
         }
         self.recorders.destroy_all(&self.device);
-        // The reaper has ended; what it was given since is freed here.
+        // The reaper has ended; what it was given since is freed here, and then the pools of the
+        // queues still alive.
         self.reaper.drain(self);
+        let pools = std::mem::take(
+            self.query_pools
+                .get_mut()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        for pool in pools {
+            // SAFETY: the device is idle.
+            unsafe { self.device.destroy_query_pool(pool, None) };
+        }
         // SAFETY: the device is idle, and nothing made from it is left but these objects.
         let zero_source = unsafe {
             self.done.destroy(&self.device);
