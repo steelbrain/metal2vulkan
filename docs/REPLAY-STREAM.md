@@ -323,11 +323,25 @@ and the (name id, value) answer pairs.
   CPU set or by signals of command buffers that can complete. It never waits on a command buffer
   held behind an event wait. Each wait is bounded under the validation crate's hang protocol.
 - It reports, for each group of command buffers it waited for (normally the one just committed),
-  for each frame and in total, the counters the runtime exposes (submissions, render passes,
-  barriers, dispatches, draws, copies, pipelines made), the words it relocated, the 8-byte values
-  at offsets 4 past a multiple of 8 that lie in a live range (left as they are), and the bytes it
-  wrote or copied in (`m2v.write` and the copies from the guest's RAM). Its own readbacks are not
-  counted.
+  for each frame and in total, two sets of counts:
+  - **Fixed by the stream** (`stream`), the same on every play of the stream on any runtime: the
+    calls played (`calls`), the command buffers committed (`commits`, a host's split included),
+    the encoders made (`encoders`: the objects a command buffer or an encoder makes), the draws
+    and dispatches their calls issued (`draws` and `dispatches`: an encoder's calls whose
+    selectors begin `draw` and `dispatch`), the words it relocated (`relocated_words`), the
+    8-byte values at offsets 4 past a multiple of 8 that lie in a live range, left as they are
+    (`misaligned_address_words`), and the bytes it wrote or copied in, `m2v.write` and the copies
+    from the guest's RAM (`written_bytes`). A group's calls are those played before it completed:
+    the call that waited for it counts in the next.
+  - **As executed** (`executed`): the counters the runtime exposes. The old runtime's are the
+    Vulkan commands it recorded (submissions, render passes, barriers, dispatches, draws, copies)
+    and the pipelines it made. They differ between runtimes, and between plays on one runtime
+    where what it records depends on timing: the old runtime records a draw whose pipeline it is
+    still making in the background through the pipeline's general form, and keeps nothing of that
+    draw for a later encoder to draw again, so where a making lands moves commands from one group
+    or frame to another. Only the stream's counts are compared between plays.
+
+  Its own readbacks are not counted.
 - A selector, argument or descriptor key the runtime's backend does not implement is a typed
   refusal naming it; the run stops there and the report keeps what ran. The old runtime's backend
   refuses rate maps, stage inputs, dynamic libraries, OpenCL mode, indirect command buffers,
@@ -336,9 +350,9 @@ and the (name id, value) answer pairs.
   nothing a pass shows. It plays a no-copy buffer as a buffer of its length, so one of the
   read-only option (bit 24) is made without it and keeps the GPU writes Metal drops.
 
-`report.txt` holds one line per item: `device NAME`, `completed IDS KEY=VALUE ...`,
-`frame N KEY=VALUE ...`, `check ID SHA256 match|differs|unrecorded`, `total KEY=VALUE ...`,
-`calls N` (the calls played; where the play stopped, the stopping call is the next),
-`cut SEGMENT OFFSET` where the last segment ends in a record cut short, then `ok` or
-`error WHAT`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
+`report.txt` holds one line per item: `device NAME`, `completed IDS COUNTS`, `frame N COUNTS`,
+`check ID SHA256 match|differs|unrecorded`, `total COUNTS` (its `calls` the calls played: where
+the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
+in a record cut short, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
+KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
 failure (a bad command line or an unreadable stream).

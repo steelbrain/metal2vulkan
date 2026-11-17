@@ -2,7 +2,7 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
-use super::player::{Backend, Counters, Made, PlayError, Player, Report, WAIT_COMPLETED};
+use super::player::{Backend, Counters, Counts, Made, PlayError, Player, Report, WAIT_COMPLETED};
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
 use crate::ScratchDir;
@@ -405,9 +405,9 @@ fn uploads_are_relocated_and_counted() {
     );
     let constants = kept.args.last().and_then(|args| args.first());
     assert_eq!(constants, Some(&Value::Bytes(moved.to_vec())));
-    assert_eq!(report.total["relocated_words"], 2);
-    assert_eq!(report.total["misaligned_address_words"], 1);
-    assert_eq!(report.total["written_bytes"], 8 + 16 + 8);
+    assert_eq!(report.total.stream["relocated_words"], 2);
+    assert_eq!(report.total.stream["misaligned_address_words"], 1);
+    assert_eq!(report.total.stream["written_bytes"], 8 + 16 + 8);
 }
 
 /// A copy from the guest's RAM lands each piece at its byte: into a block, an address is
@@ -475,9 +475,9 @@ fn guest_ram_copies_are_relocated_where_their_buffer_has_an_address() {
         Value::Bytes(pointer.to_vec()),
         "no address: untouched"
     );
-    assert_eq!(report.total["relocated_words"], 2);
-    assert_eq!(report.total["misaligned_address_words"], 1);
-    assert_eq!(report.total["written_bytes"], 16 + 16 + 8);
+    assert_eq!(report.total.stream["relocated_words"], 2);
+    assert_eq!(report.total.stream["misaligned_address_words"], 1);
+    assert_eq!(report.total.stream["written_bytes"], 16 + 16 + 8);
 
     let (_, ended) = played(&mut Kept::default(), |w| {
         let runs = Value::List(vec![Value::List(vec![
@@ -617,7 +617,10 @@ fn a_play_stops_where_the_stream_or_the_backend_cannot_go_on() {
         w.call("notPlayed", 1, 0, &[], &[])
     });
     assert!(matches!(ended, Err(PlayError::Refused { .. })), "{ended:?}");
-    assert_eq!(report.calls, 1, "the refused call is the next");
+    assert_eq!(
+        report.total.stream["calls"], 1,
+        "the refused call is the next"
+    );
 }
 
 /// A present closes a frame of the groups since the last, reading nothing (its texture may be
@@ -637,15 +640,18 @@ fn frames_releases_and_splits() {
     });
     ended.unwrap();
     assert_eq!(kept.waits, [3, 4]);
-    assert_eq!(
-        report.frames,
-        [Counters::from([
-            ("misaligned_address_words", 0),
-            ("relocated_words", 0),
-            ("submissions", 2),
-            ("written_bytes", 0),
-        ])]
-    );
+    let stream = Counters::from([
+        ("calls", 4),
+        ("commits", 2),
+        ("dispatches", 0),
+        ("draws", 0),
+        ("encoders", 0),
+        ("misaligned_address_words", 0),
+        ("relocated_words", 0),
+        ("written_bytes", 0),
+    ]);
+    let executed = Counters::from([("submissions", 2)]);
+    assert_eq!(report.frames, [Counts { stream, executed }]);
     assert!(report.checks.is_empty());
     let released: Vec<&str> = kept
         .calls
@@ -659,4 +665,68 @@ fn frames_releases_and_splits() {
         ["#1 release", "#2 release", "#3 release", "#4 release"]
     );
     assert!(kept.calls.contains(&"#4 = #2 commandBuffer".to_string()));
+}
+
+/// What a stream fixes, apart from what the runtime executed: its calls played, its commits, the
+/// encoders its command buffers made and the draws and dispatches their calls issued, per group of
+/// command buffers waited for and in total. The call that waited for a group counts in the next.
+#[test]
+fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
+    let draw = "drawPrimitives:vertexStart:vertexCount:";
+    let (report, ended) = played(&mut Kept::default(), |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("commandBuffer", 2, 3, &[], &[])?;
+        w.call("computeCommandEncoder", 3, 4, &[], &[])?;
+        w.call(
+            "dispatchThreadgroups:threadsPerThreadgroup:",
+            4,
+            0,
+            &[],
+            &[],
+        )?;
+        w.call("endEncoding", 4, 0, &[], &[])?;
+        w.call(
+            "renderCommandEncoderWithDescriptor:",
+            3,
+            5,
+            &[Value::Nil],
+            &[],
+        )?;
+        w.call(draw, 5, 0, &[], &[])?;
+        w.call(draw, 5, 0, &[], &[])?;
+        w.call("endEncoding", 5, 0, &[], &[])?;
+        w.call("commit", 3, 0, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])
+    });
+    ended.unwrap();
+    let fixed = |calls| {
+        Counters::from([
+            ("calls", calls),
+            ("commits", 1),
+            ("dispatches", 1),
+            ("draws", 2),
+            ("encoders", 2),
+            ("misaligned_address_words", 0),
+            ("relocated_words", 0),
+            ("written_bytes", 0),
+        ])
+    };
+    let executed = Counters::from([("submissions", 1)]);
+    let group = Counts {
+        stream: fixed(10),
+        executed: executed.clone(),
+    };
+    assert_eq!(report.completed, [(vec![3], group.clone())]);
+    assert_eq!(report.frames, [group]);
+    let total = Counts {
+        stream: fixed(12),
+        executed,
+    };
+    assert_eq!(report.total, total);
+    assert_eq!(
+        report.lines()[0],
+        "completed #3 stream calls=10 commits=1 dispatches=1 draws=2 encoders=2 \
+         misaligned_address_words=0 relocated_words=0 written_bytes=0 executed submissions=1"
+    );
 }

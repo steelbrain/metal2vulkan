@@ -197,11 +197,15 @@ fn a_pointer_written_at_a_recorded_address_is_relocated() {
     let report = &reports[0];
     assert_eq!(report.checks.len(), 1);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
-    assert_eq!(report.total["relocated_words"], 1);
-    assert_eq!(report.total["misaligned_address_words"], 0);
-    assert_eq!(report.total["written_bytes"], 32);
+    assert_eq!(report.total.stream["relocated_words"], 1);
+    assert_eq!(report.total.stream["misaligned_address_words"], 0);
+    assert_eq!(report.total.stream["written_bytes"], 32);
     assert_eq!(report.completed.len(), 1);
-    assert!(report.total["dispatches"] >= 1, "{:?}", report.total);
+    assert!(
+        report.total.executed["dispatches"] >= 1,
+        "{:?}",
+        report.total
+    );
     assert_eq!(reports[0], reports[1], "two plays on two devices");
 }
 
@@ -396,7 +400,11 @@ fn a_pass_from_setter_records_clears_a_drawable() {
         let report = play("pass", device, &path);
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
         assert_eq!(report.frames.len(), 1);
-        assert!(report.total["render_passes"] >= 1, "{:?}", report.total);
+        assert!(
+            report.total.executed["render_passes"] >= 1,
+            "{:?}",
+            report.total
+        );
     });
 }
 
@@ -449,7 +457,7 @@ fn guest_ram_copies_land_where_their_pieces_say() {
     on_device_with(at_plan, |device| {
         let report = play("guest-ram", device, &path);
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
-        assert_eq!(report.total["written_bytes"], 16 + 12);
-        assert_eq!(report.total["relocated_words"], 0);
+        assert_eq!(report.total.stream["written_bytes"], 16 + 12);
+        assert_eq!(report.total.stream["relocated_words"], 0);
     });
 }

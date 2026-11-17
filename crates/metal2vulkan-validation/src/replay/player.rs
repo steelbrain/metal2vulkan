@@ -1,8 +1,8 @@
 //! The player (`docs/REPLAY-STREAM.md`, section 10): it reads a stream's calls in order and drives a
 //! runtime through a [`Backend`], relocating what it uploads, waiting for the command buffers
-//! that can complete (never for one an event wait holds), and reporting the
-//! runtime's counters per group of command buffers waited for, per frame and in total, with the
-//! checksums the stream asks for.
+//! that can complete (never for one an event wait holds), and reporting per group of command
+//! buffers waited for, per frame and in total what the stream fixed and what the runtime
+//! executed, with the checksums the stream asks for.
 
 use super::addresses::AddressMap;
 use super::stream::{Call, StreamError, StreamReader};
@@ -15,12 +15,28 @@ use std::sync::Arc;
 /// A runtime's counters, cumulative, by name.
 pub type Counters = BTreeMap<&'static str, u64>;
 
-/// The player's own counters: the words it relocated, the 8-byte values at offsets 4 past a
-/// multiple of 8 that lie in a live range (left as they are), and the bytes it wrote.
+/// The counts the stream fixes, the same on every play of it on any runtime: the calls played,
+/// the command buffers committed, the encoders made, the draws and dispatches their calls issued,
+/// the words the player relocated, the 8-byte values at offsets 4 past a multiple of 8 that lie in
+/// a live range (left as they are), and the bytes it wrote.
+const CALLS: &str = "calls";
+const COMMITS: &str = "commits";
+const ENCODERS: &str = "encoders";
+const DRAWS: &str = "draws";
+const DISPATCHES: &str = "dispatches";
 const RELOCATED_WORDS: &str = "relocated_words";
 const MISALIGNED_WORDS: &str = "misaligned_address_words";
 const WRITTEN_BYTES: &str = "written_bytes";
-const OWN: [&str; 3] = [RELOCATED_WORDS, MISALIGNED_WORDS, WRITTEN_BYTES];
+const FIXED: [&str; 8] = [
+    CALLS,
+    COMMITS,
+    ENCODERS,
+    DRAWS,
+    DISPATCHES,
+    RELOCATED_WORDS,
+    MISALIGNED_WORDS,
+    WRITTEN_BYTES,
+];
 
 /// What a backend made for a call that makes an object.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -92,26 +108,47 @@ pub struct Check {
     pub recorded: Option<Hash>,
 }
 
+/// What one span of a play counted.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    /// Fixed by the stream: the same on every play of it, on any runtime.
+    pub stream: Counters,
+    /// As the runtime executed it: its counters' growth, which differs between runtimes, and
+    /// between plays on one runtime where what it records depends on timing.
+    pub executed: Counters,
+}
+
+impl Counts {
+    fn add(&mut self, from: &Counts) {
+        add(&mut self.stream, &from.stream);
+        add(&mut self.executed, &from.executed);
+    }
+}
+
 /// What a play did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report {
     /// Each group of command buffers waited for together (normally the one just committed), with
-    /// the counters' growth since the group before.
-    pub completed: Vec<(Vec<u64>, Counters)>,
-    /// Each frame's counters: the groups completed since the present before.
-    pub frames: Vec<Counters>,
+    /// what was counted since the group before. A group's calls are those played before it
+    /// completed: the call that waited for it counts in the next.
+    pub completed: Vec<(Vec<u64>, Counts)>,
+    /// Each frame's counts: the groups completed since the present before.
+    pub frames: Vec<Counts>,
     pub checks: Vec<Check>,
-    /// The counters' growth over the whole play, the player's readbacks left out.
-    pub total: Counters,
-    /// The stream's calls played: where a play stopped, the stopping call is the next.
-    pub calls: u64,
+    /// The whole play's counts, the player's readbacks left out. Its calls are the calls played:
+    /// where a play stopped, the stopping call is the next.
+    pub total: Counts,
 }
 
-fn counted(counters: &Counters) -> String {
-    let pairs = counters
-        .iter()
-        .map(|(key, value)| format!(" {key}={value}"));
-    pairs.collect()
+fn counted(counts: &Counts) -> String {
+    let pairs = |counters: &Counters| -> String {
+        let pairs = counters.iter();
+        pairs
+            .map(|(key, value)| format!(" {key}={value}"))
+            .collect()
+    };
+    let (stream, executed) = (pairs(&counts.stream), pairs(&counts.executed));
+    format!(" stream{stream} executed{executed}")
 }
 
 impl Report {
@@ -135,7 +172,6 @@ impl Report {
             lines.push(format!("check #{} {sha} {verdict}", check.object));
         }
         lines.push(format!("total{}", counted(&self.total)));
-        lines.push(format!("calls {}", self.calls));
         lines
     }
 }
@@ -145,6 +181,8 @@ impl Report {
 enum Kind {
     Device,
     CommandBuffer,
+    /// An object a command buffer or an encoder made.
+    Encoder,
     Event,
     Other,
 }
@@ -174,22 +212,17 @@ pub struct Player<'b, B: Backend> {
     /// Each event's value as far as the stream has set or completed it.
     events: HashMap<u64, u64>,
     baseline: Counters,
-    /// The player's own counters since the last group.
-    own: Counters,
-    frame: Counters,
+    /// The counts the stream fixes, since the last group.
+    fixed: Counters,
+    frame: Counts,
     report: Report,
 }
 
-/// `now` past `base`, key by key, with `own` added.
-fn grown(now: &Counters, base: &Counters, own: &Counters) -> Counters {
-    let mut out: Counters = now
-        .iter()
-        .map(|(&k, &v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0))))
-        .collect();
-    for (&k, &v) in own {
-        *out.entry(k).or_default() += v;
-    }
-    out
+/// `now` past `base`, key by key.
+fn grown(now: &Counters, base: &Counters) -> Counters {
+    let grown = now.iter();
+    let grown = grown.map(|(&k, &v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0))));
+    grown.collect()
 }
 
 fn add(into: &mut Counters, from: &Counters) {
@@ -307,7 +340,7 @@ fn sets_bytes(selector: &str) -> bool {
 impl<'b, B: Backend> Player<'b, B> {
     pub fn new(backend: &'b mut B) -> Self {
         let baseline = backend.counters();
-        let own = OWN.into_iter().map(|key| (key, 0)).collect();
+        let fixed = FIXED.into_iter().map(|key| (key, 0)).collect();
         Player {
             backend,
             addresses: AddressMap::default(),
@@ -318,8 +351,8 @@ impl<'b, B: Backend> Player<'b, B> {
             committed: Vec::new(),
             events: HashMap::new(),
             baseline,
-            own,
-            frame: Counters::new(),
+            fixed,
+            frame: Counts::default(),
             report: Report::default(),
         }
     }
@@ -331,15 +364,15 @@ impl<'b, B: Backend> Player<'b, B> {
         let result = self.all(stream, &mut readbacks);
         let ended = result.and_then(|()| self.finish());
         let now = self.backend.counters();
-        let mut total = grown(&now, &start, &Counters::new());
-        for (key, value) in &mut total {
+        let mut executed = grown(&now, &start);
+        for (key, value) in &mut executed {
             *value = value.saturating_sub(readbacks.get(key).copied().unwrap_or(0));
         }
-        for key in OWN {
-            let grouped = self.report.completed.iter().map(|(_, group)| group[key]);
-            *total.entry(key).or_default() += grouped.sum::<u64>() + self.own[key];
+        let mut stream = self.fixed.clone();
+        for (_, group) in &self.report.completed {
+            add(&mut stream, &group.stream);
         }
-        self.report.total = total;
+        self.report.total = Counts { stream, executed };
         (self.report, ended)
     }
 
@@ -349,8 +382,11 @@ impl<'b, B: Backend> Player<'b, B> {
         readbacks: &mut Counters,
     ) -> Result<(), PlayError> {
         while let Some(call) = stream.next_call()? {
+            let issued = self.issued(&call);
             self.step(stream, call, readbacks)?;
-            self.report.calls += 1;
+            for key in [Some(CALLS), issued].into_iter().flatten() {
+                *self.fixed.entry(key).or_default() += 1;
+            }
         }
         Ok(())
     }
@@ -391,7 +427,7 @@ impl<'b, B: Backend> Player<'b, B> {
             "m2v.present" => {
                 self.drain()?;
                 self.report.frames.push(self.frame.clone());
-                self.frame.clear();
+                self.frame = Counts::default();
                 Ok(())
             }
             "commit" | "m2v.commitPart" => self.commit(call.receiver),
@@ -458,6 +494,18 @@ impl<'b, B: Backend> Player<'b, B> {
         }
     }
 
+    /// The count `call` adds once played, where it is an encoder's draw or dispatch.
+    fn issued(&self, call: &Call) -> Option<&'static str> {
+        if self.kinds.get(&call.receiver) != Some(&Kind::Encoder) {
+            return None;
+        }
+        match &*call.selector {
+            selector if selector.starts_with("draw") => Some(DRAWS),
+            selector if selector.starts_with("dispatch") => Some(DISPATCHES),
+            _ => None,
+        }
+    }
+
     /// Commit `command_buffer`, then wait for what can complete.
     fn commit(&mut self, command_buffer: u64) -> Result<(), PlayError> {
         let pending = self.pending.get_mut(&command_buffer);
@@ -465,6 +513,7 @@ impl<'b, B: Backend> Player<'b, B> {
         pending.committed = true;
         self.committed.push(command_buffer);
         self.backend.call(&own_call("commit", command_buffer, 0))?;
+        *self.fixed.entry(COMMITS).or_default() += 1;
         self.drain()
     }
 
@@ -492,7 +541,7 @@ impl<'b, B: Backend> Player<'b, B> {
         for arg in &call.args {
             args.push(self.resolve(stream, arg, &mut relocated)?);
         }
-        *self.own.entry(RELOCATED_WORDS).or_default() += relocated;
+        *self.fixed.entry(RELOCATED_WORDS).or_default() += relocated;
         if sets_bytes(&call.selector) {
             if let Some(Value::Bytes(data)) = args.first_mut() {
                 self.relocate(data, 0);
@@ -548,7 +597,7 @@ impl<'b, B: Backend> Player<'b, B> {
             if relocated {
                 self.relocate(data, at);
             }
-            *self.own.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
+            *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         }
         Ok(call)
     }
@@ -560,9 +609,15 @@ impl<'b, B: Backend> Player<'b, B> {
             "MTLCreateSystemDefaultDevice" => Kind::Device,
             "newEvent" | "newSharedEvent" | "newSharedEventWithHandle:" => Kind::Event,
             _ if selector.starts_with("commandBuffer") => Kind::CommandBuffer,
-            _ => Kind::Other,
+            _ => match self.kinds.get(&call.receiver) {
+                Some(Kind::CommandBuffer | Kind::Encoder) => Kind::Encoder,
+                _ => Kind::Other,
+            },
         };
         self.kinds.insert(object, kind);
+        if kind == Kind::Encoder {
+            *self.fixed.entry(ENCODERS).or_default() += 1;
+        }
         if kind == Kind::CommandBuffer {
             let pending = Pending {
                 queue: call.receiver,
@@ -636,7 +691,7 @@ impl<'b, B: Backend> Player<'b, B> {
             if self.addresses.holds(target) {
                 self.relocate(&mut data, offset);
             }
-            *self.own.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
+            *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
             self.backend.write(target, offset, &data)?;
         }
         Ok(())
@@ -645,8 +700,8 @@ impl<'b, B: Backend> Player<'b, B> {
     /// Relocate `data`, which starts `offset` bytes into its target, and count what it found.
     fn relocate(&mut self, data: &mut [u8], offset: u64) {
         let (moved, misaligned) = self.addresses.relocate(data, offset);
-        *self.own.entry(RELOCATED_WORDS).or_default() += moved;
-        *self.own.entry(MISALIGNED_WORDS).or_default() += misaligned;
+        *self.fixed.entry(RELOCATED_WORDS).or_default() += moved;
+        *self.fixed.entry(MISALIGNED_WORDS).or_default() += misaligned;
     }
 
     /// Read `object` and record its checksum; the readback's own work is no command buffer's.
@@ -659,7 +714,7 @@ impl<'b, B: Backend> Player<'b, B> {
         let before = self.backend.counters();
         let bytes = self.backend.read(object)?;
         let after = self.backend.counters();
-        add(readbacks, &grown(&after, &before, &Counters::new()));
+        add(readbacks, &grown(&after, &before));
         self.baseline = after;
         self.report.checks.push(Check {
             object,
@@ -762,11 +817,15 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         self.committed.retain(|id| !ready.contains(id));
         let now = self.backend.counters();
-        let group = grown(&now, &self.baseline, &self.own);
-        add(&mut self.frame, &group);
+        let executed = grown(&now, &self.baseline);
+        let group = Counts {
+            stream: self.fixed.clone(),
+            executed,
+        };
+        self.frame.add(&group);
         self.report.completed.push((ready, group));
         self.baseline = now;
-        self.own.values_mut().for_each(|v| *v = 0);
+        self.fixed.values_mut().for_each(|v| *v = 0);
         Ok(())
     }
 }
