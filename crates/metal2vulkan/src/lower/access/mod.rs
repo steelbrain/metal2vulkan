@@ -1026,23 +1026,24 @@ fn uniform_range_fits(window: Window, limits: &Limits) -> bool {
     uniform_bytes(window, limits).is_some()
 }
 
-/// The uniform range of a `Bounded` window that provably fits `maxUniformBufferRange`.
+/// The uniform view's capacity for a `Bounded` window that fits `maxUniformBufferRange`.
+/// A shared descriptor range may start before the bind offset, so the declared array covers
+/// every byte the descriptor can expose, including the slot's residual.
 fn uniform_bytes(window: Window, limits: &Limits) -> Option<u32> {
     match window {
         Window::Bounded { len, .. } => {
             let align = views::base_alignment(limits.min_uniform_buffer_offset_alignment);
+            let capacity = limits.max_uniform_buffer_range & !15;
             views::uniform_range(len, align)
-                .filter(|r| *r <= u64::from(limits.max_uniform_buffer_range))
-                .and_then(|r| u32::try_from(r).ok())
+                .filter(|needed| *needed <= u64::from(capacity))
+                .map(|_| capacity)
         }
         _ => None,
     }
 }
 
-/// The uniform view the per-stage storage-buffer fallback gives a read-only slot with `window`:
-/// sized to the window's range where that provably fits `maxUniformBufferRange`, else the largest
-/// whole number of 16-byte vectors within it, which covers every range instantiation accepts
-/// (`BindError::DescriptorRangeExceeded` above the limit).
+/// The per-stage storage-buffer fallback's uniform view spans the aligned uniform range limit,
+/// covering every residual accepted by instantiation.
 fn fallback_view(p: &DeviceProfile, window: Window) -> ViewKind {
     let limits = &p.fields().limits;
     let bytes = uniform_bytes(window, limits).unwrap_or(limits.max_uniform_buffer_range & !15);

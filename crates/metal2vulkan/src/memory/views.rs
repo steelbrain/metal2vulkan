@@ -14,8 +14,9 @@
 //!
 //! Uniform views exist only for read-only slots with a `Bounded` window whose descriptor range
 //! fits `maxUniformBufferRange` ([`uniform_range`]), and only on profiles whose containment
-//! encoding emits no check: their size is that range, a translation-time constant, because a
-//! `Uniform` block cannot end in a runtime array, while the range actually bound may be shorter
+//! encoding emits no check. Their fixed arrays span the device's aligned uniform range limit,
+//! so a shared descriptor's residual stays inside the declared array. A `Uniform` block cannot
+//! end in a runtime array, while the range actually bound may be shorter
 //! (the binder clamps it to the allocation) and no in-shader check can read it.
 //!
 //! A storage slot may also have **narrow views** ([`NarrowView`]): `StorageBuffer { u16[] }` and `{
