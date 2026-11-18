@@ -9,7 +9,8 @@
 //!   take half the region, and each texture reads its last call's bytes; once the reads have
 //!   waited for every copy, the next copy's span starts at the region's start;
 //! - textures released while the upload holds them for a copy, and a block released while it
-//!   holds it for a zero fill, count against the bound, so the upload goes and frees them;
+//!   holds it for a zero fill, count against the bound: a block of the bound's length alone keeps
+//!   the upload pending, and past the bound the next call sends it and frees them;
 //! - zero fills past [`UPLOAD_ENTRIES`] submit it;
 //!
 //! and every gauge reads zero after teardown.
@@ -206,8 +207,12 @@ mod on_device {
                 counters.gauges().textures <= kept
             });
 
-            // A Private block released after a zero fill: the next fill sends the upload, and the
-            // block comes back to the pool.
+            // A Private block released after a zero fill counts against the bound. The block is
+            // the bound's length, so the upload starts this part empty (the read of a texel sends
+            // it and waits) whatever the textures above left in it, which differs by device.
+            targets[0]
+                .get_bytes(&mut [0; 4], 4, 4, texel, 0, 0)
+                .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
             let released = device
                 .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -220,10 +225,13 @@ mod on_device {
                 .release_block(released)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let (_, bytes, _) = core.work.pending();
-            assert!(
-                bytes >= MemoryClass::Private.block_len(),
+            assert_eq!(
+                bytes,
+                MemoryClass::Private.block_len(),
                 "{name}: the released block is counted"
             );
+            // At the bound and not past it, a fill keeps the upload pending.
+            let before = submissions();
             let fills = device
                 .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -231,6 +239,22 @@ mod on_device {
                 .new_buffer(fills.id, 0, 256, true)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
+            assert_eq!(submissions(), before, "{name}: a fill at the bound");
+            assert!(!core.pool.holds(released_id), "{name}: the block held");
+            // A texture released after a copy takes it past the bound: the next fill sends the
+            // upload, and the block comes back to the pool.
+            let small = device
+                .new_texture(&square(64), Some(4102))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            small
+                .replace_region(whole(4), 0, 0, &[7; 64], 16, 64)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            drop(small);
+            let buffer = device
+                .new_buffer(fills.id, 256, 256, true)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            drop(buffer);
+            assert!(submissions() > before, "{name}: a fill past the bound");
             wait_until("the released block back in the pool", || {
                 core.pool.holds(released_id)
             });
