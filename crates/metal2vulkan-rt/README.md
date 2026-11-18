@@ -1315,11 +1315,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   barrier and begins the rendering again, loading what it stored. After draws that only rendered,
   in a pass that moved an image to the feedback layout, the barrier is owed to the next draw that
   reads an attachment: the rendering ends, one global barrier is recorded and it begins again,
-  which orders every pixel the draw reads, its own and any other. Elsewhere it records nothing: the pass's first barrier ordered everything before
-  it, and a move orders everything before it. A draw that needs a copy first, of a texture over a
-  buffer in an image of its own or over a Managed buffer's device copy, records it the same way,
-  between the rendering's end and its new beginning. Fences record nothing, as in a compute
-  encoder.
+  which orders every pixel the draw reads, its own and any other. Elsewhere it records nothing:
+  the pass's first barrier ordered everything before it, and a move orders everything before it.
+  A draw that needs a copy first, of a texture over a buffer in an image of its own or over a
+  Managed buffer's device copy, records it the same way, between the rendering's end and its new
+  beginning. Fences record nothing, as in a compute encoder.
 - Refused, as Metal's validation stops them: a draw with no pipeline state
   (`Refusal::NoPipeline`), a vertex buffer the vertex descriptor reads that is not bound
   (`Refusal::NoBufferAtIndex`) or bound at an offset past its length
@@ -1358,9 +1358,28 @@ or does not check is rebuilt from the generations' names, with young counted ful
   of a 2D texture of one sample, with `Load`, `Clear` and `DontCare` loads and `Store` and
   `DontCare` stores.
 - An attachment whose home layout is shader-read-only (a texture of shader-read and render-target
-  usage) is moved to the attachment layout and back by every pass that renders into it, and to
-  the feedback layout and back by a pass that reads it through a texture, also where the next
-  pass over it reads it so again.
+  usage) is moved to the attachment layout and back by every pass that renders into it. A pass
+  that reads it through a texture moves the whole image to the feedback layout at its first
+  reading draw and home at its end, also where the next pass over it reads it so again. Their
+  cost, measured in the harness (release; Mesa 26.2.6, NVIDIA 620.70.06): a pass that clears a
+  `BGRA8Unorm` target of shader-read and render-target usage and draws over it once, the
+  fragment function reading its own pixel of the target, against the same pass reading another
+  texture of the same size; GPU time a pass, the median over four rounds of each round's median.
+  The moves are timed alone by timestamps around their barriers: the move in, and how much more
+  the pass's last barrier takes moving the image home from the feedback layout than from the
+  attachment layout.
+
+  | Device | 3648 × 2038: reading the target / another texture | 1920 × 1080: the same | The move in, 3648 × 2038 / 1920 × 1080 | The move home |
+  |---|---|---|---|---|
+  | RX 7900 XTX (RADV) | 54.3 / 20.3 µs (+34.0) | 20.4 / 13.9 µs (+6.5) | 19.6 / 8.0 µs | nothing more |
+  | RTX 3090 | 66.6 / 59.4 µs (+7.2) | 37.9 / 30.9 µs (+7.0) | 7.3 / 7.3 µs | nothing more |
+  | RX 550 (RADV) | 1,122.9 / 516.5 µs (+606.4) | 320.2 / 150.2 µs (+170.1) | 370.6 / 106.4 µs | nothing more |
+  | Iris Xe (ANV) | 449.1 / 561.7 µs (−112.7) | 143.1 / 133.5 µs (+9.6) | 2.1 / 2.0 µs | 7.0 / 7.1 µs more |
+
+  On RADV the cost is the move in; the rest of the difference, about 14 µs on the XTX and
+  236 µs on the RX 550 at 3648 × 2038, is the draw's own, slower in the feedback layout. On the
+  Iris Xe at 3648 × 2038 the pass reading another texture is the slower one, so that difference
+  is not the moves'; their timed cost there is about 9 µs.
 
 ## One path for every device
 
