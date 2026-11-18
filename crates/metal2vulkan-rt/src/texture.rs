@@ -397,9 +397,10 @@ impl Image {
     }
 
     /// Its shadow, made where it has none yet: an image of its format, extent, levels and layers,
-    /// in device-local memory, whose move from undefined to its home layout, shader-read-only, the
-    /// upload of the next submission records, ahead of every command buffer committed after this
-    /// returns. The shadow gauges rise with it. `None` for an image of no shadow.
+    /// bound as a texture's image is, whose move from undefined to its home layout,
+    /// shader-read-only, the upload of the next submission records, ahead of every command buffer
+    /// committed after this returns. The shadow gauges rise with it. `None` for an image of no
+    /// shadow.
     ///
     /// Err: [`Error::Vulkan`] where the image cannot be made or bound; [`Error::Quiesced`].
     fn shadow(&self) -> Result<Option<vk::Image>, Error> {
