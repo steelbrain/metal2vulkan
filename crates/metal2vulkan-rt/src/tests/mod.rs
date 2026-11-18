@@ -26,6 +26,7 @@ mod places;
 mod push_window;
 mod readback;
 mod render;
+mod ring;
 mod sampler;
 mod sampling;
 mod shadow;

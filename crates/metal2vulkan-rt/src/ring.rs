@@ -6,7 +6,10 @@
 //! The ring is made of 2 MiB blocks, each split into 64 KiB chunks. A command buffer takes chunks
 //! as it records, writes each byte once, and gives them back when it retires, so the GPU never
 //! reads a chunk the host is writing. A block is made when no chunk is free and kept for the
-//! device's life: the ring holds what the command buffers in flight at once have needed. The
+//! device's life: the ring holds what the command buffers in flight at once have needed. One take
+//! at a time makes a block, without the ring's lock: a take or a give-back on another thread
+//! never waits for the driver's allocation, and a take that finds no chunk while a block is being
+//! made waits for it, or for a chunk given back, so no block is made beyond what was needed. The
 //! runtime never reads the ring back.
 //!
 //! One chunk, taken at the first ask and kept for the device's life, is the nil buffer
@@ -21,18 +24,24 @@ use crate::floor;
 use crate::memory::{self, Mapping};
 use ash::vk;
 use std::ptr::NonNull;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex, PoisonError};
 
 /// A chunk's length: the most one write takes.
 pub(crate) const CHUNK: u64 = 64 * 1024;
 /// A ring block's length.
-const BLOCK: u64 = 32 * CHUNK;
+pub(crate) const BLOCK: u64 = 32 * CHUNK;
 /// The alignment of every write: a parameter block's, and Metal's for `setBytes` data.
 const ALIGN: u64 = 16;
 
 /// The device's ring.
 pub(crate) struct Ring {
     state: Mutex<State>,
+    /// A block made, or chunks given back, while a block was being made.
+    changed: Condvar,
+    /// For the device tests: where set, a take that makes a block meets the test at the barrier
+    /// twice before it makes it, once parked and once released.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) park: Mutex<Option<std::sync::Arc<std::sync::Barrier>>>,
 }
 
 struct State {
@@ -40,6 +49,8 @@ struct State {
     free: Vec<Chunk>,
     /// The nil buffer's address, once asked ([`Ring::nil`]).
     nil: Option<u64>,
+    /// A take is making a block.
+    making: bool,
 }
 
 struct RingBlock {
@@ -72,17 +83,45 @@ impl Ring {
                 blocks: Vec::new(),
                 free: Vec::new(),
                 nil: None,
+                making: false,
             }),
+            changed: Condvar::new(),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            park: Mutex::new(None),
         }
     }
 
-    /// A free chunk, making a block where none is free.
+    /// A free chunk, making a block where none is free and no other take is making one; where one
+    /// is, the take waits for it.
     fn take(&self, core: &Core) -> Result<Chunk, Error> {
         let mut state = lock(&self.state);
-        if let Some(chunk) = state.free.pop() {
-            return Ok(chunk);
+        loop {
+            if let Some(chunk) = state.free.pop() {
+                return Ok(chunk);
+            }
+            if !state.making {
+                break;
+            }
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
         }
-        let (block, address, host) = make(core)?;
+        state.making = true;
+        drop(state);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            let park = lock(&self.park).clone();
+            if let Some(park) = park {
+                park.wait();
+                park.wait();
+            }
+        }
+        let made = make(core);
+        let mut state = lock(&self.state);
+        state.making = false;
+        self.changed.notify_all();
+        let (block, address, host) = made?;
         let buffer = block.buffer;
         state.blocks.push(block);
         for index in (1..BLOCK / CHUNK).rev() {
@@ -117,6 +156,9 @@ impl Ring {
             // Another thread's ask made it first: the chunk goes back.
             Some(address) => {
                 state.free.push(chunk);
+                if state.making {
+                    self.changed.notify_all();
+                }
                 Ok(address)
             }
             None => {
@@ -128,7 +170,18 @@ impl Ring {
 
     /// Takes back a retired command buffer's chunks.
     fn give_back(&self, chunks: Vec<Chunk>) {
-        lock(&self.state).free.extend(chunks);
+        let mut state = lock(&self.state);
+        state.free.extend(chunks);
+        if state.making {
+            self.changed.notify_all();
+        }
+    }
+
+    /// For the device tests: the ring's blocks and free chunks where its lock is free now, else
+    /// None.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn chunks(&self) -> Option<(usize, usize)> {
+        (self.state.try_lock().ok()).map(|state| (state.blocks.len(), state.free.len()))
     }
 
     /// Frees every block, returning how many it freed.
