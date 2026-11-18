@@ -1675,6 +1675,10 @@ for dependency in &pipeline.dependencies {
   records they reach: the indirect-command operations they may call, and the primitive types
   their draws may pass (a draw's constant type, or all five where it is not a constant). A clear
   bit is proven.
+- `interface.writes_memory` says, provably, whether a pipeline's functions write memory another
+  invocation or a later command can read: a store to a buffer or through a device address, a
+  texture write, or an atomic update. A compute pipeline without it has no effect a program can
+  observe, so a runtime may run nothing for its dispatches.
 - `interface.reads_unbound_resources` and `interface.writes_unbound_resources` say, provably,
   whether a pipeline's functions may read or write a resource through anything but their bound
   slots: through a pointer or texture they load from memory or make from an integer (an argument

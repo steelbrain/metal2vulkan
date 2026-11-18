@@ -55,6 +55,13 @@ pub struct PipelineInterface {
     /// pipeline.
     #[cfg_attr(feature = "serde", serde(default))]
     pub writes_unbound_resources: bool,
+    /// Some stage's function writes memory another invocation or a later command can read
+    /// (`StageInterface::writes_memory`): a store to a buffer or through a device address, a
+    /// texture write, or an atomic update, in the entry or any function it calls. `false` is proven
+    /// of every function of the pipeline: a compute pipeline's kernel without it has no effect a
+    /// program can observe, so a dispatch of it may run nothing.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub writes_memory: bool,
     /// The samplers a pipeline state numbers for each of its Metal functions
     /// (`StageInterface::numbered_samplers`, [`NumberedSampler`]), each function's in Metal's
     /// order, the functions in the pipeline's stage order: what the runtime gives sampler

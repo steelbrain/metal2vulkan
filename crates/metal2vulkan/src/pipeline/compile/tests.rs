@@ -2873,6 +2873,78 @@ fn the_interface_states_whether_the_function_writes_memory() {
     assert!(!a.interface.writes_memory);
 }
 
+/// A kernel over `out` (buffer 0, read-write) and `params` (buffer 1, read), with
+/// `thread_position_in_grid` as `%2`; `body` holds the entry's instructions and its blocks, `extra`
+/// any function it calls.
+fn effects_kernel(name: &str, body: &str, extra: &str) -> String {
+    format!(
+        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+         target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+         {extra}\
+         define void @{name}(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, ptr addrspace(1) noundef \"air-buffer-no-alias\" %1, i32 noundef %2) {{\nentry:\n{body}}}\n\n\
+         !air.kernel = !{{!9}}\n!air.version = !{{!17}}\n!air.language_version = !{{!18}}\n\
+         !9 = !{{ptr @{name}, !10, !11}}\n!10 = !{{}}\n!11 = !{{!12, !13, !14}}\n\
+         !12 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}}\n\
+         !13 = !{{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 1, !\"air.read\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"params\"}}\n\
+         !14 = !{{i32 2, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"t\"}}\n\
+         !17 = !{{i32 2, i32 8, i32 0}}\n!18 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
+    )
+}
+
+/// A compute pipeline's interface states whether its kernel writes memory, which the runtime reads
+/// to record nothing for a dispatch of a kernel that does not: a kernel that returns at once, one
+/// that only reads its buffers, and one that writes only its own thread's array write none; one that
+/// stores to its buffer behind a branch, and one whose callee (kept a call, `noinline`) stores
+/// through the pointer it is passed, write memory.
+#[test]
+fn a_compute_pipeline_states_whether_its_kernel_writes_memory() {
+    let p =
+        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let callee = "define void @put(ptr addrspace(1) noundef %p, i32 noundef %v) #0 {\nentry:\n  store i32 %v, ptr addrspace(1) %p, align 4\n  ret void\n}\n\nattributes #0 = { noinline }\n\n";
+    for (name, body, extra, writes) in [
+        ("bare_return", "  ret void\n", "", false),
+        (
+            "only_reads",
+            "  %p = load i32, ptr addrspace(1) %1, align 4\n  %q = load i32, ptr addrspace(1) %0, align 4\n  %s = add i32 %p, %q\n  ret void\n",
+            "",
+            false,
+        ),
+        (
+            "local_only",
+            "  %a = alloca [4 x i32], align 4\n  %i = and i32 %2, 3\n  %ie = zext i32 %i to i64\n  %e = getelementptr inbounds [4 x i32], ptr %a, i64 0, i64 %ie\n  store i32 %2, ptr %e, align 4\n  %j = xor i32 %i, 1\n  %je = zext i32 %j to i64\n  %f = getelementptr inbounds [4 x i32], ptr %a, i64 0, i64 %je\n  %v = load i32, ptr %f, align 4\n  ret void\n",
+            "",
+            false,
+        ),
+        (
+            "branch_store",
+            "  %p = load i32, ptr addrspace(1) %1, align 4\n  %c = icmp ne i32 %p, 0\n  br i1 %c, label %then, label %done\nthen:\n  store i32 %2, ptr addrspace(1) %0, align 4\n  br label %done\ndone:\n  ret void\n",
+            "",
+            true,
+        ),
+        (
+            "callee_store",
+            "  call void @put(ptr addrspace(1) noundef %0, i32 noundef %2)\n  ret void\n",
+            callee,
+            true,
+        ),
+    ] {
+        let Some(bc) = assemble_text(name, &effects_kernel(name, body, extra)) else {
+            return;
+        };
+        let a = crate::pipeline::testing::compile(&bc, name, &p)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(a.interface.writes_memory, writes, "{name}");
+        let linked = crate::pipeline::link::link(
+            &[&*a],
+            &crate::pipeline::link::LinkInputs::standalone(),
+            &p,
+        )
+        .unwrap_or_else(|e| panic!("{name}: link: {e}"));
+        assert_eq!(linked.interface.writes_memory, writes, "{name}: pipeline");
+        crate::pipeline::testing::link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
+    }
+}
+
 /// The interface states whether the function takes an indirect command buffer, from the AIR's
 /// metadata: an argument buffer's `command_buffer` member the kernel never encodes through
 /// (`kernel_icb_declared_handle_is_inert`), and one it encodes compute commands through

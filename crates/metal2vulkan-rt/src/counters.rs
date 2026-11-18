@@ -17,6 +17,8 @@ pub(crate) enum Metric {
     PipelinesCreated,
     /// [`Metrics::blocks_made`].
     BlocksMade,
+    /// [`Metrics::dispatches_without_effects`].
+    DispatchesWithoutEffects,
     /// [`Metrics::translations`].
     Translations,
     /// [`Metrics::translations_loaded`].
@@ -88,6 +90,7 @@ struct Atomics {
     first_use_wait_nanos: AtomicU64,
     first_use_wait_max_nanos: AtomicU64,
     blocks_made: AtomicU64,
+    dispatches_without_effects: AtomicU64,
     translations: AtomicU64,
     translations_loaded: AtomicU64,
     ring_writes: AtomicU64,
@@ -136,6 +139,7 @@ impl Counters {
             Metric::Barriers => &a.barriers,
             Metric::PipelinesCreated => &a.pipelines_created,
             Metric::BlocksMade => &a.blocks_made,
+            Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
             Metric::RingWrites => &a.ring_writes,
@@ -259,6 +263,7 @@ impl Counters {
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
             first_use_wait_max_nanos: a.first_use_wait_max_nanos.load(Relaxed),
             blocks_made: a.blocks_made.load(Relaxed),
+            dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
             cache_bytes_written: a.cache_bytes_written.load(Relaxed),
@@ -328,6 +333,10 @@ pub struct Metrics {
     /// `VkDeviceMemory` allocations made: pooled blocks (the texture blocks among them) and
     /// dedicated ones, the zero source and the parameter ring's blocks.
     pub blocks_made: u64,
+    /// Dispatches of a kernel that writes no memory (`PipelineInterface::writes_memory`),
+    /// direct and indirect: each was checked as Metal checks it, and nothing was recorded, bound
+    /// or read for it, as it has no effect a program can observe.
+    pub dispatches_without_effects: u64,
     /// Kernels the translator lowered, each a module of a compute pipeline content the device did
     /// not hold compiled: one for a kernel that does not observe its threadgroup partition, two
     /// for one that does. A state of a content the device holds lowers nothing.

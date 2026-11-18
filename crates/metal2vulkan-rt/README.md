@@ -555,6 +555,12 @@ that touch blocks first.
   texture's format (`metal::format::integer_channels_word`); and for each constexpr sampler it
   samples through, the index the consumer gave it at the state's creation. Nothing is written
   into set 1 at bind or dispatch time, and every texture stays in its home layout.
+- A dispatch of a kernel that writes no memory (the translator's `PipelineInterface::writes_memory`:
+  no store to a buffer or through a device address, no texture write and no atomic update, in the
+  kernel or any function it calls) records nothing, binds nothing and reads no indirect buffer,
+  once its threadgroup size is checked: it has no effect a program can observe.
+  `Metrics::dispatches_without_effects` counts them. Its GPU time and its command buffer's are
+  then shorter than Metal's.
 - Each dispatch records at once. What it touches is its pipeline's bound buffer and texture
   slots, with the access the translator states for each (a texture's sample and read are reads),
   the `use_resource` declarations, and an indirect dispatch's arguments buffer (a read). The

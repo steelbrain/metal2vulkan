@@ -444,6 +444,11 @@ impl ComputeCommandEncoder {
     /// A count above the device's `maxComputeWorkGroupCount` is split into dispatches within it,
     /// each reading Metal's whole grid from its region.
     ///
+    /// A kernel that writes no memory (`PipelineInterface::writes_memory`) has no effect a program
+    /// can observe: once the threadgroup size is checked, its dispatch, direct or indirect, records
+    /// nothing, binds nothing and reads no indirect buffer
+    /// ([`Metrics::dispatches_without_effects`](crate::Metrics::dispatches_without_effects)).
+    ///
     /// A threadgroup that is not whole subgroups of a kernel whose tier runs only whole ones (32
     /// threads where each SIMD group is a 32-lane cluster of a 64-lane subgroup included) runs
     /// the kernel's emulated-SIMD-group module, waiting for the reaper's lowering of it where
@@ -531,7 +536,6 @@ impl ComputeCommandEncoder {
                 length: buffer.length(),
             }));
         }
-        self.building().keep(buffer);
         self.dispatch(Grid::Indirect(buffer, offset), threads_per_threadgroup)
     }
 
@@ -582,6 +586,16 @@ impl ComputeCommandEncoder {
                 size,
                 max: limits.max_group_size,
             }));
+        }
+        // A kernel that writes no memory has no effect a program can observe: once checked as
+        // Metal checks it, the dispatch records nothing, binds nothing and reads no indirect
+        // buffer. Every module of a state is the same function, so the whole module answers.
+        if !inner.whole.interface.has_effects {
+            core.counters.count(Metric::DispatchesWithoutEffects);
+            return Ok(());
+        }
+        if let Grid::Indirect(buffer, _) = &grid {
+            self.building().keep(buffer);
         }
         // What runs: the module, which of the state's it is, its workgroup size, the threadgroup
         // size its regions carry, and for a direct dispatch Metal's grid, the workgroups, and

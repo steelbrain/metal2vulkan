@@ -259,6 +259,9 @@ pub(crate) struct Interface {
     pub(crate) reads_unbound: bool,
     /// Whether the kernel writes through an address that is not one of its bound slots.
     pub(crate) writes_unbound: bool,
+    /// Whether the kernel writes memory another invocation or a later command can read
+    /// (`PipelineInterface::writes_memory`): a dispatch of a kernel without it records nothing.
+    pub(crate) has_effects: bool,
     /// Bytes of the push window the fields use.
     pub(crate) push_len: u32,
     /// The length of the ring block of the fields past the window, a multiple of 16; 0 where
@@ -889,6 +892,7 @@ fn interface(
         constexprs,
         reads_unbound: translated.reads_unbound_resources,
         writes_unbound: translated.writes_unbound_resources,
+        has_effects: translated.writes_memory,
         push_len,
         block_len,
         block_address,

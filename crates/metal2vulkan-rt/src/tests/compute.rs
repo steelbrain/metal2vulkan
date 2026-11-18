@@ -2,7 +2,7 @@
 //! buffers and `set_bytes`, parameters past the push window
 //! through the ring, indirect dispatch, barriers only at hazards in a serial encoder and only on
 //! request in a concurrent one, end barriers that reach the host only after Shared writes and
-//! signals, and Metal's refusals.
+//! signals, a dispatch of a kernel without effects that records nothing, and Metal's refusals.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -40,6 +40,7 @@ mod on_device {
             constexprs: Vec::new(),
             reads_unbound: false,
             writes_unbound: false,
+            has_effects: true,
             push_len,
             block_len: 0,
             block_address: 0,
@@ -495,6 +496,54 @@ mod on_device {
             run(name, &command_buffer);
             let expected: Vec<u32> = (0..WORDS as u32).map(|index| 1001 * index).collect();
             assert_eq!(words(&o), expected, "{name}");
+        });
+    }
+
+    /// A dispatch of a kernel that writes no memory (`Interface::has_effects` false, from the
+    /// translator's `PipelineInterface::writes_memory`) records nothing: given the step kernel's
+    /// words under such an interface, a direct and an indirect dispatch leave its buffer as it was,
+    /// a third with no buffer bound owes no bind, and each is counted.
+    #[test]
+    fn every_device_records_nothing_for_a_dispatch_of_a_kernel_without_effects() {
+        each_device("compute_without_effects", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (x, arguments) = (arena.buffer(), arena.buffer());
+            write_words(&x, |index| index);
+            write_words(&arguments, |index| match index {
+                0..=2 => 1,
+                _ => 0,
+            });
+            let fields = vec![region(), address(0, Place::Push(32))];
+            let mut quiet = interface(vec![(0, Access::ReadWrite)], fields, 40);
+            quiet.has_effects = false;
+            let state = ComputePipelineState::for_test(&device, &kernels::STEP, quiet)
+                .expect("the step kernel");
+            let before = device.counters().metrics().dispatches_without_effects;
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            encoder
+                .dispatch_threadgroups([1, 1, 1], [16, 1, 1])
+                .expect("an unbound dispatch");
+            encoder.set_buffer(Some(&x), 0, 0).expect("a buffer");
+            encoder
+                .dispatch_threadgroups([4, 1, 1], [16, 1, 1])
+                .expect("a dispatch");
+            encoder
+                .dispatch_threadgroups_with_indirect_buffer(&arguments, 0, [16, 1, 1])
+                .expect("an indirect dispatch");
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let expected: Vec<u32> = (0..WORDS as u32).collect();
+            assert_eq!(words(&x), expected, "{name}: the words");
+            assert_eq!(
+                device.counters().metrics().dispatches_without_effects - before,
+                3,
+                "{name}: the dispatches counted"
+            );
         });
     }
 

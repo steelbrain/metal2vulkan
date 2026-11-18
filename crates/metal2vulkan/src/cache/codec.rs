@@ -1405,7 +1405,8 @@ codec_struct! {
     PipelineInterface {
         slots, threadgroup, needs_pointer_translation, needs_handle_translation, push,
         reaches_command_buffers, command_writes, texture_writing_stages,
-        reads_unbound_resources, writes_unbound_resources, numbered_samplers, stage_in,
+        reads_unbound_resources, writes_unbound_resources, writes_memory, numbered_samplers,
+        stage_in,
     }
     PipelineLayout { sets, push_constants, push_descriptor_eligible }
     DescriptorSetLayout { set, bindings, flags }
