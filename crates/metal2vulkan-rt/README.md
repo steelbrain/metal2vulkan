@@ -318,8 +318,8 @@ made, with no lock, and never rewritten for layouts.
   together, made as the device starts and again at a completion once 100 ms have passed since
   the last, never for each command buffer. A command buffer's GPU times so fall between
   `host_time()` before its commit and after its completion, within the calibration's deviation
-  and the clocks' drift over 100 ms. Each queue has a pool of two queries per command buffer it may have made at once, all reset on the
-  host as it is made (`hostQueryReset`); a command buffer's pair is reset on the host as it
+  and the clocks' drift over 100 ms. Each queue has a pool of two queries per command buffer it
+  may have made at once, all reset on the host as it is made (`hostQueryReset`); a command buffer's pair is reset on the host as it
   retires, those of the two its submissions wrote, so no command buffer the GPU runs resets a
   query. A command buffer with no commands, or whose last segment has none, records a
   `VkCommandBuffer` for its timestamps. One that ends with an error has GPU times of 0.
