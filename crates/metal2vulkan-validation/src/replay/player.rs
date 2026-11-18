@@ -821,6 +821,11 @@ impl<'b, B: Backend> Player<'b, B> {
         call: Call,
         left_out: &mut Counters,
     ) -> Result<(), PlayError> {
+        // A message to nil does nothing: a call of receiver 0 that makes nothing and names no
+        // class (a class's call is `MTLX.selector`, the host's `m2v.selector`).
+        if call.receiver == 0 && call.result == 0 && !call.selector.contains('.') {
+            return Ok(());
+        }
         match &*call.selector {
             "m2v.write" => self.write(stream, &call),
             "m2v.check" => {

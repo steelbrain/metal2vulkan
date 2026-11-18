@@ -1063,6 +1063,37 @@ fn a_dispatch_plays_between_its_private_bytes() {
     assert!(total.values().all(|&value| value == 0), "{total:?}");
 }
 
+/// A message to nil (receiver 0, no result, no class named) plays nothing and does not stop the
+/// play; the stream still counts it as a call.
+#[test]
+fn a_message_to_nil_does_nothing() {
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let region = map(&[
+            ("origin", map(&[("x", Value::Uint(0))])),
+            ("size", map(&[("width", Value::Uint(1))])),
+        ]);
+        let args = [
+            region,
+            Value::Uint(0),
+            Value::Bytes(vec![0; 4]),
+            Value::Uint(4),
+        ];
+        w.call(
+            "replaceRegion:mipmapLevel:withBytes:bytesPerRow:",
+            0,
+            0,
+            &args,
+            &[],
+        )?;
+        Ok(())
+    });
+    ended.unwrap();
+    assert_eq!(kept.calls, ["#1 = MTLCreateSystemDefaultDevice"]);
+    assert_eq!(report.total.stream["calls"], 2);
+}
+
 /// On a backend that takes no snapshots, a dispatch an `m2v.privateBytes` record names plays as it
 /// is, with none of the player's own calls, and the report counts it.
 #[test]

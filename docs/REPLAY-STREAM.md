@@ -83,6 +83,8 @@ and the (name id, value) answer pairs.
   (`MTLRenderPassDescriptor.new`), or an `m2v.` name for what Metal has no call for. Where two
   classes share a selector, the receiver's kind tells them apart.
 - **Receiver 0** is the host's platform: the device, descriptor and drawable records it makes.
+  A call of receiver 0 that makes nothing and whose selector names no class (no `.`) is a message
+  the program sent to nil: it does nothing, and a player plays nothing for it.
 - **Arguments:** one value per argument of the selector, in order; an encoder command's are its
   fields. Error out-parameters, blocks and handlers are left out: their effects reach the stream as
   later calls and writes.
