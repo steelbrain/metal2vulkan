@@ -16,6 +16,8 @@
 //!   staging buffer of its own until the upload that copies through it is gone;
 //! - a copy that finds the region full behind a `get_bytes`'s span sleeps until the read ends:
 //!   once, with no spin, waking at the read's end, and a quiesce ends the sleep;
+//! - a quiesce past its deadline, a `get_bytes`'s copy in flight behind busy work, leaves the
+//!   completion thread to end alone once the copy completes, and the device then frees itself;
 //!
 //! and every gauge reads zero after teardown.
 
@@ -397,6 +399,53 @@ mod on_device {
                 drop(device);
                 wait_until("the teardown", || counters.gauges() == Gauges::default());
             }
+        }
+    }
+
+    /// A quiesce that answers past its deadline while busy work the host holds ([`Busy`]) keeps
+    /// the GPU, with a `get_bytes` copy submitted behind it, leaves the completion thread to end
+    /// alone: once the busy work opens, it retires the copy, which held what it used (the core
+    /// among it), and ends. The device's last handle then frees everything: every gauge reads
+    /// zero, and the instance goes within the validation guard's patience.
+    #[test]
+    fn every_device_frees_itself_after_a_quiesce_past_its_deadline() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        let side = 256;
+        let len = u64::from(side) * u64::from(side) * 4;
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let counters = device.counters();
+            device
+                .grant_indices(IndexClass::Texture, 4096, 1)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let read = (device.new_texture(&square(side), Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // What the device and the texture's making left pending goes and completes, so the
+            // next submission is the read's.
+            let core = device.core();
+            let value = core.work.flush();
+            (core.done.wait(core, value)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let submitted = counters.metrics().submissions;
+            let busy = Busy::new(&device);
+            let reader = thread::spawn(move || {
+                let mut bytes = vec![0; len as usize];
+                read.get_bytes(&mut bytes, u64::from(side * 4), len, whole(side), 0, 0)
+            });
+            wait_until("the read's submission", || {
+                counters.metrics().submissions > submitted
+            });
+            assert!(
+                !device.quiesce(Duration::from_millis(100)),
+                "{name}: the quiesce answers past its deadline while the busy work holds the GPU"
+            );
+            busy.open();
+            let _ = reader.join().expect("the reader");
+            drop(busy);
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
     }
 
