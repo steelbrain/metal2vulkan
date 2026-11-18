@@ -3,8 +3,8 @@
 //! signals; listeners; abandon; quiesce, also in an `exit()` handler; teardown from a handler and
 //! with work held; refusals of what has started; a loss; a released block kept until its last
 //! command buffer retires; a block whose last handle drops freed once its last command buffer
-//! retires; and a block's clones, one dropped giving nothing back, and a handle outliving its
-//! device.
+//! retires; a block's clones, one dropped giving nothing back, and a handle outliving its
+//! device; and the thread gauge holding the device's four threads as it is made.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
@@ -1922,6 +1922,18 @@ pub(crate) mod on_device {
             assert!(start >= alone.kernel_start_time(), "{name}: alone {start}");
             println!("{name}: an empty command buffer completed in order with no submission");
             drop((first, empty, last, alone, work, queue, device));
+        });
+    }
+
+    /// `Gauges::threads` holds the device's four threads (its reaper, block-maker, submit and
+    /// completion threads) as `Device::new` returns, with no wait: each thread holds its slot
+    /// before its start returns.
+    #[test]
+    fn every_device_counts_its_four_threads_as_it_is_made() {
+        each_device("device_threads", |name, _, device| {
+            let threads = device.counters().gauges().threads;
+            let held = threads.iter().filter(|&&id| id != 0).count();
+            assert_eq!(held, 4, "{name}: {threads:?}");
         });
     }
 

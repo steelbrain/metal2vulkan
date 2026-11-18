@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, CString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -709,19 +709,25 @@ impl Device {
 
 /// Starts a thread of the runtime's named `name`, which runs `body` holding a slot of the
 /// device's [`Gauges::threads`](crate::Gauges::threads) until it ends: every thread the runtime
-/// starts starts here.
+/// starts starts here. It returns once the thread holds its slot, so a reading of the gauge
+/// counts every thread started before it.
 pub(crate) fn start(
     name: &str,
     counters: &Counters,
     body: impl FnOnce() + Send + 'static,
 ) -> std::io::Result<thread::JoinHandle<()>> {
     let counters = counters.clone();
-    thread::Builder::new()
+    // Nothing is sent: the thread drops `holding` once it holds its slot, or as it unwinds.
+    let (holding, held) = mpsc::channel::<()>();
+    let handle = thread::Builder::new()
         .name(name.to_string())
         .spawn(move || {
             let _slot = counters.thread_started();
+            drop(holding);
             body();
-        })
+        })?;
+    let _ = held.recv();
+    Ok(handle)
 }
 
 /// Starts a runtime thread that serves `core` in `role`.
