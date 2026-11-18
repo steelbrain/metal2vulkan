@@ -5,7 +5,7 @@
 //!
 //! The play waits for each command buffer at its commit; the stream records a completion only where
 //! the program's CPU waited. So a user is "not seen complete" in the recording's order with only
-//! those waits: `waitUntilCompleted` of it or of a later command buffer of its queue (a queue
+//! those waits: a wait until it or a later command buffer of its queue completed (a queue
 //! completes in order), or `waitUntilSignaledValue:timeoutMS:` reaching a value that it or a later
 //! command buffer of its queue signals. Each such write is counted by the presents between the
 //! user's commit and the write.
