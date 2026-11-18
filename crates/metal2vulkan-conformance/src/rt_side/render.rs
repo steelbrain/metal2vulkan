@@ -269,8 +269,18 @@ impl RtSide<'_> {
                 )),
             };
             if answered.is_ok() {
-                if let RenderWork::Dispatch(dispatch) = piece {
-                    self.dispatched.insert(dispatch.pipeline.0 as usize);
+                match piece {
+                    RenderWork::Dispatch(dispatch) => {
+                        self.dispatched.insert(dispatch.pipeline.0 as usize);
+                    }
+                    RenderWork::Pass(pass) => {
+                        self.drawn
+                            .extend(pass.steps.iter().filter_map(|step| match step {
+                                RenderStep::Pipeline(state) => Some(state.0 as usize),
+                                _ => None,
+                            }));
+                    }
+                    _ => {}
                 }
             }
             refused.push(answered.err());

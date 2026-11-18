@@ -15,9 +15,10 @@
 //! numbered its state words took, as Metal gives an equal one the same ID.
 //!
 //! The runtime announces no degrade notice: where a kernel's answers may differ from Metal's, its
-//! state carries static precision notes ([`metal2vulkan_rt::ComputePipelineState::precision_notes`]).
-//! This side announces the notes of each state its case dispatched, by the codes the suite's
-//! allowances name (`metal2vulkan-degrade-<kind>`).
+//! state carries static precision notes ([`metal2vulkan_rt::ComputePipelineState::precision_notes`],
+//! [`metal2vulkan_rt::RenderPipelineState::precision_notes`]). This side announces the notes of
+//! each state its case dispatched or drew with, by the codes the suite's allowances name
+//! (`metal2vulkan-degrade-<kind>`).
 
 use crate::case::{
     Answer, Bindings, Failure, Handle, SamplerSpec, ShaderSource, Side, StageInRegion, StageInput,
@@ -232,6 +233,9 @@ pub struct RtSide<'a> {
     depth_stencils: Vec<rt::DepthStencilState>,
     /// The pipelines the case dispatched, whose precision notes [`Side::announced`] answers.
     dispatched: BTreeSet<usize>,
+    /// The render pipeline states a pass the case encoded set, whose precision notes
+    /// [`Side::announced`] answers too.
+    drawn: BTreeSet<usize>,
 }
 
 impl<'a> RtSide<'a> {
@@ -249,6 +253,7 @@ impl<'a> RtSide<'a> {
             render_pipelines: Vec::new(),
             depth_stencils: Vec::new(),
             dispatched: BTreeSet::new(),
+            drawn: BTreeSet::new(),
         }
     }
 
@@ -494,14 +499,19 @@ impl Side for RtSide<'_> {
         Ok(bytes.to_vec())
     }
 
-    /// The codes of the precision notes of every state the case dispatched, once.
+    /// The codes of the precision notes of every state the case dispatched or drew with, once.
     fn announced(&mut self) -> Vec<String> {
-        let codes: BTreeSet<&'static str> = (self.dispatched.iter())
+        let dispatched = (self.dispatched.iter())
             .filter_map(|&at| self.pipelines.get(at))
-            .flat_map(rt::ComputePipelineState::precision_notes)
+            .flat_map(rt::ComputePipelineState::precision_notes);
+        let drawn = (self.drawn.iter())
+            .filter_map(|&at| self.render_pipelines.get(at))
+            .flat_map(rt::RenderPipelineState::precision_notes);
+        let codes: BTreeSet<&'static str> = (dispatched.chain(drawn))
             .map(|note| metal2vulkan_runtime::Degradation::from_precision_note(note).code())
             .collect();
         self.dispatched.clear();
+        self.drawn.clear();
         codes.into_iter().map(str::to_owned).collect()
     }
 
