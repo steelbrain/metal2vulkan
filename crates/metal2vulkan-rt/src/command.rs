@@ -597,7 +597,9 @@ impl CommandBuffer {
     }
 
     /// `kernelStartTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives
-    /// seconds: the host time at the commit; 0 before it.
+    /// seconds: the host time at the commit, and once it is scheduled, the kernel end time of its
+    /// queue's command buffer before it where that is later, since Metal begins scheduling a
+    /// queue's command buffer once the one before it is scheduled; 0 before the commit.
     pub fn kernel_start_time(&self) -> u64 {
         self.state().times.kernel_start
     }
@@ -616,8 +618,8 @@ impl CommandBuffer {
     /// 100 ms have passed since the last). 0 until it completes, and for one that ended with an
     /// error. One whose segments hold no commands, no event wait and no event signal writes no
     /// timestamp: its start and end are one time, the latest GPU end of its queue's command
-    /// buffers before it, or its commit where that is later, as Metal reports for a command buffer
-    /// that does no work.
+    /// buffers before it, or its kernel end where that is later, as Metal reports for a command
+    /// buffer that does no work.
     pub fn gpu_start_time(&self) -> u64 {
         self.state().times.gpu_start
     }
@@ -1172,6 +1174,8 @@ impl CbInner {
     pub(crate) fn scheduled(&self, now: u64) {
         let mut state = lock(&self.state);
         state.status = CommandBufferStatus::Scheduled;
+        let before = self.queue.last_scheduled.fetch_max(now, Relaxed);
+        state.times.kernel_start = state.times.kernel_start.max(before);
         state.times.kernel_end = now;
         self.changed.notify_all();
     }
@@ -1213,10 +1217,10 @@ pub(crate) fn retire(
     let stamps = {
         let mut state = lock(&inner.state);
         // One with nothing for the GPU, as Metal reports it: its start and end equal, at its
-        // queue's previous command buffer's end or its own commit, whichever is later.
+        // queue's previous command buffer's end or its own kernel end, whichever is later.
         let gpu_times = gpu_times.or_else(|| {
             (error.is_none() && gpu.is_empty()).then(|| {
-                let at = (inner.queue.last_end.load(Relaxed)).max(state.times.kernel_start);
+                let at = (inner.queue.last_end.load(Relaxed)).max(state.times.kernel_end);
                 (at, at)
             })
         });

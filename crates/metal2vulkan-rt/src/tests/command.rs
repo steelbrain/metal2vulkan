@@ -2284,13 +2284,23 @@ pub(crate) mod on_device {
                 start > 0 && start >= first.gpu_end_time(),
                 "{name}: {start}"
             );
+            // Scheduled in order: its kernel start is no earlier than the first's kernel end, and
+            // the last's no earlier than its own.
+            for (before, after) in [(&first, &empty), (&empty, &last)] {
+                let (end, start) = (before.kernel_end_time(), after.kernel_start_time());
+                assert!(start >= end, "{name}: kernel start {start} before {end}");
+            }
             assert_eq!(empty.status(), CommandBufferStatus::Completed, "{name}");
             let alone = queue.command_buffer().expect("a command buffer");
             alone.commit().expect("a commit");
             finished(name, &alone);
             let (start, end) = (alone.gpu_start_time(), alone.gpu_end_time());
             assert_eq!(start, end, "{name}: equal times alone");
-            assert!(start >= alone.kernel_start_time(), "{name}: alone {start}");
+            let kernel_end = alone.kernel_end_time();
+            assert!(
+                start >= kernel_end,
+                "{name}: alone {start} before {kernel_end}"
+            );
             println!("{name}: an empty command buffer completed in order with no submission");
             drop((first, empty, last, alone, work, queue, device));
         });

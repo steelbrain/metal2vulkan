@@ -28,6 +28,10 @@ pub(crate) struct QueueInner {
     /// The latest GPU end time of its command buffers retired, in host nanoseconds: where a
     /// command buffer with nothing for the GPU places its times.
     pub(crate) last_end: AtomicU64,
+    /// The latest kernel end time of its command buffers scheduled, in host nanoseconds: where
+    /// the next one's kernel start is placed at the latest, as Metal schedules a queue's command
+    /// buffers in order.
+    pub(crate) last_scheduled: AtomicU64,
     counters: Counters,
     /// The device, without keeping it: a command buffer handle that outlives the device's
     /// handles holds its queue, and neither keeps the device from its teardown.
@@ -65,6 +69,7 @@ impl Device {
                 }),
                 room: Condvar::new(),
                 last_end: AtomicU64::new(0),
+                last_scheduled: AtomicU64::new(0),
                 counters: core.counters.clone(),
                 core: Arc::downgrade(core),
             }),

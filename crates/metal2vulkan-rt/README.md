@@ -640,15 +640,17 @@ made, with no lock, and never rewritten for layouts.
   `host_time()`: `CLOCK_MONOTONIC` on Linux and other Unix systems, `CLOCK_MONOTONIC_RAW` on
   macOS and the performance counter on Windows, each the host time domain the device calibrates
   its own clock against (`HOST_DOMAIN`). On macOS that clock counts while the system sleeps, where
-  Metal's (`mach_absolute_time`) does not. Metal gives seconds. `kernel_start_time` is the commit
-  and `kernel_end_time` the time it was scheduled. `gpu_start_time` and `gpu_end_time` are two
+  Metal's (`mach_absolute_time`) does not. Metal gives seconds. `kernel_start_time` is the commit, or
+  once it is scheduled, the `kernel_end_time` of its queue's command buffer before it where that
+  is later, as Metal schedules a queue's command buffers in order; `kernel_end_time` is the time
+  it was scheduled. `gpu_start_time` and `gpu_end_time` are two
   timestamp queries, one written where its first commands begin and one where its last segment
   ends, read once it completes with no wait, and placed on the host clock by the device's last
   calibration: one `vkGetCalibratedTimestampsEXT` call reading the GPU's clock and the host's
   together, made as the device starts and again at a completion once 100 ms have passed since
   the last, never for each command buffer. A command buffer that took no submission writes no
   query: its `gpu_start_time` and `gpu_end_time` are one time, never 0: the latest `gpu_end_time`
-  of its queue's command buffers before it, or its commit where that is later, the shape Metal
+  of its queue's command buffers before it, or its `kernel_end_time` where that is later, the shape Metal
   reports for a command buffer that does no work. A command buffer's GPU times so fall between
   `host_time()` before its commit and after its completion, within the calibration's deviation
   and the clocks' drift over 100 ms. The two queries are a pair from the device's timestamp
