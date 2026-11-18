@@ -1096,6 +1096,7 @@ const	metal2vulkan-rt::HOST_DOMAIN	#[cfg(target_os = "macos")] pub const HOST_DO
 const	metal2vulkan-rt::HOST_DOMAIN	#[cfg(windows)] pub const HOST_DOMAIN: vk::TimeDomainKHR
 const	metal2vulkan-rt::MAX_BUFFER_LENGTH	pub const MAX_BUFFER_LENGTH: u64
 const	metal2vulkan-rt::MAX_COLOR_ATTACHMENTS	pub const MAX_COLOR_ATTACHMENTS: usize
+const	metal2vulkan-rt::floor::ATTACHMENT_READ_EXTENSIONS	pub const ATTACHMENT_READ_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::BUFFER_USAGE	pub const BUFFER_USAGE: vk::BufferUsageFlags
 const	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	pub const DEVICE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	pub const INSTANCE_EXTENSIONS: &[&CStr]
@@ -1202,6 +1203,7 @@ const-value	metal2vulkan-rt::HOST_DOMAIN	vk::TimeDomainKHR::CLOCK_MONOTONIC_RAW
 const-value	metal2vulkan-rt::HOST_DOMAIN	vk::TimeDomainKHR::QUERY_PERFORMANCE_COUNTER
 const-value	metal2vulkan-rt::MAX_BUFFER_LENGTH	1 <<31
 const-value	metal2vulkan-rt::MAX_COLOR_ATTACHMENTS	8
+const-value	metal2vulkan-rt::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attachment_feedback_loop_layout::NAME, ash::ext::attachment_feedback_loop_dynamic_state::NAME]
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
@@ -2474,6 +2476,7 @@ field	metal2vulkan-rt::Viewport.width	pub width: f64
 field	metal2vulkan-rt::Viewport.zfar	pub zfar: f64
 field	metal2vulkan-rt::Viewport.znear	pub znear: f64
 field	metal2vulkan-rt::floor::BelowFloor.missing	pub missing: Vec<Missing>
+field	metal2vulkan-rt::floor::Capabilities.attachment_reads	pub attachment_reads: bool
 field	metal2vulkan-rt::floor::Capabilities.buffer_int64_atomics	pub buffer_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.extensions	pub extensions: Vec<&'static CStr>
 field	metal2vulkan-rt::floor::Capabilities.features	pub features: Features
@@ -2486,6 +2489,8 @@ field	metal2vulkan-rt::floor::Capabilities.shared_int64_atomics	pub shared_int64
 field	metal2vulkan-rt::floor::Capabilities.storage_read_without_format	pub storage_read_without_format: bool
 field	metal2vulkan-rt::floor::Capabilities.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: bool
 field	metal2vulkan-rt::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
+field	metal2vulkan-rt::floor::Features.feedback_loop	pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>
+field	metal2vulkan-rt::floor::Features.feedback_loop_dynamic	pub feedback_loop_dynamic: vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>
 field	metal2vulkan-rt::floor::Features.maximal_reconvergence	pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.portability	pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.robustness2	pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>
