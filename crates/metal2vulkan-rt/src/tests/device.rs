@@ -378,17 +378,27 @@ fn every_device_of_the_cfgs_kind_gives_the_translator_only_what_it_enables() {
     for (name, physical) in &devices {
         let device = Device::new(physical, DeviceOptions::default())
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let enabled = &device.core().translator.profile().enabled().features;
-        for on in [VkFeature::RobustImageAccess, VkFeature::NullDescriptor] {
+        let profile = device.core().translator.profile();
+        let enabled = &profile.enabled().features;
+        for on in [
+            VkFeature::RobustImageAccess,
+            VkFeature::RobustImageAccess2,
+            VkFeature::NullDescriptor,
+        ] {
             assert!(enabled.contains(&on), "{name}: {on:?}");
         }
         for off in [
-            VkFeature::RobustImageAccess2,
             VkFeature::RobustBufferAccess,
             VkFeature::RobustBufferAccess2,
         ] {
             assert!(!enabled.contains(&off), "{name}: {off:?}");
         }
-        println!("profile: {name}: robustImageAccess and nullDescriptor alone of the robustness features");
+        // An image read out of range is the device's; a texel buffer's is still the shader's.
+        assert!(profile.device_reads_texels(false), "{name}: image reads");
+        assert!(!profile.device_reads_texels(true), "{name}: texel buffers");
+        println!(
+            "profile: {name}: robustImageAccess, robustImageAccess2 and nullDescriptor alone of \
+             the robustness features"
+        );
     }
 }

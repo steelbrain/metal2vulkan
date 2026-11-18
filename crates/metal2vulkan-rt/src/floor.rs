@@ -24,8 +24,8 @@ pub const INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::surface::NAME];
 pub const OPTIONAL_INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::portability_enumeration::NAME];
 
 /// The device extensions the runtime requires and device creation enables: presenting, null
-/// descriptors, and the GPU's clock read with the host's, for GPU times on the host clock
-/// ([`host_time`](crate::host_time)).
+/// descriptors and image reads out of range answered by the device, and the GPU's clock read with
+/// the host's, for GPU times on the host clock ([`host_time`](crate::host_time)).
 pub const DEVICE_EXTENSIONS: &[&CStr] = &[
     ash::khr::swapchain::NAME,
     ash::ext::robustness2::NAME,
@@ -186,8 +186,8 @@ pub struct Features {
     /// it.
     pub subgroup_uniform_control_flow:
         vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR<'static>,
-    /// `VkPhysicalDeviceRobustness2FeaturesEXT`, of `VK_EXT_robustness2`: only `nullDescriptor`
-    /// is enabled, never the robust buffer and image access beside it.
+    /// `VkPhysicalDeviceRobustness2FeaturesEXT`, of `VK_EXT_robustness2`: `nullDescriptor` and
+    /// `robustImageAccess2` are enabled, never the robust buffer access beside them.
     pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>,
     /// `VkPhysicalDevicePortabilitySubsetFeaturesKHR`, of `VK_KHR_portability_subset`: read and
     /// enabled only where the device lists it, and then only the portability features the floor asks
@@ -308,6 +308,9 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // An image access out of range: a write or an atomic is dropped and a read answers zero, as
     // Metal's, with no guard in the shader. Vulkan 1.3's.
     feature!(vulkan13.robust_image_access => RobustImageAccess),
+    // An image read out of range answers Metal's texel exactly, alpha 1 for a format without
+    // alpha, a fetch past the view's levels included, so a read takes no check in the shader.
+    feature!(robustness2.robust_image_access2 => RobustImageAccess2),
     // A render pipeline's color attachments blend each by its own state, as Metal's do, and a
     // fragment function writes and atomically updates device memory, as Metal's may. Vulkan 1.4
     // requires both of every graphics device.

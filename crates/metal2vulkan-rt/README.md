@@ -1645,7 +1645,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 |---|---|---|
 | `VK_KHR_surface` | instance | presenting |
 | `VK_KHR_swapchain` | device | presenting |
-| `VK_EXT_robustness2` | device | null descriptors |
+| `VK_EXT_robustness2` | device | null descriptors, and image reads out of range answered by the device |
 | `VK_EXT_calibrated_timestamps` | device | GPU times on the host clock: the device calibrates its own clock (`VK_TIME_DOMAIN_DEVICE_EXT`) with the host's (`floor::TIME_DOMAINS`) |
 | `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
@@ -1672,7 +1672,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderSampledImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
 | `shaderStorageImageArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | a `gpuResourceID` that differs between threads |
 | `shaderStorageImageWriteWithoutFormat` | `VkPhysicalDeviceFeatures` | writes to array elements of any pixel format |
-| `nullDescriptor` | `VkPhysicalDeviceRobustness2FeaturesEXT` | every texture element no texture owns: a nil, freed or unowned index reads zeros, sizes 0 and drops writes, as Metal's nil texture does. The robust buffer and image access beside it stay off |
+| `nullDescriptor` | `VkPhysicalDeviceRobustness2FeaturesEXT` | every texture element no texture owns: a nil, freed or unowned index reads zeros, sizes 0 and drops writes, as Metal's nil texture does. The robust buffer access beside it stays off |
 | `samplerAnisotropy` | `VkPhysicalDeviceFeatures` | a sampler state's `maxAnisotropy`, which the device's own filter takes |
 | `shaderInt16` | `VkPhysicalDeviceFeatures` | `short` and `ushort` in shaders |
 | `shaderInt8` | `VkPhysicalDeviceVulkan12Features` | `char` and `uchar` in shaders |
@@ -1685,6 +1685,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `subgroupSizeControl` | `VkPhysicalDeviceVulkan13Features` | a kernel's SIMD groups at Metal's width of 32, where the device lists compute in `requiredSubgroupSizeStages` |
 | `computeFullSubgroups` | `VkPhysicalDeviceVulkan13Features` | a kernel's subgroups required full, so each SIMD group is one subgroup |
 | `robustImageAccess` | `VkPhysicalDeviceVulkan13Features` | an image write or atomic out of range dropped and a read out of range zero, with no guard in the shader |
+| `robustImageAccess2` | `VkPhysicalDeviceRobustness2FeaturesEXT` | an image read or fetch out of range, past the view's levels included, answering Metal's texel (zero, alpha 1 for a format without alpha), with no check in the shader; a texel buffer's read is still checked in the shader |
 | `independentBlend` | `VkPhysicalDeviceFeatures` | each color attachment of a render pipeline blended by its own state, as Metal's are |
 | `fragmentStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a fragment function's writes and atomics on device memory |
 | `multiview` | `VkPhysicalDeviceVulkan11Features` | Vulkan 1.1 requires it; the translator's multiview forms |

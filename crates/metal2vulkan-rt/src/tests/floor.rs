@@ -67,6 +67,7 @@ fn at_the_floor() -> Queried {
     features.vulkan13.subgroup_size_control = vk::TRUE;
     features.vulkan13.compute_full_subgroups = vk::TRUE;
     features.vulkan13.robust_image_access = vk::TRUE;
+    features.robustness2.robust_image_access2 = vk::TRUE;
     features.core.independent_blend = vk::TRUE;
     features.core.fragment_stores_and_atomics = vk::TRUE;
     features.vulkan11.multiview = vk::TRUE;
@@ -140,9 +141,9 @@ fn holds(features: &Features, feature: &crate::floor::Feature) -> bool {
 
 /// The translator's description is restricted to what device creation enables: a feature or an
 /// extension the device reports beyond the floor is outside the enable set, so the translator's
-/// profile never relies on it, and the floor's `robustImageAccess`, `independentBlend`,
-/// `fragmentStoresAndAtomics` and `nullDescriptor` are in it. `VK_EXT_robustness2`'s robust buffer
-/// and image access stay off where the device reports them.
+/// profile never relies on it, and the floor's `robustImageAccess`, `robustImageAccess2`,
+/// `independentBlend`, `fragmentStoresAndAtomics` and `nullDescriptor` are in it.
+/// `VK_EXT_robustness2`'s robust buffer access stays off where the device reports it.
 #[test]
 fn the_translator_sees_only_what_device_creation_enables() {
     use crate::floor::shader_enables;
@@ -151,12 +152,11 @@ fn the_translator_sees_only_what_device_creation_enables() {
     device.features.core.geometry_shader = vk::TRUE;
     device.features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
     device.features.vulkan13.robust_image_access = vk::TRUE;
-    device.features.robustness2.robust_image_access2 = vk::TRUE;
     device.features.robustness2.robust_buffer_access2 = vk::TRUE;
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
     assert_eq!(
         capabilities.features.robustness2.robust_image_access2,
-        vk::FALSE
+        vk::TRUE
     );
     assert_eq!(
         capabilities.features.robustness2.robust_buffer_access2,
@@ -164,6 +164,7 @@ fn the_translator_sees_only_what_device_creation_enables() {
     );
     let enables = shader_enables(&capabilities);
     assert!(enables.features.contains(&VkFeature::RobustImageAccess));
+    assert!(enables.features.contains(&VkFeature::RobustImageAccess2));
     assert!(enables.features.contains(&VkFeature::IndependentBlend));
     assert!(enables
         .features
@@ -185,7 +186,6 @@ fn the_translator_sees_only_what_device_creation_enables() {
     for reported in [
         VkFeature::GeometryShader,
         VkFeature::SamplerMirrorClampToEdge,
-        VkFeature::RobustImageAccess2,
         VkFeature::RobustBufferAccess2,
         VkFeature::RobustBufferAccess,
     ] {
