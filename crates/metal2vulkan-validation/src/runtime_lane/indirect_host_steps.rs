@@ -1475,10 +1475,14 @@ fn reads_reset(icb: &IndirectCommandBuffer, index: u64) -> bool {
 /// the whole range after the first resets the rest, and the kernel's writes after a reset reach
 /// the next one too: a reset clears the flags it consumed, and a later write sets them again.
 /// Each reset is one dispatch of the flagged reset and no fill or copy of the records, where the
-/// device counts its commands.
+/// device counts its commands, counted once the device's view check answered
+/// (`Device::settle_view_check`): with no record of it in the scratch cache, the check runs from
+/// the device's making, and each of its timed dispatches, made whenever no batch is in flight, is
+/// a dispatch the device records (two landed in a reset's count on lavapipe, 3 against 1).
 #[test]
 fn a_reset_resets_what_each_writer_wrote_since_the_last() {
     on_device_forcing(&[Degradation::UnmeasuredUniqueIdentifier], |device| {
+        assert!(device.settle_view_check(WAIT), "the view check answers");
         let queue = device.new_command_queue().unwrap();
         let setup = Setup::new(device, 2);
         let counted = device.work_counts().commands_uncounted == 0;
