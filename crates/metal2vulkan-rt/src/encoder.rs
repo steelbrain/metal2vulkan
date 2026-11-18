@@ -10,7 +10,7 @@ use crate::hazard::Access;
 use crate::memory::BlockId;
 use crate::over;
 use crate::pipeline::{
-    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
+    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, Which, PUSH_BYTES,
     PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
@@ -759,18 +759,11 @@ impl ComputeCommandEncoder {
             nominal,
             direct,
         } = choose(&inner.form, direct, size);
-        let kernel = match (module, &inner.form) {
-            (
-                Module::Partial,
-                Form::Sized {
-                    partial: Some(kernel),
-                },
-            ) => &**kernel,
-            (Module::Partial, _) => {
-                return Err(partial_threadgroups(
-                    direct.map_or([0; 3], |(threads, ..)| threads),
-                ))
-            }
+        let kernel = match module {
+            Module::Partial => inner.later_kernel(
+                Which::Partial,
+                partial_threadgroups(direct.map_or([0; 3], |(threads, ..)| threads)),
+            )?,
             _ => &inner.whole,
         };
         // A threadgroup that is not whole groups of a module that runs only whole ones runs the
@@ -788,7 +781,16 @@ impl ComputeCommandEncoder {
                     direct.map_or([0; 3], |(threads, ..)| threads),
                 ))
             }
-            Some(&width) => (inner.emulated_kernel(size, width)?, Module::Emulated),
+            Some(&width) => {
+                let refused = Error::Unsupported(Gap::PartialSimdgroups {
+                    threads_per_threadgroup: size,
+                    width,
+                });
+                (
+                    inner.later_kernel(Which::Emulated, refused)?,
+                    Module::Emulated,
+                )
+            }
         };
         // No thread runs: nothing is recorded, so a zero grid stays the kernel's mark of an
         // indirect dispatch.

@@ -392,9 +392,10 @@ mod on_device {
     }
 
     /// `icb_replay_grid_template`, which observes its threadgroup partition (threadgroup memory,
-    /// a barrier, and every builtin of the partition), translated twice at creation: a whole
-    /// `dispatchThreads` grid runs its plain module at the call's size, a ragged one its
-    /// partial-threadgroups variant, and a threadgroup count past the device's limit on an axis
+    /// a barrier, and every builtin of the partition), translated once at creation, plainly: a
+    /// whole `dispatchThreads` grid runs its plain module at the call's size, a ragged one its
+    /// partial-threadgroups variant, lowered at that first ragged grid, which waits for it, and
+    /// a threadgroup count past the device's limit on an axis
     /// runs split, each piece reading Metal's whole grid. Threadgroups deeper than 64, 1 by 1 by
     /// 320 and 2 by 3 by 100, run as one row of their threads on every device, whole, ragged and
     /// indirect. Each answer is Metal's, and each new size or module a first-use wait. Prints the
@@ -477,6 +478,11 @@ mod on_device {
                 created.pipelines_created, made.pipelines_created,
                 "{name}: an observing kernel's pipelines wait for their sizes"
             );
+            assert_eq!(
+                created.translations - made.translations,
+                1,
+                "{name}: the plain module alone at creation"
+            );
             let queue = device.new_command_queue(4).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer
@@ -514,10 +520,15 @@ mod on_device {
                 );
             }
             let after = device.counters().metrics();
-            // The ragged grid's variant, the whole grid's size, the one-thread size; the deep
-            // size, its ragged grid's variant (its indirect dispatch runs the whole one) and the
-            // second deep size.
-            let sizes = 5 + u64::from(past.is_some());
+            assert_eq!(
+                after.translations - created.translations,
+                1,
+                "{name}: the partial-threadgroups variant, at the first ragged grid"
+            );
+            // The ragged grid's variant's lowering and its pipeline, the whole grid's size, the
+            // one-thread size; the deep size, its ragged grid's variant (its indirect dispatch
+            // runs the whole one) and the second deep size.
+            let sizes = 6 + u64::from(past.is_some());
             assert_eq!(
                 after.first_use_waits - created.first_use_waits,
                 sizes,
@@ -1127,8 +1138,8 @@ mod on_device {
                 ];
                 let metrics = counters.metrics();
                 let counted = (metrics.translations, metrics.translations_loaded);
-                // One lowering for the tiling kernel, two for the observing one.
-                let want = [(3, 0), (0, 3)][round];
+                // One lowering for each kernel.
+                let want = [(2, 0), (0, 2)][round];
                 assert_eq!(counted, want, "{name}: device {round} on the directory");
                 drop(states);
                 drop(device);

@@ -42,12 +42,12 @@ device against the floor below.
 The runtime runs four threads per device: the block-maker, the submit thread, the completion
 thread, and the reaper, which frees the semaphores and command pools the others give up, one at a
 time, so no driver free runs on the completion thread and a submission waits behind at most one,
-lowers the compute pipeline states' emulated-SIMD-group variants after their creation returned,
-and makes the device's pipeline cache when it starts and writes it to the cache directory once
-pipeline creation is quiet. While an old generation of the cache directory is removed, a thread of
-the store's own does it, and ends with the removal; the teardown waits for it. `Gauges::threads`
-holds the OS id of each of these threads while it runs, so a tool can tell the runtime's own work
-from the threads a driver starts for itself.
+lowers the compute pipeline states' variants an encoding call waits for (the emulated-SIMD-group
+and the partial-threadgroups ones), and makes the device's pipeline cache when it starts and writes
+it to the cache directory once pipeline creation is quiet. While an old generation of the cache
+directory is removed, a thread of the store's own does it, and ends with the removal; the teardown
+waits for it. `Gauges::threads` holds the OS id of each of these threads while it runs, so a tool
+can tell the runtime's own work from the threads a driver starts for itself.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
@@ -861,11 +861,13 @@ that touch blocks first.
   elements (another sampler there is `Refusal::IndexInUse`); the last of them to go writes the
   arrays' defaults back and frees the index. The read and write samplers take nothing at their
   indices. Once `sampler_ids` has answered, a call that fails holds none of the indices.
-- Every kernel is lowered first as its partial-threadgroups variant. A kernel that does not
-  observe its threadgroup partition (it holds no threadgroup memory, barrier, fence or atomic of
-  threadgroup or SIMD-group scope, SIMD-group or quad function, and reads no builtin of the
-  partition; the translator decides from its AIR) keeps that module alone, which runs a direct
-  dispatch in workgroups of the runtime's, whatever its threadgroup size:
+- Every kernel is lowered once at creation. The translator answers, lowering nothing
+  (`Device::kernel_observes_partition`), whether it observes its threadgroup partition (it holds
+  threadgroup memory, a barrier, fence or atomic of threadgroup or SIMD-group scope, a SIMD-group
+  or quad function, or reads a builtin of the partition; the translator decides from its AIR),
+  unless the cache directory holds the kernel's partial-threadgroups variant, which answers it. A
+  kernel that does not observe it is lowered as that variant, which runs a direct dispatch in
+  workgroups of the runtime's, whatever its threadgroup size:
   - a grid of a kernel that is image-only (`CompiledFunction::is_image_only`: it samples,
     gathers or reads a texture, and loads, stores and updates atomically nothing through a
     `device` pointer; `constant` loads and texture writes are allowed) in workgroups of 16 by 16
@@ -883,10 +885,10 @@ that touch blocks first.
   the fewest tiles partly past it, then the shallowest, then (where the grid has two rows or more)
   the height nearest 2, then the widest. Where the workgroups do not divide the grid, an
   invocation past the grid returns before the kernel's body. An indirect dispatch runs at its own
-  threadgroup size. A kernel that observes its partition is lowered a
-  second time, plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
-  module at their own size, and a `dispatch_threads` grid that is not a whole number of
-  threadgroups runs the variant.
+  threadgroup size. A kernel that observes its partition is lowered plainly: its whole grids,
+  `dispatch_threadgroups` and indirect dispatches run that module at their own size, and a
+  `dispatch_threads` grid that is not a whole number of threadgroups runs its partial-threadgroups
+  variant, which the reaper lowers for the first such grid, which waits for it (a first-use wait).
 - A threadgroup deeper than 64, the floor's `maxComputeWorkGroupSize[2]`, runs as one row of its
   threads, a workgroup of `x·y·z` by 1 by 1, each thread's position its index unflattened in
   Metal's order (the translator's `SpecKey::DeepThreadgroup`), on every device alike; any other
@@ -904,12 +906,12 @@ that touch blocks first.
   `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32), or one per
   32-lane cluster of a 64- or 128-lane subgroup, runs only workgroups of whole subgroups.
 - Such a kernel also has an emulated-SIMD-group variant, whose SIMD groups exchange through
-  threadgroup memory between workgroup barriers. The reaper lowers it once the state is made,
-  through the cache directory, and a threadgroup that is not whole subgroups (one of 80 or of 1
-  thread, or of 32 on a device of 64-lane subgroups) runs it at its own size, the last SIMD group
-  partly filled, as Metal runs it. A dispatch of such a size before the reaper is done waits for
-  the lowering, which the reaper takes next: a first-use wait. In a threadgroup of one thread the
-  module's exchanges pass no barrier.
+  threadgroup memory between workgroup barriers. A threadgroup that is not whole subgroups (one of
+  80 or of 1 thread, or of 32 on a device of 64-lane subgroups) runs it at its own size, the last
+  SIMD group partly filled, as Metal runs it. The reaper lowers it, through the cache directory,
+  for the first such dispatch, which waits for it: a first-use wait. A kernel no such dispatch
+  reaches lowers no variant. In a threadgroup of one thread the module's exchanges pass no
+  barrier.
 - The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
   threadgroup (0, or a split piece's), the threadgroup size packed as
   `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's threads per grid; an indirect dispatch pushes a
@@ -1020,9 +1022,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of pipeline states
 
-- No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it, but
-  the emulated-SIMD-group variant's lowering on the reaper: a state reads only its lowerings from
-  the cache directory, and each `VkPipeline` past the first tile is made at its first dispatch,
+- No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it: a
+  state reads only its lowerings from the cache directory, each variant is lowered at the first
+  dispatch that needs it, and each `VkPipeline` past the first tile is made at its first dispatch,
   through the device's pipeline cache.
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
   content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
@@ -1031,13 +1033,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   one frame: the frame where the stream's image-only dispatches over such grids start (frame 224
   of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row, so a device
   that holds 64 makes the same 50.
-- A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
-  its plain module), on the creating thread. For the observing kernel the device tests run, a
-  grid template over threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole
-  creation 2.7 to 2.9 ms on an RX 7900 XTX in a release build. Larger kernels take longer: in the
-  first 217 frames of one recorded stream on a Radeon 780M (release build), 23 of its 59 kernel
-  contents observed their partition, and their creations' 46 lowerings took 231 ms, 5.0 ms a
-  lowering. None of the 23 dispatched its partial-threadgroups module.
+- A kernel's variants are lowered at the first dispatch that needs each, which waits for the
+  lowering and its pipeline (a first-use wait): an observing kernel's partial-threadgroups
+  variant at its first `dispatch_threads` grid that is not a whole number of threadgroups, and
+  the emulated-SIMD-group variant at the first threadgroup that is not whole subgroups. For the
+  observing kernel the device tests run, a grid template over threadgroup memory, one lowering
+  took 0.61 to 0.63 ms on an RX 7900 XTX in a release build; a larger kernel's lowering takes
+  longer.
 - On Intel's Windows driver (101.2145) for the UHD 630, the driver's compile of a tiling kernel's
   `VkPipeline`, made with the state, took 1.44 to 1.51 times the old runtime's for the harness's
   `create_state` kernel: medians of 6,680 to 6,853 µs against 4,473 to 4,761 µs, in three

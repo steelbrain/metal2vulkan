@@ -1,19 +1,19 @@
 //! Compute pipeline states: the translator's kernel and its interface, and its `VkPipeline`s.
 //!
-//! The translator lowers every kernel first as its partial-threadgroups variant, through one
-//! decode and specialization of its entry. A kernel that does not observe its threadgroup
-//! partition keeps that module alone, which runs its grid in tiles (`RuntimeFact::GridTiles`):
+//! The translator answers, lowering nothing, whether a kernel observes its threadgroup partition
+//! (`Device::kernel_observes_partition`), where the cache directory holds no lowering of its
+//! partial-threadgroups variant to answer it. A kernel that does not observe it is lowered once,
+//! as that variant, which runs its grid in tiles (`RuntimeFact::GridTiles`):
 //! every direct dispatch runs in workgroups of 256 threads, each one tile of the grid whose sides
 //! the translator's rule picks from the grid's extents (`grid_tile`) and its region carries, on
 //! one `VkPipeline` made with the state. An image-only kernel's (`CompiledFunction::is_image_only`)
 //! runs instead in workgroups of 16x16x1 over a grid one deep, on that one, and of the grid's tile
 //! over a deeper one, on one `VkPipeline` per tile made at its first dispatch. An indirect
-//! dispatch runs at its own threadgroup size. A
-//! kernel that observes its partition is lowered
-//! once more, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that
-//! module at their own threadgroup size, and a `dispatchThreads` grid that is not a whole number
-//! of threadgroups runs the partial-threadgroups variant at its size, where the translator made
-//! one. Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
+//! dispatch runs at its own threadgroup size. A kernel that observes its partition is lowered
+//! once, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that module
+//! at their own threadgroup size, and a `dispatchThreads` grid that is not a whole number of
+//! threadgroups runs its partial-threadgroups variant at its size, lowered at the first such grid.
+//! Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
 //!
 //! What a state compiles is its content ([`KernelKey`]), never the state: the translator's key
 //! of its descriptor and its `requiredThreadsPerThreadgroup`. Every state of one content shares
@@ -25,18 +25,18 @@
 //! at them.
 //!
 //! A kernel whose tier runs each SIMD group as one subgroup, or as a 32-lane cluster of one, runs
-//! only threadgroups of whole subgroups. Once the state is made, the reaper lowers the kernel's
-//! emulated-SIMD-group variant, whose SIMD groups exchange through threadgroup memory: a
-//! threadgroup that is not whole subgroups (32 threads where each SIMD group is half of a 64-lane
-//! subgroup included) runs that module at its own size, whose last SIMD group may be partly
-//! filled, as Metal runs it.
+//! only threadgroups of whole subgroups. A threadgroup that is not whole subgroups (32 threads
+//! where each SIMD group is half of a 64-lane subgroup included) runs the kernel's
+//! emulated-SIMD-group variant, whose SIMD groups exchange through threadgroup memory, at its own
+//! size, whose last SIMD group may be partly filled, as Metal runs it; that variant is lowered at
+//! the first such dispatch.
 //!
 //! Nothing the runtime records depends on when a compile finishes: an encoding call whose
 //! `VkPipeline` is not made yet makes it and waits for it, then records, so there is one recorded
-//! form; one whose emulated module the reaper has not lowered yet waits for that lowering, which
-//! the reaper takes next. Each such wait is a first-use wait, counted with its time
-//! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)). No translation runs on an
-//! encoding thread.
+//! form; one whose variant ([`Later`]: the emulated or the partial-threadgroups one) is not lowered
+//! yet gives the lowering to the reaper and waits for it. Each such wait is a first-use wait,
+//! counted with its time ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)). No
+//! translation runs on an encoding thread, and no variant is lowered before a dispatch needs it.
 
 use crate::arrays::BINDINGS;
 use crate::cache;
@@ -100,11 +100,11 @@ pub(crate) struct Compiled {
     pub(crate) whole: Kernel,
     /// How a direct dispatch runs.
     pub(crate) form: Form,
-    /// The emulated-SIMD-group module of a kernel whose `whole` module runs only whole SIMD
-    /// groups, which the reaper lowers once the content is compiled.
-    pub(crate) emulated: Option<Emulated>,
+    /// The emulated-SIMD-group variant of a kernel whose `whole` module runs only whole SIMD
+    /// groups, lowered at the first dispatch that needs it.
+    pub(crate) emulated: Option<Later>,
     /// The translator's notes of where the kernel's answers may differ from Metal's, of the
-    /// modules made with the content.
+    /// module made with the content.
     notes: Vec<PrecisionNote>,
 }
 
@@ -118,14 +118,13 @@ pub(crate) struct Numbered {
     held: Vec<usize>,
 }
 
-/// Whether a state of `kernels` holds every constexpr sampler use of `emulated`, a module of the
-/// same entry lowered later: the samplers it numbers are theirs, and each use it samples through
-/// is one of theirs, as a state holds the uses of its modules ([`number`]).
-fn covers(kernels: &[&Kernel], emulated: &Interface) -> bool {
-    emulated.numbered == kernels[0].interface.numbered
-        && emulated.constexprs.iter().all(|(at, sampler)| {
-            (kernels.iter())
-                .flat_map(|kernel| &kernel.interface.constexprs)
+/// Whether a state of the module `whole` holds every constexpr sampler use of `later`, a module
+/// of the same entry lowered later: the samplers it numbers are its, and each use it samples
+/// through is one of its, as a state holds the uses of its module ([`number`]).
+fn covers(whole: &Interface, later: &Interface) -> bool {
+    later.numbered == whole.numbered
+        && later.constexprs.iter().all(|(at, sampler)| {
+            (whole.constexprs.iter())
                 .any(|(held, used)| held == at && sampler_array(used) == sampler_array(sampler))
         })
 }
@@ -139,25 +138,16 @@ fn sampler_array(sampler: &CombinedSampler) -> usize {
     }
 }
 
-/// The state's numbered samplers: `sampler_ids` gives an index to each of `kernels`' (the
-/// state's modules, which number alike), and each constexpr sampler a module samples through
-/// takes the device sampler of each use at its index.
+/// The state's numbered samplers: `sampler_ids` gives an index to each of its module `whole`'s,
+/// and each constexpr sampler it samples through takes the device sampler of each use at its
+/// index.
 fn number(
     core: &Core,
-    kernels: &[&Kernel],
+    whole: &Interface,
     sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
 ) -> Result<Numbered, Error> {
-    let samplers = kernels[0].interface.numbered.clone();
-    if kernels
-        .iter()
-        .any(|kernel| kernel.interface.numbered != samplers)
-    {
-        return Err(gap());
-    }
-    let uses: Vec<(usize, CombinedSampler)> = (kernels.iter())
-        .flat_map(|kernel| kernel.interface.constexprs.iter().copied())
-        .collect();
-    number_samplers(core, samplers, &uses, sampler_ids, gap)
+    let samplers = whole.numbered.clone();
+    number_samplers(core, samplers, &whole.constexprs, sampler_ids, gap)
 }
 
 /// A state's numbered samplers `samplers`: `sampler_ids` gives an index to each, and each
@@ -217,16 +207,27 @@ impl Numbered {
     }
 }
 
-/// A kernel's emulated-SIMD-group variant (`LoweringInputs::emulated_simdgroups`): what it is
-/// lowered from, and once the reaper has lowered it, the module or why there is none.
-pub(crate) struct Emulated {
+/// A variant of a kernel the reaper lowers at the first dispatch that needs it, which waits for
+/// it: its emulated-SIMD-group variant (`LoweringInputs::emulated_simdgroups`), or an observing
+/// kernel's partial-threadgroups variant (`LoweringInputs::partial_threadgroups`). What it is
+/// lowered from, and once lowered, the module or why there is none.
+pub(crate) struct Later {
     descriptor: ComputePipelineDescriptor,
     function: FunctionDescriptor,
     inputs: LoweringInputs,
     pub(crate) lowered: OnceLock<Lowered>,
 }
 
-/// What the reaper's lowering of an emulated variant gave.
+/// Which of a content's [`Later`] variants.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Which {
+    /// [`Compiled::emulated`].
+    Emulated,
+    /// [`Form::Sized`]'s partial-threadgroups variant.
+    Partial,
+}
+
+/// What the reaper's lowering of a [`Later`] variant gave.
 pub(crate) enum Lowered {
     /// The module, and the translator's notes of it.
     Made(Box<Kernel>, Vec<PrecisionNote>),
@@ -253,8 +254,9 @@ pub(crate) enum Form {
     Square,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, and a
     /// `dispatchThreads` grid that is not a whole number of threadgroups on the
-    /// partial-threadgroups variant, where the translator made one.
-    Sized { partial: Option<Box<Kernel>> },
+    /// partial-threadgroups variant, lowered at the first such grid where the content has a
+    /// function to lower it from.
+    Sized { partial: Option<Later> },
 }
 
 /// One translated module of a state, its interface, and the `VkPipeline`s made of it so far.
@@ -439,17 +441,19 @@ impl crate::Device {
     /// shader modules and their `VkPipeline`s: a state of a content the device holds (the last
     /// 1,024 contents used) costs a lookup, its samplers' numbering and nothing compiled. For a
     /// content the device does not hold, the translator compiles the kernel on the calling
-    /// thread, which waits for it, within the translator's 20-second budget per lowering: once
-    /// for a kernel that does not observe its threadgroup partition, whose 256-wide tile's
-    /// `VkPipeline`, or an image-only kernel's 16x16 workgroups' one, is made here too, and
-    /// twice for one that does (its partial-threadgroups
-    /// variant and its plain module). Where the device has a cache directory
-    /// ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made before is read from it
-    /// in place of lowering again, and every `VkPipeline` is made from its file there where it
-    /// has one. The content's other `VkPipeline`s are made later, each by the first encoding call
-    /// of any of its states that needs it ([`ComputePipelineState`]). For a kernel whose tier runs
-    /// only whole SIMD groups, the reaper lowers its emulated-SIMD-group variant after this
-    /// returns, through the cache directory too.
+    /// thread, which waits for it, within the translator's 20-second budget per lowering, once:
+    /// a kernel that does not observe its threadgroup partition as its partial-threadgroups
+    /// variant, whose 256-wide tile's `VkPipeline`, or an image-only kernel's 16x16 workgroups'
+    /// one, is made here too, and one that does as its plain module. The translator answers which
+    /// without lowering, where the cache directory holds no lowering of the variant to answer it.
+    /// Where the device has a cache directory ([`DeviceOptions::pipeline_cache_dir`]), a lowering a
+    /// device made before is read from it in place of lowering again, and every `VkPipeline` is
+    /// made from its file there where it has one. The content's other `VkPipeline`s are made
+    /// later, each by the first encoding call of any of its states that needs it
+    /// ([`ComputePipelineState`]), and so are its variants: an observing kernel's
+    /// partial-threadgroups variant, and the emulated-SIMD-group variant of a kernel whose tier
+    /// runs only whole SIMD groups, each lowered by the reaper, through the cache directory too,
+    /// for the first dispatch that needs it, which waits for it.
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     ///
@@ -489,16 +493,10 @@ impl crate::Device {
             Some(compiled) => compiled,
             None => {
                 let compiled = Arc::new(Compiled::of(core, descriptor)?);
-                let kept = core
-                    .kernels
-                    .keep(key, Arc::clone(&compiled), &core.counters);
-                if Arc::ptr_eq(&kept, &compiled) && kept.emulated.is_some() {
-                    core.reaper.lower(Arc::downgrade(&kept));
-                }
-                kept
+                core.kernels.keep(key, compiled, &core.counters)
             }
         };
-        let numbered = number(core, &compiled.kernels(), sampler_ids)?;
+        let numbered = number(core, &compiled.whole.interface, sampler_ids)?;
         Ok(ComputePipelineState {
             inner: Arc::new(PipelineInner { compiled, numbered }),
         })
@@ -516,7 +514,7 @@ impl Compiled {
             compiled.kernel = StageSource::Compiled(function);
             translator.compile_compute_pipeline(&compiled, &budget)
         };
-        let (whole, partial, observes, image_only, source) = match &descriptor.kernel {
+        let (whole, partial, image_only, source) = match &descriptor.kernel {
             StageSource::Function(function) => {
                 let entries = &core.entries;
                 let plain = translator
@@ -529,47 +527,58 @@ impl Compiled {
                 inputs.partial_threadgroups = true;
                 let lower =
                     |inputs: &LoweringInputs| lower(&core, function, inputs, &budget, entries);
-                // The translator's refusal of the variant (emulated simdgroups, a vote word its
-                // workgroup memory cannot hold), kept like a lowering: the kernel keeps its plain
-                // module.
+                // The partial-threadgroups variant, where the kernel does not observe its
+                // partition: what the cache directory holds, else lowered, unless the translator
+                // answers that the kernel observes it. The translator's refusal of the variant
+                // (emulated simdgroups, a vote word its workgroup memory cannot hold) is kept like
+                // a lowering.
                 let variant_key = *translator.function_compile_key(function, &inputs).digest();
                 let variant = if core.caches.refused(&variant_key) {
                     core.counters.count(Metric::TranslationsLoaded);
                     None
+                } else if let Some(kept) = kept(&core, function, &inputs) {
+                    Some(kept)
                 } else {
-                    match lower(&inputs) {
-                        Ok(variant) => Some(variant),
-                        Err(TranslationError::Unsupported(refused))
-                            if refused.feature == Feature::GpuEncodedIndirectCommands =>
-                        {
-                            cache::keep_refusal(&core, &variant_key);
-                            None
+                    let observes = (translator)
+                        .kernel_observes_partition(function, &inputs, &budget, entries)
+                        .map_err(Error::Translation);
+                    core.note_entries();
+                    if observes? {
+                        None
+                    } else {
+                        match lower(&inputs) {
+                            Ok(variant) => Some(variant),
+                            Err(TranslationError::Unsupported(refused))
+                                if refused.feature == Feature::GpuEncodedIndirectCommands =>
+                            {
+                                cache::keep_refusal(&core, &variant_key);
+                                None
+                            }
+                            Err(error) => return Err(Error::Translation(error)),
                         }
-                        Err(error) => return Err(Error::Translation(error)),
                     }
                 };
                 match variant {
+                    // A pipeline of the variant that states no grid tiles is the plain module of
+                    // a kernel of its own size, which the variant's lowering answered.
                     Some(variant) if !variant.observes_threadgroup_partition() => {
                         let image_only = variant.is_image_only();
                         let pipeline = compiled(variant).map_err(Error::Translation)?;
-                        let observes = !grid_tiles(&pipeline);
-                        (pipeline, None, observes, image_only, Some(source))
+                        let partial = (!grid_tiles(&pipeline)).then_some(None);
+                        (pipeline, partial, image_only, Some(source))
                     }
-                    Some(variant) => {
-                        let plain = lower(&plain).and_then(compiled);
-                        let variant = compiled(variant);
-                        (
-                            plain.map_err(Error::Translation)?,
-                            Some(variant.map_err(Error::Translation)?),
-                            true,
-                            false,
-                            Some(source),
-                        )
-                    }
-                    None => {
+                    // The kernel observes its partition, or its variant is refused: its plain
+                    // module, the variant lowered at the first grid that needs it.
+                    _ => {
                         let plain = lower(&plain).and_then(compiled);
                         let plain = plain.map_err(Error::Translation)?;
-                        (plain, None, true, false, Some(source))
+                        let partial = Later {
+                            descriptor: descriptor.clone(),
+                            function: function.clone(),
+                            inputs,
+                            lowered: OnceLock::new(),
+                        };
+                        (plain, Some(Some(partial)), false, Some(source))
                     }
                 }
             }
@@ -584,45 +593,32 @@ impl Compiled {
                 // (`ForeignCompiledFunction` otherwise), on which a non-observer's partial
                 // variant states `GridTiles`: a module without it observes its partition or is
                 // the plain module, and runs at its own size.
-                let observes = !grid_tiles(&pipeline);
-                (pipeline, None, observes, function.is_image_only(), None)
+                let partial = (!grid_tiles(&pipeline)).then_some(None);
+                (pipeline, partial, function.is_image_only(), None)
             }
         };
         let required = descriptor.required_threads_per_threadgroup;
         let mut notes = whole.stage.precision_notes.clone();
-        if let Some(pipeline) = &partial {
-            notes.extend(&pipeline.stage.precision_notes);
-        }
         notes.sort_unstable();
         notes.dedup();
         let whole = Kernel::new(&core, whole, required)?;
-        // Made whole before anything else can fail, so dropping it releases what was made.
         // A module that runs only whole SIMD groups has its emulated variant for the others.
         let emulated = source
             .filter(|_| !whole.interface.multiples.is_empty())
-            .map(|(function, inputs)| Emulated {
+            .map(|(function, inputs)| Later {
                 descriptor: descriptor.clone(),
                 function,
                 inputs,
                 lowered: OnceLock::new(),
             });
-        let mut compiled = Compiled::new(
-            core,
-            whole,
-            match (observes, image_only) {
-                (false, false) => Form::Tiled,
-                (false, true) => Form::Square,
-                (true, _) => Form::Sized { partial: None },
-            },
-            emulated,
-            notes,
-        );
-        if let Some(pipeline) = partial {
-            let partial = Kernel::new(&compiled.core, pipeline, required)?;
-            compiled.form = Form::Sized {
-                partial: Some(Box::new(partial)),
-            };
-        }
+        // `partial` is `Some` for a kernel that runs at its own size: with its variant to lower
+        // where it has one.
+        let form = match (partial, image_only) {
+            (Some(partial), _) => Form::Sized { partial },
+            (None, false) => Form::Tiled,
+            (None, true) => Form::Square,
+        };
+        let compiled = Compiled::new(core, whole, form, emulated, notes);
         // A tiling kernel's grids one deep run on one `VkPipeline`, made with the state: its
         // tiles', or an image-only kernel's square workgroups'.
         let first = match compiled.form {
@@ -647,7 +643,7 @@ impl Compiled {
         core: Arc<Core>,
         whole: Kernel,
         form: Form,
-        emulated: Option<Emulated>,
+        emulated: Option<Later>,
         notes: Vec<PrecisionNote>,
     ) -> Compiled {
         core.counters.rise(Gauge::Kernels);
@@ -658,19 +654,6 @@ impl Compiled {
             emulated,
             notes,
         }
-    }
-
-    /// The modules a state of the content numbers its samplers from: the whole module, and an
-    /// observing kernel's partial-threadgroups variant.
-    pub(crate) fn kernels(&self) -> Vec<&Kernel> {
-        let mut kernels = vec![&self.whole];
-        if let Form::Sized {
-            partial: Some(partial),
-        } = &self.form
-        {
-            kernels.push(&**partial);
-        }
-        kernels
     }
 }
 
@@ -683,8 +666,26 @@ fn grid_tiles(pipeline: &ComputePipeline) -> bool {
         .any(|dependency| dependency.fact == RuntimeFact::GridTiles)
 }
 
+/// The lowering of the kernel `function` under `inputs` a device kept in the cache directory under
+/// its key, which covers everything that changes the output, counted as read.
+fn kept(
+    core: &Core,
+    function: &FunctionDescriptor,
+    inputs: &LoweringInputs,
+) -> Option<CompiledFunction> {
+    let translator = &core.translator;
+    let key = translator.function_compile_key(function, inputs);
+    let kept = (core.caches).translation(key.digest(), |bytes| {
+        CompiledFunction::from_bytes_for_key(bytes, &key, translator).ok()
+    });
+    if kept.is_some() {
+        core.counters.count(Metric::TranslationsLoaded);
+    }
+    kept
+}
+
 /// The kernel `function` lowered under `inputs`: the lowering a device kept in the cache directory
-/// under its key, which covers everything that changes the output, or one made now and kept.
+/// ([`kept`]), or one made now and kept.
 pub(crate) fn lower(
     core: &Core,
     function: &FunctionDescriptor,
@@ -692,15 +693,11 @@ pub(crate) fn lower(
     budget: &Budget,
     entries: &StageEntries,
 ) -> Result<CompiledFunction, TranslationError> {
-    let translator = &core.translator;
-    let key = translator.function_compile_key(function, inputs);
-    let kept = (core.caches).translation(key.digest(), |bytes| {
-        CompiledFunction::from_bytes_for_key(bytes, &key, translator).ok()
-    });
-    if let Some(kept) = kept {
-        core.counters.count(Metric::TranslationsLoaded);
+    if let Some(kept) = kept(core, function, inputs) {
         return Ok(kept);
     }
+    let translator = &core.translator;
+    let key = translator.function_compile_key(function, inputs);
     core.counters.count(Metric::Translations);
     let lowered = translator.compile_function_from_entries(function, inputs, budget, entries);
     core.note_entries();
@@ -1025,21 +1022,22 @@ impl ComputePipelineState {
     }
 
     /// No Metal counterpart: where the kernel's answers may differ from Metal's on this device,
-    /// fixed per operation by the translator, for every module the state runs: those made with
-    /// the state, and once the reaper has lowered it, the emulated-SIMD-group module that runs
-    /// threadgroups of partial SIMD groups. Metal's answers are its own GPU's.
+    /// fixed per operation by the translator, for every module the state runs: the one made with
+    /// the state, and once a dispatch needed them, its variants: the emulated-SIMD-group module
+    /// that runs threadgroups of partial SIMD groups and an observing kernel's
+    /// partial-threadgroups module. Metal's answers are its own GPU's.
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
         let compiled = &self.inner.compiled;
         let mut notes = compiled.notes.clone();
-        if let Some(Lowered::Made(_, emulated)) = compiled
-            .emulated
-            .as_ref()
-            .and_then(|emulated| emulated.lowered.get())
-        {
-            notes.extend(emulated);
-            notes.sort_unstable();
-            notes.dedup();
+        for which in [Which::Emulated, Which::Partial] {
+            if let Some(Lowered::Made(_, more)) =
+                (compiled.later(which)).and_then(|later| later.lowered.get())
+            {
+                notes.extend(more);
+            }
         }
+        notes.sort_unstable();
+        notes.dedup();
         notes
     }
 
@@ -1082,46 +1080,48 @@ impl PipelineInner {
 }
 
 impl Compiled {
-    /// On the reaper: lowers the content's emulated variant, where it has one not lowered yet.
-    pub(crate) fn lower_emulated(&self) {
-        if let Some(emulated) = &self.emulated {
-            emulated
-                .lowered
-                .get_or_init(|| emulated.lower(&self.core, &self.kernels()));
+    /// The content's `which` variant, where it has one.
+    fn later(&self, which: Which) -> Option<&Later> {
+        match (which, &self.form) {
+            (Which::Emulated, _) => self.emulated.as_ref(),
+            (Which::Partial, Form::Sized { partial }) => partial.as_ref(),
+            (Which::Partial, Form::Tiled | Form::Square) => None,
         }
     }
 
-    /// Where the reaper ended before lowering it: the content's emulated variant is not lowered.
-    pub(crate) fn quiesce_emulated(&self) {
-        if let Some(emulated) = &self.emulated {
-            emulated.lowered.get_or_init(|| Lowered::Quiesced);
+    /// On the reaper: lowers the content's `which` variant, where it has one not lowered yet.
+    pub(crate) fn lower_later(&self, which: Which) {
+        if let Some(later) = self.later(which) {
+            (later.lowered).get_or_init(|| later.lower(&self.core, &self.whole.interface));
         }
     }
 
-    /// The emulated module a threadgroup of `size`, which is not whole SIMD groups of `width`
-    /// threads, runs on: where the reaper has not lowered it yet, the calling thread waits for
-    /// the lowering, which the reaper takes next, a first-use wait.
+    /// Where the reaper ended before lowering it: the content's `which` variant is not lowered.
+    pub(crate) fn quiesce_later(&self, which: Which) {
+        if let Some(later) = self.later(which) {
+            later.lowered.get_or_init(|| Lowered::Quiesced);
+        }
+    }
+
+    /// The module of the content's `which` variant: where it is not lowered yet, the calling
+    /// thread gives the lowering to the reaper and waits for it, a first-use wait.
     ///
-    /// Err: [`Gap::PartialSimdgroups`] where the state has no emulated module;
+    /// Err: `refused` where the content has no such variant or the translator refused it;
     /// [`Error::Quiesced`]; [`Error::Vulkan`] where its shader module failed.
-    pub(crate) fn emulated_kernel(
+    pub(crate) fn later_kernel(
         self: &Arc<Self>,
-        size: [u32; 3],
-        width: u32,
+        which: Which,
+        refused: Error,
     ) -> Result<&Kernel, Error> {
-        let refused = Error::Unsupported(Gap::PartialSimdgroups {
-            threads_per_threadgroup: size,
-            width,
-        });
-        let Some(emulated) = &self.emulated else {
+        let Some(later) = self.later(which) else {
             return Err(refused);
         };
-        let lowered = match emulated.lowered.get() {
+        let lowered = match later.lowered.get() {
             Some(lowered) => lowered,
             None => {
                 let began = host_time();
-                self.core.reaper.hurry(self);
-                let lowered = emulated.lowered.wait();
+                self.core.reaper.lower(Arc::downgrade(self), which);
+                let lowered = later.lowered.wait();
                 self.core
                     .counters
                     .first_use_wait(host_time().saturating_sub(began));
@@ -1140,11 +1140,11 @@ impl Compiled {
     }
 }
 
-impl Emulated {
+impl Later {
     /// The variant lowered, on the reaper: the lowering a device kept in the cache directory, or
-    /// one made now and kept; the translator's refusal is kept too. `kernels` are the content's
-    /// modules a state numbers its samplers from.
-    fn lower(&self, core: &Core, kernels: &[&Kernel]) -> Lowered {
+    /// one made now and kept; the translator's refusal is kept too. `whole` is the content's
+    /// module, which a state numbers its samplers from.
+    fn lower(&self, core: &Core, whole: &Interface) -> Lowered {
         let translator = &core.translator;
         let budget = Budget::standard();
         let key = *translator
@@ -1171,7 +1171,7 @@ impl Emulated {
         match Kernel::new(core, pipeline, descriptor.required_threads_per_threadgroup) {
             // A module that samples a constexpr sampler in a use the state does not hold reads
             // what the encoder does not supply.
-            Ok(mut kernel) if !covers(kernels, &kernel.interface) => {
+            Ok(mut kernel) if !covers(whole, &kernel.interface) => {
                 kernel.release(core);
                 Lowered::Refused
             }
@@ -1306,18 +1306,14 @@ impl Drop for Compiled {
         // it retired.
         self.core.counters.fall(Gauge::Kernels);
         self.whole.release(&self.core);
-        if let Form::Sized {
-            partial: Some(partial),
-        } = &mut self.form
-        {
-            partial.release(&self.core);
-        }
-        if let Some(Lowered::Made(kernel, _)) = self
-            .emulated
-            .as_mut()
-            .and_then(|emulated| emulated.lowered.get_mut())
-        {
-            kernel.release(&self.core);
+        let partial = match &mut self.form {
+            Form::Sized { partial } => partial.as_mut(),
+            Form::Tiled | Form::Square => None,
+        };
+        for later in [self.emulated.as_mut(), partial].into_iter().flatten() {
+            if let Some(Lowered::Made(kernel, _)) = later.lowered.get_mut() {
+                kernel.release(&self.core);
+            }
         }
     }
 }

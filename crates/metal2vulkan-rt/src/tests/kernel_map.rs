@@ -142,7 +142,7 @@ mod on_device {
         each_device("kernel_map_shared", |name, _, device| {
             let counters = device.counters();
             for (kernel, descriptor, lowerings, pipelines) in
-                [("tiled", &tiled, 1, 1), ("observing", &observing, 2, 0)]
+                [("tiled", &tiled, 1, 1), ("observing", &observing, 1, 0)]
             {
                 let before = counters.metrics();
                 let first = state(name, &device, descriptor);
