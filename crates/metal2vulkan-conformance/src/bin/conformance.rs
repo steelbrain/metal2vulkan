@@ -213,6 +213,12 @@ fn command() -> Result<bool, String> {
                 ),
             };
             let unexpected = report.unexpected(&ledger);
+            // The ledger's typed reasons, counted on every run: the rows not built yet are the
+            // cutover's remaining work, and the count is printed whether or not the run is green.
+            println!(
+                "\n{}",
+                metal2vulkan_conformance::known_gaps::open_work(&ledger, file)
+            );
             // The cost half is a gate of its own, so it has its own line in the exit status: a
             // count going over its bound is never a conformance difference, and a conformance
             // difference is never a cost result. Both must hold for the run to be green.

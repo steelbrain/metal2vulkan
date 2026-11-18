@@ -46,11 +46,19 @@
 //!
 //! A row is held only against the cases a run selected, so replaying one case does not read every
 //! other row as fixed.
+//!
+//! # Typed reasons
+//!
+//! Two reasons are the ledger's own vocabulary ([`Reason`]), stated at the head of a row's last
+//! field: `refused: not built yet (<lane>)`, a feature the streams use that a lane is building,
+//! and `refused: no stream uses it yet (<census run>)`, a call replay's census found no stream
+//! using. Every replay prints their counts ([`open_work`]): the rows not built yet are the
+//! cutover's remaining work.
 
 use crate::case::Venue;
 use crate::replay::Replayed;
 use crate::verdict::Verdict;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The committed ledger, compiled in so the check needs no path and no filesystem: a replay run
 /// inside a container reads the same rows as one on this Mac.
@@ -131,6 +139,13 @@ pub struct KnownGap {
 }
 
 impl KnownGap {
+    /// The reason the row states, where the ledger's vocabulary names it ([`Reason`]): its
+    /// waiting-on field's head. [`parse`] refuses a malformed head, so a row read from a ledger
+    /// that names no vocabulary reason is its own words.
+    pub fn reason(&self) -> Reason {
+        Reason::of(&self.waiting_on).unwrap_or(Reason::Words)
+    }
+
     /// What identifies the row within a venue: the case, the verdict it expects, the site and the
     /// answer there.
     fn key(&self) -> (&str, Expects, &str, &str) {
@@ -155,6 +170,87 @@ impl KnownGap {
             .to_lowercase()
             .contains(&self.venue.to_lowercase())
     }
+}
+
+/// The head of a row waiting on a feature the streams use that a lane is building: the lane follows
+/// in parentheses.
+const NOT_BUILT_YET: &str = "refused: not built yet";
+
+/// The head of a row waiting on a call no stream uses: the census run that found none follows in
+/// parentheses.
+const NO_STREAM_USES_IT: &str = "refused: no stream uses it yet";
+
+/// Why a row is open, where the ledger's vocabulary names it: the head of its waiting-on field,
+/// which the replay counts ([`open_work`]). Every other row's reason is its own words.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Reason {
+    /// `refused: not built yet (<lane>)`: a feature the streams use that `lane` is building. The
+    /// landing that builds it deletes the row. Their count is the cutover's remaining work, and it
+    /// is zero at the cutover.
+    NotBuiltYet { lane: String },
+    /// `refused: no stream uses it yet (<census>)`: a call the census run `census` of replay's
+    /// streams found no stream using. The day a census finds a use, the row's reason becomes
+    /// [`Reason::NotBuiltYet`] with its lane.
+    NoStreamUsesIt { census: String },
+    /// The row's own words: a device's own answer, what Metal does not document, and the like.
+    Words,
+}
+
+impl Reason {
+    /// The reason `waiting_on` states at its head, or why a head that names the vocabulary is
+    /// malformed: a reason without its parenthesis, or with an empty one.
+    fn of(waiting_on: &str) -> Result<Reason, String> {
+        let heads: [(&str, fn(String) -> Reason); 2] = [
+            (NOT_BUILT_YET, |lane| Reason::NotBuiltYet { lane }),
+            (NO_STREAM_USES_IT, |census| Reason::NoStreamUsesIt {
+                census,
+            }),
+        ];
+        for (head, make) in heads {
+            let Some(rest) = waiting_on.strip_prefix(head) else {
+                continue;
+            };
+            let named = (rest.strip_prefix(" ("))
+                .and_then(|rest| rest.split_once(')'))
+                .map(|(named, _)| named.trim())
+                .filter(|named| !named.is_empty());
+            let why = || format!("a row waiting on \"{head}\" names who: \"{head} (<name>)\"");
+            return named.map(|named| make(named.to_owned())).ok_or_else(why);
+        }
+        Ok(Reason::Words)
+    }
+}
+
+/// What `ledger`'s typed reasons count, as one line of a replay's report: its rows not built yet
+/// by lane, which is the cutover's remaining work, and its rows no stream uses by census run.
+pub fn open_work(ledger: &[KnownGap], file: &str) -> String {
+    let mut lanes = BTreeMap::<String, usize>::new();
+    let mut censuses = BTreeMap::<String, usize>::new();
+    for row in ledger {
+        match row.reason() {
+            Reason::NotBuiltYet { lane } => *lanes.entry(lane).or_default() += 1,
+            Reason::NoStreamUsesIt { census } => *censuses.entry(census).or_default() += 1,
+            Reason::Words => {}
+        }
+    }
+    let each = |counted: &BTreeMap<String, usize>| match counted.is_empty() {
+        true => String::new(),
+        false => {
+            let named: Vec<String> = counted
+                .iter()
+                .map(|(name, n)| format!("{name} {n}"))
+                .collect();
+            format!(" ({})", named.join(", "))
+        }
+    };
+    format!(
+        "{file}: {} row(s) not built yet{}, the cutover's remaining work; {} row(s) no stream \
+         uses yet{}",
+        lanes.values().sum::<usize>(),
+        each(&lanes),
+        censuses.values().sum::<usize>(),
+        each(&censuses),
+    )
 }
 
 /// Why a run is not what the ledger expects. Each of these fails the run.
@@ -294,6 +390,8 @@ pub fn parse(text: &str) -> Result<Vec<KnownGap>, String> {
                  what Metal does, what we do instead, and where the fix belongs"
             ));
         }
+        Reason::of(waiting_on.trim())
+            .map_err(|why| format!("known-gaps.tsv line {at}: {case}: {why}"))?;
         rows.push(KnownGap {
             case: case.trim().to_owned(),
             venue: venue.trim().to_owned(),

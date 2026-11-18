@@ -7954,3 +7954,51 @@ fn a_refusal_of_what_the_device_offers_is_the_runtime_s() {
         Feature::SampleRateShading
     )));
 }
+
+/// The ledger's two typed reasons parse from a row's waiting-on head with the lane or census run
+/// they name, a head without its name is refused, and the count line sums each by name.
+#[test]
+fn the_ledger_s_typed_reasons_parse_and_count() {
+    use crate::known_gaps::{open_work, parse, Reason};
+    let row = |waiting_on: &str| format!("a-case\t*\trefused\tcase/site\tErr(X)\t{waiting_on}\n");
+    let text = [
+        row("refused: not built yet (render). The pipeline's multisample state."),
+        row("refused: not built yet (render)"),
+        row("refused: not built yet (identity)"),
+        row("refused: no stream uses it yet (census-1)"),
+        row("The device's own answer (rule 1)."),
+    ]
+    .concat();
+    let ledger = parse(&text).expect("the rows parse");
+    let reasons: Vec<Reason> = ledger.iter().map(|known| known.reason()).collect();
+    assert_eq!(
+        reasons,
+        [
+            Reason::NotBuiltYet {
+                lane: "render".to_owned()
+            },
+            Reason::NotBuiltYet {
+                lane: "render".to_owned()
+            },
+            Reason::NotBuiltYet {
+                lane: "identity".to_owned()
+            },
+            Reason::NoStreamUsesIt {
+                census: "census-1".to_owned()
+            },
+            Reason::Words,
+        ]
+    );
+    assert_eq!(
+        open_work(&ledger, "known-gaps-rt.tsv"),
+        "known-gaps-rt.tsv: 3 row(s) not built yet (identity 1, render 2), the cutover's \
+         remaining work; 1 row(s) no stream uses yet (census-1 1)"
+    );
+    for malformed in [
+        "refused: not built yet",
+        "refused: no stream uses it yet ()",
+    ] {
+        let refused = parse(&row(malformed)).expect_err(malformed);
+        assert!(refused.contains("names who"), "{refused}");
+    }
+}
