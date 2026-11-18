@@ -195,7 +195,7 @@ pub(crate) struct Gpu {
     /// copied, once each, kept until the command buffer retires: a buffer's block and device copy
     /// with it, and a texture's and a sampler's elements of set 1 stay theirs while work may read
     /// them (`crate::kept`).
-    pub(crate) kept: Objects,
+    pub(crate) kept: Box<Objects>,
     /// What the commands wrote into the parameter ring.
     pub(crate) ring: Writes,
     /// A texture over a Managed buffer's device copy in an image of its own is kept: the submit
@@ -282,7 +282,7 @@ impl CommandBuffer {
         queue: Arc<QueueInner>,
         device: Device,
         slot: u32,
-        kept: Objects,
+        kept: Box<Objects>,
     ) -> CommandBuffer {
         let stamps = (queue.stamps.pool, Stamps::first(slot));
         CommandBuffer {

@@ -47,7 +47,7 @@ struct Slots {
     free: Vec<u32>,
     /// The kept-object lists of retired command buffers, empty, with their capacity
     /// (`crate::kept`): at most one per slot.
-    objects: Vec<Objects>,
+    objects: Vec<Box<Objects>>,
 }
 
 impl Slots {
@@ -177,7 +177,7 @@ impl QueueInner {
     /// and `kept`, its kept-object lists emptied, for the next command buffer made. Its gauge falls
     /// first, so a command buffer made in the freed slot never reads one more live than the queue
     /// holds.
-    pub(crate) fn release(&self, slot: u32, kept: Objects) {
+    pub(crate) fn release(&self, slot: u32, kept: Box<Objects>) {
         self.counters.fall(Gauge::CommandBuffers);
         let mut slots = lock(&self.slots);
         slots.free.push(slot);

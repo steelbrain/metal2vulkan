@@ -373,11 +373,6 @@ fn make(core: &Core, desc: &SamplerDesc) -> Result<vk::Sampler, Error> {
 }
 
 impl SamplerState {
-    /// Whether two handles are one state.
-    pub(crate) fn is(&self, other: &SamplerState) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
-    }
-
     /// Whether `core` is the device this state was made on.
     pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
         Arc::ptr_eq(self.inner.device.core(), core)
