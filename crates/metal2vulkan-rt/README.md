@@ -873,6 +873,14 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   the emulated-SIMD-group variant's lowering on the reaper: a state reads only its lowerings from
   the cache directory, and each `VkPipeline` past the first tile is made at its first dispatch,
   from its file where there is one.
+- An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
+  content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
+  (`Metrics::first_use_waits`), from its file in the cache directory where there is one. In each of
+  the two recorded streams measured, that made 49 pipelines, all in one frame: the frame where the
+  stream's image-only dispatches over such grids start (frame 224 of one stream and 312 of the
+  other). One more in each, of tile 1x1x256, runs where the device's `maxComputeWorkGroupSize` is 64
+  deep (NVIDIA's) in the tiles its regions carry, on the pipeline made with the state, and makes a
+  50th elsewhere.
 - A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
   its plain module). For the observing kernel the device tests run, a grid template over
   threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole creation 2.7 to

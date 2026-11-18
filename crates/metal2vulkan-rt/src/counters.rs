@@ -352,8 +352,9 @@ pub struct Metrics {
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
-    /// for a threadgroup size or threadgroup memory lengths no state of the kernel's content had
-    /// run with before.
+    /// for a workgroup size (a threadgroup size, or the tile of an image-only kernel's grid more
+    /// than one deep) or threadgroup memory lengths no state of the kernel's content had run with
+    /// before.
     pub first_use_waits: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) the first-use waits took, in total.
     pub first_use_wait_nanos: u64,
