@@ -12245,8 +12245,10 @@ trait-impl	metal2vulkan-rt::Block impl Drop	impl Drop for Block
 trait-impl	metal2vulkan-rt::Block impl fmt::Debug	impl fmt::Debug for Block
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Send	unsafe impl Send for BlockInfo
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Sync	unsafe impl Sync for BlockInfo
+trait-impl	metal2vulkan-rt::Buffer impl crate::kept::Handle	impl crate::kept::Handle for Buffer
 trait-impl	metal2vulkan-rt::ClearColor impl Default	impl Default for ClearColor
 trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for ComputeCommandEncoder
+trait-impl	metal2vulkan-rt::ComputePipelineState impl crate::kept::Handle	impl crate::kept::Handle for ComputePipelineState
 trait-impl	metal2vulkan-rt::DepthStencilDescriptor impl Default	impl Default for DepthStencilDescriptor
 trait-impl	metal2vulkan-rt::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-rt::Error impl std::error::Error	impl std::error::Error for Error
@@ -12256,9 +12258,12 @@ trait-impl	metal2vulkan-rt::Refusal impl fmt::Display	impl fmt::Display for Refu
 trait-impl	metal2vulkan-rt::RenderCommandEncoder impl Drop	impl Drop for RenderCommandEncoder
 trait-impl	metal2vulkan-rt::RenderPassDepthAttachmentDescriptor impl Default	impl Default for RenderPassDepthAttachmentDescriptor
 trait-impl	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor impl Default	impl Default for RenderPassStencilAttachmentDescriptor
+trait-impl	metal2vulkan-rt::RenderPipelineState impl crate::kept::Handle	impl crate::kept::Handle for RenderPipelineState
 trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsage
 trait-impl	metal2vulkan-rt::SamplerDescriptor impl Default	impl Default for SamplerDescriptor
+trait-impl	metal2vulkan-rt::SamplerState impl crate::kept::Handle	impl crate::kept::Handle for SamplerState
 trait-impl	metal2vulkan-rt::StencilDescriptor impl Default	impl Default for StencilDescriptor
+trait-impl	metal2vulkan-rt::Texture impl crate::kept::Handle	impl crate::kept::Handle for Texture
 trait-impl	metal2vulkan-rt::TextureSwizzleChannels impl Default	impl Default for TextureSwizzleChannels
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl std::error::Error	impl std::error::Error for BelowFloor
