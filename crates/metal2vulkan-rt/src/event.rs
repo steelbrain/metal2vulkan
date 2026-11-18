@@ -156,10 +156,12 @@ impl SharedEvent {
     /// that no submitted signal can meet is met only by the host.
     ///
     /// Err: [`Refusal::InScheduledHandler`](crate::Refusal::InScheduledHandler) in a scheduled
-    /// handler.
+    /// handler; [`Refusal::WaitOnOwnThread`](crate::Refusal::WaitOnOwnThread) in a completed
+    /// handler or a listener of its device for a value not yet reached.
     pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> Result<bool, Error> {
         crate::command::not_in_scheduled_handler()?;
         let inner = &self.event.inner;
+        let own = crate::device::on_completion_thread(&inner.core);
         let deadline = Instant::now().checked_add(timeout);
         let mut state = lock(&inner.state);
         loop {
@@ -170,6 +172,9 @@ impl SharedEvent {
             }
             if state.lost {
                 return Ok(false);
+            }
+            if own {
+                return Err(Error::Refused(crate::Refusal::WaitOnOwnThread));
             }
             state = match deadline {
                 None => inner

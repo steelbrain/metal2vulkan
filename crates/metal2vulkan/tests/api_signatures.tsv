@@ -13781,6 +13781,7 @@ variant	metal2vulkan-rt::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
 variant	metal2vulkan-rt::Refusal::VertexBufferOffset	VertexBufferOffset { index: u32, offset: u64, length: u64 }
 variant	metal2vulkan-rt::Refusal::ViewportNotFinite	ViewportNotFinite
+variant	metal2vulkan-rt::Refusal::WaitOnOwnThread	WaitOnOwnThread
 variant	metal2vulkan-rt::Refusal::ZeroRangePastBlock	ZeroRangePastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-rt::Refusal::ZeroRangeShared	ZeroRangeShared { block: BlockId }
 variant	metal2vulkan-rt::RenderPassKind::ClearFormat	ClearFormat

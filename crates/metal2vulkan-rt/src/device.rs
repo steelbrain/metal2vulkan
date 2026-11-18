@@ -120,6 +120,18 @@ thread_local! {
 }
 
 /// The role of this thread for `core`.
+/// Whether this thread is `core`'s completion thread, which runs its completed handlers and its
+/// listeners.
+pub(crate) fn on_completion_thread(core: &Arc<Core>) -> bool {
+    role(core) == Role::Complete
+}
+
+/// Whether this thread is one of `core`'s threads that run the consumer's code: the submit thread
+/// (its scheduled handlers) or the completion thread (its completed handlers and listeners).
+pub(crate) fn on_handler_thread(core: &Arc<Core>) -> bool {
+    matches!(role(core), Role::Submit | Role::Complete)
+}
+
 fn role(core: &Arc<Core>) -> Role {
     let (serves, role) = SERVES.get();
     if serves == Arc::as_ptr(core) as usize {

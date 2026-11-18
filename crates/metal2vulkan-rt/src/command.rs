@@ -424,8 +424,9 @@ impl CommandBuffer {
     }
 
     /// `addCompletedHandler:`: runs on the completion thread once the command buffer has
-    /// completed or ended, after its scheduled handlers. One thread runs every device's completed
-    /// handlers in turn, so a completed handler waits for no command buffer.
+    /// completed or ended, after its scheduled handlers. The completion thread runs the device's
+    /// completed handlers and listeners in turn, so a wait in one for what that thread has not
+    /// yet done is [`Refusal::WaitOnOwnThread`], and one already met answers at once.
     ///
     /// Err: [`Refusal::Committed`].
     pub fn add_completed_handler(
@@ -546,9 +547,11 @@ impl CommandBuffer {
     /// `waitUntilScheduled`: returns once the command buffer is scheduled, or has completed or
     /// ended. It sends nothing: a command buffer held in a group is scheduled already.
     ///
-    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler.
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Refusal::WaitOnOwnThread`]
+    /// in a completed handler or a listener of its device for one not yet scheduled.
     pub fn wait_until_scheduled(&self) -> Result<(), Error> {
         not_in_scheduled_handler()?;
+        let own = self.on_completion_thread();
         let mut state = self.state();
         while !matches!(
             state.status,
@@ -556,6 +559,9 @@ impl CommandBuffer {
                 | CommandBufferStatus::Completed
                 | CommandBufferStatus::Error
         ) {
+            if own {
+                return Err(Error::Refused(Refusal::WaitOnOwnThread));
+            }
             state = self.wait(state);
         }
         Ok(())
@@ -563,17 +569,31 @@ impl CommandBuffer {
 
     /// `waitUntilCompleted`: returns once the command buffer has completed or ended and its
     /// handlers have run. A command buffer held in a group goes at once, as
-    /// [`CommandQueue::send_now`](crate::CommandQueue::send_now) sends it.
+    /// [`CommandQueue::send_now`](crate::CommandQueue::send_now) sends it. In a completed handler
+    /// or a listener of its device, on the completion thread, which runs the handlers: at once
+    /// for one completed or ended, its own handler's command buffer among them.
     ///
-    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler.
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Refusal::WaitOnOwnThread`]
+    /// in a completed handler or a listener of its device for one not yet completed or ended.
     pub fn wait_until_completed(&self) -> Result<(), Error> {
         not_in_scheduled_handler()?;
+        if self.on_completion_thread() {
+            return match self.status() {
+                CommandBufferStatus::Completed | CommandBufferStatus::Error => Ok(()),
+                _ => Err(Error::Refused(Refusal::WaitOnOwnThread)),
+            };
+        }
         self.send();
         let mut state = self.state();
         while !state.finished {
             state = self.wait(state);
         }
         Ok(())
+    }
+
+    /// Whether this thread is the completion thread of the command buffer's device.
+    fn on_completion_thread(&self) -> bool {
+        (self.inner.queue.core()).is_some_and(|core| crate::device::on_completion_thread(&core))
     }
 
     /// Before a host wait for it: where the command buffer is committed and not yet submitted,

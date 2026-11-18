@@ -2152,6 +2152,136 @@ pub(crate) mod on_device {
         });
     }
 
+    /// On the completion thread, in a completed handler and in a listener, a wait for what that
+    /// thread has not yet done is refused with `WaitOnOwnThread`, and one already met answers at
+    /// once: the handler's own command buffer has completed. A command buffer asked of a full
+    /// queue is refused there and in a scheduled handler, on the submit thread.
+    #[test]
+    fn every_device_refuses_in_a_handler_each_wait_its_own_thread_would_have_to_end() {
+        each_device("own_thread_waits", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let a = arena.buffer();
+            let event = shared_event(&device);
+            let queue = device.new_command_queue(2).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill(&command_buffer, &a, 5);
+            let held = queue.command_buffer().expect("a command buffer");
+            let answer = |result: Result<(), Error>| format!("{result:?}");
+            let (answered, answers) = mpsc::channel();
+            let (in_answered, in_queue) = (answered.clone(), queue.clone());
+            command_buffer
+                .add_scheduled_handler(move |_| {
+                    let made = in_queue.command_buffer().map(drop);
+                    let _ = in_answered.send(vec![("scheduled: a full queue", answer(made))]);
+                })
+                .expect("a handler");
+            let (in_answered, in_queue, in_held, in_event) =
+                (answered.clone(), queue.clone(), held.clone(), event.clone());
+            command_buffer
+                .add_completed_handler(move |own| {
+                    let waited = |value| in_event.wait_until_signaled_value(value, PATIENCE);
+                    let made = in_queue.command_buffer();
+                    let lines = vec![
+                        (
+                            "completed: own completed",
+                            answer(own.wait_until_completed()),
+                        ),
+                        (
+                            "completed: own scheduled",
+                            answer(own.wait_until_scheduled()),
+                        ),
+                        (
+                            "completed: held completed",
+                            answer(in_held.wait_until_completed()),
+                        ),
+                        (
+                            "completed: held scheduled",
+                            answer(in_held.wait_until_scheduled()),
+                        ),
+                        ("completed: value 0", format!("{:?}", waited(0))),
+                        ("completed: value 1", format!("{:?}", waited(1))),
+                        ("completed: room", answer(made.as_ref().map(drop))),
+                        (
+                            "completed: a full queue",
+                            answer(in_queue.command_buffer().map(drop)),
+                        ),
+                    ];
+                    drop(made);
+                    let _ = in_answered.send(lines);
+                })
+                .expect("a handler");
+            command_buffer.commit().expect("a commit");
+            let mut lines = answers
+                .recv_timeout(PATIENCE)
+                .expect("the scheduled answers");
+            lines.extend(
+                answers
+                    .recv_timeout(PATIENCE)
+                    .expect("the completed answers"),
+            );
+            finished(name, &command_buffer);
+            let (in_queue, in_held, in_done, in_event) = (
+                queue.clone(),
+                held.clone(),
+                command_buffer.clone(),
+                event.clone(),
+            );
+            event
+                .notify_listener(1, move |_| {
+                    let waited = |value| in_event.wait_until_signaled_value(value, PATIENCE);
+                    let made = in_queue.command_buffer();
+                    let lines = vec![
+                        ("listener: value 1", format!("{:?}", waited(1))),
+                        ("listener: value 2", format!("{:?}", waited(2))),
+                        (
+                            "listener: held completed",
+                            answer(in_held.wait_until_completed()),
+                        ),
+                        (
+                            "listener: done completed",
+                            answer(in_done.wait_until_completed()),
+                        ),
+                        ("listener: room", answer(made.as_ref().map(drop))),
+                        (
+                            "listener: a full queue",
+                            answer(in_queue.command_buffer().map(drop)),
+                        ),
+                    ];
+                    drop(made);
+                    let _ = answered.send(lines);
+                })
+                .expect("a listener");
+            event.set_signaled_value(1);
+            lines.extend(
+                answers
+                    .recv_timeout(PATIENCE)
+                    .expect("the listener's answers"),
+            );
+            let refusal = answer(Err(Error::Refused(Refusal::WaitOnOwnThread)));
+            for (call, got) in &lines {
+                let want = match *call {
+                    "completed: own completed"
+                    | "completed: own scheduled"
+                    | "completed: room"
+                    | "listener: done completed"
+                    | "listener: room" => "Ok(())".to_string(),
+                    "completed: value 0" | "listener: value 1" => "Ok(true)".to_string(),
+                    _ => refusal.clone(),
+                };
+                assert_eq!(*got, want, "{name}: {call}");
+            }
+            assert_eq!(lines.len(), 15, "{name}: {lines:?}");
+            // Outside a handler the same waits answer as before.
+            assert_eq!(word(&a), 5, "{name}");
+            assert_eq!(held.status(), CommandBufferStatus::NotEnqueued, "{name}");
+            let more = queue.command_buffer().expect("room outside a handler");
+            assert!(event
+                .wait_until_signaled_value(1, Duration::ZERO)
+                .expect("a wait outside a handler"));
+            drop((more, held, command_buffer, queue, event));
+        });
+    }
+
     /// At a loss: a host wait for a pending signal ends false; the command buffer in flight ends
     /// DeviceLost in flight, the held one and every later commit DeviceLost not in flight; the
     /// device tears down, and a new device opens and runs work.

@@ -83,7 +83,8 @@ impl CommandQueue {
     /// buffers are made and not yet completed. `commandBufferWithUnretainedReferences` is the same
     /// call: what a command buffer keeps is one reference per object it uses.
     ///
-    /// Err: [`Error::Quiesced`].
+    /// Err: [`Error::Quiesced`]; [`Refusal::WaitOnOwnThread`] in a handler or a listener of its
+    /// device where the queue's maximum count are made and not yet completed.
     pub fn command_buffer(&self) -> Result<CommandBuffer, Error> {
         let core = self.device.core();
         let mut live = lock(&self.inner.live);
@@ -93,6 +94,9 @@ impl CommandQueue {
             }
             if live.count < self.inner.max {
                 break;
+            }
+            if crate::device::on_handler_thread(core) {
+                return Err(Error::Refused(Refusal::WaitOnOwnThread));
             }
             live = self
                 .inner

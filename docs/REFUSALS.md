@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 57 | 57 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 58 | 58 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 26 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 27 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 20 | 0 | 0 | 0 |
 
@@ -628,6 +628,7 @@ Columns:
 | `ModifiedRange` | A changed range that leaves its buffer (`Buffer::did_modify_range`) | every device (a public call's own check of its arguments) | `ours`: the copy of such a range would write past the buffer's device copy | 1: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)` | `-` |
 | `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
 | `InScheduledHandler` | A call a scheduled handler may not make (`CommandBuffer::add_scheduled_handler`) | every device (a public call's own check of its arguments) | `ours`: the consumer's scheduled handlers run on the submit thread, and the one consumer's make none of these calls; a guest's scheduled handler runs in the guest | 1: `crates/metal2vulkan-rt/src/command.rs (not_in_scheduled_handler)` | `-` |
+| `WaitOnOwnThread` | A wait, in a handler or a listener, for what the runtime thread that runs it would have to do first, so it would never end | every device (a public call's own check of its arguments) | `ours`: no wait of the runtime's hangs by construction | 4: `crates/metal2vulkan-rt/src/command.rs (wait_until_completed)`, `crates/metal2vulkan-rt/src/command.rs (wait_until_scheduled)` (+2) | `-` |
 | `OtherDevice` | An event, a buffer, a texture or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block, a texture's image, a pipeline and a block belong to the `VkDevice` that made them | 23: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-rt/src/blit.rs (copy_from_buffer_to_buffer)` (+20) | `-` |
 | `NoCommandBuffers` | A queue that may hold no command buffer (`Device::new_command_queue` with a count of 0) | every device (a public call's own check of its arguments) | `ours`: its first `commandBuffer` call would wait forever | 1: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)` | `-` |
 | `EncoderOpen` | A second encoder, an encode call, or a commit or enqueue, while an encoder of the command buffer is open | every device (a public call's own check of its arguments) | `metal-documented`: a command buffer has one active encoder at a time, ended by `endEncoding` before another is made or the command buffer is committed | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
@@ -1216,6 +1217,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::ModifiedRange`: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)`
 - `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (open)`
 - `rt:Refusal::InScheduledHandler`: `crates/metal2vulkan-rt/src/command.rs (not_in_scheduled_handler)`
+- `rt:Refusal::WaitOnOwnThread`: `crates/metal2vulkan-rt/src/command.rs (wait_until_completed)`; `crates/metal2vulkan-rt/src/command.rs (wait_until_scheduled)`; `crates/metal2vulkan-rt/src/event.rs (wait_until_signaled_value)`; `crates/metal2vulkan-rt/src/queue.rs (command_buffer)`
 - `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_buffer_to_buffer)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_texture)`; `crates/metal2vulkan-rt/src/blit.rs (fill_buffer)`; `crates/metal2vulkan-rt/src/blit.rs (synchronize_resource)`; `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/device.rs (release_block)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource, 2 sites)`; `crates/metal2vulkan-rt/src/fence.rs (used_on)`; `crates/metal2vulkan-rt/src/pass.rs (check)`; `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_depth_stencil_state)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_render_pipeline_state)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/texture.rs (new_managed_texture)`
 - `rt:Refusal::NoCommandBuffers`: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)`
 - `rt:Refusal::EncoderOpen`: `crates/metal2vulkan-rt/src/command.rs (open)`

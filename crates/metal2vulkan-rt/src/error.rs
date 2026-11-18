@@ -182,6 +182,21 @@ pub enum Refusal {
     /// Basis: ours (the consumer's scheduled handlers run on the submit thread, and the one
     /// consumer's make none of these calls; a guest's scheduled handler runs in the guest).
     InScheduledHandler,
+    /// A wait, in a handler or a listener, for what the runtime thread that runs it would have to
+    /// do first, so it would never end: on the completion thread (a completed handler or a
+    /// listener), [`CommandBuffer::wait_until_completed`](crate::CommandBuffer::wait_until_completed)
+    /// for a command buffer not yet completed,
+    /// [`CommandBuffer::wait_until_scheduled`](crate::CommandBuffer::wait_until_scheduled) for one
+    /// not yet scheduled, and
+    /// [`SharedEvent::wait_until_signaled_value`](crate::SharedEvent::wait_until_signaled_value)
+    /// for a value not yet reached; in any handler or listener,
+    /// [`CommandQueue::command_buffer`](crate::CommandQueue::command_buffer) on a queue whose
+    /// maximum count of command buffers are made and not yet completed. A wait already met
+    /// answers at once there. The condition is the program's own state: what it committed, and
+    /// what has completed. Metal runs handlers on a thread of its own, where the wait would end.
+    ///
+    /// Basis: ours (no wait of the runtime's hangs by construction).
+    WaitOnOwnThread,
     /// An event, a buffer, a texture or a pipeline state of another device in an encode call
     /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event),
     /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event), or a
@@ -1233,6 +1248,9 @@ impl fmt::Display for Refusal {
             Refusal::Committed => f.write_str("the command buffer is already committed"),
             Refusal::InScheduledHandler => f.write_str(
                 "a scheduled handler runs on the submit thread, and this call may wait for it",
+            ),
+            Refusal::WaitOnOwnThread => f.write_str(
+                "this wait, in a handler or a listener, waits for what its own thread does next",
             ),
             Refusal::OtherDevice => f.write_str("the object is another device's"),
             Refusal::NoCommandBuffers => {
