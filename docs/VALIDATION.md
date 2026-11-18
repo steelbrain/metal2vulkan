@@ -305,7 +305,7 @@ changes the harness sets the base for the next.
 | `metric` | A deterministic count per frame or per command buffer: submissions, passes, barriers, bytes copied, pipelines created | It is larger than the base's |
 | `instructions` | User-space CPU instructions per draw or per dispatch | It is more than 1% over the base's |
 | `gauge` | Live objects of one resource kind, the key ending in the point it was read at: `@100` and `@200` (loop iterations), `@drop` (after the device dropped) | `@drop` is not 0, or `@200` differs from `@100` |
-| `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: its last command buffer's commit-to-complete time where the workload times it (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a diagnostic and no record) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs |
+| `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: its last command buffer's commit-to-complete time where the workload times it (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a record of its own, `harness-gpu-<runtime>/<row>`, parked) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs |
 | `size` | The size a harness row whose size follows the device ran at (`long_4cb`) | The leg's two runtimes ran the row at different sizes: its times are then not compared (the harness budget) |
 
 Every cache has a test that fills it past its capacity and records its gauge.
@@ -361,6 +361,14 @@ alone, old then new, then new then old (A B B A). It fails only if the median of
 is past its limit too. A leg re-times at most 8 rows, the furthest over first; a row it does not
 re-time is judged by its one time. The pairs are kept as `harness-retime/<row>/<pair>/<runtime>` records, parked for the
 `time` rule.
+The floors table is seeded from the old runtime's runs under an earlier harness, so a row within
+its limit only because its floor there is over 1.10 is named on the leg's line ("passed on a
+seeded floor > 1.10") until the table is measured again with this harness.
+Each row's GPU time on each runtime, the p50 over its timed runs of a run's first GPU start to its
+last GPU end, is recorded as `time harness-gpu-<runtime>/<row>` where the row has one. It is
+judged by nothing: the budget's lines show it beside the row's times, and it is parked for the
+`time` rule. `run` and `show` print, under each leg's line, every harness row's time and GPU time
+on both runtimes and the ratio of the times.
 The budget goes with the old runtime.
 
 The old runtime's translations do not move either. The golden hash table compiles through

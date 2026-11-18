@@ -61,8 +61,11 @@ PARKED_TESTS = {
 #: well: the cold ones, timed on a fresh driver cache, are the gated ones, and a warm one reads the
 #: entries the cold run just wrote, a fraction of a millisecond on Mesa. So are the re-timed pairs
 #: of a row over its budget (harness-retime/, RETIME_PAIRS), and the creation rows' first samples
-#: from the later processes (harness-first/, FIRST_RUNS): harness_budget judges them.
-PARKED_RECORDS = ("harness-old/", "harness-new-warm/", "harness-retime/", "harness-first/")
+#: from the later processes (harness-first/, FIRST_RUNS): harness_budget judges them. So are the
+#: rows' GPU times (harness-gpu-<runtime>/, HARNESS_GPU): reported beside the times the budget
+#: judges, and judged by nothing.
+PARKED_RECORDS = ("harness-old/", "harness-new-warm/", "harness-retime/", "harness-first/",
+                  "harness-gpu-")
 
 #: The phrase that opens the subject of a commit allowed to change the old runtime's output: until
 #: the cutover, the translator's output through `Device::new` moves only in such a commit. Only the
@@ -287,14 +290,27 @@ def time_outliers(times, bases):
 #: The harness budget: on each GPU, a harness row's time on the new runtime over its time on the
 #: old, both timed in the same leg, is at most this. A row's time is what a program waits on, timed
 #: on the host (the harness's `run::matrix_time`): a run's mean commit-to-complete time where the
-#: row times its command buffers', else the host wall time a run adds; a run's GPU time is a
-#: diagnostic in the harness's table and is no record. It is a rule of its own, apart from
+#: row times its command buffers', else the host wall time a run adds; a run's GPU time is
+#: reported beside it (HARNESS_GPU) and judged by nothing. It is a rule of its own, apart from
 #: TIME_OUTLIER and PARKED_RECORDS: those judge a time against its base commit's across GPUs and
 #: park the old runtime's outliers, while this compares the two runtimes within one leg, the old
 #: runtime's time the reference. It ends with the cutover, with the old runtime.
 HARNESS_BUDGET = 1.03
 HARNESS_NEW = "harness-new/"
 HARNESS_OLD = "harness-old/"
+#: A harness row's GPU time on each runtime, `harness-gpu-<runtime>/<row>`: the p50 over its timed
+#: runs of a run's first GPU start to its last GPU end, scaled like its time where the device
+#: sizes the row, and absent where the row has none. harness_budget's lines and harness_rows show
+#: it beside the row's time; it is parked (PARKED_RECORDS), so no rule judges it.
+HARNESS_GPU = "harness-gpu-"
+
+
+def gpu_beside(times, runtime, row):
+    """ROW's GPU time on RUNTIME as its time's lines show it, ` (GPU p50 N us)`, or nothing."""
+    gpu = times.get(f"{HARNESS_GPU}{runtime}/{row}")
+    return "" if gpu is None else f" (GPU p50 {gpu:.1f} us)"
+
+
 #: The harness rows over HARNESS_BUDGET that a ruling gave a ceiling, per GPU leg, each a ratio of
 #: host times: a row past its ceiling fails its leg, so an open row can neither hide nor grow. A
 #: ceiling is ruled after the work on its row, never taken from a measured ratio; a fix lowers it
@@ -332,6 +348,11 @@ def read_floors(text):
 #: runtime's. The table is measured again when the harness or the old runtime's build changes; a
 #: row or leg it does not list has a floor of 1.
 HARNESS_FLOORS = read_floors((Path(__file__).resolve().parent / "floors.tsv").read_text())
+#: The floors table is seeded from the old runtime's runs under an earlier harness, so no row
+#: closes on it: a row within its limit only because its floor is over this is named on its leg's
+#: line (seeded_floor). The table measured again with this harness replaces the seed and deletes
+#: this.
+SEEDED_FLOOR_OPEN = 1.10
 
 
 def row_limit(leg_id, row):
@@ -350,6 +371,17 @@ def past_limit(leg_id, row):
         return f"past {HARNESS_BUDGET}"
     name, value = ("ceiling", ceiling) if ceiling >= floor else ("floor", floor)
     return f"past its {name} {value} with its allowance, {row_limit(leg_id, row):.3f}"
+
+
+def seeded_floor(leg_id, row, ratio):
+    """How a line names ROW passing on LEG_ID at RATIO only on a seeded floor over
+    SEEDED_FLOOR_OPEN (within its limit, past HARNESS_BUDGET times its ceiling or the budget
+    alone), or nothing."""
+    floor = HARNESS_FLOORS.get(leg_id, {}).get(row, 1.0)
+    ceiling = HARNESS_CEILINGS.get(leg_id, {}).get(row, 1.0)
+    if floor > SEEDED_FLOOR_OPEN and HARNESS_BUDGET * ceiling < ratio <= row_limit(leg_id, row):
+        return f", passed on a seeded floor > {SEEDED_FLOOR_OPEN:.2f}, its floor {floor}"
+    return ""
 
 
 #: The harness's creation rows, by the start of their names. A leg times them apart from the
@@ -491,13 +523,18 @@ def harness_budget(leg_id, leg):
             old, new = (statistics.median(values) for values in samples)
             line = (f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us over old "
                     f"{old:.1f} us is {new / old:.3f}")
+            seeded = seeded_floor(leg_id, row, new / old)
             if new / old > limit:
                 problems.append(f"{line}, {past_limit(leg_id, row)}")
             elif row in ceilings:
-                parked.append(f"{line}, its ceiling {ceilings[row]}")
+                parked.append(f"{line}, its ceiling {ceilings[row]}{seeded}")
+            elif seeded:
+                parked.append(f"{line}{seeded}")
             continue
         ratio = new / old
-        line = f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is {ratio:.3f}"
+        line = (f"harness budget {row}: new {new:.1f} us{gpu_beside(times, 'new', row)} over old "
+                f"{old:.1f} us{gpu_beside(times, 'old', row)} is {ratio:.3f}")
+        seeded = seeded_floor(leg_id, row, ratio)
         if ratio > limit:
             past = f"{line}, {past_limit(leg_id, row)}"
             ratios = retimed(times, row)
@@ -510,14 +547,32 @@ def harness_budget(leg_id, leg):
             if median > limit:
                 problems.append(pairs)
             else:
-                parked.append(f"{pairs}, within: judged by the median")
-        elif row not in ceilings:
-            continue
-        elif ratio > HARNESS_BUDGET:
-            parked.append(f"{line}, its ceiling {ceilings[row]}")
-        else:
+                parked.append(f"{pairs}, within: judged by the median{seeded_floor(leg_id, row, median)}")
+        elif row in ceilings and ratio > HARNESS_BUDGET:
+            parked.append(f"{line}, its ceiling {ceilings[row]}{seeded}")
+        elif row in ceilings:
             parked.append(f"{line}, within {HARNESS_BUDGET}: its ceiling {ceilings[row]} leaves the list")
+        elif seeded:
+            parked.append(f"{line}{seeded}")
     return problems, parked
+
+
+def harness_rows(times):
+    """Every harness row timed on either runtime in a leg's TIMES, one line each: its time and its
+    GPU time (HARNESS_GPU) on the new runtime and on the old, `-` where it has none, and new over
+    old where both have a time."""
+    rows = sorted({key.split("/", 1)[1] for key in times if key.startswith((HARNESS_NEW, HARNESS_OLD))})
+    lines = []
+    for row in rows:
+        cells = []
+        for runtime in ("new", "old"):
+            wall, gpu = times.get(f"harness-{runtime}/{row}"), times.get(f"{HARNESS_GPU}{runtime}/{row}")
+            cells.append(f"{runtime} {'-' if wall is None else f'{wall:.1f}':>10} us, "
+                         f"GPU p50 {'-' if gpu is None else f'{gpu:.1f}':>10} us")
+        new, old = times.get(HARNESS_NEW + row), times.get(HARNESS_OLD + row)
+        ratio = f"{new / old:.3f}" if new is not None and old else "-"
+        lines.append(f"{row:<36} {cells[0]} | {cells[1]} | {ratio}")
+    return lines
 
 
 def verdict_line(leg_id, leg):

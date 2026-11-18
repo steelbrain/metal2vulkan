@@ -6,9 +6,10 @@ run through potluck, with the results attached to the commit as a git note
     scripts/matrix/matrix run [SHA] [--legs LEG,...] [--dry-run]
     scripts/matrix/matrix show [SHA]
 
-SHA defaults to development's tip. A leg is a GPU, named by its PCI vendor:device
-(`1002:744c`), or `lavapipe`. docs/VALIDATION.md ("The matrix") has the legs, the records and
-the rules; CONTRIBUTING.md has how to run it.
+SHA defaults to development's tip. Both print each leg's verdict line, then every harness row's
+time and GPU time on both runtimes (results.harness_rows). A leg is a GPU, named by its PCI
+vendor:device (`1002:744c`), or `lavapipe`. docs/VALIDATION.md ("The matrix") has the legs, the
+records and the rules; CONTRIBUTING.md has how to run it.
 
 The cluster's own facts come from potluck (its nodes, their GPUs and CPUs) and from
 ~/.config/metal2vulkan/matrix.json:
@@ -817,10 +818,17 @@ def run_cmd(sha, only, dry):
     path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
     git("notes", f"--ref={NOTES}", "add", "-f", "-F", str(path), sha)
     for leg_id in sorted(entries):
-        print(results.verdict_line(leg_id, doc["legs"][leg_id]))
+        print_leg(leg_id, doc["legs"][leg_id])
     failed = sum(1 for e in entries.values() if e["verdict"] != "pass")
     print(f"matrix {sha[:12]}: {len(entries) - failed} of {len(entries)} legs pass, {wall} min wall; note {NOTES}")
     return 1 if failed else 0
+
+
+def print_leg(leg_id, leg):
+    """A leg's verdict line, then each of its harness rows' times and GPU times."""
+    print(results.verdict_line(leg_id, leg))
+    for line in results.harness_rows(leg["records"]["time"]):
+        print(f"  {line}")
 
 
 def show_cmd(sha):
@@ -828,7 +836,7 @@ def show_cmd(sha):
     if not doc:
         sys.exit(f"no matrix note on {sha}")
     for leg_id in sorted(doc["legs"]):
-        print(results.verdict_line(leg_id, doc["legs"][leg_id]))
+        print_leg(leg_id, doc["legs"][leg_id])
     last = doc["runs"][-1]
     print(f"matrix {sha[:12]}: last run {last['started']}, {last['minutes']} min wall, jobs {' '.join(last['jobs'])}")
 

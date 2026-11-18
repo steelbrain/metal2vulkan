@@ -465,6 +465,65 @@ class HarnessBudgetTests(unittest.TestCase):
     def test_re_timed_pairs_are_parked_records(self):
         self.assertTrue(f"{results.HARNESS_RETIME}vote_loop/1/new".startswith(results.PARKED_RECORDS))
 
+    def test_a_row_s_gpu_time_is_shown_beside_its_time_and_judged_by_nothing(self):
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 120.0,
+                 "harness-gpu-old/frame": 80.25, "harness-gpu-new/frame": 81.0,
+                 "harness-old/alu": 100.0, "harness-new/alu": 100.0,
+                 "harness-gpu-old/alu": 10.0, "harness-gpu-new/alu": 900.0}
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(self.budget("a", times), ([
+                "harness budget frame: new 120.0 us (GPU p50 81.0 us) over old 100.0 us (GPU p50 80.2 us) "
+                "is 1.200, past 1.03"], []))
+            # Only one runtime's GPU time: the other's line shows none.
+            del times["harness-gpu-old/frame"]
+            self.assertEqual(self.budget("a", times)[0], [
+                "harness budget frame: new 120.0 us (GPU p50 81.0 us) over old 100.0 us is 1.200, past 1.03"])
+        # A GPU time's cross-GPU outlier is named and fails no leg.
+        key = f"{results.HARNESS_GPU}new/frame"
+        bases = {leg: {key: 100} for leg in "abcd"}
+        failing, parked = results.time_outliers(
+            {"a": {key: 100}, "b": {key: 101}, "c": {key: 99}, "d": {key: 150}}, bases)
+        self.assertEqual((failing, list(parked)), ({}, ["d"]))
+        # The re-time selection reads the rows' times alone.
+        lines = "\n".join(f"M2V-MATRIX time {key} {value:.3f}" for key, value in times.items()) + "\n"
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            run = subprocess.run(["awk", "-v", "limits=", "-v", f"budget={results.HARNESS_BUDGET!r}",
+                                  results.RETIME_SELECT], input=lines, capture_output=True, text=True, check=True)
+        self.assertEqual([line.split()[1] for line in run.stdout.splitlines()], ["frame"])
+
+    def test_a_row_within_its_limit_only_on_a_seeded_floor_over_1_10_is_named(self):
+        floors = {"a": {"frame": 1.2, "alu": 1.2, "listed": 1.2, "narrow": 1.08}}
+        ceilings = {"a": {"listed": 1.1}}
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 115.0,
+                 "harness-old/alu": 100.0, "harness-new/alu": 102.0,
+                 "harness-old/listed": 100.0, "harness-new/listed": 116.0,
+                 "harness-old/narrow": 100.0, "harness-new/narrow": 110.0}
+        with mock.patch.object(results, "HARNESS_CEILINGS", ceilings), \
+                mock.patch.object(results, "HARNESS_FLOORS", floors):
+            self.assertEqual(self.budget("a", times), ([], [
+                "harness budget frame: new 115.0 us over old 100.0 us is 1.150, passed on a seeded floor "
+                "> 1.10, its floor 1.2",
+                "harness budget listed: new 116.0 us over old 100.0 us is 1.160, its ceiling 1.1, passed on a "
+                "seeded floor > 1.10, its floor 1.2"]))
+            # Within the budget, or within its ceiling's allowance, the floor decides nothing.
+            times["harness-new/listed"] = 113.0
+            self.assertEqual(self.budget("a", times)[1][1],
+                             "harness budget listed: new 113.0 us over old 100.0 us is 1.130, its ceiling 1.1")
+
+    def test_every_row_shows_its_times_and_gpu_times_on_both_runtimes(self):
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 120.0,
+                 "harness-gpu-old/frame": 80.25, "harness-gpu-new/frame": 81.0,
+                 "harness-new/create_64MiB/first_take": 50.0, "harness-old/create_64MiB/first_take": 40.0,
+                 "harness-old/sampling": 50.0, "harness-first/create_64MiB/first_take/2/new": 51.0,
+                 "loop/gpu": 1000.0}
+        self.assertEqual(results.harness_rows(times), [
+            "create_64MiB/first_take              new       50.0 us, GPU p50          - us | old       40.0 us, "
+            "GPU p50          - us | 1.250",
+            "frame                                new      120.0 us, GPU p50       81.0 us | old      100.0 us, "
+            "GPU p50       80.2 us | 1.200",
+            "sampling                             new          - us, GPU p50          - us | old       50.0 us, "
+            "GPU p50          - us | -"])
+
     def test_every_ceiling_is_over_the_budget(self):
         for leg, rows in results.HARNESS_CEILINGS.items():
             for row, ceiling in rows.items():
