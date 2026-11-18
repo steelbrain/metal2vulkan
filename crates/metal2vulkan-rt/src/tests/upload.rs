@@ -78,7 +78,15 @@ mod on_device {
             wait_until("the next Private allocation", || {
                 core.pool.stocked(MemoryClass::Private) && counters.gauges().textures == 0
             });
-            let base = counters.gauges().blocks;
+            // The allocations in use: the idle ones are the pool's, kept for its window. A texture
+            // made while earlier ones are still being freed can take a second texture block, which
+            // goes back to the pool once empty and stays there idle.
+            let in_use = || {
+                let gauges = counters.gauges();
+                let idle = gauges.private_idle_bytes + gauges.shared_idle_bytes;
+                gauges.blocks - idle / MemoryClass::Private.block_len()
+            };
+            let base = in_use();
 
             // Textures made and released: nothing holds them, and nothing is submitted.
             let before = submissions();
@@ -94,9 +102,13 @@ mod on_device {
                 );
             }
             wait_until("the released textures freed", || {
-                let gauges = counters.gauges();
-                (gauges.textures, gauges.blocks) == (0, base)
+                counters.gauges().textures == 0
             });
+            wait_until("their allocations idle", || in_use() == base);
+            println!(
+                "upload: {name}: after the released textures, {:?}",
+                counters.gauges()
+            );
             assert_eq!(submissions(), before, "{name}: textures made and released");
 
             // Whole-texture copies of 4,000,000 bytes, twice the staging region's length, into four
@@ -126,7 +138,7 @@ mod on_device {
                 target
                     .replace_region(whole(side), 0, 0, &pattern(seed), u64::from(side * 4), call)
                     .unwrap_or_else(|error| panic!("{name}: copy {seed}: {error}"));
-                let blocks = counters.gauges().blocks;
+                let blocks = in_use();
                 assert!(
                     blocks <= ceiling,
                     "{name}: copy {seed}: {blocks} allocations live, at most {ceiling} expected"
@@ -151,10 +163,7 @@ mod on_device {
                     "{name}: texture {index}: copy {last}'s bytes"
                 );
             }
-            assert!(
-                counters.gauges().blocks <= ceiling,
-                "{name}: after the reads"
-            );
+            assert!(in_use() <= ceiling, "{name}: after the reads");
             // The reads waited for every copy, so the ring is empty, and starts again at 0.
             targets[0]
                 .replace_region(whole(side), 0, 0, &pattern(0), u64::from(side * 4), call)
@@ -213,7 +222,7 @@ mod on_device {
                 .get_bytes(&mut [0; 4], 4, 4, texel, 0, 0)
                 .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
             let released = device
-                .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
+                .take_block(MemoryClass::Private, UPLOAD_BYTES)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = device
                 .new_buffer(released.id, 0, 256, true)
@@ -224,29 +233,21 @@ mod on_device {
                 .release_block(released)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let (_, bytes, _) = core.work.pending();
-            assert_eq!(
-                bytes,
-                MemoryClass::Private.block_len(),
-                "{name}: the released block is counted"
-            );
+            assert_eq!(bytes, UPLOAD_BYTES, "{name}: the released block is counted");
             // At the bound and not past it, a fill keeps the upload pending: the released block
             // still counts, where a send would have started the count again. The upload's own
             // count, not the device's submissions: the block-maker thread's zero fills of the
             // blocks it makes and is given back submit beside it, when they come (on llvmpipe,
             // one came inside this step).
             let fills = device
-                .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
+                .take_block(MemoryClass::Private, UPLOAD_BYTES)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = device
                 .new_buffer(fills.id, 0, 256, true)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
             let (_, bytes, _) = core.work.pending();
-            assert_eq!(
-                bytes,
-                MemoryClass::Private.block_len(),
-                "{name}: a fill at the bound"
-            );
+            assert_eq!(bytes, UPLOAD_BYTES, "{name}: a fill at the bound");
             assert!(!core.pool.holds(released_id), "{name}: the block held");
             // A texture released after a copy takes it past the bound: the next fill sends the
             // upload, and the block comes back to the pool.
@@ -263,7 +264,7 @@ mod on_device {
             drop(buffer);
             let (_, bytes, _) = core.work.pending();
             assert!(
-                bytes < MemoryClass::Private.block_len(),
+                bytes < UPLOAD_BYTES,
                 "{name}: a fill past the bound keeps {bytes} bytes pending"
             );
             wait_until("the released block back in the pool", || {
