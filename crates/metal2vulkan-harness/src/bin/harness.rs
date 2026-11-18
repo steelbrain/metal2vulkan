@@ -387,8 +387,10 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
         us(90),
         time(&report.create_us),
         gauges(&report.gauges),
-        match (report.first_us, report.first_create_us) {
-            (Some(us), Some(create)) =>
+        match (report.first_us, report.first_create_us, &create.makes) {
+            (Some(us), Some(_), Makes::RenderStates { .. }) =>
+                format!("; first {us:.1} us, its creation alone"),
+            (Some(us), Some(create), _) =>
                 format!("; first {us:.1} us with one dispatch, its creation {create:.1} us"),
             _ => String::new(),
         },

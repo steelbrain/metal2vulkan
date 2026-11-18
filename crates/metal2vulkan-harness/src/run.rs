@@ -371,7 +371,8 @@ pub struct CreateReport {
     /// creation alone.
     pub first_us: Option<f64>,
     /// The first creation's wall time alone, in microseconds, the part of
-    /// [`first_us`](Self::first_us) the creation call paid.
+    /// [`first_us`](Self::first_us) the creation call paid: all of it for a render pipeline
+    /// state.
     pub first_create_us: Option<f64>,
     /// The device's gauges after the 100th and the 200th timed creation, where there were that
     /// many.
@@ -998,8 +999,9 @@ impl<D: ComputeDevice> Harness<D> {
     }
 
     /// [`Session::create`] of the states `make` makes: the first timed apart (`first`, where the
-    /// caller timed it with more than its creation; else its creation here), then `runs`' warm-up
-    /// and [`STATE_CREATIONS`] timed ones, each released before the next.
+    /// caller timed it with more than its creation; else its creation here, which is then its
+    /// [`first_create_us`](CreateReport::first_create_us) too), then `runs`' warm-up and
+    /// [`STATE_CREATIONS`] timed ones, each released before the next.
     fn time_states<S>(
         &self,
         make: impl Fn() -> Result<S>,
@@ -1013,12 +1015,16 @@ impl<D: ComputeDevice> Harness<D> {
             drop(state);
             Ok(made.as_secs_f64() * 1e6)
         };
-        let first = match first {
-            Some(first) => first,
-            None => once()?,
+        let (first, first_create_us) = match first {
+            Some(first) => (first, None),
+            None => {
+                let first = once()?;
+                (first, Some(first))
+            }
         };
         let mut report = CreateReport {
             first_us: Some(first),
+            first_create_us,
             warmup: warm_up(runs, &once)?,
             ..CreateReport::default()
         };
