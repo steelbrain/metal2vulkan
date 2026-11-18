@@ -2310,9 +2310,11 @@ field	metal2vulkan-rt::Metrics.blocks_reused	pub blocks_reused: u64
 field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
 field	metal2vulkan-rt::Metrics.bytes_zeroed	pub bytes_zeroed: u64
 field	metal2vulkan-rt::Metrics.cache_bytes_written	pub cache_bytes_written: u64
+field	metal2vulkan-rt::Metrics.capture_copy_nanos	pub capture_copy_nanos: u64
 field	metal2vulkan-rt::Metrics.capture_overflow_bytes	pub capture_overflow_bytes: u64
 field	metal2vulkan-rt::Metrics.capture_overflows	pub capture_overflows: u64
 field	metal2vulkan-rt::Metrics.capture_streams	pub capture_streams: u64
+field	metal2vulkan-rt::Metrics.capture_wait_nanos	pub capture_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.capture_waits	pub capture_waits: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_max_nanos	pub commit_lock_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_nanos	pub commit_lock_wait_nanos: u64

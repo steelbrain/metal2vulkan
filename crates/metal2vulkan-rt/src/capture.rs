@@ -389,6 +389,7 @@ pub(crate) fn overflow(
                 }
             };
             let len = (end - at).min(block_len - filled);
+            let began = crate::host_time();
             // SAFETY: the block is the capture's alone, mapped, and holds `filled..filled + len`;
             // the consumer's buffer holds `at..at + len`; the two do not overlap.
             unsafe {
@@ -398,6 +399,8 @@ pub(crate) fn overflow(
                     .as_ptr()
                     .copy_to_nonoverlapping(mapping.at(filled).as_ptr(), len as usize)
             };
+            core.counters
+                .capture_copied(crate::host_time().saturating_sub(began));
             chunk.copy(
                 buffer,
                 index,

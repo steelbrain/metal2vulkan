@@ -320,9 +320,10 @@ mod on_device {
 
     /// A commit naming three times the capture ring with nothing held streams: each ring-full goes
     /// in a submission of its own, which the commit waits for, with no staging of its own; the
-    /// ring is all the staging that lives, and the bytes arrive whole. Two commits of three
-    /// quarters of the ring each, the first scheduled before the second's commit, arrive whole
-    /// too, the second waiting for the first's copy.
+    /// ring is all the staging that lives, and the bytes arrive whole, twice. It prints the time
+    /// in the commit split into host copies, waits and the rest, and a ring-full's copy alone
+    /// timed on the GPU. Two commits of three quarters of the ring each, the first scheduled
+    /// before the second's commit, arrive whole too, the second waiting for the first's copy.
     #[test]
     fn every_device_streams_a_capture_past_the_ring() {
         each_device("managed past the ring", |name, _, device| {
@@ -335,39 +336,55 @@ mod on_device {
             let mut bytes: Vec<u8> = (0..len).map(|i| (i % 253) as u8).collect();
             let (managed, into, blocks) = named_whole(&device, name, len, &bytes);
             let queue = device.new_command_queue(4).expect("a queue");
-            let before = counters.metrics();
-            let command_buffer = queue.command_buffer().expect("a command buffer");
-            copy_out(&command_buffer, &managed, &into, 0, len);
-            let began = Instant::now();
-            command_buffer.commit().expect("a commit");
-            let took = began.elapsed();
-            let staged = counters.gauges().capture_bytes;
-            finished("the copy", &command_buffer);
-            assert_eq!(command_buffer.error(), None, "{name}");
-            assert!(
-                read(&into, len as usize) == bytes,
-                "{name}: the bytes past the ring"
-            );
-            let metrics = counters.metrics();
-            let delta = |of: fn(&crate::Metrics) -> u64| of(&metrics) - of(&before);
-            println!(
-                "managed past the ring: {name}: commit of {} MiB took {:.2} ms ({:.2} GB/s); \
-                 streams {}, waits {}, staging {} MiB",
-                len >> 20,
-                took.as_secs_f64() * 1e3,
-                len as f64 / took.as_secs_f64() / 1e9,
-                delta(|m| m.capture_streams),
-                delta(|m| m.capture_waits),
-                staged >> 20
-            );
-            assert_eq!(
-                delta(|m| m.managed_bytes_captured),
-                len,
-                "{name}: every byte once"
-            );
-            assert!(delta(|m| m.capture_streams) >= 2, "{name}: streamed");
-            assert_eq!(delta(|m| m.capture_overflows), 0, "{name}: nothing held");
-            assert_eq!(staged, CAPTURE_LEN, "{name}: the ring alone");
+            // Twice: the first commit's copies are the first to touch the ring and the device
+            // copy, the second's are not.
+            for pass in ["first", "again"] {
+                if pass == "again" {
+                    (managed.did_modify_range(0, len))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                }
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                copy_out(&command_buffer, &managed, &into, 0, len);
+                let began = Instant::now();
+                command_buffer.commit().expect("a commit");
+                let took = began.elapsed();
+                let staged = counters.gauges().capture_bytes;
+                finished("the copy", &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                assert!(
+                    read(&into, len as usize) == bytes,
+                    "{name}: the bytes past the ring"
+                );
+                let metrics = counters.metrics();
+                let delta = |of: fn(&crate::Metrics) -> u64| of(&metrics) - of(&before);
+                let streams = delta(|m| m.capture_streams);
+                println!(
+                    "managed past the ring: {name}: {pass}: commit of {} MiB took {:.2} ms \
+                     ({:.2} GB/s): host copies {:.2} ms, waits {:.2} ms ({:.2} ms a stream), \
+                     the rest {:.2} ms; streams {streams}, waits {}, staging {} MiB",
+                    len >> 20,
+                    took.as_secs_f64() * 1e3,
+                    len as f64 / took.as_secs_f64() / 1e9,
+                    delta(|m| m.capture_copy_nanos) as f64 / 1e6,
+                    delta(|m| m.capture_wait_nanos) as f64 / 1e6,
+                    delta(|m| m.capture_wait_nanos) as f64 / 1e6 / streams.max(1) as f64,
+                    (took.as_nanos() as f64
+                        - (delta(|m| m.capture_copy_nanos) + delta(|m| m.capture_wait_nanos))
+                            as f64)
+                        / 1e6,
+                    delta(|m| m.capture_waits),
+                    staged >> 20
+                );
+                assert_eq!(
+                    delta(|m| m.managed_bytes_captured),
+                    len,
+                    "{name}: every byte once"
+                );
+                assert!(streams >= 2, "{name}: streamed");
+                assert_eq!(delta(|m| m.capture_overflows), 0, "{name}: nothing held");
+                assert_eq!(staged, CAPTURE_LEN, "{name}: the ring alone");
+            }
 
             // Two commits of three quarters each.
             let part = CAPTURE_LEN / 4 * 3;
@@ -413,6 +430,28 @@ mod on_device {
                 "{name}"
             );
             println!("managed past the ring: {name}: metrics {metrics:?}");
+
+            // The link a stream's copy crosses: a ring-full's bytes copied from a Shared buffer
+            // into the device copy, alone in a command buffer, timed on the GPU, twice.
+            for pass in ["first", "again"] {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                copy_out(&command_buffer, &into, &managed, 0, CAPTURE_LEN);
+                let began = Instant::now();
+                command_buffer.commit().expect("a commit");
+                finished("the link's copy", &command_buffer);
+                let host = began.elapsed();
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let gpu = command_buffer.gpu_end_time() - command_buffer.gpu_start_time();
+                println!(
+                    "managed past the ring: {name}: link {pass}: {} MiB from a Shared buffer \
+                     into the device copy took {:.2} ms on the GPU ({:.2} GB/s), {:.2} ms from \
+                     the commit to its completion seen",
+                    CAPTURE_LEN >> 20,
+                    gpu as f64 / 1e6,
+                    CAPTURE_LEN as f64 / gpu as f64,
+                    host.as_secs_f64() * 1e3
+                );
+            }
             drop((managed, into, commits, queue));
             for block in blocks {
                 (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));

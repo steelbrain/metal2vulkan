@@ -195,7 +195,8 @@ in its memory.
   which its command buffer gives back as it retires, the pool's idle rule then deciding when their
   memory is freed. Every byte is still the commit's. `Metrics::managed_bytes_captured`,
   `capture_waits`, `capture_streams`, `capture_overflows` and `capture_overflow_bytes` count them,
-  and `Gauges::capture_bytes` counts the ring and the staging blocks alive. A command buffer
+  `capture_copy_nanos` and `capture_wait_nanos` time the commits' host copies and waits, and
+  `Gauges::capture_bytes` counts the ring and the staging blocks alive. A command buffer
   keeps each device copy it uses until it retires; the copy's place is free then.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named

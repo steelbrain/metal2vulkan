@@ -1545,6 +1545,8 @@ impl Backend for NewRuntime {
             ("capture_streams", metrics.capture_streams),
             ("capture_overflows", metrics.capture_overflows),
             ("capture_overflow_bytes", metrics.capture_overflow_bytes),
+            ("capture_copy_nanos", metrics.capture_copy_nanos),
+            ("capture_wait_nanos", metrics.capture_wait_nanos),
             ("skipped_encoders", self.skips.encoders),
             ("skipped_objects", self.skips.objects),
             ("skipped_dispatches", self.skips.dispatches),

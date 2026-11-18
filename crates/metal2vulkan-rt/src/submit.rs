@@ -573,12 +573,15 @@ impl Work {
             if let Some((number, offset)) = region.ring.take(len, false) {
                 let (host, ring) = (region.host(offset), region.buffer);
                 drop(state);
+                let began = crate::host_time();
                 // SAFETY: the span is this capture's alone until it is set recorded, and the
                 // consumer's buffer is mapped and holds `at..at + len`; the two do not overlap.
                 unsafe {
                     (modified.contents.at(at).as_ptr())
                         .copy_to_nonoverlapping(host.get().as_ptr(), len as usize)
                 };
+                core.counters
+                    .capture_copied(crate::host_time().saturating_sub(began));
                 state = self.lock();
                 if let Some(region) = &mut state.changes.region {
                     region.ring.set(number, At::Recorded);
@@ -599,7 +602,10 @@ impl Work {
                 Some(Oldest::Submitted(value)) => {
                     drop(state);
                     core.counters.count(Metric::CaptureWaits);
+                    let began = crate::host_time();
                     let waited = core.done.wait(core, value);
+                    core.counters
+                        .capture_waited(crate::host_time().saturating_sub(began));
                     state = self.lock();
                     match waited.and(if state.closed {
                         Err(Error::Quiesced)
@@ -615,8 +621,11 @@ impl Work {
                 }
                 // Of a copy not yet submitted: this capture's own, or a held command buffer's.
                 _ => {
+                    let began = crate::host_time();
                     let ahead;
                     (state, ahead) = self.send_ahead(state);
+                    core.counters
+                        .capture_waited(crate::host_time().saturating_sub(began));
                     ahead
                 }
             };
@@ -657,6 +666,7 @@ impl Work {
                         return Err(self.unwind(state, spans, &named, error));
                     }
                 };
+                let began = crate::host_time();
                 let value = state.stream(upload, chunk.ended(named.clone(), Vec::new()));
                 chunk = next;
                 drop(state);
@@ -664,6 +674,8 @@ impl Work {
                 core.counters.count(Metric::CaptureStreams);
                 core.counters.count(Metric::CaptureWaits);
                 let waited = core.done.wait(core, value);
+                core.counters
+                    .capture_waited(crate::host_time().saturating_sub(began));
                 state = self.lock();
                 if let Err(error) = waited.and(if state.closed {
                     Err(Error::Quiesced)

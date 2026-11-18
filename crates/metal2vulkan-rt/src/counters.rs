@@ -139,6 +139,8 @@ struct Atomics {
     capture_streams: AtomicU64,
     capture_overflows: AtomicU64,
     capture_overflow_bytes: AtomicU64,
+    capture_copy_nanos: AtomicU64,
+    capture_wait_nanos: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -266,6 +268,16 @@ impl Counters {
             .fetch_add(bytes, Relaxed);
     }
 
+    /// `nanos` more a capture spent copying bytes on the host ([`Metrics::capture_copy_nanos`]).
+    pub(crate) fn capture_copied(&self, nanos: u64) {
+        self.atomics.capture_copy_nanos.fetch_add(nanos, Relaxed);
+    }
+
+    /// `nanos` more a capture spent waiting ([`Metrics::capture_wait_nanos`]).
+    pub(crate) fn capture_waited(&self, nanos: u64) {
+        self.atomics.capture_wait_nanos.fetch_add(nanos, Relaxed);
+    }
+
     /// `bytes` more written to the cache directory ([`Metrics::cache_bytes_written`]).
     pub(crate) fn cache_written(&self, bytes: u64) {
         self.atomics.cache_bytes_written.fetch_add(bytes, Relaxed);
@@ -387,6 +399,8 @@ impl Counters {
             capture_streams: a.capture_streams.load(Relaxed),
             capture_overflows: a.capture_overflows.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
+            capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
+            capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
         }
     }
 
@@ -549,6 +563,14 @@ pub struct Metrics {
     pub capture_overflows: u64,
     /// The bytes those commits copied into such blocks.
     pub capture_overflow_bytes: u64,
+    /// Host time commits spent copying Managed buffers' bytes into the capture ring and into
+    /// staging blocks of their own, in nanoseconds.
+    pub capture_copy_nanos: u64,
+    /// Host time commits spent waiting in their captures, in nanoseconds: for a submission to
+    /// complete for room in the ring (an earlier command buffer's copy, or the commit's own
+    /// ring-full sent ahead, from its flush to its completion), and for command buffers committed
+    /// before to be submitted.
+    pub capture_wait_nanos: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the
