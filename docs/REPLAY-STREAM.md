@@ -135,7 +135,9 @@ and the (name id, value) answer pairs.
   `newTiledTextureWithDescriptor:offset:bytesPerRow:`, a heap's `newTextureWithDescriptor:offset:`,
   each taking a texture descriptor object (section 9).
 - **The address map** is the ranges `[gpuAddress, gpuAddress + gpuLength)` of the live objects that
-  answered them; `release` removes an object's range.
+  answered them; `release` removes an object's range. A range that meets a live one in part (the
+  program put a newer object in memory an older one still held, as a guest's own allocator in a
+  block may) ends the older range, whose inner ranges stay: a word there is the newer object's.
 - **Relocation.** The player makes each object where its runtime has room. In the bytes it puts
   into an object that answered a `gpuAddress` (`m2v.write`, a copied buffer's `contents` and the
   copies from the guest's RAM), in the data of every `set*Bytes:length:atIndex:` and in every address value, each 8-byte word at an

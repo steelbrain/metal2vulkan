@@ -206,8 +206,7 @@ fn a_blob_left_out_is_read_from_the_blob_directory() {
 }
 
 /// Ranges nest: a word in a buffer inside a block moves with the buffer, one in the block alone
-/// with the block, one past every range stays. A range that meets another in part is refused; a
-/// removed block leaves its buffers.
+/// with the block, one past every range stays. A removed block leaves its buffers.
 #[test]
 fn the_address_map_relocates_by_the_innermost_live_range() {
     let block = 1u64 << 46;
@@ -219,14 +218,6 @@ fn the_address_map_relocates_by_the_innermost_live_range() {
     assert_eq!(map.relocated(block + 0x10), Some(0x10_0010));
     assert_eq!(map.relocated(block + 0x108), Some(0x90_0008));
     assert_eq!(map.relocated(block + 0x1_0000), None);
-    assert!(
-        map.insert(4, block + 0x80, 0x100, 0).is_err(),
-        "meets #2 in part"
-    );
-    assert!(
-        map.insert(4, block - 8, 0x10, 0).is_err(),
-        "meets #1 in part"
-    );
     assert!(
         map.insert(2, block + 0x400, 8, 0).is_err(),
         "#2 has a range"
@@ -253,6 +244,30 @@ fn the_address_map_relocates_by_the_innermost_live_range() {
         &(block + 0x110).to_le_bytes(),
         "4 past 8 stays"
     );
+}
+
+/// A range that meets a live one in part ends that one, whose inner ranges stay: the program put
+/// the newer object in that memory while the older lived on, so a word there relocates by the newer
+/// one.
+#[test]
+fn a_range_that_meets_a_live_one_in_part_ends_it() {
+    let block = 1u64 << 46;
+    let mut map = AddressMap::default();
+    map.insert(1, block, 0x1_0000, 0x10_0000).unwrap();
+    map.insert(2, block + 0x100, 0x100, 0x90_0000).unwrap();
+    map.insert(3, block + 0x180, 0x100, 0xa0_0000).unwrap();
+    assert!(!map.holds(2));
+    assert_eq!(map.relocated(block + 0x188), Some(0xa0_0008));
+    assert_eq!(
+        map.relocated(block + 0x108),
+        Some(0x10_0108),
+        "the block's again"
+    );
+    // One that meets the block itself in part ends the block; its buffer stays.
+    map.insert(4, block - 8, 0x10, 0xb0_0000).unwrap();
+    assert!(!map.holds(1));
+    assert_eq!(map.relocated(block - 8), Some(0xb0_0000));
+    assert_eq!(map.relocated(block + 0x188), Some(0xa0_0008));
 }
 
 /// A backend that keeps what it is asked: the calls, the waits, the bytes written, the objects

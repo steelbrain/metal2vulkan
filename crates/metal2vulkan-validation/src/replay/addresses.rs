@@ -23,8 +23,9 @@ pub struct AddressMap {
 impl AddressMap {
     /// Add `object`'s recorded range `[start, start + length)`, which the player's runtime put at
     /// `base`. It lies inside a live range (one of the same bounds included: it is the inner one) or
-    /// apart from each, or holds live ranges whole; a range that meets another in part, or an
-    /// object with a live range, is refused.
+    /// apart from each, or holds live ranges whole. A live range it meets in part ends, its inner
+    /// ranges kept: the program put this object in that memory while the older one lived on, so a
+    /// word there is this object's. An object with a live range is refused.
     pub fn insert(
         &mut self,
         object: u64,
@@ -39,34 +40,39 @@ impl AddressMap {
         if self.of.contains_key(&object) {
             return Err(format!("#{object} has a live range already"));
         }
-        let mut level = &mut self.top;
-        while let Some(at) = container(level, start, end) {
-            level = &mut level.get_mut(&at).expect("a live range").inner;
+        loop {
+            let mut level = &mut self.top;
+            while let Some(at) = container(level, start, end) {
+                level = &mut level.get_mut(&at).expect("a live range").inner;
+            }
+            let below = level.range(..start).next_back();
+            let below = below.filter(|(_, range)| range.end > start);
+            let held: Vec<u64> = level.range(start..end).map(|(&at, _)| at).collect();
+            let parted = held.iter().filter(|at| level[at].end > end);
+            let parted: Vec<u64> = (below.map(|(_, range)| range.object).into_iter())
+                .chain(parted.map(|at| level[at].object))
+                .collect();
+            if parted.is_empty() {
+                let inner = held
+                    .into_iter()
+                    .filter_map(|at| level.remove(&at).map(|range| (at, range)))
+                    .collect();
+                level.insert(
+                    start,
+                    Range {
+                        end,
+                        object,
+                        base,
+                        inner,
+                    },
+                );
+                self.of.insert(object, (start, end));
+                return Ok(());
+            }
+            for older in parted {
+                self.remove(older);
+            }
         }
-        let below = level.range(..start).next_back();
-        let held: Vec<u64> = level.range(start..end).map(|(&at, _)| at).collect();
-        let parted = below.is_some_and(|(_, range)| range.end > start)
-            || held.iter().any(|at| level[at].end > end);
-        if parted {
-            return Err(format!(
-                "#{object}: {start:#x}..{end:#x} meets a live range in part"
-            ));
-        }
-        let inner = held
-            .into_iter()
-            .filter_map(|at| level.remove(&at).map(|range| (at, range)))
-            .collect();
-        level.insert(
-            start,
-            Range {
-                end,
-                object,
-                base,
-                inner,
-            },
-        );
-        self.of.insert(object, (start, end));
-        Ok(())
     }
 
     /// Remove `object`'s range, if it has one; the ranges inside it stay, at its level.
