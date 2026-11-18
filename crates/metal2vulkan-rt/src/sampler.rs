@@ -61,6 +61,15 @@ impl<K: Clone + Eq + Hash> SamplerTable<K> {
         Ok(sampler)
     }
 
+    /// Sets the most samplers the table holds to `cap`, for a test: the samplers it holds, and
+    /// the cap it had.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn set_cap(&mut self, cap: impl FnOnce(u32) -> u32) -> u32 {
+        let had = self.cap;
+        self.cap = cap(self.entries.len() as u32);
+        had
+    }
+
     /// One holder fewer of `desc`'s sampler: the sampler, for the reaper, where it was the last.
     pub(crate) fn give(&mut self, desc: &K) -> Option<vk::Sampler> {
         let (sampler, holders) = self.entries.get_mut(desc)?;
@@ -174,7 +183,10 @@ pub(crate) fn hold_constexpr(
         if present.is_some_and(|present| present[array].is_some()) {
             continue;
         }
-        match lock(&core.samplers).take(desc, || make(core, desc)) {
+        // Taken in a statement of its own, so the table's lock is let go before the arms: the
+        // refusal's `give_back` takes it again.
+        let taken = lock(&core.samplers).take(desc, || make(core, desc));
+        match taken {
             Ok(sampler) => added.push((array, *desc, sampler)),
             Err(error) => {
                 let taken: Vec<Option<SamplerDesc>> =

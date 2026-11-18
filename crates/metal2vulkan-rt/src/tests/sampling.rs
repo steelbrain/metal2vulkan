@@ -8,11 +8,12 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::device::lock;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
         ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType, Error,
-        FunctionDescriptor, IndexClass, Library, NumberedSampler, PixelFormat, Refusal, Region,
-        SamplerDescriptor, SamplerMinMagFilter, StageSource, Texture, TextureDescriptor,
+        FunctionDescriptor, IndexClass, Library, Limit, NumberedSampler, PixelFormat, Refusal,
+        Region, SamplerDescriptor, SamplerMinMagFilter, StageSource, Texture, TextureDescriptor,
         TextureType, TextureUsage,
     };
     use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
@@ -297,6 +298,49 @@ mod on_device {
                     .release_indices(grant)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             }
+        });
+    }
+
+    /// A constexpr sampler past the device's samplers is refused, and the refusal lets go of what
+    /// the state took: the same state is made once the samplers have room.
+    #[test]
+    fn every_device_refuses_a_constexpr_sampler_past_its_samplers() {
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("sampling", |name, _, device| {
+            let grant = device
+                .grant_indices(IndexClass::Sampler, 1, 4)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let cap = lock(&device.core().samplers).set_cap(|held| held);
+            let constexpr = |s: &[NumberedSampler]| {
+                matches!(s, [NumberedSampler::Constexpr(_), NumberedSampler::Write])
+            };
+            let refused = state(
+                &device,
+                &library,
+                "sample_up",
+                constexpr,
+                vec![CONSTEXPR, 0],
+            )
+            .err();
+            assert!(
+                matches!(refused, Some(Error::Limit(Limit::DeviceSamplers { .. }))),
+                "{name}: {refused:?}"
+            );
+            lock(&device.core().samplers).set_cap(|_| cap);
+            let up = state(
+                &device,
+                &library,
+                "sample_up",
+                constexpr,
+                vec![CONSTEXPR, 0],
+            )
+            .unwrap_or_else(|error| panic!("{name}: sample_up: {error}"));
+            drop(up);
+            device
+                .release_indices(grant)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
 
