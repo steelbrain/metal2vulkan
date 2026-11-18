@@ -11,7 +11,9 @@ use crate::fill::Filler;
 use crate::floor;
 use crate::hazard::Ids;
 use crate::instance::{Instance, PhysicalDevice};
-use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, MemoryClass, Pool, BLOCK_LEN};
+use crate::memory::{
+    self, Block, BlockId, BlockInfo, BlockMappings, Memory, MemoryClass, Pool, BLOCK_LEN,
+};
 use crate::pipeline::PUSH_BYTES;
 use crate::places::Places;
 use crate::reaper::{self, Job, Reaper};
@@ -155,6 +157,8 @@ pub(crate) struct Core {
     pub(crate) pool: Pool,
     /// The blocks textures are placed in.
     pub(crate) places: Places,
+    /// The blocks Managed buffers' device copies are placed in.
+    pub(crate) copies: Places,
     pub(crate) filler: Filler,
     pub(crate) recorders: Recorders,
     pub(crate) work: Work,
@@ -433,6 +437,7 @@ impl Device {
             max_allocations,
             pool: Pool::new(options.block_mappings),
             places: Places::new(),
+            copies: Places::new(),
             filler,
             recorders: Recorders::new(family),
             work: Work::new(),
@@ -550,12 +555,7 @@ impl Device {
         if core.closed() {
             return Err(Error::Quiesced);
         }
-        let memory = if len <= BLOCK_LEN {
-            core.pool.take(class)?
-        } else {
-            let len = memory::dedicated_len(len, core.max_block_len)?;
-            memory::make(core, class, len, core.pool.number()?, false)?
-        };
+        let memory = core.take_memory(class, len)?;
         let info = memory.info();
         core.pool.hand(memory.id);
         lock(&self.shared.claims).insert(memory.id, Arc::new(Block::new(memory, Arc::clone(core))));
@@ -960,6 +960,26 @@ impl Core {
         }
     }
 
+    /// Whether the Shared memory type is device-local, by the device's memory-type query: then a
+    /// Managed buffer is its Shared range, with no device copy.
+    pub(crate) fn shared_is_device_local(&self) -> bool {
+        self.device_local & (1 << self.memory_types.shared) != 0
+    }
+
+    /// A block of `class` for `len` bytes: a pooled one up to [`BLOCK_LEN`], else a dedicated one
+    /// of `len` rounded up to 64 KiB, made in the call.
+    ///
+    /// Err: what [`Pool::take`] and [`memory::make`] return;
+    /// [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's longest block.
+    pub(crate) fn take_memory(&self, class: MemoryClass, len: u64) -> Result<Memory, Error> {
+        if len <= BLOCK_LEN {
+            self.pool.take(class)
+        } else {
+            let len = memory::dedicated_len(len, self.max_block_len)?;
+            memory::make(self, class, len, self.pool.number()?, false)
+        }
+    }
+
     /// Quiesced or torn down.
     pub(crate) fn closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
@@ -1028,7 +1048,12 @@ impl Drop for Core {
             // SAFETY: every upload that copied through it retired, and no call reads it.
             unsafe { region.free(self) };
         }
-        for memory in (self.places.remaining().into_iter()).chain(self.pool.remaining()) {
+        let placed = (self.places.remaining().into_iter()).chain(self.copies.remaining());
+        for memory in placed
+            .collect::<Vec<_>>()
+            .into_iter()
+            .chain(self.pool.remaining())
+        {
             memory::free(self, memory);
         }
         let pools = std::mem::take(

@@ -1,36 +1,38 @@
-//! Texture blocks: the pooled Private blocks the runtime places textures in.
+//! Places: the Private blocks the runtime places its own resources in, taken as the consumer takes
+//! blocks. The device has two sets: texture blocks, where textures' images are bound, and copy
+//! blocks, which hold Managed buffers' device copies. Neither set holds the other's kind, so no
+//! buffer lies beside an optimal image in one allocation.
 //!
-//! A texture's image is bound at a place in a texture block, a Private block of the pool taken as
-//! a block the consumer takes is, so a texture makes no allocation of its own. A place is the
-//! image's bytes at a multiple of its alignment: the first that fits, in the blocks in the order
-//! they were taken; where none fits, the next block comes from the pool. A place is free again
-//! once the reaper has freed the texture's image, after every command buffer and upload that used
-//! it retired. One empty block is kept for the next texture; another that empties goes back to the
-//! pool, which zeroes it and keeps or frees it.
+//! A place is a resource's bytes at a multiple of its alignment: the first that fits, in the
+//! blocks in the order they were taken; where none fits, the next block comes from the pool, or,
+//! for a place longer than a pooled block, a dedicated block of its own. A place is free again once
+//! its resource is freed, after every command buffer and upload that used it retired. One empty
+//! pooled block of a set is kept for the next place; another that empties, and a dedicated block
+//! once empty, goes back to the pool, which zeroes and keeps a pooled block or frees it.
 //!
-//! Every image in a block is optimal. The block's own `VkBuffer`, which spans it, aliases them
-//! (Vulkan's memory aliasing), and only the pool uses it: to zero the block before it is taken and
-//! after it is given back, when no image is in it.
+//! An image in a texture block is optimal. The block's own `VkBuffer`, which spans it, aliases the
+//! images (Vulkan's memory aliasing), and only the pool uses it: to zero the block before it is
+//! taken and after it is given back, when no image is in it. A copy block's `VkBuffer` is what the
+//! device copies are reached through.
 
-use crate::device::lock;
+use crate::device::{lock, Core};
 use crate::error::Error;
-use crate::memory::{BlockId, Memory, MemoryClass, Pool};
-use ash::vk;
+use crate::memory::{BlockId, Memory, MemoryClass};
 use std::sync::{Mutex, PoisonError};
 
-/// The texture blocks.
+/// One set of blocks.
 pub(crate) struct Places {
-    blocks: Mutex<Vec<TextureBlock>>,
+    blocks: Mutex<Vec<PlaceBlock>>,
 }
 
-struct TextureBlock {
+struct PlaceBlock {
     memory: Memory,
     free: Ranges,
     /// The places taken in it.
     live: usize,
 }
 
-/// A texture's place: `len` bytes at `offset` in a texture block.
+/// A resource's place: `len` bytes at `offset` in a block of a set.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Place {
     block: BlockId,
@@ -45,17 +47,17 @@ impl Places {
         }
     }
 
-    /// A place of `len` bytes, at most a block's, at a multiple of `align`, a power of two; and
-    /// the memory of its block. Where no block has room, a Private block is taken from the pool,
-    /// without the lock.
+    /// A place of `len` bytes at a multiple of `align`, a power of two, and its block. Where no
+    /// block has room, a Private block is taken, without the lock: from the pool, or a dedicated
+    /// one for a place longer than a pooled block.
     ///
-    /// Err: what [`Pool::take`] returns.
+    /// Err: what [`Core::take_memory`] returns.
     pub(crate) fn place(
         &self,
-        pool: &Pool,
+        core: &Core,
         len: u64,
         align: u64,
-    ) -> Result<(Place, vk::DeviceMemory), Error> {
+    ) -> Result<(Place, Memory), Error> {
         let mut blocks = lock(&self.blocks);
         loop {
             for block in blocks.iter_mut() {
@@ -66,14 +68,13 @@ impl Places {
                         offset,
                         len,
                     };
-                    return Ok((place, block.memory.device_memory()));
+                    return Ok((place, block.memory));
                 }
             }
             drop(blocks);
-            let memory = pool.take(MemoryClass::Private)?;
-            debug_assert!(len <= memory.len);
+            let memory = core.take_memory(MemoryClass::Private, len)?;
             blocks = lock(&self.blocks);
-            blocks.push(TextureBlock {
+            blocks.push(PlaceBlock {
                 memory,
                 free: Ranges::new(memory.len),
                 live: 0,
@@ -81,9 +82,9 @@ impl Places {
         }
     }
 
-    /// Frees `place`. Where its block empties while another is empty, the block goes back to
-    /// `pool`.
-    pub(crate) fn release(&self, pool: &Pool, place: Place) {
+    /// Frees `place`. Where its block empties and is dedicated, or another pooled block of the
+    /// set is empty, the block goes back to the pool.
+    pub(crate) fn release(&self, core: &Core, place: Place) {
         let mut blocks = lock(&self.blocks);
         let Some(index) = (blocks.iter()).position(|block| block.memory.id == place.block) else {
             return;
@@ -91,20 +92,23 @@ impl Places {
         let block = &mut blocks[index];
         block.free.give(place.offset, place.len);
         block.live -= 1;
-        if block.live == 0 && blocks.iter().filter(|block| block.live == 0).count() > 1 {
+        let empty = |block: &PlaceBlock| block.live == 0 && block.memory.pooled();
+        let surplus =
+            !block.memory.pooled() || blocks.iter().filter(|block| empty(block)).count() > 1;
+        if blocks[index].live == 0 && surplus {
             let emptied = blocks.remove(index);
             drop(blocks);
-            pool.give_back(emptied.memory);
+            core.pool.give_back(emptied.memory);
         }
     }
 
-    /// For the device tests: the texture blocks taken.
+    /// For the device tests: the blocks of the set.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn blocks(&self) -> usize {
         lock(&self.blocks).len()
     }
 
-    /// At teardown, once every texture is freed: the blocks, for the core to free.
+    /// At teardown, once every resource placed is freed: the blocks, for the core to free.
     pub(crate) fn remaining(&mut self) -> Vec<Memory> {
         let blocks = self
             .blocks

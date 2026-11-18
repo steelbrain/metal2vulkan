@@ -182,7 +182,7 @@ fn free(core: &Core, object: Free) {
                     unsafe { device.free_memory(memory, None) };
                     core.counters.fall(Gauge::Blocks);
                 }
-                Backing::Placed(place) => core.places.release(&core.pool, place),
+                Backing::Placed(place) => core.places.release(core, place),
             }
             core.counters.fall(Gauge::Textures);
         }

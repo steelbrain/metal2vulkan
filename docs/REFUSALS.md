@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 33 | 33 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 7 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 10 | 8 | 0 | 0 | 13 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 10 | 8 | 0 | 0 | 15 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 |
 
@@ -613,9 +613,11 @@ Columns:
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
-| `EmptyBuffer` | A buffer of no bytes (`Device::new_buffer` with a length of 0) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: newBufferWithLength:0 answers nil | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
-| `BufferTooLong` | A buffer longer than `MAX_BUFFER_LENGTH` (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `ours`: this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind address in it | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
-| `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)` | `-` |
+| `EmptyBuffer` | A buffer of no bytes (`Device::new_buffer` with a length of 0) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: newBufferWithLength:0 answers nil | 2: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`, `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `BufferTooLong` | A buffer longer than `MAX_BUFFER_LENGTH` (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `ours`: this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind address in it | 2: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`, `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 2: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`, `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `ManagedBlockNotShared` | A Managed buffer whose bytes are in a Private block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: a Managed buffer's bytes are the consumer's, which it maps; a Private block has no mapping | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `ModifiedRange` | A changed range that leaves its buffer (`Buffer::did_modify_range`) | every device (a public call's own check of its arguments) | `ours`: the copy of such a range would write past the buffer's device copy | 1: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)` | `-` |
 | `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
 | `OtherDevice` | An event, a buffer or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block and a pipeline belong to the `VkDevice` that made them | 8: `crates/metal2vulkan-rt/src/command.rs (check)`, `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` (+5) | `-` |
 | `NoCommandBuffers` | A queue that may hold no command buffer (`Device::new_command_queue` with a count of 0) | every device (a public call's own check of its arguments) | `ours`: its first `commandBuffer` call would wait forever | 1: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)` | `-` |
@@ -1162,9 +1164,11 @@ Each refusal's sites, with the function that builds it.
 - `floor::QueueFamily`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
 - `floor::MemoryType`: `crates/metal2vulkan-rt/src/floor.rs (choose)`
 - `floor::TimeDomain`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
-- `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
-- `rt:Refusal::BufferTooLong`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
-- `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`
+- `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::BufferTooLong`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::ManagedBlockNotShared`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::ModifiedRange`: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)`
 - `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (open)`
 - `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource, 2 sites)`
 - `rt:Refusal::NoCommandBuffers`: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)`

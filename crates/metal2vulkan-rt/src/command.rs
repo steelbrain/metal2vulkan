@@ -1,6 +1,7 @@
 //! Command buffers: recorded at once into segments that event waits and signals split, and their
 //! states from creation to retirement.
 
+use crate::buffer::{Buffer, DeviceCopy};
 use crate::counters::Metric;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
@@ -145,6 +146,9 @@ pub(crate) struct Gpu {
     /// Each block the commands use, once: a block released meanwhile is reused only after the
     /// command buffer retires.
     pub(crate) blocks: Vec<Arc<Block>>,
+    /// Each Managed buffer's device copy the commands use, once: its place is freed only after
+    /// the command buffer retires.
+    pub(crate) copies: Vec<Arc<DeviceCopy>>,
     /// The pipeline states the commands use, once each, kept until the command buffer retires.
     pub(crate) pipelines: Vec<ComputePipelineState>,
     /// The textures and sampler states the encoders bound or declared, once each, kept until the
@@ -211,6 +215,7 @@ impl CommandBuffer {
                             recorder: None,
                             segments: vec![Segment::default()],
                             blocks: Vec::new(),
+                            copies: Vec::new(),
                             pipelines: Vec::new(),
                             textures: Vec::new(),
                             samplers: Vec::new(),
@@ -517,7 +522,7 @@ impl CommandBuffer {
             building.wrote_host();
             f(&building.device.core().device, command);
             for buffer in buffers {
-                building.keep(buffer.held_block());
+                building.keep(buffer);
             }
             Ok(())
         })
@@ -715,11 +720,19 @@ impl Building {
         self.gpu.ring.write(&core, bytes)
     }
 
-    /// Keeps `block` until the command buffer retires.
-    pub(crate) fn keep(&mut self, block: &Arc<Block>) {
+    /// Keeps `buffer`'s block, and its device copy where it has one, until the command buffer
+    /// retires.
+    pub(crate) fn keep(&mut self, buffer: &Buffer) {
+        let (block, copy) = buffer.held();
         let blocks = &mut self.gpu.blocks;
         if !blocks.iter().rev().any(|kept| Arc::ptr_eq(kept, block)) {
             blocks.push(Arc::clone(block));
+        }
+        if let Some(copy) = copy {
+            let copies = &mut self.gpu.copies;
+            if !copies.iter().rev().any(|kept| Arc::ptr_eq(kept, copy)) {
+                copies.push(Arc::clone(copy));
+            }
         }
     }
 
@@ -813,6 +826,7 @@ pub(crate) fn retire(
         recorder,
         segments,
         blocks,
+        copies,
         pipelines,
         textures,
         samplers,
@@ -822,7 +836,7 @@ pub(crate) fn retire(
         core.recorders.give_back(core, recorder);
     }
     ring.give_back(core);
-    drop((segments, blocks, pipelines, textures, samplers));
+    drop((segments, blocks, copies, pipelines, textures, samplers));
     times::reset(
         &core.device,
         inner.queue.stamps.pool,

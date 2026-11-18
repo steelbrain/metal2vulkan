@@ -738,9 +738,9 @@ impl Made {
             && requirements.size <= BLOCK_LEN
             && bits & (1 << core.memory_type(MemoryClass::Private)) != 0;
         let (backing, memory, offset) = if placed {
-            let (place, memory) =
-                (core.places).place(&core.pool, requirements.size, requirements.alignment)?;
-            (Backing::Placed(place), memory, place.offset)
+            let (place, block) =
+                (core.places).place(core, requirements.size, requirements.alignment)?;
+            (Backing::Placed(place), block.device_memory(), place.offset)
         } else {
             // Vulkan gives every image of no external handle type a device-local type.
             let local = bits & core.device_local;
@@ -811,7 +811,7 @@ impl Made {
                     device.free_memory(memory, None);
                     core.counters.fall(Gauge::Blocks);
                 }
-                Some(Backing::Placed(place)) => core.places.release(&core.pool, place),
+                Some(Backing::Placed(place)) => core.places.release(core, place),
                 None => {}
             }
         }

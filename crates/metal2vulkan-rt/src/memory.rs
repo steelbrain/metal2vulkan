@@ -125,6 +125,11 @@ impl Memory {
         self.memory
     }
 
+    /// Whether the pool made it, to keep once it is given back; a dedicated block is freed then.
+    pub(crate) fn pooled(&self) -> bool {
+        self.pooled
+    }
+
     pub(crate) fn info(&self) -> BlockInfo {
         BlockInfo {
             id: self.id,

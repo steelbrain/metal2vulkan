@@ -90,8 +90,8 @@ pub(crate) mod on_device {
 
     /// Records a fill of `buffer` with `word`, keeping its block.
     fn fill(command_buffer: &CommandBuffer, buffer: &Buffer, word: u32) {
-        let target = buffer.held_block().memory.buffer;
-        let (offset, size) = (buffer.offset(), buffer.length());
+        let (target, offset) = buffer.device_range();
+        let size = buffer.length();
         command_buffer
             .record_for_test(&[buffer], |device, command| {
                 // SAFETY: the command buffer is recording; the range is the buffer's, in whole
@@ -681,8 +681,8 @@ pub(crate) mod on_device {
     /// Commits a command buffer of `fills` fills of `buffer`: work that runs for a while.
     fn busy(queue: &CommandQueue, buffer: &Buffer, fills: u32) -> CommandBuffer {
         let command_buffer = queue.command_buffer().expect("a command buffer");
-        let target = buffer.held_block().memory.buffer;
-        let (offset, size) = (buffer.offset(), buffer.length());
+        let (target, offset) = buffer.device_range();
+        let size = buffer.length();
         command_buffer
             .record_for_test(&[buffer], |device, command| {
                 for word in 0..fills {
@@ -761,7 +761,7 @@ pub(crate) mod on_device {
             let member = |label: &str, log: &Log, buffer: &Buffer, word: u32| {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 fill(&command_buffer, buffer, word);
-                let target = work.held_block().memory.buffer;
+                let (target, _) = work.device_range();
                 command_buffer
                     .record_for_test(&[&work], |device, command| {
                         // SAFETY: as `busy`'s.

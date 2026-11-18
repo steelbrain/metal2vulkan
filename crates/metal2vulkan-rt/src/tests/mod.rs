@@ -7,6 +7,7 @@ mod floor;
 mod hazard;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kernels;
+mod managed;
 mod memory;
 mod narrow;
 mod null_descriptor;

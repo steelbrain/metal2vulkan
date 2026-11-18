@@ -257,7 +257,7 @@ impl ComputeCommandEncoder {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
-                building.keep(buffer.held_block());
+                building.keep(buffer);
                 Slot::Buffer {
                     buffer: buffer.clone(),
                     offset,
@@ -384,7 +384,7 @@ impl ComputeCommandEncoder {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
-                building.keep(buffer.held_block());
+                building.keep(buffer);
                 (buffer.id(), buffer.is_shared())
             }
             Resource::Texture(texture) => {
@@ -513,7 +513,7 @@ impl ComputeCommandEncoder {
                 length: buffer.length(),
             }));
         }
-        self.building().keep(buffer.held_block());
+        self.building().keep(buffer);
         self.dispatch(Grid::Indirect(buffer, offset), threads_per_threadgroup)
     }
 
@@ -990,8 +990,8 @@ impl Building {
                     device.cmd_dispatch(command, groups[0], groups[1], groups[2]);
                 }
                 Launch::Indirect(buffer, offset) => {
-                    let block = &buffer.held_block().memory;
-                    device.cmd_dispatch_indirect(command, block.buffer, buffer.offset() + offset);
+                    let (reached, at) = buffer.device_range();
+                    device.cmd_dispatch_indirect(command, reached, at + offset);
                 }
             }
         }

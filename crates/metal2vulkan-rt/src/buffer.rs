@@ -1,9 +1,14 @@
-//! Buffers: views of a range of a block, with no Vulkan object of their own.
+//! Buffers: views of a range of a block, with no Vulkan object of their own; a Managed buffer's
+//! device copy, where the device has one, is a place in a copy block ([`crate::places`]).
 
 use crate::counters::Gauge;
-use crate::device::Device;
+use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
-use crate::memory::{Block, BlockId, Mapping, MemoryClass};
+use crate::fill;
+use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
+use crate::places::Place;
+use crate::submit::Held;
+use ash::vk;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
@@ -12,6 +17,10 @@ use std::sync::Arc;
 /// either side of it; a byte of a longer buffer could lie where no access reaches it. Metal
 /// answers nil past a device's `maxBufferLength`; the consumer states one no larger than this.
 pub const MAX_BUFFER_LENGTH: u64 = 1 << 31;
+
+/// The alignment of a device copy in its block: a multiple of every storage buffer, uniform buffer
+/// and copy offset alignment Vulkan lets a device require.
+const COPY_ALIGN: u64 = 256;
 
 /// `MTLBuffer`: `length` bytes at `offset` in a block the consumer took, with no `VkBuffer` or
 /// memory of its own. Shaders reach it by its device address.
@@ -27,10 +36,40 @@ struct Inner {
     device: Device,
     /// Its resource id, for the hazard sets.
     id: u32,
+    /// The block the consumer placed it in: of a Managed buffer, the block of its bytes.
     block: Arc<Block>,
     offset: u64,
     length: u64,
     contents: Option<Mapping>,
+    /// A Managed buffer's device copy, on a device whose Shared memory is not device-local.
+    copy: Option<Arc<DeviceCopy>>,
+}
+
+/// A Managed buffer's device copy: a place in a copy block of Private memory, which shaders reach.
+/// The buffer, each command buffer that uses it and each upload that copies into it hold it; the
+/// last gone frees its place.
+pub(crate) struct DeviceCopy {
+    core: Arc<Core>,
+    place: Place,
+    block: Memory,
+}
+
+impl DeviceCopy {
+    /// The copy block's buffer.
+    pub(crate) fn buffer(&self) -> vk::Buffer {
+        self.block.buffer
+    }
+
+    /// The copy's offset in [`buffer`](Self::buffer).
+    pub(crate) fn offset(&self) -> u64 {
+        self.place.offset
+    }
+}
+
+impl Drop for DeviceCopy {
+    fn drop(&mut self) {
+        self.core.copies.release(&self.core, self.place);
+    }
 }
 
 impl Drop for Inner {
@@ -96,8 +135,112 @@ impl Device {
                 None => self.core().work.zero(self.core(), &block, offset, end)?,
             }
         }
+        Ok(self.buffer(block, offset, length, contents, None))
+    }
+
+    /// `newBufferWithLength:options:` and `newBufferWithBytes:length:options:` with
+    /// `MTLResourceStorageModeManaged`: `length` bytes at `offset` in a Shared block the consumer
+    /// holds are the consumer's bytes, which [`Buffer::contents`] answers. Which form the buffer
+    /// takes is the device's memory-type query's answer:
+    ///
+    /// - where the Shared memory type is device-local, the buffer is its bytes, as a Shared buffer
+    ///   is, and [`Buffer::did_modify_range`] does nothing;
+    /// - elsewhere shaders reach a device copy in Private memory the device holds, at
+    ///   [`Buffer::gpu_address`]. Its first `copied` bytes (all of them where `copied` is the
+    ///   length or more) are copied from the consumer's bytes, and the rest are zeroed, ahead of
+    ///   every command buffer committed after this call; [`Buffer::did_modify_range`] copies a
+    ///   range again. The consumer's own bytes are as it wrote them.
+    ///
+    /// Metal keeps such a copy on a Mac with a discrete GPU. The consumer chooses the range of its
+    /// bytes, as for [`Device::new_buffer`]. A buffer a command buffer uses holds its device copy
+    /// until the command buffer retires.
+    ///
+    /// Err: as [`Device::new_buffer`]; [`Refusal::ManagedBlockNotShared`] for a Private block;
+    /// [`Error::Quiesced`], and what taking a Private block or the upload's command buffer can
+    /// return, for a device copy.
+    pub fn new_managed_buffer(
+        &self,
+        block: BlockId,
+        offset: u64,
+        length: u64,
+        copied: u64,
+    ) -> Result<Buffer, Error> {
+        if length == 0 {
+            return Err(Error::Refused(Refusal::EmptyBuffer));
+        }
+        if length > MAX_BUFFER_LENGTH {
+            return Err(Error::Refused(Refusal::BufferTooLong {
+                length,
+                max: MAX_BUFFER_LENGTH,
+            }));
+        }
+        let block = self.block(block)?;
+        let block_len = block.memory.len;
+        offset
+            .checked_add(length)
+            .filter(|&end| end <= block_len)
+            .ok_or(Error::Refused(Refusal::BufferPastBlock {
+                offset,
+                length,
+                block_len,
+            }))?;
+        let Some(mapping) = block.memory.mapping else {
+            return Err(Error::Refused(Refusal::ManagedBlockNotShared {
+                block: block.memory.id,
+            }));
+        };
+        // SAFETY: `offset` is inside the block.
+        let contents = Some(Mapping::new(unsafe { mapping.at(offset) }));
+        let core = self.core();
+        if core.shared_is_device_local() {
+            return Ok(self.buffer(block, offset, length, contents, None));
+        }
+        let (place, copy_block) = core.copies.place(core, length, COPY_ALIGN)?;
+        let copy = Arc::new(DeviceCopy {
+            core: Arc::clone(core),
+            place,
+            block: copy_block,
+        });
+        let copied = copied.min(length);
+        if copied < length {
+            let start = copy.offset() + copied;
+            let end = copy.offset() + length;
+            core.work.upload(
+                core,
+                None,
+                [Held::Copy(Arc::clone(&copy))],
+                // SAFETY: the upload's command buffer is recording, under the work lock; the copy
+                // block's buffer has every usage, `start..end` lies in it, and the upload holds
+                // the copy.
+                |device, command| unsafe {
+                    fill::record(
+                        device,
+                        command,
+                        core.filler.zeros(),
+                        copy.buffer(),
+                        start,
+                        end,
+                    )
+                },
+            )?;
+        }
+        if copied > 0 {
+            core.work.modify(core, &copy, &block, offset, 0, copied)?;
+        }
+        Ok(self.buffer(block, offset, length, contents, Some(copy)))
+    }
+
+    /// A new buffer's handle, counted in [`Gauges::buffers`](crate::Gauges::buffers).
+    fn buffer(
+        &self,
+        block: Arc<Block>,
+        offset: u64,
+        length: u64,
+        contents: Option<Mapping>,
+        copy: Option<Arc<DeviceCopy>>,
+    ) -> Buffer {
         self.core().counters.rise(Gauge::Buffers);
-        Ok(Buffer {
+        Buffer {
             inner: Arc::new(Inner {
                 device: self.clone(),
                 id: self.core().ids.take(),
@@ -105,15 +248,50 @@ impl Device {
                 offset,
                 length,
                 contents,
+                copy,
             }),
-        })
+        }
     }
 }
 
 impl Buffer {
-    /// `gpuAddress`: the block's device address plus the buffer's offset.
+    /// `gpuAddress`: the block's device address plus the buffer's offset; of a Managed buffer with
+    /// a device copy, the copy's address.
     pub fn gpu_address(&self) -> u64 {
-        self.inner.block.memory.address + self.inner.offset
+        match &self.inner.copy {
+            Some(copy) => copy.block.address + copy.offset(),
+            None => self.inner.block.memory.address + self.inner.offset,
+        }
+    }
+
+    /// `didModifyRange:`: the consumer changed `length` bytes from `start` of the buffer's bytes.
+    /// Of a Managed buffer with a device copy, the next submission's upload copies them into the
+    /// copy, ahead of every command buffer committed after this call on every queue; the copy
+    /// reads the bytes when the GPU reaches it, so a later write the consumer makes before then
+    /// may be seen. Of any other buffer it does nothing, as the GPU reads the consumer's bytes.
+    ///
+    /// Err: [`Refusal::ModifiedRange`] for a range that leaves the buffer; for a copy,
+    /// [`Error::Quiesced`], [`Error::Vulkan`] where the upload's command buffer cannot be made,
+    /// and with `VK_ERROR_DEVICE_LOST` where the device is lost while the call waits for the
+    /// upload to have room.
+    pub fn did_modify_range(&self, start: u64, length: u64) -> Result<(), Error> {
+        let inner = &self.inner;
+        let end = (start.checked_add(length))
+            .filter(|&end| end <= inner.length)
+            .ok_or(Error::Refused(Refusal::ModifiedRange {
+                start,
+                length,
+                buffer_length: inner.length,
+            }))?;
+        let Some(copy) = &inner.copy else {
+            return Ok(());
+        };
+        if length == 0 {
+            return Ok(());
+        }
+        let core = inner.device.core();
+        core.work
+            .modify(core, copy, &inner.block, inner.offset, start, end)
     }
 
     /// `length`.
@@ -137,14 +315,22 @@ impl Buffer {
         self.inner.offset
     }
 
-    /// Whether the buffer is in Shared memory, which the host reads.
+    /// Whether shaders reach the buffer in Shared memory, which the host reads.
     pub(crate) fn is_shared(&self) -> bool {
-        self.held_block().memory.class == MemoryClass::Shared
+        self.inner.copy.is_none() && self.inner.block.memory.class == MemoryClass::Shared
     }
 
-    /// The block, for a command buffer to keep.
-    pub(crate) fn held_block(&self) -> &Arc<Block> {
-        &self.inner.block
+    /// The block, and a Managed buffer's device copy, for a command buffer to keep.
+    pub(crate) fn held(&self) -> (&Arc<Block>, Option<&Arc<DeviceCopy>>) {
+        (&self.inner.block, self.inner.copy.as_ref())
+    }
+
+    /// The `VkBuffer` shaders reach the buffer through and the buffer's offset in it.
+    pub(crate) fn device_range(&self) -> (vk::Buffer, u64) {
+        match &self.inner.copy {
+            Some(copy) => (copy.buffer(), copy.offset()),
+            None => (self.inner.block.memory.buffer, self.inner.offset),
+        }
     }
 
     /// Its resource id, for the hazard sets.

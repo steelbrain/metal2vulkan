@@ -116,6 +116,19 @@ in its memory.
   translator may read as signed, so the consumer states a maximum buffer length (Metal's
   `maxBufferLength`) no larger than `MAX_BUFFER_LENGTH`, and places no buffer longer than that in
   a block, whether Metal's `newBufferWithLength:`, a heap's or a no-copy buffer stands behind it.
+- `Device::new_managed_buffer(block, offset, length, copied)` makes a Managed buffer over a range
+  of a Shared block (`Refusal::ManagedBlockNotShared` for a Private one): the consumer's bytes,
+  which `contents` answers. The device's memory-type query picks its form. Where the Shared type
+  is device-local, the buffer is its bytes, as a Shared buffer is, and `did_modify_range` does
+  nothing. Elsewhere shaders reach a device copy at `gpu_address`: a place in a copy block, a
+  Private block of the pool (a dedicated one past `BLOCK_LEN`) that holds device copies alone. Its
+  first `copied` bytes are copied from the consumer's and the rest zeroed, in the upload.
+  `Buffer::did_modify_range(start, length)` marks a range changed (`Refusal::ModifiedRange` past
+  the buffer): the upload copies it into the device copy as it goes, ahead of every command buffer
+  committed after the call on every queue, one copy command per buffer with its ranges merged where
+  they overlap or touch, and no CPU copy. The copy reads the consumer's bytes when the GPU reaches
+  it. Each change is one of the upload's 4,096 calls, so changes past them submit it and wait. A
+  command buffer keeps each device copy it uses until it retires; the copy's place is free then.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
 the buffer there before has completed. A command buffer keeps each block it uses until it retires,
@@ -386,6 +399,8 @@ that touch blocks first.
   resource IDs it made up, with no fault. The consumer treats every byte on the device as
   guest-writable and keeps nothing there that it parses or trusts.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
+- A Managed buffer's `synchronizeResource` comes with blit encoders. A Private allocation does not
+  yet go on to another memory type when device memory runs out.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
   dispatch past it is split into dispatches of at most that many, each told its first
@@ -718,6 +733,9 @@ only for a created device, so `PhysicalDevice::check` finds a type with each set
 | Private | `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` | Private storage, which only the GPU reads and writes |
 | Shared | `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`, `VK_MEMORY_PROPERTY_HOST_CACHED_BIT` | Shared storage, which the host maps and reads |
 | ring | `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`, `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT` | the parameter ring, which the host writes with no flush and the GPU reads |
+
+Whether the Shared type also has `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` decides a Managed buffer's
+form: without it, shaders reach a device copy in Private memory (Memory blocks and buffers).
 
 ### Chosen by a query
 

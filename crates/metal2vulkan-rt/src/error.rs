@@ -90,6 +90,26 @@ pub enum Refusal {
         /// The block's length.
         block_len: u64,
     },
+    /// A Managed buffer whose bytes are in a Private block
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (a Managed buffer's bytes are the consumer's, which it maps; a Private block
+    /// has no mapping).
+    ManagedBlockNotShared {
+        /// The block named.
+        block: BlockId,
+    },
+    /// A changed range that leaves its buffer ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
+    ///
+    /// Basis: ours (the copy of such a range would write past the buffer's device copy).
+    ModifiedRange {
+        /// The range's first byte in the buffer.
+        start: u64,
+        /// The range's length.
+        length: u64,
+        /// The buffer's length.
+        buffer_length: u64,
+    },
     /// A call on a command buffer already committed: encoding, adding a handler, enqueueing or
     /// committing again.
     ///
@@ -594,6 +614,20 @@ impl fmt::Display for Refusal {
             } => write!(
                 f,
                 "a buffer of {length} bytes at offset {offset} leaves its block of {block_len} bytes"
+            ),
+            Refusal::ManagedBlockNotShared { block } => write!(
+                f,
+                "a Managed buffer's bytes are in block {}, which is Private",
+                block.get()
+            ),
+            Refusal::ModifiedRange {
+                start,
+                length,
+                buffer_length,
+            } => write!(
+                f,
+                "a changed range of {length} bytes from {start} leaves its buffer of \
+                 {buffer_length} bytes"
             ),
             Refusal::Committed => f.write_str("the command buffer is already committed"),
             Refusal::OtherDevice => f.write_str("the object is another device's"),
