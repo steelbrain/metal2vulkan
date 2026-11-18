@@ -694,7 +694,7 @@ impl Building {
             self.gpu.stamps = core.stamps.take(&core.device, &core.counters);
             match self.gpu.stamps {
                 Some(pair) => times::write_start(&core.device, command, pair.pool, pair.first),
-                None => core.counters.count(Metric::UntimedCommandBuffers),
+                None => self.tally.count(Metric::UntimedCommandBuffers),
             }
         }
         self.last().command = Some(command);
