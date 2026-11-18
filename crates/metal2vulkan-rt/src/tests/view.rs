@@ -17,7 +17,6 @@ mod on_device {
         PixelFormat, Refusal, Region, StorageMode, Texture, TextureDescriptor, TexturePlace,
         TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage, TextureViewKind,
     };
-    use std::ops::Range;
 
     /// FNV-1a 64 of `bytes`.
     fn fnv(bytes: &[u8]) -> u64 {
@@ -99,15 +98,7 @@ mod on_device {
             use TextureType::{Type2D, Type2DArray};
             // The probe's cases: the parent, the view's type, levels and slices; what the view
             // reports (width, levels, array length); its level 0's bytes' FNV-1a 64.
-            let cases: [(
-                &str,
-                &Texture,
-                TextureType,
-                Range<u32>,
-                Range<u32>,
-                [u32; 3],
-                u64,
-            ); 6] = [
+            let cases = [
                 (
                     "whole",
                     &flat,
