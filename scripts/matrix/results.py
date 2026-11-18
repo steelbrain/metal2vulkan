@@ -566,6 +566,16 @@ HARNESS_CEILINGS = {
     # first GPU zero fill's recording and the first GPU use of the new block, are open, and their
     # fixes lower the ceiling.
     "8086:a7a0": {"create_private_16MiB/first_take": 1.88},
+    # 8086:3e9b's zero_products has none: the row runs level with old, the new runtime about 1%
+    # ahead (m3-max-47846). A grid-edge test that decodes and compares the position ahead of the
+    # region's ragged branch once ran 5-6% faster on this card, by the driver compiler's accident
+    # on that kernel. Its looped executable had the most instructions of the forms timed (149, and
+    # 507 static cycles), yet ran fastest:
+    # - the form that branches on the flag first: 153 and 520;
+    # - no edge test at all: 117 and 375;
+    # - old's: 100 and 336.
+    # The driver returns no representation of its code to say why. No form of the test kept both
+    # that speed and the sampling rows' gains (m3-max-47851).
 }
 
 
