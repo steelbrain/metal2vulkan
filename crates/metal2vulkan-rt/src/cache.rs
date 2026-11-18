@@ -696,6 +696,18 @@ pub(crate) struct Caches {
     /// The blob's writes.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     writes: AtomicUsize,
+    /// Whether the seed waits before its merge, for a test.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    merge_held: AtomicBool,
+    /// Whether the seed is waiting before its merge.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    merge_waiting: AtomicBool,
+}
+
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+thread_local! {
+    /// Whether the caches made next on this thread hold their seed before its merge, for a test.
+    static HOLD_NEXT_MERGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The `VkPipelineCache` creations take, and those a fresh one replaced.
@@ -883,7 +895,44 @@ impl Caches {
             looks: AtomicUsize::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             writes: AtomicUsize::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            merge_held: AtomicBool::new(HOLD_NEXT_MERGE.with(std::cell::Cell::take)),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            merge_waiting: AtomicBool::new(false),
         }
+    }
+
+    /// Makes the seed of the device made next on this thread wait before its merge, until
+    /// [`Caches::release_merge`], for a test.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn hold_next_merge() {
+        HOLD_NEXT_MERGE.with(|hold| hold.set(true));
+    }
+
+    /// Whether the seed is waiting before its merge.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn merge_waiting(&self) -> bool {
+        (self.merge_waiting).load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Lets the seed's merge go on.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn release_merge(&self) {
+        (self.merge_held).store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// On the reaper, before the seed's merge: waits while a test holds the merge.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    fn wait_while_merge_held(&self) {
+        use std::sync::atomic::Ordering::{Acquire, Release};
+        if !self.merge_held.load(Acquire) {
+            return;
+        }
+        self.merge_waiting.store(true, Release);
+        while self.merge_held.load(Acquire) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        self.merge_waiting.store(false, Release);
     }
 
     /// The device's blob, where it has a cache directory and the reaper has seeded the cache.
@@ -993,8 +1042,9 @@ impl Caches {
     /// it, merges into it what creations compiled in the empty cache meanwhile, and makes it the
     /// cache creations take from then on. A blob that is not taken is removed. So no creation
     /// waits for the blob's read or the driver's parse of it, which for a blob of 32 MiB take tens
-    /// of milliseconds; a creation that ends in the empty cache after the merge is not in this
-    /// run's blob.
+    /// of milliseconds, or for the merge, which takes hundreds on some drivers: a creation during
+    /// it goes through the empty cache. A creation through the empty cache that ends once the
+    /// merge has begun is not in this run's blob, and the next start compiles it again.
     ///
     /// The blob is named by the whole header in hex ([`blob_name`]); before its read, the blobs
     /// past the [`BLOBS_KEPT`] most recently written are removed.
@@ -1062,7 +1112,13 @@ impl Caches {
     ) {
         // SAFETY: the cache is the device's.
         let written = unsafe { data_size(device, seeded) };
-        if let Some(empty) = lock(&self.pipelines).current.clone() {
+        // Taken in a statement of its own, so the lock is let go before the merge, which takes
+        // hundreds of milliseconds on some drivers: a creation meanwhile takes the empty cache and
+        // never waits for it.
+        let empty = lock(&self.pipelines).current.clone();
+        if let Some(empty) = empty {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            self.wait_while_merge_held();
             // SAFETY: both caches are the device's; `seeded`, the destination, is this thread's
             // alone, and the source is internally synchronized against the creations through it.
             // Where the merge fails, `seeded` holds the blob's pipelines alone.

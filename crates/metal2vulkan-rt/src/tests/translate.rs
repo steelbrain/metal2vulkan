@@ -1471,6 +1471,61 @@ mod on_device {
         }
     }
 
+    /// A creation while the seed merges the empty cache into the cache made from the blob goes
+    /// through the empty cache and never waits for the merge, which takes hundreds of
+    /// milliseconds on some drivers; it counts as a creation before the seed.
+    #[test]
+    fn every_device_creates_through_the_empty_cache_while_its_seed_merges() {
+        let (Some(first), Some(second)) = (
+            descriptor("a1_bool_from_float"),
+            descriptor("a1_sign_and_division_precise"),
+        ) else {
+            return;
+        };
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-merge-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let device = on_directory(name, physical, &dir);
+            within("the pipeline cache", || device.core().caches.is_seeded());
+            let blob = device.core().caches.blob().expect("a blob").to_owned();
+            drop(state(name, &device, &first));
+            drop(device);
+            assert!(blob.exists(), "{name}: the drop wrote the blob");
+            crate::cache::Caches::hold_next_merge();
+            let device = on_directory(name, physical, &dir);
+            let caches = &device.core().caches;
+            within("the merge", || caches.merge_waiting());
+            let counters = device.counters();
+            let before = counters.metrics().creations_before_seed;
+            let (made, during) = std::thread::scope(|scope| {
+                let (ended, end) = std::sync::mpsc::channel();
+                let (device, second) = (&device, &second);
+                let creating = scope.spawn(move || {
+                    let made = state(name, device, second);
+                    let _ = ended.send(());
+                    made
+                });
+                // Let go either way, so a creation that waits for the merge ends.
+                let during = end.recv_timeout(std::time::Duration::from_secs(30)).is_ok();
+                caches.release_merge();
+                (creating.join().expect("the creation"), during)
+            });
+            assert!(during, "{name}: the creation waited for the merge");
+            assert!(
+                counters.metrics().creations_before_seed > before,
+                "{name}: the creation counted before the seed"
+            );
+            within("the seed", || caches.is_seeded());
+            drop(made);
+            drop(device);
+            within("the teardown", || counters.gauges() == Gauges::default());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     /// `vector_word_phases`'s kernels (`metal2vulkan_devtools::vector_word_phases`): with
     /// `vwp_words`'s two `uint` buffers bound at each word phase, 0, 4, 8 and 12, so its `uint4`
     /// and `float4` accesses through cast pointers land that far past a multiple of 16 whatever

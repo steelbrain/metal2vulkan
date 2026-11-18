@@ -955,9 +955,10 @@ comes before it waits for (microseconds). Then, off every guest thread, it reads
 a cache from it, merges into that cache what creations compiled in the empty one meanwhile
 (`vkMergePipelineCaches`), and makes it the cache creations take; the empty one is destroyed once no
 creation holds it. So no creation waits for the blob's read or the driver's parse of it, which for a
-blob near 32 MiB take tens of milliseconds; a creation that started in the empty cache and ends
-after the merge is not in this run's blob. `Metrics::creations_before_seed` counts the creations
-that went through the empty cache. A blob that does not check, whose data does not begin with the
+blob near 32 MiB take tens of milliseconds, or for the merge, which takes hundreds on some drivers:
+a creation during it goes through the empty cache. `Metrics::creations_before_seed` counts the
+creations that went through the empty cache; those that end once the merge has begun are not in
+this run's blob, and the next start compiles their pipelines again. A blob that does not check, whose data does not begin with the
 device's pipeline cache header (whole, the `pipelineCacheUUID` a new driver version changes
 included), or that the driver refuses, is removed, and the empty cache stays. Once pipeline creation
 has been quiet for 20 ms (no creation running and none ending) after a creation, the reaper reads
