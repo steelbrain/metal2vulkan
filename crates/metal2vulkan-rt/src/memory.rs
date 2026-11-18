@@ -318,8 +318,8 @@ impl Drop for Block {
 }
 
 /// One `VkDeviceMemory` of a class and the ranges of it no block holds.
-struct Allocation {
-    memory: vk::DeviceMemory,
+pub(crate) struct Allocation {
+    pub(crate) memory: vk::DeviceMemory,
     len: u64,
     mapping: Option<Mapping>,
     device_local: bool,
@@ -1238,7 +1238,11 @@ fn new_buffer(device: &ash::Device, len: u64) -> Result<vk::Buffer, Error> {
 /// Makes an allocation of `len` bytes of `class` with device addresses, mapped whole if
 /// Shared, its free ranges all of it. Its bytes are undefined: nothing writes them, and a Shared
 /// allocation's pages become resident as they are first written.
-fn make_allocation(core: &Core, class: MemoryClass, len: u64) -> Result<Allocation, Error> {
+pub(crate) fn make_allocation(
+    core: &Core,
+    class: MemoryClass,
+    len: u64,
+) -> Result<Allocation, Error> {
     let device = &core.device;
     let buffer = vk::BufferCreateInfo::default()
         .size(len)
@@ -1367,7 +1371,7 @@ fn free_idle(core: &Core, allocation: Allocation, kept: &[Memory]) {
 }
 
 /// Frees an allocation, whose blocks are all retired. Freeing the memory also unmaps it.
-fn free_allocation(core: &Core, allocation: Allocation) {
+pub(crate) fn free_allocation(core: &Core, allocation: Allocation) {
     // SAFETY: no buffer is bound to it any more, and no GPU work uses it.
     unsafe { core.device.free_memory(allocation.memory, None) };
     core.counters.fall(Gauge::Blocks);

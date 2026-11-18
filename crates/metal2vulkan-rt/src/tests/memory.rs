@@ -130,6 +130,8 @@ fn the_idle_rule_keeps_idle_allocations_under_the_window_s_peak() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::device::lock;
+    use crate::memory::{free_allocation, make_allocation};
+    use crate::tests::command::on_device::each_device;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Block, BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus, Device,
@@ -1195,6 +1197,85 @@ mod on_device {
                 counters.metrics()
             );
         }
+    }
+
+    /// A commit is not held for a free of host-visible memory beside it: a command buffer
+    /// committed 1 ms into the free of a 64 MiB Shared allocation the GPU used completes in less
+    /// than half the free's time. NVIDIA's Linux driver held the submission of a command buffer
+    /// from a pool reset keeping its memory for the whole of such a free (20 to 70 ms on an RTX
+    /// 2080 and 3090); the recorders' pools are reset releasing it. A device whose free takes
+    /// under 10 ms only prints its times.
+    #[test]
+    fn every_device_completes_a_commit_beside_a_free_of_shared_memory_unheld() {
+        each_device("commit beside a free", |name, _, device| {
+            let core = device.core();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let target = device
+                .take_block(MemoryClass::Private, 4096)
+                .expect("a block");
+            let kept = device
+                .new_buffer(target.id, 0, 256, None)
+                .expect("a buffer");
+            let to = device.block(target.id).expect("a held block").memory.buffer;
+            let commit = |fill: vk::Buffer| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                command_buffer
+                    .record_for_test(&[&kept], |device, command| unsafe {
+                        device.cmd_fill_buffer(command, fill, 0, 256, 7)
+                    })
+                    .expect("a fill");
+                let started = Instant::now();
+                command_buffer.commit().expect("a commit");
+                command_buffer.wait_until_completed();
+                started.elapsed()
+            };
+            // The queue's recorders reused, as a program's are.
+            for _ in 0..3 {
+                commit(to);
+            }
+            for _ in 0..3 {
+                let allocation =
+                    make_allocation(core, MemoryClass::Shared, 64 << 20).expect("an allocation");
+                let info = vk::BufferCreateInfo::default()
+                    .size(256)
+                    .usage(crate::floor::BUFFER_USAGE)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+                // SAFETY: the device is live; the buffer is bound once, to memory of its usage's
+                // type, and destroyed once the fill that uses it completed.
+                let used = unsafe {
+                    let used = core.device.create_buffer(&info, None).expect("a buffer");
+                    (core.device)
+                        .bind_buffer_memory(used, allocation.memory, 0)
+                        .expect("its memory");
+                    used
+                };
+                commit(used);
+                // SAFETY: the fill that used it completed.
+                unsafe { core.device.destroy_buffer(used, None) };
+                let (freed, completed) = thread::scope(|scope| {
+                    let committed = scope.spawn(|| {
+                        thread::sleep(Duration::from_millis(1));
+                        commit(to)
+                    });
+                    let started = Instant::now();
+                    free_allocation(core, allocation);
+                    let freed = started.elapsed();
+                    (freed, committed.join().expect("the commit"))
+                });
+                println!(
+                    "{name}: a 64 MiB Shared free took {freed:?}; a commit 1 ms into it completed \
+                     in {completed:?}"
+                );
+                if freed >= Duration::from_millis(10) {
+                    assert!(
+                        completed < freed / 2,
+                        "{name}: the commit waited for the free: {completed:?} of {freed:?}"
+                    );
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            drop((kept, target, queue));
+        });
     }
 
     /// Idle allocations are freed only in quiet gaps, and a submission during a free is counted.

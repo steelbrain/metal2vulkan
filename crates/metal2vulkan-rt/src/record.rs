@@ -183,13 +183,22 @@ impl Recorders {
     }
 
     /// Takes back a recorder whose work has completed, or that never submitted: its pool is reset
-    /// for the next one, or, past [`IDLE_MAX`], given to the reaper to destroy.
+    /// for the next one, its memory given back to the driver, or, past [`IDLE_MAX`], given to the
+    /// reaper to destroy.
+    ///
+    /// The reset releases the pool's memory, so a recorder that once recorded a long command
+    /// buffer keeps none of it. A pool reset keeping its memory made NVIDIA's Linux driver hold
+    /// the next `vkQueueSubmit2` of the pool's command buffers until any `vkFreeMemory` of
+    /// host-visible memory beside it ended: 20 to 70 ms beside a 64 MiB free on an RTX 2080 and
+    /// an RTX 3090, against 0.2 ms with the memory released, as with a new pool. The release
+    /// cost no measurable time per command buffer there, on a Radeon RX 7900 XTX or on an Iris Xe
+    /// (probe 6be5985659, jobs m3-max-46001 to m3-max-46004).
     pub(crate) fn give_back(&self, core: &Core, mut recorder: Recorder) {
         // SAFETY: no command buffer of the pool is pending. A failed reset (a lost device) leaves
         // the pool to be destroyed.
         let reset = unsafe {
             core.device
-                .reset_command_pool(recorder.pool, vk::CommandPoolResetFlags::empty())
+                .reset_command_pool(recorder.pool, vk::CommandPoolResetFlags::RELEASE_RESOURCES)
         };
         let mut idle = lock(&self.idle);
         if reset.is_ok() && idle.len() < IDLE_MAX {
