@@ -9,6 +9,7 @@ microseconds, decimals allowed.
 
 import re
 import statistics
+from pathlib import Path
 
 #: `size` is the size a harness row whose size follows the device ran at (harness_budget).
 KINDS = ("metric", "instructions", "gauge", "time", "size")
@@ -59,8 +60,9 @@ PARKED_TESTS = {
 #: harness's warm first-use records (harness-new-warm/, the matrix's harness_runs) are parked as
 #: well: the cold ones, timed on a fresh driver cache, are the gated ones, and a warm one reads the
 #: entries the cold run just wrote, a fraction of a millisecond on Mesa. So are the re-timed pairs
-#: of a row over its budget (harness-retime/, RETIME_PAIRS): harness_budget judges them.
-PARKED_RECORDS = ("harness-old/", "harness-new-warm/", "harness-retime/")
+#: of a row over its budget (harness-retime/, RETIME_PAIRS), and the creation rows' first samples
+#: from the later processes (harness-first/, FIRST_RUNS): harness_budget judges them.
+PARKED_RECORDS = ("harness-old/", "harness-new-warm/", "harness-retime/", "harness-first/")
 
 #: The phrase that opens the subject of a commit allowed to change the old runtime's output: until
 #: the cutover, the translator's output through `Device::new` moves only in such a commit. Only the
@@ -306,14 +308,98 @@ HARNESS_CEILINGS = {
 }
 
 
-#: A row over its budget in a leg (its ceiling times HARNESS_BUDGET, else HARNESS_BUDGET) is
-#: re-timed in that leg before the leg ends (the matrix's harness_runs): RETIME_PAIRS pairs of
-#: runs of the row alone, old then new, the second pair new then old, kept as
+def read_floors(text):
+    """The floors table's TEXT: `#` comments, a header of `row` and GPU leg ids, then per line a
+    harness row and its floor on each leg, `-` for none. Returns {leg: {row: floor}}."""
+    floors, legs = {}, None
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        cells = line.split()
+        if legs is None:
+            legs = cells[1:]
+            continue
+        for leg, cell in zip(legs, cells[1:]):
+            if cell != "-":
+                floors.setdefault(leg, {})[cells[0]] = float(cell)
+    return floors
+
+
+#: The old runtime's own spread per harness row on each GPU leg, the row's floor: the widest ratio
+#: between two of the old runtime's runs of the row in one leg, old over old (`floors.tsv`, beside
+#: this file). A row is past its limit only past HARNESS_BUDGET times the greater of its floor and
+#: its ceiling (row_limit): a difference within the old runtime's own spread is not the new
+#: runtime's. The table is measured again when the harness or the old runtime's build changes; a
+#: row or leg it does not list has a floor of 1.
+HARNESS_FLOORS = read_floors((Path(__file__).resolve().parent / "floors.tsv").read_text())
+
+
+def row_limit(leg_id, row):
+    """ROW's limit on LEG_ID, new over old: HARNESS_BUDGET times the greater of its ceiling
+    (HARNESS_CEILINGS) and its floor (HARNESS_FLOORS), each 1 where none is listed."""
+    return HARNESS_BUDGET * max(HARNESS_CEILINGS.get(leg_id, {}).get(row, 1.0),
+                                HARNESS_FLOORS.get(leg_id, {}).get(row, 1.0))
+
+
+def past_limit(leg_id, row):
+    """How a line names ROW's limit on LEG_ID once past it: the budget, or its ceiling or floor,
+    whichever sets it, with the allowance."""
+    ceiling = HARNESS_CEILINGS.get(leg_id, {}).get(row, 1.0)
+    floor = HARNESS_FLOORS.get(leg_id, {}).get(row, 1.0)
+    if max(ceiling, floor) <= 1.0:
+        return f"past {HARNESS_BUDGET}"
+    name, value = ("ceiling", ceiling) if ceiling >= floor else ("floor", floor)
+    return f"past its {name} {value} with its allowance, {row_limit(leg_id, row):.3f}"
+
+
+#: The harness's creation rows, by the start of their names. A leg times them apart from the
+#: other rows (the matrix's harness_runs): each runtime's run of the others skips them, and they
+#: run alone after it, in FIRST_RUNS processes of their own, each on a fresh driver cache and
+#: store, so no row before them moves their times.
+HARNESS_CREATES = "create_"
+#: A creation row's first samples (`<row>/first`, `/first_take`, `/next_take`,
+#: `/first_allocation_total`) are one sample per process, so harness_budget judges each by the
+#: median of FIRST_RUNS processes per runtime: the first process's own record and the later
+#: processes' `harness-first/<row>/<n>/<runtime>`. A first sample alone is never past its limit.
+FIRST_RUNS = 5
+HARNESS_FIRST = "harness-first/"
+#: The sed program the first creation process's output goes through: its device's gauges at drop
+#: become `harness-<runtime>/creates/device/...`, apart from the other rows' process's, so each
+#: key is recorded once.
+CREATES_APART = (r"s#^M2V-MATRIX gauge harness-\([a-z]*\)/device/#"
+                 r"M2V-MATRIX gauge harness-\1/creates/device/#")
+#: The sed program (`sed -n`) each later creation process's output goes through: its first samples
+#: alone, as `harness-first/<row>/<n>/<runtime>`, the shell giving `$n` and `$runtime`.
+FIRST_KEEP = (r"s#^M2V-MATRIX time harness-$runtime/\(create_[A-Za-z0-9_]*/[a-z_]*\) #"
+              r"M2V-MATRIX time harness-first/\1/$n/$runtime #p")
+
+
+def first_row(row):
+    """Whether ROW is a creation row's first sample, judged by the median of FIRST_RUNS."""
+    return row.startswith(HARNESS_CREATES) and "/" in row
+
+
+def first_samples(times, row):
+    """ROW's first samples per runtime, (old, new), each FIRST_RUNS long, or None unless every
+    process recorded both."""
+    samples = []
+    for runtime in ("old", "new"):
+        values = [times.get(f"harness-{runtime}/{row}")]
+        values += [times.get(f"{HARNESS_FIRST}{row}/{n}/{runtime}") for n in range(2, FIRST_RUNS + 1)]
+        if any(value is None for value in values):
+            return None
+        samples.append(values)
+    return tuple(samples)
+
+
+#: A row over its limit in a leg (row_limit) is re-timed once in that leg before the leg ends
+#: (the matrix's harness_runs): RETIME_PAIRS pairs of runs of the row alone, old then new, then new
+#: then old (A B B A), kept as
 #: `harness-retime/<row>/<pair>/<runtime>`. harness_budget judges such a row by the median of its
 #: pairs' ratios, new over old, so a clock episode in one run decides nothing while a regression in
 #: every pair still fails. At most RETIME_ROWS rows of a leg, the furthest over first; a row that
 #: was not re-timed is judged by its one time.
-RETIME_PAIRS = 3
+RETIME_PAIRS = 2
 RETIME_ROWS = 8
 HARNESS_RETIME = "harness-retime/"
 #: The awk program the leg runs over its runtimes' output to choose the rows it re-times: each row
@@ -334,10 +420,11 @@ END {
 
 
 def harness_limits(leg_id):
-    """The rows of HARNESS_CEILINGS for LEG_ID as RETIME_SELECT's LIMITS, `row=limit ...`: each
-    limit its ceiling times HARNESS_BUDGET, written so that it reads back as the same double."""
-    return " ".join(f"{row}={ceiling * HARNESS_BUDGET!r}"
-                    for row, ceiling in sorted(HARNESS_CEILINGS.get(leg_id, {}).items()))
+    """The rows of LEG_ID with a ceiling or a floor as RETIME_SELECT's LIMITS, `row=limit ...`:
+    each its row_limit, written so that it reads back as the same double."""
+    rows = set(HARNESS_CEILINGS.get(leg_id, {})) | set(HARNESS_FLOORS.get(leg_id, {}))
+    return " ".join(f"{row}={row_limit(leg_id, row)!r}" for row in sorted(rows)
+                    if row_limit(leg_id, row) != HARNESS_BUDGET)
 
 
 def retimed(times, row):
@@ -353,14 +440,16 @@ def retimed(times, row):
 
 def harness_budget(leg_id, leg):
     """The harness budget on LEG, the parsed leg LEG_ID: each row timed on both runtimes
-    (`harness-new/<row>` and `harness-old/<row>`) against its ceiling in HARNESS_CEILINGS, or
-    against HARNESS_BUDGET where none is listed. Returns (problems, parked): a row past its ceiling
-    or the budget is a problem, and so is a row whose time was recorded more than once (twice by a
-    suite, or by two suites), which has no one time to judge. A row past its limit that the leg
-    re-timed (RETIME_PAIRS) is judged by the median of its pairs' ratios instead: a problem past the
-    limit, else named with its pairs. A listed row passes up to its ceiling
-    times HARNESS_BUDGET, the noise allowance parity gets, and is named with its ceiling; one within
-    the budget is named as leaving the list. A row whose run failed on the old runtime
+    (`harness-new/<row>` and `harness-old/<row>`) against its limit, row_limit: HARNESS_BUDGET times
+    the greater of its ceiling (HARNESS_CEILINGS) and its floor (HARNESS_FLOORS). Returns
+    (problems, parked): a row past its limit is a problem, and so is a row whose time was recorded
+    more than once (twice by a suite, or by two suites), which has no one time to judge. A row past
+    its limit that the leg re-timed (RETIME_PAIRS) is judged by the median of its pairs' ratios
+    instead: a problem past the limit, else named with its pairs. A creation row's first sample
+    (first_row) is judged by the ratio of the medians of its FIRST_RUNS processes, and is never a
+    problem on its one sample: without every process's, it is named as not judged. A listed row
+    passes up to its ceiling times HARNESS_BUDGET, the noise allowance parity gets, and is named
+    with its ceiling; one within the budget is named as leaving the list. A row whose run failed on the old runtime
     (`M2V-FAILED harness-old/<row>`) is named as not compared and fails nothing here (PARKED_RECORDS);
     one that failed on the new runtime fails its suite (leg_problems). A row whose size follows the
     device (`size` records) is compared only where both runtimes ran it at one size: at two, the
@@ -390,12 +479,27 @@ def harness_budget(leg_id, leg):
             problems.append(f"harness budget {row}: new ran at size {new_size}, old at {old_size}, so its "
                             "times measure different work")
             continue
+        limit = row_limit(leg_id, row)
+        if first_row(row):
+            samples = first_samples(times, row)
+            if samples is None:
+                if new / old > limit:
+                    parked.append(f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is "
+                                  f"{new / old:.3f}, one sample: a first sample is judged by the median "
+                                  f"of {FIRST_RUNS} processes, not judged")
+                continue
+            old, new = (statistics.median(values) for values in samples)
+            line = (f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us over old "
+                    f"{old:.1f} us is {new / old:.3f}")
+            if new / old > limit:
+                problems.append(f"{line}, {past_limit(leg_id, row)}")
+            elif row in ceilings:
+                parked.append(f"{line}, its ceiling {ceilings[row]}")
+            continue
         ratio = new / old
         line = f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is {ratio:.3f}"
-        limit = ceilings[row] * HARNESS_BUDGET if row in ceilings else HARNESS_BUDGET
         if ratio > limit:
-            past = (f"{line}, past {HARNESS_BUDGET}" if row not in ceilings else
-                    f"{line}, past its ceiling {ceilings[row]} with its allowance, {limit:.3f}")
+            past = f"{line}, {past_limit(leg_id, row)}"
             ratios = retimed(times, row)
             if ratios is None:
                 problems.append(past)

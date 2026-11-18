@@ -276,9 +276,14 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     USERPROFILE), so its first uses compile cold whatever ran on the node before.
     For HARNESS_WARM, a short second run on the same cache follows, before the suite's line, and
     its first-use records are kept under harness-<runtime>-warm/: the same first uses with the
-    driver's cache warm. After the last runtime's run, before its suite's line, the rows over their
-    budget (results.RETIME_SELECT, at most results.RETIME_ROWS, the furthest over first) are each
-    re-timed alone in results.RETIME_PAIRS pairs, old then new, the second pair new then old, their
+    driver's cache warm. These runs skip the creation rows (results.HARNESS_CREATES): those run
+    alone after them, in results.FIRST_RUNS processes per runtime, each with a fresh empty driver
+    cache and store, so no row before them moves their times. The first process's output is kept
+    whole, its device's gauges apart (results.CREATES_APART); of each later one's, only the first
+    samples (results.FIRST_KEEP), which results.harness_budget judges by the median of the
+    processes. After the last runtime's runs, before its suite's line, the rows over their
+    limits (results.RETIME_SELECT, at most results.RETIME_ROWS, the furthest over first) are each
+    re-timed alone in results.RETIME_PAIRS pairs, old then new, then new then old, their
     times kept as harness-retime/<row>/<pair>/<runtime> (results.harness_budget). A row whose size
     follows the device is sized by the first runtime's run, and every later run, warm and re-timed
     ones included, is given that size (`--size`), so each runtime times the same work. Each
@@ -288,17 +293,19 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     warm = " ".join(HARNESS_WARM)
     profile = unprofile = ""
     store = '"$(cygpath -w "$store")"' if windows else '"$store"'
+    point = ""
     if windows:
-        profile = r"""      mkdir -p "$cache/AppData/Local" && w=$(cygpath -w "$cache") || exit 3
-      saved_local=$LOCALAPPDATA saved_profile=$USERPROFILE
+        point = r"""      mkdir -p "$cache/AppData/Local" && w=$(cygpath -w "$cache") || exit 3
       export LOCALAPPDATA="$w\AppData\Local" USERPROFILE="$w"
 """
+        profile = "      saved_local=$LOCALAPPDATA saved_profile=$USERPROFILE\n" + point
         unprofile = '\n      export LOCALAPPDATA="$saved_local" USERPROFILE="$saved_profile"'
+    creates = f"'{results.HARNESS_CREATES}*'"
     rename = r"s#^M2V-MATRIX \([a-z]*\) harness-$runtime/\([a-z]*\)/first_use_#M2V-MATRIX \1 harness-$runtime-warm/\2/first_use_#p"
     retime = r"s#^M2V-MATRIX time harness-$timed/$row #M2V-MATRIX time harness-retime/$row/$pair/$timed #p"
     outputs = " ".join(f'"$out/{runtime}"' for runtime in HARNESS_RUNTIMES)
     limits = "\n".join(f"        {leg_id}) limits='{results.harness_limits(leg_id)}' ;;"
-                        for leg_id in sorted(results.HARNESS_CEILINGS))
+                        for leg_id in sorted(set(results.HARNESS_CEILINGS) | set(results.HARNESS_FLOORS)))
     sized = r"s#^\([a-z0-9_]*\)  *[a-z]*  *sized to \([0-9][0-9]*\) .*#--size \1=\2#p"
     return f"""rc=0
     out=$(mktemp -d) || exit 3
@@ -306,14 +313,27 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     for runtime in {" ".join(HARNESS_RUNTIMES)}; do
       cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
       export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
-{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --store {store} 2>&1 | tee "$out/$runtime"
+{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --skip {creates} --store {store} 2>&1 | tee "$out/$runtime"
       r=${{PIPESTATUS[0]}}
       [ -n "$sizes" ] || sizes=$(sed -n "{sized}" "$out/$runtime" | tr '\\n' ' ')
       case " {warm} " in
         *" $runtime "*)
-          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --store {store} --runs 5 --warmup 1 --no-settle 2>&1 |
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --skip {creates} --store {store} --runs 5 --warmup 1 --no-settle 2>&1 |
             sed -n "{rename}" ;;
       esac
+      for n in $(seq {results.FIRST_RUNS}); do
+        rm -rf "$cache" "$store"
+        cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
+        export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
+{point}        if [ $n -eq 1 ]; then
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
+            sed "{results.CREATES_APART}" | tee -a "$out/$runtime"
+        else
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
+            sed -n "{results.FIRST_KEEP}"
+        fi
+        [ ${{PIPESTATUS[0]}} -eq 0 ] || r=1
+      done
       if [ "$runtime" = {HARNESS_RUNTIMES[-1]} ]; then
         case "{leg}" in
 {limits}

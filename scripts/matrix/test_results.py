@@ -216,6 +216,12 @@ class RuleTests(unittest.TestCase):
 
 
 class HarnessBudgetTests(unittest.TestCase):
+    def setUp(self):
+        # The rules below on no floors unless a test gives its own.
+        floors = mock.patch.object(results, "HARNESS_FLOORS", {})
+        floors.start()
+        self.addCleanup(floors.stop)
+
     def budget(self, leg_id, times):
         return results.harness_budget(leg_id, leg_of(recs(time=times)))
 
@@ -323,21 +329,117 @@ class HarnessBudgetTests(unittest.TestCase):
             return out
 
         with mock.patch.object(results, "HARNESS_CEILINGS", {}):
-            # A clock episode in one pair's run decides nothing.
-            self.assertEqual(self.budget("1002:1900", pairs(415.7, 662.8, 415.5)), ([], [
-                f"{past}; re-timed in 3 pairs, 0.992, 1.582, 0.992, median 0.992, within: judged by the "
+            # Back within in the re-time, A B B A, it passes, named with its pairs.
+            self.assertEqual(self.budget("1002:1900", pairs(415.7, 425.5)), ([], [
+                f"{past}; re-timed in 2 pairs, 0.992, 1.016, median 1.004, within: judged by the "
                 "median"]))
-            # A regression in every pair still fails.
-            self.assertEqual(self.budget("1002:1900", pairs(470.0, 466.0, 474.0)), ([
-                f"{past}; re-timed in 3 pairs, 1.122, 1.112, 1.131, median 1.122"], []))
+            # A regression in the re-time still fails.
+            self.assertEqual(self.budget("1002:1900", pairs(470.0, 466.0)), ([
+                f"{past}; re-timed in 2 pairs, 1.122, 1.112, median 1.117"], []))
             # A row with a pair missing was not re-timed: its one time judges it.
-            missing = pairs(415.7, 662.8, 415.5)
-            del missing["harness-retime/vote_loop/3/new"]
+            missing = pairs(415.7, 425.5)
+            del missing["harness-retime/vote_loop/2/new"]
             self.assertEqual(self.budget("1002:1900", missing), ([past], []))
         # A listed row is re-timed past its ceiling's limit, and judged against that limit.
         with mock.patch.object(results, "HARNESS_CEILINGS", {"1002:1900": {"vote_loop": 1.05}}):
-            self.assertEqual(self.budget("1002:1900", pairs(440.0, 441.0, 700.0))[0], [])
-            self.assertEqual(len(self.budget("1002:1900", pairs(455.0, 456.0, 700.0))[0]), 1)
+            self.assertEqual(self.budget("1002:1900", pairs(440.0, 441.0))[0], [])
+            self.assertEqual(len(self.budget("1002:1900", pairs(455.0, 456.0))[0]), 1)
+
+    def test_a_row_within_its_floor_passes_and_past_it_fails_only_if_its_re_time_stays_past(self):
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 112.0}
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}), \
+                mock.patch.object(results, "HARNESS_FLOORS", {"a": {"frame": 1.1}}):
+            # Within the old runtime's own spread with the allowance, 1.133: not past.
+            self.assertEqual(self.budget("a", times), ([], []))
+            # Another GPU's floor is not this one's.
+            self.assertEqual(len(self.budget("b", times)[0]), 1)
+            past = dict(times, **{"harness-new/frame": 120.0})
+            line = "harness budget frame: new 120.0 us over old 100.0 us is 1.200, past its floor 1.1 with " \
+                   "its allowance, 1.133"
+            self.assertEqual(self.budget("a", past), ([line], []))
+            # Past it on its one time, but back within when re-timed alone: not past.
+            retimed = dict(past, **{"harness-retime/frame/1/old": 100.0, "harness-retime/frame/1/new": 110.0,
+                                    "harness-retime/frame/2/old": 100.0, "harness-retime/frame/2/new": 112.0})
+            self.assertEqual(self.budget("a", retimed), ([], [
+                f"{line}; re-timed in 2 pairs, 1.100, 1.120, median 1.110, within: judged by the median"]))
+            # Past it in the re-time too: past.
+            retimed.update({"harness-retime/frame/1/new": 118.0, "harness-retime/frame/2/new": 121.0})
+            self.assertEqual(len(self.budget("a", retimed)[0]), 1)
+            # The re-time selection reads the floor's limit.
+            self.assertEqual(results.harness_limits("a"), f"frame={1.1 * results.HARNESS_BUDGET!r}")
+        # A ceiling over the floor sets the limit, and a floor over the ceiling does.
+        with mock.patch.object(results, "HARNESS_CEILINGS", {"a": {"frame": 1.2}}), \
+                mock.patch.object(results, "HARNESS_FLOORS", {"a": {"frame": 1.1}}):
+            self.assertAlmostEqual(results.row_limit("a", "frame"), 1.236)
+        with mock.patch.object(results, "HARNESS_CEILINGS", {"a": {"frame": 1.05}}), \
+                mock.patch.object(results, "HARNESS_FLOORS", {"a": {"frame": 1.1}}):
+            self.assertAlmostEqual(results.row_limit("a", "frame"), 1.133)
+
+    def test_a_first_sample_is_judged_by_the_median_of_five_processes_and_never_alone(self):
+        row = "create_64MiB/first_take"
+
+        def processes(olds, news):
+            out = {f"harness-old/{row}": olds[0], f"harness-new/{row}": news[0]}
+            for n, (old, new) in enumerate(zip(olds[1:], news[1:]), 2):
+                out[f"{results.HARNESS_FIRST}{row}/{n}/old"] = old
+                out[f"{results.HARNESS_FIRST}{row}/{n}/new"] = new
+            return out
+
+        self.assertEqual(results.FIRST_RUNS, 5)
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            # One sample, however far past, is never past: it is named as not judged.
+            one = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 2000.0}
+            self.assertEqual(self.budget("a", one), ([], [
+                f"harness budget {row}: new 2000.0 us over old 1000.0 us is 2.000, one sample: a first sample "
+                "is judged by the median of 5 processes, not judged"]))
+            # One slow process of five decides nothing.
+            olds = [1000.0, 1010.0, 990.0, 1005.0, 995.0]
+            self.assertEqual(self.budget("a", processes(olds, [1000.0, 3000.0, 1010.0, 990.0, 1020.0])),
+                             ([], []))
+            # A median past the limit is past.
+            self.assertEqual(self.budget("a", processes(olds, [1100.0, 1200.0, 1150.0, 3000.0, 1120.0])), ([
+                f"harness budget {row}: median of 5 processes, new 1150.0 us over old 1000.0 us is 1.150, "
+                "past 1.03"], []))
+            # Against its own floor.
+            with mock.patch.object(results, "HARNESS_FLOORS", {"a": {row: 1.2}}):
+                self.assertEqual(
+                    self.budget("a", processes(olds, [1100.0, 1200.0, 1150.0, 3000.0, 1120.0]))[0], [])
+        # The later processes' samples are parked records: the budget judges them.
+        self.assertTrue(f"{results.HARNESS_FIRST}{row}/2/new".startswith(results.PARKED_RECORDS))
+
+    def test_the_creation_processes_record_each_key_once_beside_the_other_rows(self):
+        others = ["M2V-MATRIX time harness-new/alu 10.000", "M2V-MATRIX gauge harness-new/device/blocks@drop 0"]
+        creates = ["M2V-MATRIX time harness-new/create_64MiB 700.000",
+                   "M2V-MATRIX time harness-new/create_64MiB/first_take 900.000",
+                   "M2V-MATRIX metric harness-new/create_64MiB/first_allocations 1",
+                   "M2V-MATRIX gauge harness-new/create_64MiB/buffers@100 0",
+                   "M2V-MATRIX gauge harness-new/device/blocks@drop 0", "a table row"]
+
+        def sed(program, lines, quiet=False):
+            run = subprocess.run(["sed"] + (["-n"] if quiet else []) + [program], input="\n".join(lines) + "\n",
+                                 capture_output=True, text=True, check=True)
+            return run.stdout.splitlines()
+
+        first = sed(results.CREATES_APART, creates)
+        # The shell gives the later processes' program its process and runtime.
+        keep = results.FIRST_KEEP.replace("$runtime", "new").replace("$n", "2")
+        later = sed(keep, creates, quiet=True)
+        self.assertEqual(later, [f"M2V-MATRIX time {results.HARNESS_FIRST}create_64MiB/first_take/2/new 900.000"])
+        suite = results.parse_suite(others + first + later)
+        self.assertEqual((suite["problems"], suite["duplicated"]), ([], set()))
+        self.assertEqual(suite["records"]["gauge"], {"harness-new/device/blocks@drop": 0,
+                                                     "harness-new/creates/device/blocks@drop": 0,
+                                                     "harness-new/create_64MiB/buffers@100": 0})
+        # Without the program, the device's gauges would be recorded twice.
+        self.assertIn(("gauge", "harness-new/device/blocks@drop"), results.parse_suite(others + creates)["duplicated"])
+
+    def test_the_floors_table_reads_per_leg_and_row(self):
+        text = "# a comment\nrow  a  b\nframe  1.10  -\nalu  1.00  1.02\n"
+        self.assertEqual(results.read_floors(text), {"a": {"frame": 1.1, "alu": 1.0}, "b": {"alu": 1.02}})
+        # The stored table: every floor is a ratio of at least 1, on a leg id.
+        for leg, rows in results.HARNESS_FLOORS.items():
+            self.assertRegex(leg, r"^[0-9a-f]{4}:[0-9a-f]{4}$")
+            self.assertTrue(all(value >= 1.0 for value in rows.values()), leg)
 
     def test_a_leg_re_times_the_rows_the_budget_would_fail_on_their_one_time(self):
         ceilings = {"a": {"listed": 2.0, "edge": 2.0}}

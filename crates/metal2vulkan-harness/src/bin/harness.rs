@@ -3,9 +3,14 @@
 //!
 //! ```text
 //! harness --runtime old|new[,old|new...] [--runs N] [--warmup N] [--no-settle]
-//!     [--only NAME,NAME...] [--size NAME=N]... [--store DIRECTORY]
+//!     [--only NAME,NAME...] [--skip NAME,NAME...] [--size NAME=N]... [--store DIRECTORY]
 //!     [--workloads DIRECTORY --description FILE]
 //! ```
+//!
+//! `--only` runs the workloads it names and `--skip` leaves out those it names, of all of them or
+//! of `--only`'s. A name ending in `*` names every workload whose name starts with what comes
+//! before it: `--skip 'create_*'` runs every workload but the creation ones, and
+//! `--only 'create_*'` those alone. A name that names no workload is an error.
 //!
 //! Each runtime's device keeps its pipelines (the old runtime's shader cache, the new runtime's
 //! cache directory) in a store of its own: `<DIRECTORY>/<place>-<runtime>` under `--store`, so a
@@ -40,6 +45,8 @@ struct Args {
     runtimes: Vec<String>,
     runs: Runs,
     only: Option<Vec<String>>,
+    /// The workloads `--skip` leaves out.
+    skip: Vec<String>,
     /// The sizes `--size` gives, by workload.
     sizes: Vec<(String, u32)>,
     /// The directory of the runtimes' stores, `--store`.
@@ -49,8 +56,8 @@ struct Args {
 }
 
 const USAGE: &str = "usage: harness --runtime old|new[,old|new...] [--runs N] [--warmup N] \
-                     [--no-settle] [--only NAME,NAME...] [--size NAME=N]... [--store DIRECTORY] \
-                     [--workloads DIRECTORY --description FILE]";
+                     [--no-settle] [--only NAME,NAME...] [--skip NAME,NAME...] [--size NAME=N]... \
+                     [--store DIRECTORY] [--workloads DIRECTORY --description FILE]";
 
 fn main() -> ExitCode {
     match parse(std::env::args().skip(1)).and_then(|args| run_all(&args)) {
@@ -72,6 +79,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
             timed: 200,
         },
         only: None,
+        skip: Vec::new(),
         sizes: Vec::new(),
         store: None,
         workloads: None,
@@ -88,6 +96,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
             "--warmup" => parsed.runs.warmup = value()?.parse()?,
             "--no-settle" => parsed.runs.settle = false,
             "--only" => parsed.only = Some(value()?.split(',').map(str::to_owned).collect()),
+            "--skip" => parsed.skip = value()?.split(',').map(str::to_owned).collect(),
             "--size" => {
                 let given = value()?;
                 let (name, size) = (given.split_once('='))
@@ -193,35 +202,45 @@ fn workloads(args: &Args) -> Result<(Vec<Workload>, Vec<Create>)> {
             (authored, authored::CREATES.to_vec())
         }
     };
-    let Some(only) = &args.only else {
-        if let Some((name, _)) =
-            (args.sizes.iter()).find(|(name, _)| !all.iter().any(|(known, _)| known == name))
-        {
-            return Err(format!("no workload {name} to size").into());
-        }
-        return Ok((all, creates));
-    };
+    if let Some((name, _)) =
+        (args.sizes.iter()).find(|(name, _)| !all.iter().any(|(known, _)| known == name))
+    {
+        return Err(format!("no workload {name} to size").into());
+    }
     let known: Vec<&str> = (all.iter().map(|(known, _)| known.as_str()))
         .chain(creates.iter().map(|create| create.name))
         .collect();
-    if let Some(name) = (only.iter())
-        .chain(args.sizes.iter().map(|(name, _)| name))
-        .find(|name| !known.contains(&name.as_str()))
+    if let Some(given) = (args.only.iter().flatten())
+        .chain(&args.skip)
+        .find(|given| !known.iter().any(|name| names(given, name)))
     {
         return Err(format!(
-            "no workload {name}; the workloads are: {}",
+            "no workload {given}; the workloads are: {}",
             known.join(", ")
         )
         .into());
     }
+    let selected = |name: &str| {
+        (args.only.as_ref()).is_none_or(|only| only.iter().any(|given| names(given, name)))
+            && !args.skip.iter().any(|given| names(given, name))
+    };
     Ok((
         (all.into_iter())
-            .filter(|(name, _)| only.contains(name))
+            .filter(|(name, _)| selected(name))
             .collect(),
         (creates.into_iter())
-            .filter(|create| only.iter().any(|name| name == create.name))
+            .filter(|create| selected(create.name))
             .collect(),
     ))
+}
+
+/// Whether `given`, a name `--only` or `--skip` takes, names the workload `name`: the same name,
+/// or, ending in `*`, a start of it.
+fn names(given: &str, name: &str) -> bool {
+    match given.strip_suffix('*') {
+        Some(start) => name.starts_with(start),
+        None => given == name,
+    }
 }
 
 /// Every selected workload on every runtime named; whether each matched.
@@ -601,5 +620,61 @@ fn print(runtime: &str, name: &str, report: &Report) {
     }
     for (count, value) in &report.counts {
         println!("M2V-MATRIX metric harness-{runtime}/{name}/{count}_per_run {value}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{names, parse, workloads};
+    use metal2vulkan_harness::authored;
+
+    /// The workloads and creation rows that ARGS select, by name.
+    fn selected(args: &[&str]) -> (Vec<String>, Vec<&'static str>) {
+        let args = parse(args.iter().map(|arg| arg.to_string())).expect("the arguments");
+        let (all, creates) = workloads(&args).expect("a selection");
+        (
+            all.into_iter().map(|(name, _)| name).collect(),
+            creates.iter().map(|create| create.name).collect(),
+        )
+    }
+
+    #[test]
+    fn a_name_ending_in_a_star_names_the_workloads_it_starts() {
+        assert!(names("create_*", "create_64MiB"));
+        assert!(!names("create_*", "alu"));
+        assert!(names("alu", "alu"));
+        assert!(!names("alu", "alu_wide"));
+    }
+
+    #[test]
+    fn skip_leaves_out_what_only_would_run_and_the_creation_rows_split_apart() {
+        let workloads: Vec<String> = (authored::WORKLOADS.iter())
+            .map(|workload| workload.name.to_owned())
+            .collect();
+        let creates: Vec<&str> = authored::CREATES.iter().map(|create| create.name).collect();
+        assert_eq!(
+            selected(&["--runtime", "new", "--skip", "create_*"]),
+            (workloads.clone(), Vec::new())
+        );
+        assert_eq!(
+            selected(&["--runtime", "new", "--only", "create_*"]),
+            (Vec::new(), creates.clone())
+        );
+        assert_eq!(selected(&["--runtime", "new"]), (workloads, creates));
+        let first = authored::WORKLOADS[0].name;
+        assert_eq!(
+            selected(&["--runtime", "new", "--only", first, "--skip", first]),
+            (Vec::new(), Vec::new())
+        );
+        // A name that names no workload is an error, in either flag.
+        for flag in ["--only", "--skip"] {
+            let args = parse(
+                ["--runtime", "new", flag, "no_such_*"]
+                    .iter()
+                    .map(|arg| arg.to_string()),
+            )
+            .expect("the arguments");
+            assert!(workloads(&args).is_err(), "{flag}");
+        }
     }
 }

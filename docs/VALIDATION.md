@@ -329,24 +329,37 @@ runtimes: those records are judged. A short second run on the same directory and
 (`--runs 5 --warmup 1 --no-settle`), and its first-use records are kept as
 `harness-new-warm/<set>/first_use_*`, the same first uses with both warm; they are parked.
 
+Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run alone after them,
+`--only 'create_*'`, in five processes per runtime, each with a fresh empty cache directory and
+store, so no row before them moves their times. The first process's records are kept whole, its
+device's gauges at drop as `harness-<runtime>/creates/device/...`; of each later process, only the
+creation rows' first samples (`<row>/first`, `/first_take`, `/next_take`,
+`/first_allocation_total`, one sample per process), as `harness-first/<row>/<n>/<runtime>`,
+parked for the `time` rule.
+
 The harness budget compares the two runtimes rather than two commits, apart from the `time` rule
 and the parked records. On each GPU, a harness row timed on both runtimes in the leg
 (`harness-new/<row>` and `harness-old/<row>`) holds the new runtime's time to at most 1.03 times
-the old's. A row over it fails its leg unless a ruling, made after the work on that row, gave it a
-ceiling on that GPU (`HARNESS_CEILINGS` in `scripts/matrix/results.py`, empty now); a ceiling is
-never taken from a measured ratio. A listed row fails its leg past its ceiling times 1.03, the
-noise allowance parity gets, and one within that is named on the leg's line. A fix lowers its
-row's ceiling to the ratio it reaches, and a row within 1.03 leaves the list. A row whose time
+the old's, times the row's floor on that GPU where it has one: the widest ratio between two of
+the old runtime's own runs of the row there (`scripts/matrix/floors.tsv`, measured again when the
+harness or the old runtime's build changes), so a difference within the old runtime's own spread
+is not the new runtime's. A row over it fails its leg unless a ruling, made after the work on that
+row, gave it a ceiling on that GPU (`HARNESS_CEILINGS` in `scripts/matrix/results.py`); a ceiling
+is never taken from a measured ratio, and the greater of a row's ceiling and floor sets its limit.
+A listed row fails its leg past its ceiling times 1.03, the noise allowance parity gets, and one
+within that is named on the leg's line. A fix lowers its row's ceiling to the ratio it reaches,
+and a row within 1.03 leaves the list. A creation row's first sample is judged by the ratio of
+the medians of its five processes, the new runtime's over the old's; a first sample alone is
+never past its limit. A row whose time
 either runtime recorded more than once fails, uncompared. A row whose size follows the device
 (`long_4cb`) is sized by the first runtime's run, and the later runs, warm and re-timed ones
 included, are given that size (the harness's `--size`); each run records it as
 `size harness-<runtime>/<row>`, and a row the two runtimes ran at different sizes fails,
 uncompared, its times measuring different work.
-A row over its limit is re-timed in its leg before the leg ends: three pairs of runs of the row
-alone, old then new, the second pair new then old. It is judged by the median of the pairs' ratios,
-so a clock episode in one run decides nothing, while a regression in every pair still fails. A leg
-re-times at most 8 rows, the furthest over first; a row it does not re-time is judged by its one
-time. The pairs are kept as `harness-retime/<row>/<pair>/<runtime>` records, parked for the
+A row over its limit is re-timed once in its leg before the leg ends: two pairs of runs of the row
+alone, old then new, then new then old (A B B A). It fails only if the median of the pairs' ratios
+is past its limit too. A leg re-times at most 8 rows, the furthest over first; a row it does not
+re-time is judged by its one time. The pairs are kept as `harness-retime/<row>/<pair>/<runtime>` records, parked for the
 `time` rule.
 The budget goes with the old runtime.
 

@@ -41,8 +41,8 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \
-//!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--size NAME=N]... [--store DIRECTORY] \
-//!     [--workloads DIRECTORY --description FILE]
+//!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--skip NAME,NAME...] [--size NAME=N]... \
+//!     [--store DIRECTORY] [--workloads DIRECTORY --description FILE]
 //! ```
 //!
 //! Each runtime's device keeps its pipelines in a store of its own, under `--store`'s directory
