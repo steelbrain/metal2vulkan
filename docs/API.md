@@ -1862,6 +1862,13 @@ threads fill at the dispatch's threadgroup size instead, the last along an axis 
 threadgroup, so every remainder takes the same `VkPipeline`; a kernel the variant cannot run
 exactly (a tile function, a stage-input region, compute derivatives, emulated simdgroups) is
 refused it, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`, and keeps the edges. On
+`Device::from_queries`' profile under the identity domains the variant of a kernel that does not
+observe its threadgroup partition (`KernelFacts::partition_oblivious`) runs its grid in tiles
+instead (`RuntimeFact::GridTiles`): its plans run a direct dispatch's threads in
+`pipeline::grid_tile`'s tiles, one workgroup of `pipeline::GRID_TILE_THREADS` each with the tile
+as the region's nominal size (`MultiRegion` 1), the region flagged `NONUNIFORM` where the tile
+does not divide the grid, and a range of threadgroups at its own size (`MultiRegion` 0); the
+kernel runs the same positions with the same answers. On
 that plan a grid of whole threadgroups, of `Threads` or `Threadgroups`, takes the same regions
 unflagged (each `MultiRegion` 1, every thread live), so one `VkPipeline` of a threadgroup size runs
 all of a kernel's direct dispatches. `metal2vulkan-runtime` runs a kernel's whole grids there where

@@ -22,6 +22,12 @@
 //! - A kernel's partial-threadgroups variant (`partial`, generated) dispatched at its whole
 //!   threadgroup size over a ragged grid, its pushed region flagged `NONUNIFORM`, answers each
 //!   edge threadgroup's own size, and its invocations past the grid store nothing.
+//! - The partial-threadgroups variant of a kernel that does not observe its threadgroup partition
+//!   (`edge`, generated) keeps Metal's partial threadgroups on `Device::new`'s profile; on
+//!   `Device::from_queries`' it runs its grid in tiles (`RuntimeFact::GridTiles`), its module holds
+//!   no division by a value the driver does not know, and over grids ragged along every axis,
+//!   along one, and whole, in `grid_tile`'s tiles, it stores each thread's Metal position once and
+//!   nothing past the grid; an indirect dispatch runs at its own size.
 //! - A kernel's texture slots (`tex`, generated: a read, a write, a width and an `is_null_texture`)
 //!   are the elements of the two fixed set-1 arrays at the indices their pushed resource IDs hold,
 //!   with no descriptor of their own. It passes L3 and, on the CPU interpreter, reads and writes
@@ -1516,6 +1522,176 @@ fn a_partial_threadgroups_variant_answers_the_edge_threadgroups_of_a_ragged_grid
         };
         let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(got.buffers[0], want, "{stem}");
+    }
+}
+
+/// A kernel that does not observe its threadgroup partition, storing at its position in the grid
+/// `(x, y, z)` of a grid `(gx, gy, gz)` the word `1 + x + (y << 10) + (z << 20)`, at
+/// `(z · gy + y) · gx + x`.
+fn edge_kernel() -> String {
+    "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+define void @edge(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, <3 x i32> noundef %1, <3 x i32> noundef %2) {\n\
+entry:\n\
+  %tx = extractelement <3 x i32> %1, i64 0\n\
+  %ty = extractelement <3 x i32> %1, i64 1\n\
+  %tz = extractelement <3 x i32> %1, i64 2\n\
+  %gx = extractelement <3 x i32> %2, i64 0\n\
+  %gy = extractelement <3 x i32> %2, i64 1\n\
+  %plane = mul i32 %tz, %gy\n\
+  %rows = add i32 %plane, %ty\n\
+  %row = mul i32 %rows, %gx\n\
+  %idx = add i32 %row, %tx\n\
+  %hy = shl i32 %ty, 10\n\
+  %hz = shl i32 %tz, 20\n\
+  %xy = or i32 %tx, %hy\n\
+  %xyz = or i32 %xy, %hz\n\
+  %v = add i32 %xyz, 1\n\
+  %i = zext i32 %idx to i64\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %i\n\
+  store i32 %v, ptr addrspace(1) %p, align 4\n\
+  ret void\n\
+}\n\n\
+!air.kernel = !{!9}\n!air.version = !{!17}\n!air.language_version = !{!18}\n\
+!9 = !{ptr @edge, !10, !11}\n!10 = !{}\n!11 = !{!12, !13, !14}\n\
+!12 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}\n\
+!13 = !{i32 1, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"tid\"}\n\
+!14 = !{i32 2, !\"air.threads_per_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"grid\"}\n\
+!17 = !{i32 2, i32 8, i32 0}\n!18 = !{!\"Metal\", i32 4, i32 0, i32 0}\n"
+        .to_string()
+}
+
+/// The `OpUDiv`s and `OpUMod`s of disassembly `text` whose divisor is not a constant or a
+/// specialization constant: a division the driver keeps once it specializes the module.
+fn runtime_divisions(text: &str) -> usize {
+    let mut constants = BTreeSet::new();
+    let mut count = 0;
+    for line in text.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        match words[..] {
+            [id, "=", op, ..]
+                if op.starts_with("OpConstant") || op.starts_with("OpSpecConstant") =>
+            {
+                constants.insert(id);
+            }
+            [_, "=", "OpUDiv" | "OpUMod", _, _, divisor] if !constants.contains(divisor) => {
+                count += 1
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+/// The words [`edge_kernel`] stores over `grid` where each of its threads runs once: each
+/// position's word at its index, and `len` words in all.
+fn edge_words(grid: [u32; 3], len: usize) -> Vec<u8> {
+    let mut want = vec![0u8; 4 * len];
+    for z in 0..grid[2] {
+        for y in 0..grid[1] {
+            for x in 0..grid[0] {
+                let at = 4 * ((z * grid[1] + y) * grid[0] + x) as usize;
+                let v = 1 + x + (y << 10) + (z << 20);
+                want[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+    want
+}
+
+/// On `Device::from_queries`' profile the partial-threadgroups variant of a kernel that does not
+/// observe its threadgroup partition runs its grid in tiles (`RuntimeFact::GridTiles`): over
+/// grids ragged along every axis, along one, and whole, each in `grid_tile`'s tile, one workgroup
+/// of `GRID_TILE_THREADS` with the tile as the region's nominal size at `MultiRegion` 1, flagged
+/// `NONUNIFORM` where the tile does not divide the grid, each of the grid's threads stores
+/// Metal's position once and no invocation past the grid stores anything; an indirect dispatch at
+/// `MultiRegion` 0 runs at its own size. Its module divides by no value the driver does not know
+/// when it specializes it. On `Device::new`'s profile the same variant keeps Metal's partial
+/// threadgroups, whose positions divide `lin` by the threads left.
+#[test]
+fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
+    use crate::lower::dispatch::{grid_tile, GRID_TILE_THREADS};
+    let Some(bc) = assemble_text("edge", &edge_kernel()) else {
+        return;
+    };
+    let mut inputs = LowerInputs::new();
+    inputs.partial_threadgroups = true;
+    for stem in PROFILES {
+        let rows = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let a = compile_with(&bc, "edge", &rows, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(!a.facts.contains(&RuntimeFact::GridTiles), "{stem}");
+        let (_, module_words) =
+            link_and_validate(&a, &rows).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert!(
+            runtime_divisions(&spirv_dis(&module_words)) > 0,
+            "{stem}: Device::new"
+        );
+        let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let p = device.profile();
+        let a = compile_with(&bc, "edge", p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(a.facts.contains(&RuntimeFact::GridTiles), "{stem}");
+        let (_, module_words) =
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let text = spirv_dis(&module_words);
+        assert_eq!(runtime_divisions(&text), 0, "{stem}: from_queries\n{text}");
+        let (plan, module) =
+            typed_module_with(&bc, "edge", p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        // Ragged along every axis (each odd, so the tile takes no side for free), a grid of 8x8
+        // threadgroups whole in 8x8x4, ragged along `z` alone, a row, and a pillar.
+        for grid in [[7, 5, 3], [24, 24, 8], [8, 8, 22], [300, 1, 1], [1, 1, 300]] {
+            let tile = grid_tile(grid);
+            let groups: [u32; 3] = std::array::from_fn(|i| grid[i].div_ceil(tile[i]));
+            let ragged = (0..3).any(|i| !grid[i].is_multiple_of(tile[i]));
+            // Every word a launched invocation could store at, so a store past the grid shows.
+            let len = ((groups[2] * tile[2] * grid[1] + groups[1] * tile[1]) * grid[0]
+                + groups[0] * tile[0]) as usize;
+            let mut region = region_bytes([0; 3], grid, tile).expect("packs");
+            if ragged {
+                region[28..32].copy_from_slice(&NONUNIFORM.to_le_bytes());
+            }
+            let mut spec = local_size3([GRID_TILE_THREADS, 1, 1]);
+            spec.insert(SpecKey::MultiRegion, 1);
+            let res = Resources {
+                buffers: vec![Buffer {
+                    slot: None,
+                    address: Some(OUT),
+                    bytes: vec![0; 4 * len],
+                }],
+                push: grid_push(&plan, OUT, region),
+                spec,
+            };
+            let cfg = Config {
+                workgroups: groups,
+                ..Config::default()
+            };
+            let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem} {grid:?}: {e}"));
+            assert_eq!(
+                got.buffers[0],
+                edge_words(grid, len),
+                "{stem} {grid:?} {tile:?}"
+            );
+        }
+        // An indirect dispatch: 2 x 3 threadgroups of 4 x 2, its grid theirs.
+        let res = Resources {
+            buffers: vec![Buffer {
+                slot: None,
+                address: Some(OUT),
+                bytes: vec![0; 4 * 48],
+            }],
+            push: grid_push(
+                &plan,
+                OUT,
+                region_bytes([0; 3], [0; 3], [4, 2, 1]).expect("packs"),
+            ),
+            spec: local_size3([4, 2, 1]),
+        };
+        let cfg = Config {
+            workgroups: [2, 3, 1],
+            ..Config::default()
+        };
+        let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem} indirect: {e}"));
+        assert_eq!(got.buffers[0], edge_words([8, 6, 1], 48), "{stem} indirect");
     }
 }
 

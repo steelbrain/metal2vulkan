@@ -20,7 +20,12 @@
 //!   with `MultiRegion = 1` and their `DispatchRegion` flagged `lower::dispatch::NONUNIFORM`: the
 //!   kernel's last threadgroup along an axis answers Metal's partial threadgroup, so no edge is
 //!   planned and one `VkPipeline` of the dispatch's size runs every such grid. A grid of whole
-//!   threadgroups takes the same regions there, unflagged: every thread is live.
+//!   threadgroups takes the same regions there, unflagged: every thread is live. On the plan of a
+//!   kernel's grid tiles (`LocalRules::grid_tiles`), `Threads` and `Threadgroups` both run their
+//!   threads in [`grid_tile`]'s tiles, one workgroup of [`GRID_TILE_THREADS`] each, per
+//!   group-count chunk, with `MultiRegion = 1`, the tile as the nominal size, and the
+//!   `DispatchRegion` flagged where the tile does not divide the grid; `ThreadgroupRange` runs at
+//!   its own size with `MultiRegion = 0`, its base in the push field.
 //! - A count above `maxComputeWorkGroupCount` on an axis is split into chunks, each a region
 //!   with `MultiRegion = 1` and its base in the push field. At most [`MAX_REGIONS`] regions are
 //!   planned; more is `Unsupported{GroupCount}`.
@@ -108,7 +113,9 @@ use crate::cache::{SpecializationKey, VariantKey};
 use crate::device::requirements::VkLimit;
 use crate::error::{BindError, Capability, Feature, LowerFamily, Unsupported};
 use crate::indirect_commands::BINDING_COUNT;
-use crate::lower::dispatch::{nonuniform_region_bytes, pack_nominal, region_bytes};
+use crate::lower::dispatch::{
+    grid_tile, nonuniform_region_bytes, pack_nominal, region_bytes, GRID_TILE_THREADS,
+};
 use crate::metal::vertex::vertex_bytes;
 use crate::metal::{StepFunction, VertexFormat};
 use crate::pipeline::interface::{AccessSet, BufferForm, PushLoc};
@@ -785,6 +792,30 @@ pub(crate) fn regions(
         }
     }
     let empty = |v: [u32; 3]| v.contains(&0);
+    // A kernel's grid tiles run a direct dispatch's threads in [`grid_tile`]'s tiles, one
+    // workgroup of `GRID_TILE_THREADS` each, with the tile as the nominal size (`MultiRegion` 1);
+    // a dispatch of a range of threadgroups runs at its own size (`MultiRegion` 0), from each
+    // region's base.
+    let tiled = |threads: [u32; 3]| -> Result<Planned, BindError> {
+        let tile = grid_tile(threads);
+        let local = [GRID_TILE_THREADS, 1, 1];
+        let fit = fit(rules, std::iter::once(local))?;
+        let pieces = std::array::from_fn(|i| {
+            Pieces::chunks(
+                0,
+                threads[i].div_ceil(tile[i]),
+                local[i],
+                rules.max_count[i],
+            )
+        });
+        Ok(Planned {
+            emulated: fit == Fit::EmulatedSimdgroups,
+            regions: product(pieces, true)?,
+            grid: threads,
+            nominal: tile,
+            nonuniform: (0..3).any(|i| !threads[i].is_multiple_of(tile[i])),
+        })
+    };
     let planned = |regions: Regions, grid, emulated: bool| Planned {
         emulated: emulated && !regions.is_empty(),
         regions,
@@ -798,6 +829,9 @@ pub(crate) fn regions(
             let grid = threadgroup_grid(groups, nominal)?;
             if empty(groups) {
                 return Ok(planned(Regions::none(), grid, false));
+            }
+            if rules.grid_tiles {
+                return tiled(grid);
             }
             let pieces =
                 std::array::from_fn(|i| Pieces::chunks(0, groups[i], l[i], rules.max_count[i]));
@@ -827,16 +861,20 @@ pub(crate) fn regions(
             let pieces = std::array::from_fn(|i| {
                 Pieces::chunks(start[i], end[i] - start[i], l[i], rules.max_count[i])
             });
-            // Every region takes its first threadgroup from the push field.
-            Ok(planned(
-                product(pieces, true)?,
-                grid,
-                fit == Fit::EmulatedSimdgroups,
-            ))
+            // Every region takes its first threadgroup from the push field; a kernel's grid tiles
+            // read it at `MultiRegion` 0, where their threadgroup is the pipeline's.
+            let mut regions = product(pieces, true)?;
+            if rules.grid_tiles {
+                regions.multi = false;
+            }
+            Ok(planned(regions, grid, fit == Fit::EmulatedSimdgroups))
         }
         Dispatch::Threads { threads, .. } => {
             if empty(threads) {
                 return Ok(planned(Regions::none(), threads, false));
+            }
+            if rules.grid_tiles {
+                return tiled(threads);
             }
             // A flat variant runs the whole grid in one region of the dispatch's own threadgroup
             // size: invocation `((wz · ny + wy) · nx + wx) · N + LocalInvocationIndex`, with

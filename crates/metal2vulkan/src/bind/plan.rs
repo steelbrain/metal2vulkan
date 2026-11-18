@@ -608,6 +608,10 @@ pub(crate) struct LocalRules {
     /// one deep. Every region of its dispatches carries it as the nominal threadgroup
     /// (`MultiRegion` 1) and the grid of its tiles, whatever threads per tile run.
     pub tile_threadgroup: Option<[u32; 3]>,
+    /// The kernel runs its grid in tiles (`RuntimeFact::GridTiles`): a direct dispatch's regions
+    /// are [`crate::pipeline::grid_tile`]'s tiles of its threads, one workgroup of
+    /// [`crate::pipeline::GRID_TILE_THREADS`] each.
+    pub grid_tiles: bool,
 }
 
 /// A region of `N` threads takes `fixed + ⌈N / 32⌉ · per_simdgroup` bytes of threadgroup memory,

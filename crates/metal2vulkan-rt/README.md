@@ -410,13 +410,19 @@ that touch blocks first.
 - Every kernel is lowered first as its partial-threadgroups variant. A kernel that does not
   observe its threadgroup partition (it holds no threadgroup memory, barrier, fence or atomic of
   threadgroup or SIMD-group scope, SIMD-group or quad function, and reads no builtin of the
-  partition; the translator decides from its AIR) keeps that module alone: every direct dispatch
-  runs in tiles of 256 threads, 256 by 1 for a grid 256 threads wide or wider and, for a narrower
-  one, as wide as the grid rounded down to a power of two, so at most nine `VkPipeline`s; the
-  256-wide one is made with the state. An indirect dispatch runs at its own threadgroup size. A
-  kernel that observes its partition is lowered a second time, plainly: its whole grids,
-  `dispatch_threadgroups` and indirect dispatches run that module at their own size, and a
-  `dispatch_threads` grid that is not a whole number of threadgroups runs the variant.
+  partition; the translator decides from its AIR) keeps that module alone, which runs its grid in
+  tiles: every direct dispatch runs in workgroups of 256 threads on one `VkPipeline`, made with the
+  state, each workgroup one tile of the grid. The translator's `pipeline::grid_tile` picks the
+  tile from the grid's extents alone: power-of-two sides whose product is 256, launching the fewest
+  threads past the grid, then with the fewest tiles partly past it, then the shallowest, then
+  (where the grid has two rows or more) the height nearest 2, then the widest. Each region carries
+  the tile, and a thread's position is the tile's origin plus its index masked and shifted by the
+  tile's sides, with no division. Where the tile does not divide the grid, an invocation past the
+  grid returns before the kernel's body. An indirect
+  dispatch runs at its own threadgroup size. A kernel that observes its partition is lowered a
+  second time, plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
+  module at their own size, and a `dispatch_threads` grid that is not a whole number of
+  threadgroups runs the variant.
 - A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
   `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32), or one per
   32-lane cluster of a 64- or 128-lane subgroup, runs only workgroups of whole subgroups.

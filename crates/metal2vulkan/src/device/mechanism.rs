@@ -197,6 +197,8 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::RegionViewports => Mechanism::Variant,
         // A kernel compiled under the partial-threadgroups variant; its plans state it.
         RuntimeFact::PartialThreadgroups => Mechanism::Variant,
+        // The binder's regions carry the tile as the nominal size, under `MultiRegion` 1.
+        RuntimeFact::GridTiles => Mechanism::RegionSelected,
         // Keyed by the slots bound to a texture whose planes are read in place, on a profile that
         // reads them so (`ProfileFields::ycbcr_in_place`).
         RuntimeFact::YCbCrInPlace { .. } => Mechanism::Variant,

@@ -38,6 +38,7 @@ fn plan(form: LocalSizeForm, multi_region: bool) -> DispatchPlan {
         wrapper_groups: false,
         object_grid: false,
         partial_groups: false,
+        grid_edge: false,
         identity_region: None,
     }
 }
@@ -835,5 +836,110 @@ fn the_flat_variant_s_64_bit_division_is_exact() {
             (n / u64::from(d), (n % u64::from(d)) as u32),
             "{n} / {d}"
         );
+    }
+}
+
+/// [`grid_tile`]'s rule taken over every tile it may give: the sides `2^a, 2^b, 2^c` with
+/// `a + b + c = 8`, the least of each tile's key in its total order: the tiles launched, then the
+/// tiles partly past the grid, then the depth `c`, then where the grid has two rows or more the
+/// height's distance `|b - 1|` from 2, then the narrower last (`-a`).
+fn every_tile_rule(threads: [u32; 3]) -> [u32; 3] {
+    let rows = threads[1] >= 2;
+    let mut best: Option<([u32; 3], (u128, u128, u32, u32, i64))> = None;
+    for a in 0..=8u32 {
+        for b in 0..=8 - a {
+            let k = [a, b, 8 - a - b];
+            let tiles: u128 = (0..3)
+                .map(|i| u128::from(threads[i].div_ceil(1 << k[i])))
+                .product();
+            let whole: u128 = (0..3).map(|i| u128::from(threads[i] >> k[i])).product();
+            let height = if rows { b.abs_diff(1) } else { 0 };
+            let key = (tiles, tiles - whole, k[2], height, -i64::from(a));
+            if best.is_none_or(|(_, kept)| key < kept) {
+                best = Some((k, key));
+            }
+        }
+    }
+    best.expect("a tile").0.map(|k| 1 << k)
+}
+
+/// The tiles of grids the rule must place, in its total order over the 45 tiles: the fewest
+/// threads launched, then the fewest tiles partly past the grid, then the shallowest, then where
+/// the grid has two rows or more the height nearest 2, then the widest. Ragged rows of 8 x 8
+/// threadgroups (24x24x252 and 8x8x360 whole in 8x8x4, 8x8x22 in 8x8x4 at 24 planes for 22,
+/// 304x304 whole in 16x16); whole grids, which take the first tile that divides them (128x2 for
+/// square, wide and tall ones a 2-row tile divides, 64x4 for a cube of 64); ragged square, wide,
+/// tall and deep grids, where 1000x30 launches as many threads in 256x1 as in 128x2 and takes
+/// 128x2 for its fewer tiles partly past the grid; one-row grids, which take 256x1, and a column
+/// and a pillar of 300 and 1000 threads along their axis; and grids one tile holds, which take
+/// the first tile that holds them (8x8 in 32x8).
+#[test]
+fn grid_tiles_launch_the_fewest_threads_past_the_grid() {
+    let table: [([u32; 3], [u32; 3]); 25] = [
+        ([24, 24, 252], [8, 8, 4]),
+        ([8, 8, 360], [8, 8, 4]),
+        ([8, 8, 22], [8, 8, 4]),
+        ([304, 304, 1], [16, 16, 1]),
+        ([1024, 1024, 1], [128, 2, 1]),
+        ([5600, 4200, 1], [32, 8, 1]),
+        ([64, 64, 64], [64, 4, 1]),
+        ([4096, 256, 1], [128, 2, 1]),
+        ([256, 4096, 1], [128, 2, 1]),
+        ([16, 16, 1], [16, 16, 1]),
+        ([100, 100, 1], [16, 16, 1]),
+        ([1000, 30, 1], [128, 2, 1]),
+        ([30, 1000, 1], [2, 128, 1]),
+        ([255, 4095, 1], [1, 256, 1]),
+        ([33, 33, 33], [8, 8, 4]),
+        ([300, 1, 1], [256, 1, 1]),
+        ([1000, 1, 1], [256, 1, 1]),
+        ([1, 1000, 1], [1, 256, 1]),
+        ([1, 1, 300], [1, 1, 256]),
+        ([7, 5, 3], [8, 8, 4]),
+        ([1, 1, 1], [256, 1, 1]),
+        ([33, 1, 1], [256, 1, 1]),
+        ([3, 3, 1], [64, 4, 1]),
+        ([8, 8, 1], [32, 8, 1]),
+        ([2, 2, 1], [128, 2, 1]),
+    ];
+    for (threads, tile) in table {
+        assert_eq!(grid_tile(threads), tile, "{threads:?}");
+        assert_eq!(
+            tile.iter().product::<u32>(),
+            GRID_TILE_THREADS,
+            "{threads:?}"
+        );
+    }
+}
+
+/// [`grid_tile`] gives the tile its rule takes over every tile, on every grid of extents 1 to 40
+/// per axis and on wide, tall and deep ones: its shortcuts, for grids its tile divides and grids
+/// one tile holds, take the tile the rule takes.
+#[test]
+fn grid_tiles_match_the_rule_over_every_tile() {
+    let mut grids: Vec<[u32; 3]> = Vec::new();
+    for x in 1..=40 {
+        for y in 1..=40 {
+            for z in [1, 2, 3, 5, 6, 8, 22, 40] {
+                grids.push([x, y, z]);
+            }
+        }
+    }
+    for n in [
+        255,
+        256,
+        257,
+        1023,
+        1366,
+        1920,
+        4097,
+        65_535,
+        1 << 20,
+        u32::MAX,
+    ] {
+        grids.extend([[n, 1, 1], [1, n, 1], [1, 1, n], [n, 768, 1], [n, 3, 5]]);
+    }
+    for threads in grids {
+        assert_eq!(grid_tile(threads), every_tile_rule(threads), "{threads:?}");
     }
 }

@@ -832,6 +832,10 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         unit_relief: unit_axes.1,
         tile: is_tile_function(p),
         tile_threadgroup: tile_threadgroup(p, shape)?,
+        grid_tiles: p
+            .dependencies
+            .iter()
+            .any(|d| d.fact == RuntimeFact::GridTiles),
     };
 
     // Uses: every bound buffer slot, with its proven access and window, and the used resources

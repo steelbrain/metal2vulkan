@@ -42,7 +42,7 @@ use crate::air::ir::{AddrSpace, Callee, InstKind, Type, Value};
 
 /// How a kernel observes its threadgroup partition (see the module).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum Partition {
+pub(crate) enum Partition {
     /// It does not observe it.
     Oblivious,
     /// It observes it through its simdgroups alone.
@@ -53,7 +53,7 @@ pub(super) enum Partition {
 
 /// How kernel `e` observes its threadgroup partition (see the module). Any other stage, and an
 /// entry without a body, observes it.
-pub(super) fn partition(e: &air::Entry) -> Partition {
+pub(crate) fn partition(e: &air::Entry) -> Partition {
     if !matches!(e.ep.stage, AbiStage::Kernel { .. }) {
         return Partition::Observed;
     }

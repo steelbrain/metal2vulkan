@@ -113,6 +113,22 @@
 //! variant's plan as the same regions unflagged: every invocation is live, and
 //! `threads_per_threadgroup` is the call's.
 //!
+//! **Grid tiles** ([`DispatchPlan::grid_edge`], `RuntimeFact::GridTiles`). A kernel that does not
+//! observe its threadgroup partition reads only `thread_position_in_grid` and `threads_per_grid`,
+//! so neither Metal's threadgroups nor their partial edges reach it: only the set of positions
+//! does. On `Device::from_queries`' profile under the identity domains (`ObliviousEdge::Grid`)
+//! its partial-threadgroups variant runs its grid in tiles. Under `MultiRegion` 1 its workgroup of
+//! [`GRID_TILE_THREADS`] is one tile, whose power-of-two sides the region's nominal size gives
+//! ([`grid_tile`] picks them from the grid's extents): the invocation's position is the tile's
+//! origin `(base + WorkgroupId) << s` plus `LocalInvocationIndex` masked and shifted by the sides,
+//! `s` the bits of `L − 1` per axis, all of them uniform values, so nothing divides. Where the
+//! region is flagged [`NONUNIFORM`] (the tile does not divide the grid) an invocation whose
+//! position is past the region's grid on some axis returns before the body, behind a branch on
+//! the flag, so a whole grid tests no lane. Under `MultiRegion` 0 (an indirect dispatch) it runs
+//! at its pipeline's size, its position `(base + WorkgroupId) · (sx, sy, sz)` plus its position in
+//! the workgroup, every invocation live. `Device::new`'s profile answers Metal's partial
+//! threadgroup as above.
+//!
 //! **Flat grids**. A flat variant (`LoweringInputs::flat_grid`, of a device replay or not) of a
 //! kernel that does not observe its threadgroup partition runs any grid in threadgroups of its own
 //! local size `N = sx·sy·sz`, dispatched `(nx, ny, nz)`: invocation `((wz · ny + wy) · nx + wx) ·
@@ -139,13 +155,13 @@
 //! `ReplayRegionAddress` (base 0, `MultiRegion` 1).
 //!
 //! **Facts.** Every kernel depends on `ThreadsPerThreadgroup` and `LocalSizeLimits`, and on
-//! `IndirectGroupCount` (any kernel may be dispatched indirectly, and the planner clamps GPU-written
-//! counts); a flattened kernel on `LocalSizeConstraint{multiple}` (the tier's subgroup size); a
-//! kernel reading grid builtins on `DispatchGrid`; a flat grid on `DispatchGrid` and `FlatGrid`; a
-//! folded variant on `DispatchGrid` and `FoldedGroups`; a kernel's partial-threadgroups variant on
-//! `DispatchGrid` and `PartialThreadgroups`. A threadgroup-memory length is a
-//! `ThreadgroupMemoryLength{index}` specialization ([`threadgroup_length`]), which the arena
-//! lowering declares through this module.
+//! `IndirectGroupCount` (any kernel may be dispatched indirectly, and the planner clamps
+//! GPU-written counts); a flattened kernel on `LocalSizeConstraint{multiple}` (the tier's subgroup
+//! size); a kernel reading grid builtins on `DispatchGrid`; a flat grid on `DispatchGrid` and
+//! `FlatGrid`; a folded variant on `DispatchGrid` and `FoldedGroups`; a kernel's
+//! partial-threadgroups variant on `DispatchGrid` and `PartialThreadgroups`, and one that runs its
+//! grid in tiles on `GridTiles`. A threadgroup-memory length is a `ThreadgroupMemoryLength{index}`
+//! specialization ([`threadgroup_length`]), which the arena lowering declares through this module.
 //!
 //! Its hooks into `select` and `lower::emit`: the kernel's dispatch plan, made once the subgroup
 //! tier is known ([`plan_kernel`]); dispatch builtin parameters ([`select_param`], and
@@ -154,7 +170,7 @@
 
 use crate::air::abi::{Builtin, ParamBinding, ParamRole};
 use crate::air::ir::{ArgIdx, Value};
-use crate::device::profile::IdentityRegion;
+use crate::device::profile::{IdentityRegion, ObliviousEdge};
 use crate::device::subgroup::{self, SimdClass, Tier};
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith;
@@ -170,6 +186,13 @@ use crate::spirv::ir::{
     BinOp, ConstBits, Constant, ConvOp, ExecMode, GlslOp, IoDir, MemAccess, StorageClass, Type,
     UnOp,
 };
+
+/// The builder's error for a value the declarations do not hold.
+fn dangling_value() -> crate::spirv::error::BuildError {
+    crate::spirv::error::BuildError::Dangling(crate::spirv::error::Dangling::Value(SValue::new(
+        u32::MAX,
+    )))
+}
 
 fn not_lowered() -> Error {
     Unsupported::not_implemented(Feature::Lowering(LowerFamily::Dispatch)).into()
@@ -493,6 +516,13 @@ pub struct DispatchPlan {
     /// threadgroup runs only the threads Metal's partial threadgroup has (the module docs). It
     /// declares `MultiRegion` and reads the region whatever builtins it reads.
     pub partial_groups: bool,
+    /// Of `partial_groups`, a kernel that does not observe its threadgroup partition, on a profile
+    /// whose [`ObliviousEdge`] is `Grid` under the identity domains: under `MultiRegion` 1 its
+    /// workgroup is one tile of the grid whose power-of-two sides the region's nominal size gives
+    /// ([`grid_tile`]), and where the region is flagged [`NONUNIFORM`] an invocation past the
+    /// region's grid returns before the body; under `MultiRegion` 0 it runs at its pipeline's size
+    /// (the module docs' grid tiles).
+    pub grid_edge: bool,
     /// Under the identity domains a kernel tells a region from an indirect dispatch by the
     /// region's grid, and reads its base and `L` as the profile's form says
     /// ([`RegionSelect::Grid`], [`RegionSelect::Sized`]). `None` outside them.
@@ -552,6 +582,20 @@ fn tile_sized(cx: &SelectCx<'_>) -> bool {
 /// or, in a tile function whose threadgroup is the tile, one that answers the threadgroup's size.
 fn reads_region(b: KernelBuiltin, tile_sized: bool) -> bool {
     b.reads_grid() || (tile_sized && b.follows_tile())
+}
+
+/// Whether a kernel's partial-threadgroups variant runs its grid in tiles
+/// ([`DispatchPlan::grid_edge`]): a kernel that does not observe its threadgroup partition
+/// (`pipeline::compile::partition`, decided from its AIR) on a profile whose [`ObliviousEdge`] is
+/// `Grid`, under the identity domains, whose regions state their base on every dispatch
+/// ([`IdentityRegion::Sized`]).
+fn grid_edge(cx: &SelectCx<'_>) -> bool {
+    use crate::pipeline::compile::partition::{partition, Partition};
+    cx.stage == crate::pipeline::sym::Stage::Kernel
+        && cx.profile.oblivious_edge() == ObliviousEdge::Grid
+        && crate::lower::access::identity(cx.profile)
+        && cx.profile.identity_region() == IdentityRegion::Sized
+        && partition(cx.entry) == Partition::Oblivious
 }
 
 /// Plan the kernel's dispatch under subgroup tier `tier`: the local-size form (flattened in the
@@ -668,6 +712,10 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
             _ => RuntimeFact::PartialObjectThreadgroups,
         });
     }
+    let grid_edge = partial_groups && grid_edge(cx);
+    if grid_edge {
+        cx.facts.insert(RuntimeFact::GridTiles);
+    }
     Ok(DispatchPlan {
         local_size,
         builtins,
@@ -683,6 +731,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         wrapper_groups: crate::lower::mesh::wrapper_groups(&cx.families.mesh),
         object_grid: !folded_groups && cx.stage == crate::pipeline::sym::Stage::Object,
         partial_groups,
+        grid_edge,
         identity_region: crate::lower::access::identity(cx.profile)
             .then(|| cx.profile.identity_region()),
     })
@@ -714,8 +763,8 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
     // A flat grid's invocation past the grid's last thread returns before the body. Its position
     // is derived here once, with the test, and is the `thread_position_in_grid` every parameter
     // reads: a second derivation would repeat the divisions in a construct of its own, which the
-    // driver does not merge with this one.
-    let mut flat_position = None;
+    // driver does not merge with this one. So is a grid edge's.
+    let mut tested_position = None;
     if plan.flat_grid {
         let decl: &crate::lower::emit::Declared = cx.decl;
         let Some(decl) = decl.families.dispatch.kernel.as_ref() else {
@@ -723,7 +772,7 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         };
         let (pos, inside) =
             decl.flat(fb, &mut |fb| cx.push_field(fb, PushField::DispatchRegion))?;
-        flat_position = Some(pos);
+        tested_position = Some(pos);
         let past = fb.unary(UnOp::LogicalNot, inside)?;
         let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
             fb.ret(None)?;
@@ -747,14 +796,36 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         });
         fb.if_(&mut (), past, leave, None)?;
     }
-    // An invocation past a partial threadgroup's threads returns before the body, or, where the
-    // body is walked predicated for its barriers, walks it never live.
+    // An invocation past a partial threadgroup's threads, or past the grid on a grid edge, returns
+    // before the body, or, where the body is walked predicated for its barriers, walks it never
+    // live.
     if plan.partial_groups {
         let decl: &crate::lower::emit::Declared = cx.decl;
         let Some(decl) = decl.families.dispatch.kernel.as_ref() else {
             return Err(cx.fail("partial threadgroups without the kernel's declarations"));
         };
-        if let Some(live) = decl.live(fb, &mut |fb| cx.push_field(fb, PushField::DispatchRegion))? {
+        let mut region =
+            |fb: &mut FunctionBuilder<'_>| cx.push_field(fb, PushField::DispatchRegion);
+        if plan.grid_edge {
+            // A grid tile's invocation past the grid returns where its region is flagged ragged
+            // (under `MultiRegion` 1): a test of uniform values first, so a tile inside the grid
+            // tests no lane.
+            let pos = decl.edge_position(fb, &mut region)?;
+            let (ragged, grid) = decl.edge_ragged(fb, &mut region)?;
+            tested_position = Some(pos);
+            let test: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let below = fb.binary(BinOp::ULessThan, pos, grid)?;
+                let inside = fb.unary(UnOp::All, below)?;
+                let past = fb.unary(UnOp::LogicalNot, inside)?;
+                let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
+                    fb.ret(None)?;
+                    Ok(ArmEnd::Exits)
+                });
+                fb.if_(&mut (), past, leave, None)?;
+                Ok(ArmEnd::FallThrough(Vec::new()))
+            });
+            fb.if_(&mut (), ragged, test, None)?;
+        } else if let Some(live) = decl.live(fb, &mut region)? {
             let walked = cx
                 .plan
                 .families
@@ -781,7 +852,7 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         else {
             return Err(cx.fail(format!("dispatch parameter {} is out of range", p.param)));
         };
-        let x = param_value(cx, fb, b, flat_position)?;
+        let x = param_value(cx, fb, b, tested_position)?;
         cx.hold(v, x);
     }
     Ok(())
@@ -793,7 +864,7 @@ fn param_value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     b: &ParamBinding,
-    flat_position: Option<SValue>,
+    tested_position: Option<SValue>,
 ) -> BResult<SValue> {
     let (plan, decl): (&Plan, &crate::lower::emit::Declared) = (cx.plan, cx.decl);
     let planned = plan
@@ -809,8 +880,8 @@ fn param_value(
     if decl.flat_grid && !decl.flat_reads(p.builtin) {
         return Err(cx.fail(format!("parameter {} is not a flat grid's", b.param)));
     }
-    let raw = match (p.builtin, flat_position) {
-        (KernelBuiltin::ThreadPositionInGrid, Some(pos)) if decl.flat_grid => pos,
+    let raw = match (p.builtin, tested_position) {
+        (KernelBuiltin::ThreadPositionInGrid, Some(pos)) if decl.flat_grid || decl.grid_edge => pos,
         _ => decl.value(fb, p.builtin, &mut |fb| {
             cx.push_field(fb, PushField::DispatchRegion)
         })?,
@@ -912,6 +983,9 @@ pub struct KernelDecl {
     object_grid: bool,
     /// A function whose threadgroup may be partial ([`DispatchPlan::partial_groups`]).
     partial_groups: bool,
+    /// Its threadgroups run whole, its invocations past the grid return
+    /// ([`DispatchPlan::grid_edge`]).
+    grid_edge: bool,
 }
 
 /// The threadgroup position and grid of a kernel whose entry wrapper computes them
@@ -984,7 +1058,9 @@ impl Needs {
             };
         }
         let has = |b| dp.builtins.contains(b);
-        let local_pos = has(K::ThreadPositionInThreadgroup) || has(K::ThreadPositionInGrid);
+        // A grid edge tests every invocation's position in the grid, whatever builtins it reads.
+        let local_pos =
+            has(K::ThreadPositionInThreadgroup) || has(K::ThreadPositionInGrid) || dp.grid_edge;
         // A partial object threadgroup counts its threads from its position and its own `lin`.
         let partial = dp.partial_groups;
         // A folded variant counts its threadgroup from its workgroup's position and the
@@ -1033,6 +1109,74 @@ pub fn pack_nominal(l: [u32; 3]) -> Option<u32> {
         out |= (n - 1) << (NOMINAL_AXIS_BITS * i as u32);
     }
     Some(out)
+}
+
+/// The threads of a grid tile ([`grid_tile`]): the workgroup of a kernel's grid tiles
+/// (`RuntimeFact::GridTiles`).
+pub const GRID_TILE_THREADS: u32 = 256;
+
+/// The tile a kernel's grid tiles (`RuntimeFact::GridTiles`) cover a grid of `threads` with: sides
+/// `2^a, 2^b, 2^c` with `a + b + c = 8`, so that one workgroup of [`GRID_TILE_THREADS`] is one
+/// tile, dispatched as `⌈threads / tile⌉` workgroups per axis. Of every such tile it is the first
+/// in one total order: the fewest threads launched, `∏ ⌈threads_i / side_i⌉ · side_i`; then the
+/// fewest tiles partly past the grid; then the shallowest (`z` side 1 first); then, where the grid
+/// has two rows or more, the height nearest 2 (`|b - 1|` smallest); then the widest. A pure
+/// function of the grid's extents.
+///
+/// A side that divides its axis's extent launches nothing past it, so where the powers of two
+/// that divide the extents reach 256 between them, the tile is the first of those that divide the
+/// grid. A grid that one tile holds takes the first tile that holds it, each such tile being one
+/// workgroup partly past the grid. Any other grid tries the 45 tiles in the order, passing over
+/// the depths that cannot launch as few. A zero extent is divided by every power of two; such a
+/// grid runs nothing.
+pub fn grid_tile(threads: [u32; 3]) -> [u32; 3] {
+    const BITS: u32 = GRID_TILE_THREADS.trailing_zeros();
+    let rows = threads[1] >= 2;
+    // The height nearest 2 of `lo..=hi` where the grid has rows, else the lowest (the widest).
+    let height = |lo: u32, hi: u32| if rows { 1.clamp(lo, hi) } else { lo };
+    let [x, y, z] = threads.map(|n| n.trailing_zeros().min(BITS));
+    if x + y + z >= BITS {
+        let c = BITS.saturating_sub(x + y);
+        let b = height(BITS - c - x.min(BITS - c), y.min(BITS - c));
+        return [1 << (BITS - c - b), 1 << b, 1 << c];
+    }
+    let [x, y, z] = threads.map(|n| u32::BITS - n.saturating_sub(1).leading_zeros());
+    if x + y + z <= BITS {
+        let b = height(y, BITS - z - x);
+        return [1 << (BITS - z - b), 1 << b, 1 << z];
+    }
+    // Every tile in the order: a later tile wins only by launching fewer threads, or as many with
+    // fewer tiles partly past the grid. The tiles `2^c` deep launch at least
+    // `⌈z / 2^c⌉ · ⌈x·y / 2^(8 - c)⌉` tiles, so a depth whose bound exceeds the fewest yet is
+    // passed over.
+    let counts = |n: u32, k: u32| (u64::from(n.div_ceil(1 << k)), u64::from(n >> k));
+    let xy = u64::from(threads[0]) * u64::from(threads[1]);
+    let (mut best, mut fewest) = ([0; 3], (u128::MAX, u128::MAX));
+    for c in 0..=BITS {
+        let (tz, wz) = counts(threads[2], c);
+        let rest = BITS - c;
+        if u128::from(tz) * u128::from(xy.div_ceil(1 << rest)) > fewest.0 {
+            continue;
+        }
+        // Heights 1, 0, 2, 3, ... where the grid has rows (nearest 2 first, the wider of two
+        // as near), else 0, 1, 2, ... (the widest first).
+        for step in 0..=rest {
+            let b = match step {
+                0 | 1 if rows && rest > 0 => 1 - step,
+                _ => step,
+            };
+            let ((tx, wx), (ty, wy)) = (counts(threads[0], rest - b), counts(threads[1], b));
+            let tiles = u128::from(tx * ty) * u128::from(tz);
+            if tiles > fewest.0 {
+                continue;
+            }
+            let partly = tiles - u128::from(wx * wy) * u128::from(wz);
+            if (tiles, partly) < fewest {
+                (best, fewest) = ([rest - b, b, c], (tiles, partly));
+            }
+        }
+    }
+    best.map(|k| 1 << k)
 }
 
 /// The `DispatchRegion` push field's bytes (two `uvec4`) for a region whose first threadgroup is
@@ -1123,8 +1267,9 @@ impl KernelDecl {
         // A flat grid counts its threads by `LocalInvocationIndex` in either form: it reads no
         // simdgroup. One of the call's threadgroups counts them by `lin`, its simdgroups' lanes.
         let by_index = dp.flat_grid && !dp.call_threadgroups;
-        let index = needs.lin && (!flat || by_index);
-        let subgroups = needs.lin && flat && !by_index;
+        // A grid tile counts by `LocalInvocationIndex` in either form too.
+        let index = needs.lin && (!flat || by_index || dp.grid_edge);
+        let subgroups = needs.lin && flat && !by_index && !dp.grid_edge;
         use crate::spv::BuiltIn as B;
         // A wrapper that computes the threadgroup's position and grid stores them into private
         // words, which the builtins read; it reads the dispatch's own.
@@ -1177,6 +1322,7 @@ impl KernelDecl {
             wrapper,
             object_grid: dp.object_grid,
             partial_groups: dp.partial_groups,
+            grid_edge: dp.grid_edge,
         })
     }
 
@@ -1198,9 +1344,7 @@ impl KernelDecl {
 
     fn load(&self, fb: &mut FunctionBuilder<'_>, g: Option<GlobalId>) -> BResult<SValue> {
         let Some(g) = g else {
-            return Err(crate::spirv::error::BuildError::Dangling(
-                crate::spirv::error::Dangling::Value(SValue::new(u32::MAX)),
-            ));
+            return Err(dangling_value());
         };
         let p = fb.module().global_value(g)?;
         fb.load(p, MemAccess::default())
@@ -1283,8 +1427,12 @@ impl KernelDecl {
         fb.binary(BinOp::IAdd, q, extra)
     }
 
-    /// The linear local index `lin`.
+    /// The linear local index `lin`; a grid tile's is `LocalInvocationIndex` in either form (its
+    /// kernel reads no simdgroup).
     fn lin(&self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
+        if self.grid_edge {
+            return self.load(fb, self.local_index);
+        }
         match self.form {
             LocalSizeForm::Spec => self.load(fb, self.local_index),
             LocalSizeForm::Flat => {
@@ -1354,13 +1502,15 @@ impl KernelDecl {
     /// Whether the region says the draw's threadgroups may be partial ([`NONUNIFORM`] under
     /// `MultiRegion`), and the threads this threadgroup runs: `min(L, threads_per_grid − position ·
     /// L)` per axis where it does (0 past the grid), `(sx, sy, sz)` where it does not. `None` but
-    /// for an object function of [`DispatchPlan::partial_groups`].
+    /// for a function of [`DispatchPlan::partial_groups`] whose threadgroups run whole
+    /// ([`DispatchPlan::grid_edge`]).
     fn partial_threads(
         &self,
         fb: &mut FunctionBuilder<'_>,
         region: &mut RegionFn<'_>,
     ) -> BResult<Option<(SValue, SValue)>> {
-        let (true, Some(sel)) = (self.partial_groups, self.multi_region) else {
+        let (true, false, Some(sel)) = (self.partial_groups, self.grid_edge, self.multi_region)
+        else {
             return Ok(None);
         };
         let mr = self.selected(fb, sel, region)?;
@@ -1408,6 +1558,80 @@ impl KernelDecl {
         let below = fb.binary(BinOp::ULessThan, lin, n)?;
         let yes = Self::flag(fb, true)?;
         Ok(Some(fb.select(partial, below, yes)?))
+    }
+
+    /// Of [`DispatchPlan::grid_edge`], the invocation's position in the grid (a `uvec3`). Under
+    /// `MultiRegion` 1 its workgroup is one tile of the grid whose sides the region's nominal size
+    /// `L` gives, each a power of two whose product is the workgroup's threads: with `m = L − 1`
+    /// and `s` the bits set in `m` per axis, the position is `((base + WorkgroupId) << s) + (lin &
+    /// m.x, (lin >> s.x) & m.y, lin >> (s.x + s.y))`, masks and shifts by uniform values, where
+    /// `lin` is `LocalInvocationIndex`. Under `MultiRegion` 0 it is the uniform one at the
+    /// pipeline's size, `(base + WorkgroupId) · (sx, sy, sz)` plus the position in the workgroup,
+    /// which the driver keeps alone when it specializes either.
+    pub fn edge_position(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        region: &mut RegionFn<'_>,
+    ) -> BResult<SValue> {
+        let Some(RegionSelect::Sized(sized)) = self.multi_region else {
+            return Err(dangling_value());
+        };
+        let r = region(fb)?;
+        let r0 = fb.composite_extract(r, &[0])?;
+        let base = fb.vector_shuffle(r0, r0, &[0, 1, 2])?;
+        let packed = fb.composite_extract(r0, &[3])?;
+        let axis = Self::k(fb, (1 << NOMINAL_AXIS_BITS) - 1)?;
+        let mask_x = fb.binary(BinOp::BitwiseAnd, packed, axis)?;
+        let mut above = [mask_x; 2];
+        for (i, mask) in (1..).zip(&mut above) {
+            let sh = Self::k(fb, NOMINAL_AXIS_BITS * i)?;
+            let bits = fb.binary(BinOp::ShiftRightLogical, packed, sh)?;
+            *mask = fb.binary(BinOp::BitwiseAnd, bits, axis)?;
+        }
+        let [mask_y, mask_z] = above;
+        let m = fb.composite_construct(self.uvec3, &[mask_x, mask_y, mask_z])?;
+        let s = fb.unary(UnOp::BitCount, m)?;
+        let sx = fb.composite_extract(s, &[0])?;
+        let sy = fb.composite_extract(s, &[1])?;
+        let lin = self.lin(fb)?;
+        let x = fb.binary(BinOp::BitwiseAnd, lin, mask_x)?;
+        let row = fb.binary(BinOp::ShiftRightLogical, lin, sx)?;
+        let y = fb.binary(BinOp::BitwiseAnd, row, mask_y)?;
+        let z = fb.binary(BinOp::ShiftRightLogical, row, sy)?;
+        let local = fb.composite_construct(self.uvec3, &[x, y, z])?;
+        let group = self.group_pos(fb, Some(base))?;
+        let first = fb.binary(BinOp::ShiftLeftLogical, group, s)?;
+        let tiled = fb.binary(BinOp::IAdd, first, local)?;
+        let size = self.size3(fb)?;
+        let first = fb.binary(BinOp::IMul, group, size)?;
+        let at = self.local_pos(fb, region)?;
+        let uniform = fb.binary(BinOp::IAdd, first, at)?;
+        let sized = fb.module().const_value(sized)?;
+        fb.select(sized, tiled, uniform)
+    }
+
+    /// Of [`DispatchPlan::grid_edge`], whether the region may hold invocations past the grid (a
+    /// workgroup-uniform `bool`: `MultiRegion` 1 and the region flagged [`NONUNIFORM`]), and the
+    /// grid, `region[1].xyz`.
+    pub fn edge_ragged(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        region: &mut RegionFn<'_>,
+    ) -> BResult<(SValue, SValue)> {
+        let Some(RegionSelect::Sized(sized)) = self.multi_region else {
+            return Err(dangling_value());
+        };
+        let r = region(fb)?;
+        let r1 = fb.composite_extract(r, &[1])?;
+        let grid = fb.vector_shuffle(r1, r1, &[0, 1, 2])?;
+        let flags = fb.composite_extract(r1, &[3])?;
+        let bit = Self::k(fb, NONUNIFORM)?;
+        let flag = fb.binary(BinOp::BitwiseAnd, flags, bit)?;
+        let zero = Self::k(fb, 0)?;
+        let flagged = fb.binary(BinOp::INotEqual, flag, zero)?;
+        let sized = fb.module().const_value(sized)?;
+        let ragged = fb.binary(BinOp::LogicalAnd, sized, flagged)?;
+        Ok((ragged, grid))
     }
 
     /// A `bool` constant.
@@ -2037,6 +2261,7 @@ impl KernelDecl {
                 let (base, _) = self.region(fb, region)?;
                 self.group_pos(fb, base)
             }
+            K::ThreadPositionInGrid if self.grid_edge => self.edge_position(fb, region),
             K::ThreadPositionInGrid => {
                 let (base, l) = self.region(fb, region)?;
                 let g = self.group_pos(fb, base)?;

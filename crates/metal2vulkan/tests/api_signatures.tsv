@@ -1158,6 +1158,7 @@ const	metal2vulkan::cache::SOURCE_DIGEST	pub const SOURCE_DIGEST: &str
 const	metal2vulkan::device::NVIDIA_AMPERE_GA10X	pub const NVIDIA_AMPERE_GA10X: &[u32]
 const	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	pub const NOT_MIPMAPPED_MAX_LOD: f32
 const	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	pub const MAX_VERTEX_ALIGNMENT: u32
+const	metal2vulkan::pipeline::GRID_TILE_THREADS	pub const GRID_TILE_THREADS: u32
 const	metal2vulkan::pipeline::NONUNIFORM	pub const NONUNIFORM: u32
 const-value	metal2vulkan-air::bitstream::BLOCKINFO_BLOCK_ID	0
 const-value	metal2vulkan-air::bitstream::TOP_LEVEL_ABBREV_WIDTH	2
@@ -1252,6 +1253,7 @@ const-value	metal2vulkan::cache::SOURCE_DIGEST	env!("M2V_SOURCE_DIGEST")
 const-value	metal2vulkan::device::NVIDIA_AMPERE_GA10X	&[0x2200, 0x2203, 0x2204, 0x2205, 0x2206, 0x2207, 0x2208, 0x220a, 0x220d, 0x2216, 0x222b, 0x222f, 0x2230, 0x2231, 0x2232, 0x2233, 0x2235, 0x2236, 0x2237, 0x2238, 0x223f, 0x2414, 0x2420, 0x2438, 0x2460, 0x2480, 0x2482, 0x2483, 0x2484, 0x2486, 0x2487, 0x2488, 0x2489, 0x248a, 0x248c, 0x248d, 0x248e, 0x249c, 0x249d, 0x249f, 0x24a0, 0x24a4, 0x24ac, 0x24ad, 0x24af, 0x24b0, 0x24b1, 0x24b6, 0x24b7, 0x24b8, 0x24b9, 0x24ba, 0x24bb, 0x24bf, 0x24c0, 0x24c7, 0x24c8, 0x24c9, 0x24dc, 0x24dd, 0x24df, 0x24e0, 0x24fa, 0x2501, 0x2503, 0x2504, 0x2505, 0x2507, 0x2508, 0x2509, 0x2520, 0x2521, 0x2523, 0x252f, 0x2531, 0x2544, 0x2560, 0x2561, 0x2563, 0x2571, 0x2582, 0x2583, 0x2584, 0x25a0, 0x25a2, 0x25a3, 0x25a4, 0x25a5, 0x25a6, 0x25a7, 0x25a9, 0x25aa, 0x25ab, 0x25ac, 0x25ad, 0x25af, 0x25b0, 0x25b2, 0x25b5, 0x25b6, 0x25b8, 0x25b9, 0x25ba, 0x25bb, 0x25bc, 0x25bd, 0x25e0, 0x25e2, 0x25e5, 0x25ec, 0x25ed, 0x25f9, 0x25fa, 0x25fb]
 const-value	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	0.25
 const-value	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	4
+const-value	metal2vulkan::pipeline::GRID_TILE_THREADS	256
 const-value	metal2vulkan::pipeline::NONUNIFORM	1
 enum	metal2vulkan-air::abi::AbiHandle	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum AbiHandle
 enum	metal2vulkan-air::abi::AbiInt	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum AbiInt
@@ -6001,6 +6003,7 @@ fn	metal2vulkan::metal::vertex::attribute_fetch	pub fn attribute_fetch(format: V
 fn	metal2vulkan::metal::vertex::vertex_alignment	pub fn vertex_alignment(format: VertexFormat) -> Result<u32, Error>
 fn	metal2vulkan::metal::vertex::vk_vertex_format	pub fn vk_vertex_format(format: VertexFormat) -> Result<vk::Format, Error>
 fn	metal2vulkan::pipeline::arena_bytes	pub fn arena_bytes(arena: Option<u32>, regions: u64) -> u64
+fn	metal2vulkan::pipeline::grid_tile	pub fn grid_tile(threads: [u32; 3]) -> [u32; 3]
 fn	metal2vulkan::pipeline::heap_sampler_capacity	pub fn heap_sampler_capacity(p: &DeviceProfile) -> u32
 fn	metal2vulkan::pipeline::heap_unused_while_pending	pub fn heap_unused_while_pending(p: &DeviceProfile) -> bool
 fn	metal2vulkan::pipeline::nonuniform_region_bytes	pub fn nonuniform_region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]>
@@ -16342,6 +16345,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::FoldedGroups	FoldedGroups
 variant	metal2vulkan::pipeline::RuntimeFact::FragmentImageblock	FragmentImageblock { words: u32, writes: bool, master: Hash256, data_size: u32, alignment: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::FramebufferFetch	FramebufferFetch { color: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::FunctionTableRange	FunctionTableRange { addressed: bool }
+variant	metal2vulkan::pipeline::RuntimeFact::GridTiles	GridTiles
 variant	metal2vulkan::pipeline::RuntimeFact::HeapCrossClassNeutral	HeapCrossClassNeutral { stage: Stage, class: ImageHandleClass, every_member: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapNumericType	HeapNumericType { class: ImageHandleClass }
 variant	metal2vulkan::pipeline::RuntimeFact::HeapRawSamples	HeapRawSamples { stage: Stage, sampler: Option<u32> }

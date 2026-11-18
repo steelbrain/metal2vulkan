@@ -132,6 +132,12 @@ impl DeviceProfile {
         self.facts.identity_region
     }
 
+    /// How the partial-threadgroups variant of a kernel that does not observe its threadgroup
+    /// partition runs the threads past its grid.
+    pub(crate) fn oblivious_edge(&self) -> ObliviousEdge {
+        self.facts.oblivious_edge
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -573,6 +579,9 @@ pub(crate) struct ProfileFacts {
     /// How a kernel under the identity domains reads its dispatch region's base and threadgroup
     /// size.
     pub(crate) identity_region: IdentityRegion,
+    /// How the partial-threadgroups variant of a kernel that does not observe its threadgroup
+    /// partition runs the threads past its grid.
+    pub(crate) oblivious_edge: ObliviousEdge,
 }
 
 impl ProfileFacts {
@@ -586,6 +595,7 @@ impl ProfileFacts {
         push_window: PushWindow::Guaranteed,
         half_fma: HalfFma::Measured,
         identity_region: IdentityRegion::Grid,
+        oblivious_edge: ObliviousEdge::Partial,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -598,6 +608,7 @@ impl ProfileFacts {
         push_window: PushWindow::Floor,
         half_fma: HalfFma::Native,
         identity_region: IdentityRegion::Sized,
+        oblivious_edge: ObliviousEdge::Grid,
     };
 }
 
@@ -639,6 +650,23 @@ pub(crate) enum IdentityRegion {
     /// consumer launches at its pipeline's own size reads no decode. `Device::from_queries`'
     /// profile.
     Sized,
+}
+
+/// How the partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) of a kernel that
+/// does not observe its threadgroup partition runs the threads a ragged grid's last threadgroups
+/// leave over (`lower::dispatch`'s grid edge). Such a kernel reads only `thread_position_in_grid`
+/// and `threads_per_grid`, so both forms run the same threads with the same answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ObliviousEdge {
+    /// As any kernel's: where the region is flagged `NONUNIFORM`, the threadgroup runs Metal's
+    /// partial threadgroup, its position in the threadgroup `lin` divided over the threads left.
+    /// `Device::new`'s profile.
+    Partial,
+    /// Under the identity domains the variant runs its grid in tiles (`RuntimeFact::GridTiles`):
+    /// each workgroup one power-of-two tile of the grid that its region gives, its positions
+    /// masks and shifts of its local index, and an invocation past the grid returning before the
+    /// body. `Device::from_queries`' profile.
+    Grid,
 }
 
 /// Which `half` fused multiply-adds take the device's 16-bit `Fma` (`lower::arith::fma::half_route`).

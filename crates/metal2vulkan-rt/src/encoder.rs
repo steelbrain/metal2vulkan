@@ -6,7 +6,7 @@ use crate::counters::Metric;
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::hazard::Access;
 use crate::pipeline::{
-    tile, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
+    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
 };
 use crate::record::Reach;
 use crate::ring::CHUNK;
@@ -14,7 +14,7 @@ use crate::sampler::SamplerState;
 use crate::texture::Texture;
 use ash::vk;
 use metal2vulkan::metal::format::integer_channels_word;
-use metal2vulkan::pipeline::{nonuniform_region_bytes, region_bytes};
+use metal2vulkan::pipeline::{grid_tile, nonuniform_region_bytes, region_bytes, GRID_TILE_THREADS};
 use std::ops::BitOr;
 use std::sync::Arc;
 
@@ -169,6 +169,8 @@ pub struct ComputeCommandEncoder {
 enum Module {
     /// The state's whole module.
     Whole,
+    /// The whole module of a kernel that runs its grid in tiles, at `MultiRegion` 1.
+    Tiles,
     /// An observing kernel's partial-threadgroups variant.
     Partial,
     /// The emulated-SIMD-group variant.
@@ -556,25 +558,28 @@ impl ComputeCommandEncoder {
                 max: limits.max_group_size,
             }));
         }
-        // What runs: the module, which of the state's it is, its workgroup size, and for a
-        // direct dispatch Metal's grid, the workgroups, and whether the last along some axis is
-        // partial.
+        // What runs: the module, which of the state's it is, its workgroup size, the threadgroup
+        // size its regions carry, and for a direct dispatch Metal's grid, the workgroups, and
+        // whether the last along some axis is partial.
         let partial_threadgroups = |threads| {
             Error::Unsupported(Gap::PartialThreadgroups {
                 threads_per_grid: threads,
                 threads_per_threadgroup: size,
             })
         };
-        let (kernel, module, local, direct) = match (&grid, &inner.form) {
-            (Grid::Indirect(..), _) => (&inner.whole, Module::Whole, size, None),
+        let (kernel, module, local, nominal, direct) = match (&grid, &inner.form) {
+            (Grid::Indirect(..), _) => (&inner.whole, Module::Whole, size, size, None),
+            // A kernel's grid tiles: workgroups of `GRID_TILE_THREADS`, each one tile of the
+            // grid, which its region carries as the threadgroup size.
             (&Grid::Direct { threads, .. }, Form::Tiled) => {
-                let local = tile(threads);
-                let ragged = (0..3).any(|axis| !threads[axis].is_multiple_of(local[axis]));
-                let groups = std::array::from_fn(|axis| threads[axis].div_ceil(local[axis]));
+                let tile = grid_tile(threads);
+                let ragged = (0..3).any(|axis| !threads[axis].is_multiple_of(tile[axis]));
+                let groups = std::array::from_fn(|axis| threads[axis].div_ceil(tile[axis]));
                 (
                     &inner.whole,
-                    Module::Whole,
-                    local,
+                    Module::Tiles,
+                    [GRID_TILE_THREADS, 1, 1],
+                    tile,
                     Some((threads, groups, ragged)),
                 )
             }
@@ -589,6 +594,7 @@ impl ComputeCommandEncoder {
                 &inner.whole,
                 Module::Whole,
                 size,
+                size,
                 Some((threads, groups, false)),
             ),
             (
@@ -602,6 +608,7 @@ impl ComputeCommandEncoder {
                 Some(kernel) => (
                     &**kernel,
                     Module::Partial,
+                    size,
                     size,
                     Some((threads, groups, true)),
                 ),
@@ -641,6 +648,7 @@ impl ComputeCommandEncoder {
                         .iter()
                         .map(|&index| self.threadgroup_length(index))
                         .collect(),
+                    tiles: module == Module::Tiles,
                 };
                 let length = kernel
                     .interface
@@ -693,8 +701,8 @@ impl ComputeCommandEncoder {
         self.wrote |= wrote;
         let region = |base, threads, ragged| {
             match ragged {
-                true => nonuniform_region_bytes(base, threads, local),
-                false => region_bytes(base, threads, local),
+                true => nonuniform_region_bytes(base, threads, nominal),
+                false => region_bytes(base, threads, nominal),
             }
             .ok_or(Error::Refused(Refusal::ThreadgroupSize { size, max }))
         };

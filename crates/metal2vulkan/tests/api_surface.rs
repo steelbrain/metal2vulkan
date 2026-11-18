@@ -337,6 +337,8 @@ surface! {
         fn region_bytes;
         fn nonuniform_region_bytes;
         const NONUNIFORM;
+        fn grid_tile;
+        const GRID_TILE_THREADS;
         struct ComputePipeline N;
         struct ComputePipelineMetalInfo N;
         struct CompileReport N;

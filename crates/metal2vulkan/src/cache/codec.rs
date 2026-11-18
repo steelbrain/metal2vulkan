@@ -1329,6 +1329,7 @@ codec_enum! {
         UnitAxes { axes, relief },
         TexelBufferParts { slot },
         AddressAlignment { slot, align },
+        GridTiles,
     }
     UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {

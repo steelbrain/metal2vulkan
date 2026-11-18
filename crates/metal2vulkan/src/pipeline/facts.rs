@@ -882,6 +882,15 @@ pub enum RuntimeFact {
     /// that address as it is: no access rounds it to a word, and an 8- or 16-byte access at an
     /// offset proven a multiple of its size is one `uvec2` or `uvec4`.
     AddressAlignment { slot: SlotRef, align: u32 },
+    /// The kernel's partial-threadgroups variant (`RuntimeFact::PartialThreadgroups`) runs its
+    /// grid in tiles: a kernel that does not observe its threadgroup partition, on a profile that
+    /// tiles such a kernel's grid (`Device::from_queries`') under the identity domains. Where its
+    /// region's `MultiRegion` is 1, its workgroup of `pipeline::GRID_TILE_THREADS` threads is one
+    /// tile of the grid, whose power-of-two sides the region's nominal size gives
+    /// (`pipeline::grid_tile`), and where the region is flagged `lower::dispatch::NONUNIFORM` an
+    /// invocation past the region's grid returns before the body; where it is 0, the kernel runs
+    /// at its pipeline's size. Its plans run a `dispatchThreads` grid in such tiles.
+    GridTiles,
 }
 
 /// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.

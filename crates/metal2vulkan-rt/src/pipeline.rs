@@ -2,9 +2,11 @@
 //!
 //! The translator lowers every kernel first as its partial-threadgroups variant, through one
 //! decode and specialization of its entry. A kernel that does not observe its threadgroup
-//! partition keeps that module alone: every direct dispatch runs in tiles of 256 threads, one
-//! `VkPipeline` per tile shape ([`tile`]), the 256-wide tile made with the state; an indirect
-//! dispatch runs at its own threadgroup size. A kernel that observes its partition is lowered
+//! partition keeps that module alone, which runs its grid in tiles (`RuntimeFact::GridTiles`):
+//! every direct dispatch runs in workgroups of 256 threads, each one tile of the grid whose sides
+//! the translator's rule picks from the grid's extents (`grid_tile`) and its region carries, on
+//! one `VkPipeline` made with the state; an indirect dispatch runs at its own threadgroup size. A
+//! kernel that observes its partition is lowered
 //! once more, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that
 //! module at their own threadgroup size, and a `dispatchThreads` grid that is not a whole number
 //! of threadgroups runs the partial-threadgroups variant at its size, where the translator made
@@ -41,6 +43,7 @@ use metal2vulkan::pipeline::{
     ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, LoweringInputs,
     NumberedSampler, PrecisionNote, PushField, PushLoc, RuntimeFact, SamplerRef, SlotClass,
     SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, TextureAccess,
+    GRID_TILE_THREADS,
 };
 use metal2vulkan::vk::SamplerDesc;
 use metal2vulkan::Budget;
@@ -52,23 +55,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// profile: a dispatch region and 28 buffer addresses. Fields past it go to a block in the
 /// parameter ring, whose address is a field in the window.
 pub(crate) const PUSH_BYTES: u32 = crate::floor::PUSH_CONSTANT_BYTES;
-
-/// The threads of a tile: a kernel that does not observe its threadgroup partition runs every
-/// direct dispatch in tiles of this many threads.
-pub(crate) const TILE_THREADS: u32 = 256;
-
-/// The tile a direct dispatch of a kernel that does not observe its threadgroup partition runs
-/// over a grid of `threads`: 256 by 1 for a grid 256 threads wide or wider, and for a narrower
-/// one the 256-thread tile whose width is the grid's width rounded down to a power of two, so at
-/// most nine shapes per kernel.
-pub(crate) fn tile(threads: [u32; 3]) -> [u32; 3] {
-    let width = match threads[0] {
-        0 => TILE_THREADS,
-        wide if wide >= TILE_THREADS => TILE_THREADS,
-        narrow => 1 << narrow.ilog2(),
-    };
-    [width, TILE_THREADS / width, 1]
-}
 
 /// `MTLComputePipelineState`.
 ///
@@ -218,7 +204,9 @@ pub(crate) enum Lowered {
 /// How a state runs a direct dispatch.
 pub(crate) enum Form {
     /// The kernel does not observe its threadgroup partition: `whole`, its partial-threadgroups
-    /// variant, runs every direct dispatch in [`tile`]s, whatever the threadgroup size.
+    /// variant, runs its grid in tiles (`RuntimeFact::GridTiles`): every direct dispatch in
+    /// workgroups of `GRID_TILE_THREADS`, each a `grid_tile` tile of its grid, whatever the
+    /// threadgroup size.
     Tiled,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, and a
     /// `dispatchThreads` grid that is not a whole number of threadgroups on the
@@ -332,6 +320,10 @@ pub(crate) enum Constant {
     /// The length of the threadgroup memory argument at this position of
     /// [`Interface::threadgroups`].
     ThreadgroupLength(usize),
+    /// `MultiRegion`: 1 for a kernel's grid tiles ([`Variant::tiles`]), whose regions carry the
+    /// tile; 0 for every other launch, whose region states the pipeline's own threadgroup size,
+    /// so the kernel takes `L` from its workgroup size and reads no decode.
+    MultiRegion,
 }
 
 /// A parameter and where it goes.
@@ -373,12 +365,14 @@ pub(crate) enum FieldValue {
     DispatchRegion,
 }
 
-/// A `VkPipeline`'s specialization: the threadgroup size and the threadgroup memory lengths in the
-/// order of [`Interface::threadgroups`].
+/// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
+/// order of [`Interface::threadgroups`], and whether it runs a kernel's grid tiles.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Variant {
     pub(crate) size: [u32; 3],
     pub(crate) threadgroup_lengths: Vec<u32>,
+    /// The launches are a kernel's grid tiles (`MultiRegion` 1).
+    pub(crate) tiles: bool,
 }
 
 impl crate::Device {
@@ -465,12 +459,11 @@ impl crate::Device {
                     }
                 };
                 match variant {
-                    Some(variant) if !variant.observes_threadgroup_partition() => (
-                        compiled(variant).map_err(Error::Translation)?,
-                        None,
-                        false,
-                        Some(source),
-                    ),
+                    Some(variant) if !variant.observes_threadgroup_partition() => {
+                        let pipeline = compiled(variant).map_err(Error::Translation)?;
+                        let observes = !grid_tiles(&pipeline);
+                        (pipeline, None, observes, Some(source))
+                    }
                     Some(variant) => {
                         let plain = lower(&plain).and_then(compiled);
                         let variant = compiled(variant);
@@ -488,22 +481,14 @@ impl crate::Device {
                 }
             }
             // A kernel the consumer compiled: the variant it was compiled under.
-            StageSource::Compiled(function) => {
+            StageSource::Compiled(_) => {
                 let pipeline = translator
                     .compile_compute_pipeline(descriptor, &budget)
                     .map_err(Error::Translation)?;
-                let partial = pipeline
-                    .dependencies
-                    .iter()
-                    .any(|dependency| dependency.fact == RuntimeFact::PartialThreadgroups);
-                // Only a non-observer's partial variant runs every dispatch in tiles. It has no
+                // Only a non-observer's partial variant runs its grid in tiles. It has no
                 // emulated variant: the kernel keeps the variant it was compiled under.
-                (
-                    pipeline,
-                    None,
-                    !(partial && !function.observes_threadgroup_partition()),
-                    None,
-                )
+                let observes = !grid_tiles(&pipeline);
+                (pipeline, None, observes, None)
             }
         };
         let required = descriptor.required_threads_per_threadgroup;
@@ -543,8 +528,9 @@ impl crate::Device {
         }
         if let Form::Tiled = inner.form {
             let variant = Variant {
-                size: [TILE_THREADS, 1, 1],
+                size: [GRID_TILE_THREADS, 1, 1],
                 threadgroup_lengths: vec![0; inner.whole.interface.threadgroups.len()],
+                tiles: true,
             };
             let made = inner.whole.make(&inner.core, &variant)?;
             lock(&inner.whole.variants).push((variant, made));
@@ -563,6 +549,15 @@ impl crate::Device {
         }
         Ok(ComputePipelineState { inner })
     }
+}
+
+/// Whether `pipeline`'s module runs its grid in tiles (`RuntimeFact::GridTiles`): the
+/// partial-threadgroups variant of a kernel that does not observe its threadgroup partition.
+fn grid_tiles(pipeline: &ComputePipeline) -> bool {
+    pipeline
+        .dependencies
+        .iter()
+        .any(|dependency| dependency.fact == RuntimeFact::GridTiles)
 }
 
 /// The kernel `function` lowered under `inputs`: the lowering a device kept in the cache directory
@@ -652,6 +647,7 @@ fn interface(
             | RuntimeFact::DispatchGrid
             | RuntimeFact::IndirectGroupCount
             | RuntimeFact::PartialThreadgroups
+            | RuntimeFact::GridTiles
             | RuntimeFact::DeviceAddresses { .. } => {}
             // What a variant could relieve, which the module runs without: a predicated walk
             // that unit axes would make less divergent, and lockstep barriers a one-row region
@@ -794,9 +790,7 @@ fn interface(
                     .position(|&argument| argument == index)
                     .ok_or_else(gap)?,
             ),
-            // Left at its default, 0: every launch's region states the pipeline's own threadgroup
-            // size, so the kernel takes `L` from its workgroup size and reads no decode.
-            SpecKey::MultiRegion => continue,
+            SpecKey::MultiRegion => Constant::MultiRegion,
             _ => return Err(gap()),
         };
         constants.push((constant.id, set));
@@ -1102,6 +1096,7 @@ impl Kernel {
                 Constant::Size(axis) => variant.size[axis],
                 Constant::Threads => variant.size.iter().product(),
                 Constant::ThreadgroupLength(at) => variant.threadgroup_lengths[at],
+                Constant::MultiRegion => u32::from(variant.tiles),
             })
             .flat_map(u32::to_ne_bytes)
             .collect();

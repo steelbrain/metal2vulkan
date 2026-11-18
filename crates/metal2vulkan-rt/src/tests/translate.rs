@@ -1,7 +1,7 @@
 //! Translated kernels, under a device cfg on every device of the cfg's kind. A kernel that does not
-//! observe its threadgroup partition runs every direct dispatch in tiles, the 256-wide one made
-//! with its state, and an indirect dispatch at its own threadgroup size; a precise one answers the
-//! same words in a tile as at the app's shape. A kernel that does observe it runs whole grids at
+//! observe its threadgroup partition runs every direct dispatch in tiles of 256 threads on the one
+//! `VkPipeline` made with its state, and an indirect dispatch at its own threadgroup size; a
+//! precise one answers the same words in a tile as at the app's shape. A kernel that does observe it runs whole grids at
 //! their own size, a `dispatchThreads` grid that is not a whole number of threadgroups on its
 //! partial-threadgroups variant, and a threadgroup count past the device's limit split. Each
 //! answer is checked against the program's, and each `VkPipeline` made after creation is a
@@ -241,10 +241,9 @@ mod on_device {
     }
 
     /// `a1_bool_from_float`, which does not observe its threadgroup partition, translated: its
-    /// state made the 256-wide tile, which a wide `dispatchThreads` grid runs without a wait; a
-    /// narrow threadgroup dispatch runs a narrower tile and an indirect dispatch the app's own
-    /// size, each made by a first-use wait. Every answer is the program's, over buffers bound at
-    /// offsets.
+    /// state made the `VkPipeline` of its tiles, which a wide `dispatchThreads` grid and a narrow
+    /// threadgroup dispatch both run without a wait; an indirect dispatch runs the app's own size,
+    /// made by a first-use wait. Every answer is the program's, over buffers bound at offsets.
     #[test]
     fn every_device_tiles_a_kernel_that_does_not_observe_its_threadgroups() {
         let Some(descriptor) = descriptor("a1_bool_from_float") else {
@@ -276,7 +275,7 @@ mod on_device {
             assert_eq!(
                 created.pipelines_created - made.pipelines_created,
                 1,
-                "{name}: the 256-wide tile, made with the state"
+                "{name}: the tiles' pipeline, made with the state"
             );
             assert_eq!(created.first_use_waits, made.first_use_waits, "{name}");
             let queue = device.new_command_queue(4).expect("a queue");
@@ -327,7 +326,7 @@ mod on_device {
             let after = device.counters().metrics();
             let waits = after.first_use_waits - created.first_use_waits;
             let nanos = after.first_use_wait_nanos - created.first_use_wait_nanos;
-            assert_eq!(waits, 2, "{name}: first-use waits");
+            assert_eq!(waits, 1, "{name}: first-use waits");
             assert!(nanos > 0, "{name}: first-use wait time");
             assert!(
                 after.first_use_wait_max_nanos >= nanos / 2,
@@ -335,7 +334,7 @@ mod on_device {
             );
             assert_eq!(
                 after.pipelines_created - created.pipelines_created,
-                2,
+                1,
                 "{name}: pipelines"
             );
             println!(

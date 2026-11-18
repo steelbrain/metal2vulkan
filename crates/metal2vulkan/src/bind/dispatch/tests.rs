@@ -41,6 +41,7 @@ fn rules() -> LocalRules {
         unit_relief: 0,
         tile: false,
         tile_threadgroup: None,
+        grid_tiles: false,
     }
 }
 

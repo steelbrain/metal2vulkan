@@ -18,7 +18,7 @@ pub(crate) mod color_group;
 mod entry;
 pub mod key;
 mod numbered;
-mod partition;
+pub(crate) mod partition;
 mod stage_bound;
 #[cfg(test)]
 mod tests;
