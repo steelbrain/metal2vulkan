@@ -18,11 +18,12 @@
 //! the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
-//! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`, the skipped
-//! line and this one ending `; not a verdict past frame F, call C` where the backend skipped
-//! anything (`F` and `C` the first skip's frame and stream position); a play
-//! where an object's ID differs, the compute pipeline states' typed gap aside, is an error. The exit
-//! status is 0 for `ok`, 1 for a play that stopped and 2 for a harness failure (a bad command line, no device, an unreadable stream).
+//! no gate result), `gaps ...` where it met a typed gap, then `ok`, `ids: ...` or `error WHAT`,
+//! the skipped line and this one ending `; not a verdict past frame F, call C` where the backend
+//! skipped anything (`F` and `C` the first skip's frame and stream position); a play that ends
+//! where an object's ID differs, the compute pipeline states' typed gap aside, ends `ids: played
+//! to the end; ...`. The exit status is 0 for `ok`, 1 for a play that stopped, 2 for a harness
+//! failure (a bad command line, no device, an unreadable stream) and 3 for `ids`.
 //!
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
 //! then `cut SEGMENT OFFSET` where the last segment ends in a record cut short.
