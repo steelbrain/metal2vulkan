@@ -247,13 +247,14 @@ mod on_device {
     use crate::{Device, DeviceOptions};
     use ash::vk;
 
-    /// A buffer of no bytes is invalid usage (`VUID-VkBufferCreateInfo-size-00912`): the layer
-    /// refuses the call and logs it, and the test's log holds exactly that message. Made once,
-    /// on the first device of the cfg's kind, through the device's own function table. Prints
-    /// the validation tool each device lists.
+    /// A sampler whose `maxLod` is below its `minLod` is invalid usage
+    /// (`VUID-VkSamplerCreateInfo-maxLod-01973`), and one a driver takes as it takes any clamp:
+    /// the layer reports it and passes it down, and the test's log holds exactly that message.
+    /// Made once, on the first device of the cfg's kind, through the device's own function table.
+    /// Prints the validation tool each device lists.
     #[test]
     fn every_device_logs_a_deliberately_invalid_call_once() {
-        let instance = instance(&[]).expecting(&["VUID-VkBufferCreateInfo-size-00912"]);
+        let instance = instance(&[]).expecting(&["VUID-VkSamplerCreateInfo-maxLod-01973"]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -263,24 +264,12 @@ mod on_device {
         let (name, physical) = &devices[0];
         let device = Device::new(physical, DeviceOptions::default())
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let info = vk::BufferCreateInfo::default()
-            .size(0)
-            .usage(vk::BufferUsageFlags::TRANSFER_DST)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        // SAFETY: the device is live. The info is invalid on purpose (its size is 0): the layer
-        // refuses it and does not pass it down.
-        let made = unsafe { device.core().device.create_buffer(&info, None) };
-        match made {
-            Ok(buffer) => {
-                // SAFETY: the buffer is the device's, unused.
-                unsafe { device.core().device.destroy_buffer(buffer, None) };
-                panic!("{name}: a buffer of no bytes was made: the layer passed the call down");
-            }
-            Err(error) => assert_eq!(
-                error,
-                vk::Result::ERROR_VALIDATION_FAILED_EXT,
-                "{name}: the layer's refusal"
-            ),
+        let info = vk::SamplerCreateInfo::default().min_lod(1.0).max_lod(0.0);
+        // SAFETY: the device is live. The info is invalid on purpose: its LOD range is empty.
+        let made = unsafe { device.core().device.create_sampler(&info, None) };
+        if let Ok(sampler) = made {
+            // SAFETY: the sampler is the device's, unused.
+            unsafe { device.core().device.destroy_sampler(sampler, None) };
         }
     }
 }
