@@ -795,7 +795,8 @@ pub(crate) fn regions(
     // A kernel's grid tiles run a direct dispatch's threads in [`grid_tile`]'s tiles, one
     // workgroup of `GRID_TILE_THREADS` each, with the tile as the nominal size (`MultiRegion` 1);
     // a dispatch of a range of threadgroups runs at its own size (`MultiRegion` 0), from each
-    // region's base.
+    // region's base. The pieces carry the workgroup's size, so the unit axes and rows the plan
+    // reads see one row of 256 whatever the tile: the kernel reads no SIMD group or barrier.
     let tiled = |threads: [u32; 3]| -> Result<Planned, BindError> {
         let tile = grid_tile(threads);
         let local = [GRID_TILE_THREADS, 1, 1];

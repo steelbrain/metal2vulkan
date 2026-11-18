@@ -486,7 +486,11 @@ impl crate::Device {
                     .compile_compute_pipeline(descriptor, &budget)
                     .map_err(Error::Translation)?;
                 // Only a non-observer's partial variant runs its grid in tiles. It has no
-                // emulated variant: the kernel keeps the variant it was compiled under.
+                // emulated variant: the kernel keeps the variant it was compiled under. The
+                // translator links a compiled kernel only for its own profile
+                // (`ForeignCompiledFunction` otherwise), on which a non-observer's partial
+                // variant states `GridTiles`: a module without it observes its partition or is
+                // the plain module, and runs at its own size.
                 let observes = !grid_tiles(&pipeline);
                 (pipeline, None, observes, None)
             }

@@ -1631,6 +1631,15 @@ fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
         let p = device.profile();
         let a = compile_with(&bc, "edge", p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert!(a.facts.contains(&RuntimeFact::GridTiles), "{stem}");
+        // The tile's workgroup takes its position from the region only where `MultiRegion` is 1,
+        // so a runtime running the tiles must be able to set it.
+        assert!(
+            a.interface
+                .spec
+                .iter()
+                .any(|c| c.key == SpecKey::MultiRegion),
+            "{stem}: GridTiles without MultiRegion"
+        );
         let (_, module_words) =
             link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         let text = spirv_dis(&module_words);
