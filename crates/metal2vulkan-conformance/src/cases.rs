@@ -200,6 +200,7 @@ pub mod two_plane_heap_blits;
 pub mod two_plane_samples;
 pub mod vector_word_phases;
 pub mod vertex_attribute_strides;
+pub mod vertex_constant_step;
 pub mod vertex_fetch_reach;
 pub mod vertex_formats;
 pub mod visibility;
@@ -527,6 +528,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     cases.extend(attribute_strides::all());
     cases.extend(vertex_attribute_strides::all());
     cases.extend(vertex_fetch_reach::all());
+    cases.extend(vertex_constant_step::all());
     cases.extend(stage_in_unread::all());
     cases.extend(blit_indirect_commands::all());
     cases.push(Box::new(compute_heap_residency::heap_residency()));
