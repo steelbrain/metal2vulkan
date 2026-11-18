@@ -458,13 +458,16 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
         us(90),
         time(&report.create_us),
         gauges(&report.gauges),
-        match (report.first_us, report.first_create_us, &create.makes) {
-            (Some(us), Some(_), Makes::RenderStates { .. }) => {
+        match (report.first_us, report.first_create_us, report.again_us, &create.makes) {
+            (Some(us), Some(_), _, Makes::RenderStates { .. }) => {
                 format!("; first {us:.1} us, its creation alone; store {store}")
             }
-            (Some(us), Some(create), _) => format!(
+            (Some(us), Some(create), _, _) => format!(
                 "; first {us:.1} us with one dispatch, its creation {create:.1} us; store {store}"
             ),
+            (None, Some(first), Some(again), _) => {
+                format!("; first take {first:.1} us, the next {again:.1} us")
+            }
             _ => String::new(),
         },
     );
@@ -477,6 +480,18 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
     if let Some(us) = report.first_us {
         println!(
             "M2V-MATRIX time harness-{runtime}/{}/first {us:.3}",
+            create.name
+        );
+    }
+    if let (None, Some(first), Some(again)) =
+        (report.first_us, report.first_create_us, report.again_us)
+    {
+        println!(
+            "M2V-MATRIX time harness-{runtime}/{}/first_take {first:.3}",
+            create.name
+        );
+        println!(
+            "M2V-MATRIX time harness-{runtime}/{}/next_take {again:.3}",
             create.name
         );
     }

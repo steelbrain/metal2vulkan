@@ -384,10 +384,13 @@ pub struct CreateReport {
     /// creation or at the first dispatch and the sum holds both; a render pipeline state's is its
     /// creation alone.
     pub first_us: Option<f64>,
-    /// The first creation's wall time alone, in microseconds, the part of
-    /// [`first_us`](Self::first_us) the creation call paid: all of it for a render pipeline
-    /// state.
+    /// The first creation's wall time alone, in microseconds: for a pipeline state, the part of
+    /// [`first_us`](Self::first_us) the creation call paid, all of it for a render pipeline
+    /// state; for a buffer, the device's first take of memory for a buffer of its length.
     pub first_create_us: Option<f64>,
+    /// For a buffer, the second creation's wall time, in microseconds: the first after the first
+    /// buffer was released, which a runtime may serve from the memory that buffer gave back.
+    pub again_us: Option<f64>,
     /// The device's gauges after the 100th and the 200th timed creation, where there were that
     /// many.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
@@ -1103,8 +1106,6 @@ impl<D: ComputeDevice> Harness<D> {
 
 /// [`Session::create`] of buffers on `device`.
 fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport> {
-    // The range the first creation takes: a buffer of the length, written, released.
-    scribble(&device.new_buffer(length, Storage::Shared)?, length)?;
     // A creation's time, its buffer checked zero at every `stride`th byte, then written all over
     // and released.
     let once = |stride| -> Result<f64> {
@@ -1115,8 +1116,12 @@ fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport
         scribble(&buffer, length)?;
         Ok(created.as_secs_f64() * 1e6)
     };
-    once(4)?;
+    // The first take of memory for a buffer of the length, then the first after its release.
+    let first = once(4)?;
+    let again = once(4)?;
     let mut report = CreateReport {
+        first_create_us: Some(first),
+        again_us: Some(again),
         warmup: warm_up(runs, || once(4096))?,
         ..CreateReport::default()
     };
