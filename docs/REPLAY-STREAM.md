@@ -354,6 +354,19 @@ and the (name id, value) answer pairs.
   command buffer completed, it reads the bytes after back and counts the 4-byte words of each
   range that differ from the recording's, relocated the same way. A difference is reported, and
   the play goes on. Its own objects take ids from 2^63 + 1.
+- It lays each placement heap out again for the runtime's sizes and alignments, as a program that
+  lays out its heap by `heapTextureSizeAndAlignWithDescriptor:` and
+  `heapBufferSizeAndAlignWithLength:options:` does: the stream's offsets and heap sizes are the
+  recording device's answers. Before it plays, it reads ahead every `newTextureWithDescriptor:offset:`
+  and `newBufferWithLength:options:offset:` of each placement heap and asks the runtime the size
+  and alignment of each, a texture's of its descriptor as the calls before it made and set it.
+  Going up the offsets the stream placed at, each keeps at least its distance from the one below,
+  moves up until the resources placed below it end, and rounds up to the largest alignment of the
+  resources placed there. The heap keeps at least its distance past its last offset and holds the
+  resources placed there. Resources the stream placed at one offset still share it; resources at different offsets no longer share memory, even where the
+  stream's did, on every runtime. Where every resource ends before the next offset and every offset
+  is aligned, the layout is the stream's. A placement whose size the runtime does not answer keeps
+  its offset, and the play meets the runtime's refusal where it lies.
 - It reports, for each group of command buffers it waited for (normally the one just committed),
   for each frame and in total, two sets of counts:
   - **Fixed by the stream** (`stream`), the same on every play of the stream on any runtime: the
@@ -396,7 +409,9 @@ gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none`
 runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
 `m2v.privateBytes` range compared, `split N executed COUNTS` where the player split compute
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
-`total COUNTS` (its `calls` the calls played: where
+`relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
+offsets it moved in them and the bytes it added to their sizes), `total COUNTS` (its `calls` the
+calls played: where
 the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
 KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness

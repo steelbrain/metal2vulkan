@@ -3,7 +3,7 @@
 
 use super::addresses::AddressMap;
 use super::player::{
-    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Report,
+    Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
     WAIT_COMPLETED,
 };
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
@@ -275,6 +275,12 @@ struct Kept {
     asked: Vec<u64>,
     memory: HashMap<u64, Vec<u8>>,
     copies: u64,
+    /// The size and alignment it answers for a heap texture, by the id of its descriptor; a heap
+    /// buffer it answers its length at 256 bytes.
+    heap_answers: HashMap<u64, (u64, u64)>,
+    /// Each heap size it was asked: the placing selector and how many calls made and set the
+    /// texture descriptor.
+    heap_asked: Vec<(String, usize)>,
 }
 
 impl Backend for Kept {
@@ -343,6 +349,19 @@ impl Backend for Kept {
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError> {
         self.asked.push(object);
         Ok(self.ids.get(&object).copied())
+    }
+
+    fn heap_size_and_align(
+        &mut self,
+        call: &Call,
+        descriptor: &[Call],
+    ) -> Result<(u64, u64), PlayError> {
+        self.heap_asked
+            .push((call.selector.to_string(), descriptor.len()));
+        Ok(match descriptor.first() {
+            Some(made) => self.heap_answers[&made.result],
+            None => (call.args[0].as_uint().unwrap(), 256),
+        })
     }
 
     fn counters(&mut self) -> Counters {
@@ -1082,4 +1101,79 @@ fn a_private_bytes_record_names_an_earlier_dispatch() {
         let (_, ended) = played(&mut kept, stream(dispatch, length));
         assert!(matches!(ended, Err(PlayError::Invalid(_))), "{ended:?}");
     }
+}
+
+/// The arguments the backend was given for the call that made `object`.
+fn args_of(kept: &Kept, object: u64) -> &[Value] {
+    let made = format!("#{object} = ");
+    let at = kept.calls.iter().position(|call| call.starts_with(&made));
+    &kept.args[at.unwrap()]
+}
+
+/// A placement heap's resources take the runtime's sizes and alignments, read ahead before the
+/// play: where the runtime makes a texture larger than the room the stream left it below a buffer,
+/// the buffer moves up past it and the heap grows by as much; a texture made again at its offset
+/// shares it. A heap where every answer fits keeps the stream's layout. A texture's size is asked
+/// of every call that made and set its descriptor.
+#[test]
+fn placement_heaps_take_the_runtimes_sizes_and_alignments() {
+    let mut kept = Kept::default();
+    kept.heap_answers.insert(3, (0xC000, 0x4000));
+    kept.heap_answers.insert(9, (0x4000, 0x4000));
+    let heap = |size: u64| {
+        [map(&[
+            ("size", Value::Uint(size)),
+            ("heapType", Value::Uint(1)),
+            ("options", Value::List(Vec::new())),
+        ])]
+    };
+    let buffer = [Value::Uint(0x4000), Value::Uint(0), Value::Uint(0x8000)];
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newHeapWithDescriptor:", 1, 2, &heap(0x1_0000), &[])?;
+        w.call("m2v.textureDescriptor", 0, 3, &[map(&[])], &[])?;
+        w.call("setUsage:", 3, 0, &[Value::Uint(1)], &[])?;
+        let texture = [Value::Object(3), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 2, 4, &texture, &[])?;
+        w.call("newBufferWithLength:options:offset:", 2, 5, &buffer, &[])?;
+        w.call("release", 4, 0, &[], &[])?;
+        w.call("newTextureWithDescriptor:offset:", 2, 6, &texture, &[])?;
+        w.call("newHeapWithDescriptor:", 1, 7, &heap(0x1_0000), &[])?;
+        w.call("m2v.textureDescriptor", 0, 9, &[map(&[])], &[])?;
+        let fits = [Value::Object(9), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 7, 10, &fits, &[])?;
+        w.call("newBufferWithLength:options:offset:", 7, 11, &buffer, &[])
+    });
+    ended.unwrap();
+    let size = |object| args_of(&kept, object)[0].as_map().unwrap()[0].1.as_uint();
+    let offset = |object, at: usize| args_of(&kept, object)[at].as_uint();
+    assert_eq!(size(2), Some(0x1_4000), "grown by what the buffer moved");
+    assert_eq!((offset(4, 1), offset(6, 1)), (Some(0), Some(0)));
+    assert_eq!(offset(5, 2), Some(0xC000), "past the larger texture");
+    assert_eq!(size(7), Some(0x1_0000), "every answer fits");
+    assert_eq!((offset(10, 1), offset(11, 2)), (Some(0), Some(0x8000)));
+    let asked = |selector: &str, calls| (selector.to_owned(), calls);
+    let texture = "newTextureWithDescriptor:offset:";
+    let buffer = "newBufferWithLength:options:offset:";
+    assert_eq!(
+        kept.heap_asked,
+        [
+            asked(texture, 2),
+            asked(buffer, 0),
+            asked(texture, 2),
+            asked(texture, 1),
+            asked(buffer, 0)
+        ]
+    );
+    assert_eq!(
+        report.relaid,
+        Relaid {
+            heaps: 1,
+            moved: 1,
+            grown: 0x4000
+        }
+    );
+    assert!(report
+        .lines()
+        .contains(&"relaid 1 moved 1 grown 16384".to_owned()));
 }

@@ -323,22 +323,9 @@ impl OldRuntime {
                 let texture = device.new_texture(&descriptor).map_err(failed(call))?;
                 unaddressed(Object::Texture(texture))
             }
-            "MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:mipmapped:" => {
-                let format: PixelFormat = metal(call, uint(call, 0)?)?;
-                let mipmapped = arg(call, 3)?.as_bool();
-                let mipmapped = mipmapped.ok_or_else(|| refuse(call, "argument 3 is no bool"))?;
-                let descriptor = TextureDescriptor::texture_2d(
-                    format,
-                    uint(call, 1)?,
-                    uint(call, 2)?,
-                    mipmapped,
-                );
-                unaddressed(Object::TextureDescriptor(Box::new(descriptor)))
-            }
-            "m2v.textureDescriptor" => {
-                let f = Fields::arg(call, 0, &descriptors::TEXTURE_KEYS)?;
-                let mut descriptor = TextureDescriptor::default();
-                descriptors::texture(call, &f, &mut descriptor)?;
+            "MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
+            | "m2v.textureDescriptor" => {
+                let descriptor = made_texture_descriptor(call)?;
                 unaddressed(Object::TextureDescriptor(Box::new(descriptor)))
             }
             "MTLRenderPassDescriptor.new" => {
@@ -501,17 +488,11 @@ impl OldRuntime {
 
     /// A setter of the texture descriptor `call` is sent to.
     fn texture_descriptor_call(&mut self, call: &Call) -> Result<(), PlayError> {
-        let raw = uint(call, 0)?;
         let Some(Object::TextureDescriptor(descriptor)) = self.objects.get_mut(&call.receiver)
         else {
             unreachable!("a texture descriptor's call");
         };
-        match &*call.selector {
-            "setUsage:" => descriptor.usage = metal::<TextureUsage>(call, raw)?,
-            "setResourceOptions:" => descriptor.resource_options = options(call, raw)?,
-            _ => return Err(refuse(call, "not played on a texture descriptor")),
-        }
-        Ok(())
+        set_texture_descriptor(call, descriptor)
     }
 
     /// A call of library `library`: the function it makes.
@@ -614,6 +595,45 @@ fn completed(
     })
 }
 
+/// The texture descriptor `call` makes: `m2v.textureDescriptor` or
+/// `MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:mipmapped:`.
+fn made_texture_descriptor(call: &Call) -> Result<TextureDescriptor, PlayError> {
+    match &*call.selector {
+        "MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:mipmapped:" => {
+            let format: PixelFormat = metal(call, uint(call, 0)?)?;
+            let mipmapped = arg(call, 3)?.as_bool();
+            let mipmapped = mipmapped.ok_or_else(|| refuse(call, "argument 3 is no bool"))?;
+            Ok(TextureDescriptor::texture_2d(
+                format,
+                uint(call, 1)?,
+                uint(call, 2)?,
+                mipmapped,
+            ))
+        }
+        "m2v.textureDescriptor" => {
+            let f = Fields::arg(call, 0, &descriptors::TEXTURE_KEYS)?;
+            let mut descriptor = TextureDescriptor::default();
+            descriptors::texture(call, &f, &mut descriptor)?;
+            Ok(descriptor)
+        }
+        _ => Err(refuse(call, "makes no texture descriptor")),
+    }
+}
+
+/// Texture descriptor `descriptor` changed by `call`, one of its setters.
+fn set_texture_descriptor(
+    call: &Call,
+    descriptor: &mut TextureDescriptor,
+) -> Result<(), PlayError> {
+    let raw = uint(call, 0)?;
+    match &*call.selector {
+        "setUsage:" => descriptor.usage = metal::<TextureUsage>(call, raw)?,
+        "setResourceOptions:" => descriptor.resource_options = options(call, raw)?,
+        _ => return Err(refuse(call, "not played on a texture descriptor")),
+    }
+    Ok(())
+}
+
 impl Backend for OldRuntime {
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         if &*call.selector == "release" {
@@ -681,6 +701,33 @@ impl Backend for OldRuntime {
         }
         self.objects.insert(call.result, object);
         Ok(made)
+    }
+
+    fn heap_size_and_align(
+        &mut self,
+        call: &Call,
+        descriptor: &[Call],
+    ) -> Result<(u64, u64), PlayError> {
+        let answer = match &*call.selector {
+            "newTextureWithDescriptor:offset:" => {
+                let (made, set) = descriptor
+                    .split_first()
+                    .ok_or_else(|| refuse(call, "a texture of no texture descriptor"))?;
+                let mut descriptor = made_texture_descriptor(made)?;
+                for setter in set {
+                    set_texture_descriptor(setter, &mut descriptor)?;
+                }
+                let answer = self.device.heap_texture_size_and_align(&descriptor);
+                answer.map_err(failed(call))?
+            }
+            "newBufferWithLength:options:offset:" => {
+                let options = options(call, uint(call, 1)?)?;
+                self.device
+                    .heap_buffer_size_and_align(uint(call, 0)?, options)
+            }
+            _ => return Err(refuse(call, "places nothing in a heap")),
+        };
+        Ok((answer.size, answer.align))
     }
 
     fn write(&mut self, target: u64, offset: u64, bytes: &[u8]) -> Result<(), PlayError> {

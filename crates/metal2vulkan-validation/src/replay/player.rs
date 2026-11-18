@@ -72,6 +72,16 @@ pub trait Backend {
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError>;
     /// The `gpuResourceID` the runtime gives `object`; none where its getter raises.
     fn resource_id(&mut self, object: u64) -> Result<Option<u64>, PlayError>;
+    /// The runtime's size and alignment, in bytes, of what `call` places in a placement heap: for
+    /// `newTextureWithDescriptor:offset:`, its `heapTextureSizeAndAlignWithDescriptor:` of the
+    /// texture descriptor that `descriptor`'s calls make and set, in order (the call that made
+    /// it, then its setters); for `newBufferWithLength:options:offset:` (`descriptor` empty), its
+    /// `heapBufferSizeAndAlignWithLength:options:`.
+    fn heap_size_and_align(
+        &mut self,
+        call: &Call,
+        descriptor: &[Call],
+    ) -> Result<(u64, u64), PlayError>;
     /// The runtime's counters now.
     fn counters(&mut self) -> Counters;
 }
@@ -180,9 +190,24 @@ pub struct Report {
     /// there (a runtime may record the barriers a split needs at the program's next command or at
     /// the commit).
     pub split_executed: Counters,
+    /// The placement heaps the player laid out again for the runtime's sizes and alignments
+    /// (`relay`).
+    pub relaid: Relaid,
     /// The whole play's counts, the player's own work left out. Its calls are the calls played:
     /// where a play stopped, the stopping call is the next.
     pub total: Counts,
+}
+
+/// The placement heaps whose layout the player changed for the runtime's answers: how many, the
+/// offsets it moved in them and the bytes it added to their sizes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Relaid {
+    /// The heaps laid out again.
+    pub heaps: u64,
+    /// The offsets the stream placed at that moved.
+    pub moved: u64,
+    /// The bytes added to the heaps' sizes.
+    pub grown: u64,
 }
 
 fn counted(counts: &Counts) -> String {
@@ -239,6 +264,13 @@ impl Report {
                 .map(|(key, value)| format!(" {key}={value}"))
                 .collect();
             lines.push(format!("split {} executed{executed}", self.splits));
+        }
+        let relaid = self.relaid;
+        if relaid.heaps > 0 {
+            lines.push(format!(
+                "relaid {} moved {} grown {}",
+                relaid.heaps, relaid.moved, relaid.grown
+            ));
         }
         lines.push(format!("total{}", counted(&self.total)));
         lines
@@ -330,6 +362,62 @@ struct Snapshot {
     ranges: Vec<(Around, u64)>,
 }
 
+/// A placement heap's layout on the runtime: its size, and the offset the player places each
+/// resource at by the offset the stream places it at.
+struct Layout {
+    size: u64,
+    offsets: HashMap<u64, u64>,
+}
+
+/// The layout of a placement heap of `size` bytes, as a program asking the runtime's sizes and
+/// alignments lays it out, whose resources the stream places at the offsets of `at`, each with the
+/// most bytes and the largest alignment the runtime answers for its resources there. Each offset
+/// keeps at least its distance from the one below, moves up until the resources below it end, and
+/// rounds up to its alignment; the heap keeps at least its distance past the last offset and holds
+/// the resources there. Resources at one offset still share it; resources at different offsets no
+/// longer meet. Where every resource ends before the next offset and every offset is aligned, the
+/// layout is the stream's.
+fn relay(size: u64, at: &BTreeMap<u64, (u64, u64)>) -> Layout {
+    let mut offsets = HashMap::with_capacity(at.len());
+    let mut below: Option<(u64, u64, u64)> = None;
+    for (&recorded, &(bytes, align)) in at {
+        let floor = match below {
+            None => recorded,
+            Some((was, placed, held)) => (placed + (recorded - was)).max(placed + held),
+        };
+        let placed = floor.next_multiple_of(align.max(1));
+        offsets.insert(recorded, placed);
+        below = Some((recorded, placed, bytes));
+    }
+    let size = match below {
+        None => size,
+        Some((was, placed, held)) => (placed + size.saturating_sub(was)).max(placed + held),
+    };
+    Layout { size, offsets }
+}
+
+/// Whether `selector` makes a texture descriptor (`docs/REPLAY-STREAM.md`, section 9).
+fn makes_texture_descriptor(selector: &str) -> bool {
+    selector == "m2v.textureDescriptor" || selector.starts_with("MTLTextureDescriptor.")
+}
+
+/// The recorded size of the heap `call` (`newHeapWithDescriptor:`) makes, where it is a placement
+/// heap (`MTLHeapTypePlacement`).
+fn placement_heap(call: &Call) -> Option<u64> {
+    let entries = call.args.first()?.as_map()?;
+    let field = |key: &str| entries.iter().find(|(k, _)| &**k == key)?.1.as_uint();
+    (field("heapType")? == 1).then_some(field("size")?)
+}
+
+/// The argument of a placement heap's call that is the offset it places at.
+fn placement_offset(selector: &str) -> Option<usize> {
+    match selector {
+        "newTextureWithDescriptor:offset:" => Some(1),
+        "newBufferWithLength:options:offset:" => Some(2),
+        _ => None,
+    }
+}
+
 /// Plays one stream on one backend.
 pub struct Player<'b, B: Backend> {
     backend: &'b mut B,
@@ -347,6 +435,8 @@ pub struct Player<'b, B: Backend> {
     compared: HashSet<u64>,
     /// The `m2v.privateBytes` records, read ahead, by the position of the dispatch each names.
     ahead: HashMap<u64, Vec<Around>>,
+    /// The placement heaps' layouts on the runtime, read ahead, by heap.
+    layouts: HashMap<u64, Layout>,
     /// The next call's position: the calls stepped so far.
     position: u64,
     /// The compute encoders open while a record names a later dispatch.
@@ -542,6 +632,7 @@ impl<'b, B: Backend> Player<'b, B> {
             events: HashMap::new(),
             compared: HashSet::new(),
             ahead: HashMap::new(),
+            layouts: HashMap::new(),
             position: 0,
             encoders: HashMap::new(),
             done: VecDeque::new(),
@@ -592,24 +683,104 @@ impl<'b, B: Backend> Player<'b, B> {
         Ok(())
     }
 
-    /// Index the `m2v.privateBytes` records by the dispatch each names, which comes before it. A
-    /// stream error ends the reading: the play meets it where it lies.
+    /// Index the `m2v.privateBytes` records by the dispatch each names, which comes before it, and
+    /// lay out each placement heap for the runtime's answers (`relay`). A stream error ends the
+    /// reading: the play meets it where it lies, as it meets a placement whose size the runtime
+    /// does not answer.
     fn read_ahead(&mut self, stream: &StreamReader) -> Result<(), PlayError> {
         let mut ahead = stream.reopened()?;
         let mut position = 0;
+        // Each live texture descriptor's calls: the one that made it, then its setters.
+        let mut descriptors: HashMap<u64, Vec<Call>> = HashMap::new();
+        // Each placement heap's recorded size and, by offset, the most bytes and the largest
+        // alignment the runtime answers for what the stream places there.
+        let mut heaps: HashMap<u64, (u64, BTreeMap<u64, (u64, u64)>)> = HashMap::new();
         while let Ok(Some(call)) = ahead.next_call() {
-            if &*call.selector == PRIVATE_BYTES {
-                let (dispatch, around) = Around::of(&call)?;
-                if dispatch >= position {
-                    return Err(invalid(format!(
-                        "{PRIVATE_BYTES} at call {position} names call {dispatch}, no earlier one"
-                    )));
+            match &*call.selector {
+                PRIVATE_BYTES => {
+                    let (dispatch, around) = Around::of(&call)?;
+                    if dispatch >= position {
+                        return Err(invalid(format!(
+                            "{PRIVATE_BYTES} at call {position} names call {dispatch}, no earlier one"
+                        )));
+                    }
+                    self.ahead.entry(dispatch).or_default().push(around);
                 }
-                self.ahead.entry(dispatch).or_default().push(around);
+                "release" => drop(descriptors.remove(&call.receiver)),
+                "newHeapWithDescriptor:" => {
+                    if let Some(size) = placement_heap(&call) {
+                        heaps.insert(call.result, (size, BTreeMap::new()));
+                    }
+                }
+                selector if call.result != 0 && makes_texture_descriptor(selector) => {
+                    descriptors.insert(call.result, vec![call]);
+                }
+                selector => match descriptors.get_mut(&call.receiver) {
+                    Some(calls) => calls.push(call),
+                    None => {
+                        let at = placement_offset(selector);
+                        let heap = heaps.get_mut(&call.receiver);
+                        let (Some(at), Some((_, placed))) = (at, heap) else {
+                            position += 1;
+                            continue;
+                        };
+                        let offset = call.args.get(at).and_then(Value::as_uint);
+                        let descriptor = call.args.first().and_then(Value::as_object);
+                        let descriptor = descriptor.and_then(|d| descriptors.get(&d));
+                        let descriptor = descriptor.map_or(&[][..], Vec::as_slice);
+                        let answer = self.backend.heap_size_and_align(&call, descriptor);
+                        if let (Some(offset), Ok((bytes, align))) = (offset, answer) {
+                            let most = placed.entry(offset).or_default();
+                            *most = (most.0.max(bytes), most.1.max(align));
+                        }
+                    }
+                },
             }
             position += 1;
         }
+        for (heap, (size, placed)) in heaps {
+            let layout = relay(size, &placed);
+            let moved = layout.offsets.iter().filter(|(was, now)| was != now);
+            let moved = moved.count() as u64;
+            if moved > 0 || layout.size != size {
+                self.report.relaid.heaps += 1;
+                self.report.relaid.moved += moved;
+                self.report.relaid.grown += layout.size.saturating_sub(size);
+                self.layouts.insert(heap, layout);
+            }
+        }
         Ok(())
+    }
+
+    /// `call` with the size of the placement heap it makes, or the offset it places at in one, as
+    /// the heap's layout on the runtime has it (`relay`).
+    fn placed(&self, mut call: Call) -> Call {
+        if &*call.selector == "newHeapWithDescriptor:" {
+            let Some(layout) = self.layouts.get(&call.result) else {
+                return call;
+            };
+            if let Some(Value::Map(entries)) = call.args.first_mut() {
+                for (key, value) in entries {
+                    if &**key == "size" {
+                        *value = Value::Uint(layout.size);
+                    }
+                }
+            }
+            return call;
+        }
+        let (Some(at), Some(layout)) = (
+            placement_offset(&call.selector),
+            self.layouts.get(&call.receiver),
+        ) else {
+            return call;
+        };
+        if let Some(offset) = call.args.get_mut(at) {
+            let placed = offset.as_uint().and_then(|o| layout.offsets.get(&o));
+            if let Some(&placed) = placed {
+                *offset = Value::Uint(placed);
+            }
+        }
+        call
     }
 
     fn finish(&mut self) -> Result<(), PlayError> {
@@ -817,7 +988,7 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.relocate(data, 0);
             }
         }
-        let resolved = Call { args, ..call };
+        let resolved = self.placed(Call { args, ..call });
         let resolved = self.uploaded(resolved)?;
         let made = self.backend.call(&resolved)?;
         self.track(&resolved);
