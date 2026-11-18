@@ -37,9 +37,9 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 37 | 37 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 39 | 39 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 15 | 15 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -55,9 +55,9 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 12 | 8 | 0 | 0 | 17 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 14 | 8 | 0 | 0 | 17 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 15 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -635,7 +635,7 @@ Columns:
 | `IndicesNotGranted` | A release of an index that is not granted (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: a grant is returned once | 2: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`, `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
 | `IndexInUse` | A texture, a sampler state or a pipeline state's constexpr sampler at an index where another object lives already (`Device::new_texture`,... | every device (a public call's own check of its arguments) | `ours`: an index names one object at a time, and its elements are that object's | 2: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`, `crates/metal2vulkan-rt/src/sampler.rs (hold_constexpr)` | `-` |
 | `IndicesInUse` | A release of a grant while a texture or a sampler state lives at one of its indices (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: an object's index stays granted while the object lives | 1: `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
-| `TextureIndex` | A texture whose usage shaders reach (read or write) made without an index, or one of no such usage made with one (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index is an element of set 1's texture arrays, which only shaders read | 1: `crates/metal2vulkan-rt/src/texture.rs (texture)` | `-` |
+| `TextureIndex` | A texture whose usage shaders reach (read or write) made without an index, or one of no such usage made with one (`Device::new_texture`) | every device (a public call's own check of its arguments) | `ours`: an index is an element of set 1's texture arrays, which only shaders read | 2: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)`, `crates/metal2vulkan-rt/src/texture.rs (texture)` | `-` |
 | `TextureZeroExtent` | A texture with a width, height or depth of 0 | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor has width of zero", and the same for a height of zero | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
 | `TextureExtentForType` | A texture with a height other than 1 of a 1D type, or a depth other than 1 of a type that is not 3D | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "the texture type MTLTextureType1D requires that height is 1", and the same for a 2D texture of depth 2 | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
 | `TextureCubeNotSquare` | A cube texture whose width and height differ | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: plain Metal asserts "MTLTextureDescriptor width must equal height for cube textures" | 1: `crates/metal2vulkan-rt/src/texture.rs (shape)` | `-` |
@@ -648,6 +648,8 @@ Columns:
 | `TextureBytesLayout` | `Texture::replace_region` or `Texture::get_bytes` with rows closer than a row of the region, images closer than an image of it, or bytes too few... | every device (a public call's own check of its arguments) | `ours`: the call would read or write past the bytes it is given, or one texel's bytes over another's | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
 | `BufferCopyLayout` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose offset or row stride, for a format of single... | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_buffer_copy_rules.m` in the conformance crate, jobs m3-max-43541 and m3-max-43545: Metal's validation layer stops an RGBA8Unorm offset of 2, `sourceOffset (2) must be a multiple of 4 bytes`, a row stride of 18, `sourceBytesPerRow (18) must be a multiple of 4 bytes`, and the same of a copy into a buffer, a row stride of 12 for rows of 16 bytes, an image stride of 12 for images of 16, and a region 16 bytes past the buffer's end, `totalBytesUsed(4112) must be <= [sourceBuffer length](4096)`; it takes an R8Unorm offset of 2, a row stride of 0 for one row, image strides of no whole number of rows, and an image stride on a 2D texture and on a slice of a 1D array | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)` | `-` |
 | `FillRange` | `BlitCommandEncoder::fill_buffer` of an empty range, or of one past the buffer's end | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_fill_rules.m` in the conformance crate, job m3-max-43573: Metal's validation layer stops both, `range.length(0) must not be 0` and `(range.location + range.length)(68) must be <= [buffer length](64)` | 1: `crates/metal2vulkan-rt/src/blit.rs (fill_range)` | `-` |
+| `TextureViewRange` | `Texture::new_texture_view` of an empty range of levels or slices, or of one past the texture's | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the conformance crate, job m3-max-43677: Metal's validation layer stops each, `(newLevelRange.location + newLevelRange.length)(4) must be <= [texture mipmapLevelCount](3)`, `newLevelRange.length must not be 0` and `(newSliceRange.location + newSliceRange.length)(4) must be <= (3)` | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)` | `-` |
+| `TextureViewFormat` | `Texture::new_texture_view` of another pixel format over a texture made without `PixelFormatView` usage | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the conformance crate, job m3-max-43677: Metal's validation layer stops an `R32Uint` view of an `RGBA8Unorm` texture of `ShaderRead` usage, `Texture View Validation`, and makes it where the usage adds `PixelFormatView` | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)` | `-` |
 | `TextureCopyMismatch` | `BlitCommandEncoder::copy_from_texture` between textures of two pixel formats, or of two sample counts | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_copy_format_pairs.m` in the conformance crate: Metal's validation layer stops every pair of two formats it was given, sRGB, integer, float, channel order, depth and compressed pairs among them, with `[sourceTexture pixelFormat](...) must equal [destinationTexture pixelFormat](...)`, and a source of four samples into one of one with `[sourceTexture sampleCount](4) must equal [destinationTexture sampleCount](1)` | 1: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)` | `-` |
 | `ManagedTextureBytes` | A Managed texture's bytes the device cannot copy in place (`Device::new_managed_texture`) | every device (a public call's own check of its arguments) | `ours`: a buffer-to-image copy reads a place only so laid out, and the consumer's bytes are the place the copy reads | 4: `crates/metal2vulkan-rt/src/texture.rs (check_places)`, `crates/metal2vulkan-rt/src/texture.rs (named)` (+2) | `-` |
 | `HeapTexturePlace` | A heap texture whose image does not lie in its heap (`Device::new_heap_texture`) | every device (a public call's own check of its arguments) | `ours`: an image bound past its heap's range would take memory the heap does not hold, and Vulkan binds an image only at its alignment | 1: `crates/metal2vulkan-rt/src/texture.rs (make)` | `-` |
@@ -685,6 +687,7 @@ Columns:
 | `HeapTexture` | A heap texture the runtime does not place (`Device::new_heap_texture` and `Device::heap_texture_size_and_align`) | every device (a public call's own check of its arguments) | `ours`: heap textures are built for Private heaps of placeable images | 2: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`, `crates/metal2vulkan-rt/src/texture.rs (new_heap_texture)` | `-` |
 | `BufferCopyAlignment` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose bytes no copy command in the floor addresses,... | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an aligned offset; each is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)` | `-` |
 | `FillAlignment` | `BlitCommandEncoder::fill_buffer` of a range that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal fills byte... | every device (a public call's own check of its arguments) | `ours`: `vkCmdFillBuffer` writes whole words; a byte fill is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (fill_range)` | `-` |
+| `TextureView` | `Texture::new_texture_view` of a kind Metal makes and the runtime does not build | every device (a public call's own check of its arguments) | `ours`: the replay streams' views that compute binds are same-format views of every slice, 2D views of one slice of a 2D array, and level subranges; each other kind is built when a replay stream binds one | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)` | `-` |
 
 ## Appendix: every site
 
@@ -1195,7 +1198,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`; `crates/metal2vulkan-rt/src/arrays.rs (release)`
 - `rt:Refusal::IndexInUse`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`; `crates/metal2vulkan-rt/src/sampler.rs (hold_constexpr)`
 - `rt:Refusal::IndicesInUse`: `crates/metal2vulkan-rt/src/arrays.rs (release)`
-- `rt:Refusal::TextureIndex`: `crates/metal2vulkan-rt/src/texture.rs (texture)`
+- `rt:Refusal::TextureIndex`: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)`; `crates/metal2vulkan-rt/src/texture.rs (texture)`
 - `rt:Refusal::TextureZeroExtent`: `crates/metal2vulkan-rt/src/texture.rs (shape)`
 - `rt:Refusal::TextureExtentForType`: `crates/metal2vulkan-rt/src/texture.rs (shape)`
 - `rt:Refusal::TextureCubeNotSquare`: `crates/metal2vulkan-rt/src/texture.rs (shape)`
@@ -1208,6 +1211,8 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::TextureBytesLayout`: `crates/metal2vulkan-rt/src/texture.rs (copy)`
 - `rt:Refusal::BufferCopyLayout`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`
 - `rt:Refusal::FillRange`: `crates/metal2vulkan-rt/src/blit.rs (fill_range)`
+- `rt:Refusal::TextureViewRange`: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)`
+- `rt:Refusal::TextureViewFormat`: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)`
 - `rt:Refusal::TextureCopyMismatch`: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)`
 - `rt:Refusal::ManagedTextureBytes`: `crates/metal2vulkan-rt/src/texture.rs (check_places)`; `crates/metal2vulkan-rt/src/texture.rs (named)`; `crates/metal2vulkan-rt/src/texture.rs (named_host)`; `crates/metal2vulkan-rt/src/texture.rs (upload_region)`
 - `rt:Refusal::HeapTexturePlace`: `crates/metal2vulkan-rt/src/texture.rs (make)`
@@ -1235,4 +1240,5 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::HeapTexture`: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`; `crates/metal2vulkan-rt/src/texture.rs (new_heap_texture)`
 - `rt:Gap::BufferCopyAlignment`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`
 - `rt:Gap::FillAlignment`: `crates/metal2vulkan-rt/src/blit.rs (fill_range)`
+- `rt:Gap::TextureView`: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)`
 

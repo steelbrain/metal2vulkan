@@ -539,11 +539,13 @@ fn written() -> vk::MemoryBarrier2<'static> {
         .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
 }
 
-/// One texture of a copy: its descriptor, its image's format and the unit its copies move.
+/// One texture of a copy: its descriptor, its image's format, the unit its copies move, and
+/// where it starts in its image (a view's first level and array layer).
 pub(crate) struct Side<'a> {
     pub(crate) descriptor: &'a TextureDescriptor,
     pub(crate) format: vk::Format,
     pub(crate) unit: Option<CopyUnit>,
+    pub(crate) base: [u32; 2],
 }
 
 impl<'a> Side<'a> {
@@ -552,6 +554,7 @@ impl<'a> Side<'a> {
             descriptor: texture.descriptor(),
             format: texture.format(),
             unit: texture.unit(),
+            base: texture.base(),
         }
     }
 }
@@ -668,7 +671,7 @@ pub(crate) fn buffer_copy(
         origin: at.origin,
         size,
     };
-    let Some(placed) = place(d, unit.block, region, at.level, at.slice)? else {
+    let Some(placed) = place(d, texture.base, unit.block, region, at.level, at.slice)? else {
         return Ok(None);
     };
     let Lies { base, len, layout } = lies;
@@ -806,8 +809,22 @@ pub(crate) fn texture_copy(
         size,
     };
     let placed = (
-        place(s, unit.block, region(from), from.level, from.slice)?,
-        place(d, unit.block, region(to), to.level, to.slice)?,
+        place(
+            s,
+            source.base,
+            unit.block,
+            region(from),
+            from.level,
+            from.slice,
+        )?,
+        place(
+            d,
+            destination.base,
+            unit.block,
+            region(to),
+            to.level,
+            to.slice,
+        )?,
     );
     let (Some(from), Some(to)) = placed else {
         return Ok(None);

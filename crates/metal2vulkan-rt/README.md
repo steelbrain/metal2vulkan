@@ -266,10 +266,24 @@ made, with no lock, and never rewritten for layouts.
   submission, submitting the upload first where the span is in it (`Metrics::upload_waits`). A
   copy larger than 16 MiB has a staging buffer of its own, which counts against the upload's
   64 MiB.
+- `Texture::new_texture_view(pixel_format, texture_type, levels, slices, index)` is
+  `newTextureViewWithPixelFormat:textureType:levels:slices:`, and with the texture's own type and
+  every level and slice `newTextureViewWithPixelFormat:`. A view is a texture over the parent's
+  image with image views and elements of set 1 of its own, at its own index: no image, no memory
+  and no copy (no submission, block or copied byte). It keeps its parent, and its descriptor is
+  what Metal's view reports: the extent of its first level, its levels and its slices. Copies,
+  `replace_region` and `get_bytes` through it reach the parent's levels and slices under it; its
+  hazards are its parent's. Built: the parent's own pixel format, over every slice in the
+  parent's type, a slice subrange of a 1D or 2D array, or one slice of a 2D array as a 2D
+  texture, each over any level subrange; a view of a view is a view of the first parent. Refused,
+  as Metal's validation stops them: an empty range of levels or slices, or one past the parent's
+  (`Refusal::TextureViewRange`), and another pixel format of a texture made without
+  `PixelFormatView` usage (`Refusal::TextureViewFormat`).
 - A texture holds the device. Once its last handle and the last command buffer that used it are
   gone, its elements read null and its index is free at once; the reaper frees its image once the
-  last upload that moves or copies it has retired. `Gauges::textures` counts images until then,
-  `Gauges::descriptor_slots` the indices held.
+  last upload that moves or copies it has retired, and a view's image views once the view is
+  gone. `Gauges::textures` counts images and views until then, `Gauges::descriptor_slots` the
+  indices held.
 
 ### Known gaps of textures
 
@@ -286,8 +300,12 @@ made, with no lock, and never rewritten for layouts.
   (`Gap::TextureBytes`).
 - A texture's memory is device-local; where the device has none left, the call fails
   (`Error::Vulkan`).
-- Texture views and textures over a swapchain image are not built yet. Heap textures are
-  placed only in Private heaps (`Gap::HeapTexture` for a Shared block).
+- Texture views that change what the replay streams' views keep are not built
+  (`Gap::TextureView`, naming the kind): another pixel format, another texture type (but a 2D
+  view of one slice of a 2D array), some of a cube's faces or a cube array's cubes, and any view
+  of a swizzled texture. The swizzle form of `newTextureViewWithPixelFormat:` is not built.
+- Textures over a swapchain image are not built yet. Heap textures are placed only in Private
+  heaps (`Gap::HeapTexture` for a Shared block).
 
 ## Sampler states
 

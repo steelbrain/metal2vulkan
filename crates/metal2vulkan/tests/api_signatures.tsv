@@ -1424,6 +1424,7 @@ enum	metal2vulkan-rt::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non
 enum	metal2vulkan-rt::Resource	#[derive(Clone, Copy)] #[non_exhaustive] pub enum Resource<'a>
 enum	metal2vulkan-rt::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
 enum	metal2vulkan-rt::StorageMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum StorageMode
+enum	metal2vulkan-rt::TextureViewKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureViewKind
 enum	metal2vulkan-rt::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
 enum	metal2vulkan-runtime::AddressPlacement	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AddressPlacement
 enum	metal2vulkan-runtime::AppleOnly	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AppleOnly
@@ -9361,6 +9362,7 @@ method	metal2vulkan-rt::SharedEvent::wait_until_signaled_value	pub fn wait_until
 method	metal2vulkan-rt::Texture::descriptor	pub fn descriptor(&self) -> &TextureDescriptor
 method	metal2vulkan-rt::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u32, slice: u32) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
+method	metal2vulkan-rt::Texture::new_texture_view	pub fn new_texture_view(&self, pixel_format: PixelFormat, texture_type: TextureType, levels: Range<u32>, slices: Range<u32>, index: Option<u32>) -> Result<Texture, Error>
 method	metal2vulkan-rt::Texture::replace_region	pub fn replace_region(&self, region: Region, level: u32, slice: u32, bytes: &[u8], bytes_per_row: u64, bytes_per_image: u64) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::upload_region	pub fn upload_region(&self, region: Region, level: u32, slice: u32) -> Result<(), Error>
 method	metal2vulkan-rt::TextureDescriptor::new	pub fn new(texture_type: TextureType, pixel_format: PixelFormat, width: u32, height: u32) -> TextureDescriptor
@@ -13321,6 +13323,7 @@ variant	metal2vulkan-rt::Gap::TextureBuffer	TextureBuffer
 variant	metal2vulkan-rt::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureCopy	TextureCopy { source: PixelFormat, destination: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureFormat	TextureFormat { pixel_format: PixelFormat }
+variant	metal2vulkan-rt::Gap::TextureView	TextureView { kind: TextureViewKind }
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
 variant	metal2vulkan-rt::IndexClass::StorageTexture	StorageTexture
 variant	metal2vulkan-rt::IndexClass::Texture	Texture
@@ -13453,6 +13456,8 @@ variant	metal2vulkan-rt::Refusal::TextureLevelCount	TextureLevelCount { levels: 
 variant	metal2vulkan-rt::Refusal::TextureRegion	TextureRegion { level: u32, slice: u32 }
 variant	metal2vulkan-rt::Refusal::TextureSampleCount	TextureSampleCount { sample_count: u32 }
 variant	metal2vulkan-rt::Refusal::TextureSwizzleWithWrites	TextureSwizzleWithWrites
+variant	metal2vulkan-rt::Refusal::TextureViewFormat	TextureViewFormat { texture: PixelFormat, view: PixelFormat }
+variant	metal2vulkan-rt::Refusal::TextureViewRange	TextureViewRange { level: u32, level_count: u32, slice: u32, slice_count: u32 }
 variant	metal2vulkan-rt::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
 variant	metal2vulkan-rt::Resource::Buffer	Buffer(&'a Buffer)
@@ -13463,6 +13468,10 @@ variant	metal2vulkan-rt::StorageMode::Managed	Managed
 variant	metal2vulkan-rt::StorageMode::Memoryless	Memoryless
 variant	metal2vulkan-rt::StorageMode::Private	Private
 variant	metal2vulkan-rt::StorageMode::Shared	Shared
+variant	metal2vulkan-rt::TextureViewKind::PixelFormat	PixelFormat
+variant	metal2vulkan-rt::TextureViewKind::Slices	Slices
+variant	metal2vulkan-rt::TextureViewKind::Swizzle	Swizzle
+variant	metal2vulkan-rt::TextureViewKind::TextureType	TextureType
 variant	metal2vulkan-rt::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-rt::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-rt::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }

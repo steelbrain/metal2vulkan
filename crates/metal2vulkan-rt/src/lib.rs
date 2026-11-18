@@ -48,7 +48,7 @@ pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};
-pub use error::{Error, Gap, Limit, Refusal};
+pub use error::{Error, Gap, Limit, Refusal, TextureViewKind};
 pub use event::{Event, SharedEvent};
 pub use extension::{ConsumerFeature, DeviceExtension};
 pub use instance::{Instance, PhysicalDevice};

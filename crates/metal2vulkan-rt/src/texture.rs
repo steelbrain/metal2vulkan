@@ -25,7 +25,7 @@ use crate::arrays::{IndexClass, ResourceId};
 use crate::buffer::Buffer;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
-use crate::error::{Error, Gap, Limit, Refusal};
+use crate::error::{Error, Gap, Limit, Refusal, TextureViewKind};
 use crate::memory::{self, Block, BlockId, MemoryClass, BLOCK_LEN};
 use crate::places::Place;
 use crate::reaper::{Free, Job};
@@ -38,6 +38,7 @@ use metal2vulkan::metal::resource_word::TextureWord;
 use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
 };
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -189,6 +190,32 @@ struct TextureInner {
     /// A Managed texture's bytes the consumer names: the buffer, and a place for each level and
     /// slice in order.
     managed: Option<(Buffer, Vec<BytesPlace>)>,
+    /// A view's parent and place in the image ([`Texture::new_texture_view`]); `None` for a
+    /// texture with an image of its own.
+    view: Option<View>,
+}
+
+/// A texture view's parent, its place in the image, and its own image views.
+struct View {
+    /// The texture whose image the view reads, which the view keeps: the first in its chain of
+    /// parents with an image of its own.
+    parent: Texture,
+    /// The view's first level and array layer in the image.
+    base: [u32; 2],
+    _views: Views,
+}
+
+/// A texture view's image views, which the reaper frees once the view is gone.
+struct Views {
+    core: Arc<Core>,
+    sampled: Option<vk::ImageView>,
+    storage: Option<vk::ImageView>,
+}
+
+impl Drop for Views {
+    fn drop(&mut self) {
+        (self.core.reaper).give(Job::Free(Free::Views([self.sampled, self.storage])));
+    }
 }
 
 /// A texture's Vulkan objects: its image, its memory and its views. The texture and each upload
@@ -297,10 +324,13 @@ pub(crate) struct Shape {
 impl Drop for TextureInner {
     fn drop(&mut self) {
         let core = self.device.core();
-        core.ids.give_back(self.id);
-        // An upload holds the image past the texture: the pending one's bound counts it.
-        if Arc::strong_count(&self.image) > 1 {
-            core.work.released(self.image.bytes);
+        // A view's id and image are its parent's, which it keeps.
+        if self.view.is_none() {
+            core.ids.give_back(self.id);
+            // An upload holds the image past the texture: the pending one's bound counts it.
+            if Arc::strong_count(&self.image) > 1 {
+                core.work.released(self.image.bytes);
+            }
         }
         if let Some((class, index)) = self.index {
             // SAFETY: the texture owns its elements until it vacates the index below, and no
@@ -538,6 +568,7 @@ impl Device {
             word: plan.word,
             id: core.ids.take(),
             managed: managed.map(|(bytes, places)| (bytes.clone(), places.to_vec())),
+            view: None,
         };
         if let Some((class, index)) = index {
             // SAFETY: the index is occupied for the texture, whose views are live; its image is
@@ -886,6 +917,29 @@ pub(crate) fn components(
     })
 }
 
+/// An image view of `range` of `image`, of `view_type` and `format`, with `components`.
+///
+/// # Safety
+///
+/// `image` is the device's and bound, and takes such a view: its format, usage and range.
+unsafe fn image_view(
+    device: &ash::Device,
+    image: vk::Image,
+    view_type: vk::ImageViewType,
+    format: vk::Format,
+    components: vk::ComponentMapping,
+    range: vk::ImageSubresourceRange,
+) -> Result<vk::ImageView, Error> {
+    let info = vk::ImageViewCreateInfo::default()
+        .image(image)
+        .view_type(view_type)
+        .format(format)
+        .components(components)
+        .subresource_range(range);
+    // SAFETY: the caller's contract.
+    unsafe { device.create_image_view(&info, None) }.map_err(Error::vulkan("vkCreateImageView"))
+}
+
 /// Every level and layer of an image of `aspects`.
 fn whole(aspects: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange {
@@ -1093,15 +1147,10 @@ impl Made {
         unsafe { device.bind_image_memory(image, memory, offset) }
             .map_err(Error::vulkan("vkBindImageMemory"))?;
         let mut view = |components, aspect| {
-            let info = vk::ImageViewCreateInfo::default()
-                .image(image)
-                .view_type(shape.view_type)
-                .format(plan.format)
-                .components(components)
-                .subresource_range(whole(aspect));
+            let (view_type, format) = (shape.view_type, plan.format);
             // SAFETY: the image is bound, of the view's format, and has the view's usage.
-            let view = unsafe { device.create_image_view(&info, None) }
-                .map_err(Error::vulkan("vkCreateImageView"))?;
+            let view =
+                unsafe { image_view(device, image, view_type, format, components, whole(aspect)) }?;
             self.views.push(view);
             Ok::<_, Error>(view)
         };
@@ -1190,11 +1239,13 @@ impl Placed {
 /// Checks `region` of `level` and `slice` of a texture of `d` whose copy unit covers `block`
 /// texels: the level and slice are the texture's (a cube's slices are six a cube, a 3D texture
 /// has slice 0 alone), and the region lies inside the level, its origin on the block grid and its
-/// size whole blocks or reaching the level's edge. `None` for an empty region.
+/// size whole blocks or reaching the level's edge. `None` for an empty region. The place is in
+/// the image, which the texture starts at `base` of: a view's first level and array layer.
 ///
 /// Err: [`Refusal::TextureRegion`].
 pub(crate) fn place(
     d: &TextureDescriptor,
+    base: [u32; 2],
     block: [u32; 2],
     region: Region,
     level: u32,
@@ -1224,10 +1275,10 @@ pub(crate) fn place(
         return Ok(None);
     }
     Ok(Some(Placed {
-        level,
+        level: base[0] + level,
         layer: match three_d {
             true => 0,
-            false => slice,
+            false => base[1] + slice,
         },
         origin: region.origin,
         size: region.size,
@@ -1327,7 +1378,7 @@ impl TextureInner {
         let unit = self.unit.ok_or(Error::Unsupported(Gap::TextureBytes {
             pixel_format: d.pixel_format,
         }))?;
-        let Some(placed) = place(d, unit.block, region, level, slice)? else {
+        let Some(placed) = place(d, self.base(), unit.block, region, level, slice)? else {
             return Ok(None);
         };
         let [bw, bh] = unit.block;
@@ -1538,10 +1589,197 @@ impl TextureInner {
     }
 }
 
+impl TextureInner {
+    /// Where the texture starts in its image: a view's first level and array layer, else the
+    /// image's first.
+    fn base(&self) -> [u32; 2] {
+        self.view.as_ref().map_or([0, 0], |view| view.base)
+    }
+}
+
 impl Texture {
-    /// Its resource id in the encoders' hazard sets.
+    /// Its resource id in the encoders' hazard sets: a view's is its parent's, so the hazards
+    /// between them are one texture's.
     pub(crate) fn id(&self) -> u32 {
         self.inner.id
+    }
+
+    /// Where the texture starts in its image: a view's first level and array layer.
+    pub(crate) fn base(&self) -> [u32; 2] {
+        self.inner.base()
+    }
+
+    /// `newTextureViewWithPixelFormat:textureType:levels:slices:`: a texture over `levels` and
+    /// `slices` of this one's image, of `texture_type`, at `index`, with elements of set 1 of its
+    /// own and no copy; `newTextureViewWithPixelFormat:` is the call with the texture's own type,
+    /// every level and every slice. The view keeps this texture, as Metal's `parentTexture`, and
+    /// its descriptor is a view's in Metal: the extent of its first level, `levels.len()` levels
+    /// and `slices.len()` slices (a cube's six faces each one). Copies and encoders that name the
+    /// view reach the levels and slices under it; its hazards are its parent's own.
+    ///
+    /// Built: the texture's own pixel format, over every slice in the texture's own type, a slice
+    /// subrange of a 1D or 2D array, or one slice of a 2D array as a 2D texture, each over any
+    /// level subrange. `index` is given exactly where shaders reach the view, as
+    /// [`Device::new_texture`] takes it; its usage, storage mode and sample count are the
+    /// texture's.
+    ///
+    /// Err: [`Refusal::TextureViewRange`] for an empty range of levels or slices or one past the
+    /// texture's, and [`Refusal::TextureViewFormat`] for another pixel format of a texture made
+    /// without `PixelFormatView` usage, as Metal's validation stops them; [`Gap::TextureView`]
+    /// for another kind Metal makes, naming it; [`Refusal::TextureIndex`],
+    /// [`Refusal::IndicesNotGranted`] and [`Refusal::IndexInUse`] as [`Device::new_texture`];
+    /// [`Error::Vulkan`] where a view cannot be made.
+    pub fn new_texture_view(
+        &self,
+        pixel_format: PixelFormat,
+        texture_type: TextureType,
+        levels: Range<u32>,
+        slices: Range<u32>,
+        index: Option<u32>,
+    ) -> Result<Texture, Error> {
+        use TextureType as T;
+        let inner = &self.inner;
+        let p = &inner.descriptor;
+        let level_count = levels.end.saturating_sub(levels.start);
+        let slice_count = slices.end.saturating_sub(slices.start);
+        if level_count == 0
+            || levels.end > p.mipmap_level_count
+            || slice_count == 0
+            || slices.end > self::slices(p)
+        {
+            return Err(Error::Refused(Refusal::TextureViewRange {
+                level: levels.start,
+                level_count,
+                slice: slices.start,
+                slice_count,
+            }));
+        }
+        let gap = |kind| Err(Error::Unsupported(Gap::TextureView { kind }));
+        if pixel_format != p.pixel_format {
+            if !p.usage.is_empty() && !p.usage.contains(TextureUsage::PIXEL_FORMAT_VIEW) {
+                return Err(Error::Refused(Refusal::TextureViewFormat {
+                    texture: p.pixel_format,
+                    view: pixel_format,
+                }));
+            }
+            return gap(TextureViewKind::PixelFormat);
+        }
+        if p.swizzle != TextureSwizzleChannels::DEFAULT {
+            return gap(TextureViewKind::Swizzle);
+        }
+        let every_slice = slice_count == self::slices(p);
+        match (p.texture_type, texture_type) {
+            (from, to) if from == to => {
+                if !every_slice && !matches!(to, T::Type1DArray | T::Type2DArray) {
+                    return gap(TextureViewKind::Slices);
+                }
+            }
+            (T::Type2DArray, T::Type2D) if slice_count == 1 => {}
+            _ => return gap(TextureViewKind::TextureType),
+        }
+        let mut d = *p;
+        d.texture_type = texture_type;
+        [d.width, d.height, d.depth] =
+            [p.width, p.height, p.depth].map(|extent| (extent >> levels.start).max(1));
+        d.mipmap_level_count = level_count;
+        d.array_length = match texture_type {
+            T::Cube | T::CubeArray => slice_count / 6,
+            _ => slice_count,
+        };
+        let (shape, plan, usage) = inner.device.prepare(&d)?;
+        let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
+        if reached != index.is_some() {
+            return Err(Error::Refused(Refusal::TextureIndex { index }));
+        }
+        let class = match usage.contains(TextureUsage::SHADER_WRITE) {
+            true => IndexClass::StorageTexture,
+            false => IndexClass::Texture,
+        };
+        let core = inner.device.core();
+        let [level, layer] = inner.base();
+        let base = [level + levels.start, layer + slices.start];
+        let range = |aspect_mask| vk::ImageSubresourceRange {
+            aspect_mask,
+            base_mip_level: base[0],
+            level_count,
+            base_array_layer: base[1],
+            layer_count: shape.layers,
+        };
+        if let Some(index) = index {
+            lock(&core.arrays.grants).occupy(class, index)?;
+            core.counters.rise(Gauge::DescriptorSlots);
+        }
+        let index = index.map(|index| (class, index));
+        let image = inner.image.image;
+        let make = |(components, aspect)| {
+            let (view_type, format) = (shape.view_type, plan.format);
+            // SAFETY: the image is bound, of the view's format, has the view's usage, and holds
+            // the range: the texture's levels and layers hold the view's.
+            unsafe {
+                image_view(
+                    &core.device,
+                    image,
+                    view_type,
+                    format,
+                    components,
+                    range(aspect),
+                )
+            }
+        };
+        let storage = (plan.storage)
+            .then_some((vk::ComponentMapping::default(), vk::ImageAspectFlags::COLOR));
+        let mut views = Views {
+            core: Arc::clone(core),
+            sampled: None,
+            storage: None,
+        };
+        let mut made = || {
+            views.sampled = plan.sampled.map(make).transpose()?;
+            views.storage = storage.map(make).transpose()?;
+            Ok::<_, Error>(())
+        };
+        let made = made();
+        // The textures gauge counts the view from here; the reaper's free of its views lowers it.
+        core.counters.rise(Gauge::Textures);
+        let (sampled, storage) = (views.sampled, views.storage);
+        let parent = match &inner.view {
+            Some(view) => view.parent.clone(),
+            None => self.clone(),
+        };
+        let view = TextureInner {
+            device: inner.device.clone(),
+            descriptor: d,
+            image: Arc::clone(&inner.image),
+            format: plan.format,
+            unit: plan.unit,
+            index,
+            word: plan.word,
+            id: inner.id,
+            managed: None,
+            view: Some(View {
+                parent,
+                base,
+                _views: views,
+            }),
+        };
+        // A failed view drops here: its index is vacated and its views freed.
+        made?;
+        if let Some((class, index)) = index {
+            // SAFETY: the index is occupied for the view, whose image views are live; the image
+            // is in its home layout whenever work uses it.
+            unsafe {
+                core.arrays.write_texture(
+                    &core.device,
+                    class,
+                    index,
+                    sampled.map(|view| (view, inner.image.home)),
+                    storage,
+                )
+            };
+        }
+        Ok(Texture {
+            inner: Arc::new(view),
+        })
     }
 
     /// Whether `core` is the device this texture was made on.

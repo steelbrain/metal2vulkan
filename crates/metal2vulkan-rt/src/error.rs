@@ -383,6 +383,37 @@ pub enum Refusal {
         /// The buffer's length.
         len: u64,
     },
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of an empty range of levels
+    /// or slices, or of one past the texture's.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the
+    /// conformance crate, job m3-max-43677: Metal's validation layer stops each,
+    /// `(newLevelRange.location + newLevelRange.length)(4) must be <= [texture mipmapLevelCount](3)`,
+    /// `newLevelRange.length must not be 0` and
+    /// `(newSliceRange.location + newSliceRange.length)(4) must be <= (3)`).
+    TextureViewRange {
+        /// The view's first level in the texture.
+        level: u32,
+        /// Its levels.
+        level_count: u32,
+        /// The view's first slice in the texture: an array's element, or a cube's face.
+        slice: u32,
+        /// Its slices.
+        slice_count: u32,
+    },
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of another pixel format
+    /// over a texture made without `PixelFormatView` usage.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `texture_view_rules.m` in the
+    /// conformance crate, job m3-max-43677: Metal's validation layer stops an `R32Uint` view of an
+    /// `RGBA8Unorm` texture of `ShaderRead` usage, `Texture View Validation`, and makes it where
+    /// the usage adds `PixelFormatView`).
+    TextureViewFormat {
+        /// The texture's pixel format.
+        texture: PixelFormat,
+        /// The view's.
+        view: PixelFormat,
+    },
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// between textures of two pixel formats, or of two sample counts.
     ///
@@ -599,6 +630,31 @@ pub enum Gap {
         /// The byte after its last.
         end: u64,
     },
+    /// [`Texture::new_texture_view`](crate::Texture::new_texture_view) of a kind Metal makes and
+    /// the runtime does not build: what `kind` names.
+    ///
+    /// Basis: ours (the replay streams' views that compute binds are same-format views of every
+    /// slice, 2D views of one slice of a 2D array, and level subranges; each other kind is built
+    /// when a replay stream binds one).
+    TextureView {
+        /// What the view changes that is not built.
+        kind: TextureViewKind,
+    },
+}
+
+/// What a texture view changes that the runtime does not build ([`Gap::TextureView`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextureViewKind {
+    /// Another pixel format, over a texture of `PixelFormatView` usage.
+    PixelFormat,
+    /// Another texture type, but a 2D view of one slice of a 2D array.
+    TextureType,
+    /// Some of the slices of a texture that is not a 1D or 2D array: a cube's faces, or a cube
+    /// array's cubes.
+    Slices,
+    /// Any view of a texture made with a swizzle.
+    Swizzle,
 }
 
 /// A limit a call ran into, with what it was asked.
@@ -886,6 +942,19 @@ impl fmt::Display for Refusal {
                 f,
                 "a fill of {start}..{end} is empty or past the buffer's {len} bytes"
             ),
+            Refusal::TextureViewRange {
+                level,
+                level_count,
+                slice,
+                slice_count,
+            } => write!(
+                f,
+                "a view of {level_count} levels from {level} and {slice_count} slices from {slice} is empty or leaves the texture"
+            ),
+            Refusal::TextureViewFormat { texture, view } => write!(
+                f,
+                "a {view:?} view of a {texture:?} texture made without PixelFormatView usage"
+            ),
             Refusal::TextureCopyMismatch {
                 source,
                 destination,
@@ -972,6 +1041,7 @@ impl fmt::Display for Gap {
                 f,
                 "a fill of {start}..{end}, not whole 4-byte words, is not built"
             ),
+            Gap::TextureView { kind } => write!(f, "a texture view that changes {kind:?} is not built"),
         }
     }
 }

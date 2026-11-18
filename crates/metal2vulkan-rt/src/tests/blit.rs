@@ -54,6 +54,7 @@ fn side(d: &TextureDescriptor, format: vk::Format, unit: Option<CopyUnit>) -> Si
         descriptor: d,
         format,
         unit,
+        base: [0, 0],
     }
 }
 
@@ -740,7 +741,7 @@ fn a_fill_takes_whole_words_of_a_range_inside_the_buffer() {
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use crate::tests::command::on_device::{each_device, finished, within};
     use crate::{
         BlitCommandEncoder, Buffer, BufferLayout, BytesPlace, CommandBuffer, Device, DispatchType,
@@ -1480,7 +1481,7 @@ mod on_device {
     /// Returns once the pool holds a ready block of each class again: the block-maker thread
     /// makes one after a block is taken, a Private one zeroed in a submission of its own, which a
     /// count of a test's own work must not take in.
-    fn settled(device: &Device) {
+    pub(crate) fn settled(device: &Device) {
         within("a ready block of each class", || {
             let pool = &device.core().pool;
             pool.idle(MemoryClass::Private) > 0 && pool.idle(MemoryClass::Shared) > 0
