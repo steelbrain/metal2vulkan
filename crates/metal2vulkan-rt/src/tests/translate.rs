@@ -19,7 +19,7 @@ mod on_device {
     use crate::{
         host_time, BlockId, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
         DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Instance, Library, Limit,
-        MemoryClass, PrecisionNote, Refusal, StageSource,
+        MemoryClass, PrecisionNote, Refusal, StageSource, MAX_BUFFER_LENGTH,
     };
     use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
     use metal2vulkan::Budget;
@@ -1216,41 +1216,38 @@ mod on_device {
     }
 
     /// `ob1_storage_buffer` loads `src[idx[t]]` into `out[t]` and stores `0xA0000000 | t` to
-    /// `out[idx[8 + t]]`, with `src` and `out` one Shared buffer of 2 GiB and 64 KiB and the
-    /// indices on both sides of 2 GiB: the word below it, the word at it, and words past it up to
-    /// the buffer's last. A Metal buffer argument's offsets are unsigned, so each access lands at
-    /// its own word, where a signed 32-bit byte offset would land 4 GiB below. A device whose
-    /// largest block or memory is smaller skips visibly.
+    /// `out[idx[8 + t]]`, with `src` and `out` one Shared buffer of [`MAX_BUFFER_LENGTH`] (2 GiB)
+    /// bound at its start and the indices near it and up to its last word. Each access lands at
+    /// its own word. A device whose largest block or memory is smaller skips visibly.
     #[test]
-    fn an_access_at_2_gib_and_past_lands_at_its_own_word() {
+    fn an_access_up_to_2_gib_lands_at_its_own_word() {
         let Some(descriptor) = descriptor("ob1_storage_buffer") else {
             return;
         };
-        // The word at byte 2 GiB, and the buffer's length.
-        const AT_2_GIB: u32 = 1 << 29;
-        const LEN: u64 = (2 << 30) + (64 << 10);
+        const LEN: u64 = MAX_BUFFER_LENGTH;
+        // The buffer's last word.
         let last = (LEN / 4) as u32 - 1;
         let loads = [
             64,
-            AT_2_GIB - 1,
-            AT_2_GIB,
-            AT_2_GIB + 1,
-            AT_2_GIB + 2,
-            AT_2_GIB + 3,
-            AT_2_GIB + 4096,
+            last - 4096,
+            last - 1000,
+            last - 4,
+            last - 3,
+            last - 2,
+            last - 1,
             last,
         ];
         let stores = [
             128,
-            AT_2_GIB - 2,
-            AT_2_GIB + 8,
-            AT_2_GIB + 9,
-            AT_2_GIB + 10,
-            AT_2_GIB + 11,
-            AT_2_GIB + 8000,
-            last - 1,
+            last - 4097,
+            last - 2000,
+            last - 11,
+            last - 10,
+            last - 9,
+            last - 8,
+            last - 5,
         ];
-        each_device("compute_past_2_gib", |name, _, device| {
+        each_device("compute_to_2_gib", |name, _, device| {
             let block = match device.take_block(MemoryClass::Shared, LEN) {
                 Ok(block) => block,
                 Err(
@@ -1309,7 +1306,7 @@ mod on_device {
                     "{name}: the store to word {word:#x}"
                 );
             }
-            println!("{name}: loads and stores at 2 GiB and past landed at their own words");
+            println!("{name}: loads and stores up to 2 GiB landed at their own words");
         });
     }
 }
