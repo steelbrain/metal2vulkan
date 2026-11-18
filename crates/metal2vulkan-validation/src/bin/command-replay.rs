@@ -406,11 +406,14 @@ fn run<B: Backend>(
         report.line(&format!("gaps {}", gaps.join(" ")));
     }
     match ended {
+        // Played to the end, the IDs a shader reads differing from the program's: no fault, hang
+        // or refusal, its own status.
         Ok(()) if differing_ids > 0 => {
             report.line(&format!(
-                "error ids: {differing_ids} objects' gpuResourceID differ from the recording's{note}"
+                "ids: played to the end; {differing_ids} objects' gpuResourceID differ from the \
+                 recording's{note}"
             ));
-            1
+            3
         }
         Ok(()) => {
             report.line(&format!("ok{note}"));

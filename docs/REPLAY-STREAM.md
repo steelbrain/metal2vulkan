@@ -637,9 +637,11 @@ and `C` the first one's frame and stream position), `cut SEGMENT OFFSET` where t
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute
 pipeline states whose `gpuResourceID` the player asked, which the new runtime does not give),
-then `ok` or `error WHAT`. Where the backend skipped anything, the `skipped` line and the last
+then `ok`, `ids: played to the end; N objects' gpuResourceID differ from the recording's` where
+the play ended but objects whose ID the program saw have other IDs in the runtime, or
+`error WHAT`. Where the backend skipped anything, the `skipped` line and the last
 one end `; not a verdict past frame F, call C`: `F` and `C` the frame and stream position of the
 call at which it first skipped, past which nothing the play shows is a verdict. A dispatch is
 skipped only where it names a skipped object. `COUNTS` is `stream KEY=VALUE ... executed
-KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
-failure (a bad command line or an unreadable stream).
+KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped, 2 for a harness
+failure (a bad command line or an unreadable stream) and 3 for `ids`, a run that played to the end.
