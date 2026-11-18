@@ -462,6 +462,42 @@ fn queried(query: &crate::texture_query::HeapTextureQuery) -> rt::TextureDescrip
     d
 }
 
+/// What a texture the runtime made answers of itself, read of its descriptor: each `MTLTexture`
+/// getter the runtime's descriptor states, and at `cpuCacheMode`, `hazardTrackingMode` and
+/// `allowGPUOptimizedContents`, which it does not, the consumer's own.
+fn texture_facts(texture: &rt::Texture) -> crate::buffer_texture::BufferTextureFacts {
+    let d = texture.descriptor();
+    let consumers = || {
+        Failure::named(
+            "TheConsumers",
+            "metal2vulkan-rt's TextureDescriptor states no cpuCacheMode, hazardTrackingMode or \
+             allowGPUOptimizedContents: its consumer implements them",
+        )
+        .recorded()
+    };
+    crate::buffer_texture::BufferTextureFacts {
+        texture_type: u64::from(d.texture_type.as_raw()),
+        pixel_format: u64::from(d.pixel_format.as_raw()),
+        width: d.width.into(),
+        height: d.height.into(),
+        depth: d.depth.into(),
+        mipmap_level_count: d.mipmap_level_count.into(),
+        array_length: d.array_length.into(),
+        sample_count: d.sample_count.into(),
+        usage: u64::from(d.usage.as_raw()),
+        // `MTLStorageMode`'s raw values.
+        storage_mode: match d.storage_mode {
+            rt::StorageMode::Shared => 0,
+            rt::StorageMode::Managed => 1,
+            rt::StorageMode::Private => 2,
+            rt::StorageMode::Memoryless => 3,
+        },
+        cpu_cache_mode: consumers(),
+        hazard_tracking_mode: consumers(),
+        gpu_optimized: consumers(),
+    }
+}
+
 /// [`waited_for`] within [`ARRIVAL`], as a status.
 fn waited(command_buffer: &rt::CommandBuffer) -> Status {
     waited_for(command_buffer, ARRIVAL).map_or(Status::NeverSettled, Status::read)
@@ -569,6 +605,40 @@ impl Side for RtSide<'_> {
         (texture.get_bytes(&mut bytes, row_pitch.into(), 0, region, 0, 0))
             .map_err(|error| Failure::of_rt(&error))?;
         Ok(bytes)
+    }
+
+    /// `newTextureWithDescriptor:` of the query, kept, and what it answers of itself
+    /// ([`texture_facts`]).
+    fn queried_texture_facts(
+        &mut self,
+        query: &crate::texture_query::HeapTextureQuery,
+    ) -> Answer<Option<crate::buffer_texture::BufferTextureFacts>> {
+        let descriptor = queried(query);
+        let index = self.on.texture_index(descriptor.usage);
+        let texture = (self.on.device.new_texture(&descriptor, index))
+            .map_err(|error| Failure::of_rt(&error))?;
+        let facts = texture_facts(&texture);
+        keep(&mut self.textures, texture);
+        Ok(Some(facts))
+    }
+
+    /// `newTextureWithDescriptor:offset:bytesPerRow:` on a buffer of the request's length and
+    /// storage, in blocks of its own, and what the texture answers of itself
+    /// ([`texture_facts`]). The texture is kept; it holds the buffer, and the buffer its blocks'
+    /// memory, as the runtime's `Buffer::new_texture` says.
+    fn buffer_texture(
+        &mut self,
+        request: &crate::buffer_texture::BufferTextureRequest,
+    ) -> Answer<crate::buffer_texture::BufferTextureFacts> {
+        let (buffer, _blocks) =
+            work::buffer_of(self.on, request.buffer_length, request.buffer_storage)?;
+        let descriptor = queried(&request.descriptor);
+        let index = self.on.texture_index(descriptor.usage);
+        let made = buffer.new_texture(&descriptor, index, request.offset, request.bytes_per_row);
+        let texture = made.map_err(|error| Failure::of_rt(&error))?;
+        let facts = texture_facts(&texture);
+        keep(&mut self.textures, texture);
+        Ok(facts)
     }
 
     fn heap_texture_size_and_align(

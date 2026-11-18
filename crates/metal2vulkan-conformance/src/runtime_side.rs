@@ -5770,9 +5770,9 @@ impl Side for RuntimeSide<'_> {
             sample_count: texture.sample_count(),
             usage: u64::from(texture.usage().as_raw()),
             storage_mode: texture.storage_mode().raw(),
-            cpu_cache_mode: texture.cpu_cache_mode().raw(),
-            hazard_tracking_mode: texture.hazard_tracking_mode().raw(),
-            gpu_optimized: texture.allow_gpu_optimized_contents(),
+            cpu_cache_mode: Value::Uint(texture.cpu_cache_mode().raw()),
+            hazard_tracking_mode: Value::Uint(texture.hazard_tracking_mode().raw()),
+            gpu_optimized: Value::Bool(texture.allow_gpu_optimized_contents()),
         };
         // Both are kept, as the Metal side keeps them: a texture over a buffer the case dropped
         // would be a texture over freed memory, and a later row could read it.
@@ -5804,9 +5804,9 @@ impl Side for RuntimeSide<'_> {
             sample_count: texture.sample_count(),
             usage: u64::from(texture.usage().as_raw()),
             storage_mode: texture.storage_mode().raw(),
-            cpu_cache_mode: texture.cpu_cache_mode().raw(),
-            hazard_tracking_mode: texture.hazard_tracking_mode().raw(),
-            gpu_optimized: texture.allow_gpu_optimized_contents(),
+            cpu_cache_mode: Value::Uint(texture.cpu_cache_mode().raw()),
+            hazard_tracking_mode: Value::Uint(texture.hazard_tracking_mode().raw()),
+            gpu_optimized: Value::Bool(texture.allow_gpu_optimized_contents()),
         };
         self.textures.push(texture);
         Ok(Some(facts))

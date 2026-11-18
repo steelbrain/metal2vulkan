@@ -7582,9 +7582,9 @@ fn buffer_texture_facts(
         sample_count: texture.sampleCount() as u64,
         usage: texture.usage().0 as u64,
         storage_mode: texture.storageMode().0 as u64,
-        cpu_cache_mode: texture.cpuCacheMode().0 as u64,
-        hazard_tracking_mode: texture.hazardTrackingMode().0 as u64,
-        gpu_optimized: texture.allowGPUOptimizedContents(),
+        cpu_cache_mode: crate::transcript::Value::Uint(texture.cpuCacheMode().0 as u64),
+        hazard_tracking_mode: crate::transcript::Value::Uint(texture.hazardTrackingMode().0 as u64),
+        gpu_optimized: crate::transcript::Value::Bool(texture.allowGPUOptimizedContents()),
     }
 }
 

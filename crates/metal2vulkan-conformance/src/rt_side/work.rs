@@ -168,19 +168,24 @@ fn read_buffer(buffer: &rt::Buffer, offset: u64, length: usize) -> Answer<Vec<u8
     Ok(bytes.to_vec())
 }
 
-/// A buffer of `length` bytes in `storage`, zeroed as `newBufferWithLength:options:` is.
-fn buffer(on: &RtDevice, length: u64, storage: Storage) -> Answer<Made> {
+/// A buffer of `length` bytes in `storage`, zeroed as `newBufferWithLength:options:` is, with
+/// the blocks this side took for it.
+pub(super) fn buffer_of(
+    on: &RtDevice,
+    length: u64,
+    storage: Storage,
+) -> Answer<(rt::Buffer, Vec<rt::Block>)> {
     let length = length.max(1);
     let device = &on.device;
     match storage {
         Storage::Shared => {
             let (buffer, block) = shared_buffer(on, length)?;
-            Ok(Made::Buffer(buffer, vec![block]))
+            Ok((buffer, vec![block]))
         }
         Storage::Private => {
             let block = (device.take_block(rt::MemoryClass::Private, length)).map_err(of_rt)?;
             let buffer = (device.new_buffer(block.id, 0, length, Some(0))).map_err(of_rt)?;
-            Ok(Made::Buffer(buffer, vec![block]))
+            Ok((buffer, vec![block]))
         }
         Storage::Managed => {
             let bytes = (device.take_block(rt::MemoryClass::Shared, length)).map_err(of_rt)?;
@@ -195,10 +200,7 @@ fn buffer(on: &RtDevice, length: u64, storage: Storage) -> Answer<Made> {
                 .map_err(of_rt)?;
             // The device copy is zeroed; the consumer's bytes are this side's to zero.
             write(&buffer, &vec![0; length as usize])?;
-            Ok(Made::Buffer(
-                buffer,
-                [Some(bytes), copy].into_iter().flatten().collect(),
-            ))
+            Ok((buffer, [Some(bytes), copy].into_iter().flatten().collect()))
         }
         Storage::Memoryless => Err(Failure::unavailable(
             "newBufferWithLength:options: of MTLStorageModeMemoryless",
@@ -247,7 +249,10 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
             write(&buffer, bytes)?;
             Ok(Made::Buffer(buffer, vec![block]))
         }
-        Resource::UnwrittenBuffer { length, storage } => buffer(on, *length, *storage),
+        Resource::UnwrittenBuffer { length, storage } => {
+            let (buffer, blocks) = buffer_of(on, *length, *storage)?;
+            Ok(Made::Buffer(buffer, blocks))
+        }
         Resource::Fence => Ok(Made::Fence(device.new_fence())),
         Resource::Heap { size, storage } => heap(on, *size, *storage),
         Resource::HeapForTexture { spec, storage } => {

@@ -193,7 +193,11 @@ pub fn ends_metals_process(request: &BufferTextureRequest) -> Option<String> {
 
 /// What a texture made over a buffer answers of itself: every `MTLTexture` getter both sides have,
 /// so a difference names the field rather than the object.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The three getters metal2vulkan-rt keeps no counterpart of (`cpuCacheMode`,
+/// `hazardTrackingMode`, `allowGPUOptimizedContents`, which its consumer implements) are each the
+/// value a side recorded, so the new runtime's side records its refusal at those three sites alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BufferTextureFacts {
     /// `textureType`, by its raw `MTLTextureType`.
     pub texture_type: u64,
@@ -209,12 +213,13 @@ pub struct BufferTextureFacts {
     pub usage: u64,
     /// `storageMode`, by its raw `MTLStorageMode`.
     pub storage_mode: u64,
-    /// `cpuCacheMode`, by its raw `MTLCPUCacheMode`.
-    pub cpu_cache_mode: u64,
-    /// `hazardTrackingMode`, by its raw `MTLHazardTrackingMode`.
-    pub hazard_tracking_mode: u64,
-    /// `allowGPUOptimizedContents`.
-    pub gpu_optimized: bool,
+    /// `cpuCacheMode`, by its raw `MTLCPUCacheMode` (a `Value::Uint`), or a side's refusal.
+    pub cpu_cache_mode: Value,
+    /// `hazardTrackingMode`, by its raw `MTLHazardTrackingMode` (a `Value::Uint`), or a side's
+    /// refusal.
+    pub hazard_tracking_mode: Value,
+    /// `allowGPUOptimizedContents` (a `Value::Bool`), or a side's refusal.
+    pub gpu_optimized: Value,
 }
 
 impl BufferTextureFacts {
@@ -236,14 +241,17 @@ impl BufferTextureFacts {
             .with(Node::leaf("sample_count", number(self.sample_count)))
             .with(Node::leaf("usage", number(self.usage)))
             .with(Node::leaf("storage_mode", number(self.storage_mode)))
-            .with(Node::leaf("cpu_cache_mode", number(self.cpu_cache_mode)))
+            .with(Node::leaf(
+                "cpu_cache_mode",
+                Observed::value(self.cpu_cache_mode.clone()),
+            ))
             .with(Node::leaf(
                 "hazard_tracking_mode",
-                number(self.hazard_tracking_mode),
+                Observed::value(self.hazard_tracking_mode.clone()),
             ))
             .with(Node::leaf(
                 "gpu_optimized",
-                Observed::value(Value::Bool(self.gpu_optimized)),
+                Observed::value(self.gpu_optimized.clone()),
             ))
     }
 }
