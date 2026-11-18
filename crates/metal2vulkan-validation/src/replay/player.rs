@@ -198,6 +198,9 @@ pub struct Report {
     /// The dispatches an `m2v.privateBytes` record names that played without the snapshot, as the
     /// backend takes none (`Backend::snapshots`).
     pub unsnapshotted: u64,
+    /// The live recorded ranges a newer one met in part, which the address map ended
+    /// (`AddressMap::insert`).
+    pub parted: u64,
     /// The placement heaps the player laid out again for the runtime's sizes and alignments
     /// (`relay`).
     pub relaid: Relaid,
@@ -275,6 +278,9 @@ impl Report {
         }
         if self.unsnapshotted > 0 {
             lines.push(format!("unsnapshotted {}", self.unsnapshotted));
+        }
+        if self.parted > 0 {
+            lines.push(format!("parted {}", self.parted));
         }
         let relaid = self.relaid;
         if relaid.heaps > 0 {
@@ -1038,9 +1044,8 @@ impl<'b, B: Backend> Player<'b, B> {
                 selector: resolved.selector.to_string(),
                 error: format!("#{object} has a recorded range and no address in the runtime"),
             })?;
-            self.addresses
-                .insert(object, address, length, base)
-                .map_err(PlayError::Invalid)?;
+            let ended = self.addresses.insert(object, address, length, base);
+            self.report.parted += ended.map_err(PlayError::Invalid)?;
         }
         match contents {
             Some(bytes) => self.put(object, 0, bytes),

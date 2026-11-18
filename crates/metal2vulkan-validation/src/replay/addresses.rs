@@ -25,14 +25,15 @@ impl AddressMap {
     /// `base`. It lies inside a live range (one of the same bounds included: it is the inner one) or
     /// apart from each, or holds live ranges whole. A live range it meets in part ends, its inner
     /// ranges kept: the program put this object in that memory while the older one lived on, so a
-    /// word there is this object's. An object with a live range is refused.
+    /// word there is this object's. An object with a live range is refused. The count is the live
+    /// ranges it ended.
     pub fn insert(
         &mut self,
         object: u64,
         start: u64,
         length: u64,
         base: u64,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let end = start
             .checked_add(length)
             .filter(|_| length > 0)
@@ -40,6 +41,7 @@ impl AddressMap {
         if self.of.contains_key(&object) {
             return Err(format!("#{object} has a live range already"));
         }
+        let mut ended = 0;
         loop {
             let mut level = &mut self.top;
             while let Some(at) = container(level, start, end) {
@@ -67,10 +69,11 @@ impl AddressMap {
                     },
                 );
                 self.of.insert(object, (start, end));
-                return Ok(());
+                return Ok(ended);
             }
             for older in parted {
                 self.remove(older);
+                ended += 1;
             }
         }
     }

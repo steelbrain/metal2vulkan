@@ -138,6 +138,7 @@ and the (name id, value) answer pairs.
   answered them; `release` removes an object's range. A range that meets a live one in part (the
   program put a newer object in memory an older one still held, as a guest's own allocator in a
   block may) ends the older range, whose inner ranges stay: a word there is the newer object's.
+  The player's report counts the ranges it ended (`parted`).
 - **Relocation.** The player makes each object where its runtime has room. In the bytes it puts
   into an object that answered a `gpuAddress` (`m2v.write`, a copied buffer's `contents` and the
   copies from the guest's RAM), in the data of every `set*Bytes:length:atIndex:` and in every address value, each 8-byte word at an
@@ -427,7 +428,7 @@ old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `c
   once every command buffer committed before its release completed, and gives textures and
   sampler states indices from the whole of each index class. Its readback serves Shared and Managed buffers only; a check of anything else
   is a refusal. The runtime gives a compute pipeline state no `gpuResourceID`, so each one the
-  program saw is reported on an `id` line as `none`.
+  program saw is reported on an `id` line as `none` and counted (`gap_pipeline_ids`).
 
 `report.txt` holds one line per item: `device NAME`, `completed IDS COUNTS`, `frame N COUNTS`,
 `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
@@ -436,11 +437,14 @@ runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/W
 `m2v.privateBytes` range compared, `split N executed COUNTS` where the player split compute
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
 `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
+`parted N` where a recorded range met a live one in part (`N` the older ranges ended),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
 offsets it moved in them and the bytes it added to their sizes), `total COUNTS` (its `calls` the
 calls played: where
 the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the new runtime's backend
-skipped anything, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
+skipped anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute
+pipeline states whose `gpuResourceID` the player asked, which the new runtime does not give),
+then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
 KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
 failure (a bad command line or an unreadable stream).

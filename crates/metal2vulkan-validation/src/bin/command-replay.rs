@@ -6,7 +6,7 @@
 //! old runtime (the default) or the new one (`rt`) and writes `DIR/report.txt`: `device NAME`,
 //! the player's report lines, `cut SEGMENT OFFSET` where the last segment ends in a record cut
 //! short, `skipped ...` where the new runtime skipped what it does not build yet (such a play is
-//! no gate result), then `ok` or `error WHAT`. The exit status is 0 for `ok`, 1 for a play that
+//! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`. The exit status is 0 for `ok`, 1 for a play that
 //! stopped and 2 for a harness failure (a bad command line, no device, an unreadable stream).
 //!
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
@@ -230,14 +230,20 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                 }
             };
             let code = run(&mut backend, &mut reader, &mut report);
-            let skips = backend.counters();
-            let skips: Vec<_> = skips
-                .iter()
-                .filter(|(name, count)| name.starts_with("skipped_") && **count > 0)
-                .map(|(name, count)| format!("{name}={count}"))
-                .collect();
+            let counters = backend.counters();
+            let counted = |prefix: &str| -> Vec<String> {
+                (counters.iter())
+                    .filter(|(name, count)| name.starts_with(prefix) && **count > 0)
+                    .map(|(name, count)| format!("{name}={count}"))
+                    .collect()
+            };
+            let skips = counted("skipped_");
             if !skips.is_empty() {
                 report.line(&format!("skipped {}: no gate result", skips.join(" ")));
+            }
+            let gaps = counted("gap_");
+            if !gaps.is_empty() {
+                report.line(&format!("gaps {}", gaps.join(" ")));
             }
             code
         }

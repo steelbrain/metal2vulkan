@@ -83,6 +83,9 @@ pub struct NewRuntime {
     /// The commits that have completed, every earlier one with them.
     completed: u64,
     skips: Skips,
+    /// The compute pipeline states whose `gpuResourceID` the player asked, which the runtime does
+    /// not give: a typed gap, counted.
+    unanswered_pipeline_ids: u64,
 }
 
 /// A made object with no address.
@@ -269,6 +272,7 @@ impl NewRuntime {
             in_flight: VecDeque::new(),
             completed: 0,
             skips: Skips::default(),
+            unanswered_pipeline_ids: 0,
         })
     }
 
@@ -1088,8 +1092,12 @@ impl Backend for NewRuntime {
             Some(Object::Texture(texture)) => texture.gpu_resource_id(),
             Some(Object::Sampler(sampler)) => sampler.gpu_resource_id(),
             // The runtime gives a compute pipeline state no resource ID: it builds no indirect
-            // command buffers. The player reports the ID as differing.
-            Some(Object::ComputePipeline(_) | Object::Skipped) => return Ok(None),
+            // command buffers. The player reports the ID as differing, and the gap is counted.
+            Some(Object::ComputePipeline(_)) => {
+                self.unanswered_pipeline_ids += 1;
+                return Ok(None);
+            }
+            Some(Object::Skipped) => return Ok(None),
             _ => {
                 return Err(PlayError::Invalid(format!(
                     "gpuResourceID of #{object}, which has none"
@@ -1121,6 +1129,7 @@ impl Backend for NewRuntime {
             ("skipped_dispatches", self.skips.dispatches),
             ("skipped_blits", self.skips.blits),
             ("skipped_calls", self.skips.calls),
+            ("gap_pipeline_ids", self.unanswered_pipeline_ids),
         ])
     }
 

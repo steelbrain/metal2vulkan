@@ -255,7 +255,7 @@ fn a_range_that_meets_a_live_one_in_part_ends_it() {
     let mut map = AddressMap::default();
     map.insert(1, block, 0x1_0000, 0x10_0000).unwrap();
     map.insert(2, block + 0x100, 0x100, 0x90_0000).unwrap();
-    map.insert(3, block + 0x180, 0x100, 0xa0_0000).unwrap();
+    assert_eq!(map.insert(3, block + 0x180, 0x100, 0xa0_0000), Ok(1));
     assert!(!map.holds(2));
     assert_eq!(map.relocated(block + 0x188), Some(0xa0_0008));
     assert_eq!(
@@ -264,7 +264,7 @@ fn a_range_that_meets_a_live_one_in_part_ends_it() {
         "the block's again"
     );
     // One that meets the block itself in part ends the block; its buffer stays.
-    map.insert(4, block - 8, 0x10, 0xb0_0000).unwrap();
+    assert_eq!(map.insert(4, block - 8, 0x10, 0xb0_0000), Ok(1));
     assert!(!map.holds(1));
     assert_eq!(map.relocated(block - 8), Some(0xb0_0000));
     assert_eq!(map.relocated(block + 0x188), Some(0xa0_0008));
@@ -412,6 +412,39 @@ fn addressed(address: u64, length: u64) -> [(&'static str, Value); 2] {
         ("gpuAddress", Value::Address(address)),
         ("gpuLength", Value::Uint(length)),
     ]
+}
+
+/// A buffer whose recorded range meets a live buffer's in part, as a guest's allocator reuses
+/// block memory before the older buffer's release, ends the older range; the report counts it.
+#[test]
+fn a_range_met_in_part_is_counted() {
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let block = [Value::Uint(0x1_0000), Value::Uint(0)];
+        let made = addressed(BLOCK, 0x1_0000);
+        w.call("m2v.newBlockWithLength:storageMode:", 1, 2, &block, &made)?;
+        for (id, offset) in [(3, 0x100), (4, 0x180)] {
+            let inner = [
+                Value::Object(2),
+                Value::Uint(offset),
+                Value::Uint(0x100),
+                Value::Uint(0),
+            ];
+            let at = addressed(BLOCK + offset, 0x100);
+            w.call(
+                "m2v.newBufferInBlock:offset:length:options:",
+                2,
+                id,
+                &inner,
+                &at,
+            )?;
+        }
+        Ok(())
+    });
+    ended.unwrap();
+    assert_eq!(report.parted, 1);
+    assert!(report.lines().contains(&"parted 1".to_string()));
 }
 
 /// A write into a block and a constant upload carry recorded addresses: the player rewrites them
