@@ -81,6 +81,34 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(code, 137)
 
 
+class PlanTests(unittest.TestCase):
+    """The legs a run plans from the nodes' GPUs and the config."""
+
+    nodes = {
+        "a": {"os": "linux", "gpus": [{"vendor": "10de", "device": "2204", "id": "0000:01:00.0"},
+                                      {"vendor": "8086", "device": "a7a0", "id": "0000:00:02.0"}]},
+        "b": {"os": "linux", "gpus": [{"vendor": "10de", "device": "2204", "id": "0000:05:00.0"}]},
+    }
+
+    def legs(self, cfg):
+        with mock.patch.object(matrix, "log"):
+            return sorted((leg.id, leg.node) for leg in matrix.plan(self.nodes, cfg, None)
+                          if leg.id not in matrix.CPU_LEGS)
+
+    def test_a_card_on_two_nodes_has_one_leg_unless_the_config_names_its_node_of_record(self):
+        self.assertEqual(len([leg for leg, _ in self.legs({}) if leg.startswith("10de:2204")]), 1)
+        self.assertEqual(self.legs({"record_nodes": {"10de:2204": "b"}}),
+                         [("10de:2204", "b"), ("10de:2204@a", "a"), ("8086:a7a0", "a")])
+        # Its node of record away: the other runs as the extra leg, and none is of record.
+        self.assertEqual(self.legs({"record_nodes": {"10de:2204": "c"}}),
+                         [("10de:2204@a", "a"), ("10de:2204@b", "b"), ("8086:a7a0", "a")])
+
+    def test_an_extra_leg_selects_its_device_by_its_card(self):
+        leg = matrix.Leg("1002:744c@a", "a", "0000:03:00.0", "radeon", True)
+        script = matrix.gpu_script("abc", "", [leg], "POTLUCK_MIRROR_x", "0" * 40, "rt", False)
+        self.assertIn("leg 1002:744c@a radeon '1002:744c!'", script)
+
+
 class LayerTests(unittest.TestCase):
     """The shell a device-test job runs to unpack the carried validation layer, run for real."""
 

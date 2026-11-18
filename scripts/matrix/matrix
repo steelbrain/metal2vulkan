@@ -17,12 +17,19 @@ The cluster's own facts come from potluck (its nodes, their GPUs and CPUs) and f
     {"builders": [{"node": "A", "gate": "SHELL COMMAND", "portable": true}, {"node": "B"}],
      "setup": {"A": "SHELL"},
      "skip_gpus": ["vendor:device"],
+     "record_nodes": {"vendor:device": "A"},
+     "open_records": {"vendor:device@B": "ONE LINE"},
      "validation_layer": "PATH"}
 
 The first builder whose gate command exits 0 (no gate: always) builds the GPU legs' test archive
 and runs the lavapipe leg. Its archive runs on every Linux node when it is `portable`, else only
 on nodes of its CPU model; any other node builds its own. `setup` is shell each job on that node
-runs first. A GPU in `skip_gpus` gets no leg. `validation_layer` is the carry
+runs first. A GPU in `skip_gpus` gets no leg. A card in `record_nodes` has its leg of record on
+that node, named by the card, and runs as an extra leg, `vendor:device@node`, on each other node
+that holds it, judged like any leg. A leg in `open_records` is an extra leg with an open record
+against its card: a test that failed there with wrong bytes and passed on the card's leg of
+record at the same commit is listed with the record, not judged (results.record_excused); every
+other failure, and every timing row, is judged. `validation_layer` is the carry
 `scripts/validation-layer make` made (default ~/.cache/metal2vulkan-matrix/validation-layer):
 every job that runs rt's device tests (each GPU leg's, lavapipe's, the Windows host's) unpacks
 its OS's directory in its workspace and points the loader at it, and its note gives the layer's
@@ -165,8 +172,12 @@ CPU_LEGS = ("lavapipe", "lint")
 
 def plan(nodes, cfg, only):
     """The legs: each lab GPU on one node, the nodes' loads kept even (the GPUs on fewest nodes
-    placed first), each Windows GPU on its host, lavapipe and the lint."""
+    placed first), each Windows GPU on its host, lavapipe and the lint. A card in the config's
+    `record_nodes` runs on every node that holds it: its leg of record on the node named, an extra
+    leg (results.extra_leg_id) on each other; with its node of record away, it has no leg of
+    record that run."""
     skip = set(cfg.get("skip_gpus", []))
+    record_nodes = cfg.get("record_nodes", {})
     linux = {n: f for n, f in nodes.items() if f["os"] == "linux"}
     where = {}
     for name, facts in sorted(linux.items()):
@@ -181,6 +192,15 @@ def plan(nodes, cfg, only):
         places = [p for p in places if select or (p[0], icd) not in taken]
         if not places:
             log(f"{vd}: every node holding it already runs a leg on its driver, which cannot pick between two")
+            continue
+        recorded = record_nodes.get(vd)
+        if recorded is not None:
+            if recorded not in {node for node, _ in places}:
+                log(f"{vd}: its node of record {recorded} is not among its nodes, so it has no leg of record")
+            for node, gpu in places:
+                load_of[node] += 1
+                leg_id = vd if node == recorded else results.extra_leg_id(vd, node)
+                legs.append(Leg(leg_id, node, gpu, icd, select))
             continue
         node, gpu = min(places, key=lambda p: (load_of[p[0]], p[0]))
         load_of[node] += 1
@@ -262,7 +282,7 @@ def gpu_script(short, setup, legs, mirror, rev, suite, last, layer=None):
     LAYER carries, layer_lines) or `harness` (the timed workloads, one run per runtime, without
     it). The node's LAST job removes the tree and its carry's mirror there (no other job reads
     it; potluck never prunes one), and any left by a job that never ran."""
-    runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(leg.id + "!" if leg.select else "")])
+    runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(results.card_of(leg.id) + "!" if leg.select else "")])
                      for leg in legs)
     if suite == "rt":
         file, body = ARCHIVE, f"""{layer_lines(layer, 'linux', '$1')}
@@ -332,7 +352,7 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     creates = f"'{results.HARNESS_CREATES}*'"
     rename = r"s#^M2V-MATRIX \([a-z]*\) harness-$runtime/\([a-z]*\)/first_use_#M2V-MATRIX \1 harness-$runtime-warm/\2/first_use_#p"
     outputs = " ".join(f'"$out/{runtime}"' for runtime in HARNESS_RUNTIMES)
-    limits = "\n".join(f"        {leg_id}) limits='{results.harness_limits(leg_id)}' "
+    limits = "\n".join(f"        {leg_id}|{leg_id}@*) limits='{results.harness_limits(leg_id)}' "
                         f"gpulimits='{results.harness_limits(leg_id, gpu=True)}' ;;"
                         for leg_id in sorted(set(results.HARNESS_CEILINGS) | set(results.HARNESS_FLOORS)
                                              | set(results.HARNESS_GPU_FLOORS)))
@@ -792,14 +812,26 @@ class Run:
 
 # --- commands ------------------------------------------------------------------------------------
 
+def record_suites(run, card):
+    """The suites of CARD's leg of record at the run's commit: this run's, else its note's."""
+    for leg in run.legs:
+        if leg.id == card:
+            return leg.parsed["suites"]
+    return (((note(run.sha) or {}).get("legs") or {}).get(card) or {}).get("suites") or {}
+
+
 def leg_entry(run, leg):
-    """A leg's document in the note, judged against its base where only one leg is needed."""
+    """A leg's document in the note, judged against its base where only one leg is needed. An
+    extra leg under an open record (the config's `open_records`) has its wrong-bytes failures that
+    passed on the card's leg of record listed with the record (results.record_excused)."""
     parsed = leg.parsed
     records, problems = results.leg_records(parsed)
     base_sha, base = base_of(run.sha, leg.id)
     problems += run.failures.get(leg.id, [])
     base_records = base and results.base_records(base["records"], harness_tree(base_sha) == harness_tree(run.sha))
-    problems += results.leg_problems(parsed, records, base_records)
+    record = run.cfg.get("open_records", {}).get(leg.id)
+    excused = record and results.record_excused(parsed, record_suites(run, results.card_of(leg.id)), record) or {}
+    problems += results.leg_problems(parsed, records, base_records, excused)
     problems += results.old_path_moved(parsed, run.since_bless)
     budget, budget_parked = results.harness_budget(leg.id, parsed)
     problems += budget
@@ -818,7 +850,7 @@ def leg_entry(run, leg):
         minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
         records=records, base=base_sha, base_records=base and base["records"], problems=problems,
-        parked=results.leg_parked(parsed, records) + budget_parked)
+        parked=results.leg_parked(parsed, records, excused) + budget_parked)
 
 
 def run_cmd(sha, only, dry):
