@@ -377,7 +377,7 @@ impl NewRuntime {
             (self.places.take(rt::MemoryClass::Shared, len, completed)).map_err(failed(call))?;
         let staging = self
             .device
-            .new_buffer(place.block, place.range.start, len, false);
+            .new_buffer(place.block, place.range.start, len, None);
         let staging = staging.map_err(failed(call))?;
         for (at, entry, span, from) in &spans {
             let bytes = crate::replay::player::piece(&call.args, *entry);

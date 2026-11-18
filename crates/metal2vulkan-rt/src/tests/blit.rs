@@ -1616,8 +1616,8 @@ pub(crate) mod on_device {
     fn every_device_copies_between_buffers() {
         each_device("blit_buffer_to_buffer", |name, _, device| {
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
-            let source = (device.new_buffer(block.id, 0, 256, true)).expect("a buffer");
-            let destination = (device.new_buffer(block.id, 256, 256, true)).expect("a buffer");
+            let source = (device.new_buffer(block.id, 0, 256, Some(0))).expect("a buffer");
+            let destination = (device.new_buffer(block.id, 256, 256, Some(0))).expect("a buffer");
             let (from, into) = (pattern(256, 31), pattern(256, 47));
             write(&source, &from);
             write(&destination, &into);

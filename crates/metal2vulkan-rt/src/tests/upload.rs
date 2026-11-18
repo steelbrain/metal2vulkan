@@ -259,7 +259,7 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(small);
             let buffer = device
-                .new_buffer(fills.id, 256, 256, true)
+                .new_buffer(fills.id, 256, 256, Some(0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
             let (_, bytes, _) = core.work.pending();
