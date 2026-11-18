@@ -457,12 +457,6 @@ HARNESS_CEILINGS = {
     # first GPU zero fill's recording and the first GPU use of the new block, are open, and their
     # fixes lower the ceiling.
     "8086:a7a0": {"create_private_16MiB/first_take": 1.88},
-    # Ruled by the planner: one step. On the UHD 630 this row's GPU time moves in steps of
-    # 1/1024 s (976.6 us) on both runtimes, the kernel's on that card's driver: every reading sits
-    # on the step's grid (the new runtime's 26 at 7 to 26 us past a step, the old runtime's 6 at 58
-    # to 71 us before one), where no other row of 5 ms or more does. One step over old's 19.46 ms
-    # is 1.05, so one step passes and two fail.
-    "8086:3e9b": {"zero_products": 1.05},
 }
 
 
