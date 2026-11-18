@@ -446,6 +446,17 @@ HARNESS_CEILINGS = {
     # and one deep pays for running in tiles and for the RX 550's 64-bit address per read (the rt
     # README's known gaps of pipeline states), from a Private table and from a Managed one alike.
     "1002:699f": {"constant_managed": 1.20, "constant_private": 1.20},
+    # Ruled by the planner on the rows' measured medians, 1.876 and 2.252: old imports fresh
+    # anonymous pages for a Shared buffer of 64 MiB, a form chosen by a run-time check; rt
+    # allocates and zeroes (on the 2080, a 10.0 ms vkAllocateMemory and a 2.5 ms memset against
+    # old's 6.7 ms import; on the 3090, 15.4 to 17.4 ms and 2.6 ms against 6.4 to 8.2 ms).
+    "10de:1e87": {"create_64MiB/first_take": 1.88},
+    "10de:2204": {"create_64MiB/first_take": 2.26},
+    # Ruled by the planner on the row's measured median, 1.877: old carves the buffer from a
+    # Private block it already holds, and rt takes a new block. rt's own costs inside the row, its
+    # first GPU zero fill's recording and the first GPU use of the new block, are open, and their
+    # fixes lower the ceiling.
+    "8086:a7a0": {"create_private_16MiB/first_take": 1.88},
 }
 
 
