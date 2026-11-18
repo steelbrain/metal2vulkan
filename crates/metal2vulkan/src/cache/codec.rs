@@ -1241,6 +1241,7 @@ codec_enum! {
     DepthMode { Any, Greater, Less }
     VertexFetch {
         FixedFunction,
+        SignedFixedFunction,
         Pulled { format, buffer_index, offset, step_function, step_rate },
     }
     RuntimeFact {
