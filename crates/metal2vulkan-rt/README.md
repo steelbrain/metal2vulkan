@@ -974,18 +974,21 @@ generations. `Gauges::pipeline_cache_bytes` is the cache's size at the reaper's 
 zero once the device is torn down. With no directory the cache is the same, made empty, and
 nothing is written.
 
-**The lowerings** live in two generations, `g<N>/` (young) and `g<N-1>/` (old), each holding at
-most half of `DeviceOptions::pipeline_cache_cap` (128 MiB where it is `None`: half of it is about
-seven times the 9.16 MB a long recorded session's 282 lowerings fill). A lookup tries young, then
-old, and a hit in old moves the file into young by a rename. A new file goes into young. The write
-that takes young past half the cap starts the next generation: young becomes old, and the old one
-is removed whole, by a thread the store starts for it. So a file stays for at least half the cap,
-and at most the whole cap, of files written or moved after its last use. Half the cap is what the
-store is sure to keep: a set of functions used over and over that is larger than half the cap is
-partly removed at each new generation and lowered again. On disk the lowerings take at most the
-cap, and while a removal runs, also what is left of the generation it removes; the blobs are
-beside them. A file larger than half the cap is not kept. `Metrics::cache_bytes_written` counts
-the bytes the device wrote there, lowerings and blobs.
+**The lowerings** live in two generations, `g<N>/` (young) and `g<N-1>/` (old), each holding at most
+half of `DeviceOptions::pipeline_cache_cap` (128 MiB where it is `None`: half of it is about seven
+times the 9.16 MB a long recorded session's 282 lowerings fill). A lookup tries young, then old, and
+a hit in old moves the file into young by a rename. A new file goes into young, written by the
+reaper off every guest thread: a state hands its lowering over and returns, and where the lowerings
+waiting for the reaper hold 8 MiB it is dropped and counted (`Metrics::cache_writes_dropped`), never
+waited for, and lowered again by a later device. The write that takes young past half the cap starts
+the next generation: young becomes old, and the old one is removed whole, by a thread the store
+starts for it. So a file stays for at least half the cap, and at most the whole cap, of files
+written or moved after its last use. Half the cap is what the store is sure to keep: a set of
+functions used over and over that is larger than half the cap is partly removed at each new
+generation and lowered again. On disk the lowerings take at most the cap, and while a removal runs,
+also what is left of the generation it removes; the blobs are beside them. A file larger than half
+the cap is not kept. `Metrics::cache_bytes_written` counts the bytes the device wrote there,
+lowerings and blobs.
 
 The bytes young holds are counted in `state`, a file of 24 bytes beside the generations, read and
 written under its lock, so devices open on one directory, in one process or several, share its

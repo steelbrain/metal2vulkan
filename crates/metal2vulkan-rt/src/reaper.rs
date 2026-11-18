@@ -1,10 +1,10 @@
 //! The reaper thread: it makes the device's `VkPipelineCache` from its blob first, then frees
 //! what the runtime's other threads give up, one object at a time, runs a teardown that starts on
-//! the completion thread, lowers the pipeline states' emulated-SIMD-group variants after their
-//! creation returned, and looks at the pipeline cache once creation is quiet, writing its blob or
-//! replacing it past its bound (`crate::cache`). No driver free runs on the completion thread, so
-//! no completion waits behind one, and a submission on another thread waits behind at most one
-//! free.
+//! the completion thread, writes the lowerings the pipeline states hand it to the store, lowers
+//! the states' emulated-SIMD-group variants after their creation returned, and looks at the
+//! pipeline cache once creation is quiet, writing its blob or replacing it past its bound
+//! (`crate::cache`). No driver free runs on the completion thread, so no completion waits behind
+//! one, and a submission on another thread waits behind at most one free.
 
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
@@ -121,8 +121,8 @@ impl Reaper {
         }
     }
 
-    /// Wakes the reaper to see when to look at the pipeline cache, after the first creation since
-    /// its last look.
+    /// Wakes the reaper: to see when to look at the pipeline cache, after the first creation since
+    /// its last look, or to write a lowering handed to it (`cache::keep_translation`).
     pub(crate) fn poke(&self) {
         let _state = lock(&self.state);
         self.changed.notify_one();
@@ -242,6 +242,8 @@ enum Next {
     Lower(Weak<Compiled>),
     /// Look at the pipeline cache, creation being quiet.
     Look,
+    /// Write a lowering or refusal to the store.
+    Write(String, Vec<u8>),
     /// End, after telling the states whose lowering is left that it will not run.
     End(VecDeque<Weak<Compiled>>),
 }
@@ -257,6 +259,10 @@ pub(crate) fn run(core: Arc<Core>) {
             loop {
                 if let Some(job) = state.jobs.pop_front() {
                     break Next::Job(job);
+                }
+                // Before the end, so a teardown writes every lowering handed over.
+                if let Some((file, bytes)) = core.caches.next_write() {
+                    break Next::Write(file, bytes);
                 }
                 if state.stop {
                     break Next::End(std::mem::take(&mut state.lowerings));
@@ -281,6 +287,7 @@ pub(crate) fn run(core: Arc<Core>) {
             Next::Job(Job::Teardown(teardown)) => teardown(&core),
             // SAFETY: the caches are the core's device's.
             Next::Look => unsafe { core.caches.look(&core.device, &core.counters) },
+            Next::Write(file, bytes) => core.caches.write_kept(&file, &bytes, &core.counters),
             Next::Lower(lowering) => {
                 if let Some(state) = lowering.upgrade() {
                     state.lower_emulated();

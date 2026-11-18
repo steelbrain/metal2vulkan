@@ -542,7 +542,7 @@ impl Compiled {
                         Err(TranslationError::Unsupported(refused))
                             if refused.feature == Feature::GpuEncodedIndirectCommands =>
                         {
-                            core.caches.keep_refusal(&variant_key, &core.counters);
+                            cache::keep_refusal(&core, &variant_key);
                             None
                         }
                         Err(error) => return Err(Error::Translation(error)),
@@ -705,8 +705,7 @@ pub(crate) fn lower(
     let lowered = translator.compile_function_from_entries(function, inputs, budget, entries);
     core.note_entries();
     let lowered = lowered?;
-    core.caches
-        .keep_translation(key.digest(), &lowered.to_bytes(), &core.counters);
+    cache::keep_translation(core, key.digest(), lowered.to_bytes());
     Ok(lowered)
 }
 
@@ -1158,7 +1157,7 @@ impl Emulated {
         let compiled = match lower(core, &self.function, &self.inputs, &budget, &core.entries) {
             Ok(compiled) => compiled,
             Err(TranslationError::Unsupported(_)) => {
-                core.caches.keep_refusal(&key, &core.counters);
+                cache::keep_refusal(core, &key);
                 return Lowered::Refused;
             }
             Err(_) => return Lowered::Refused,

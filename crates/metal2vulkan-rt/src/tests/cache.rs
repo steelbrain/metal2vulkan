@@ -6,7 +6,9 @@
 //! blobs kept, and stores in threads and processes sharing one directory without losing a count
 //! or reading a file another was writing.
 
-use crate::cache::{blob_name, checksum, frame, prune_blobs, unframe, State, Store, BLOBS_KEPT};
+use crate::cache::{
+    blob_name, checksum, frame, prune_blobs, unframe, Pending, State, Store, BLOBS_KEPT,
+};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -504,6 +506,25 @@ fn a_directory_keeps_at_most_four_blobs_the_least_recently_used_removed() {
     assert_eq!(blobs(), kept, "its own and those three: four");
     assert!(scratch.0.join(&temp).exists(), "the temporary file stays");
     assert!(scratch.0.join("state").exists(), "the state stays");
+}
+
+/// The lowerings waiting for the reaper: a file that would take the queue past its bound is
+/// refused and nothing is queued; the rest come out in order, and each taken makes room.
+#[test]
+fn the_write_queue_refuses_a_file_past_its_bound() {
+    let mut pending = Pending::new(10);
+    assert!(pending.push("a".into(), vec![1; 4]));
+    assert!(pending.push("b".into(), vec![2; 6]));
+    assert!(!pending.push("c".into(), vec![3]), "full: dropped");
+    assert!(
+        !pending.push("d".into(), vec![4; 11]),
+        "larger than the bound"
+    );
+    assert_eq!(pending.pop(), Some(("a".into(), vec![1; 4])));
+    assert!(pending.push("c".into(), vec![3; 4]), "room again");
+    assert_eq!(pending.pop(), Some(("b".into(), vec![2; 6])));
+    assert_eq!(pending.pop(), Some(("c".into(), vec![3; 4])));
+    assert_eq!(pending.pop(), None);
 }
 
 #[test]

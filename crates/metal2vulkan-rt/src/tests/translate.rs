@@ -1347,6 +1347,69 @@ mod on_device {
         }
     }
 
+    /// A state's lowerings go to the store on the reaper: with the reaper's writes held, the
+    /// creation returns and nothing is written. Once the queue is full, the next state's lowerings
+    /// are dropped and counted, never waited for. Let go, the reaper writes what was queued: a
+    /// device after it reads the first kernel's lowering and lowers the second again.
+    #[test]
+    fn every_device_writes_its_lowerings_off_the_creating_thread_and_drops_them_past_its_queue() {
+        let (Some(first), Some(second)) = (
+            descriptor("a1_sign_and_division"),
+            descriptor("a1_sign_and_division_precise"),
+        ) else {
+            return;
+        };
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-pending-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let device = on_directory(name, physical, &dir);
+            let caches = &device.core().caches;
+            let counters = device.counters();
+            caches.stall_writes(true);
+            let a = state(name, &device, &first);
+            let metrics = counters.metrics();
+            assert!(metrics.translations > 0, "{name}: the first kernel lowered");
+            assert_eq!(
+                metrics.cache_bytes_written, 0,
+                "{name}: the creation returned with nothing written"
+            );
+            // Full: the bound is what waits now.
+            let waiting = caches.set_pending_bound(0);
+            caches.set_pending_bound(waiting);
+            let b = state(name, &device, &second);
+            assert!(
+                counters.metrics().cache_writes_dropped > 0,
+                "{name}: the second kernel's lowering dropped and counted"
+            );
+            caches.set_pending_bound(crate::cache::PENDING_BYTES);
+            caches.stall_writes(false);
+            within("the writes", || counters.metrics().cache_bytes_written > 0);
+            drop((a, b));
+            drop(device);
+            within("the teardown", || counters.gauges() == Gauges::default());
+            let next = on_directory(name, physical, &dir);
+            let counters = next.counters();
+            let a = state(name, &next, &first);
+            assert!(
+                counters.metrics().translations_loaded > 0,
+                "{name}: the first kernel's lowering was written"
+            );
+            let lowered = counters.metrics().translations;
+            let b = state(name, &next, &second);
+            assert!(
+                counters.metrics().translations > lowered,
+                "{name}: the second kernel's, dropped, is lowered again"
+            );
+            drop((a, b));
+            drop(next);
+            within("the teardown", || counters.gauges() == Gauges::default());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     /// A blob the device cannot take, cut short or of another device's header, is removed when
     /// the reaper makes the cache, which starts empty: creations go on, and the drop writes the
     /// blob a next device takes. That device's look finds the cache no larger, so neither it nor

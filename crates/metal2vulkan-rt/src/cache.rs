@@ -39,23 +39,24 @@
 //! self-checking encoding (`CompiledFunction::to_bytes`), and bytes that do not decode for the key
 //! are a miss. A partial-threadgroups variant the translator refused is kept too, as a marker.
 //!
-//! The files live in two generations, `g<N>/` (young) and `g<N-1>/` (old), which the consumer's
-//! cap ([`DeviceOptions::pipeline_cache_cap`]) bounds at half of it each. A lookup tries young,
-//! then old; a hit in old is renamed into young, which is its mark of use. Generations start at
-//! 1, and the first has no old: a lookup there tries young alone. A write goes into young. The
-//! bytes young holds are counted in `state`, 24 bytes beside the generations: young's number,
-//! its bytes and a checksum of both, read and written under a lock on the file, which every store
-//! on the directory, in this process or another, holds open for its life. The write that takes
-//! young past half the cap makes the next generation young: young becomes old, and the old one is
-//! dead. A store keeps young's number as it last read or wrote the state, so a lookup reads no
-//! state: a move another store made is seen at this store's next write, and until then its
-//! lookups try the generations it knew, a miss at worst. A thread of the store's own removes the
-//! dead generation and ends, so no thread that submits, waits for or completes work removes
-//! files. So a file stays at least half the cap and at most the cap of other writes and moves
-//! after its last use, opening reads one file whatever the store holds, and nothing per file is
-//! kept in memory. The same thread removes the `pipelines/` directories under young and old in
-//! which an earlier version kept one file of pipeline data per `VkPipeline`; their bytes stay
-//! counted in young until it moves on.
+//! The files live in two generations, `g<N>/` (young) and `g<N-1>/` (old), which the consumer's cap
+//! ([`DeviceOptions::pipeline_cache_cap`]) bounds at half of it each. A lookup tries young, then
+//! old; a hit in old is renamed into young, which is its mark of use. Generations start at 1, and
+//! the first has no old: a lookup there tries young alone. A write goes into young, made by the
+//! reaper: a state hands its lowering over ([`keep_translation`]) and returns, and a lowering that
+//! would take the ones waiting past [`PENDING_BYTES`] is dropped and counted, never waited for. The
+//! bytes young holds are counted in `state`, 24 bytes beside the generations: young's number, its
+//! bytes and a checksum of both, read and written under a lock on the file, which every store on
+//! the directory, in this process or another, holds open for its life. The write that takes young
+//! past half the cap makes the next generation young: young becomes old, and the old one is dead. A
+//! store keeps young's number as it last read or wrote the state, so a lookup reads no state: a
+//! move another store made is seen at this store's next write, and until then its lookups try the
+//! generations it knew, a miss at worst. A thread of the store's own removes the dead generation
+//! and ends, so no thread that submits, waits for or completes work removes files. So a file stays
+//! at least half the cap and at most the cap of other writes and moves after its last use, opening
+//! reads one file whatever the store holds, and nothing per file is kept in memory. The same thread
+//! removes the `pipelines/` directories under young and old in which an earlier version kept one
+//! file of pipeline data per `VkPipeline`; their bytes stay counted in young until it moves on.
 //!
 //! Every write is a temporary file renamed over its name, counted before it is written and given
 //! back where it fails, so the count is never below what young holds. Every file checks itself
@@ -75,6 +76,7 @@ use crate::device::{lock, Core};
 use crate::memory::QUIET_NANOS;
 use crate::times::host_time;
 use ash::vk;
+use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
@@ -97,6 +99,9 @@ const MAGIC: &[u8; 8] = b"m2vblob1";
 const BLOB: &str = "pipelines";
 /// The most blobs a cache directory keeps: four kinds of device or driver versions.
 pub(crate) const BLOBS_KEPT: usize = 4;
+/// The most bytes of lowerings waiting for the reaper to write them: about the 9.16 MB a long
+/// recorded session's 282 lowerings fill. A lowering past it is not kept.
+pub(crate) const PENDING_BYTES: u64 = 8 << 20;
 /// What a translation file holds where the translator refused the lowering: bytes no lowering
 /// encodes to, and that a file cut short is not.
 const REFUSED: &[u8] = b"m2v-refused";
@@ -651,6 +656,11 @@ pub(crate) struct Caches {
     grown: AtomicBool,
     /// [`PIPELINE_CACHE_BOUND`], lower in a test.
     bound: AtomicU64,
+    /// The lowerings and refusals waiting for the reaper to write them.
+    pending: Mutex<Pending>,
+    /// Whether the reaper's writes wait, for a test.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    writes_stalled: AtomicBool,
     /// Whether the reaper has seeded the cache from the blob, or found none to take.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     seeded: AtomicBool,
@@ -680,6 +690,64 @@ struct Pipelines {
 
 /// A `VkPipelineCache` of the device's, held by each creation through it.
 pub(crate) struct PipelineCache(vk::PipelineCache);
+
+/// Hands the bytes of a lowered function of key digest `key` to the reaper, which writes them to
+/// the store, off every guest thread. Where the lowerings waiting for it hold [`PENDING_BYTES`]
+/// already, they are dropped and counted (`Metrics::cache_writes_dropped`), never waited for: a
+/// lowering is only a cache, and a later state lowers it again.
+pub(crate) fn keep_translation(core: &Core, key: &[u8], bytes: Vec<u8>) {
+    if core.caches.store.is_none() {
+        return;
+    }
+    let queued = lock(&core.caches.pending).push(Caches::translation_file(key), bytes);
+    match queued {
+        true => core.reaper.poke(),
+        false => core.counters.count(Metric::CacheWritesDropped),
+    }
+}
+
+/// Hands the translator's refusal of the lowering of key digest `key` to the reaper, as
+/// [`keep_translation`] does a lowering.
+pub(crate) fn keep_refusal(core: &Core, key: &[u8]) {
+    keep_translation(core, key, REFUSED.to_vec());
+}
+
+/// The files waiting for the reaper to write them, in order, at most `bound` bytes of them.
+pub(crate) struct Pending {
+    files: VecDeque<(String, Vec<u8>)>,
+    bytes: u64,
+    bound: u64,
+}
+
+impl Pending {
+    /// An empty queue of at most `bound` bytes.
+    pub(crate) fn new(bound: u64) -> Pending {
+        Pending {
+            files: VecDeque::new(),
+            bytes: 0,
+            bound,
+        }
+    }
+
+    /// Queues `bytes` under `file`; false, queuing nothing, where they would take the queue past
+    /// its bound.
+    pub(crate) fn push(&mut self, file: String, bytes: Vec<u8>) -> bool {
+        let len = bytes.len() as u64;
+        if self.bytes.saturating_add(len) > self.bound {
+            return false;
+        }
+        self.bytes += len;
+        self.files.push_back((file, bytes));
+        true
+    }
+
+    /// The first file queued, taken off the queue.
+    pub(crate) fn pop(&mut self) -> Option<(String, Vec<u8>)> {
+        let (file, bytes) = self.files.pop_front()?;
+        self.bytes -= bytes.len() as u64;
+        Some((file, bytes))
+    }
+}
 
 /// A creation through the device's `VkPipelineCache`, from [`creation`] until it is dropped.
 pub(crate) struct Creation<'a> {
@@ -779,6 +847,9 @@ impl Caches {
             created: AtomicU64::new(0),
             grown: AtomicBool::new(false),
             bound: AtomicU64::new(PIPELINE_CACHE_BOUND),
+            pending: Mutex::new(Pending::new(PENDING_BYTES)),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            writes_stalled: AtomicBool::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             seeded: AtomicBool::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -792,6 +863,20 @@ impl Caches {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn blob(&self) -> Option<&Path> {
         self.blob.get().map(PathBuf::as_path)
+    }
+
+    /// Makes the reaper's writes of lowerings wait, or go on, for a test.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn stall_writes(&self, stalled: bool) {
+        (self.writes_stalled).store(stalled, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Sets the bound of the lowerings waiting to be written, for a test; the bytes waiting.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn set_pending_bound(&self, bytes: u64) -> u64 {
+        let mut pending = lock(&self.pending);
+        pending.bound = bytes;
+        pending.bytes
     }
 
     /// Sets the cache's bound for a test.
@@ -846,10 +931,23 @@ impl Caches {
         kept.flatten()
     }
 
-    /// Keeps the bytes of a lowered kernel of key digest `key`.
-    pub(crate) fn keep_translation(&self, key: &[u8], bytes: &[u8], counters: &Counters) {
+    /// The next lowering or refusal waiting for the reaper to write it.
+    pub(crate) fn next_write(&self) -> Option<(String, Vec<u8>)> {
+        lock(&self.pending).pop()
+    }
+
+    /// On the reaper: writes `bytes` under `file` in the store, as [`keep_translation`] queued
+    /// them.
+    pub(crate) fn write_kept(&self, file: &str, bytes: &[u8], counters: &Counters) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        while self
+            .writes_stalled
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
         if let Some(store) = &self.store {
-            if store.put(&Caches::translation_file(key), bytes) {
+            if store.put(file, bytes) {
                 counters.cache_written(bytes.len() as u64);
             }
         }
@@ -860,11 +958,6 @@ impl Caches {
         self.store
             .as_ref()
             .is_some_and(|store| store.holds(&Caches::translation_file(key), REFUSED))
-    }
-
-    /// Keeps the translator's refusal of the lowering of key digest `key`.
-    pub(crate) fn keep_refusal(&self, key: &[u8], counters: &Counters) {
-        self.keep_translation(key, REFUSED, counters);
     }
 
     /// On the reaper, first: makes the device's `VkPipelineCache` empty, which creations waiting

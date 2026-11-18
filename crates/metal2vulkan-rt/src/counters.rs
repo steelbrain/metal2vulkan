@@ -27,6 +27,8 @@ pub(crate) enum Metric {
     TranslationsLoaded,
     /// [`Metrics::creations_before_seed`].
     CreationsBeforeSeed,
+    /// [`Metrics::cache_writes_dropped`].
+    CacheWritesDropped,
     /// [`Metrics::ring_writes`].
     RingWrites,
     /// [`Metrics::upload_waits`].
@@ -136,6 +138,7 @@ struct Atomics {
     translations: AtomicU64,
     translations_loaded: AtomicU64,
     creations_before_seed: AtomicU64,
+    cache_writes_dropped: AtomicU64,
     ring_writes: AtomicU64,
     upload_waits: AtomicU64,
     synchronizations: AtomicU64,
@@ -206,6 +209,7 @@ impl Counters {
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
             Metric::CreationsBeforeSeed => &a.creations_before_seed,
+            Metric::CacheWritesDropped => &a.cache_writes_dropped,
             Metric::RingWrites => &a.ring_writes,
             Metric::UploadWaits => &a.upload_waits,
             Metric::Synchronizations => &a.synchronizations,
@@ -412,6 +416,7 @@ impl Counters {
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
             creations_before_seed: a.creations_before_seed.load(Relaxed),
+            cache_writes_dropped: a.cache_writes_dropped.load(Relaxed),
             cache_bytes_written: a.cache_bytes_written.load(Relaxed),
             ring_writes: a.ring_writes.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
@@ -546,6 +551,10 @@ pub struct Metrics {
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     pub creations_before_seed: u64,
+    /// Lowerings and refusals not kept in the cache directory: each was handed to the reaper,
+    /// which writes them off every guest thread, while the ones waiting for it held 8 MiB, and was
+    /// dropped rather than waited for. A later device lowers it again.
+    pub cache_writes_dropped: u64,
     /// Bytes written to the cache directory ([`DeviceOptions::pipeline_cache_dir`]): lowered
     /// kernels, and the device's pipeline cache blob each time it is written: once creation is
     /// quiet where the cache grew by more than an eighth since the last write, and at the
