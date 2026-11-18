@@ -1203,8 +1203,9 @@ mod on_device {
     /// every free begins at least 20 ms after the last commit before it, whatever the test
     /// thread's own gaps were. Once the commits stop, the idle allocations are freed. Then the
     /// free of one of two more idle allocations is held open: a command buffer committed with a
-    /// fill during it is counted as a submission during a free, and one committed once both are
-    /// freed is not.
+    /// fill during it is counted as a submission during a free, the other's free begins no sooner
+    /// than 20 ms after the held one ended, though the hold outlasted the fill by more than that,
+    /// and a command buffer committed once both are freed is not counted.
     #[test]
     fn every_device_frees_idle_allocations_in_quiet_gaps() {
         const QUIET: u64 = 20_000_000;
@@ -1300,10 +1301,20 @@ mod on_device {
                 1,
                 "{name}: the submission during the free"
             );
+            // Held past the quiet time after the submission, as a driver may hold a submission for
+            // a whole free: the next free still waits the quiet time from this free's end.
+            thread::sleep(Duration::from_nanos(QUIET + 10_000_000));
+            let released = crate::host_time();
             core.pool.hold_frees(false);
             wait_until("both freed", || {
                 counters.metrics().allocations_freed == freed + 2 && !core.pool.freeing()
             });
+            let next = *core.pool.quiet_frees().last().expect("the second free");
+            assert!(
+                next >= released + QUIET,
+                "{name}: the free after a held submission began {} us after the hold ended",
+                next.saturating_sub(released) / 1000
+            );
             fill(&buffer);
             assert_eq!(
                 counters.metrics().submissions_during_frees,

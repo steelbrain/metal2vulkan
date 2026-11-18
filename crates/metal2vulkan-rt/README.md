@@ -142,8 +142,10 @@ in its memory.
   after `BlockMappings::unmap` of each block kept in them, except those the class's free bytes
   need to stay at 8 MiB or more. The quiet test is 20 ms: the block-maker thread frees them one at
   a time, only once no commit or submission has come on any of the device's queues for 20 ms, and
-  looks again after each free, so a program that goes quiet gives its idle allocations back
-  without a call of its own, and a busy one at its next quiet gap. `Metrics::allocations_freed`
+  looks again after each free. A commit or submission made during a free starts the 20 ms again
+  where that free ends, however long the driver held it. So a program that goes quiet gives its
+  idle allocations back without a call of its own, and a busy one at its next quiet gap.
+  `Metrics::allocations_freed`
   counts the frees. `Gauges::shared_idle_bytes` and `Gauges::private_idle_bytes` count the idle
   bytes. Once the last handle is gone the block's
   number names nothing

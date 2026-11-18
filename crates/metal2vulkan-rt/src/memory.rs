@@ -105,7 +105,8 @@ const WINDOW_SECS: u64 = 3;
 /// host-visible memory takes about 1.1 ms per MiB and holds any submission for its length, where
 /// an internal NVIDIA card frees 16 MiB in about 0.5 ms. So the thread frees one allocation at a
 /// time, only in such a gap, and looks again after each; a submission that arrives during a free
-/// waits for the rest of it.
+/// waits for the rest of it, and the quiet time starts again where that free ended, so the next
+/// free waits 20 ms past the held submission however long the hold.
 const QUIET_NANOS: u64 = 20_000_000;
 
 /// `MTLStorageMode` of a block, as the buffers in it see it.
@@ -534,6 +535,15 @@ impl Pool {
     /// queues: the block-maker thread frees no idle allocation until [`QUIET_NANOS`] after it.
     pub(crate) fn worked(&self, now: u64) {
         self.worked.fetch_max(now, Relaxed);
+    }
+
+    /// The end of an idle allocation's free, which began once the device had been quiet at
+    /// `quiet` ([`host_time`](crate::host_time)): where a commit or submission came during it,
+    /// which a driver may have held until now, the quiet time starts again now.
+    fn freed(&self, quiet: u64) {
+        if self.worked.load(Relaxed) > quiet {
+            self.worked(crate::host_time());
+        }
     }
 
     /// How long until the device has been quiet for [`QUIET_NANOS`] at `now`
@@ -1133,6 +1143,7 @@ pub(crate) fn run(core: Arc<Core>) {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             lock(&pool.quiet_frees).push(quiet);
             free_idle(&core, allocation, &kept);
+            pool.freed(quiet);
             state = pool.lock();
             continue;
         }
