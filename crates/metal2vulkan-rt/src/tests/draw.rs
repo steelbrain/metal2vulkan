@@ -25,8 +25,8 @@
 //!     for every vertex and instance, from a base instance of 1.
 //!   - a draw whose vertex buffer is bound off its argument's alignment is refused before
 //!     anything is recorded, and the same buffers bound aligned draw.
-//!   - 32-bit indices at byte 2 of their block are refused before anything is recorded, and
-//!     16-bit indices there draw.
+//!   - 32-bit indices 2 bytes past a multiple of 256 in their block are refused before anything
+//!     is recorded, and 16-bit indices there draw.
 //!   - what Metal refuses is refused, and what a draw does not build is a gap: no pipeline state,
 //!     a pipeline state of other formats than the pass's, points, a depth test, a stencil test
 //!     without a stencil attachment, a misaligned index offset, a non-finite viewport and a
@@ -884,10 +884,10 @@ mod on_device {
     }
 
     /// Vulkan binds indices only at a multiple of their size in the memory: in a buffer the
-    /// consumer placed 2 bytes into its block, 32-bit indices at offset 0, which Metal takes, are
-    /// refused before anything is recorded (`Refusal::ArgumentPlace`), and 16-bit indices there
-    /// draw the top half's triangle from where they lie; the pass is its two barriers and the
-    /// segment's end.
+    /// consumer placed 2 bytes past a multiple of 256 in its block, 32-bit indices at offset 0,
+    /// which Metal takes, are refused before anything is recorded (`Refusal::ArgumentPlace`), and
+    /// 16-bit indices there draw the top half's triangle from where they lie; the pass is its two
+    /// barriers and the segment's end.
     #[test]
     fn every_device_takes_indices_only_at_a_multiple_of_their_size_in_their_block() {
         let Some(library) = examples() else {
@@ -898,6 +898,8 @@ mod on_device {
             let state = state(name, &device, &d);
             let mut buffers = Buffers::new(&device);
             let (positions, colors) = vertices(&device, &mut buffers);
+            // 2 bytes past a multiple of 256 in the block.
+            let at = buffers.next + 2;
             let indices = buffers.at(&device, &[0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0], 2);
             let color = target(
                 &device,
@@ -927,9 +929,9 @@ mod on_device {
             match encoder.draw_indexed_primitives(triangle, 3, indexed(IndexType::UInt32), 1, 0, 0)
             {
                 Err(Error::Refused(Refusal::ArgumentPlace { place, alignment })) => {
-                    assert_eq!((place, alignment), (2, 4), "{name}: 32-bit indices");
+                    assert_eq!((place, alignment), (at, 4), "{name}: 32-bit indices");
                 }
-                other => panic!("{name}: 32-bit indices at byte 2: {other:?}"),
+                other => panic!("{name}: 32-bit indices at byte {at}: {other:?}"),
             }
             draw(encoder.draw_indexed_primitives(triangle, 3, indexed(IndexType::UInt16), 1, 0, 0));
             encoder.end_encoding();
