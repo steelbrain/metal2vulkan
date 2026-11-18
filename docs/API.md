@@ -117,8 +117,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   address plus its 32-bit byte offset, sign-extended, which is exact as the new runtime makes no
   buffer longer than 2 GiB (`MAX_BUFFER_LENGTH`), and an access of 8 or 16 bytes at an offset
   proven a multiple of its size is one `uvec2` or `uvec4`. The function states
-  `RuntimeFact::AddressAlignment` with that alignment (at most 16), and a binder refuses a binding
-  whose address is not a multiple of it, as Metal's API validation refuses the bind offset. A
+  `RuntimeFact::AddressAlignment` with that alignment (at most 16), and a binder rounds a bound
+  address down to a multiple of it, where Metal's API validation refuses the bind offset (an
+  accepted difference, section 10). A
   slot whose argument states an alignment below 4, or none, is reached the same way where each of
   its accesses is one 1- or 2-byte unit no wider than that alignment (an `i8` access of a `uchar`
   buffer, an `i16` one of a `ushort` buffer) on a device with that width's storage access. Any
@@ -6403,6 +6404,18 @@ each item named states the rule in full.
   an argument the kernel writes may read those bytes as they were before its own writes, where the
   device reads read-only memory through another path (RADV reads a uniform address of it with a
   scalar load). The attribute states that no other argument reaches that memory.
+- **A buffer bound off its argument's alignment is reached at the address rounded down to that
+  alignment** (the alignment the kernel's AIR states for the argument, `air.arg_type_align_size`,
+  at most 16; `RuntimeFact::AddressAlignment`): the new runtime's binder rounds the bound address,
+  the buffer's `gpuAddress` plus the offset, before the dispatch runs. Metal's API validation
+  refuses such a bind offset ("must be a multiple of 4 but was set to 2" for a `uint *` argument).
+  Without validation an Apple M3 Max (macOS 27.0.1) reaches each element at its address rounded
+  down to the smaller of the element's alignment and 4, for loads, stores and pointers stored in a
+  buffer alike (`crates/metal2vulkan-conformance/probes/misaligned_buffer_binds.m`). The two agree
+  for arguments of alignment 2 and 4, and for 8- and 16-byte ones bound 1 to 3 bytes off a
+  multiple of 4; an 8- or 16-byte argument bound at a multiple of 4 that is not a multiple of its
+  alignment is reached at the address rounded down to 8 or 16, where the M3 reaches it exactly
+  there.
 - **An imageblock's length rounds its cell as an M4 does**
   (`ComputePipelineState::imageblock_memory_length_for_dimensions`), never less than what a
   dispatch counts against the device's threadgroup memory.

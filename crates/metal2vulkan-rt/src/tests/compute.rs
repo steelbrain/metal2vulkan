@@ -139,6 +139,77 @@ mod on_device {
         });
     }
 
+    /// The binder pushes a bound buffer's address rounded down to a multiple of the alignment the
+    /// kernel takes it to have (`FieldValue::BufferAddress`'s mask, `RuntimeFact::AddressAlignment`
+    /// in a translated kernel), where Metal's API validation refuses the bind offset. At each
+    /// alignment, 2, 4, 8 and 16, a buffer bound 1, 3, 4, 8, 12 or 15 bytes past a multiple of 16
+    /// (each offset that is not a multiple of the alignment and rounds down to a word: 15 binds)
+    /// is stepped from its address rounded down to the alignment, and no other word changes. An
+    /// 8- or 16-byte alignment's bind 4, 8 or 12 bytes past a multiple of 16 is a word apart from
+    /// its rounded address, so a bind not rounded steps other words on every device.
+    #[test]
+    fn every_device_rounds_a_bound_address_down_to_its_alignment() {
+        each_device("compute_rounded_address", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut runs = 0;
+            for align in [2u64, 4, 8, 16] {
+                let fields = vec![
+                    region(),
+                    Field {
+                        place: Place::Push(32),
+                        value: FieldValue::BufferAddress {
+                            slot: 0,
+                            mask: align - 1,
+                        },
+                    },
+                ];
+                let buffers = vec![(0, Access::ReadWrite)];
+                let state = ComputePipelineState::for_test(
+                    &device,
+                    &kernels::STEP,
+                    interface(buffers, fields, 40),
+                )
+                .expect("the step kernel");
+                for at in [1u64, 3, 4, 8, 12, 15] {
+                    let rounded = (32 + at) & !(align - 1);
+                    if at % align == 0 || rounded % 4 != 0 {
+                        continue;
+                    }
+                    let x = arena.buffer();
+                    assert_eq!(x.gpu_address() % 16, 0, "{name}: the buffer's address");
+                    write_words(&x, |index| index);
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let mut encoder = command_buffer
+                        .compute_command_encoder(DispatchType::Serial)
+                        .expect("an encoder");
+                    encoder.set_compute_pipeline_state(&state).expect("a state");
+                    encoder.set_buffer(Some(&x), 32 + at, 0).expect("a buffer");
+                    encoder
+                        .dispatch_threadgroups([1, 1, 1], [16, 1, 1])
+                        .expect("a dispatch");
+                    encoder.end_encoding();
+                    run(name, &command_buffer);
+                    let stepped = rounded as u32 / 4..rounded as u32 / 4 + 16;
+                    let expected: Vec<u32> = (0..WORDS as u32)
+                        .map(|index| match stepped.contains(&index) {
+                            true => index * 2 + 1,
+                            false => index,
+                        })
+                        .collect();
+                    assert_eq!(
+                        words(&x),
+                        expected,
+                        "{name}: alignment {align}, bound at 32 + {at}"
+                    );
+                    runs += 1;
+                }
+            }
+            assert_eq!(runs, 15, "{name}: the binds");
+            println!("{name}: {runs} binds off their alignment, each run at the rounded address");
+        });
+    }
+
     /// A serial encoder places a barrier at each hazard and none between independent dispatches;
     /// a concurrent encoder places one only on request. The values show the order held.
     #[test]

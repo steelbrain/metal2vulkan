@@ -343,9 +343,9 @@ pub(crate) enum Place {
 #[derive(Clone, Copy)]
 pub(crate) enum FieldValue {
     /// A `u64`: the address of the buffer bound at the slot plus its offset, the address of the
-    /// slot's `set_bytes` copy, or 0 where nothing is bound. `mask` is the alignment the module
-    /// takes that address to have, less 1 (`RuntimeFact::AddressAlignment`), 0 where it takes
-    /// none.
+    /// slot's `set_bytes` copy, or 0 where nothing is bound, rounded down to a multiple of the
+    /// alignment the module takes that address to have. `mask` is that alignment less 1
+    /// (`RuntimeFact::AddressAlignment`), 0 where it takes none.
     BufferAddress { slot: u32, mask: u64 },
     /// A `u64`: the `gpuResourceID` of the texture bound at the slot, 0 where none is.
     TextureId(u32),
@@ -622,7 +622,7 @@ fn interface(
     for dependency in &pipeline.dependencies {
         match dependency.fact {
             RuntimeFact::LocalSizeConstraint { multiple } => multiples.push(multiple),
-            // The slot's address is a multiple of its argument's alignment.
+            // The slot's address, rounded down to a multiple of its argument's alignment.
             RuntimeFact::AddressAlignment {
                 slot:
                     SlotRef {

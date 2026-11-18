@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 33 | 33 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 32 | 32 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 7 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 10 | 8 | 0 | 0 | 15 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 9 | 8 | 0 | 0 | 15 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 |
 
@@ -627,7 +627,6 @@ Columns:
 | `TextureArgumentIndex` | A texture argument index past Metal's 128 entries (`setTexture`) | every device (a public call's own check of its arguments) | `metal-documented`: the texture argument table has 128 entries per stage on Apple GPUs | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_texture)` | `-` |
 | `SamplerArgumentIndex` | A sampler argument index past Metal's 16 entries (`setSamplerState`) | every device (a public call's own check of its arguments) | `metal-documented`: the sampler argument table has 16 entries per stage | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)` | `-` |
 | `SamplerIds` | A consumer's answer to `Device::new_compute_pipeline_state`'s numbered samplers with another count of indices | every device (a public call's own check of its arguments) | `ours`: each numbered sampler takes one index | 1: `crates/metal2vulkan-rt/src/pipeline.rs (number)` | `-` |
-| `MisalignedBuffer` | A dispatch whose buffer at `index` sits at an address, its buffer's `gpuAddress` plus the bind offset, that is not a multiple of the alignment of... | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: API validation fails a bind offset that is not a multiple of the argument type's alignment: "must be a multiple of 4 but was set to 2" for a `uint *` argument, "of 16 but was set to 8" for a `float4 *`, "of 2 but was set to 1" for a `ushort *`; `probes/vector_access_placement.m` in the conformance crate | 1: `crates/metal2vulkan-rt/src/encoder.rs (fill_parameters)` | `-` |
 | `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)` | `-` |
 | `ThreadgroupSize` | A threadgroup of no threads, or of more than the pipeline state's `maxTotalThreadsPerThreadgroup` | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)` | `-` |
 | `IndirectOffset` | An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer than 12 bytes (three 32-bit counts) in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset inside the buffer | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` | `-` |
@@ -1178,7 +1177,6 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::TextureArgumentIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`
 - `rt:Refusal::SamplerArgumentIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`
 - `rt:Refusal::SamplerIds`: `crates/metal2vulkan-rt/src/pipeline.rs (number)`
-- `rt:Refusal::MisalignedBuffer`: `crates/metal2vulkan-rt/src/encoder.rs (fill_parameters)`
 - `rt:Refusal::NoBufferAtIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)`
 - `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)`
 - `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`

@@ -877,8 +877,9 @@ pub enum RuntimeFact {
     /// bind offset, is a multiple of `align` (2, 4, 8 or 16): its argument's alignment
     /// (`air.arg_type_align_size`, at most 16). Metal's API validation refuses a bind offset that
     /// is not a multiple of it ("must be a multiple of 4 but was set to 2" for a `uint *` argument,
-    /// `probes/vector_access_placement.m` in the conformance crate), and the binder refuses such a
-    /// binding before the work runs. Where `align` is at least 4 the function reaches the slot from
+    /// `probes/vector_access_placement.m` in the conformance crate), and the binder rounds such an
+    /// address down to a multiple of it before the work runs. Where `align` is at least 4 the
+    /// function reaches the slot from
     /// that address as it is: no access rounds it to a word, and an 8- or 16-byte access at an
     /// offset proven a multiple of its size is one `uvec2` or `uvec4`.
     AddressAlignment { slot: SlotRef, align: u32 },

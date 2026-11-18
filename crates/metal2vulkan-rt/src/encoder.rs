@@ -432,9 +432,6 @@ impl ComputeCommandEncoder {
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
     /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
     /// [`Error::Quiesced`] where the device was quiesced before that module was lowered;
-    /// [`Refusal::MisalignedBuffer`] where a bound buffer's address plus its offset is not a
-    /// multiple of its argument's alignment, as Metal's API validation refuses the bind: the
-    /// dispatch is not recorded, and the encoder and its command buffer stay usable;
     /// [`Limit::MemoryAllocations`] where the parameter ring needs a block past the device's
     /// allocation count; [`Error::Vulkan`] where the pipeline's compile, the ring or recording
     /// fails.
@@ -728,7 +725,7 @@ impl ComputeCommandEncoder {
                                 kernel,
                                 &inner.numbered.ids,
                                 &region(base, threads, ragged)?,
-                            )?;
+                            );
                             self.record(vk_pipeline, Launch::Direct(count))?;
                         }
                     }
@@ -736,7 +733,7 @@ impl ComputeCommandEncoder {
                 Ok(())
             }
             (None, Grid::Indirect(buffer, offset)) => {
-                self.fill_parameters(kernel, &inner.numbered.ids, &region([0; 3], [0; 3], false)?)?;
+                self.fill_parameters(kernel, &inner.numbered.ids, &region([0; 3], [0; 3], false)?);
                 self.record(vk_pipeline, Launch::Indirect(buffer, offset))
             }
             (None, Grid::Direct { .. }) => Ok(()),
@@ -765,14 +762,9 @@ impl ComputeCommandEncoder {
     /// samplers `sampler_ids`. The block's address is written by [`Building::record_dispatch`]
     /// once the block is in the ring.
     ///
-    /// Err: [`Refusal::MisalignedBuffer`] where a buffer's address is not a multiple of the
-    /// alignment the module takes it to have.
-    fn fill_parameters(
-        &mut self,
-        kernel: &Kernel,
-        sampler_ids: &[u32],
-        region: &[u8; 32],
-    ) -> Result<(), Error> {
+    /// A buffer's address that is not a multiple of the alignment the module takes it to have
+    /// goes rounded down to that alignment, where Metal's API validation refuses the bind offset.
+    fn fill_parameters(&mut self, kernel: &Kernel, sampler_ids: &[u32], region: &[u8; 32]) {
         let interface: &Interface = &kernel.interface;
         let parameters = &mut self.parameters;
         parameters.push.clear();
@@ -794,14 +786,7 @@ impl ComputeCommandEncoder {
                         }
                         Some(Slot::Bytes(address)) => *address,
                         Some(Slot::Empty) | None => 0,
-                    };
-                    if address & mask != 0 {
-                        return Err(Error::Refused(Refusal::MisalignedBuffer {
-                            index: slot,
-                            address,
-                            align: mask + 1,
-                        }));
-                    }
+                    } & !mask;
                     bytes[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }
                 FieldValue::TextureId(slot) => {
@@ -835,7 +820,6 @@ impl ComputeCommandEncoder {
             }
         }
         parameters.block_address = (interface.block_len > 0).then_some(interface.block_address);
-        Ok(())
     }
 }
 

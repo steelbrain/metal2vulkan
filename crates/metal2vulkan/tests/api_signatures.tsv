@@ -13390,7 +13390,6 @@ variant	metal2vulkan-rt::Refusal::IndicesInUse	IndicesInUse { class: IndexClass,
 variant	metal2vulkan-rt::Refusal::IndicesNotGranted	IndicesNotGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndirectOffset	IndirectOffset { offset: u64, length: u64 }
 variant	metal2vulkan-rt::Refusal::ManagedBlockNotShared	ManagedBlockNotShared { block: BlockId }
-variant	metal2vulkan-rt::Refusal::MisalignedBuffer	MisalignedBuffer { index: u32, address: u64, align: u64 }
 variant	metal2vulkan-rt::Refusal::ModifiedRange	ModifiedRange { start: u64, length: u64, buffer_length: u64 }
 variant	metal2vulkan-rt::Refusal::NoBufferAtIndex	NoBufferAtIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::NoCommandBuffers	NoCommandBuffers
