@@ -25,6 +25,14 @@
 //!   region kept and each result plain Metal's (job m3-max-43555); one copy into a Shared buffer
 //!   alone is one submission and three barriers, the segment's end reaching the host, and copies
 //!   no byte of the runtime's own.
+//! - A copy between buffers takes ranges inside both buffers (`Refusal::BufferCopyRange`), both
+//!   offsets and the size multiples of 4 (`Refusal::BufferCopyUnaligned`), and a source and a
+//!   destination that share no byte (`Refusal::BufferCopyOverlap`), one buffer's ranges or two
+//!   buffers' in one block; a size of 0 copies nothing. Under a device cfg its bytes land where
+//!   it names, between two buffers of one block and within one buffer, everything around them
+//!   kept, at one submission and three barriers alone, copying no byte of the runtime's own; a
+//!   copy into a Managed buffer lands in the bytes shaders reach, which a synchronize brings to
+//!   the host.
 //! - A fill takes a range of whole words inside the buffer: an empty range or one past the end is
 //!   `Refusal::FillRange`, one of no whole words `Gap::FillAlignment`. Under a device cfg its
 //!   bytes are plain Metal's (probe `blit_fill_rules.m`, job m3-max-43571), at one submission and
@@ -40,8 +48,8 @@
 //!   synchronized a device copy or a Managed texture.
 
 use crate::blit::{
-    buffer_copy, fill_range, texture_copy, BufferCopy, BufferLayout, ImageCopy, Lies, Side,
-    TexturePlace,
+    buffer_copy, buffer_to_buffer, fill_range, texture_copy, BufferCopy, BufferLayout, ImageCopy,
+    Lies, Side, Span, TexturePlace,
 };
 use crate::error::{Error, Gap, Refusal};
 use crate::texture::{CopyUnit, Placed};
@@ -714,6 +722,121 @@ fn a_layout_metal_stops_is_refused_and_one_a_copy_command_cannot_address_is_a_ga
         )),
         Refusal::TextureRegion { level: 0, slice: 1 }
     ));
+}
+
+#[test]
+fn a_copy_between_buffers_takes_words_inside_both_that_share_no_byte() {
+    use ash::vk::Handle;
+    let one = vk::Buffer::from_raw(1);
+    let span = |buffer, base, len| Span { buffer, base, len };
+    // Offsets in the device's buffer are each buffer's in its block plus its own.
+    let region = buffer_to_buffer(
+        span(one, 256, 64),
+        8,
+        span(vk::Buffer::from_raw(2), 0, 32),
+        4,
+        16,
+    )
+    .expect("a copy")
+    .expect("a region");
+    assert_eq!(
+        (region.src_offset, region.dst_offset, region.size),
+        (264, 4, 16)
+    );
+    // Two buffers of one block, side by side, and one buffer's two ranges, apart.
+    assert!(
+        buffer_to_buffer(span(one, 0, 64), 0, span(one, 64, 64), 0, 64).is_ok_and(|r| r.is_some())
+    );
+    assert!(
+        buffer_to_buffer(span(one, 0, 64), 0, span(one, 0, 64), 32, 32).is_ok_and(|r| r.is_some())
+    );
+    // A size of 0 copies nothing, wherever it is.
+    assert!(matches!(
+        buffer_to_buffer(span(one, 0, 64), 64, span(one, 0, 64), 0, 0),
+        Ok(None)
+    ));
+    let refused = |result: Result<Option<vk::BufferCopy>, Error>| match result {
+        Err(Error::Refused(refusal)) => refusal,
+        other => panic!("{:?}", other.map(|r| r.is_some())),
+    };
+    for (offset, size) in [(60, 8), (68, 0), (u64::MAX - 3, 8)] {
+        assert_eq!(
+            refused(buffer_to_buffer(
+                span(one, 0, 64),
+                offset,
+                span(one, 128, 256),
+                0,
+                size
+            )),
+            Refusal::BufferCopyRange {
+                offset,
+                size,
+                len: 64
+            },
+            "{offset} {size}"
+        );
+    }
+    assert_eq!(
+        refused(buffer_to_buffer(
+            span(one, 0, 256),
+            0,
+            span(one, 0, 64),
+            60,
+            8
+        )),
+        Refusal::BufferCopyRange {
+            offset: 60,
+            size: 8,
+            len: 64
+        },
+        "the destination"
+    );
+    for (from, to, size) in [(2, 0, 4), (0, 2, 4), (0, 0, 6)] {
+        assert_eq!(
+            refused(buffer_to_buffer(
+                span(one, 0, 64),
+                from,
+                span(vk::Buffer::from_raw(2), 0, 64),
+                to,
+                size
+            )),
+            Refusal::BufferCopyUnaligned {
+                source_offset: from,
+                destination_offset: to,
+                size
+            },
+            "{from} {to} {size}"
+        );
+    }
+    // One buffer's overlapping ranges, and two buffers of one block that overlap.
+    assert_eq!(
+        refused(buffer_to_buffer(
+            span(one, 0, 64),
+            0,
+            span(one, 0, 64),
+            16,
+            32
+        )),
+        Refusal::BufferCopyOverlap {
+            source_offset: 0,
+            destination_offset: 16,
+            size: 32
+        }
+    );
+    assert_eq!(
+        refused(buffer_to_buffer(
+            span(one, 32, 64),
+            0,
+            span(one, 0, 64),
+            0,
+            64
+        )),
+        Refusal::BufferCopyOverlap {
+            source_offset: 0,
+            destination_offset: 0,
+            size: 64
+        }
+    );
 }
 
 #[test]
@@ -1481,6 +1604,87 @@ pub(crate) mod on_device {
                 read(&buffer),
                 metal(want, 0x5d28_bc84_b408_472d),
                 "{name}: the fill"
+            );
+        });
+    }
+
+    /// A copy between two buffers of one block and one within a buffer land where they name,
+    /// everything around them kept, at one submission and three barriers alone, copying nothing
+    /// of the runtime's own; a copy into a Managed buffer lands in the bytes shaders reach, which a
+    /// synchronize brings to the host.
+    #[test]
+    fn every_device_copies_between_buffers() {
+        each_device("blit_buffer_to_buffer", |name, _, device| {
+            let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
+            let source = (device.new_buffer(block.id, 0, 256, true)).expect("a buffer");
+            let destination = (device.new_buffer(block.id, 256, 256, true)).expect("a buffer");
+            let (from, into) = (pattern(256, 31), pattern(256, 47));
+            write(&source, &from);
+            write(&destination, &into);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+
+            // Between two buffers of one block, alone.
+            settled(&device);
+            let metrics = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .copy_from_buffer_to_buffer(&source, 16, &destination, 100, 64)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - metrics.submissions,
+                    after.barriers - metrics.barriers,
+                    after.bytes_copied - metrics.bytes_copied,
+                    after.passes - metrics.passes,
+                ),
+                (1, 3, 0, 1),
+                "{name}: submissions, barriers, bytes copied, passes"
+            );
+            let mut want = into.clone();
+            want[100..164].copy_from_slice(&from[16..80]);
+            assert_eq!(read(&destination), want, "{name}: between two buffers");
+            assert_eq!(read(&source), from, "{name}: the source kept");
+
+            // Within one buffer, two ranges apart; a size of 0 records nothing more.
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .copy_from_buffer_to_buffer(&source, 0, &source, 128, 32)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder
+                .copy_from_buffer_to_buffer(&source, 0, &source, 0, 0)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let mut want = from.clone();
+            want[128..160].copy_from_slice(&from[0..32]);
+            assert_eq!(read(&source), want, "{name}: within one buffer");
+
+            // Into a Managed buffer: its bytes shaders reach, brought to the host by a
+            // synchronize.
+            let copied = !device.core().shared_is_device_local();
+            let managed = (device.new_managed_buffer(block.id, 512, 64, 64))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .copy_from_buffer_to_buffer(&destination, 0, &managed, 8, 32)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder
+                .synchronize_resource(Resource::Buffer(&managed))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let landed = read(&managed);
+            assert_eq!(
+                landed[8..40],
+                read(&destination)[0..32],
+                "{name}: into a Managed buffer (device copy: {copied})"
             );
         });
     }

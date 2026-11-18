@@ -482,6 +482,45 @@ pub enum Refusal {
         /// The heap's bytes.
         heap_len: u64,
     },
+    /// A copy between buffers
+    /// ([`BlitCommandEncoder::copy_from_buffer_to_buffer`](crate::BlitCommandEncoder::copy_from_buffer_to_buffer))
+    /// whose range, `size` bytes from `offset`, leaves the source or the destination.
+    ///
+    /// Basis: metal-documented (Metal's validation stops a copy past either buffer's length).
+    BufferCopyRange {
+        /// The range's offset in the buffer it leaves.
+        offset: u64,
+        /// The bytes copied.
+        size: u64,
+        /// That buffer's length.
+        len: u64,
+    },
+    /// A copy between buffers whose source offset, destination offset or size is not a multiple
+    /// of 4.
+    ///
+    /// Basis: metal-documented (`copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`:
+    /// on macOS both offsets and the size are multiples of 4).
+    BufferCopyUnaligned {
+        /// The offset in the source.
+        source_offset: u64,
+        /// The offset in the destination.
+        destination_offset: u64,
+        /// The bytes copied.
+        size: u64,
+    },
+    /// A copy between buffers whose source and destination share bytes: one buffer's
+    /// overlapping ranges, or two buffers that overlap in one block.
+    ///
+    /// Basis: ours (Metal states no result for such a copy, and `vkCmdCopyBuffer` reads no byte
+    /// it also writes, `VUID-vkCmdCopyBuffer-pRegions-00117`; the runtime does not emulate one).
+    BufferCopyOverlap {
+        /// The offset in the source.
+        source_offset: u64,
+        /// The offset in the destination.
+        destination_offset: u64,
+        /// The bytes copied.
+        size: u64,
+    },
 }
 
 /// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
@@ -1060,6 +1099,26 @@ impl fmt::Display for Refusal {
             } => write!(
                 f,
                 "a heap texture of {size} bytes aligned to {align} does not lie at offset {offset} of a heap of {heap_len} bytes"
+            ),
+            Refusal::BufferCopyRange { offset, size, len } => write!(
+                f,
+                "a copy of {size} bytes at {offset} leaves a buffer of {len} bytes"
+            ),
+            Refusal::BufferCopyUnaligned {
+                source_offset,
+                destination_offset,
+                size,
+            } => write!(
+                f,
+                "a copy of {size} bytes from {source_offset} to {destination_offset} is not in multiples of 4"
+            ),
+            Refusal::BufferCopyOverlap {
+                source_offset,
+                destination_offset,
+                size,
+            } => write!(
+                f,
+                "a copy of {size} bytes from {source_offset} to {destination_offset} reads bytes it writes"
             ),
         }
     }

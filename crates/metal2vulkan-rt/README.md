@@ -700,6 +700,15 @@ that touch blocks first.
   shaders reach that is no multiple of a texel block's bytes, or of 4 for a depth or stencil
   aspect, and a row stride of no whole number of a compressed format's blocks; also what `replace_region` and
   `get_bytes` refuse (`Gap::TextureBytes`, and `Gap::FloatDepthUpload` into a texture).
+- `copy_from_buffer_to_buffer` is `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`:
+  one `vkCmdCopyBuffer` region between the bytes shaders reach (a Managed buffer's device copy,
+  where the device keeps one), between the same two barriers as a fill, a copy into a Shared
+  buffer marking the segment as a copy into one does. A size of 0 copies nothing. Refused, as
+  Metal's validation stops them: a range past either buffer's end (`Refusal::BufferCopyRange`),
+  and on macOS an offset or a size that is not a multiple of 4 (`Refusal::BufferCopyUnaligned`).
+  Refused too: a source and a destination that share bytes, one buffer's overlapping ranges or
+  two buffers that overlap in one block (`Refusal::BufferCopyOverlap`), which `vkCmdCopyBuffer`
+  forbids and the runtime does not emulate.
 - `fill_buffer` is `fillBuffer:range:value:`: one `vkCmdFillBuffer` of the byte in each word,
   between the same two barriers, a fill of a Shared buffer marking the segment as a copy into
   one does. Refused (`Refusal::FillRange`), as Metal's validation stops them: an empty range and

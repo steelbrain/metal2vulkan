@@ -13,7 +13,8 @@
 //! the region, between the same two barriers; the second also makes a write into the buffer
 //! visible to every later command, and to the host where the buffer is Shared.
 //!
-//! A fill is one `vkCmdFillBuffer` between two barriers: the first after every earlier command,
+//! A copy between buffers is one `vkCmdCopyBuffer` region between the bytes shaders reach, and a
+//! fill one `vkCmdFillBuffer`, each between two barriers: the first after every earlier command,
 //! as a copy's, the second making its writes visible to every later command.
 //!
 //! A synchronize of a Managed buffer with a device copy is one `vkCmdCopyBuffer` of the copy into
@@ -242,6 +243,84 @@ impl BlitCommandEncoder {
         layout: BufferLayout,
     ) -> Result<(), Error> {
         self.buffer_copy(source, from, size, destination, layout, false)
+    }
+
+    /// `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`: `size` bytes at
+    /// `source_offset` in `source` to `destination_offset` in `destination`, one
+    /// `vkCmdCopyBuffer` region between the bytes shaders reach (a Managed buffer's device copy,
+    /// where the device keeps one), between a fill's two barriers. A size of 0 copies nothing. The
+    /// command buffer keeps both buffers until it retires.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's buffer; [`Refusal::BufferCopyRange`] for
+    /// a range past either buffer's end; [`Refusal::BufferCopyUnaligned`] for an offset or a size
+    /// that is not a multiple of 4, as Metal's validation stops it on macOS;
+    /// [`Refusal::BufferCopyOverlap`] for a source and a destination that share bytes;
+    /// [`Error::Vulkan`] where the command buffer cannot record.
+    pub fn copy_from_buffer_to_buffer(
+        &mut self,
+        source: &Buffer,
+        source_offset: u64,
+        destination: &Buffer,
+        destination_offset: u64,
+        size: u64,
+    ) -> Result<(), Error> {
+        let building = self.building();
+        let core = Arc::clone(building.device.core());
+        if !source.is_of(&core) || !destination.is_of(&core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        // A Managed buffer's GPU side is its device copy, where it has one.
+        let span = |buffer: &Buffer| {
+            let (buffer_of, base) = buffer.device_range();
+            Span {
+                buffer: buffer_of,
+                base,
+                len: buffer.length(),
+            }
+        };
+        let (from, to) = (span(source), span(destination));
+        let Some(region) = buffer_to_buffer(from, source_offset, to, destination_offset, size)?
+        else {
+            return Ok(());
+        };
+        building.keep(source);
+        building.keep(destination);
+        // The textures over either device copy go back to it first; the destination's owe their
+        // copies in (`crate::over::ManagedOvers`).
+        building.managed_backs(over::backs(source, None, true))?;
+        building.managed_backs(over::backs(destination, None, true))?;
+        building.wrote_managed(destination);
+        let overs = [
+            (source.id(), Access::Read),
+            (destination.id(), Access::Write),
+        ];
+        building.overs_before(&overs, false)?;
+        let command = building.ordered_command()?;
+        building.overs_after(&overs, false);
+        // Marked after `ordered_command`, as a copy into a buffer is.
+        if destination.is_shared() {
+            building.wrote_host();
+        }
+        let earlier = [memory_barrier(Reach::Commands)];
+        let written = [written()];
+        let device = &core.device;
+        // SAFETY: the command buffer records outside any render pass and keeps both buffers until
+        // it retires; the region lies in each buffer's device range and its source and
+        // destination share no byte (`buffer_to_buffer`).
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default().memory_barriers(&earlier),
+            );
+            device.cmd_copy_buffer(command, from.buffer, to.buffer, &[region]);
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default().memory_barriers(&written),
+            );
+        }
+        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::Barriers);
+        Ok(())
     }
 
     /// A copy of `size` texels at `at` in `texture` from or, not `into_image`, to `buffer`.
@@ -648,6 +727,64 @@ pub(crate) fn fill_range(base: u64, len: u64, range: Range<u64>) -> Result<(u64,
         return Err(Error::Unsupported(Gap::FillAlignment { start, end }));
     }
     Ok((offset, length))
+}
+
+/// One buffer of a copy between buffers: the `VkBuffer` shaders reach it in, its offset there,
+/// and its length.
+#[derive(Clone, Copy)]
+pub(crate) struct Span {
+    pub(crate) buffer: vk::Buffer,
+    pub(crate) base: u64,
+    pub(crate) len: u64,
+}
+
+/// Checks a copy of `size` bytes from `source_offset` in `source` to `destination_offset` in
+/// `destination`: the region of `vkCmdCopyBuffer` to record, `None` for a size of 0.
+///
+/// Err: [`Refusal::BufferCopyRange`]; [`Refusal::BufferCopyUnaligned`];
+/// [`Refusal::BufferCopyOverlap`].
+pub(crate) fn buffer_to_buffer(
+    source: Span,
+    source_offset: u64,
+    destination: Span,
+    destination_offset: u64,
+    size: u64,
+) -> Result<Option<vk::BufferCopy>, Error> {
+    for (span, offset) in [(source, source_offset), (destination, destination_offset)] {
+        if offset.checked_add(size).is_none_or(|end| end > span.len) {
+            return Err(Error::Refused(Refusal::BufferCopyRange {
+                offset,
+                size,
+                len: span.len,
+            }));
+        }
+    }
+    if source_offset % 4 != 0 || destination_offset % 4 != 0 || size % 4 != 0 {
+        return Err(Error::Refused(Refusal::BufferCopyUnaligned {
+            source_offset,
+            destination_offset,
+            size,
+        }));
+    }
+    if size == 0 {
+        return Ok(None);
+    }
+    let (from, to) = (
+        source.base + source_offset,
+        destination.base + destination_offset,
+    );
+    if source.buffer == destination.buffer && from < to + size && to < from + size {
+        return Err(Error::Refused(Refusal::BufferCopyOverlap {
+            source_offset,
+            destination_offset,
+            size,
+        }));
+    }
+    Ok(Some(vk::BufferCopy {
+        src_offset: from,
+        dst_offset: to,
+        size,
+    }))
 }
 
 /// A buffer's side of a copy: its offset in its block, its length, and where the region lies

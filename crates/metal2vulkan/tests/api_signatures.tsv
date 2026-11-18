@@ -9288,6 +9288,7 @@ method	metal2vulkan-air::tensor_ops::OperandIndex::from_raw	pub fn from_raw(raw:
 method	metal2vulkan-air::tensor_ops::RunForm::arity	pub fn arity(&self) -> usize
 method	metal2vulkan-air::tensor_ops::RunForm::operand_args	pub fn operand_args(&self) -> [usize; 3]
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_buffer	pub fn copy_from_buffer(&mut self, source: &Buffer, layout: BufferLayout, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
+method	metal2vulkan-rt::BlitCommandEncoder::copy_from_buffer_to_buffer	pub fn copy_from_buffer_to_buffer(&mut self, source: &Buffer, source_offset: u64, destination: &Buffer, destination_offset: u64, size: u64) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture	pub fn copy_from_texture(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture_to_buffer	pub fn copy_from_texture_to_buffer(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Buffer, layout: BufferLayout) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::end_encoding	pub fn end_encoding(mut self)
@@ -13503,6 +13504,9 @@ variant	metal2vulkan-rt::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchW
 variant	metal2vulkan-rt::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan-rt::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan-rt::Refusal::BufferCopyLayout	BufferCopyLayout { offset: u64, bytes_per_row: u64, bytes_per_image: u64, len: u64 }
+variant	metal2vulkan-rt::Refusal::BufferCopyOverlap	BufferCopyOverlap { source_offset: u64, destination_offset: u64, size: u64 }
+variant	metal2vulkan-rt::Refusal::BufferCopyRange	BufferCopyRange { offset: u64, size: u64, len: u64 }
+variant	metal2vulkan-rt::Refusal::BufferCopyUnaligned	BufferCopyUnaligned { source_offset: u64, destination_offset: u64, size: u64 }
 variant	metal2vulkan-rt::Refusal::BufferIndex	BufferIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferTextureLayout	BufferTextureLayout { offset: u64, bytes_per_row: u64, len: u64 }
