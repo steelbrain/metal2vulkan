@@ -893,6 +893,8 @@ impl Backend for OldRuntime {
             ),
             ("pipelines_made", counts.variant_pipelines_made),
             ("device_memory_allocated", counts.device_memory_allocated),
+            ("vk_memory_allocations", counts.vk_memory_allocations),
+            ("vk_memory_freed", counts.vk_memory_freed),
             (
                 "pooled_memory_blocks_made",
                 counts.pooled_memory_blocks_made,
