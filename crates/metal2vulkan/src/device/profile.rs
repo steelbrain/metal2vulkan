@@ -138,6 +138,12 @@ impl DeviceProfile {
         self.facts.oblivious_edge
     }
 
+    /// How a kernel whose workgroup is its threadgroup runs a threadgroup deeper than the
+    /// device's `maxComputeWorkGroupSize[2]`.
+    pub(crate) fn deep_threadgroups(&self) -> DeepThreadgroups {
+        self.facts.deep_threadgroups
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -582,6 +588,9 @@ pub(crate) struct ProfileFacts {
     /// How the partial-threadgroups variant of a kernel that does not observe its threadgroup
     /// partition runs the threads past its grid.
     pub(crate) oblivious_edge: ObliviousEdge,
+    /// How a kernel whose workgroup is its threadgroup runs a deep threadgroup, and the
+    /// threadgroup the device reports it runs.
+    pub(crate) deep_threadgroups: DeepThreadgroups,
 }
 
 impl ProfileFacts {
@@ -596,6 +605,7 @@ impl ProfileFacts {
         half_fma: HalfFma::Measured,
         identity_region: IdentityRegion::Grid,
         oblivious_edge: ObliviousEdge::Partial,
+        deep_threadgroups: DeepThreadgroups::Axes,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -609,6 +619,7 @@ impl ProfileFacts {
         half_fma: HalfFma::Native,
         identity_region: IdentityRegion::Sized,
         oblivious_edge: ObliviousEdge::Grid,
+        deep_threadgroups: DeepThreadgroups::OneRow,
     };
 }
 
@@ -669,6 +680,22 @@ pub(crate) enum ObliviousEdge {
     /// masks and shifts of its local index, and an invocation past the grid returning before the
     /// body. `Device::from_queries`' profile.
     Grid,
+}
+
+/// How a kernel whose workgroup is its threadgroup (`lower::dispatch::LocalSizeForm::Spec`) runs
+/// a threadgroup deeper than the device's `maxComputeWorkGroupSize[2]`, and so what the device
+/// reports as Metal's `maxThreadsPerThreadgroup` (`MetalDeviceProperties`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeepThreadgroups {
+    /// As its workgroup, axis for axis, so a device that holds fewer threads along `z` than the
+    /// threadgroup refuses it at its plan (`bind::dispatch`'s local-size checks), and the device
+    /// reports each axis's `maxComputeWorkGroupSize`: `Device::new`'s profile.
+    Axes,
+    /// As one row past [`DEEP_THREADGROUP`](crate::lower::dispatch::DEEP_THREADGROUP) along `z`
+    /// (`SpecKey::DeepThreadgroup`), within every device's sizes, so the device reports
+    /// `maxComputeWorkGroupInvocations` on every axis, as an Apple GPU reports 1024 on each:
+    /// `Device::from_queries`' profile.
+    OneRow,
 }
 
 /// Which `half` fused multiply-adds take the device's 16-bit `Fma` (`lower::arith::fma::half_route`).

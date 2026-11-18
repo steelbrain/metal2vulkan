@@ -395,8 +395,10 @@ mod on_device {
     /// a barrier, and every builtin of the partition), translated twice at creation: a whole
     /// `dispatchThreads` grid runs its plain module at the call's size, a ragged one its
     /// partial-threadgroups variant, and a threadgroup count past the device's limit on an axis
-    /// runs split, each piece reading Metal's whole grid. Each answer is Metal's, and each new
-    /// size or module a first-use wait. Prints the creation's time and one lowering's.
+    /// runs split, each piece reading Metal's whole grid. Threadgroups deeper than 64, 1 by 1 by
+    /// 320 and 2 by 3 by 100, run as one row of their threads on every device, whole, ragged and
+    /// indirect. Each answer is Metal's, and each new size or module a first-use wait. Prints the
+    /// creation's time and one lowering's.
     #[test]
     fn every_device_runs_an_observing_kernel_at_its_own_threadgroup_size() {
         let Some(descriptor) = descriptor("icb_replay_grid_template") else {
@@ -414,22 +416,38 @@ mod on_device {
             let past = limits.max_compute_work_group_count[1]
                 .checked_add(3)
                 .filter(|&count| count <= 1 << 20);
-            let runs: Vec<([u32; 3], [u32; 3], bool)> = [
-                ([10, 3, 1], [4, 2, 1], true),
-                ([8, 4, 1], [4, 2, 1], true),
-                ([3, 2, 1], [4, 2, 1], false),
+            // How each run dispatches: a `dispatchThreads` grid, or threadgroup counts, direct or
+            // from a buffer.
+            #[derive(Clone, Copy, PartialEq)]
+            enum How {
+                Threads,
+                Groups,
+                Indirect,
+            }
+            let runs: Vec<([u32; 3], [u32; 3], How)> = [
+                ([10, 3, 1], [4, 2, 1], How::Threads),
+                ([8, 4, 1], [4, 2, 1], How::Threads),
+                ([3, 2, 1], [4, 2, 1], How::Groups),
+                ([1, 1, 2], [1, 1, 320], How::Groups),
+                ([1, 1, 500], [1, 1, 320], How::Threads),
+                ([1, 1, 2], [1, 1, 320], How::Indirect),
+                ([4, 3, 200], [2, 3, 100], How::Threads),
             ]
             .into_iter()
-            .chain(past.map(|count| ([1, count, 1], [1, 1, 1], false)))
+            .chain(past.map(|count| ([1, count, 1], [1, 1, 1], How::Groups)))
             .collect();
             let mut buffers = Buffers::new(&device, 8 << 20);
+            let arguments = buffers.buffer(16);
+            write(&arguments, 0, &le_bytes(&[1, 1, 2]));
             let outs: Vec<(Buffer, Vec<u32>)> = runs
                 .iter()
-                .map(|&(grid, size, threads)| {
+                .map(|&(grid, size, how)| {
                     // A threadgroup dispatch's grid is its counts times its size.
-                    let grid = match threads {
-                        true => grid,
-                        false => std::array::from_fn(|axis| grid[axis] * size[axis]),
+                    let grid = match how {
+                        How::Threads => grid,
+                        How::Groups | How::Indirect => {
+                            std::array::from_fn(|axis| grid[axis] * size[axis])
+                        }
                     };
                     let slots = grid.iter().product::<u32>();
                     let want = grid_template(grid, size, [1000, slots]);
@@ -465,7 +483,7 @@ mod on_device {
                 .compute_command_encoder(DispatchType::Serial)
                 .expect("an encoder");
             encoder.set_compute_pipeline_state(&state).expect("a state");
-            for (&(grid, size, threads), (out, want)) in runs.iter().zip(&outs) {
+            for (&(grid, size, how), (out, want)) in runs.iter().zip(&outs) {
                 let n = size.iter().product::<u32>();
                 encoder
                     .set_threadgroup_memory_length((4 * n).next_multiple_of(16), 0)
@@ -474,9 +492,12 @@ mod on_device {
                     .set_bytes(&le_bytes(&[1000, want.len() as u32]), 0)
                     .expect("the parameters");
                 encoder.set_buffer(Some(out), 0, 1).expect("a buffer");
-                match threads {
-                    true => encoder.dispatch_threads(grid, size),
-                    false => encoder.dispatch_threadgroups(grid, size),
+                match how {
+                    How::Threads => encoder.dispatch_threads(grid, size),
+                    How::Groups => encoder.dispatch_threadgroups(grid, size),
+                    How::Indirect => {
+                        encoder.dispatch_threadgroups_with_indirect_buffer(&arguments, 0, size)
+                    }
                 }
                 .unwrap_or_else(|error| panic!("{name}: {grid:?} by {size:?}: {error}"));
             }
@@ -493,8 +514,10 @@ mod on_device {
                 );
             }
             let after = device.counters().metrics();
-            // The ragged grid's variant, the whole grid's size, the one-thread size.
-            let sizes = 2 + u64::from(past.is_some());
+            // The ragged grid's variant, the whole grid's size, the one-thread size; the deep
+            // size, its ragged grid's variant (its indirect dispatch runs the whole one) and the
+            // second deep size.
+            let sizes = 5 + u64::from(past.is_some());
             assert_eq!(
                 after.first_use_waits - created.first_use_waits,
                 sizes,

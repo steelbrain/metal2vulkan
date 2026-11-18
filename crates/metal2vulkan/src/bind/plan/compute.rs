@@ -707,7 +707,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             SpecKey::LocalSize(_)
             | SpecKey::FlatLocalSize
             | SpecKey::MultiRegion
-            | SpecKey::StageInReach => continue,
+            | SpecKey::StageInReach
+            | SpecKey::DeepThreadgroup => continue,
             SpecKey::TgLength(n) => {
                 let len = u64::from(ks.threadgroup_lengths.get(&n).copied().unwrap_or(0));
                 let len = len.next_multiple_of(TG_ALIGN);
@@ -813,6 +814,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         .unwrap_or((0, 0));
     let local = LocalRules {
         flat: layout.iter().any(|c| c.key == SpecKey::FlatLocalSize),
+        deep: layout.iter().any(|c| c.key == SpecKey::DeepThreadgroup),
         multiples,
         max_size: limits.max_compute_work_group_size,
         max_invocations: limits.max_compute_work_group_invocations,

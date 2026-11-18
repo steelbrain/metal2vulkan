@@ -2,7 +2,7 @@
 //! drives translation.
 
 use crate::device::description::AllocationLimits;
-use crate::device::profile::{BufferAccess, DeviceProfile};
+use crate::device::profile::{BufferAccess, DeepThreadgroups, DeviceProfile};
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::subgroup::{tier, OpBits, SimdClass};
 use crate::error::{Capability, Feature, Unsupported};
@@ -19,7 +19,8 @@ pub struct MetalDeviceProperties {
     /// `CmdGetComputeInfo` key 3).
     pub thread_execution_width: u32,
     /// Per axis: `maxComputeWorkGroupSize[i]` capped by `maxComputeWorkGroupInvocations`, and by an
-    /// Apple GPU's 1024.
+    /// Apple GPU's 1024; on `Device::from_queries`' profile, which runs a deep threadgroup as one
+    /// row (`SpecKey::DeepThreadgroup`), the capped invocations on every axis.
     pub max_threads_per_threadgroup: [u32; 3],
     /// `maxComputeWorkGroupInvocations` (pipelines report a flattened-tier cap of their own),
     /// capped by an Apple GPU's 1024.
@@ -168,7 +169,10 @@ impl MetalDeviceProperties {
         let threads = l
             .max_compute_work_group_invocations
             .min(apple_gpu::MAX_THREADS_PER_THREADGROUP);
-        let per_axis = l.max_compute_work_group_size.map(|axis| axis.min(threads));
+        let per_axis = match profile.deep_threadgroups() {
+            DeepThreadgroups::Axes => l.max_compute_work_group_size.map(|axis| axis.min(threads)),
+            DeepThreadgroups::OneRow => [threads; 3],
+        };
         let d = &f.descriptors;
         let argument_buffers_tier = if f.buffer_access == BufferAccess::Addressed
             && d.runtime_descriptor_array

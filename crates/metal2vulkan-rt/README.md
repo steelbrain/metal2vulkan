@@ -869,8 +869,7 @@ that touch blocks first.
     where it is deeper, on one `VkPipeline` per tile, made at the kernel's first dispatch at that
     tile, which waits for it, each thread's position the workgroup's origin plus its place in it,
     with no decode. Those pipelines are kept with the kernel's others, at most one per tile of the
-    45 a rule's tile can be. A tile past the device's `maxComputeWorkGroupSize` runs as the next
-    item's;
+    45 a rule's tile can be. A tile deeper than 64 runs as one row of its 256 threads (below);
   - a grid of any other such kernel in tiles: workgroups of 256 threads on one `VkPipeline`, made
     with the state, each one tile of the grid, which its region carries. A thread's position is
     the tile's origin plus its index masked and shifted by the tile's sides, with no division.
@@ -884,6 +883,19 @@ that touch blocks first.
   second time, plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
   module at their own size, and a `dispatch_threads` grid that is not a whole number of
   threadgroups runs the variant.
+- A threadgroup deeper than 64, the floor's `maxComputeWorkGroupSize[2]`, runs as one row of its
+  threads, a workgroup of `x·y·z` by 1 by 1, each thread's position its index unflattened in
+  Metal's order (the translator's `SpecKey::DeepThreadgroup`), on every device alike; any other
+  threadgroup is its own workgroup. A kernel's threadgroup memory, barriers, SIMD groups and grid
+  are the same either way, an indirect dispatch's included. So every threadgroup Metal allows,
+  up to 1,024 threads on any axis, runs on every device, and `MetalDeviceProperties` on the
+  runtime's profile reports 1,024 on each axis of `max_threads_per_threadgroup`. The form follows
+  from the size, which keys a `VkPipeline` already, so it adds none, and the most a kernel makes
+  is the same with it or without: for its direct dispatches, one for the tiles of a kernel that
+  runs its grid in tiles, 46 for an image-only one (the square one and one per tile, three of
+  whose tiles are deeper than 64), and for one that observes its partition one per threadgroup
+  size and threadgroup memory lengths, and one more per size for grids that are not whole
+  threadgroups; for any kernel's indirect dispatches, one per size and lengths.
 - A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
   `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32), or one per
   32-lane cluster of a 64- or 128-lane subgroup, runs only workgroups of whole subgroups.
@@ -977,11 +989,10 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
   content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
   (`Metrics::first_use_waits`), from its file in the cache directory where there is one. In each of
-  the two recorded streams measured, that made 49 pipelines, all in one frame: the frame where the
-  stream's image-only dispatches over such grids start (frame 224 of one stream and 312 of the
-  other). One more in each, of tile 1x1x256, runs where the device's `maxComputeWorkGroupSize` is 64
-  deep (NVIDIA's) in the tiles its regions carry, on the pipeline made with the state, and makes a
-  50th elsewhere.
+  the two recorded streams measured, on a device that holds 1,024 threads along `z`, that made 50
+  pipelines, all in one frame: the frame where the stream's image-only dispatches over such grids
+  start (frame 224 of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row,
+  so a device that holds 64 makes the same 50.
 - A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
   its plain module). For the observing kernel the device tests run, a grid template over
   threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole creation 2.7 to
@@ -1367,7 +1378,7 @@ Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |
-| `maxComputeWorkGroupSize[2]` | `64` | a threadgroup's depth |
+| `maxComputeWorkGroupSize[2]` | `64` | a threadgroup's depth; a deeper one runs as one row |
 | `timestampComputeAndGraphics` | `1` | GPU times of command buffers |
 | `timestampValidBits` | `36` | GPU times of command buffers |
 

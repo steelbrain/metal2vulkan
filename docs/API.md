@@ -134,7 +134,15 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   made by `Device::from_queries` it reads its first threadgroup from every region (0 where the
   dispatch is not split, and for an indirect one) and declares `MultiRegion`, default 0: at 0
   Metal's threadgroup size is the pipeline's workgroup size; at 1 it is the region's, for a region
-  whose workgroup size is not Metal's (an edge region). A texture slot's `gpuResourceID` is pushed as
+  whose workgroup size is not Metal's (an edge region). There a kernel whose workgroup is its
+  threadgroup (one outside the flattened SIMD-group tiers, without compute derivatives) also
+  declares `SpecKey::DeepThreadgroup`, default false: at true its workgroup is one row of the
+  threadgroup's threads, `(sx·sy·sz, 1, 1)`, each thread's position its `LocalInvocationIndex`
+  unflattened in Metal's order, so a threadgroup deeper than a device's
+  `maxComputeWorkGroupSize[2]` runs; the binder sets it for a region deeper than
+  `pipeline::DEEP_THREADGROUP` (64) alone, and so does a runtime, so every other pipeline
+  specializes it away. `MetalDeviceProperties::max_threads_per_threadgroup` on that profile is
+  the capped `maxComputeWorkGroupInvocations` on every axis. A texture slot's `gpuResourceID` is pushed as
   its `PushField::SlotGuestBase`, and its texture is the element at the ID's index of set 1's two
   fixed arrays, the same layout for every pipeline ([RESOURCE-ID.md](RESOURCE-ID.md)); it binds no
   descriptor of its own and declares no specialization constant. An argument buffer's texture is

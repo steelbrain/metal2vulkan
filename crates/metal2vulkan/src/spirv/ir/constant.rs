@@ -375,8 +375,9 @@ impl Consts {
     }
 
     /// Declare the module's `WorkgroupSize` composite of `ty` (a `u32` 3-vector) from three
-    /// positive `u32` constants, at least one of them a specialization constant. Declaring it again with the same parts returns the first
-    /// declaration; different parts are a conflict.
+    /// positive `u32` constants ([`Consts::positive`]), at least one of them a specialization
+    /// constant or an `OpSpecConstantOp` of them. Declaring it again with the same parts returns
+    /// the first declaration; different parts are a conflict.
     pub fn workgroup_size(
         &mut self,
         ty: TypeId,
@@ -410,17 +411,11 @@ impl Consts {
         let mut specs = 0;
         for p in parts {
             let def = self.get(p)?;
-            // A local size of zero is invalid on every axis, so a part (a specialization
-            // constant's default, or a plain constant) must be positive.
-            let positive = match &def.kind {
-                ConstKind::Spec { default, .. } => {
-                    specs += 1;
-                    default.0 != 0
-                }
-                ConstKind::Plain(Constant::Scalar { bits, .. }) => bits.0 != 0,
-                _ => false,
-            };
-            if def.ty != u32_elem || !positive {
+            if matches!(def.kind, ConstKind::Spec { .. } | ConstKind::SpecOp { .. }) {
+                specs += 1;
+            }
+            // A local size of zero is invalid on every axis, so a part must be positive.
+            if def.ty != u32_elem || !self.positive(p)? {
                 return Err(BuildError::Constant(ConstRule::CompositeParts));
             }
         }
@@ -434,6 +429,25 @@ impl Consts {
             kind: ConstKind::WorkgroupSize { parts },
         });
         Ok((id, true))
+    }
+
+    /// Whether constant `c` is positive at its defaults: a plain scalar or a specialization
+    /// constant's default above 0, or a product or select of such. An `OpSpecConstantOp` of any
+    /// other operation is not known to be.
+    fn positive(&self, c: ConstId) -> BResult<bool> {
+        Ok(match &self.get(c)?.kind {
+            ConstKind::Spec { default, .. } => default.0 != 0,
+            ConstKind::Plain(Constant::Scalar { bits, .. }) => bits.0 != 0,
+            ConstKind::SpecOp {
+                op: SpecOp::IMul,
+                operands,
+            } => self.positive(operands[0])? && self.positive(operands[1])?,
+            ConstKind::SpecOp {
+                op: SpecOp::Select,
+                operands,
+            } => self.positive(operands[1])? && self.positive(operands[2])?,
+            _ => false,
+        })
     }
 
     /// The module's `WorkgroupSize` composite, if declared.

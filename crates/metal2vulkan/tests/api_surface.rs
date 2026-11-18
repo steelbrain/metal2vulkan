@@ -339,6 +339,7 @@ surface! {
         const NONUNIFORM;
         fn grid_tile;
         const GRID_TILE_THREADS;
+        const DEEP_THREADGROUP;
         struct ComputePipeline N;
         struct ComputePipelineMetalInfo N;
         struct CompileReport N;

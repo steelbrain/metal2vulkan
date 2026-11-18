@@ -422,7 +422,6 @@ impl Device {
         let sampler_cap = limits.max_sampler_allocation_count.saturating_sub(2);
         let limits = EncoderLimits {
             max_group_count: limits.max_compute_work_group_count,
-            max_group_size: limits.max_compute_work_group_size,
             max_shared_memory: limits.max_compute_shared_memory_size,
             max_viewport: limits.max_viewport_dimensions,
             viewport_bounds: limits.viewport_bounds_range,
@@ -968,8 +967,6 @@ unsafe fn objects(
 pub(crate) struct EncoderLimits {
     /// `maxComputeWorkGroupCount`.
     pub(crate) max_group_count: [u32; 3],
-    /// `maxComputeWorkGroupSize`.
-    pub(crate) max_group_size: [u32; 3],
     /// `maxComputeSharedMemorySize`.
     pub(crate) max_shared_memory: u32,
     /// `maxViewportDimensions`.

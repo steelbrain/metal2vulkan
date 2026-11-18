@@ -149,9 +149,11 @@ pub use compile::{
 };
 pub use facts::{Mechanism, RuntimeFact, UniformViewChoice};
 // The `DispatchRegion` push field's bytes, which a consumer of the identity domains pushes with
-// each dispatch, and the tile a kernel's grid tiles cover a grid with (`RuntimeFact::GridTiles`).
+// each dispatch, the tile a kernel's grid tiles cover a grid with (`RuntimeFact::GridTiles`), and
+// the depth past which a threadgroup runs as one row (`SpecKey::DeepThreadgroup`).
 pub use crate::lower::dispatch::{
-    grid_tile, nonuniform_region_bytes, region_bytes, GRID_TILE_THREADS, NONUNIFORM,
+    grid_tile, nonuniform_region_bytes, region_bytes, DEEP_THREADGROUP, GRID_TILE_THREADS,
+    NONUNIFORM,
 };
 // The threadgroup memory of an emulated-simdgroup module's arena (`RuntimeFact::SimdgroupEmulation`),
 // which a consumer of the identity domains counts with each dispatch's scratch.

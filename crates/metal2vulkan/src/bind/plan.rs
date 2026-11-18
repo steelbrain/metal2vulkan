@@ -582,6 +582,9 @@ pub(crate) enum BoundKind {
 pub(crate) struct LocalRules {
     /// The flattened tiers' `(sn, 1, 1)` workgroup (`SpecKey::FlatLocalSize`).
     pub flat: bool,
+    /// The kernel declares `SpecKey::DeepThreadgroup`: a region deeper than
+    /// [`crate::pipeline::DEEP_THREADGROUP`] runs as one row, checked as the flattened tiers'.
+    pub deep: bool,
     /// Every `LocalSizeConstraint{multiple}` of the pipeline.
     pub multiples: Vec<u32>,
     pub max_size: [u32; 3],

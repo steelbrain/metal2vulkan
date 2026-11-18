@@ -36,8 +36,9 @@
 //!   as Metal's threadgroup and the tiles times the tile as the grid, as plain Metal answers them
 //!   under `threadgroupSizeMatchesTileSize`.
 //!
-//! Every region's local size is checked: in the flattened tiers `sn = x·y·z` against
-//! `maxComputeWorkGroupSize[0]`, `maxComputeWorkGroupInvocations`, and
+//! Every region's local size is checked: in the flattened tiers, and in a region deeper than
+//! `DEEP_THREADGROUP` of a kernel that declares `SpecKey::DeepThreadgroup` (which the region sets),
+//! `sn = x·y·z` against `maxComputeWorkGroupSize[0]`, `maxComputeWorkGroupInvocations`, and
 //! `maxComputeWorkgroupSubgroups · S`; otherwise each axis and the product; and against every
 //! `LocalSizeConstraint{multiple}` (`ComputeDerivatives` outside the flattened tiers). Metal's
 //! nominal size must be 1..=1024 per axis (the `DispatchRegion` packing).
@@ -114,7 +115,8 @@ use crate::device::requirements::VkLimit;
 use crate::error::{BindError, Capability, Feature, LowerFamily, Unsupported};
 use crate::indirect_commands::BINDING_COUNT;
 use crate::lower::dispatch::{
-    grid_tile, nonuniform_region_bytes, pack_nominal, region_bytes, GRID_TILE_THREADS,
+    grid_tile, nonuniform_region_bytes, pack_nominal, region_bytes, DEEP_THREADGROUP,
+    GRID_TILE_THREADS,
 };
 use crate::metal::vertex::vertex_bytes;
 use crate::metal::{StepFunction, VertexFormat};
@@ -362,7 +364,7 @@ pub(crate) fn fit(
 fn check_local(rules: &LocalRules, r: [u32; 3]) -> Result<(), BindError> {
     let n: u64 = r.iter().map(|&x| u64::from(x)).product();
     let total = Feature::LocalSize { axis: None };
-    if rules.flat {
+    if rules.flat || (rules.deep && r[2] > DEEP_THREADGROUP) {
         let x = Feature::LocalSize {
             axis: Some(Axis::X),
         };
@@ -1251,9 +1253,10 @@ impl BindingPlan {
 }
 
 /// The specialization of a region of `local` threads of `t`: the template's fixed constants, the
-/// local size, whether the region reads its record (`MultiRegion`), and whether a stage-in element
-/// it fetches may lie past the first `2^32` bytes from its bind offset (`StageInReach`,
-/// [`stage_in_reach`]).
+/// local size, whether the region reads its record (`MultiRegion`), whether a stage-in element it
+/// fetches may lie past the first `2^32` bytes from its bind offset (`StageInReach`,
+/// [`stage_in_reach`]), and whether it runs as one row (`DeepThreadgroup`, deeper than
+/// [`DEEP_THREADGROUP`]).
 fn region_specialization(
     t: &ComputeTemplate,
     local: [u32; 3],
@@ -1284,6 +1287,7 @@ fn region_specialization_into(
         SpecKey::FlatLocalSize => Some(n),
         SpecKey::MultiRegion => Some(u64::from(multi)),
         SpecKey::StageInReach => Some(u64::from(reach)),
+        SpecKey::DeepThreadgroup => Some(u64::from(local[2] > DEEP_THREADGROUP)),
         other => match t.fixed.get(next.get()) {
             Some(&(at, v)) if at == other => {
                 next.set(next.get() + 1);

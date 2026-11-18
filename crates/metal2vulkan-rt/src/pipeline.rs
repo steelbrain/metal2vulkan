@@ -57,7 +57,7 @@ use metal2vulkan::pipeline::{
     ComputePipelineDescriptor, DescriptorSetLayout, FunctionDescriptor, LoweringInputs,
     NumberedSampler, PrecisionNote, PushField, PushLoc, RuntimeFact, SamplerRef, SlotClass,
     SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, TextureAccess,
-    GRID_TILE_THREADS,
+    DEEP_THREADGROUP, GRID_TILE_THREADS,
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
@@ -248,8 +248,8 @@ pub(crate) enum Form {
     /// The kernel does not observe its partition and is image-only
     /// (`CompiledFunction::is_image_only`): `whole` runs a direct dispatch at `MultiRegion` 0,
     /// whatever the threadgroup size, in workgroups of [`SQUARE`] over a grid one deep and of the
-    /// grid's `grid_tile` tile over a deeper one, a tile past the device's
-    /// `maxComputeWorkGroupSize` as [`Form::Tiled`] does.
+    /// grid's `grid_tile` tile over a deeper one, a tile deeper than `DEEP_THREADGROUP` as one
+    /// row ([`Constant::Deep`]).
     Square,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, and a
     /// `dispatchThreads` grid that is not a whole number of threadgroups on the
@@ -372,6 +372,9 @@ pub(crate) enum Constant {
     /// tile; 0 for every other launch, whose region states the pipeline's own threadgroup size,
     /// so the kernel takes `L` from its workgroup size and reads no decode.
     MultiRegion,
+    /// `DeepThreadgroup`: 1 where the threadgroup is deeper than `DEEP_THREADGROUP`, which then
+    /// runs as one row of its threads, 0 for every other, whose workgroup is the threadgroup.
+    Deep,
 }
 
 /// A parameter and where it goes.
@@ -971,6 +974,7 @@ fn interface(
                     .ok_or_else(gap)?,
             ),
             SpecKey::MultiRegion => Constant::MultiRegion,
+            SpecKey::DeepThreadgroup => Constant::Deep,
             _ => return Err(gap()),
         };
         constants.push((constant.id, set));
@@ -981,6 +985,15 @@ fn interface(
         .iter()
         .any(|(_, set)| matches!(set, Constant::Threads));
     if !multiples.is_empty() && !flat {
+        return Err(gap());
+    }
+    // Every workgroup is within the floor's sizes: a flattened one is one row of the threadgroup,
+    // and any other runs a threadgroup deeper than `DEEP_THREADGROUP` as one row, which a module
+    // that cannot (compute derivatives) does not declare.
+    let deep = constants
+        .iter()
+        .any(|(_, set)| matches!(set, Constant::Deep));
+    if !flat && !deep {
         return Err(gap());
     }
     let max_total_threads = match required_size {
@@ -1291,6 +1304,7 @@ impl Kernel {
                 Constant::Threads => variant.size.iter().product(),
                 Constant::ThreadgroupLength(at) => variant.threadgroup_lengths[at],
                 Constant::MultiRegion => u32::from(variant.tiles),
+                Constant::Deep => u32::from(variant.size[2] > DEEP_THREADGROUP),
             })
             .flat_map(u32::to_ne_bytes)
             .collect();

@@ -305,7 +305,8 @@ mod on_device {
     /// edge: over a grid of 20 by 12, ragged in both, a 32x32 destination holds the sample in the
     /// grid's texels and nothing past them, with no first-use wait. A grid two deep runs in
     /// workgroups of its tile on a `VkPipeline` made at that dispatch: one wait, the same
-    /// texels.
+    /// texels. A column 256 deep, whose tile is 1 by 1 by 256, deeper than 64, runs its tile as
+    /// one row of 256 threads on every device: one wait, its one texel.
     #[test]
     fn every_device_runs_an_image_only_kernel_in_square_workgroups() {
         let Some(library) = library() else {
@@ -372,8 +373,8 @@ mod on_device {
                 "{name}: the square workgroups' pipeline, made with the state"
             );
             let queue = device.new_command_queue(4).expect("a queue");
-            let grid = [20, 12];
-            for (depth, waits) in [(1, 0), (2, 1)] {
+            for (grid, depth, waits) in [([20, 12], 1, 0), ([20, 12], 2, 1), ([1, 1], 256, 1)] {
+                fill(&output, OUT, [0.0; 4]);
                 let before = counters.metrics();
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = command_buffer

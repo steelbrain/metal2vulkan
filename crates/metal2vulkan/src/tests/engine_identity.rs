@@ -87,9 +87,11 @@ use crate::pipeline::testing::{
     typed_module_with, AssembleError,
 };
 use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
+use crate::spirv::ids::ConstId;
 use crate::spirv::interp::{
     run, run_with_images, BarrierRule, Buffer, Config, Image, Order, Resources,
 };
+use crate::spirv::ir::{ConstKind, TypedModule};
 use crate::spirv::testing::spirv_dis;
 use crate::vk;
 
@@ -1474,6 +1476,226 @@ entry:\n\
 !14 = !{i32 2, !\"air.threads_per_threadgroup\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"size\"}\n\
 !17 = !{i32 2, i32 8, i32 0}\n!18 = !{!\"Metal\", i32 4, i32 0, i32 0}\n"
         .to_string()
+}
+
+/// A kernel that stores, for its thread `t` of threadgroup `g` along `x`, two words at `2 · (g ·
+/// n + t)` of a threadgroup of `n` threads: its position in the threadgroup `x | y << 10 | z << 20`,
+/// and the index of thread `n - 1 - t`, which it reads from threadgroup memory that thread wrote
+/// before a threadgroup barrier.
+fn deep_kernel() -> String {
+    "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n\
+@s = internal addrspace(3) global [1024 x i32] undef, align 4\n\n\
+define void @deep(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, <3 x i32> noundef %1, i32 noundef %2, <3 x i32> noundef %3, <3 x i32> noundef %4) {\n\
+entry:\n\
+  %ps = getelementptr inbounds [1024 x i32], ptr addrspace(3) @s, i32 0, i32 %2\n\
+  store i32 %2, ptr addrspace(3) %ps, align 4\n\
+  tail call void @air.wg.barrier(i32 2, i32 1)\n\
+  %sx = extractelement <3 x i32> %3, i64 0\n\
+  %sy = extractelement <3 x i32> %3, i64 1\n\
+  %sz = extractelement <3 x i32> %3, i64 2\n\
+  %sxy = mul i32 %sx, %sy\n\
+  %n = mul i32 %sxy, %sz\n\
+  %last = sub i32 %n, 1\n\
+  %r = sub i32 %last, %2\n\
+  %pr = getelementptr inbounds [1024 x i32], ptr addrspace(3) @s, i32 0, i32 %r\n\
+  %v = load i32, ptr addrspace(3) %pr, align 4\n\
+  %x = extractelement <3 x i32> %1, i64 0\n\
+  %y = extractelement <3 x i32> %1, i64 1\n\
+  %z = extractelement <3 x i32> %1, i64 2\n\
+  %y10 = shl i32 %y, 10\n\
+  %z20 = shl i32 %z, 20\n\
+  %xy = or i32 %x, %y10\n\
+  %w = or i32 %xy, %z20\n\
+  %g = extractelement <3 x i32> %4, i64 0\n\
+  %gn = mul i32 %g, %n\n\
+  %idx = add i32 %gn, %2\n\
+  %i2 = shl i32 %idx, 1\n\
+  %i = zext i32 %i2 to i64\n\
+  %p = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %i\n\
+  store i32 %w, ptr addrspace(1) %p, align 4\n\
+  %q = getelementptr inbounds i32, ptr addrspace(1) %p, i64 1\n\
+  store i32 %v, ptr addrspace(1) %q, align 4\n\
+  ret void\n\
+}\n\n\
+declare void @air.wg.barrier(i32, i32)\n\n\
+!air.kernel = !{!9}\n!air.version = !{!17}\n!air.language_version = !{!18}\n\
+!9 = !{ptr @deep, !10, !11}\n!10 = !{}\n!11 = !{!12, !13, !14, !15, !16}\n\
+!12 = !{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}\n\
+!13 = !{i32 1, !\"air.thread_position_in_threadgroup\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"pos\"}\n\
+!14 = !{i32 2, !\"air.thread_index_in_threadgroup\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"t\"}\n\
+!15 = !{i32 3, !\"air.threads_per_threadgroup\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"size\"}\n\
+!16 = !{i32 4, !\"air.threadgroup_position_in_grid\", !\"air.arg_type_name\", !\"uint3\", !\"air.arg_name\", !\"group\"}\n\
+!17 = !{i32 2, i32 8, i32 0}\n!18 = !{!\"Metal\", i32 4, i32 0, i32 0}\n"
+        .to_string()
+}
+
+/// The workgroup `module` declares under `spec`: its `WorkgroupSize` composite, each part a
+/// constant, a specialization constant or an operation of them, at those values.
+fn workgroup_of(module: &TypedModule, spec: &BTreeMap<SpecKey, u64>) -> [u32; 3] {
+    fn value(module: &TypedModule, spec: &BTreeMap<SpecKey, u64>, c: ConstId) -> u64 {
+        match &module.consts().get(c).expect("a constant").kind {
+            ConstKind::Plain(crate::spirv::ir::Constant::Scalar { bits, .. }) => bits.0,
+            ConstKind::Spec { key, default } => spec.get(key).copied().unwrap_or(default.0),
+            ConstKind::SpecOp { op, operands } => {
+                let values: Vec<u64> = (operands.iter()).map(|&o| value(module, spec, o)).collect();
+                op.eval(32, &values).expect("an operation of its arity")
+            }
+            other => panic!("a workgroup size part {other:?}"),
+        }
+    }
+    let size = module
+        .consts()
+        .workgroup_size_const()
+        .expect("a WorkgroupSize");
+    let ConstKind::WorkgroupSize { parts } = module.consts().get(size).expect("it").kind else {
+        panic!("not a WorkgroupSize");
+    };
+    parts.map(|part| value(module, spec, part) as u32)
+}
+
+/// On `Device::from_queries`' profile a kernel whose workgroup is its threadgroup declares
+/// `SpecKey::DeepThreadgroup`, default false, and on `Device::new`'s it does not. Set for a
+/// threadgroup deeper than `DEEP_THREADGROUP`, its workgroup is one row of the threadgroup's
+/// threads and its threads' positions, linear indices and threadgroup memory are Metal's:
+/// [`deep_kernel`] over two threadgroups of 1 by 1 by 320, 2 by 3 by 100 and 1 by 4 by 256 stores
+/// what Metal's do, and so does one of 4 by 4 by 4, at its own workgroup with the key unset. The
+/// device reports Metal's 1,024 threads along every axis there, where `Device::new` on a profile of
+/// 64 along `z` reports 64.
+#[test]
+fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
+    use crate::pipeline::DEEP_THREADGROUP;
+    let Some(bc) = assemble_text("deep", &deep_kernel()) else {
+        return;
+    };
+    for stem in PROFILES {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let (a, _, _) = compile_kept(&bc, "deep", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(
+            (a.interface.spec.iter()).all(|c| c.key != SpecKey::DeepThreadgroup),
+            "{stem}: DeepThreadgroup on Device::new"
+        );
+        let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let p = device.profile();
+        let (a, plan, module) =
+            compile_kept(&bc, "deep", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let declared: Vec<u64> = (a.interface.spec.iter())
+            .filter(|c| c.key == SpecKey::DeepThreadgroup)
+            .map(|c| c.default)
+            .collect();
+        assert_eq!(declared, [0], "{stem}");
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        for size in [[1, 1, 320], [2, 3, 100], [1, 4, 256], [4, 4, 4]] {
+            let n = size.iter().product::<u32>();
+            let deep = size[2] > DEEP_THREADGROUP;
+            let mut spec = local_size3(size);
+            spec.insert(SpecKey::DeepThreadgroup, u64::from(deep));
+            let want_group = match deep {
+                true => [n, 1, 1],
+                false => size,
+            };
+            assert_eq!(workgroup_of(&module, &spec), want_group, "{stem} {size:?}");
+            let mut want = Vec::new();
+            for _ in 0..2 {
+                for t in 0..n {
+                    let (x, y, z) = (t % size[0], t / size[0] % size[1], t / (size[0] * size[1]));
+                    want.extend((x | y << 10 | z << 20).to_le_bytes());
+                    want.extend((n - 1 - t).to_le_bytes());
+                }
+            }
+            let grid = [2 * size[0], size[1], size[2]];
+            let region = region_bytes([0; 3], grid, size).expect("packs");
+            let res = Resources {
+                buffers: vec![Buffer {
+                    slot: None,
+                    address: Some(OUT),
+                    bytes: vec![0; want.len()],
+                }],
+                push: grid_push(&plan, OUT, region),
+                spec,
+            };
+            let cfg = Config {
+                workgroups: [2, 1, 1],
+                ..Config::default()
+            };
+            let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem} {size:?}: {e}"));
+            assert_eq!(got.buffers[0], want, "{stem} {size:?}");
+        }
+    }
+    let desc = crate::pipeline::testing::description("nvidia-rtx50-linux")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let new = Device::new(desc.clone(), identity()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        new.metal_properties().max_threads_per_threadgroup,
+        [1024, 1024, 64]
+    );
+    let queries = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        queries.metal_properties().max_threads_per_threadgroup,
+        [1024; 3]
+    );
+}
+
+/// Through the binder on `Device::from_queries`' profile of a device that holds 64 threads along
+/// `z` (NVIDIA's): a dispatch of [`deep_kernel`] in threadgroups 320 deep is planned, its region
+/// setting `SpecKey::DeepThreadgroup`, and one 4 deep is planned with it unset.
+#[test]
+fn the_binder_sets_deep_threadgroup_for_a_threadgroup_deeper_than_the_floor() {
+    let Some(bc) = assemble_text("deep", &deep_kernel()) else {
+        return;
+    };
+    let desc = crate::pipeline::testing::description("nvidia-rtx50-linux")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+    let lib = Library::from_air(&bc).unwrap_or_else(|e| panic!("{e}"));
+    let f = FunctionDescriptor::new(lib.function("deep").unwrap_or_else(|e| panic!("{e}")));
+    let compiled = dev
+        .compile_function(&f, &LowerInputs::new(), &Budget::standard())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let d = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
+    let pipe = dev
+        .compile_compute_pipeline(&d, &Budget::standard())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut table = StageTable::default();
+    table.buffers.insert(
+        0,
+        BoundBuffer::Buffer {
+            length: 1 << 20,
+            offset: 0,
+            gpu_address: OUT,
+            device_address: Some(OUT),
+            attribute_stride: None,
+        },
+    );
+    let mut state = BindState::default();
+    state.stages.insert(Stage::Kernel, table);
+    let plan = pipe
+        .plan(&dev, &state.shape())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let id = (pipe.stage.specialization.constants.iter())
+        .find(|c| c.key == SpecKey::DeepThreadgroup)
+        .map(|c| c.id)
+        .expect("the kernel declares DeepThreadgroup");
+    for (threads_per_group, deep) in [([1, 1, 320], true), ([4, 4, 4], false)] {
+        let dispatch = Dispatch::Threadgroups {
+            groups: [2, 1, 1],
+            threads_per_group,
+        };
+        let commands = plan
+            .instantiate_dispatch(&state, &dispatch)
+            .unwrap_or_else(|e| panic!("{threads_per_group:?}: {e}"));
+        assert!(!commands.regions.is_empty());
+        for region in &commands.regions {
+            let entry = (region.specialization.entries.iter())
+                .find(|e| e.constant_id == id)
+                .expect("every region sets DeepThreadgroup");
+            let at = entry.offset as usize;
+            let set =
+                (region.specialization.data[at..at + entry.size as usize].iter()).any(|&b| b != 0);
+            assert_eq!(set, deep, "{threads_per_group:?}");
+        }
+    }
 }
 
 /// A partial-threadgroups variant over a ragged grid, its region flagged `NONUNIFORM`, answers

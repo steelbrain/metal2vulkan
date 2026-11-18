@@ -947,6 +947,15 @@ pub enum SpecKey {
     /// nothing for it and the write's test is dead code at pipeline creation, exactly, since no
     /// handle the command names then names such a texture. A pipeline's key carries it.
     HeapYCbCrWrites(Stage),
+    /// Boolean: the kernel's threadgroup runs as one row (default false). Its workgroup is then
+    /// `(sx·sy·sz, 1, 1)`, and its position in the threadgroup is its `LocalInvocationIndex`
+    /// unflattened over `(sx, sy, sz)`, `x` fastest, which is Metal's order, so its linear index
+    /// and every other builtin keep their values. Declared on `Device::from_queries`' profile by
+    /// a kernel whose workgroup is its threadgroup (`LocalSizeForm::Spec`), so a threadgroup
+    /// deeper than [`DEEP_THREADGROUP`](crate::pipeline::DEEP_THREADGROUP) runs within every
+    /// device's `maxComputeWorkGroupSize`; where it is false the workgroup is `(sx, sy, sz)` and
+    /// the pipeline is the one the kernel makes without it.
+    DeepThreadgroup,
 }
 
 impl SpecKey {

@@ -1,18 +1,16 @@
-//! What runs a compute dispatch (`encoder::choose`), with no device. An image-only kernel that does
-//! not observe its threadgroup partition runs its grid at `MultiRegion` 0 in workgroups of 16x16x1
-//! where it is one deep and of its tile where it is deeper, with no tile decode and its edge tested
-//! where they do not divide the grid. A kernel that does not observe it and is not image-only runs
-//! every grid in the tiles the region carries, as an image-only kernel does where its tile is past
-//! the device's sizes. An observing kernel runs at its own size. Every workgroup a kernel that does not observe its
-//! partition runs is within the device's `maxComputeWorkGroupSize`, whatever its threadgroup size.
+//! What runs a compute dispatch (`encoder::choose`), with no device: the same on every device. An
+//! image-only kernel that does not observe its threadgroup partition runs its grid at
+//! `MultiRegion` 0 in workgroups of 16x16x1 where it is one deep and of its tile where it is
+//! deeper, with no tile decode and its edge tested where they do not divide the grid. A kernel that
+//! does not observe it and is not image-only runs every grid in the tiles the region carries. An
+//! observing kernel runs at its own size. A size deeper than `DEEP_THREADGROUP` runs as one row of
+//! its threads, so every workgroup is within the floor's `maxComputeWorkGroupSize`, whatever the
+//! threadgroup size.
 
-use crate::encoder::{choose, fits, Choice, Direct, Module};
+use crate::encoder::{choose, Choice, Direct, Module};
+use crate::floor::{WORKGROUP_INVOCATIONS, WORKGROUP_SIZE};
 use crate::pipeline::{Form, SQUARE};
-use ash::vk;
-use metal2vulkan::pipeline::{grid_tile, GRID_TILE_THREADS};
-
-/// A `maxComputeWorkGroupSize` of 1,024 by 1,024 by 64: the floor's, and NVIDIA's.
-const MAX: [u32; 3] = [1024, 1024, 64];
+use metal2vulkan::pipeline::{grid_tile, DEEP_THREADGROUP, GRID_TILE_THREADS};
 
 /// A `dispatchThreads` grid of `threads` in threadgroups of `size`.
 fn threads_of(threads: [u32; 3], size: [u32; 3]) -> Direct {
@@ -47,7 +45,6 @@ fn an_image_only_kernels_grid_one_deep_runs_in_square_workgroups() {
             &Form::Square,
             Some(threads_of(threads, [8, 8, 1])),
             [8, 8, 1],
-            MAX,
         );
         assert_eq!(
             choice,
@@ -72,7 +69,6 @@ fn an_image_only_kernels_deeper_grid_runs_in_workgroups_of_its_tile() {
             &Form::Square,
             Some(threads_of(threads, [4, 4, 4])),
             [4, 4, 4],
-            MAX,
         );
         assert_eq!(
             choice,
@@ -105,7 +101,6 @@ fn a_tiling_kernel_runs_every_grid_in_its_regions_tiles() {
             &Form::Tiled,
             Some(threads_of(threads, [32, 1, 1])),
             [32, 1, 1],
-            MAX,
         );
         assert_eq!(
             choice,
@@ -125,22 +120,12 @@ fn a_tiling_kernel_runs_every_grid_in_its_regions_tiles() {
 #[test]
 fn an_observing_kernel_and_an_indirect_dispatch_run_at_their_own_size() {
     let sized = Form::Sized { partial: None };
-    let whole = choose(
-        &sized,
-        Some(threads_of([64, 64, 1], [8, 8, 1])),
-        [8, 8, 1],
-        MAX,
-    );
+    let whole = choose(&sized, Some(threads_of([64, 64, 1], [8, 8, 1])), [8, 8, 1]);
     assert_eq!((whole.module, whole.local), (Module::Whole, [8, 8, 1]));
-    let ragged = choose(
-        &sized,
-        Some(threads_of([60, 64, 1], [8, 8, 1])),
-        [8, 8, 1],
-        MAX,
-    );
+    let ragged = choose(&sized, Some(threads_of([60, 64, 1], [8, 8, 1])), [8, 8, 1]);
     assert_eq!(ragged.module, Module::Partial);
     for form in [Form::Tiled, Form::Square, Form::Sized { partial: None }] {
-        let indirect = choose(&form, None, [4, 2, 1], MAX);
+        let indirect = choose(&form, None, [4, 2, 1]);
         assert_eq!(
             indirect,
             Choice {
@@ -153,34 +138,46 @@ fn an_observing_kernel_and_an_indirect_dispatch_run_at_their_own_size() {
     }
 }
 
-/// A threadgroup 320 deep, on a device whose `maxComputeWorkGroupSize` is 1,024 by 1,024 by 64: a
-/// kernel that does not observe its partition runs it in a workgroup within the device's sizes,
-/// square, tiled or of its tile, over a grid one deep and a deeper one alike; an observing
-/// kernel's workgroup is the threadgroup, past the device's depth, which the encoder refuses
-/// (`Limit::ThreadgroupShape`). An image-only kernel whose grid's tile is past the device's depth
-/// (a column 1,024 deep, whose tile is 1 by 1 by 256) runs it in the tiles its regions carry.
+/// The workgroup a pipeline of local size `local` runs: one row of its threads where it is deeper
+/// than `DEEP_THREADGROUP` (`DeepThreadgroup` 1), else the threadgroup.
+fn workgroup(local: [u32; 3]) -> [u32; 3] {
+    match local[2] > DEEP_THREADGROUP {
+        true => [local.iter().product(), 1, 1],
+        false => local,
+    }
+}
+
+/// A threadgroup 320 deep: every kernel runs it in a workgroup within the floor's sizes, the same
+/// on every device. One that does not observe its partition runs it square, tiled or of its tile,
+/// over a grid one deep and a deeper one alike; an observing kernel at its own size, as one row of
+/// its 320 threads, and so does an indirect dispatch. An image-only kernel whose grid's tile is
+/// deeper than `DEEP_THREADGROUP` (a column 1,024 deep, whose tile is 1 by 1 by 256) runs it whole,
+/// as one row of the tile's threads.
 #[test]
-fn a_threadgroup_deeper_than_the_device_runs_only_where_it_is_not_the_workgroup() {
-    let limits = vk::PhysicalDeviceLimits {
-        max_compute_work_group_size: MAX,
-        ..Default::default()
+fn a_threadgroup_deeper_than_the_floor_runs_as_one_row() {
+    let within = |local: [u32; 3]| {
+        let at = workgroup(local);
+        (0..3).all(|axis| at[axis] <= WORKGROUP_SIZE[axis])
+            && at.iter().product::<u32>() <= WORKGROUP_INVOCATIONS
     };
-    let max = limits.max_compute_work_group_size;
     let size = [1, 1, 320];
     for threads in [[4, 16, 320], [64, 64, 1], [1, 1, 1024]] {
         let direct = Some(threads_of(threads, size));
-        for form in [Form::Tiled, Form::Square] {
-            let choice = choose(&form, direct, size, max);
-            assert!(fits(choice.local, max), "{threads:?}: {:?}", choice.local);
+        for form in [Form::Tiled, Form::Square, Form::Sized { partial: None }] {
+            let choice = choose(&form, direct, size);
+            assert!(within(choice.local), "{threads:?}: {:?}", choice.local);
         }
-        let sized = choose(&Form::Sized { partial: None }, direct, size, max);
-        assert!(!fits(sized.local, max), "{threads:?}");
+        let sized = choose(&Form::Sized { partial: None }, direct, size);
+        assert_eq!(workgroup(sized.local), [320, 1, 1], "{threads:?}");
     }
+    let indirect = choose(&Form::Sized { partial: None }, None, size);
+    assert_eq!(workgroup(indirect.local), [320, 1, 1]);
     let column = [1, 1, 1024];
     assert_eq!(grid_tile(column), [1, 1, 256]);
-    let choice = choose(&Form::Square, Some(threads_of(column, size)), size, max);
+    let choice = choose(&Form::Square, Some(threads_of(column, size)), size);
     assert_eq!(
         (choice.module, choice.local, choice.nominal),
-        (Module::Tiles, [GRID_TILE_THREADS, 1, 1], [1, 1, 256])
+        (Module::Whole, [1, 1, 256], [1, 1, 256])
     );
+    assert_eq!(workgroup(choice.local), [256, 1, 1]);
 }

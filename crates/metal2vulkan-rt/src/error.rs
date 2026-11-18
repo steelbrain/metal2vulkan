@@ -942,19 +942,6 @@ pub enum Limit {
     ///
     /// Basis: ours (block numbers are 32 bits).
     BlockIds,
-    /// A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds
-    /// 1,024 by 1,024 by 64), where the threadgroup is the Vulkan workgroup: a kernel that observes
-    /// its threadgroup partition, and any kernel's indirect dispatch. A direct dispatch of a kernel
-    /// that does not observe it runs in workgroups of the runtime's, within the floor, whatever its
-    /// threadgroup size. Metal's go to 1,024 on every axis.
-    ///
-    /// Basis: device (the device's `maxComputeWorkGroupSize`).
-    ThreadgroupShape {
-        /// The threadgroup size asked for.
-        size: [u32; 3],
-        /// The device's most.
-        max: [u32; 3],
-    },
     /// A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up
     /// to 16 bytes), is past the device's `maxComputeSharedMemorySize`; for a threadgroup that
     /// runs the emulated-SIMD-group module, with the scratch of its SIMD groups. Metal's
@@ -1407,9 +1394,6 @@ impl fmt::Display for Limit {
                 "a block of {len} bytes is past the device's largest, {max} bytes"
             ),
             Limit::BlockIds => f.write_str("every block number has been used"),
-            Limit::ThreadgroupShape { size, max } => {
-                write!(f, "a threadgroup of {size:?} is past the device's {max:?}")
-            }
             Limit::ThreadgroupMemory { length, max } => write!(
                 f,
                 "{length} bytes of threadgroup memory are past the device's {max}"

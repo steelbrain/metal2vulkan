@@ -12,6 +12,17 @@
 //! [`DispatchPlan::keys`]): link gives a key one id over the pipeline, and a mesh render pipeline's
 //! object and mesh threadgroups take separate sizes.
 //!
+//! **Deep threadgroups.** On `Device::from_queries`' profile (`DeepThreadgroups::OneRow`) a
+//! kernel of the `Spec` form declares `SpecKey::DeepThreadgroup` ([`DispatchPlan::deep`]), under
+//! which its `WorkgroupSize` is `(sn, 1, 1)`, `sn = sx·sy·sz` (each part an `OpSpecConstantOp`
+//! select of the constants) and its position in the threadgroup `LocalInvocationIndex`
+//! unflattened over `(sx, sy, sz)`: Metal allows 1024 threads along `z`, where a device's
+//! `maxComputeWorkGroupSize[2]` may hold 64, and a threadgroup of at most 1024 threads in one row
+//! fits every device the profile serves. The linear index keeps its value, `x` fastest either
+//! way, and so does every builtin derived from it, the workgroup's and the grid's. The runtime
+//! sets it for a threadgroup deeper than [`DEEP_THREADGROUP`] alone, so a pipeline of any other
+//! size specializes it away.
+//!
 //! **Builtins** ([`KernelBuiltin`]). Every Metal kernel builtin derives from a handful of Vulkan
 //! ones and the linear local index `lin`:
 //!
@@ -172,7 +183,7 @@
 
 use crate::air::abi::{Builtin, ParamBinding, ParamRole};
 use crate::air::ir::{ArgIdx, Value};
-use crate::device::profile::{IdentityRegion, ObliviousEdge};
+use crate::device::profile::{DeepThreadgroups, IdentityRegion, ObliviousEdge};
 use crate::device::subgroup::{self, SimdClass, Tier};
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith;
@@ -185,8 +196,8 @@ use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{ConstId, DemoteTy, GlobalId, ScalarTy, TypeId, Value as SValue};
 use crate::spirv::ir::{
-    BinOp, ConstBits, Constant, ConvOp, ExecMode, GlslOp, IoDir, MemAccess, StorageClass, Type,
-    UnOp,
+    BinOp, ConstBits, Constant, ConvOp, ExecMode, GlslOp, IoDir, MemAccess, SpecOp, StorageClass,
+    Type, UnOp,
 };
 
 /// The builder's error for a value the declarations do not hold.
@@ -534,6 +545,10 @@ pub struct DispatchPlan {
     /// never reads `SubgroupSize`. `None` outside the flattened tiers and where the stage pins no
     /// size, where `lin` reads the builtin.
     pub pinned_subgroup_size: Option<u32>,
+    /// A kernel of the [`LocalSizeForm::Spec`] form on a profile whose `DeepThreadgroups` is
+    /// `OneRow`, without compute derivatives (whose quads are two-dimensional): it declares
+    /// `SpecKey::DeepThreadgroup`, under which its threadgroup runs as one row (the module docs).
+    pub deep: bool,
 }
 
 /// The words a flat grid adds: its thread's index, position, and early return, derived once for the
@@ -725,6 +740,10 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
     if grid_edge {
         cx.facts.insert(RuntimeFact::GridTiles);
     }
+    let deep = local_size == LocalSizeForm::Spec
+        && cx.stage == crate::pipeline::sym::Stage::Kernel
+        && cx.profile.deep_threadgroups() == DeepThreadgroups::OneRow
+        && !cx.families.barrier.compute_derivatives;
     Ok(DispatchPlan {
         local_size,
         builtins,
@@ -744,6 +763,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         identity_region: crate::lower::access::identity(cx.profile)
             .then(|| cx.profile.identity_region()),
         pinned_subgroup_size,
+        deep,
     })
 }
 
@@ -977,6 +997,8 @@ pub struct KernelDecl {
     uvec3: TypeId,
     /// `sx, sy, sz`.
     size: [ConstId; 3],
+    /// `SpecKey::DeepThreadgroup`, where the plan declares it ([`DispatchPlan::deep`]).
+    deep: Option<ConstId>,
     /// How the kernel tells a region, when it reads a grid builtin.
     multi_region: Option<RegionSelect>,
     local_id: Option<GlobalId>,
@@ -1128,6 +1150,11 @@ pub fn pack_nominal(l: [u32; 3]) -> Option<u32> {
 /// (`RuntimeFact::GridTiles`).
 pub const GRID_TILE_THREADS: u32 = 256;
 
+/// The deepest threadgroup a kernel runs as its own workgroup on `Device::from_queries`' profile:
+/// one deeper runs as one row (`SpecKey::DeepThreadgroup`). The least `maxComputeWorkGroupSize[2]`
+/// of the devices that profile serves (Vulkan's own minimum).
+pub const DEEP_THREADGROUP: u32 = 64;
+
 /// The tile a kernel's grid tiles (`RuntimeFact::GridTiles`) cover a grid of `threads` with: sides
 /// `2^a, 2^b, 2^c` with `a + b + c = 8`, so that one workgroup of [`GRID_TILE_THREADS`] is one
 /// tile, dispatched as `⌈threads / tile⌉` workgroups per axis. Of every such tile it is the first
@@ -1245,7 +1272,22 @@ impl KernelDecl {
         ]
         .map(|(k, d)| mb.spec(k, u32_, ConstBits(u64::from(d))));
         let size = [sx?, sy?, sz?];
+        let mut deep = None;
         match dp.local_size {
+            LocalSizeForm::Spec if dp.deep => {
+                let b = mb.ty(Type::Bool)?;
+                let one_row = mb.spec(SpecKey::DeepThreadgroup, b, ConstBits(0))?;
+                let row = mb.spec_op(SpecOp::IMul, u32_, &[size[0], size[1]])?;
+                let sn = mb.spec_op(SpecOp::IMul, u32_, &[row, size[2]])?;
+                let one = mb.constant(Constant::Scalar {
+                    ty: u32_,
+                    bits: ConstBits(1),
+                })?;
+                let [x, y, z] = [(sn, size[0]), (one, size[1]), (one, size[2])]
+                    .map(|(deep, own)| mb.spec_op(SpecOp::Select, u32_, &[one_row, deep, own]));
+                mb.workgroup_size(x?, y?, z?)?;
+                deep = Some(one_row);
+            }
             LocalSizeForm::Spec => {
                 mb.workgroup_size(size[0], size[1], size[2])?;
             }
@@ -1280,8 +1322,10 @@ impl KernelDecl {
         // A flat grid counts its threads by `LocalInvocationIndex` in either form: it reads no
         // simdgroup. One of the call's threadgroups counts them by `lin`, its simdgroups' lanes.
         let by_index = dp.flat_grid && !dp.call_threadgroups;
-        // A grid tile counts by `LocalInvocationIndex` in either form too.
-        let index = needs.lin && (!flat || by_index || dp.grid_edge);
+        // A grid tile counts by `LocalInvocationIndex` in either form too, and a deep
+        // threadgroup's position is unflattened from it.
+        let index = (needs.lin && (!flat || by_index || dp.grid_edge))
+            || (needs.local_pos && deep.is_some());
         let subgroups = needs.lin && flat && !by_index && !dp.grid_edge;
         use crate::spv::BuiltIn as B;
         // A wrapper that computes the threadgroup's position and grid stores them into private
@@ -1320,6 +1364,7 @@ impl KernelDecl {
             draw_index: var(dp.draw_pieces, B::DrawIndex, u32_)?,
             uvec3,
             size,
+            deep,
             multi_region,
             local_id: var(
                 needs.local_pos && !flat && !dp.tile,
@@ -1481,7 +1526,26 @@ impl KernelDecl {
             return self.tile_pos(fb, lin);
         }
         let uniform = match self.form {
-            LocalSizeForm::Spec => self.load(fb, self.local_id)?,
+            LocalSizeForm::Spec => {
+                let id = self.load(fb, self.local_id)?;
+                match self.deep {
+                    // A deep threadgroup's row, unflattened as the flattened tiers' is; any
+                    // other's own position, which the driver keeps alone when it specializes.
+                    Some(deep) => {
+                        let index = self.load(fb, self.local_index)?;
+                        let sx = fb.module().const_value(self.size[0])?;
+                        let sy = fb.module().const_value(self.size[1])?;
+                        let x = fb.binary(BinOp::UMod, index, sx)?;
+                        let row = fb.binary(BinOp::UDiv, index, sx)?;
+                        let y = fb.binary(BinOp::UMod, row, sy)?;
+                        let z = fb.binary(BinOp::UDiv, row, sy)?;
+                        let at = fb.composite_construct(self.uvec3, &[x, y, z])?;
+                        let deep = fb.module().const_value(deep)?;
+                        fb.select(deep, at, id)?
+                    }
+                    None => id,
+                }
+            }
             LocalSizeForm::Flat => {
                 let lin = self.lin(fb)?;
                 let sx = fb.module().const_value(self.size[0])?;

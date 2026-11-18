@@ -38,7 +38,7 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 51 | 51 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -56,7 +56,7 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 20 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 8 | 3 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 20 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -674,7 +674,6 @@ Columns:
 |---|---|---|---|---|---|
 | `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 1: `crates/metal2vulkan-rt/src/memory.rs (round)` | `-` |
 | `BlockIds` | A block after every block number has been used (`Device::take_block`) | every device (a public call's own check of its arguments) | `ours`: block numbers are 32 bits | 1: `crates/metal2vulkan-rt/src/memory.rs (number)` | `-` |
-| `ThreadgroupShape` | A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds 1,024 by 1,024 by 64), where the threadgroup is the... | at the device's limit | `device`: the device's `maxComputeWorkGroupSize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `ThreadgroupMemory` | A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up to 16 bytes), is past the device's... | at the device's limit | `device`: the device's `maxComputeSharedMemorySize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 2: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`, `crates/metal2vulkan-rt/src/render_encoder.rs (set_bytes)` | `-` |
 | `IndexRange` | A grant of no indices, or one past its class's range (`Device::grant_indices`, [`IndexClass::range`]) | every device (a public call's own check of its arguments) | `ours`: the descriptor arrays are 65,536 sampled textures, 4,096 storage textures and 4,000 samplers of each use, and index 0 is nil | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
@@ -1252,7 +1251,6 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::StencilAttachment`: `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`
 - `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (round)`
 - `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (number)`
-- `rt:Limit::ThreadgroupShape`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::ThreadgroupMemory`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-rt/src/encoder.rs (set_bytes)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_bytes)`
 - `rt:Limit::IndexRange`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`

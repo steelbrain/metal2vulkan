@@ -5,6 +5,7 @@ use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
+use crate::floor;
 use crate::hazard::Access;
 use crate::memory::BlockId;
 use crate::over;
@@ -18,7 +19,9 @@ use crate::sampler::SamplerState;
 use crate::texture::Texture;
 use ash::vk;
 use metal2vulkan::metal::format::integer_channels_word;
-use metal2vulkan::pipeline::{grid_tile, nonuniform_region_bytes, region_bytes, GRID_TILE_THREADS};
+use metal2vulkan::pipeline::{
+    grid_tile, nonuniform_region_bytes, region_bytes, DEEP_THREADGROUP, GRID_TILE_THREADS,
+};
 use std::ops::BitOr;
 use std::sync::Arc;
 
@@ -230,17 +233,19 @@ pub(crate) struct Choice {
 }
 
 /// How a state of `form` runs a dispatch of threadgroup size `size`, direct over `direct` or
-/// indirect, on a device whose `maxComputeWorkGroupSize` is `max`:
+/// indirect, the same on every device:
 /// - indirect: the whole module at its own size;
 /// - an image-only kernel ([`Form::Square`]): the whole module at `MultiRegion` 0 in workgroups
 ///   of [`SQUARE`] over a grid one deep, and of the grid's `grid_tile` tile over a deeper one,
-///   the region carrying them, flagged where they do not divide the grid; a tile past `max` runs
-///   as a tiling kernel's does;
+///   the region carrying them, flagged where they do not divide the grid;
 /// - a tiling kernel ([`Form::Tiled`]): its tiles, workgroups of `GRID_TILE_THREADS`, each one
 ///   `grid_tile` tile of the grid, which its region carries;
 /// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
 ///   partial-threadgroups variant.
-pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [u32; 3]) -> Choice {
+///
+/// A size deeper than `DEEP_THREADGROUP` runs as one row of its threads ([`Constant::Deep`]),
+/// so every workgroup is within the floor's `maxComputeWorkGroupSize`.
+pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3]) -> Choice {
     let Some(direct) = direct else {
         return Choice {
             module: Module::Whole,
@@ -267,16 +272,14 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [
     };
     match form {
         Form::Square if threads[2] == 1 => whole(SQUARE),
-        Form::Tiled | Form::Square => {
+        Form::Square => whole(grid_tile(threads)),
+        Form::Tiled => {
             let tile = grid_tile(threads);
-            match form {
-                Form::Square if fits(tile, max) => whole(tile),
-                _ => Choice {
-                    module: Module::Tiles,
-                    local: [GRID_TILE_THREADS, 1, 1],
-                    nominal: tile,
-                    direct: over(tile),
-                },
+            Choice {
+                module: Module::Tiles,
+                local: [GRID_TILE_THREADS, 1, 1],
+                nominal: tile,
+                direct: over(tile),
             }
         }
         Form::Sized { .. } => Choice {
@@ -291,10 +294,12 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [
     }
 }
 
-/// Whether a workgroup of `local` is within the device's `maxComputeWorkGroupSize`, `max`.
-pub(crate) fn fits(local: [u32; 3], max: [u32; 3]) -> bool {
-    local.iter().zip(max).all(|(&axis, max)| axis <= max)
-}
+// A workgroup one deep at most `DEEP_THREADGROUP`, or one row of at most Metal's 1,024
+// threads, is within the floor's sizes.
+const _: () = assert!(
+    DEEP_THREADGROUP <= floor::WORKGROUP_SIZE[2]
+        && floor::WORKGROUP_INVOCATIONS <= floor::WORKGROUP_SIZE[0]
+);
 
 impl CommandBuffer {
     /// `computeCommandEncoderWithDispatchType:`; `computeCommandEncoder` is this call with
@@ -591,7 +596,7 @@ impl ComputeCommandEncoder {
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`];
     /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off its argument's
-    /// alignment, which nothing records; [`Limit::ThreadgroupShape`];
+    /// alignment, which nothing records;
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
     /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
     /// [`Error::Quiesced`] where the device was quiesced before that module was lowered;
@@ -753,16 +758,7 @@ impl ComputeCommandEncoder {
             local,
             nominal,
             direct,
-        } = choose(&inner.form, direct, size, limits.max_group_size);
-        // The workgroup Vulkan runs is within the device's sizes: the threadgroup itself where it
-        // is the workgroup, else the tiles' or the square workgroup, which the floor holds, or a
-        // tile, which `choose` held to them.
-        if !fits(local, limits.max_group_size) {
-            return Err(Error::Limit(Limit::ThreadgroupShape {
-                size: local,
-                max: limits.max_group_size,
-            }));
-        }
+        } = choose(&inner.form, direct, size);
         let kernel = match (module, &inner.form) {
             (
                 Module::Partial,

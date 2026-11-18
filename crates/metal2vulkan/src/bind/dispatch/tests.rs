@@ -28,6 +28,7 @@ fn compute_plan(t: &ComputeTemplate, variant: VariantKey) -> BindingPlan {
 
 fn rules() -> LocalRules {
     LocalRules {
+        deep: false,
         flat: false,
         multiples: Vec::new(),
         max_size: [1024, 1024, 64],
