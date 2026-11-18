@@ -80,12 +80,10 @@ mod on_device {
             });
             // The allocations in use: the idle ones are the pool's, kept for its window. A texture
             // made while earlier ones are still being freed can take a second texture block, which
-            // goes back to the pool once empty and stays there idle.
-            let in_use = || {
-                let gauges = counters.gauges();
-                let idle = gauges.private_idle_bytes + gauges.shared_idle_bytes;
-                gauges.blocks - idle / MemoryClass::Private.block_len()
-            };
+            // goes back to the pool once empty and stays there idle. Counted in the pool, not from
+            // the gauges, which also count an allocation the block-maker thread is making or
+            // freeing at the time.
+            let in_use = || core.pool.in_use() as u64;
             let base = in_use();
 
             // Textures made and released: nothing holds them, and nothing is submitted.

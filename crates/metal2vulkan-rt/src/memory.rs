@@ -566,6 +566,18 @@ impl Pool {
         self.lock().free(class) >= MAKE_BELOW
     }
 
+    /// For the device tests: the allocations of both classes with a block in use, counted where
+    /// the pool keeps them. An allocation the block-maker thread is making or freeing is not
+    /// among them, where the `Blocks` gauge counts it: the gauge rises before the allocation joins
+    /// the pool and falls after it left.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn in_use(&self) -> usize {
+        let state = self.lock();
+        (state.allocations.iter().flatten())
+            .filter(|allocation| allocation.live > 0)
+            .count()
+    }
+
     /// For the device tests: the class's blocks given back and kept.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn kept(&self, class: MemoryClass) -> usize {
