@@ -617,10 +617,10 @@ pub(crate) mod on_device {
     }
 
     /// A burst of 64 command buffers committed back to back with no wait: each submission ends at
-    /// most four of them, and a batch kept while two submissions run goes once they complete, with
-    /// no host wait to send it.
+    /// most sixteen of them, and a batch kept while two submissions run goes once they complete,
+    /// with no host wait to send it.
     #[test]
-    fn every_device_runs_a_burst_in_submissions_of_four_at_most() {
+    fn every_device_runs_a_burst_in_submissions_of_sixteen_at_most() {
         burst("command_burst", 64, 64);
     }
 
@@ -660,7 +660,7 @@ pub(crate) mod on_device {
             let submissions = device.counters().metrics().submissions - before.submissions;
             println!("{name}: {count} command buffers through {places} places in {submissions} submissions");
             assert!(
-                submissions >= u64::from(count.div_ceil(4)),
+                submissions >= u64::from(count).div_ceil(crate::submit::GROUP as u64),
                 "{name}: {submissions}"
             );
         });
@@ -1718,7 +1718,6 @@ pub(crate) mod on_device {
     #[test]
     fn every_device_shares_submit_infos_within_a_group_and_records_what_it_records_alone() {
         each_device("command_infos", |name, _, device| {
-            let busy = private(&device);
             let queue = queue(&device);
             let mut arena = Arena::new(&device);
             let (a, b) = (arena.buffer(), arena.buffer());
@@ -1762,39 +1761,36 @@ pub(crate) mod on_device {
                 unsafe { std::slice::from_raw_parts(contents.as_ptr(), 256) }.to_vec()
             };
 
-            // Behind two busy submissions: the mix is held in groups.
-            let busy_work = || {
-                let command_buffer = queue.command_buffer().expect("a command buffer");
-                let (target, offset) = busy.device_range();
-                command_buffer
-                    .record_for_test(&[&busy], |device, command| {
-                        for word in 0..16 {
-                            // SAFETY: the command buffer is recording; the range is the
-                            // buffer's, in whole words.
-                            unsafe {
-                                device.cmd_fill_buffer(command, target, offset, BLOCK_LEN, word)
-                            };
-                        }
-                    })
-                    .expect("fills");
-                command_buffer.commit().expect("a commit");
-                command_buffer
-            };
-            let held = [busy_work(), busy_work()];
-            let (before, infos_before) = (deterministic(), infos());
-            let grouped = mix(10, 0x5a, 1, &|command_buffer| {
-                command_buffer.commit().expect("a commit")
+            // Behind two busy submissions, each try with more work: the mix is held in groups,
+            // counted where the busy work still ran once the mix was committed.
+            let mut signal = 0;
+            let mut kept = Vec::new();
+            let mut counted = None;
+            behind_two(name, &device, &queue, |running, _| {
+                signal += 1;
+                let (before, infos_before) = (deterministic(), infos());
+                let grouped = mix(10, 0x5a, signal, &|command_buffer| {
+                    command_buffer.commit().expect("a commit")
+                });
+                let ran = (running.iter()).all(|command_buffer| {
+                    command_buffer.status() != CommandBufferStatus::Completed
+                });
+                for command_buffer in running.iter().chain(&grouped) {
+                    finished(name, command_buffer);
+                    assert_eq!(command_buffer.error(), None, "{name}");
+                }
+                if ran {
+                    counted = Some((before, (deterministic(), infos() - infos_before)));
+                }
+                kept.extend(grouped);
+                ran
             });
-            for command_buffer in held.iter().chain(&grouped) {
-                finished(name, command_buffer);
-                assert_eq!(command_buffer.error(), None, "{name}");
-            }
-            let in_groups = (deterministic(), infos() - infos_before);
+            let (before, in_groups) = counted.expect("the mix counted behind running work");
             let grouped_words = (word(&a), bytes(&b));
 
             // One at a time, each complete before the next is made.
             let (before_alone, infos_alone) = (deterministic(), infos());
-            let alone = mix(10, 0x5a, 2, &|command_buffer| {
+            let alone = mix(10, 0x5a, signal + 1, &|command_buffer| {
                 command_buffer.commit().expect("a commit");
                 finished(name, command_buffer);
             });
@@ -1826,9 +1822,7 @@ pub(crate) mod on_device {
                 "{name}: the mix passed {} submit infos in groups",
                 in_groups.1
             );
-            drop((
-                grouped, alone, held, a, b, arena, event, busy, queue, device,
-            ));
+            drop((kept, alone, a, b, arena, event, queue, device));
         });
     }
 }

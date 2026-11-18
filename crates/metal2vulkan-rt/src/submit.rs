@@ -41,7 +41,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 /// The command buffers one submission ends at most. A larger group is fewer submissions, until
 /// the group grows past what a completion can release: on the UHD 630, sixteen ran a burst of 160
 /// command buffers in half the time no bound did (probe 06860a3848, job m3-max-44105).
-const GROUP: usize = 16;
+pub(crate) const GROUP: usize = 16;
 
 /// The submissions of a queue not yet seen complete at which its command buffers are held in a
 /// group.
