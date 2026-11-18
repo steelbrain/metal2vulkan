@@ -8,8 +8,8 @@
 //! result. A selector, an argument or a descriptor key this module does not name is refused.
 
 mod encoders;
-mod render;
 pub(super) mod places;
+mod render;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
