@@ -44,6 +44,7 @@ use std::time::Duration;
 
 mod compute;
 mod render;
+mod work;
 
 /// How long a wait for a command buffer waits before the side records that it never returned:
 /// the old runtime's side's bound.
@@ -187,6 +188,15 @@ impl RtDevice {
                 return index;
             }
         }
+    }
+
+    /// The next texture index ([`RtDevice::next_index`]) for a texture of `usage` where a shader
+    /// reaches it (shader read or write, or no bit, which the runtime takes as every usage), and
+    /// `None` where none does, as the runtime's texture makers take an index.
+    fn texture_index(&self, usage: rt::TextureUsage) -> Option<u32> {
+        let reached = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
+        (usage.is_empty() || usage.intersects(reached))
+            .then(|| self.next_index(rt::IndexClass::Texture))
     }
 
     /// The indices of a pipeline state's numbered samplers: a constexpr sampler takes the index
@@ -438,6 +448,20 @@ fn waited_for(command_buffer: &rt::CommandBuffer, bound: Duration) -> Option<Str
     received.recv_timeout(bound).ok()
 }
 
+/// The runtime's descriptor of a query, each field as the query states it, a zero included, so
+/// that what Metal refuses of it the runtime is asked too.
+fn queried(query: &crate::texture_query::HeapTextureQuery) -> rt::TextureDescriptor {
+    let [width, height, depth] = query.size;
+    let mut d = rt::TextureDescriptor::new(query.texture_type, query.format, width, height);
+    d.depth = depth;
+    d.mipmap_level_count = query.levels;
+    d.sample_count = query.samples;
+    d.array_length = query.array_length;
+    d.usage = query.usage;
+    d.storage_mode = work::storage_mode(query.storage);
+    d
+}
+
 /// [`waited_for`] within [`ARRIVAL`], as a status.
 fn waited(command_buffer: &rt::CommandBuffer) -> Status {
     waited_for(command_buffer, ARRIVAL).map_or(Status::NeverSettled, Status::read)
@@ -517,6 +541,62 @@ impl Side for RtSide<'_> {
         (texture.get_bytes(&mut bytes, row_pitch.into(), 0, region, 0, 0))
             .map_err(|error| Failure::of_rt(&error))?;
         Ok(bytes)
+    }
+
+    fn read_texture_over(
+        &mut self,
+        texture: Handle,
+        size: [u32; 2],
+        row_pitch: u32,
+        before: &[u8],
+    ) -> Answer<Vec<u8>> {
+        let wanted = row_pitch as usize * size[1] as usize;
+        if before.len() != wanted {
+            return Err(Failure::named(
+                "TooFewBytes",
+                format!(
+                    "{} bytes before the read, and it reads {wanted}",
+                    before.len()
+                ),
+            ));
+        }
+        let texture = self.held_texture(texture)?;
+        let mut bytes = before.to_vec();
+        let region = rt::Region {
+            origin: [0, 0, 0],
+            size: [size[0], size[1], 1],
+        };
+        (texture.get_bytes(&mut bytes, row_pitch.into(), 0, region, 0, 0))
+            .map_err(|error| Failure::of_rt(&error))?;
+        Ok(bytes)
+    }
+
+    fn heap_texture_size_and_align(
+        &mut self,
+        query: &crate::texture_query::HeapTextureQuery,
+    ) -> Answer<crate::texture_query::SizeAndAlign> {
+        let sized = (self.on.device.heap_texture_size_and_align(&queried(query)))
+            .map_err(|error| Failure::of_rt(&error))?;
+        Ok(crate::texture_query::SizeAndAlign {
+            size: sized.size,
+            align: sized.align,
+        })
+    }
+
+    /// Whether `newTextureWithDescriptor:` of the query makes a texture, at the next texture index
+    /// where a shader reaches it. The runtime answers no texture Metal answers nil for: what it
+    /// does not make is its typed error, recorded as the failure it is.
+    fn makes_texture(&mut self, query: &crate::texture_query::HeapTextureQuery) -> Answer<bool> {
+        let descriptor = queried(query);
+        let index = self.on.texture_index(descriptor.usage);
+        (self.on.device.new_texture(&descriptor, index))
+            .map(|_| true)
+            .map_err(|error| Failure::of_rt(&error))
+    }
+
+    fn minimum_linear_texture_alignment(&mut self, format: PixelFormat) -> Answer<u64> {
+        (self.on.device.minimum_linear_texture_alignment(format))
+            .map_err(|error| Failure::of_rt(&error))
     }
 
     fn dispatch(
@@ -627,6 +707,95 @@ impl Side for RtSide<'_> {
                 .map_err(of_rt)?;
         }
         Ok(keep(&mut self.textures, texture))
+    }
+
+    /// The call the request names: the device's `newTextureWithDescriptor:`, the buffer's
+    /// `newTextureWithDescriptor:offset:bytesPerRow:` or the parent's view, at the next texture
+    /// index where a shader reaches the texture, then its uploads in order.
+    ///
+    /// The runtime's descriptor has no `allowGPUOptimizedContents`: each texture is in the
+    /// device's own layout, which the flag allows, and Metal's texels are the same with it off, so
+    /// the request's flag asks the runtime nothing. A view's swizzle other than each channel's own
+    /// is `newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:`, which the runtime
+    /// does not have; the view of the default swizzle is the call without it.
+    fn texture(&mut self, request: &crate::texture::TextureRequest<'_>) -> Answer<Handle> {
+        use crate::texture::Over;
+        let format = PixelFormat::try_from(request.format).map_err(|problem| {
+            Failure::named(
+                "NoSuchPixelFormat",
+                format!("{}: {problem:?}", request.format),
+            )
+        })?;
+        let [width, height, depth] = request.size;
+        let mut descriptor =
+            rt::TextureDescriptor::new(request.texture_type, format, width, height);
+        descriptor.depth = depth.max(1);
+        descriptor.mipmap_level_count = request.levels.max(1);
+        descriptor.array_length = request.slices.max(1);
+        descriptor.usage = request.usage;
+        descriptor.storage_mode = match request.private {
+            true => rt::StorageMode::Private,
+            false => rt::StorageMode::Shared,
+        };
+        descriptor.swizzle = request.swizzle;
+        let index = |usage| self.on.texture_index(usage);
+        let of_rt = |error: rt::Error| Failure::of_rt(&error);
+        let texture = match request.over {
+            None => self
+                .on
+                .device
+                .new_texture(&descriptor, index(request.usage)),
+            Some(Over::Buffer {
+                buffer,
+                offset,
+                bytes_per_row,
+            }) => (self.held(buffer)?).new_texture(
+                &descriptor,
+                index(request.usage),
+                offset,
+                bytes_per_row,
+            ),
+            Some(Over::View { .. }) if request.swizzle != rt::TextureSwizzleChannels::DEFAULT => {
+                return Err(Failure::unavailable(
+                    "newTextureViewWithPixelFormat:textureType:levels:slices:swizzle:",
+                ));
+            }
+            Some(Over::View { texture }) => {
+                let parent = self.held_texture(texture)?;
+                parent.new_texture_view(
+                    format,
+                    request.texture_type,
+                    0..request.levels.max(1),
+                    0..request.slices.max(1),
+                    index(parent.descriptor().usage),
+                )
+            }
+        }
+        .map_err(of_rt)?;
+        for upload in request.uploads {
+            let [x, y, z] = upload.origin;
+            let [w, h, d] = upload.size;
+            let region = rt::Region {
+                origin: [x, y, z],
+                size: [w, h, d.max(1)],
+            };
+            (texture.replace_region(
+                region,
+                upload.level,
+                upload.slice,
+                upload.bytes,
+                upload.row_pitch.into(),
+                upload.image_pitch.into(),
+            ))
+            .map_err(of_rt)?;
+        }
+        Ok(keep(&mut self.textures, texture))
+    }
+
+    /// The program on the runtime, as the old runtime's side runs it (`rt_side::work`).
+    fn work(&mut self, work: &crate::work::Work) -> Answer<crate::work::Done> {
+        let on = self.on;
+        work::run(on, self.queue()?, work)
     }
 
     /// At the next sampler index. Every state the runtime makes has a resource ID, so
