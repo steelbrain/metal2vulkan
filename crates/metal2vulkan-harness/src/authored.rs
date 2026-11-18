@@ -21,7 +21,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 31] = [
+pub const WORKLOADS: [Workload; 36] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -113,6 +113,26 @@ pub const WORKLOADS: [Workload; 31] = [
     Workload {
         name: "sampling_deep_1x1x192",
         plan: sampling_deep_1x1x192,
+    },
+    Workload {
+        name: "sampling_deep_512x512x16_8x8x1",
+        plan: sampling_deep_512x512x16_8x8x1,
+    },
+    Workload {
+        name: "sampling_deep_512x512x16_16x16x1",
+        plan: sampling_deep_512x512x16_16x16x1,
+    },
+    Workload {
+        name: "sampling_deep_512x512x16_4x4x4",
+        plan: sampling_deep_512x512x16_4x4x4,
+    },
+    Workload {
+        name: "sampling_distinct_64x64x16",
+        plan: sampling_distinct_64x64x16,
+    },
+    Workload {
+        name: "sampling_distinct_512x512x16",
+        plan: sampling_distinct_512x512x16,
     },
     Workload {
         name: "wide_bindings",
@@ -1106,10 +1126,15 @@ fn texture(index: u32, texture: usize) -> Binding {
 /// below 4.
 const TEXEL_TOLERANCE: f32 = 1.0 / 256.0;
 
-/// A `side` by `side` texture's starting texels, four channels each, every one a sixteenth of a
-/// whole number below 64: exact in `half`.
+/// A `side` by `side` texture's starting texels ([`sixteenths_of`]).
 fn sixteenths(seed: u64, side: u32) -> Vec<f32> {
-    let count = 4 * side as usize * side as usize;
+    sixteenths_of(seed, side, side)
+}
+
+/// A `width` by `height` texture's starting texels, four channels each, every one a sixteenth of
+/// a whole number below 64: exact in `half`.
+fn sixteenths_of(seed: u64, width: u32, height: u32) -> Vec<f32> {
+    let count = 4 * width as usize * height as usize;
     (words(seed, count).into_iter())
         .map(|word| (word & 63) as f32 / 16.0)
         .collect()
@@ -1238,36 +1263,57 @@ fn constexpr_sampling() -> Plan {
 /// texel kernels need), one texture write a thread: each texel in the grid the mean of its four
 /// source texels, the rest left zero. The shapes are those a recorded stream's image-only kernels
 /// ran deep grids at, thin and ragged ones among them.
-fn sampling_deep(name: &str, [x, y, z]: [u32; 3]) -> Plan {
+fn sampling_deep(name: &str, threads: [u32; 3]) -> Plan {
+    deep_sampling(name, threads, [8, 8, 4], false)
+}
+
+/// [`sampling_deep`] in threadgroups of `per_group`; with `distinct`, through
+/// `sample_down_distinct`, whose layer `z` downsamples its own `2t` by `2t` rows of a `2t` by
+/// `2t·z` source, so no two layers read the same texels.
+fn deep_sampling(name: &str, [x, y, z]: [u32; 3], per_group: [u32; 3], distinct: bool) -> Plan {
     let t = x.max(y).next_multiple_of(16);
     let side = 2 * t;
-    let source = sixteenths(18, side);
+    let layers = if distinct { z } else { 1 };
+    let source = sixteenths_of(18, side, side * layers);
     let at = |i: u32, j: u32, c: u32| source[(4 * (j * side + i) + c) as usize];
-    let layer: Vec<f32> = (0..t)
-        .flat_map(|j| (0..t).flat_map(move |i| (0..4).map(move |c| (i, j, c))))
-        .map(|(i, j, c)| match i < x && j < y {
-            true => {
-                let (i, j) = (2 * i, 2 * j);
-                (at(i, j, c) + at(i + 1, j, c) + at(i, j + 1, c) + at(i + 1, j + 1, c)) / 4.0
-            }
-            false => 0.0,
-        })
-        .collect();
-    let expected = (0..z).flat_map(|_| layer.iter().copied()).collect();
+    let layer = |k: u32| -> Vec<f32> {
+        let rows = 2 * t * k.min(layers - 1);
+        (0..t)
+            .flat_map(|j| (0..t).flat_map(move |i| (0..4).map(move |c| (i, j, c))))
+            .map(|(i, j, c)| match i < x && j < y {
+                true => {
+                    let (i, j) = (2 * i, rows + 2 * j);
+                    (at(i, j, c) + at(i + 1, j, c) + at(i, j + 1, c) + at(i + 1, j + 1, c)) / 4.0
+                }
+                false => 0.0,
+            })
+            .collect()
+    };
+    let expected = match distinct {
+        true => (0..z).flat_map(layer).collect(),
+        false => {
+            let one = layer(0);
+            (0..z).flat_map(|_| one.iter().copied()).collect()
+        }
+    };
+    let function = match distinct {
+        true => "sample_down_distinct",
+        false => "sample_down_layers",
+    };
     let mut plan = sampling_plan(
         name,
-        "sample_down_layers",
+        function,
         (16, Vec::new()),
         (16, expected),
         Some(Filter::Linear),
     );
     plan.textures = vec![
-        TexturePlan::rgba16_float(side, side, Some(source)),
+        TexturePlan::rgba16_float(side, side * layers, Some(source)),
         TexturePlan::rgba16_float(t, t * z, Some(vec![0.0; 4 * (t * t * z) as usize])),
     ];
     plan.dispatches[0].grid = Grid::Threads {
         threads: [u64::from(x), u64::from(y), u64::from(z)],
-        per_group: [8, 8, 4],
+        per_group: per_group.map(u64::from),
     };
     plan
 }
@@ -1300,6 +1346,51 @@ fn sampling_deep_4x16x252() -> Plan {
 /// [`sampling_deep`] over a 1x1x192 grid.
 fn sampling_deep_1x1x192() -> Plan {
     sampling_deep("sampling_deep_1x1x192", [1, 1, 192])
+}
+
+/// [`sampling_deep`] over a 512x512x16 grid in threadgroups of 8x8x1.
+fn sampling_deep_512x512x16_8x8x1() -> Plan {
+    deep_sampling(
+        "sampling_deep_512x512x16_8x8x1",
+        [512, 512, 16],
+        [8, 8, 1],
+        false,
+    )
+}
+
+/// [`sampling_deep`] over a 512x512x16 grid in threadgroups of 16x16x1.
+fn sampling_deep_512x512x16_16x16x1() -> Plan {
+    deep_sampling(
+        "sampling_deep_512x512x16_16x16x1",
+        [512, 512, 16],
+        [16, 16, 1],
+        false,
+    )
+}
+
+/// [`sampling_deep`] over a 512x512x16 grid in threadgroups of 4x4x4.
+fn sampling_deep_512x512x16_4x4x4() -> Plan {
+    deep_sampling(
+        "sampling_deep_512x512x16_4x4x4",
+        [512, 512, 16],
+        [4, 4, 4],
+        false,
+    )
+}
+
+/// [`deep_sampling`] of distinct layers over a 64x64x16 grid in threadgroups of 8x8x4.
+fn sampling_distinct_64x64x16() -> Plan {
+    deep_sampling("sampling_distinct_64x64x16", [64, 64, 16], [8, 8, 4], true)
+}
+
+/// [`deep_sampling`] of distinct layers over a 512x512x16 grid in threadgroups of 8x8x4.
+fn sampling_distinct_512x512x16() -> Plan {
+    deep_sampling(
+        "sampling_distinct_512x512x16",
+        [512, 512, 16],
+        [8, 8, 4],
+        true,
+    )
 }
 
 /// A texture read out to a buffer: each thread of a 2048x2048 grid, in threadgroups of 16x16,

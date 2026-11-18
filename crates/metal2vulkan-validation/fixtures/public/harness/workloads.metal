@@ -195,6 +195,20 @@ kernel void sample_down_layers(texture2d<float, access::sample> source [[texture
     destination.write(texel, uint2(position.x, position.y + position.z * height));
 }
 
+// Sampling over a grid more than one deep, each layer from its own source: layer `z` is a 2x
+// downsample of its own rows of the source into its own rows of the destination (both `z` times
+// a layer's height on, the destination's layers as tall as it is wide), so no two layers read
+// the same texels; one texture write a thread.
+kernel void sample_down_distinct(texture2d<float, access::sample> source [[texture(0)]],
+                                 texture2d<float, access::write> destination [[texture(1)]],
+                                 sampler filter [[sampler(0)]],
+                                 uint3 position [[thread_position_in_grid]]) {
+    uint side = destination.get_width();
+    float2 size = float2(side, destination.get_height());
+    uint2 at = uint2(position.x, position.y + position.z * side);
+    destination.write(source.sample(filter, (float2(at) + 0.5f) / size), at);
+}
+
 // Many buffers bound for one kernel: each thread folds one word of each of 23 inputs into the
 // 24th, so a dispatch reads 24 buffer addresses, and many small dispatches each bind all 24.
 kernel void wide_bindings(device const uint *b0 [[buffer(0)]],
