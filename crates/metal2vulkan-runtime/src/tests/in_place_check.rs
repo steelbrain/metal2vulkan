@@ -623,6 +623,9 @@ fn exported_buffer(device: &Device, length: u64, only: bool) -> Option<Buffer> {
 fn the_in_place_check_imports_its_dma_buf_pages_as_dma_bufs() {
     let scratch = Scratch::new("in-place-check-dma-buf");
     let device = device(&scratch.0);
+    if super::no_pointer_import::refuses_shared_dma_bufs("IN-PLACE-DMA-BUF", &device) {
+        return;
+    }
     let length = 1 << 20;
     let (Some(pointer_first), Some(only)) = (
         exported_buffer(&device, length, false),

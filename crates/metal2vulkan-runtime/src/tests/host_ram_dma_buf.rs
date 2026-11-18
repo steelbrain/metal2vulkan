@@ -797,6 +797,9 @@ fn a_dma_buf_refused_for_want_of_memory_is_that_import_s_alone() {
         eprintln!("HOST-RAM-DMA-BUF: the device imports no dma-bufs; nothing to test");
         return;
     }
+    if super::no_pointer_import::refuses_shared_dma_bufs("HOST-RAM-DMA-BUF", &device) {
+        return;
+    }
     (device.shared().submit_checks).force(Check::ImportTax, Verdict::Holds);
     let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
     crate::device::lock(&device.shared().memory).undedicated_import_refusal = Some(refusal);
@@ -1110,6 +1113,9 @@ fn without_pointer_imports_a_ram_s_chunks_are_its_dma_bufs() {
     }
     let scratch = Scratch::new();
     let device = super::no_pointer_import::device(&scratch.0, None);
+    if super::no_pointer_import::refuses_shared_dma_bufs("HOST-RAM-DMA-BUF", &device) {
+        return;
+    }
     device.hold_host_ram_imports();
     let (unsourced, ..) = ram(false);
     assert_eq!(

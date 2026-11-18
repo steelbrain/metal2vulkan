@@ -28,7 +28,7 @@
 //! Where `/dev/udmabuf` cannot be opened, each says so and passes without running.
 
 use super::host_residency::{counting, host_page, read, udmabuf_openable, Ram, Scratch};
-use super::no_pointer_import::lists_dma_buf_route;
+use super::no_pointer_import::{lists_dma_buf_route, refuses_shared_dma_bufs};
 use crate::{
     BlitCommandEncoder, Buffer, CommandBuffer, CommandQueue, Device, HostBacking, HostMemory,
     ResourceOptions, WorkCounts,
@@ -61,6 +61,9 @@ fn without_pointer_imports_a_buffer_over_part_of_a_live_import_lies_beside_its_d
     let device = super::no_pointer_import::device(&scratch.0, None);
     if !lists_dma_buf_route(&device) {
         eprintln!("{TEST}: on {}: no dma-buf route listed", device.name());
+        return;
+    }
+    if refuses_shared_dma_bufs(TEST, &device) {
         return;
     }
     over_part("without pointer imports", &device);
@@ -319,6 +322,9 @@ fn without_pointer_imports_a_buffer_inside_a_live_dma_buf_import_is_bound_in_it(
     let device = super::no_pointer_import::device(&scratch.0, None);
     if !lists_dma_buf_route(&device) {
         eprintln!("{TEST}: on {}: no dma-buf route listed", device.name());
+        return;
+    }
+    if refuses_shared_dma_bufs(TEST, &device) {
         return;
     }
     inside("without pointer imports", &device);

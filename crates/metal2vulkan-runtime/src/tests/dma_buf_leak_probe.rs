@@ -90,7 +90,7 @@
 use super::dma_buf_import_cycles::device_idle;
 use super::host_residency::{host_page, udmabuf, udmabuf_list, udmabuf_openable, Scratch};
 use super::merge_scratch::read;
-use super::no_pointer_import::{device, lists_dma_buf_route};
+use super::no_pointer_import::{device, lists_dma_buf_route, refuses_shared_dma_bufs};
 use crate::device::lock;
 use crate::{
     Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DmaBufChunk, DmaBufRequest,
@@ -1021,6 +1021,9 @@ fn rounds(way: &str, plan: Plan, steps: Arc<Steps>) {
             "{TEST} on {}: {way}: no dma-buf route: not run",
             device.name()
         );
+        return;
+    }
+    if refuses_shared_dma_bufs(TEST, &device) {
         return;
     }
     let knobs = Knobs::read();

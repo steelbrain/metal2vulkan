@@ -46,7 +46,7 @@ use super::host_residency::{
     counting, host_page, own_dma_buf_images, udmabuf_openable, Ram, Scratch,
 };
 use super::merge_scratch::{blit, read};
-use super::no_pointer_import::{device, lists_dma_buf_route};
+use super::no_pointer_import::{device, lists_dma_buf_route, refuses_shared_dma_bufs};
 use crate::device::lock;
 use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
 use crate::linear_plan::BufferLayout;
@@ -139,6 +139,9 @@ fn over_dma_buf_pages(dedicated_alone: bool) {
             "{TEST}: {name} lists no dma-buf route or makes no DRM_FORMAT_MOD_LINEAR images: not \
              run"
         );
+        return;
+    }
+    if refuses_shared_dma_bufs(TEST, &device) {
         return;
     }
     assert!(

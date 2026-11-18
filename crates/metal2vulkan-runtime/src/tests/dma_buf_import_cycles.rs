@@ -62,7 +62,7 @@ use super::host_residency::{
     counting, host_page, own_dma_buf_images, udmabuf, udmabuf_openable, Scratch,
 };
 use super::merge_scratch::{blit, read};
-use super::no_pointer_import::{device, lists_dma_buf_route};
+use super::no_pointer_import::{device, lists_dma_buf_route, refuses_shared_dma_bufs};
 use crate::{
     BlitOption, Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, Device, DmaBufChunk,
     DmaBufRequest, DmaBufSource, HostMemory, Origin, ResourceOptions, Size, TextureDescriptor,
@@ -334,6 +334,9 @@ fn buffer_cycles(way: &str, used: impl Fn(&CommandQueue, Buffer, &Buffer) -> boo
     let Some(device) = cycling_device(&scratch, way) else {
         return;
     };
+    if refuses_shared_dma_bufs(TEST, &device) {
+        return;
+    }
     let queue = device.new_command_queue().unwrap();
     let out = device
         .new_buffer(LENGTH, ResourceOptions::shared())
@@ -483,6 +486,9 @@ fn dma_buf_cycles_several_imports() {
     let Some(device) = cycling_device(&scratch, WAY) else {
         return;
     };
+    if refuses_shared_dma_bufs(TEST, &device) {
+        return;
+    }
     let queue = device.new_command_queue().unwrap();
     let out = device
         .new_buffer(LENGTH, ResourceOptions::shared())

@@ -46,7 +46,7 @@ use super::draw_again::Heard;
 use super::encoder_holds::{bytes_of, library};
 use super::host_residency::{host_page, udmabuf_openable, Ram, Scratch};
 use super::merge_scratch::blit;
-use super::no_pointer_import::lists_dma_buf_route;
+use super::no_pointer_import::{lists_dma_buf_route, refuses_shared_dma_bufs};
 use crate::in_place::{Access, PagesClass, RowEnds, Verdict};
 use crate::linear_plan::BufferLayout;
 use crate::shadow_splice::store_differing;
@@ -390,6 +390,9 @@ fn a_shadow_s_copy_back_keeps_the_cpu_s_writes_beside_its_texels() {
     let name = device.name();
     if !lists_dma_buf_route(&device) {
         println!("{TEST}: {name} lists no dma-buf route: not run");
+        return;
+    }
+    if refuses_shared_dma_bufs(TEST, &device) {
         return;
     }
     let queue = device.new_command_queue().unwrap();

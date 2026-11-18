@@ -99,6 +99,82 @@ pub(super) fn lists_dma_buf_route(device: &Device) -> bool {
     crate::device::create::dma_buf_names(&names).is_some()
 }
 
+/// Whether `device` imports a dma-buf of host pages as `Shared` memory, as a no-copy buffer's
+/// pages are imported: the types a one-page udmabuf takes (`vkGetMemoryFdPropertiesKHR`), among
+/// those a buffer over it takes, give such an import an order (`memory::dma_buf_candidates`).
+/// They give none where the order's first type is not host-coherent (NVIDIA's type 0, no property
+/// flag), and the runtime refuses those imports ([`refuses_shared_dma_bufs`]). A device whose
+/// udmabuf or types cannot be had answers `true`, and its tests run as they would.
+pub(super) fn imports_shared_dma_bufs(device: &Device) -> bool {
+    use super::export_after_dma_buf::{dma_buf_buffer_types, dma_buf_types};
+    use crate::memory::{dma_buf_candidates, MemoryClass};
+    let page = host_page();
+    let ram = Ram::new(page, 0, page);
+    let Ok(dma_buf) = super::host_residency::udmabuf(ram.file(), 0, page as u64) else {
+        return true;
+    };
+    let Ok(listed) = dma_buf_types(device, &dma_buf) else {
+        return true;
+    };
+    let allowed = listed & dma_buf_buffer_types(device, page as u64);
+    // SAFETY: the handles are read while the device lives.
+    let handles = unsafe { device.raw() };
+    // SAFETY: the physical device is the instance's.
+    let memory = unsafe {
+        handles
+            .instance
+            .get_physical_device_memory_properties(handles.physical_device)
+    };
+    let types = &memory.memory_types[..memory.memory_type_count as usize];
+    let unified = device.properties().has_unified_memory;
+    !dma_buf_candidates(types, allowed, MemoryClass::Shared, unified).is_empty()
+}
+
+/// Whether `device` refuses `Shared` imports of host pages' dma-bufs ([`imports_shared_dma_bufs`]),
+/// and, where it does, what `test` expects of them instead: a no-copy buffer over a RAM's pages,
+/// its memory with a source of their dma-bufs, is made with no dma-buf imported and over none
+/// (the pages' pointer import where the device takes it, else a copy of them), or is refused as
+/// memory the device cannot import. Says so.
+pub(super) fn refuses_shared_dma_bufs(test: &str, device: &Device) -> bool {
+    if imports_shared_dma_bufs(device) {
+        return false;
+    }
+    let page = host_page();
+    let ram = Ram::new(4 * page, 0, 4 * page);
+    ram.write_file(0, &counting(4 * page, 3));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let before = device.work_counts();
+    // SAFETY: the view outlives the buffer, and the source makes dma-bufs of its pages.
+    let made = unsafe {
+        device.new_buffer_with_bytes_no_copy(
+            HostMemory::with_dma_buf(ram.pointer(0), ram.source(&calls)),
+            (2 * page) as u64,
+            ResourceOptions::default(),
+            None,
+        )
+    };
+    let after = device.work_counts();
+    println!(
+        "{test} on {}: Shared imports of host pages' dma-bufs refused (their order's first type is \
+         not host-coherent): a no-copy buffer over such pages {}, {} dma-buf import(s)",
+        device.name(),
+        match &made {
+            Ok(buffer) => format!("made, {:?}", buffer.host_backing()),
+            Err(error) => format!("refused: {error}"),
+        },
+        after.dma_buf_imports - before.dma_buf_imports,
+    );
+    assert_eq!(
+        after.dma_buf_imports, before.dma_buf_imports,
+        "{test}: no dma-buf imported"
+    );
+    match made {
+        Ok(buffer) => assert!(!buffer.over_dma_buf(), "{test}: the buffer over no dma-buf"),
+        Err(error) => assert_eq!(error, refusal(), "{test}"),
+    }
+    true
+}
+
 /// A no-copy buffer over 3 pages of a `memfd` mapped shared, 256 bytes into its second page, whose
 /// memory has a source of dma-bufs of them: on a device that lists the dma-buf route, made over
 /// imports of the source's dma-bufs, no pointer imported, its source called once; the GPU reads
@@ -113,6 +189,9 @@ fn without_pointer_imports_a_sourced_no_copy_buffer_lies_in_its_dma_bufs() {
     }
     let scratch = Scratch::new();
     let device = device(&scratch.0, None);
+    if refuses_shared_dma_bufs(TEST, &device) {
+        return;
+    }
     let page = host_page();
     let ram = Ram::new(8 * page, 0, 8 * page);
     let bytes = counting(8 * page, 0);
@@ -226,6 +305,9 @@ fn a_sourced_no_copy_buffer_refused_undedicated_takes_an_import_dedicated_to_it(
             "{TEST}: on {}: the dma-buf route not listed; nothing to test",
             device.name()
         );
+        return;
+    }
+    if refuses_shared_dma_bufs(TEST, &device) {
         return;
     }
     let refusal = ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;

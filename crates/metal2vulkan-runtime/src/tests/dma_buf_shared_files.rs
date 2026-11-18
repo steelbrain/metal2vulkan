@@ -50,7 +50,7 @@ use super::host_residency::{
     counting, counts_once, gpu_fill, host_page, read, release, udmabuf, udmabuf_list,
     udmabuf_openable, Ram, Scratch,
 };
-use super::no_pointer_import::{device, lists_dma_buf_route};
+use super::no_pointer_import::{device, lists_dma_buf_route, refuses_shared_dma_bufs};
 use crate::{
     Buffer, Device, DmaBufChunk, DmaBufRequest, DmaBufSource, Error, HostMemory, Invalid, Problem,
     ResourceOptions, WorkCounts,
@@ -74,6 +74,9 @@ pub(super) fn on_device(test: &str) -> Option<(Scratch, Device)> {
     let device = device(&scratch.0, None);
     if !lists_dma_buf_route(&device) {
         eprintln!("{test}: {} lists no dma-buf route: not run", device.name());
+        return None;
+    }
+    if refuses_shared_dma_bufs(test, &device) {
         return None;
     }
     Some((scratch, device))

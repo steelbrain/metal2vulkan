@@ -313,7 +313,7 @@ fn raw_import(device: &Device, dma_buf: &OwnedFd, size: u64, type_index: u32) ->
 }
 
 /// The memory types `dma_buf` may be imported as, as bits (`vkGetMemoryFdPropertiesKHR`).
-fn dma_buf_types(device: &Device, dma_buf: &OwnedFd) -> Result<u32, vk::Result> {
+pub(super) fn dma_buf_types(device: &Device, dma_buf: &OwnedFd) -> Result<u32, vk::Result> {
     // SAFETY: as in `budgets`.
     let handles = unsafe { device.raw() };
     let loader = ash::khr::external_memory_fd::Device::new(handles.instance, handles.device);
@@ -539,7 +539,7 @@ fn device_local_dma_buf(device: &Device, bytes: u64) -> Option<(OwnedFd, vk::Dev
 }
 
 /// The memory types a buffer of `bytes` bytes, importable from a dma-buf, takes, as bits.
-fn dma_buf_buffer_types(device: &Device, bytes: u64) -> u32 {
+pub(super) fn dma_buf_buffer_types(device: &Device, bytes: u64) -> u32 {
     // SAFETY: as in `budgets`.
     let handles = unsafe { device.raw() };
     let mut external = vk::ExternalMemoryBufferCreateInfo::default()
