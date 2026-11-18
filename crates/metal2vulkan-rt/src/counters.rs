@@ -401,12 +401,12 @@ pub struct Metrics {
     /// Groups opened while another queue held one. Each queue groups its own command buffers,
     /// so these are the groups one queue of the same command buffers would not have opened.
     pub groups_beside_another_queue: u64,
-    /// Submissions sent with fewer than two of their own queue's submissions in flight while the
-    /// device had two or more in flight across its queues: the ones one queue of the same
+    /// Submissions sent with fewer than three of their own queue's submissions in flight while the
+    /// device had three or more in flight across its queues: the ones one queue of the same
     /// command buffers would have held in a group.
     pub lone_submissions_across_queues: u64,
     /// Groups sent with no reason of their own queue's: neither full, nor ended by an event's
-    /// signal or a semaphore wait, nor below two submissions in flight, nor asked for by a host
+    /// signal or a semaphore wait, nor below three submissions in flight, nor asked for by a host
     /// wait or the end. No path of the submit thread sends one, so this stays 0; it is counted to
     /// show it.
     pub forced_flushes_across_queues: u64,

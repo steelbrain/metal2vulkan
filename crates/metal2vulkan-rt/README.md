@@ -464,10 +464,10 @@ made, with no lock, and never rewritten for layouts.
   at most 4,096 calls and keeps at most 64 MiB on its own account: the staging buffers of copies
   larger than the staging region, and the textures and blocks released while it held them. A call
   that finds it past either submits it and waits for it to complete before recording, so nothing
-  grows without a commit. While fewer than two of a queue's submissions are not yet seen complete,
-  each of its command buffers goes at once, alone. While two are, the ones committed meanwhile
+  grows without a commit. While fewer than three of a queue's submissions are not yet seen complete,
+  each of its command buffers goes at once, alone. While three are, the ones committed meanwhile
   are held in one group, each scheduled as it joins, and the group goes when it holds sixteen, when
-  a completion leaves fewer than two in flight (the completion thread wakes the submit thread as
+  a completion leaves fewer than three in flight (the completion thread wakes the submit thread as
   it retires; no commit or wait is needed), when the host is to wait for one of them
   (`wait_until_completed`, or `CommandQueue::send_now`, the hint for a wait the runtime does not
   see), or at teardown. Waiting for a place in the queue sends nothing. A segment that signals an
@@ -485,9 +485,9 @@ made, with no lock, and never rewritten for layouts.
   submission's in commit order: the status, the blocks they kept, their recorders and their place
   in the queue, then the handlers. Scheduled and completed handlers run on it, every device's in
   turn, so no handler waits for a command buffer. A command buffer of a group is seen complete
-  with the group's last: up to the GPU time of the fifteen after it late. Only a queue already two
+  with the group's last: up to the GPU time of the fifteen after it late. Only a queue already three
   submissions behind holds a group; one whose submissions have completed sends its next command
-  buffer alone. Without a wait or a hint, the lateness is bounded only while two submissions are
+  buffer alone. Without a wait or a hint, the lateness is bounded only while three submissions are
   in flight, and the completion that leaves fewer sends the group (the measured lateness is under
   "Known gaps"). A command buffer ended while its queue holds a group joins it, and retires in its
   place; the group goes at once.

@@ -47,8 +47,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 pub(crate) const GROUP: usize = 16;
 
 /// The submissions of a queue not yet seen complete at which its command buffers are held in a
-/// group.
-const IN_FLIGHT: usize = 2;
+/// group. Three, not two: with two, the GPU idles between a group's end and the next
+/// submission's start whenever the completion that sends the held group comes late. Behind three,
+/// the frame of five command buffers on the UHD 630 completed in 420-429 us against 895-1137 us,
+/// and the second of four long command buffers was seen complete 74.7 ms after its commit against
+/// 99.2 ms (76.5 against 96.8 on an RTX 2080), while a burst of 160 kept its time within 0.5% on
+/// both (probe b15b306d2f, jobs m3-max-44423 and m3-max-44424).
+pub(crate) const IN_FLIGHT: usize = 3;
 
 /// The calls the pending upload records at most: a call past them waits for it to complete.
 pub(crate) const UPLOAD_ENTRIES: usize = 4096;

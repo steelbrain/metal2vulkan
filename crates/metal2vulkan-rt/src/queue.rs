@@ -126,7 +126,7 @@ impl CommandQueue {
     /// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun), and runs their handlers,
     /// as a Mac drops a dead process's held command buffers. One enqueued and not yet committed
     /// ends so at its commit. Segments already submitted still complete, and so does a group of
-    /// scheduled command buffers the queue holds while two of its submissions run. Each ended
+    /// scheduled command buffers the queue holds while three of its submissions run. Each ended
     /// command buffer retires in the queue's order, behind its work held or in flight. The queue
     /// stays usable.
     pub fn abandon(&self) {
@@ -136,7 +136,7 @@ impl CommandQueue {
 
     /// No Metal counterpart: the wait hint. Where `command_buffer`, of this queue, is committed and
     /// not yet submitted, its group goes now, as a host wait for it sends it
-    /// ([`CommandBuffer::wait_until_completed`]): held in a group while two of the queue's
+    /// ([`CommandBuffer::wait_until_completed`]): held in a group while three of the queue's
     /// submissions run, or committed behind such a group, or at an event wait (then its group goes
     /// as it is staged). For a consumer that learns of a wait the runtime does not see.
     ///

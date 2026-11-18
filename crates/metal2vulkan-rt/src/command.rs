@@ -53,7 +53,7 @@ pub enum CommandBufferStatus {
     /// `MTLCommandBufferStatusCommitted`: also while the submit thread holds a later segment.
     Committed,
     /// `MTLCommandBufferStatusScheduled`: the last segment is in a submission: passed to
-    /// `vkQueueSubmit2`, or in a group its queue holds while two of its submissions run, which
+    /// `vkQueueSubmit2`, or in a group its queue holds while three of its submissions run, which
     /// goes with no other call.
     Scheduled,
     /// `MTLCommandBufferStatusCompleted`.
