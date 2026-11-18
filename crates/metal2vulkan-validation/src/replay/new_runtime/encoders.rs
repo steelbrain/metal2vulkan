@@ -135,7 +135,7 @@ impl NewRuntime {
             "renderCommandEncoderWithDescriptor:"
             | "parallelRenderCommandEncoderWithDescriptor:" => {
                 self.skips.encoders += 1;
-                super::unaddressed(Object::Skipped("render encoder"))
+                super::unaddressed(Object::Skipped)
             }
             "commit" => {
                 command_buffer.commit().map_err(failed(call))?;
@@ -188,7 +188,7 @@ impl NewRuntime {
             "setComputePipelineState:" => {
                 let state = match self.get(call, Self::id(call, 0)?)? {
                     Object::ComputePipeline(state) => Some(state.clone()),
-                    Object::Skipped(_) => None,
+                    Object::Skipped => None,
                     _ => return Err(refuse(call, "argument 0 is no compute pipeline state")),
                 };
                 let compute = self.compute(id);
@@ -313,7 +313,7 @@ impl NewRuntime {
                         (self.compute(id).encoder)
                             .use_resource(rt::Resource::Texture(&texture), usage)
                     }
-                    Object::Skipped(_) => {
+                    Object::Skipped => {
                         self.skips.calls += 1;
                         Ok(())
                     }

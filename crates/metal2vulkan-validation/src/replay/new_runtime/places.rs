@@ -72,7 +72,8 @@ impl Places {
             }
         }
         let info = self.device.take_block(class, rt::BLOCK_LEN)?;
-        let mut free = vec![0..info.len];
+        let mut free = Vec::new();
+        free.push(0..info.len);
         let range = take_from(&mut free, span).expect("a new block holds any pooled place");
         let block = info.id;
         self.blocks.push(Block { info, free });

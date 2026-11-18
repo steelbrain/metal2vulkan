@@ -55,8 +55,8 @@ enum Object {
     Sampler(rt::SamplerState),
     Event(rt::Event),
     SharedEvent(rt::SharedEvent),
-    /// What the runtime does not build yet, by its kind.
-    Skipped(&'static str),
+    /// What the runtime does not build yet.
+    Skipped,
 }
 
 /// A function: its descriptor, and the name `newFunctionWithDescriptor:error:` specialized it
@@ -287,7 +287,7 @@ impl NewRuntime {
 
     /// Whether object `id` is one the play skipped.
     fn skipped(&self, id: u64) -> bool {
-        matches!(self.objects.get(&id), Some(Object::Skipped(_)))
+        matches!(self.objects.get(&id), Some(Object::Skipped))
     }
 
     /// Whether any argument of `call` names an object the play skipped, in its lists and maps
@@ -699,13 +699,14 @@ impl NewRuntime {
                 let state = self.compute_pipeline_state(call, &d)?;
                 unaddressed(Object::ComputePipeline(state))
             }
-            "newRenderPipelineStateWithDescriptor:error:" => self.skip_object("render pipeline"),
-            "newDepthStencilStateWithDescriptor:" => self.skip_object("depth-stencil state"),
-            "MTLRenderPassDescriptor.new" | "MTLRenderPassDescriptor.renderPassDescriptor" => {
-                self.skip_object("render pass descriptor")
-            }
-            "newLibraryWithSource:options:error:" => self.skip_object("library from source"),
-            "newFence" => self.skip_object("fence"),
+            // Render pipeline and depth-stencil states, render pass descriptors, libraries from
+            // source and fences: the runtime builds none yet.
+            "newRenderPipelineStateWithDescriptor:error:"
+            | "newDepthStencilStateWithDescriptor:"
+            | "MTLRenderPassDescriptor.new"
+            | "MTLRenderPassDescriptor.renderPassDescriptor"
+            | "newLibraryWithSource:options:error:"
+            | "newFence" => self.skip_object(),
             "newSamplerStateWithDescriptor:" => {
                 let (mut descriptor, f) = translator::sampler(call)?;
                 if let Some(color) = f.metal("borderColor")? {
@@ -758,9 +759,9 @@ impl NewRuntime {
         }
     }
 
-    fn skip_object(&mut self, kind: &'static str) -> Result<Option<(Object, Made)>, PlayError> {
+    fn skip_object(&mut self) -> Result<Option<(Object, Made)>, PlayError> {
         self.skips.objects += 1;
-        unaddressed(Object::Skipped(kind))
+        unaddressed(Object::Skipped)
     }
 
     /// The texture descriptor object argument `at` names, as it is now.
@@ -829,9 +830,7 @@ impl NewRuntime {
             }
             "newTextureWithDescriptor:offset:bytesPerRow:"
             | "newTiledTextureWithDescriptor:offset:bytesPerRow:"
-            | "newTextureWithDescriptor:iosurface:plane:" => {
-                self.skip_object("texture over a buffer")
-            }
+            | "newTextureWithDescriptor:iosurface:plane:" => self.skip_object(),
             _ => Err(refuse(call, "not played on a buffer")),
         }
     }
@@ -866,7 +865,7 @@ impl NewRuntime {
             | "newTextureViewWithPixelFormat:resourceIndex:"
             | "newTextureViewWithPixelFormat:textureType:levels:slices:"
             | "newTextureViewWithPixelFormat:textureType:levels:slices:resourceIndex:" => {
-                return self.skip_object("texture view")
+                return self.skip_object()
             }
             _ => return Err(refuse(call, "not played on a texture")),
         };
@@ -909,8 +908,7 @@ impl Backend for NewRuntime {
             // A call on a skipped object; what it makes is skipped too.
             self.skips.calls += 1;
             if call.result != 0 {
-                self.objects
-                    .insert(call.result, Object::Skipped("made by a skipped object"));
+                self.objects.insert(call.result, Object::Skipped);
             }
             return Ok(Made::default());
         }
@@ -921,8 +919,7 @@ impl Backend for NewRuntime {
         if call.result != 0 && !encodes && self.names_skipped(call) {
             // What a call makes of a skipped object is skipped too.
             self.skips.objects += 1;
-            self.objects
-                .insert(call.result, Object::Skipped("made of a skipped object"));
+            self.objects.insert(call.result, Object::Skipped);
             return Ok(Made::default());
         }
         let made = match call.receiver {
@@ -1081,7 +1078,7 @@ impl Backend for NewRuntime {
         let id = match self.objects.get(&object) {
             Some(Object::Texture(texture)) => texture.gpu_resource_id(),
             Some(Object::Sampler(sampler)) => sampler.gpu_resource_id(),
-            Some(Object::Skipped(_)) => return Ok(None),
+            Some(Object::Skipped) => return Ok(None),
             _ => {
                 return Err(PlayError::Invalid(format!(
                     "gpuResourceID of #{object}, which has none"
