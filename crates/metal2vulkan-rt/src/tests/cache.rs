@@ -465,10 +465,10 @@ fn a_blob_is_named_by_its_devices_whole_header() {
 }
 
 /// The fill past capacity: six blobs of other headers, a temporary file and the state beside them;
-/// a device's seed keeps its own blob and the three most recently used of the others, removes the
-/// rest and touches nothing else, whether or not its own blob is there yet.
+/// a device's seed keeps its own blob and the three most recently written of the others, removes
+/// the rest and touches nothing else, whether or not its own blob is there yet.
 #[test]
-fn a_directory_keeps_at_most_four_blobs_the_least_recently_used_removed() {
+fn a_directory_keeps_at_most_four_blobs_the_oldest_removed() {
     let scratch = Scratch::new("blobs");
     fs::create_dir_all(&scratch.0).expect("the directory");
     let base = std::time::SystemTime::now() - Duration::from_secs(600);
@@ -498,7 +498,11 @@ fn a_directory_keeps_at_most_four_blobs_the_least_recently_used_removed() {
     let mut kept = others[6 - (BLOBS_KEPT - 1)..].to_vec();
     kept.sort();
     prune_blobs(&scratch.0, &own);
-    assert_eq!(blobs(), kept, "the three most recently used of the others");
+    assert_eq!(
+        blobs(),
+        kept,
+        "the three most recently written of the others"
+    );
     fs::write(scratch.0.join(&own), b"own").expect("its own blob");
     prune_blobs(&scratch.0, &own);
     kept.push(own.clone());

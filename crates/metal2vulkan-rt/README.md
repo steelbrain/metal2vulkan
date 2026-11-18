@@ -938,8 +938,8 @@ the lowerings from one device to the next:
   cache header the device's driver writes, opaque bytes: a device or driver version whose header
   differs in any byte, its `pipelineCacheUUID` included, has a blob of its own. Devices with one
   header, in one process or several, start from it, and each replaces it. The directory keeps at
-  most four blobs: a device's seed removes the least recently used past that (a blob's time is
-  its last write, or the last seed that took it), its own counted among the four.
+  most four blobs: a device's seed removes the oldest past that, by last write, its own counted
+  among the four. Taking a blob writes nothing to it.
 - `translations/`: each function's lowering, a kernel's or a render pipeline's vertex or fragment
   function's, named by its `FunctionCompileKey`, which covers everything that changes the
   lowering: the function's AIR, entry, constants and linked functions, its lowering inputs (a

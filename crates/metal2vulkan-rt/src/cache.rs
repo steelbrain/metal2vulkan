@@ -8,7 +8,7 @@
 //! named `pipelines-` and the hex of the whole 32-byte pipeline cache header the device's driver
 //! writes, opaque bytes: a device or driver version whose header differs in any byte, its
 //! `pipelineCacheUUID` included, has a blob of its own. A directory keeps at most
-//! [`BLOBS_KEPT`] blobs: a device's seed removes the least recently used past that, its own
+//! [`BLOBS_KEPT`] blobs: a device's seed removes the oldest past that, by last write, its own
 //! counted among the kept. The reaper
 //! makes an empty cache first when it starts, which a creation that comes before it waits for
 //! (microseconds); then it reads the blob and makes a cache from it, merges into that what
@@ -552,8 +552,8 @@ pub(crate) fn blob_name(header: &[u8; 32]) -> String {
     format!("{BLOB}-{}", hex(header))
 }
 
-/// Removes the blobs in `dir` past the [`BLOBS_KEPT`] most recently used (a blob's time is its
-/// last write, or the last seed that took it), the blob named `own` counted among the kept
+/// Removes the blobs in `dir` past the [`BLOBS_KEPT`] most recently written, the blob named `own`
+/// counted among the kept
 /// whether or not it is there yet. A temporary file, and anything not named as a blob, stays.
 pub(crate) fn prune_blobs(dir: &Path, own: &str) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -970,7 +970,7 @@ impl Caches {
     /// run's blob.
     ///
     /// The blob is named by the whole header in hex ([`blob_name`]); before its read, the blobs
-    /// past the [`BLOBS_KEPT`] most recently used are removed, and a blob taken is marked used.
+    /// past the [`BLOBS_KEPT`] most recently written are removed.
     ///
     /// # Safety
     ///
@@ -1005,13 +1005,8 @@ impl Caches {
             // whole, as its length and checksum show.
             let seeded = data.and_then(|data| unsafe { make_cache(device, data) });
             match seeded {
-                Some(seeded) => {
-                    // Marked used, so the least recently used blobs are the ones removed.
-                    let _ = (File::options().write(true).open(&path))
-                        .and_then(|file| file.set_modified(SystemTime::now()));
-                    // SAFETY: the cache is the device's, and this thread's alone.
-                    unsafe { self.take_seeded(device, seeded, counters) };
-                }
+                // SAFETY: the cache is the device's, and this thread's alone.
+                Some(seeded) => unsafe { self.take_seeded(device, seeded, counters) },
                 None if file.is_some() => {
                     let _ = fs::remove_file(&path);
                 }
