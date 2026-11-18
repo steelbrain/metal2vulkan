@@ -346,8 +346,13 @@ impl Arrays {
     /// attachment feedback layout. A texture without a storage view, or without a second element
     /// written here, leaves that element null, as every element starts, unless it displaced a
     /// texture, which may have had one: then it writes that element null, so nothing stale
-    /// answers there. The descriptor-slot gauge rises where no object held the index. Its owner
-    /// word, which [`Arrays::vacate_texture`] and [`Arrays::place_shadow`] take.
+    /// answers there. A null second element is written shader-read-only on every device, as
+    /// [`Arrays::vacate_texture`] writes it: it holds no image, so its layout need only be one
+    /// every device takes for a sampled image, which the feedback layout is not: a device without
+    /// `VK_EXT_attachment_feedback_loop_layout` refuses it
+    /// (`VUID-VkWriteDescriptorSet-descriptorType-04149`). The descriptor-slot gauge rises where no
+    /// object held the index. Its owner word, which [`Arrays::vacate_texture`] and
+    /// [`Arrays::place_shadow`] take.
     ///
     /// Err: [`Refusal::IndicesNotGranted`].
     ///
@@ -374,10 +379,15 @@ impl Arrays {
             counters.rise(Gauge::DescriptorSlots);
         }
         let storage = storage.or(displaced.then(vk::ImageView::null));
-        let feedback = vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
         let second = match looped {
-            true => sampled.map(|(view, _)| (view, feedback)),
-            false => (displaced && self.seconds).then(|| (vk::ImageView::null(), feedback)),
+            true => sampled
+                .map(|(view, _)| (view, vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)),
+            false => (displaced && self.seconds).then(|| {
+                (
+                    vk::ImageView::null(),
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                )
+            }),
         };
         // SAFETY: the caller's contract; the texture owns the index, and the lock is held.
         unsafe { self.write_texture(device, index, sampled, storage, second) };
