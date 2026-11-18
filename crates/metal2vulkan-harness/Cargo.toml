@@ -14,12 +14,11 @@ autobins = false
 name = "metal2vulkan_harness"
 path = "src/lib.rs"
 
-# The harness's command (src/bin/harness.rs). It has no unit tests, so `test = false` keeps
-# `cargo test`, nextest and `clippy --all-targets` from building a test harness of it.
+# The harness's command (src/bin/harness.rs); its unit tests cover how `--only` and `--skip`
+# select workloads.
 [[bin]]
 name = "harness"
 path = "src/bin/harness.rs"
-test = false
 
 [dependencies]
 # The translator: the library of AIR bitcode the old runtime takes (`old.rs`), and the function
