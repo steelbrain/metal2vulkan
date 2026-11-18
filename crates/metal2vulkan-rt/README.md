@@ -876,13 +876,15 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   vertex and fragment functions on the calling thread, which waits for them, within its 20-second
   budget per lowering, for what device creation enabled and under its identity domains, as for a
   compute state. A refusal of the translator is `Error::Translation`.
-- What a state compiles is its content, never the state: its descriptor's functions with their
-  constant values and linked functions, and the descriptor's fields that change the compile (the
-  translator's `Device::render_pipeline_key`). Every state of one content shares one compiled
-  content: its translation, its shader modules and their `VkPipeline`s, and its precision notes.
-  Render contents and compute kernels share the device's one map of the last 1,024 contents used,
-  so a state of a content it holds costs the key, which decodes the descriptor's functions, and a
-  lookup. `Gauges::render_contents` counts the compiled render contents alive.
+- What a state compiles is its content, never the state: its descriptor, with its functions'
+  constant values and linked functions, and every field (the translator's
+  `Device::render_descriptor_key`). Every state of one content shares one compiled content: its
+  translation, its shader modules and their `VkPipeline`s, and its precision notes. Render
+  contents and compute kernels share the device's one map of the last 1,024 contents used, so a
+  state of a content it holds costs the key, which reads no function, and a lookup.
+  `Gauges::render_contents` counts the compiled render contents alive, and
+  `Gauges::kernel_entries` the map's entries, compute and render together. Two descriptors that
+  differ only in a field their compile does not read are two contents, each compiled.
 - A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content and the topology class
   (point, line or triangle) of the draws it serves. It takes as dynamic state the viewport,
   scissor, cull mode, front face, primitive topology within its class, primitive restart, depth

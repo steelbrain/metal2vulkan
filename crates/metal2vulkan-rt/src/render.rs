@@ -2,12 +2,16 @@
 //! modules, and its `VkPipeline`s, one for each topology class drawn.
 //!
 //! What a state compiles is its content, never the state: the translator's key of its descriptor
-//! (`Device::render_variant_key`: its functions with their constant values and linked functions,
-//! the lowering inputs each function's use in the pipeline gives, the descriptor's fields that
-//! change the compile, the device's profile and the translator's semantics version). Every state
-//! of one content shares one [`RenderCompiled`]: the translation, its shader modules and their
-//! `VkPipeline`s. The device's one map of contents (`kernel_map`), which compute states use too,
-//! holds each content's, so a state of a content the map holds costs the key and a lookup.
+//! (`Device::render_descriptor_key`: every field of the descriptor, each function by its AIR,
+//! entry, constant values, linked functions and dynamic libraries, with the device's profile and
+//! the translator's semantics version), which reads no function, as a compute state's key reads
+//! none. Every state of one content shares one [`RenderCompiled`]: the translation, its shader
+//! modules and their `VkPipeline`s. The device's one map of contents (`kernel_map`), which compute
+//! states use too, holds each content's, so a state of a content the map holds costs the key and a
+//! lookup. A content the map does not hold is decoded, keyed for its compile
+//! (`Device::render_variant_key`) and lowered. The cost of keying on the descriptor: two
+//! descriptors that differ only in a field their compile does not read are two contents, each
+//! compiled.
 //!
 //! What a `VkPipeline` bakes is what Vulkan 1.3 cannot leave dynamic: the content, and the
 //! topology class (point, line or triangle) of the draws it serves. Everything Metal sets on the
@@ -121,11 +125,11 @@ struct Fixed {
 impl crate::Device {
     /// `newRenderPipelineStateWithDescriptor:error:`, without reflection.
     ///
-    /// A state's content is its descriptor's functions with their constant values and linked
-    /// functions, and the descriptor's fields that change the compile. Every state of one content
-    /// shares its translation, its shader modules and their `VkPipeline`s: a state of a content
-    /// the device holds (the last 1,024 contents used, compute and render together) costs the
-    /// translator's key of the descriptor, which decodes its functions, and a lookup. For a
+    /// A state's content is its descriptor: its functions with their constant values and linked
+    /// functions, and every field. Every state of one content shares its translation, its shader
+    /// modules and their `VkPipeline`s: a state of a content the device holds (the last 1,024
+    /// contents used, compute and render together) costs the translator's key of the descriptor,
+    /// which reads no function, and a lookup. For a
     /// content the device does not hold, the translator lowers each function on the calling
     /// thread, which waits for it, within its 20-second budget per lowering, and the content's
     /// triangle-class `VkPipeline` is made here. Where the device has a cache directory
@@ -150,18 +154,18 @@ impl crate::Device {
     ) -> Result<RenderPipelineState, Error> {
         refuse(descriptor)?;
         let core = self.core();
-        let budget = Budget::standard();
-        let entries = StageEntries::new();
-        let keys = (core.translator)
-            .render_variant_key(descriptor, &VariantKey::new(), &budget, &entries)
-            .map_err(Error::Translation)?;
         let key = KernelKey {
-            pipeline: keys.pipeline,
+            pipeline: core.translator.render_descriptor_key(descriptor),
             required: None,
         };
         let compiled = match core.kernels.find_render(&key) {
             Some(compiled) => compiled,
             None => {
+                let budget = Budget::standard();
+                let entries = StageEntries::new();
+                let keys = (core.translator)
+                    .render_variant_key(descriptor, &VariantKey::new(), &budget, &entries)
+                    .map_err(Error::Translation)?;
                 let compiled = RenderCompiled::of(core, descriptor, &keys, &budget, &entries)?;
                 (core.kernels).keep_render(key, Arc::new(compiled), &core.counters)
             }

@@ -6,6 +6,9 @@
 //!   shares the first's compiled content, which the device's map of contents holds beside its
 //!   compute kernels. Another colour format, a blended attachment, or a stencil attachment with a
 //!   second colour attachment is another content.
+//! - Filled past a cap of 2, the map holds 2 render contents and forgets the least recently used,
+//!   which lives while a state holds it and goes once that state does; a forgotten content
+//!   compiles again, and one the map holds does not.
 //! - A depth attachment, more than one sample, or a fragment function with a constexpr sampler is
 //!   refused by kind, making no `VkPipeline`.
 //! - A device on a cache directory a device before it used lowers nothing at creation: both
@@ -148,6 +151,64 @@ mod on_device {
             println!(
                 "{name}: two states of a content share it; {} other contents made apart",
                 others.len()
+            );
+        });
+    }
+
+    /// Filled past a cap of 2, the map holds 2 render contents and forgets the least recently
+    /// used, which lives while a state holds it and goes once that state does; a content
+    /// forgotten compiles again, and one the map holds does not.
+    #[test]
+    fn every_device_bounds_its_render_contents_and_frees_a_forgotten_one_with_its_last_state() {
+        let Some(library) = library() else {
+            return;
+        };
+        let [one, two, three] = [
+            PixelFormat::BGRA8Unorm,
+            PixelFormat::RGBA8Unorm,
+            PixelFormat::RGBA16Float,
+        ]
+        .map(|color| descriptor(&library, "colored_fragment", color));
+        each_device("render_past_cap", |name, _, device| {
+            device.core().kernels.set_cap(2);
+            let counters = device.counters();
+            let gauges = || {
+                let gauges = counters.gauges();
+                (gauges.render_contents, gauges.kernel_entries)
+            };
+            let lowered = || counters.metrics().translations;
+            let start = lowered();
+            let a = state(name, &device, &one);
+            let each = lowered() - start;
+            assert!(each > 0, "{name}: a lowering");
+            let b = state(name, &device, &two);
+            assert_eq!(gauges(), (2, 2), "{name}");
+            // `one` is the least recently used, and goes from the map; its state keeps it.
+            let c = state(name, &device, &three);
+            assert_eq!(
+                gauges(),
+                (3, 2),
+                "{name}: a forgotten content its state holds"
+            );
+            let b_again = state(name, &device, &two);
+            assert!(shared(&b, &b_again), "{name}: `two` is held");
+            assert_eq!(lowered() - start, 3 * each, "{name}: `two` compiled once");
+            drop(a);
+            assert_eq!(
+                gauges(),
+                (2, 2),
+                "{name}: the forgotten content went with its last state"
+            );
+            // `one` compiles again, and `three`, now the least recently used, goes from the map.
+            let a = state(name, &device, &one);
+            assert_eq!(lowered() - start, 4 * each, "{name}: `one` compiled again");
+            assert_eq!(gauges(), (3, 2), "{name}");
+            drop(c);
+            assert_eq!(gauges(), (2, 2), "{name}");
+            drop((a, b, b_again));
+            assert_eq!(gauges(), (2, 2), "{name}: the map holds 2");
+            println!(
+                "{name}: the map held 2 of 3 render contents, and freed a forgotten one with its state"
             );
         });
     }
