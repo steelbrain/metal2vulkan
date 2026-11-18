@@ -303,7 +303,6 @@ impl Device {
             mut vulkan11,
             mut vulkan12,
             mut vulkan13,
-            mut workgroup_layout,
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
             mut robustness2,
@@ -314,7 +313,6 @@ impl Device {
             .push_next(&mut vulkan11)
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
-            .push_next(&mut workgroup_layout)
             .push_next(&mut robustness2);
         // An optional extension's structure goes in only where the extension is enabled.
         let enabled = |name: &std::ffi::CStr| capabilities.extensions.contains(&name);

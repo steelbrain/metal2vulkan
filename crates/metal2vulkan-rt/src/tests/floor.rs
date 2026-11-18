@@ -61,11 +61,6 @@ fn at_the_floor() -> Queried {
     features.vulkan12.storage_buffer8_bit_access = vk::TRUE;
     features.vulkan12.scalar_block_layout = vk::TRUE;
     features.vulkan12.uniform_buffer_standard_layout = vk::TRUE;
-    let layout = &mut features.workgroup_layout;
-    layout.workgroup_memory_explicit_layout = vk::TRUE;
-    layout.workgroup_memory_explicit_layout_scalar_block_layout = vk::TRUE;
-    layout.workgroup_memory_explicit_layout8_bit_access = vk::TRUE;
-    layout.workgroup_memory_explicit_layout16_bit_access = vk::TRUE;
     features.vulkan12.vulkan_memory_model = vk::TRUE;
     features.vulkan12.vulkan_memory_model_device_scope = vk::TRUE;
     features.vulkan13.subgroup_size_control = vk::TRUE;
@@ -222,10 +217,9 @@ fn each_missing_feature_is_named() {
     const V12: &str = "VkPhysicalDeviceVulkan12Features";
     const V13: &str = "VkPhysicalDeviceVulkan13Features";
     const CORE: &str = "VkPhysicalDeviceFeatures";
-    const LAYOUT: &str = "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 33] = [
+    let cases: [(Clear, Missing); 29] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -303,31 +297,6 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan12.uniform_buffer_standard_layout = vk::FALSE,
             feature(V12, "uniformBufferStandardLayout"),
-        ),
-        (
-            |f| f.workgroup_layout.workgroup_memory_explicit_layout = vk::FALSE,
-            feature(LAYOUT, "workgroupMemoryExplicitLayout"),
-        ),
-        (
-            |f| {
-                f.workgroup_layout
-                    .workgroup_memory_explicit_layout_scalar_block_layout = vk::FALSE
-            },
-            feature(LAYOUT, "workgroupMemoryExplicitLayoutScalarBlockLayout"),
-        ),
-        (
-            |f| {
-                f.workgroup_layout
-                    .workgroup_memory_explicit_layout8_bit_access = vk::FALSE
-            },
-            feature(LAYOUT, "workgroupMemoryExplicitLayout8BitAccess"),
-        ),
-        (
-            |f| {
-                f.workgroup_layout
-                    .workgroup_memory_explicit_layout16_bit_access = vk::FALSE
-            },
-            feature(LAYOUT, "workgroupMemoryExplicitLayout16BitAccess"),
         ),
         (
             |f| f.vulkan12.vulkan_memory_model = vk::FALSE,
@@ -716,7 +685,6 @@ fn every_missing_item_is_named_at_once() {
         below.missing,
         [
             Missing::Extension(ash::khr::swapchain::NAME),
-            Missing::Extension(ash::khr::workgroup_memory_explicit_layout::NAME),
             Missing::Extension(ash::ext::robustness2::NAME),
             Missing::Extension(ash::ext::calibrated_timestamps::NAME),
             feature("VkPhysicalDeviceFeatures", "shaderInt64"),
@@ -735,8 +703,7 @@ fn every_missing_item_is_named_at_once() {
     assert_eq!(
         below.to_string(),
         "the device is below the runtime's floor: it lacks VK_KHR_swapchain; \
-         VK_KHR_workgroup_memory_explicit_layout; VK_EXT_robustness2; \
-         VK_EXT_calibrated_timestamps; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
+         VK_EXT_robustness2; VK_EXT_calibrated_timestamps; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
          maxPushConstantsSize 64, below 256; a queue family with graphics and compute; a memory \
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers"
@@ -1093,7 +1060,6 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut vulkan11,
             mut vulkan12,
             mut vulkan13,
-            mut workgroup_layout,
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
             mut robustness2,
@@ -1104,7 +1070,6 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             .push_next(&mut vulkan11)
             .push_next(&mut vulkan12)
             .push_next(&mut vulkan13)
-            .push_next(&mut workgroup_layout)
             .push_next(&mut robustness2);
         let enabled = |name: &std::ffi::CStr| capabilities.extensions.contains(&name);
         if enabled(ash::khr::shader_maximal_reconvergence::NAME) {

@@ -752,7 +752,6 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 |---|---|---|
 | `VK_KHR_surface` | instance | presenting |
 | `VK_KHR_swapchain` | device | presenting |
-| `VK_KHR_workgroup_memory_explicit_layout` | device | threadgroup memory laid out as Metal lays it |
 | `VK_EXT_robustness2` | device | null descriptors |
 | `VK_EXT_calibrated_timestamps` | device | GPU times on the host clock: the device calibrates its own clock (`VK_TIME_DOMAIN_DEVICE_EXT`) with the host's (`floor::TIME_DOMAINS`) |
 | `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
@@ -784,10 +783,6 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `storageBuffer8BitAccess` | `VkPhysicalDeviceVulkan12Features` | 8-bit values in buffers |
 | `scalarBlockLayout` | `VkPhysicalDeviceVulkan12Features` | buffer and push-constant blocks laid out as Metal lays them, where std430 cannot |
 | `uniformBufferStandardLayout` | `VkPhysicalDeviceVulkan12Features` | uniform blocks in std430 layout |
-| `workgroupMemoryExplicitLayout` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | threadgroup blocks with an explicit layout |
-| `workgroupMemoryExplicitLayoutScalarBlockLayout` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | threadgroup blocks in scalar layout |
-| `workgroupMemoryExplicitLayout8BitAccess` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | 8-bit values in threadgroup blocks |
-| `workgroupMemoryExplicitLayout16BitAccess` | `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR` | 16-bit values in threadgroup blocks |
 | `vulkanMemoryModel` | `VkPhysicalDeviceVulkan12Features` | the translator's atomics and barriers |
 | `vulkanMemoryModelDeviceScope` | `VkPhysicalDeviceVulkan12Features` | atomics and barriers of device scope |
 | `subgroupSizeControl` | `VkPhysicalDeviceVulkan13Features` | a kernel's SIMD groups at Metal's width of 32, where the device lists compute in `requiredSubgroupSizeStages` |

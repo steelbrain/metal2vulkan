@@ -33,7 +33,6 @@ impl DeviceExtension {
     ///
     /// `T` is a structure the floor's features do not already chain: not
     /// `VkPhysicalDeviceVulkan11Features`, `12`, `13`,
-    /// `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR`,
     /// `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR` or
     /// `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR`.
     pub fn with_features<T>(name: &CStr, wanted: T, needs: fn(&T) -> bool) -> DeviceExtension

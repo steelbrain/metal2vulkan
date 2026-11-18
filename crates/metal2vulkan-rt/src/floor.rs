@@ -23,12 +23,11 @@ pub const INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::surface::NAME];
 /// portability devices, which the floor then checks as it checks any device.
 pub const OPTIONAL_INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::portability_enumeration::NAME];
 
-/// The device extensions the runtime requires and device creation enables: presenting,
-/// threadgroup memory laid out as Metal lays it, null descriptors, and the GPU's clock read with
-/// the host's, for GPU times on the host clock ([`host_time`](crate::host_time)).
+/// The device extensions the runtime requires and device creation enables: presenting, null
+/// descriptors, and the GPU's clock read with the host's, for GPU times on the host clock
+/// ([`host_time`](crate::host_time)).
 pub const DEVICE_EXTENSIONS: &[&CStr] = &[
     ash::khr::swapchain::NAME,
-    ash::khr::workgroup_memory_explicit_layout::NAME,
     ash::ext::robustness2::NAME,
     ash::ext::calibrated_timestamps::NAME,
 ];
@@ -52,9 +51,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
 /// that its description of the device must enable: the portability subset, where the device lists
 /// it.
 fn shader_extension(name: &CStr) -> Option<VkExtension> {
-    if name == ash::khr::workgroup_memory_explicit_layout::NAME {
-        Some(VkExtension::KhrWorkgroupMemoryExplicitLayout)
-    } else if name == ash::khr::shader_maximal_reconvergence::NAME {
+    if name == ash::khr::shader_maximal_reconvergence::NAME {
         Some(VkExtension::KhrShaderMaximalReconvergence)
     } else if name == ash::khr::shader_subgroup_uniform_control_flow::NAME {
         Some(VkExtension::KhrShaderSubgroupUniformControlFlow)
@@ -163,9 +160,6 @@ pub struct Features {
     pub vulkan12: vk::PhysicalDeviceVulkan12Features<'static>,
     /// `VkPhysicalDeviceVulkan13Features`.
     pub vulkan13: vk::PhysicalDeviceVulkan13Features<'static>,
-    /// `VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR`, of
-    /// `VK_KHR_workgroup_memory_explicit_layout`.
-    pub workgroup_layout: vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR<'static>,
     /// `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR`, of
     /// `VK_KHR_shader_maximal_reconvergence`: read and enabled only where the device lists it.
     pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>,
@@ -204,9 +198,6 @@ macro_rules! feature {
     };
     (@structure vulkan13) => {
         "VkPhysicalDeviceVulkan13Features"
-    };
-    (@structure workgroup_layout) => {
-        "VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR"
     };
     (@structure maximal_reconvergence) => {
         "VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR"
@@ -259,19 +250,15 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // texture does, with no code in the shader.
     feature!(robustness2.null_descriptor => NullDescriptor),
     // The translator's shaders: 8-, 16- and 64-bit integers, 8- and 16-bit values in buffers,
-    // scalar and std430 layout of buffer, uniform and push-constant blocks, threadgroup memory
-    // laid out as Metal lays it, and the Vulkan memory model with device scope for atomics and
-    // barriers.
+    // scalar and std430 layout of buffer, uniform and push-constant blocks, and the Vulkan memory
+    // model with device scope for atomics and barriers. Threadgroup memory is a plain array the
+    // shader addresses by byte offset, which needs no feature.
     feature!(core.shader_int16 => ShaderInt16),
     feature!(vulkan12.shader_int8 => ShaderInt8),
     feature!(vulkan11.storage_buffer16_bit_access => StorageBuffer16BitAccess),
     feature!(vulkan12.storage_buffer8_bit_access => StorageBuffer8BitAccess),
     feature!(vulkan12.scalar_block_layout => ScalarBlockLayout),
     feature!(vulkan12.uniform_buffer_standard_layout => UniformBufferStandardLayout),
-    feature!(workgroup_layout.workgroup_memory_explicit_layout => WorkgroupMemoryExplicitLayout),
-    feature!(workgroup_layout.workgroup_memory_explicit_layout_scalar_block_layout => WorkgroupMemoryExplicitLayoutScalarBlockLayout),
-    feature!(workgroup_layout.workgroup_memory_explicit_layout8_bit_access => WorkgroupMemoryExplicitLayout8BitAccess),
-    feature!(workgroup_layout.workgroup_memory_explicit_layout16_bit_access => WorkgroupMemoryExplicitLayout16BitAccess),
     feature!(vulkan12.vulkan_memory_model => VulkanMemoryModel),
     feature!(vulkan12.vulkan_memory_model_device_scope => VulkanMemoryModelDeviceScope),
     // SIMD groups at Metal's width of 32: a kernel's subgroup size pinned where the device lists
@@ -587,7 +574,6 @@ unsafe fn query(
                 .iter()
                 .any(|name| name.as_c_str() == extension)
         };
-        let workgroup_layout_listed = listed(ash::khr::workgroup_memory_explicit_layout::NAME);
         let maximal_reconvergence_listed = listed(ash::khr::shader_maximal_reconvergence::NAME);
         let uniform_control_flow_listed =
             listed(ash::khr::shader_subgroup_uniform_control_flow::NAME);
@@ -599,7 +585,6 @@ unsafe fn query(
             vulkan11,
             vulkan12,
             vulkan13,
-            workgroup_layout,
             maximal_reconvergence,
             subgroup_uniform_control_flow,
             robustness2,
@@ -609,9 +594,6 @@ unsafe fn query(
             .push_next(&mut *vulkan11)
             .push_next(&mut *vulkan12)
             .push_next(&mut *vulkan13);
-        if workgroup_layout_listed {
-            features = features.push_next(&mut *workgroup_layout);
-        }
         if maximal_reconvergence_listed {
             features = features.push_next(&mut *maximal_reconvergence);
         }
@@ -629,7 +611,6 @@ unsafe fn query(
         vulkan11.p_next = std::ptr::null_mut();
         vulkan12.p_next = std::ptr::null_mut();
         vulkan13.p_next = std::ptr::null_mut();
-        workgroup_layout.p_next = std::ptr::null_mut();
         maximal_reconvergence.p_next = std::ptr::null_mut();
         subgroup_uniform_control_flow.p_next = std::ptr::null_mut();
         robustness2.p_next = std::ptr::null_mut();
