@@ -159,7 +159,7 @@ pub struct ComputeCommandEncoder {
     declared_shared_write: bool,
     /// The module, workgroup size, folded tile and `VkPipeline` of the last dispatch, while the
     /// state and the threadgroup memory lengths are unchanged.
-    last: Option<(Module, [u32; 3], Option<[u32; 3]>, vk::Pipeline)>,
+    last: Option<Last>,
     /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
     /// Whether a dispatch of the encoder wrote anything.
@@ -177,6 +177,15 @@ pub(crate) enum Module {
     Partial,
     /// The emulated-SIMD-group variant.
     Emulated,
+}
+
+/// The last dispatch's module, workgroup size and folded tile, and its `VkPipeline`.
+#[derive(Clone, Copy)]
+struct Last {
+    module: Module,
+    local: [u32; 3],
+    fold: Option<[u32; 3]>,
+    pipeline: vk::Pipeline,
 }
 
 /// A direct dispatch's grid: Metal's threadgroups, its threads, and whether the last threadgroup
@@ -749,8 +758,8 @@ impl ComputeCommandEncoder {
             return Ok(());
         }
         let vk_pipeline = match self.last {
-            Some((last, at, folded, made)) if last == module && at == local && folded == fold => {
-                made
+            Some(last) if last.module == module && last.local == local && last.fold == fold => {
+                last.pipeline
             }
             _ => {
                 let variant = Variant {
@@ -777,7 +786,12 @@ impl ComputeCommandEncoder {
                 kernel.pipeline(&core, &variant)?
             }
         };
-        self.last = Some((module, local, fold, vk_pipeline));
+        self.last = Some(Last {
+            module,
+            local,
+            fold,
+            pipeline: vk_pipeline,
+        });
         let serial = self.serial;
         // A write the host may read once the command buffer completes: to a Shared buffer or a
         // texture over one, bound or declared, or through an address outside the dispatch's
