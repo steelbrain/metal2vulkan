@@ -3,7 +3,7 @@
 //! in (`places`) and every texture and sampler index, granted at the start. A block of the stream
 //! is a block of the runtime, and a heap is a block of its own. What the runtime does not build
 //! yet is skipped and counted, never stood in for (`Skips`): render encoders and the states and
-//! descriptors only they take, textures over buffers, fences, and the blit commands it lacks; a
+//! descriptors only they take, textures over buffers, and the blit commands it lacks; a
 //! dispatch or blit that names a skipped object is skipped too. A play with any skip is no gate
 //! result. A selector, an argument or a descriptor key this module does not name is refused.
 
@@ -25,8 +25,8 @@ use std::collections::{HashMap, VecDeque};
 struct Skips {
     /// Encoders the runtime does not build: render encoders.
     encoders: u64,
-    /// Objects it does not build: textures over buffers, render pipeline and depth-stencil
-    /// states, render pass descriptors and fences.
+    /// Objects it does not build: textures over buffers, texture views, render pipeline and
+    /// depth-stencil states, render pass descriptors and libraries from source.
     objects: u64,
     /// Dispatches that bind a skipped object.
     dispatches: u64,
@@ -55,6 +55,7 @@ enum Object {
     Sampler(rt::SamplerState),
     Event(rt::Event),
     SharedEvent(rt::SharedEvent),
+    Fence(rt::Fence),
     /// What the runtime does not build yet.
     Skipped,
 }
@@ -303,6 +304,14 @@ impl NewRuntime {
             Value::List(items) => items.iter().any(|item| self.holds_skipped(item)),
             Value::Map(entries) => entries.iter().any(|(_, item)| self.holds_skipped(item)),
             _ => false,
+        }
+    }
+
+    fn fence_of(&self, call: &Call, at: usize) -> Result<rt::Fence, PlayError> {
+        let id = Self::id(call, at)?;
+        match self.get(call, id)? {
+            Object::Fence(fence) => Ok(fence.clone()),
+            _ => Err(refuse(call, format!("#{id} is no fence"))),
         }
     }
 
@@ -699,14 +708,14 @@ impl NewRuntime {
                 let state = self.compute_pipeline_state(call, &d)?;
                 unaddressed(Object::ComputePipeline(state))
             }
-            // Render pipeline and depth-stencil states, render pass descriptors, libraries from
-            // source and fences: the runtime builds none yet.
+            // Render pipeline and depth-stencil states, render pass descriptors and libraries from
+            // source: the runtime builds none yet.
             "newRenderPipelineStateWithDescriptor:error:"
             | "newDepthStencilStateWithDescriptor:"
             | "MTLRenderPassDescriptor.new"
             | "MTLRenderPassDescriptor.renderPassDescriptor"
-            | "newLibraryWithSource:options:error:"
-            | "newFence" => self.skip_object(),
+            | "newLibraryWithSource:options:error:" => self.skip_object(),
+            "newFence" => unaddressed(Object::Fence(self.device.new_fence())),
             "newSamplerStateWithDescriptor:" => {
                 let (mut descriptor, f) = translator::sampler(call)?;
                 if let Some(color) = f.metal("borderColor")? {
@@ -1115,7 +1124,7 @@ impl Backend for NewRuntime {
         ])
     }
 
-    /// The runtime makes no blits between buffers or fences yet.
+    /// The runtime makes no blits between buffers yet.
     fn snapshots(&self) -> bool {
         false
     }

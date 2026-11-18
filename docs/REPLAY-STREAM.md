@@ -358,7 +358,7 @@ old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `c
   command buffer completed, it reads the bytes after back and counts the 4-byte words of each
   range that differ from the recording's, relocated the same way. A difference is reported, and
   the play goes on. Its own objects take ids from 2^63 + 1. On a backend that takes no snapshots
-  (the new runtime's, which has no blits between buffers or fences yet), each such dispatch plays
+  (the new runtime's, which has no blits between buffers yet), each such dispatch plays
   as it is and is counted on the report's `unsnapshotted` line.
 - It lays each placement heap out again for the runtime's sizes and alignments, as a program that
   lays out its heap by `heapTextureSizeAndAlignWithDescriptor:` and
@@ -408,25 +408,24 @@ old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `c
   `isDrawable` other than their defaults; it does not play `defaultColorSampleCount`, which changes
   nothing a pass shows. It plays a no-copy buffer as a buffer of its length, so one of the
   read-only option (bit 24) is made without it and keeps the GPU writes Metal drops.
-- The new runtime's backend plays compute, blits, `synchronizeResource:`, events and queues. What
-  the new runtime does not build yet it skips and counts, and never fakes:
-  - objects: render pipelines, depth-stencil states, render pass descriptors, fences, libraries
-    from source, textures over a buffer (`bytesPerRow`, tiled and surface textures), texture
-    views, and whatever a call makes of a skipped object (`skipped_objects`);
+- The new runtime's backend plays compute, blits, `synchronizeResource:`, fences, events and
+  queues. What the new runtime does not build yet it skips and counts, and never fakes:
+  - objects: render pipelines, depth-stencil states, render pass descriptors, libraries from
+    source, textures over a buffer (`bytesPerRow`, tiled and surface textures), texture views,
+    and whatever a call makes of a skipped object (`skipped_objects`);
   - render and parallel render encoders (`skipped_encoders`), and every call of a skipped object
-    (`skipped_calls`, with `useResource:usage:` of one and a compute encoder's `useHeap:`,
-    `updateFence:` and `waitForFence:`);
+    (`skipped_calls`, with `useResource:usage:` of one and a compute encoder's `useHeap:`);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
     (`skipped_dispatches`);
   - blit commands that name a skipped object, and buffer-to-buffer copies,
-    `synchronizeTexture:slice:level:`, fences, mipmaps, `optimizeContentsForGPUAccess:` and the
-    host's copies to and from the guest's RAM (`skipped_blits`).
+    `synchronizeTexture:slice:level:`, mipmaps, `optimizeContentsForGPUAccess:` and the host's
+    copies to and from the guest's RAM (`skipped_blits`).
 
   The counts are among its executed counters. A play with any of them above zero is no gate
   result: `report.txt` says so on a `skipped` line. It places buffers of their own in pooled
-  256 MiB blocks of the runtime (a larger one in a block of its own), a range freed for reuse once every command buffer committed
-  before its release completed, and gives textures and sampler states indices from the whole of
-  each index class. Its readback serves Shared and Managed buffers only; a check of anything else
+  256 MiB blocks of the runtime (a larger one in a block of its own), a range freed for reuse
+  once every command buffer committed before its release completed, and gives textures and
+  sampler states indices from the whole of each index class. Its readback serves Shared and Managed buffers only; a check of anything else
   is a refusal. The runtime gives a compute pipeline state no `gpuResourceID`, so each one the
   program saw is reported on an `id` line as `none`.
 

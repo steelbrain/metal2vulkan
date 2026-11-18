@@ -320,8 +320,16 @@ impl NewRuntime {
                     _ => return Err(refuse(call, "argument 0 is no buffer or texture")),
                 }
             }
-            // Fences are skipped objects; the runtime makes no heap residency calls.
-            "useHeap:" | "updateFence:" | "waitForFence:" => {
+            "updateFence:" => {
+                let fence = self.fence_of(call, 0)?;
+                self.compute(id).encoder.update_fence(&fence)
+            }
+            "waitForFence:" => {
+                let fence = self.fence_of(call, 0)?;
+                self.compute(id).encoder.wait_for_fence(&fence)
+            }
+            // The runtime makes no heap residency calls.
+            "useHeap:" => {
                 self.skips.calls += 1;
                 Ok(())
             }
@@ -402,6 +410,14 @@ impl NewRuntime {
                 }
                 _ => return Err(refuse(call, "argument 0 is no buffer or texture")),
             },
+            "updateFence:" => {
+                let fence = self.fence_of(call, 0)?;
+                self.blit(id).update_fence(&fence)
+            }
+            "waitForFence:" => {
+                let fence = self.fence_of(call, 0)?;
+                self.blit(id).wait_for_fence(&fence)
+            }
             "fillBuffer:range:value:" => {
                 let buffer = self.buffer_of(call, Self::id(call, 0)?)?;
                 let span = range(call, arg(call, 1)?)?;
@@ -410,11 +426,9 @@ impl NewRuntime {
                 self.blit(id).fill_buffer(&buffer, span, value)
             }
             // Not built by the runtime yet: buffer-to-buffer copies, a texture slice's and level's
-            // synchronization, fences, mipmaps and the host's guest-RAM copies.
+            // synchronization, mipmaps and the host's guest-RAM copies.
             "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:"
             | "synchronizeTexture:slice:level:"
-            | "updateFence:"
-            | "waitForFence:"
             | "generateMipmapsForTexture:"
             | "optimizeContentsForGPUAccess:"
             | "m2v.copyFromGuestRam"
