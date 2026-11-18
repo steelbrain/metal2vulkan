@@ -1209,9 +1209,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `Error::Translation` naming what it needs, and never pulled into the shader:
   - a per-instance step rate above 1 on a device without the step rates, or past its
     `maxVertexAttribDivisor` (`VertexStepRate`, naming `vertexAttributeInstanceRateDivisor` or
-    the limit; on a device that lacks only `supportsNonZeroFirstInstance`, not implemented):
-    Vulkan divides the instance index only with that feature, a rate within that limit and,
-    for a draw at a base instance other than 0, that property;
+    the limit): Vulkan divides the instance index only with that feature and a rate within that
+    limit;
   - a format the device's query does not report for `VERTEX_BUFFER` (`Format`, with the format),
     and `FloatRGB9E5` on every device (`Format`, not implemented: of those profiles only
     lavapipe's reports the format, and its fetch answers 0 for the fourth component, where Metal
@@ -1337,13 +1336,19 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points, a depth-stencil state that
   tests or writes depth (no pass has a depth attachment yet), a viewport Vulkan's is not (a
   negative width, a depth range past `[0, 1]`, bounds past the device's viewport limits), a
-  pipeline state whose formats are not the pass's attachments', and a draw that binds a texture
+  pipeline state whose formats are not the pass's attachments', a draw that binds a texture
   whose image the pass renders, where the feedback loop does not read it: on a device without the
   attachment reads, from the vertex function at the rendered level and layer, written, of a
   depth or stencil attachment, of an image with a storage view or over a buffer in place, or of
-  an image two attachments of the pass render. The replay streams draw lines and triangles under
-  depth-stencil states that test no depth, and every attachment they read through a texture is a
-  shader-read colour render target of `Private` storage, read from the fragment function.
+  an image two attachments of the pass render; and, on a device that does not report
+  `supportsNonZeroFirstInstance` (lavapipe and the UHD 630 among the lab's), a draw at a base
+  instance other than 0 through a state that steps a layout per instance at a rate above 1
+  (`DividedBaseInstance`: Vulkan's divisor takes `firstInstance` 0 alone there,
+  VUID-vkCmdDraw-pNext-09461); the same draw from base instance 0 runs. An indirect draw, whose
+  base instance the CPU does not see, is not built. The replay streams draw lines and triangles
+  under depth-stencil states that test no depth; every attachment they read through a texture is
+  a shader-read colour render target of `Private` storage, read from the fragment function; and
+  their stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0.
 - A draw that reaches an attachment of its own pass through an argument buffer's texture is not
   seen: it reads through the texture's own element, in its home layout, while the pass may have
   moved the image to the feedback layout.
@@ -1487,9 +1492,10 @@ extension offers each of them by Vulkan's definition and is not asked.
 Metal's per-instance step at a rate above 1 has one form, a vertex binding's divisor. Where the
 device lists `VK_KHR_vertex_attribute_divisor` and reports the feature below, device creation
 enables both, and the translator builds the step where the rate is within
-`maxVertexAttribDivisor` and the device reports `supportsNonZeroFirstInstance`, as a Metal draw
-may carry a base instance. Elsewhere it refuses the step at creation (`VertexStepRate`); no
-other feature or answer changes.
+`maxVertexAttribDivisor`. Elsewhere it refuses the step at creation (`VertexStepRate`). Where
+the device does not report `supportsNonZeroFirstInstance`, a draw through such a state at a base
+instance other than 0 is refused (render encoders' known gaps); no other feature or answer
+changes.
 
 | Step-rate feature | Structure | Used for |
 |---|---|---|

@@ -1018,6 +1018,9 @@ impl RenderCommandEncoder {
         if count == 0 || instance_count == 0 {
             return Ok(());
         }
+        if draws.first_instance_zero && base_instance != 0 {
+            return gap(DrawKind::DividedBaseInstance);
+        }
         let pipeline = compiled.pipeline(topology)?;
         // The attachments the draw reads: their images moved, which orders everything before, or
         // the barrier owed paid.

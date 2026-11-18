@@ -858,7 +858,9 @@ pub enum Gap {
     ///
     /// Basis: ours (the replay streams draw lines and triangles under depth-stencil states that
     /// test no depth, through viewports Vulkan's are, with pipeline states of their pass's formats;
-    /// each other kind is built when a replay stream draws one).
+    /// each other kind is built when a replay stream draws one), and device for
+    /// [`DrawKind::DividedBaseInstance`] (a device that does not report
+    /// `supportsNonZeroFirstInstance`).
     Draw {
         /// What the draw asks for.
         kind: DrawKind,
@@ -924,6 +926,12 @@ pub enum DrawKind {
     /// over a buffer in place, or of an image two attachments of the pass render. Metal reads a
     /// render target through a texture.
     AttachmentRead,
+    /// A draw at a base instance other than 0 through a pipeline state that steps a vertex layout
+    /// per instance at a rate above 1, on a device that does not report
+    /// `supportsNonZeroFirstInstance`: Vulkan's divisor takes `firstInstance` 0 alone there
+    /// (VUID-vkCmdDraw-pNext-09461). Metal counts the step from any base instance. The same
+    /// draw from base instance 0 runs.
+    DividedBaseInstance,
 }
 
 /// What a render pass asks that the runtime does not build ([`Gap::RenderPass`]).

@@ -20,7 +20,9 @@
 //!   `ima_vertex`, a `float2` position and a mark read from a `short`): two bindings, the formats
 //!   `R32G32_SFLOAT` and `R16_SINT`, nothing pulled, both modules L3-valid. A layout stepped per
 //!   instance at rate 2 without the divisor feature is refused as `Unsupported{VertexStepRate}`,
-//!   needing `vertexAttributeInstanceRateDivisor`.
+//!   needing `vertexAttributeInstanceRateDivisor`; with it, the layout is an instance-rate binding
+//!   of divisor 2 whether or not the device reports `supportsNonZeroFirstInstance`, and at a rate
+//!   past `maxVertexAttribDivisor` it is refused naming the limit.
 //!
 //! `llvm-as` assembles the fixture; a missing tool skips visibly. No GPU is used.
 
@@ -259,7 +261,8 @@ fn ima_descriptor(library: &Library) -> RenderPipelineDescriptor {
 }
 
 /// `stem`'s profile under the identity domains with no buffer robustness and without
-/// `vertexAttributeInstanceRateDivisor`, as the new runtime's floor enables neither.
+/// `vertexAttributeInstanceRateDivisor`, as the new runtime enables neither where a device does
+/// not offer them.
 fn fixed_function_device(stem: &str) -> Device {
     let mut desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
     for robust in [
@@ -270,6 +273,27 @@ fn fixed_function_device(stem: &str) -> Device {
     }
     desc.features
         .remove(&VkFeature::VertexAttributeInstanceRateDivisor);
+    Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// `stem`'s profile under the identity domains with no buffer robustness, with
+/// `VK_KHR_vertex_attribute_divisor`'s `vertexAttributeInstanceRateDivisor` enabled, a
+/// `maxVertexAttribDivisor` of 4 and `supportsNonZeroFirstInstance` as `nonzero`.
+fn divisor_device(stem: &str, nonzero: bool) -> Device {
+    use crate::device::requirements::VkExtension;
+    let mut desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
+    for robust in [
+        VkFeature::RobustBufferAccess,
+        VkFeature::RobustBufferAccess2,
+    ] {
+        desc.features.remove(&robust);
+    }
+    desc.features
+        .insert(VkFeature::VertexAttributeInstanceRateDivisor);
+    desc.extensions
+        .insert(VkExtension::KhrVertexAttributeDivisor);
+    desc.limits.max_vertex_attrib_divisor = 4;
+    desc.limits.supports_non_zero_first_instance = nonzero;
     Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"))
 }
 
@@ -319,6 +343,61 @@ fn from_queries_fetches_every_attribute_in_fixed_function() {
                 "{stem}"
             ),
             other => panic!("{stem}: {:?}", other.map(|_| "compiled")),
+        }
+    }
+}
+
+/// Under the identity domains with `vertexAttributeInstanceRateDivisor`, a layout stepped per
+/// instance at rate 2 is an instance-rate binding of divisor 2, both modules L3-valid, whether or
+/// not the device reports `supportsNonZeroFirstInstance` (the consumer refuses a draw at a base
+/// instance other than 0 where it does not); at rate 5, past the `maxVertexAttribDivisor` of 4, it
+/// is refused naming the limit.
+#[test]
+fn from_queries_divides_an_instance_step_where_the_divisor_feature_is_enabled() {
+    let Some(library) = ima_library() else {
+        return;
+    };
+    let stepped = |rate| {
+        let mut d = ima_descriptor(&library);
+        let layouts = &mut d.vertex_descriptor.as_mut().expect("the layouts").layouts;
+        let layout = layouts.get_mut(&1).expect("layout 1");
+        layout.step_function = VertexStepFunction::PerInstance;
+        layout.step_rate = rate;
+        d
+    };
+    for stem in PROFILES {
+        for nonzero in [false, true] {
+            let device = divisor_device(stem, nonzero);
+            let p = (device.compile_render_pipeline(&stepped(2), &Budget::standard()))
+                .unwrap_or_else(|e| panic!("{stem} {nonzero}: {e:?}"));
+            let marks = (p.vertex_input.bindings.iter())
+                .find(|binding| binding.buffer_index == 1)
+                .expect("the marks' binding");
+            assert_eq!(
+                (marks.input_rate, marks.divisor),
+                (vk::VertexInputRate::INSTANCE, 2),
+                "{stem} {nonzero}"
+            );
+            assert!(p.vertex_input.pulled.is_empty(), "{stem}: nothing pulled");
+            for stage in &p.stages {
+                check_words_valid(&stage.spirv, &p.requirements, device.profile())
+                    .unwrap_or_else(|e| panic!("{stem} {nonzero}: {:?}: {e}", stage.stage));
+            }
+            match device.compile_render_pipeline(&stepped(5), &Budget::standard()) {
+                Err(Error::Unsupported(u)) => assert_eq!(
+                    (u.feature, u.needs),
+                    (
+                        Feature::VertexStepRate,
+                        Needs::AnyOf(vec![vec![Capability::Limit {
+                            limit: crate::device::requirements::VkLimit::MaxVertexAttribDivisor,
+                            required: 5,
+                            available: 4,
+                        }]])
+                    ),
+                    "{stem} {nonzero}"
+                ),
+                other => panic!("{stem} {nonzero}: {:?}", other.map(|_| "compiled")),
+            }
         }
     }
 }

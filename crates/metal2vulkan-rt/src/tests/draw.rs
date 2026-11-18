@@ -724,19 +724,19 @@ mod on_device {
         d
     }
 
-    /// Instances 1 and 2 of `state`'s triangle ([`marked`]), drawn from vertex 1 at base
-    /// instance 1 over the marks `0xA0` to `0xA3`: each texel's four words, and the instance whose
-    /// triangle covers it last, 1 in the target's upper half and 2 in its lower.
+    /// Two instances of `state`'s triangle ([`marked`]), drawn from vertex 1 at `base_instance`
+    /// over the marks `0xA0` to `0xA3`: each texel's four words, or the draw's error.
     fn two_instances(
         name: &str,
         device: &Device,
         state: &RenderPipelineState,
-    ) -> Vec<([u32; 4], u32)> {
+        base_instance: u32,
+    ) -> Result<Vec<[u32; 4]>, Error> {
         // `ima_vertex` maps pixel positions to clip space by the frame's width and height and
         // moves instance `iid` down `iid` rows of the frame's row stride, 4. Vertices 1 to 3 are a
         // triangle twice the target's side, starting 4 rows above it: instance 1 covers the whole
-        // target and instance 2 its lower half, and no pixel centre lies on an edge. Vertex 0 is
-        // not drawn.
+        // target, instance 2 its lower half and instance 0 less than all of it, and no pixel
+        // centre lies on an edge. Vertex 0 is not drawn.
         let side = SIDE as f32;
         let positions = floats(&[
             side,
@@ -766,19 +766,24 @@ mod on_device {
         draw(encoder.set_vertex_buffer(Some(&xy), 0, 0));
         draw(encoder.set_vertex_buffer(Some(&mark), 0, 1));
         draw(encoder.set_vertex_bytes(&frame, 2));
-        draw(encoder.draw_primitives(PrimitiveType::Triangle, 1, 3, 2, 1));
+        let drawn = encoder.draw_primitives(PrimitiveType::Triangle, 1, 3, 2, base_instance);
         encoder.end_encoding();
         run(name, &command_buffer);
-        (read(&color, 16).chunks(16).enumerate())
-            .map(|(at, texel)| {
-                let word = |i: usize| u32::from_le_bytes([0, 1, 2, 3].map(|b| texel[4 * i + b]));
-                let instance = match at / SIDE as usize {
-                    0..4 => 1,
-                    _ => 2,
-                };
-                ([word(0), word(1), word(2), word(3)], instance)
+        drawn?;
+        Ok((read(&color, 16).chunks(16))
+            .map(|texel| {
+                [0, 1, 2, 3].map(|i| u32::from_le_bytes([0, 1, 2, 3].map(|b| texel[4 * i + b])))
             })
-            .collect()
+            .collect())
+    }
+
+    /// The instance whose triangle covers texel `at` last when instances 1 and 2 are drawn
+    /// ([`two_instances`] at base instance 1): 1 in the target's upper half, 2 in its lower.
+    fn upper_or_lower(at: usize) -> u32 {
+        match at / SIDE as usize {
+            0..4 => 1,
+            _ => 2,
+        }
     }
 
     /// Metal's constant step reads the layout's first element for every vertex and instance: a
@@ -797,8 +802,14 @@ mod on_device {
         let d = marked(&library, VertexStepFunction::Constant, 0);
         each_device("draw_constant_step", |name, _, device| {
             let state = state(name, &device, &d);
-            for (at, (words, instance)) in two_instances(name, &device, &state).iter().enumerate() {
-                assert_eq!(*words, [0xA0, 1, *instance, 1], "{name}: texel {at}");
+            let texels = two_instances(name, &device, &state, 1)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            for (at, words) in texels.iter().enumerate() {
+                assert_eq!(
+                    *words,
+                    [0xA0, 1, upper_or_lower(at), 1],
+                    "{name}: texel {at}"
+                );
             }
             println!("{name}: the first mark at every vertex of instances 1 and 2");
         });
@@ -806,11 +817,17 @@ mod on_device {
 
     /// Metal's per-instance step at rate 2 fetches one element for every two instances, counted
     /// from the draw's base instance (the conformance case `vertex-step-rate-instances`): a
-    /// binding's divisor where the device has the step rates (Floor, Step rates) and reports
-    /// `supportsNonZeroFirstInstance`. Instances 1 and 2 drawn from base instance 1 both read the
-    /// second mark: without the divisor the lower half would read the third, and a division of the
-    /// instance index from 0 would give the upper half the first. Elsewhere the state is the
-    /// translator's refusal (`VertexStepRate`).
+    /// binding's divisor where the device has the step rates (Floor, Step rates).
+    ///
+    /// - From base instance 0, instances 0 and 1 both read the first mark; instance 1 covers the
+    ///   target, so every texel holds it. A binding without the divisor would read the second.
+    /// - From base instance 1, where the device reports `supportsNonZeroFirstInstance`, instances
+    ///   1 and 2 both read the second mark: without the divisor the lower half would read the
+    ///   third, and a division of the instance index from 0 would give the upper half the first.
+    ///   Where the device does not, that draw is refused (`DrawKind::DividedBaseInstance`) and
+    ///   records nothing.
+    ///
+    /// Without the step rates the state is the translator's refusal (`VertexStepRate`).
     #[test]
     fn every_device_with_the_step_rates_fetches_per_instance_at_rate_2_from_the_base_instance() {
         let Some(library) = library(&engine_dir().join("icb_merged_attributes.ll")) else {
@@ -821,23 +838,43 @@ mod on_device {
             let core = device.core();
             let profile = core.translator.profile();
             let divides = profile.fragment().vertex_attribute_divisor
-                && profile.limits().supports_non_zero_first_instance
                 && profile.limits().max_vertex_attrib_divisor >= 2;
-            match device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers) {
-                Ok(state) => {
-                    assert!(divides, "{name}: a step rate of 2 made a state");
-                    for (at, (words, instance)) in
-                        two_instances(name, &device, &state).iter().enumerate()
-                    {
-                        assert_eq!(*words, [0xA1, 1, *instance, 1], "{name}: texel {at}");
-                    }
-                    println!("{name}: the second mark at instances 1 and 2, at rate 2 from base instance 1");
-                }
+            let nonzero = profile.limits().supports_non_zero_first_instance;
+            let state = match device
+                .new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers)
+            {
+                Ok(state) => state,
                 Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) if !divides => {
                     assert_eq!(u.feature, Feature::VertexStepRate, "{name}: {u:?}");
                     println!("{name}: no step rates; a step rate of 2 refused");
+                    return;
                 }
                 Err(other) => panic!("{name}: {other}"),
+            };
+            assert!(divides, "{name}: a step rate of 2 made a state");
+            let from_zero = two_instances(name, &device, &state, 0)
+                .unwrap_or_else(|error| panic!("{name}: from base instance 0: {error}"));
+            for (at, words) in from_zero.iter().enumerate() {
+                assert_eq!(*words, [0xA0, 1, 1, 1], "{name}: from 0: texel {at}");
+            }
+            match two_instances(name, &device, &state, 1) {
+                Ok(texels) => {
+                    assert!(nonzero, "{name}: a base instance of 1 drew");
+                    for (at, words) in texels.iter().enumerate() {
+                        assert_eq!(
+                            *words,
+                            [0xA1, 1, upper_or_lower(at), 1],
+                            "{name}: from 1: texel {at}"
+                        );
+                    }
+                    println!("{name}: at rate 2, the first mark from base instance 0 and the second from 1");
+                }
+                Err(Error::Unsupported(Gap::Draw {
+                    kind: DrawKind::DividedBaseInstance,
+                })) if !nonzero => {
+                    println!("{name}: at rate 2, the first mark from base instance 0; base instance 1 refused");
+                }
+                Err(other) => panic!("{name}: from base instance 1: {other}"),
             }
         });
     }

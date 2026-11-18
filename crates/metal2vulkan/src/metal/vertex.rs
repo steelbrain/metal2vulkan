@@ -223,7 +223,9 @@ pub enum AttributeFetch {
 /// `VUID-vkCmdBindVertexBuffers2-pStrides-06209` names 0 as a stride a bind may set), where link
 /// refuses it as `Feature::VertexInputLayout`. What fixed-function input cannot take is refused by
 /// what it needs: a per-instance rate above 1 ([`Feature::VertexStepRate`], with the missing
-/// `vertexAttributeInstanceRateDivisor` feature or the `maxVertexAttribDivisor` limit), a format
+/// `vertexAttributeInstanceRateDivisor` feature or the `maxVertexAttribDivisor` limit; a device
+/// that lacks only `supportsNonZeroFirstInstance` takes the divisor, and the consumer refuses a
+/// draw through it at a base instance other than 0), a format
 /// the profile cannot fetch as `VERTEX_BUFFER` ([`Feature::Format`], with that format usage), and
 /// `FloatRGB9E5`, whose fixed-function fetch a conformant device's answer differs from
 /// (`Feature::Format`, not implemented).
@@ -261,11 +263,14 @@ pub(crate) fn fetch_as(
                 }))
             }
             1 => (vk::VertexInputRate::INSTANCE, 1),
-            // A Metal draw may have a nonzero base instance, so a divisor is usable only where
-            // `firstInstance` may then be nonzero (VUID-vkCmdDraw-pNext-09461).
+            // A Metal draw may have a nonzero base instance, and a divisor other than 1 takes a
+            // nonzero `firstInstance` only where the device reports `supportsNonZeroFirstInstance`
+            // (VUID-vkCmdDraw-pNext-09461). Elsewhere the step is pulled, or, under the identity
+            // domains, a divisor still: the consumer refuses each draw through it at a base
+            // instance other than 0.
             n if f.fragment.vertex_attribute_divisor
-                && f.limits.supports_non_zero_first_instance
-                && n <= f.limits.max_vertex_attrib_divisor =>
+                && n <= f.limits.max_vertex_attrib_divisor
+                && (identity || f.limits.supports_non_zero_first_instance) =>
             {
                 (vk::VertexInputRate::INSTANCE, n)
             }
@@ -324,26 +329,20 @@ pub(crate) fn fetch_as(
 
 /// The refusal of Metal's per-instance step at rate `n` above 1 where fixed-function input cannot
 /// divide the instance index on `profile`. It names what the profile lacks:
-/// `vertexAttributeInstanceRateDivisor`, else the rate past `maxVertexAttribDivisor`; where it
-/// lacks neither, `supportsNonZeroFirstInstance`, which no capability names (a Metal draw may
-/// carry a base instance, and a divisor other than 1 needs a nonzero `firstInstance` to be legal,
-/// VUID-vkCmdDraw-pNext-09461).
+/// `vertexAttributeInstanceRateDivisor`, else the rate past `maxVertexAttribDivisor`. Only the
+/// identity domains read it: elsewhere the step is pulled, as it is where the profile lacks only
+/// `supportsNonZeroFirstInstance`, which the identity domains do not refuse.
 fn divided(profile: &DeviceProfile, n: u32) -> Unsupported {
     let f = profile.fields();
     let needs = match f.fragment.vertex_attribute_divisor {
-        false => Some(Capability::Feature(
-            VkFeature::VertexAttributeInstanceRateDivisor,
-        )),
-        true => (n > f.limits.max_vertex_attrib_divisor).then_some(Capability::Limit {
+        false => Capability::Feature(VkFeature::VertexAttributeInstanceRateDivisor),
+        true => Capability::Limit {
             limit: VkLimit::MaxVertexAttribDivisor,
             required: u64::from(n),
             available: u64::from(f.limits.max_vertex_attrib_divisor),
-        }),
+        },
     };
-    match needs {
-        Some(needs) => Unsupported::needs(Feature::VertexStepRate, needs),
-        None => Unsupported::not_implemented(Feature::VertexStepRate),
-    }
+    Unsupported::needs(Feature::VertexStepRate, needs)
 }
 
 /// Whether fixed-function input delivers an attribute of `vk_format` where the profile reports

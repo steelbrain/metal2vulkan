@@ -101,6 +101,9 @@ pub(crate) struct Draws {
     pub(crate) push_len: u32,
     /// Each push field: its offset, its function's tables, and its value.
     pub(crate) fields: Vec<(u32, usize, FieldValue)>,
+    /// Whether a draw must be at base instance 0: a binding has a divisor other than 1 and the
+    /// device does not report `supportsNonZeroFirstInstance` (VUID-vkCmdDraw-pNext-09461).
+    pub(crate) first_instance_zero: bool,
 }
 
 /// The state Vulkan 1.3 lets a draw set, which every render `VkPipeline` takes as dynamic.
@@ -269,7 +272,10 @@ fn draw_input() -> Error {
 /// what a draw does not supply: a function table, a table the binder builds, a parameter block,
 /// a push field or bind-time fact the encoder does not fill, or an unnormalized constexpr
 /// sampler.
-fn draws(pipeline: &RenderPipeline) -> Result<(Draws, Numbering), Error> {
+fn draws(
+    pipeline: &RenderPipeline,
+    nonzero_first_instance: bool,
+) -> Result<(Draws, Numbering), Error> {
     let translated = &pipeline.interface;
     if translated.needs_pointer_translation
         || translated.needs_handle_translation
@@ -399,6 +405,7 @@ fn draws(pipeline: &RenderPipeline) -> Result<(Draws, Numbering), Error> {
     let bindings = (pipeline.vertex_input.bindings.iter())
         .map(|binding| (binding.binding, binding.buffer_index))
         .collect();
+    let divided = (pipeline.vertex_input.bindings.iter()).any(|binding| binding.divisor != 1);
     let draws = Draws {
         buffers,
         textures,
@@ -408,6 +415,7 @@ fn draws(pipeline: &RenderPipeline) -> Result<(Draws, Numbering), Error> {
         writes_memory: translated.writes_memory,
         push_len,
         fields,
+        first_instance_zero: divided && !nonzero_first_instance,
     };
     Ok((draws, (numbered, constexprs)))
 }
@@ -590,7 +598,11 @@ impl RenderCompiled {
         if let Some(kind) = unbuilt(&pipeline, translator.profile().enabled()) {
             return Err(Error::Unsupported(Gap::RenderPipeline { kind }));
         }
-        let (draws, (numbered, constexprs)) = draws(&pipeline)?;
+        let nonzero_first_instance = translator
+            .profile()
+            .limits()
+            .supports_non_zero_first_instance;
+        let (draws, (numbered, constexprs)) = draws(&pipeline, nonzero_first_instance)?;
         let samples = descriptor.raster_sample_count;
         let mut stages = Vec::new();
         let mut notes = Vec::new();

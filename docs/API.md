@@ -1181,7 +1181,9 @@ A `RenderPipeline` holds:
   into a variable declared `int`, the constant step at vertex rate on a binding of stride 0 (no
   divisor); an attribute fixed-function input cannot take is refused,
   `Unsupported{VertexStepRate}` (a per-instance rate above 1, naming the missing
-  `vertexAttributeInstanceRateDivisor` or the `maxVertexAttribDivisor` it passes),
+  `vertexAttributeInstanceRateDivisor` or the `maxVertexAttribDivisor` it passes; a device that
+  lacks only `supportsNonZeroFirstInstance` takes the divisor, and the consumer refuses each draw
+  through it at a base instance other than 0),
   `Unsupported{Format}` (a format the device cannot fetch as `VERTEX_BUFFER`,
   and `FloatRGB9E5`) or `Unsupported{VertexInputLayout}` (an offset or stride off the format's
   alignment or past the device's limits, more attributes or layouts than its limits, or the
