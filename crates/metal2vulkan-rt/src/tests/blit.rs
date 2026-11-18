@@ -1499,6 +1499,20 @@ mod on_device {
             drop(start);
             let managed = (device.new_managed_buffer(block, 256, 64, 64))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // Made before the first command buffer, whose upload moves it home.
+            device
+                .grant_indices(IndexClass::Texture, 4096, 1)
+                .expect("a grant");
+            let usage = TextureUsage::SHADER_READ;
+            let texture = texture(
+                &device,
+                TextureType::Type2D,
+                PixelFormat::R8Unorm,
+                [4, 4, 1],
+                usage,
+                4096,
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
             let queue = device.new_command_queue(4).expect("a queue");
             let counters = device.counters();
 
@@ -1555,19 +1569,6 @@ mod on_device {
             );
 
             // A synchronize of a texture without named bytes records nothing.
-            device
-                .grant_indices(IndexClass::Texture, 4096, 1)
-                .expect("a grant");
-            let usage = TextureUsage::SHADER_READ;
-            let texture = texture(
-                &device,
-                TextureType::Type2D,
-                PixelFormat::R8Unorm,
-                [4, 4, 1],
-                usage,
-                4096,
-            )
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
             let metrics = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
