@@ -2076,6 +2076,8 @@ engine/ob3_texture_array.air.ll	ob3_texture_array	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/ob3_texture_array.ll	ob3_texture_array	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/ob3_vertex_input.air.ll	ob3_vertex_input	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}
 engine/ob3_vertex_input.ll	ob3_vertex_input	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}	ok	Unsupported{StageStoresAndAtomics; AnyOf[[Feature(VertexPipelineStoresAndAtomics)]]}
+engine/oor_texture_reads.air.ll	oor_texture_reads	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/oor_texture_reads.ll	oor_texture_reads	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/overlapping_slots.air.ll	overlapping_slots	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
 engine/overlapping_slots.ll	overlapping_slots	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}	ok	NeedsInput{StorageTextureFormat { slot: SlotRef { stage: Kernel, class: Texture, index: 1 } }}
 engine/pad_simd_shape.air.ll	simd_shape	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
