@@ -287,7 +287,18 @@ after a quiesce.
   than the pool's 16 MiB allocations allocates on the calling thread and pays it there: in one
   consumer's replay stream on the 3090, six Shared takes of 547 MiB took about 70 ms each, and its
   Shared takes past 16 MiB took 1.46 s of the stream's 210 s. The pool keeps no memory to avoid
-  it; `Metrics::consumer_allocation_nanos` counts it.
+  it; `Metrics::consumer_allocation_nanos` counts it. On the 3090 (driver 620.70.06, rt at
+  140714ceae), 64 MiB of rt's Shared memory type costs about 12.5 ms in `vkAllocateMemory`, with
+  or without a device address, and 2.75 ms more for rt to zero it through its mapping. The old
+  runtime imports host pages it mapped itself instead: about 5.8 ms for 64 MiB, 5.4 ms of it the
+  import. Importing fresh pages by host pointer takes 0.35 to 0.54 times as long as allocating
+  them, from 16 to 256 MiB on both cards. No host-visible type outside the card's 246 MiB
+  device-local heap is cheaper, and a Shared allocation is the driver's own memory on every
+  device, so the import is not open to it. In another consumer's replay stream on the 2080 (the
+  same driver, rt at c810d2a3df), the first 1138 frames make 304 Shared takes of 9.5 GiB, whose
+  allocations took 0.90 to 0.93 s in two plays, under 1% of the play. On three loading frames of
+  1.3 to 3.6 s they are 6 to 8.3% of the frame (at most 301 ms of 3.64 s); in the play that
+  listed every frame, they are at most 1.7% of any other.
 - On a full discrete card a Private block the consumer takes goes to another memory type, host
   memory where the card has no other device-local type, and the kernels that read a Managed
   buffer's device copy placed there read it across the host link:
