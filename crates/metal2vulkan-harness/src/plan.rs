@@ -367,10 +367,81 @@ pub struct Dispatch {
     /// The functions its pipeline links as private functions (`linkedFunctions.privateFunctions`),
     /// by name in the plan's library, each made with `constants` as the kernel is.
     pub linked: Vec<String>,
+    /// The texture copies before the dispatch and its bindings, in order, in a blit encoder of
+    /// their own: the compute encoder before them ends there, so no binding before them reaches
+    /// the dispatch.
+    pub copies: Vec<TextureCopy>,
     /// The binding calls before the dispatch, in order.
     pub bindings: Vec<Binding>,
     /// The dispatch call.
     pub grid: Grid,
+}
+
+/// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:`
+/// `destinationSlice:destinationLevel:destinationOrigin:` between level 0 of two of the plan's
+/// textures (each has one level), a region one texel deep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureCopy {
+    /// The source texture, by index.
+    pub source: usize,
+    /// Its slice.
+    pub source_slice: u32,
+    /// The region's origin in it, x and y.
+    pub source_origin: [u32; 2],
+    /// The region's width and height.
+    pub size: [u32; 2],
+    /// The destination texture, by index.
+    pub destination: usize,
+    /// Its slice.
+    pub destination_slice: u32,
+    /// Where the region lands in it, x and y.
+    pub destination_origin: [u32; 2],
+}
+
+impl TextureCopy {
+    /// Why the copy is not one Metal takes between `textures`, if it is not: a texture the plan
+    /// lacks, two pixel formats (Metal's validation requires one), or a slice or region outside
+    /// either texture.
+    pub fn problem(&self, textures: &[TexturePlan]) -> Option<String> {
+        let sides = [
+            (self.source, self.source_slice, self.source_origin),
+            (
+                self.destination,
+                self.destination_slice,
+                self.destination_origin,
+            ),
+        ];
+        let mut formats = Vec::new();
+        for (texture, slice, origin) in sides {
+            let Some(made) = textures.get(texture) else {
+                return Some(format!("texture {texture} is not made before it"));
+            };
+            if slice >= made.array_length {
+                return Some(format!(
+                    "texture {texture} has {} slices, not slice {slice}",
+                    made.array_length
+                ));
+            }
+            let fits = |at: u32, size: u32, extent: u32| {
+                at.checked_add(size).is_some_and(|end| end <= extent)
+            };
+            if !(fits(origin[0], self.size[0], made.width)
+                && fits(origin[1], self.size[1], made.height))
+            {
+                return Some(format!(
+                    "the region at {origin:?} of {:?} is outside texture {texture}",
+                    self.size
+                ));
+            }
+            formats.push(made.pixel_format);
+        }
+        (formats[0] != formats[1]).then(|| {
+            format!(
+                "a copy from {:?} to {:?}: Metal copies between textures of one pixel format",
+                formats[0], formats[1]
+            )
+        })
+    }
 }
 
 /// A function constant's value, as `setConstantValue:type:atIndex:` takes it.
@@ -638,6 +709,11 @@ impl Plan {
         }
         let known = |buffer: usize| buffer < self.buffers.len();
         for (i, dispatch) in self.dispatches.iter().enumerate() {
+            for copy in &dispatch.copies {
+                if let Some(problem) = copy.problem(&self.textures) {
+                    return Err(format!("{name}: dispatch {i}'s texture copy: {problem}").into());
+                }
+            }
             for binding in &dispatch.bindings {
                 let (kind, at, count) = match binding {
                     Binding::Buffer { buffer, .. } => ("buffer", *buffer, self.buffers.len()),

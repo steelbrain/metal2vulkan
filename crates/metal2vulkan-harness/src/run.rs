@@ -522,7 +522,9 @@ impl<D: ComputeDevice> Harness<D> {
         Ok(command_buffer)
     }
 
-    /// The dispatches `range` of `plan` in a compute encoder of `command_buffer`, ended.
+    /// The dispatches `range` of `plan` in a compute encoder of `command_buffer`, ended. A
+    /// dispatch's texture copies end the compute encoder before them and go in a blit encoder;
+    /// a new compute encoder takes the dispatch.
     fn encode_pass(
         &self,
         command_buffer: &D::CommandBuffer,
@@ -530,10 +532,32 @@ impl<D: ComputeDevice> Harness<D> {
         made: &Made<D>,
         range: Range<usize>,
     ) -> Result<()> {
-        let mut encoder = command_buffer.compute_command_encoder()?;
+        let mut open: Option<D::ComputeCommandEncoder> = None;
         let mut current = None;
         let states = &made.state_of[range.clone()];
         for (dispatch, &state) in plan.dispatches[range].iter().zip(states) {
+            if !dispatch.copies.is_empty() {
+                if let Some(encoder) = open.take() {
+                    encoder.end_encoding()?;
+                }
+                current = None;
+                let mut blit = command_buffer.blit_command_encoder()?;
+                for copy in &dispatch.copies {
+                    let texture = |at: usize| {
+                        (made.textures.get(at)).ok_or("a texture the plan names is unmade")
+                    };
+                    blit.copy_from_texture(
+                        copy,
+                        texture(copy.source)?,
+                        texture(copy.destination)?,
+                    )?;
+                }
+                blit.end_encoding()?;
+            }
+            let encoder = match open {
+                Some(ref mut encoder) => encoder,
+                None => open.insert(command_buffer.compute_command_encoder()?),
+            };
             if current != Some(state) {
                 encoder.set_compute_pipeline_state(&made.states[state])?;
                 current = Some(state);
@@ -570,7 +594,10 @@ impl<D: ComputeDevice> Harness<D> {
                 }
             }
         }
-        encoder.end_encoding()
+        match open {
+            Some(encoder) => encoder.end_encoding(),
+            None => Ok(()),
+        }
     }
 
     /// Every buffer's starting contents: a `Shared` one's written through `contents`, a

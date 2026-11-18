@@ -7,7 +7,7 @@ use crate::{Code, Result, Size, Storage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_runtime as runtime;
 use runtime::{
-    CommandBufferStatus, HeapDescriptor, HeapType, PipelineOptions, ResourceOptions,
+    CommandBufferStatus, HeapDescriptor, HeapType, Origin, PipelineOptions, ResourceOptions,
     TextureDescriptor,
 };
 use std::ptr::NonNull;
@@ -78,6 +78,7 @@ impl crate::ComputeDevice for runtime::Device {
     type CommandQueue = runtime::CommandQueue;
     type CommandBuffer = runtime::CommandBuffer;
     type ComputeCommandEncoder = runtime::ComputeCommandEncoder;
+    type BlitCommandEncoder = runtime::BlitCommandEncoder;
     type Texture = Texture;
     type SamplerState = runtime::SamplerState;
 
@@ -239,6 +240,10 @@ impl crate::CommandBuffer<runtime::Device> for runtime::CommandBuffer {
         Ok(runtime::CommandBuffer::compute_command_encoder(self)?)
     }
 
+    fn blit_command_encoder(&self) -> Result<runtime::BlitCommandEncoder> {
+        Ok(runtime::CommandBuffer::blit_command_encoder(self)?)
+    }
+
     fn commit(&self) -> Result<()> {
         Ok(runtime::CommandBuffer::commit(self)?)
     }
@@ -266,6 +271,33 @@ impl crate::CommandBuffer<runtime::Device> for runtime::CommandBuffer {
             self,
             Box::new(move |_| handler()),
         )?)
+    }
+}
+
+impl crate::BlitCommandEncoder<runtime::Device> for runtime::BlitCommandEncoder {
+    fn copy_from_texture(
+        &mut self,
+        copy: &plan::TextureCopy,
+        source: &Texture,
+        destination: &Texture,
+    ) -> Result<()> {
+        let origin = |[x, y]: [u32; 2]| Origin::new(x.into(), y.into(), 0);
+        let [width, height] = copy.size;
+        Ok(self.copy_from_texture_to_texture(
+            &source.texture,
+            copy.source_slice.into(),
+            0,
+            origin(copy.source_origin),
+            runtime::Size::new(width.into(), height.into(), 1),
+            &destination.texture,
+            copy.destination_slice.into(),
+            0,
+            origin(copy.destination_origin),
+        )?)
+    }
+
+    fn end_encoding(self) -> Result<()> {
+        Ok(runtime::BlitCommandEncoder::end_encoding(self)?)
     }
 }
 

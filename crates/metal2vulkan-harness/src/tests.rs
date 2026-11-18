@@ -92,6 +92,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
             modified: None,
         }],
         dispatches: vec![Dispatch {
+            copies: Vec::new(),
             function: "copy_words".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -515,6 +516,45 @@ fn refusal(body: &str) -> String {
 #[test]
 fn a_faulty_description_is_refused_naming_its_line() {
     let dispatch = "set-buffer 0 0\ndispatch k threadgroups 1 1 1 16 1 1";
+    // Two RGBA8Unorm textures and an R32Uint one, after the workload's first two lines.
+    let textures = "texture 2 70 8 8 1 1 shared plain zero\n\
+                    texture 3 70 8 8 2 1 shared plain zero\n\
+                    texture 2 53 8 8 1 1 shared plain zero\n";
+    let copy = |line: &str| refusal(&format!("{textures}{line}\n{dispatch}"));
+    assert_eq!(
+        copy("copy-texture 0 0 0 0 4 4 3 0 0 0"),
+        "line 6: texture 3 is not made before it"
+    );
+    assert_eq!(
+        copy("copy-texture 0 0 0 0 4 4 1 2 0 0"),
+        "line 6: texture 1 has 2 slices, not slice 2"
+    );
+    assert_eq!(
+        copy("copy-texture 0 0 6 0 4 4 1 0 0 0"),
+        "line 6: the region at [6, 0] of [4, 4] is outside texture 0"
+    );
+    assert_eq!(
+        copy("copy-texture 0 0 0 0 4 4 2 0 0 0"),
+        "line 6: a copy from RGBA8Unorm to R32Uint: Metal copies between textures of one pixel \
+         format"
+    );
+    assert_eq!(
+        copy("copy-texture 0 0 0 0 4 4 1"),
+        "line 6: copy-texture takes SOURCE SLICE X Y WIDTH HEIGHT DESTINATION SLICE X Y"
+    );
+    assert_eq!(
+        refusal(&format!(
+            "{textures}set-buffer 0 0\ncopy-texture 0 0 0 0 4 4 1 1 0 0\n{dispatch}"
+        )),
+        "line 7: a texture copy ends the compute encoder, so it goes before the set lines of its \
+         dispatch"
+    );
+    assert_eq!(
+        refusal(&format!(
+            "{textures}{dispatch}\ncopy-texture 0 0 0 0 4 4 1 1 0 0"
+        )),
+        "workload w copies a texture after its last dispatch"
+    );
     assert_eq!(
         refused("buffer 16 private zero"),
         "line 1: buffer before a workload"

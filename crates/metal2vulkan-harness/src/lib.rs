@@ -3,7 +3,8 @@
 //! reference before any time is reported. It is a regression gate between the runtimes, not a
 //! measure against native Metal.
 //!
-//! The traits below are the Metal compute subset the workloads call, one method per Metal call.
+//! The traits below are the Metal compute subset the workloads call, one method per Metal call,
+//! with the blit encoder's texture copy.
 //! A runtime implements them once: the old runtime in [`old`], which the cutover deletes with its
 //! file, and the new runtime in [`rt`]. A workload a runtime answers with a typed refusal (a
 //! known gap or a device limit, [`Refused`]) is reported by name as refused, not as a failure.
@@ -232,6 +233,8 @@ pub trait ComputeDevice: Device {
     type CommandBuffer: CommandBuffer<Self>;
     /// `MTLComputeCommandEncoder`.
     type ComputeCommandEncoder: ComputeCommandEncoder<Self>;
+    /// `MTLBlitCommandEncoder`.
+    type BlitCommandEncoder: BlitCommandEncoder<Self>;
     /// `MTLTexture`.
     type Texture: Texture;
     /// `MTLSamplerState`.
@@ -298,6 +301,9 @@ pub trait CommandBuffer<D: ComputeDevice> {
     /// `computeCommandEncoder`: a serial compute encoder.
     fn compute_command_encoder(&self) -> Result<D::ComputeCommandEncoder>;
 
+    /// `blitCommandEncoder`.
+    fn blit_command_encoder(&self) -> Result<D::BlitCommandEncoder>;
+
     /// `commit`.
     fn commit(&self) -> Result<()>;
 
@@ -313,6 +319,22 @@ pub trait CommandBuffer<D: ComputeDevice> {
 
     /// `addCompletedHandler:`, with a handler that reads nothing of the command buffer.
     fn add_completed_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()>;
+}
+
+/// `MTLBlitCommandEncoder`.
+pub trait BlitCommandEncoder<D: ComputeDevice> {
+    /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:`
+    /// `destinationSlice:destinationLevel:destinationOrigin:` of `copy`, from `source` to
+    /// `destination`, the textures it names.
+    fn copy_from_texture(
+        &mut self,
+        copy: &plan::TextureCopy,
+        source: &D::Texture,
+        destination: &D::Texture,
+    ) -> Result<()>;
+
+    /// `endEncoding`.
+    fn end_encoding(self) -> Result<()>;
 }
 
 /// `MTLComputeCommandEncoder`.

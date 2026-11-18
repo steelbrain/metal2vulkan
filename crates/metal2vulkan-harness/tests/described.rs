@@ -16,8 +16,8 @@ use metal2vulkan_harness::{authored, description, old, rt};
 
 /// The description: each fill, both storage modes, a binding at an offset, bindings that stay
 /// set for the dispatches after, both dispatch calls, `repeat`, both comparisons, a threadgroup
-/// memory length, textures of each source with their bytes written by the CPU, and a sampler
-/// state.
+/// memory length, textures of each source with their bytes written by the CPU, a sampler
+/// state, and a texture copy from a slice of an array into a 2D texture.
 const DESCRIPTION: &str = "\
 # Synthetic workloads over the authored kernels.
 workload scale kernels.metallib
@@ -102,6 +102,17 @@ set-texture 0 1
 set-buffer 0 0
 set-bytes 1 4 hex 10000000   # its width, 16
 dispatch texels_out threadgroups 1 1 1 16 16 1
+check 0 exact
+
+workload copied kernels.metallib
+texture 3 70 32 16 2 1 shared plain words 23   # RGBA8Unorm, a 2D array of 2
+texture 2 70 32 16 1 1 shared plain words 17
+buffer 8192 shared zero
+copy-texture 0 1 4 2 8 6 1 0 20 9   # 8x6 texels at (4, 2) of slice 1 to (20, 9)
+set-texture 0 1
+set-buffer 0 0
+set-bytes 1 4 hex 20000000
+dispatch texels_out threadgroups 2 1 1 16 16 1
 check 0 exact
 ";
 
@@ -204,6 +215,32 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             }
             texels = Some(first.outputs[0].clone());
         }
+        if plan.name == "copied" {
+            // The 2D texture's bytes, with the region of the array's slice 1 copied over them.
+            let words = |seed, count| -> Vec<u8> {
+                (seeded_words(seed, count).iter())
+                    .flat_map(|word| word.to_le_bytes())
+                    .collect()
+            };
+            let (array, mut bytes) = (words(23, 1024), words(17, 512));
+            let row = 32 * 4;
+            for y in 0..6 {
+                let from = 2048 + (2 + y) * row + 4 * 4;
+                let to = (9 + y) * row + 20 * 4;
+                bytes[to..to + 8 * 4].copy_from_slice(&array[from..from + 8 * 4]);
+            }
+            let got: Vec<f32> = (first.outputs[0].as_chunks::<4>().0.iter())
+                .map(|word| f32::from_le_bytes(*word))
+                .collect();
+            assert_eq!(got.len(), bytes.len());
+            for (at, (&got, &byte)) in got.iter().zip(&bytes).enumerate() {
+                let want = f32::from(byte) / 255.0;
+                assert!(
+                    (got - want).abs() <= 1e-6,
+                    "copied: channel {at}: {got} for {want}"
+                );
+            }
+        }
         if plan.name == "heaped" || plan.name == "over" {
             // The same texels as the device's own texture of them, on the old runtime.
             assert_eq!(Some(&first.outputs[0]), texels.as_ref(), "{}", plan.name);
@@ -219,7 +256,7 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             assert_eq!(got, want);
         }
     }
-    assert_eq!(described.len(), 9);
+    assert_eq!(described.len(), 10);
 }
 
 /// The fixture's LLVM text `ll` with `kernel` its only entry point: every other kernel's

@@ -393,6 +393,7 @@ impl crate::ComputeDevice for Device {
     type CommandQueue = rt::CommandQueue;
     type CommandBuffer = rt::CommandBuffer;
     type ComputeCommandEncoder = rt::ComputeCommandEncoder;
+    type BlitCommandEncoder = rt::BlitCommandEncoder;
     type Texture = rt::Texture;
     type SamplerState = rt::SamplerState;
 
@@ -531,6 +532,10 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
         rt::CommandBuffer::compute_command_encoder(self, rt::DispatchType::Serial).map_err(error)
     }
 
+    fn blit_command_encoder(&self) -> Result<rt::BlitCommandEncoder> {
+        rt::CommandBuffer::blit_command_encoder(self).map_err(error)
+    }
+
     fn commit(&self) -> Result<()> {
         rt::CommandBuffer::commit(self).map_err(error)
     }
@@ -555,6 +560,36 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
 
     fn add_completed_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()> {
         rt::CommandBuffer::add_completed_handler(self, move |_| handler()).map_err(error)
+    }
+}
+
+impl crate::BlitCommandEncoder<Device> for rt::BlitCommandEncoder {
+    fn copy_from_texture(
+        &mut self,
+        copy: &plan::TextureCopy,
+        source: &rt::Texture,
+        destination: &rt::Texture,
+    ) -> Result<()> {
+        let place = |slice, [x, y]: [u32; 2]| rt::TexturePlace {
+            slice,
+            level: 0,
+            origin: [x, y, 0],
+        };
+        let [width, height] = copy.size;
+        rt::BlitCommandEncoder::copy_from_texture(
+            self,
+            source,
+            place(copy.source_slice, copy.source_origin),
+            [width, height, 1],
+            destination,
+            place(copy.destination_slice, copy.destination_origin),
+        )
+        .map_err(error)
+    }
+
+    fn end_encoding(self) -> Result<()> {
+        rt::BlitCommandEncoder::end_encoding(self);
+        Ok(())
     }
 }
 
