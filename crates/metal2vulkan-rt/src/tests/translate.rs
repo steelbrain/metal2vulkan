@@ -2092,10 +2092,11 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
     /// to `out[k]`, and after a barrier on device memory, for each of its `float4`s `j`, the
     /// `float4`'s sum to `out[params[0] + j]`. The kernel leaves no pair to lockstep, so no device
     /// runs it on emulated SIMD groups, whose arena keeps composed words: it masks `params[0]` to
-    /// 18 bits (every device's limit is fewer words), which bounds each loop's counter, so two
-    /// threads of one SIMD group never meet within a loop; and the barrier orders the two loops'
-    /// stores to `out`, which two such threads could make to one word (a loop runs once in a
-    /// thread past the region).
+    /// 18 bits (every device's limit is fewer words), which bounds each loop's counter, and each
+    /// loop indexes one pointer by its counter (the sums' is `out + params[0]`), so two threads of
+    /// one SIMD group never meet within a loop; and the barrier orders the two loops' stores to
+    /// `out`, which two such threads could make to one word (a loop runs once in a thread past
+    /// the region).
     const FLOAT_ARENA: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 
@@ -2134,6 +2135,7 @@ back:
 
 apart:
   tail call void @air.wg.barrier(i32 1, i32 1)
+  %sums = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %w
   br label %vectors
 
 vectors:
@@ -2149,8 +2151,7 @@ vectors:
   %yb = fadd float %y2, %y3
   %ys = fadd float %ya, %yb
   %yo = fptoui float %ys to i32
-  %at = add i32 %w, %j
-  %o4 = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %at
+  %o4 = getelementptr inbounds i32, ptr addrspace(1) %sums, i32 %j
   store i32 %yo, ptr addrspace(1) %o4, align 4
   %j2 = add i32 %j, 256
   %more3 = icmp ult i32 %j2, %w4
