@@ -82,10 +82,14 @@ threads-required = 'num-test-threads'
 
 # The runtime's isolation tests of command queues sharing `VkQueue`s run alone. Each holds a
 # compositor's 99th percentile of commit-to-completion latency under 5 ms, and its stalls over
-# 10 ms to at most one, beside an application's 30 ms command buffers: a bound of the GPU's time,
-# which other test processes' work on the same GPU spends too.
+# 10 ms to at most one, beside an application's 30 ms command buffers (and beside a queue waiting
+# on the GPU for them): a bound of the GPU's time, which other test processes' work on the same GPU
+# spends too. So does the held-head test, whose hold needs the long command buffer (about 30 ms of
+# GPU time as it measures it first) to have more than the hold's budget left when the next commits
+# come: other processes' work changes that time between its measure and its run. On the RTX 2080
+# the gpu-wait and held-head tests failed only beside the parallel suite, and pass alone.
 [[profile.default.overrides]]
-filter = 'package(metal2vulkan-runtime) & test(/^tests::queue_share_device::(a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long|an_unshared_compositor_beside_a_long_queue_never_stalls)$/)'
+filter = 'package(metal2vulkan-runtime) & test(/^tests::queue_share_device::(a_compositor_beside_a_long_queue_keeps_its_latency_once_that_queue_went_long|an_unshared_compositor_beside_a_long_queue_never_stalls|a_compositor_beside_a_queue_waiting_on_the_gpu_for_long_work_keeps_its_latency|an_unshared_head_behind_an_earlier_commit_of_the_held_queue_holds_nothing)$/)'
 threads-required = 'num-test-threads'
 
 # The runtime's GPU-start test of a command buffer's own long work runs alone. It holds the time
