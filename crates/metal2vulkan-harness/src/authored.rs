@@ -111,29 +111,53 @@ pub const WORKLOADS: [Workload; 22] = [
     },
 ];
 
-/// A creation workload: `Shared` buffers of one length made and released in turn, so that each
-/// takes the range the last one left (`Session::create`).
+/// A creation workload: objects of one kind made and released in turn (`Session::create`).
 #[derive(Clone, Copy, Debug)]
 pub struct Create {
     /// Its name in reports and in `--only`.
     pub name: &'static str,
-    /// Each buffer's length in bytes.
-    pub length: u64,
+    /// What it makes.
+    pub makes: Makes,
 }
 
+/// What a creation workload makes.
+#[derive(Clone, Copy, Debug)]
+pub enum Makes {
+    /// `Shared` buffers of `length` bytes, each taking the range the last one left.
+    Buffers { length: u64 },
+    /// Compute pipeline states of one content: `function` of the authored library with the
+    /// `float` function constants `constants` (index, value), values no other workload gives it,
+    /// so the first creation is of a content the device has not seen and each later one of a
+    /// content it has. [`STATE_CREATIONS`] are timed, whatever `--runs` says.
+    States {
+        function: &'static str,
+        constants: &'static [(u32, f32)],
+    },
+}
+
+/// The timed creations of a pipeline-state workload.
+pub const STATE_CREATIONS: u32 = 1000;
+
 /// The creation workloads.
-pub const CREATES: [Create; 3] = [
+pub const CREATES: [Create; 4] = [
     Create {
         name: "create_4KiB",
-        length: 4 << 10,
+        makes: Makes::Buffers { length: 4 << 10 },
     },
     Create {
         name: "create_1MiB",
-        length: 1 << 20,
+        makes: Makes::Buffers { length: 1 << 20 },
     },
     Create {
         name: "create_64MiB",
-        length: 64 << 20,
+        makes: Makes::Buffers { length: 64 << 20 },
+    },
+    Create {
+        name: "create_state",
+        makes: Makes::States {
+            function: "signed_zero_products",
+            constants: &[(0, 2.0), (1, -2.0)],
+        },
     },
 ];
 

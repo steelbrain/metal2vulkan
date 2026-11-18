@@ -6,7 +6,7 @@
 
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
-use crate::pipeline::PipelineInner;
+use crate::pipeline::Compiled;
 use crate::texture::Backing;
 use ash::vk;
 use std::collections::VecDeque;
@@ -23,7 +23,7 @@ struct State {
     /// The states whose emulated variant the reaper lowers, in order, after every job: no one waits
     /// for them, except for one an encoding call waits for, which goes first
     /// ([`Reaper::hurry`]).
-    lowerings: VecDeque<Weak<PipelineInner>>,
+    lowerings: VecDeque<Weak<Compiled>>,
     /// The reaper ends once the queue is empty, lowering nothing more.
     stop: bool,
 }
@@ -83,30 +83,30 @@ impl Reaper {
         self.changed.notify_one();
     }
 
-    /// Queues the lowering of `state`'s emulated variant. Once the reaper has ended, the variant
-    /// is not lowered.
-    pub(crate) fn lower(&self, state: Weak<PipelineInner>) {
+    /// Queues the lowering of the emulated variant of `compiled`, a compiled content. Once the
+    /// reaper has ended, the variant is not lowered.
+    pub(crate) fn lower(&self, compiled: Weak<Compiled>) {
         let mut queue = lock(&self.state);
         if queue.stop {
             drop(queue);
-            if let Some(state) = state.upgrade() {
-                state.quiesce_emulated();
+            if let Some(compiled) = compiled.upgrade() {
+                compiled.quiesce_emulated();
             }
             return;
         }
-        queue.lowerings.push_back(state);
+        queue.lowerings.push_back(compiled);
         drop(queue);
         self.changed.notify_one();
     }
 
-    /// Puts `state`'s lowering first, for an encoding call that waits for it; nothing where the
-    /// reaper took it already.
-    pub(crate) fn hurry(&self, state: &Arc<PipelineInner>) {
+    /// Puts the lowering of `compiled` first, for an encoding call that waits for it; nothing
+    /// where the reaper took it already.
+    pub(crate) fn hurry(&self, compiled: &Arc<Compiled>) {
         let mut queue = lock(&self.state);
         let lowerings = &mut queue.lowerings;
         if let Some(at) = lowerings
             .iter()
-            .position(|queued| std::ptr::eq(queued.as_ptr(), Arc::as_ptr(state)))
+            .position(|queued| std::ptr::eq(queued.as_ptr(), Arc::as_ptr(compiled)))
         {
             if let Some(hurried) = lowerings.remove(at) {
                 lowerings.push_front(hurried);
@@ -210,11 +210,11 @@ fn free(core: &Core, object: Free) {
 enum Next {
     Job(Job),
     /// Lower a state's emulated variant.
-    Lower(Weak<PipelineInner>),
+    Lower(Weak<Compiled>),
     /// Write the pipeline data.
     Save,
     /// End, after telling the states whose lowering is left that it will not run.
-    End(VecDeque<Weak<PipelineInner>>),
+    End(VecDeque<Weak<Compiled>>),
 }
 
 /// The reaper thread, until it is stopped and its queue is empty. The device's end writes the

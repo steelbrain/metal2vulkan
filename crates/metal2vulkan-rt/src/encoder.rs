@@ -543,7 +543,8 @@ impl ComputeCommandEncoder {
             .pipeline
             .clone()
             .ok_or(Error::Refused(Refusal::NoPipeline))?;
-        let inner = &pipeline.inner;
+        let state = &pipeline.inner;
+        let inner = &state.compiled;
         let max = inner.whole.interface.max_total_threads;
         let total = size.iter().map(|&axis| u64::from(axis)).product::<u64>();
         if total == 0 || total > u64::from(max) {
@@ -723,7 +724,7 @@ impl ComputeCommandEncoder {
                             });
                             self.fill_parameters(
                                 kernel,
-                                &inner.numbered.ids,
+                                &state.numbered.ids,
                                 &region(base, threads, ragged)?,
                             );
                             self.record(vk_pipeline, Launch::Direct(count))?;
@@ -733,7 +734,7 @@ impl ComputeCommandEncoder {
                 Ok(())
             }
             (None, Grid::Indirect(buffer, offset)) => {
-                self.fill_parameters(kernel, &inner.numbered.ids, &region([0; 3], [0; 3], false)?);
+                self.fill_parameters(kernel, &state.numbered.ids, &region([0; 3], [0; 3], false)?);
                 self.record(vk_pipeline, Launch::Indirect(buffer, offset))
             }
             (None, Grid::Direct { .. }) => Ok(()),

@@ -11,6 +11,7 @@ use crate::fill::Filler;
 use crate::floor;
 use crate::hazard::Ids;
 use crate::instance::{Instance, PhysicalDevice};
+use crate::kernel_map::KernelMap;
 use crate::memory::{
     self, Block, BlockId, BlockInfo, BlockMappings, Memory, MemoryClass, Pool, BLOCK_LEN,
 };
@@ -193,6 +194,8 @@ pub(crate) struct Core {
     pub(crate) translator: metal2vulkan::device::Device,
     /// The lowered kernels on disk and the `VkPipelineCache` every pipeline is made through.
     pub(crate) caches: Caches,
+    /// The compiled kernels by content, which every compute pipeline state of a content shares.
+    pub(crate) kernels: KernelMap,
     /// Quiesced or torn down: calls that need a thread are refused.
     closed: AtomicBool,
     /// [`RUNNING`], [`HALTING`], or the answer of the stop that ran.
@@ -464,6 +467,7 @@ impl Device {
             ids: Ids::new(),
             translator,
             caches,
+            kernels: KernelMap::new(),
             closed: AtomicBool::new(false),
             halt: AtomicU8::new(RUNNING),
         });
@@ -1049,6 +1053,9 @@ impl Drop for Shared {
         let teardown = move |core: &Arc<Core>| {
             halt(core, threads, None, false);
             drop(claims);
+            // The map's kernels hold the core: a kernel no state holds goes now, its modules and
+            // pipelines freed with the core.
+            core.kernels.clear(&core.counters);
         };
         if role(&self.core) == Role::Complete {
             // A handler or listener dropped the last handle: the reaper tears down, once the

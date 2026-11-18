@@ -15,7 +15,7 @@
 //! themselves. The command exits 0 when every workload matched or was refused, 1 when one did
 //! not match or failed, and 2 when it could not start.
 
-use metal2vulkan_harness::authored::Create;
+use metal2vulkan_harness::authored::{Create, Makes};
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
     percentile, run_each, steady, CreateReport, Harness, Report, Runs, Session, Warmup,
@@ -248,7 +248,7 @@ fn run_all(args: &Args) -> Result<bool> {
     for create in &creates {
         let reports = (sessions.iter_mut())
             .map(|(runtime, session)| {
-                (session.create(create.length, args.runs)).map_err(|why| -> Error {
+                (session.create(create.makes, args.runs)).map_err(|why| -> Error {
                     Box::new(Failed {
                         runtime: runtime.to_string(),
                         why,
@@ -346,17 +346,29 @@ fn gauges(gauges: &[(u32, Vec<(&'static str, u64)>)]) -> String {
 fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
     let us = |p| percentile(&report.create_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     println!(
-        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}",
+        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}{}",
         create.name,
-        create.length,
+        match create.makes {
+            Makes::Buffers { length } => length.to_string(),
+            Makes::States { .. } => "state".to_owned(),
+        },
         warmup(&report.warmup),
         us(10),
         us(50),
         us(90),
         time(&report.create_us),
         gauges(&report.gauges),
+        report
+            .first_us
+            .map_or(String::new(), |us| format!("; first {us:.1} us")),
     );
     matrix(runtime, create.name, &report.create_us, &report.gauges);
+    if let Some(us) = report.first_us {
+        println!(
+            "M2V-MATRIX time harness-{runtime}/{}/first {us:.3}",
+            create.name
+        );
+    }
 }
 
 /// `report`'s row, and its matrix lines.

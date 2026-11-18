@@ -700,7 +700,7 @@ mod on_device {
                 }
                 Err(error) => panic!("{name}: {error}"),
             };
-            let interface = &state.inner.whole.interface;
+            let interface = &state.inner.compiled.whole.interface;
             if pinnable {
                 assert_eq!(
                     (interface.required_subgroup_size, &interface.multiples[..]),
@@ -939,7 +939,7 @@ mod on_device {
         const GROUPS: u32 = 4;
         each_device("compute_row_lockstep", |name, _, device| {
             let state = state(name, &device, &descriptor);
-            let multiples = state.inner.whole.interface.multiples.clone();
+            let multiples = state.inner.compiled.whole.interface.multiples.clone();
             let queue = device.new_command_queue(4).expect("a queue");
             let mut on_emulated = Vec::new();
             for (width, rows) in [(16, 2), (32, 1), (12, 2)] {
@@ -1015,7 +1015,7 @@ mod on_device {
                 println!("{name}: the kernel is refused; nothing to mark");
                 return;
             };
-            let Some(emulated) = &state.inner.emulated else {
+            let Some(emulated) = &state.inner.compiled.emulated else {
                 println!("{name}: no emulated variant");
                 return;
             };

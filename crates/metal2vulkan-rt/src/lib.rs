@@ -24,6 +24,7 @@ mod fill;
 pub mod floor;
 mod hazard;
 mod instance;
+mod kernel_map;
 mod memory;
 mod pipeline;
 mod places;

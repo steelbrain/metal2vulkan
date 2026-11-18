@@ -40,6 +40,10 @@ pub(crate) enum Gauge {
     DescriptorSlots,
     /// [`Gauges::pipelines`].
     Pipelines,
+    /// [`Gauges::kernels`].
+    Kernels,
+    /// [`Gauges::kernel_entries`].
+    KernelEntries,
     /// [`Gauges::blocks`].
     Blocks,
     /// [`Gauges::command_buffers`].
@@ -81,6 +85,8 @@ struct Atomics {
     textures: AtomicU64,
     samplers: AtomicU64,
     pipelines: AtomicU64,
+    kernels: AtomicU64,
+    kernel_entries: AtomicU64,
     command_buffers: AtomicU64,
     descriptor_slots: AtomicU64,
     blocks: AtomicU64,
@@ -194,6 +200,8 @@ impl Counters {
             Gauge::Samplers => &a.samplers,
             Gauge::DescriptorSlots => &a.descriptor_slots,
             Gauge::Pipelines => &a.pipelines,
+            Gauge::Kernels => &a.kernels,
+            Gauge::KernelEntries => &a.kernel_entries,
             Gauge::Blocks => &a.blocks,
             Gauge::CommandBuffers => &a.command_buffers,
             Gauge::Events => &a.events,
@@ -230,6 +238,8 @@ impl Counters {
             textures: a.textures.load(Relaxed),
             samplers: a.samplers.load(Relaxed),
             pipelines: a.pipelines.load(Relaxed),
+            kernels: a.kernels.load(Relaxed),
+            kernel_entries: a.kernel_entries.load(Relaxed),
             command_buffers: a.command_buffers.load(Relaxed),
             descriptor_slots: a.descriptor_slots.load(Relaxed),
             blocks: a.blocks.load(Relaxed),
@@ -262,7 +272,8 @@ pub struct Metrics {
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
-    /// for a threadgroup size or threadgroup memory lengths the state had not run with before.
+    /// for a threadgroup size or threadgroup memory lengths no state of the kernel's content had
+    /// run with before.
     pub first_use_waits: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) the first-use waits took, in total.
     pub first_use_wait_nanos: u64,
@@ -272,8 +283,9 @@ pub struct Metrics {
     /// `VkDeviceMemory` allocations made: pooled blocks (the texture blocks among them) and
     /// dedicated ones, the zero source and the parameter ring's blocks.
     pub blocks_made: u64,
-    /// Kernels the translator lowered, each a pipeline state's module: one for a kernel that does
-    /// not observe its threadgroup partition, two for one that does.
+    /// Kernels the translator lowered, each a module of a compute pipeline content the device did
+    /// not hold compiled: one for a kernel that does not observe its threadgroup partition, two
+    /// for one that does. A state of a content the device holds lowers nothing.
     pub translations: u64,
     /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
     pub translations_loaded: u64,
@@ -298,6 +310,14 @@ pub struct Gauges {
     pub samplers: u64,
     /// `VkPipeline`s.
     pub pipelines: u64,
+    /// Compiled kernels: each the translation of one compute pipeline content (its descriptor's
+    /// kernel, constant values, linked functions and compile fields), with its shader modules and
+    /// their `VkPipeline`s, shared by every state of that content. One lives while a state or
+    /// the device's map of kernels holds it.
+    pub kernels: u64,
+    /// Entries of the device's map of compiled kernels by content, which holds at most 1,024 and
+    /// forgets the least recently used past them.
+    pub kernel_entries: u64,
     /// Command buffers not yet retired.
     pub command_buffers: u64,
     /// Occupied indices of set 1's arrays: one for each texture made at an index and each sampler

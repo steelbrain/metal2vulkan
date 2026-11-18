@@ -1,5 +1,6 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
+use crate::authored::{Makes, STATE_CREATIONS};
 use crate::plan::{
     Binding, Blit, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
 };
@@ -216,10 +217,12 @@ pub trait Session {
     /// `plan`'s first run, checked against its expectations and its outputs kept, then `runs`.
     fn run(&mut self, plan: &Plan, runs: Runs) -> Result<Report>;
 
-    /// `Shared` buffers of `length` bytes made and released in turn, so each takes the range the
-    /// last one left: one checked whole, then `runs`. Each one is checked to start zero (every
-    /// 4 KiB), then written all over before its release.
-    fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport>;
+    /// The objects `makes` says, made and released in turn. `Shared` buffers of a length, so each
+    /// takes the range the last one left: one checked whole, then `runs`, each checked to start
+    /// zero (every 4 KiB), then written all over before its release. Compute pipeline states of
+    /// one content: the first, of a content the device has not seen, timed apart, then `runs`'
+    /// warm-up and [`STATE_CREATIONS`](crate::authored::STATE_CREATIONS) timed ones.
+    fn create(&mut self, makes: Makes, runs: Runs) -> Result<CreateReport>;
 
     /// Drops the session, its device last; the device's gauges after that, where the runtime's
     /// gauges outlive the device.
@@ -322,11 +325,14 @@ fn run_scaled(
     Ok(report)
 }
 
-/// What the timed creations of buffers measured.
+/// What the timed creations measured.
 #[derive(Clone, Debug, Default)]
 pub struct CreateReport {
-    /// Each timed `newBufferWithLength:options:` call's wall time, in microseconds.
+    /// Each timed creation call's wall time, in microseconds.
     pub create_us: Vec<f64>,
+    /// The first creation's wall time, in microseconds, where it is timed apart: a pipeline
+    /// state's of a content the device had not seen.
+    pub first_us: Option<f64>,
     /// The device's gauges after the 100th and the 200th timed creation, where there were that
     /// many.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
@@ -844,8 +850,14 @@ impl<D: ComputeDevice> Session for Harness<D> {
         Ok(report)
     }
 
-    fn create(&mut self, length: u64, runs: Runs) -> Result<CreateReport> {
-        create(&self.device, length, runs)
+    fn create(&mut self, makes: Makes, runs: Runs) -> Result<CreateReport> {
+        match makes {
+            Makes::Buffers { length } => create(&self.device, length, runs),
+            Makes::States {
+                function,
+                constants,
+            } => self.create_states(function, constants, runs),
+        }
     }
 
     fn finish(self: Box<Self>) -> Option<Vec<(&'static str, u64)>> {
@@ -889,7 +901,48 @@ pub(crate) fn parts(range: Range<usize>, per: Option<usize>) -> impl Iterator<It
         .map(move |start| start..(start + per).min(end))
 }
 
-/// [`Session::create`] on `device`.
+impl<D: ComputeDevice> Harness<D> {
+    /// [`Session::create`] of pipeline states of `function` with the `float` constants
+    /// `constants`: each made, timed, and released.
+    fn create_states(
+        &self,
+        function: &str,
+        constants: &[(u32, f32)],
+        runs: Runs,
+    ) -> Result<CreateReport> {
+        let constants: Vec<Constant> = (constants.iter())
+            .map(|&(index, value)| Constant {
+                index,
+                // `MTLDataTypeFloat`.
+                data_type: 3,
+                value: value.to_le_bytes().to_vec(),
+            })
+            .collect();
+        let function = self.authored.new_function(function, &constants)?;
+        let once = || -> Result<f64> {
+            let started = Instant::now();
+            let state = self.device.new_compute_pipeline_state(&function, &[])?;
+            let made = started.elapsed();
+            drop(state);
+            Ok(made.as_secs_f64() * 1e6)
+        };
+        let first = once()?;
+        let mut report = CreateReport {
+            first_us: Some(first),
+            warmup: warm_up(runs, &once)?,
+            ..CreateReport::default()
+        };
+        for run in 1..=STATE_CREATIONS {
+            report.create_us.push(once()?);
+            if run == 100 || run == 200 {
+                report.gauges.push((run, self.device.gauges()));
+            }
+        }
+        Ok(report)
+    }
+}
+
+/// [`Session::create`] of buffers on `device`.
 fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport> {
     // The range the first creation takes: a buffer of the length, written, released.
     scribble(&device.new_buffer(length, Storage::Shared)?, length)?;

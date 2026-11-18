@@ -27,7 +27,9 @@
 //! names them. They have no CPU reference: each runtime's outputs must match the first
 //! runtime's. The creation workloads ([`authored::CREATES`]) run with the authored ones: `Shared`
 //! buffers of 4 KiB, 1 MiB and 64 MiB, each made and released in turn over the range the last
-//! one left ([`run::Session::create`]), each checked to start zero.
+//! one left ([`run::Session::create`]), each checked to start zero; and compute pipeline states of
+//! one content (`create_state`), the first of a content the device has not seen timed apart
+//! (`first`), then 1,000 of a content it has, each made and released in turn.
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \

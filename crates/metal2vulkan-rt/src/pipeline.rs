@@ -12,6 +12,15 @@
 //! of threadgroups runs the partial-threadgroups variant at its size, where the translator made
 //! one. Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
 //!
+//! What a state compiles is its content ([`KernelKey`]), never the state: the translator's key
+//! of its descriptor and its `requiredThreadsPerThreadgroup`. Every state of one content shares
+//! one [`Compiled`]: its translation, its shader modules and their `VkPipeline`s, its emulated
+//! variant and its notes. The device's map of kernels holds each content's (`kernel_map`), so a
+//! state of a content the map holds costs a lookup; past its cap the map forgets the least
+//! recently used, which a state that took it keeps. What stays a state's own is what the consumer
+//! gives it: the indices of its numbered samplers and the constexpr samplers' elements it holds
+//! at them.
+//!
 //! A kernel whose tier runs each SIMD group as one subgroup, or as a 32-lane cluster of one, runs
 //! only threadgroups of whole subgroups. Once the state is made, the reaper lowers the kernel's
 //! emulated-SIMD-group variant, whose SIMD groups exchange through threadgroup memory: a
@@ -31,6 +40,7 @@ use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::{Error, Gap, Refusal};
 use crate::hazard::Access;
+use crate::kernel_map::KernelKey;
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
 use crate::sampler::{canonical, hold_constexpr, release_constexpr};
@@ -45,7 +55,6 @@ use metal2vulkan::pipeline::{
     SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, TextureAccess,
     GRID_TILE_THREADS,
 };
-use metal2vulkan::vk::SamplerDesc;
 use metal2vulkan::Budget;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -59,13 +68,24 @@ pub(crate) const PUSH_BYTES: u32 = crate::floor::PUSH_CONSTANT_BYTES;
 /// `MTLComputePipelineState`.
 ///
 /// A cheap handle: clones share one state. A command buffer that dispatches with it keeps it until
-/// it retires.
+/// it retires. States of one content (the kernel, its constant values and linked functions, and
+/// the descriptor's fields that change the compile) share its translation and `VkPipeline`s;
+/// each numbers its own samplers.
 #[derive(Clone)]
 pub struct ComputePipelineState {
     pub(crate) inner: Arc<PipelineInner>,
 }
 
 pub(crate) struct PipelineInner {
+    /// What the state's content compiles to, shared with every state of that content.
+    pub(crate) compiled: Arc<Compiled>,
+    /// The samplers the state numbers and the indices the consumer gave them.
+    pub(crate) numbered: Numbered,
+}
+
+/// What one compute pipeline content ([`KernelKey`]) compiles to, shared by every state of it
+/// and held by the device's map of kernels until the map forgets it.
+pub(crate) struct Compiled {
     core: Arc<Core>,
     /// The module of whole grids, threadgroup dispatches and indirect dispatches; for a kernel
     /// that does not observe its threadgroup partition, of every dispatch.
@@ -73,13 +93,11 @@ pub(crate) struct PipelineInner {
     /// How a direct dispatch runs.
     pub(crate) form: Form,
     /// The emulated-SIMD-group module of a kernel whose `whole` module runs only whole SIMD
-    /// groups, which the reaper lowers once the state is made.
+    /// groups, which the reaper lowers once the content is compiled.
     pub(crate) emulated: Option<Emulated>,
     /// The translator's notes of where the kernel's answers may differ from Metal's, of the
-    /// modules made with the state.
+    /// modules made with the content.
     notes: Vec<PrecisionNote>,
-    /// The samplers the state numbers and the indices the consumer gave them.
-    pub(crate) numbered: Numbered,
 }
 
 /// The samplers a state numbers ([`Interface::numbered`]), the index the consumer gave each, and
@@ -88,22 +106,20 @@ pub(crate) struct PipelineInner {
 pub(crate) struct Numbered {
     samplers: Vec<NumberedSampler>,
     pub(crate) ids: Vec<u32>,
-    /// Each constexpr sampler the state holds, by its place in `samplers`, with the create info
-    /// of each array's element it uses (plain, comparison, integer texture).
-    held: Vec<(usize, [Option<SamplerDesc>; 3])>,
+    /// Each constexpr sampler the state holds the elements of, by its place in `samplers`.
+    held: Vec<usize>,
 }
 
-impl Numbered {
-    /// Whether the state holds every constexpr sampler use of `kernel`, a module of the same
-    /// entry lowered later.
-    fn covers(&self, kernel: &Interface) -> bool {
-        kernel.numbered == self.samplers
-            && kernel.constexprs.iter().all(|(at, sampler)| {
-                self.held
-                    .iter()
-                    .any(|(held, uses)| held == at && uses[sampler_array(sampler)].is_some())
-            })
-    }
+/// Whether a state of `kernels` holds every constexpr sampler use of `emulated`, a module of the
+/// same entry lowered later: the samplers it numbers are theirs, and each use it samples through
+/// is one of theirs, as a state holds the uses of its modules ([`number`]).
+fn covers(kernels: &[&Kernel], emulated: &Interface) -> bool {
+    emulated.numbered == kernels[0].interface.numbered
+        && emulated.constexprs.iter().all(|(at, sampler)| {
+            (kernels.iter())
+                .flat_map(|kernel| &kernel.interface.constexprs)
+                .any(|(held, used)| held == at && sampler_array(used) == sampler_array(sampler))
+        })
 }
 
 /// The sampler array of a constexpr sampler's use: 0 plain, 1 comparison, 2 integer texture.
@@ -166,7 +182,7 @@ fn number(
             numbered.release(core);
             return Err(error);
         }
-        numbered.held.push((at, uses));
+        numbered.held.push(at);
     }
     Ok(numbered)
 }
@@ -174,7 +190,7 @@ fn number(
 impl Numbered {
     /// Gives up the constexpr samplers' elements the state holds.
     fn release(&mut self, core: &Core) {
-        for (at, _) in self.held.drain(..) {
+        for at in self.held.drain(..) {
             release_constexpr(core, self.ids[at]);
         }
     }
@@ -378,14 +394,20 @@ pub(crate) struct Variant {
 impl crate::Device {
     /// `newComputePipelineStateWithDescriptor:options:reflection:error:`, without reflection.
     ///
-    /// The translator compiles the kernel on the calling thread, which waits for it, within the
-    /// translator's 20-second budget per lowering: once for a kernel that does not observe its
-    /// threadgroup partition, whose 256-wide tile's `VkPipeline` is made here too, and twice for
-    /// one that does (its partial-threadgroups variant and its plain module). Where the device
-    /// has a cache directory ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made
-    /// before is read from it in place of lowering again, and every `VkPipeline` is made through
-    /// the pipeline data it keeps. The state's other `VkPipeline`s are made later, each by the
-    /// first encoding call that needs it ([`ComputePipelineState`]). For a kernel whose tier runs
+    /// A state's content is its descriptor's kernel with its constant values, linked functions
+    /// and dynamic libraries, the descriptor's fields that change the compile, and its
+    /// `requiredThreadsPerThreadgroup`. Every state of one content shares its translation, its
+    /// shader modules and their `VkPipeline`s: a state of a content the device holds (the last
+    /// 1,024 contents used) costs a lookup, its samplers' numbering and nothing compiled. For a
+    /// content the device does not hold, the translator compiles the kernel on the calling
+    /// thread, which waits for it, within the translator's 20-second budget per lowering: once
+    /// for a kernel that does not observe its threadgroup partition, whose 256-wide tile's
+    /// `VkPipeline` is made here too, and twice for one that does (its partial-threadgroups
+    /// variant and its plain module). Where the device has a cache directory
+    /// ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made before is read from it
+    /// in place of lowering again, and every `VkPipeline` is made through the pipeline data it
+    /// keeps. The content's other `VkPipeline`s are made later, each by the first encoding call
+    /// of any of its states that needs it ([`ComputePipelineState`]). For a kernel whose tier runs
     /// only whole SIMD groups, the reaper lowers its emulated-SIMD-group variant after this
     /// returns, through the cache directory too.
     ///
@@ -418,7 +440,35 @@ impl crate::Device {
         if descriptor.support_indirect_command_buffers {
             return Err(Error::Unsupported(Gap::IndirectCommandBuffers));
         }
-        let core = Arc::clone(self.core());
+        let core = self.core();
+        let key = KernelKey {
+            pipeline: core.translator.compute_pipeline_key(descriptor),
+            required: descriptor.required_threads_per_threadgroup,
+        };
+        let compiled = match core.kernels.find(&key) {
+            Some(compiled) => compiled,
+            None => {
+                let compiled = Arc::new(Compiled::of(core, descriptor)?);
+                let kept = core
+                    .kernels
+                    .keep(key, Arc::clone(&compiled), &core.counters);
+                if Arc::ptr_eq(&kept, &compiled) && kept.emulated.is_some() {
+                    core.reaper.lower(Arc::downgrade(&kept));
+                }
+                kept
+            }
+        };
+        let numbered = number(core, &compiled.kernels(), sampler_ids)?;
+        Ok(ComputePipelineState {
+            inner: Arc::new(PipelineInner { compiled, numbered }),
+        })
+    }
+}
+
+impl Compiled {
+    /// The translation of `descriptor`, with the `VkPipeline` of a tiling kernel's tiles.
+    fn of(core: &Arc<Core>, descriptor: &ComputePipelineDescriptor) -> Result<Compiled, Error> {
+        let core = Arc::clone(core);
         let budget = Budget::standard();
         let translator = &core.translator;
         let compiled = |function: CompiledFunction| {
@@ -513,45 +563,63 @@ impl crate::Device {
                 inputs,
                 lowered: OnceLock::new(),
             });
-        let mut inner = PipelineInner {
+        let mut compiled = Compiled::new(
             core,
             whole,
-            form: match observes {
+            match observes {
                 false => Form::Tiled,
                 true => Form::Sized { partial: None },
             },
             emulated,
             notes,
-            numbered: Numbered::default(),
-        };
+        );
         if let Some(pipeline) = partial {
-            let partial = Kernel::new(&inner.core, pipeline, required)?;
-            inner.form = Form::Sized {
+            let partial = Kernel::new(&compiled.core, pipeline, required)?;
+            compiled.form = Form::Sized {
                 partial: Some(Box::new(partial)),
             };
         }
-        if let Form::Tiled = inner.form {
+        if let Form::Tiled = compiled.form {
             let variant = Variant {
                 size: [GRID_TILE_THREADS, 1, 1],
-                threadgroup_lengths: vec![0; inner.whole.interface.threadgroups.len()],
+                threadgroup_lengths: vec![0; compiled.whole.interface.threadgroups.len()],
                 tiles: true,
             };
-            let made = inner.whole.make(&inner.core, &variant)?;
-            lock(&inner.whole.variants).push((variant, made));
+            let made = compiled.whole.make(&compiled.core, &variant)?;
+            lock(&compiled.whole.variants).push((variant, made));
         }
-        let mut kernels = vec![&inner.whole];
+        Ok(compiled)
+    }
+
+    /// The content of `whole`, its form, emulated variant and notes, counted live.
+    fn new(
+        core: Arc<Core>,
+        whole: Kernel,
+        form: Form,
+        emulated: Option<Emulated>,
+        notes: Vec<PrecisionNote>,
+    ) -> Compiled {
+        core.counters.rise(Gauge::Kernels);
+        Compiled {
+            core,
+            whole,
+            form,
+            emulated,
+            notes,
+        }
+    }
+
+    /// The modules a state of the content numbers its samplers from: the whole module, and an
+    /// observing kernel's partial-threadgroups variant.
+    pub(crate) fn kernels(&self) -> Vec<&Kernel> {
+        let mut kernels = vec![&self.whole];
         if let Form::Sized {
             partial: Some(partial),
-        } = &inner.form
+        } = &self.form
         {
             kernels.push(&**partial);
         }
-        inner.numbered = number(&inner.core, &kernels, sampler_ids)?;
-        let inner = Arc::new(inner);
-        if inner.emulated.is_some() {
-            inner.core.reaper.lower(Arc::downgrade(&inner));
-        }
-        Ok(ComputePipelineState { inner })
+        kernels
     }
 }
 
@@ -874,7 +942,7 @@ impl ComputePipelineState {
     /// `requiredThreadsPerThreadgroup`, that size's threads, as Metal answers. A dispatch of
     /// another size within it runs at the size it gives, where Metal's validation stops it.
     pub fn max_total_threads_per_threadgroup(&self) -> u32 {
-        self.inner.whole.interface.max_total_threads
+        self.inner.compiled.whole.interface.max_total_threads
     }
 
     /// No Metal counterpart: where the kernel's answers may differ from Metal's on this device,
@@ -882,9 +950,9 @@ impl ComputePipelineState {
     /// the state, and once the reaper has lowered it, the emulated-SIMD-group module that runs
     /// threadgroups of partial SIMD groups. Metal's answers are its own GPU's.
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
-        let mut notes = self.inner.notes.clone();
-        if let Some(Lowered::Made(_, emulated)) = self
-            .inner
+        let compiled = &self.inner.compiled;
+        let mut notes = compiled.notes.clone();
+        if let Some(Lowered::Made(_, emulated)) = compiled
             .emulated
             .as_ref()
             .and_then(|emulated| emulated.lowered.get())
@@ -907,18 +975,16 @@ impl ComputePipelineState {
         let core = Arc::clone(device.core());
         // SAFETY: the words are a valid SPIR-V module.
         let module = unsafe { Kernel::module(&core, words) }?;
+        let whole = Kernel {
+            module,
+            entry: c"main".to_owned(),
+            interface,
+            variants: Mutex::new(Vec::new()),
+        };
+        let compiled = Compiled::new(core, whole, Form::Sized { partial: None }, None, Vec::new());
         Ok(ComputePipelineState {
             inner: Arc::new(PipelineInner {
-                core,
-                whole: Kernel {
-                    module,
-                    entry: c"main".to_owned(),
-                    interface,
-                    variants: Mutex::new(Vec::new()),
-                },
-                form: Form::Sized { partial: None },
-                emulated: None,
-                notes: Vec::new(),
+                compiled: Arc::new(compiled),
                 numbered: Numbered::default(),
             }),
         })
@@ -932,19 +998,21 @@ impl ComputePipelineState {
 
 impl PipelineInner {
     pub(crate) fn core(&self) -> &Arc<Core> {
-        &self.core
+        &self.compiled.core
     }
+}
 
-    /// On the reaper: lowers the state's emulated variant, where it has one not lowered yet.
+impl Compiled {
+    /// On the reaper: lowers the content's emulated variant, where it has one not lowered yet.
     pub(crate) fn lower_emulated(&self) {
         if let Some(emulated) = &self.emulated {
             emulated
                 .lowered
-                .get_or_init(|| emulated.lower(&self.core, &self.numbered));
+                .get_or_init(|| emulated.lower(&self.core, &self.kernels()));
         }
     }
 
-    /// Where the reaper ended before lowering it: the state's emulated variant is not lowered.
+    /// Where the reaper ended before lowering it: the content's emulated variant is not lowered.
     pub(crate) fn quiesce_emulated(&self) {
         if let Some(emulated) = &self.emulated {
             emulated.lowered.get_or_init(|| Lowered::Quiesced);
@@ -995,8 +1063,9 @@ impl PipelineInner {
 
 impl Emulated {
     /// The variant lowered, on the reaper: the lowering a device kept in the cache directory, or
-    /// one made now and kept; the translator's refusal is kept too.
-    fn lower(&self, core: &Core, numbered: &Numbered) -> Lowered {
+    /// one made now and kept; the translator's refusal is kept too. `kernels` are the content's
+    /// modules a state numbers its samplers from.
+    fn lower(&self, core: &Core, kernels: &[&Kernel]) -> Lowered {
         let translator = &core.translator;
         let budget = Budget::standard();
         let key = *translator
@@ -1024,7 +1093,7 @@ impl Emulated {
         match Kernel::new(core, pipeline, descriptor.required_threads_per_threadgroup) {
             // A module that samples a constexpr sampler in a use the state does not hold reads
             // what the encoder does not supply.
-            Ok(mut kernel) if !numbered.covers(&kernel.interface) => {
+            Ok(mut kernel) if !covers(kernels, &kernel.interface) => {
                 kernel.release(core);
                 Lowered::Refused
             }
@@ -1158,8 +1227,15 @@ impl Kernel {
 
 impl Drop for PipelineInner {
     fn drop(&mut self) {
-        // No command buffer that used it is left: each kept the state until it retired.
-        self.numbered.release(&self.core);
+        self.numbered.release(&self.compiled.core);
+    }
+}
+
+impl Drop for Compiled {
+    fn drop(&mut self) {
+        // No state holds it, so no command buffer that used it is left: each kept its state until
+        // it retired.
+        self.core.counters.fall(Gauge::Kernels);
         self.whole.release(&self.core);
         if let Form::Sized {
             partial: Some(partial),

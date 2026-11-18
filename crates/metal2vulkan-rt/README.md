@@ -560,6 +560,17 @@ that touch blocks first.
   buffer argument is the guest address of the bound buffer plus its offset, and each texture and
   sampler argument the bound object's resource ID, pushed; set 1 is the only descriptor set a
   kernel reads. A refusal of the translator is `Error::Translation`.
+- What a state compiles is its content, never the state: its descriptor's kernel with its
+  constant values, linked functions and dynamic libraries, the descriptor's fields that change
+  the compile (the translator's `Device::compute_pipeline_key`), and its
+  `requiredThreadsPerThreadgroup`. Every state of one content shares one compiled kernel: its
+  translation, its shader modules and their `VkPipeline`s, its emulated-SIMD-group variant and
+  its precision notes. The device's map holds the last 1,024 contents used, so a state of a
+  content it holds costs a lookup and its samplers' numbering, and compiles nothing. Past them the
+  map forgets the least recently used content, which every state that took it keeps; a compiled
+  kernel goes once its last state and the map have let it go. Each state numbers its own
+  samplers. `Gauges::kernels` counts the compiled kernels alive and `Gauges::kernel_entries` the
+  map's entries.
 - A state numbers samplers as Metal's pipeline creation does (`NumberedSampler`, in Metal's
   order): each constexpr sampler its kernel uses, then one where it reads a texture and one where
   it writes one. `sampler_ids` takes that list once the kernel is lowered and answers an index
@@ -604,8 +615,9 @@ that touch blocks first.
   zero grid, and its kernel takes the grid from its threadgroup count. The packed size is always
   the pipeline's own workgroup size, so the kernel's `MultiRegion` constant stays at its default,
   0, and the kernel takes the size from its workgroup size, with no decode.
-- A state makes one `VkPipeline` per module, threadgroup size and threadgroup memory lengths, on
-  the encoding thread that first dispatches with them, which waits for it. Nothing the runtime records
+- A compiled kernel makes one `VkPipeline` per module, threadgroup size and threadgroup memory
+  lengths, on the encoding thread that first dispatches any of its states with them, which waits
+  for it. Nothing the runtime records
   depends on when a compile finishes: there is one recorded form, made after the wait. Each such
   wait is counted in `Metrics::first_use_waits`, with its time in `first_use_wait_nanos` and the
   longest in `first_use_wait_max_nanos`.
