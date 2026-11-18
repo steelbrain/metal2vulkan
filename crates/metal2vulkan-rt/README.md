@@ -272,13 +272,13 @@ made, with no lock, and never rewritten for layouts.
   image with image views and elements of set 1 of its own, at its own index: no image, no memory
   and no copy (no submission, block or copied byte). It keeps its parent, and its descriptor is
   what Metal's view reports: the extent of its first level, its levels and its slices. Copies,
-  `replace_region` and `get_bytes` through it reach the parent's levels and slices under it; its
-  hazards are its parent's. Built: the parent's own pixel format, over every slice in the
-  parent's type, a slice subrange of a 1D or 2D array, or one slice of a 2D array as a 2D
-  texture, each over any level subrange; a view of a view is a view of the first parent. Refused,
-  as Metal's validation stops them: an empty range of levels or slices, or one past the parent's
-  (`Refusal::TextureViewRange`), and another pixel format of a texture made without
-  `PixelFormatView` usage (`Refusal::TextureViewFormat`).
+  `replace_region` and `get_bytes` through it reach the parent's levels and slices under it, and a
+  view of a Managed texture names the parent's bytes of them; its hazards are its parent's. Built:
+  the parent's own pixel format, over every slice in the parent's type, a slice subrange of a 1D or
+  2D array, or one slice of a 2D array as a 2D texture, each over any level subrange; a view of a
+  view is a view of the first parent. Refused, as Metal's validation stops them: an empty range of
+  levels or slices, or one past the parent's (`Refusal::TextureViewRange`), and another pixel format
+  of a texture made without `PixelFormatView` usage (`Refusal::TextureViewFormat`).
 - A texture holds the device. Once its last handle and the last command buffer that used it are
   gone, its elements read null and its index is free at once; the reaper frees its image once the
   last upload that moves or copies it has retired, and a view's image views once the view is

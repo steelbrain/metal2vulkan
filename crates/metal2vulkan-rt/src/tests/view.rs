@@ -6,16 +6,18 @@
 //! m3-max-43677). A view costs no submission, no block and no copied byte. What Metal's validation
 //! stops is `Refusal::TextureViewRange` or `Refusal::TextureViewFormat`, and each kind of view
 //! the runtime does not build `Gap::TextureView` naming it. Every gauge comes back to zero with the
-//! device, the views' image views among them.
+//! device, the views' image views among them. A view of a Managed texture writes the texture's own
+//! named bytes.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::blit::on_device::settled;
     use crate::tests::command::on_device::{each_device, finished, within};
     use crate::{
-        Buffer, BufferLayout, CommandQueue, Device, Error, Gap, IndexClass, MemoryClass,
-        PixelFormat, Refusal, Region, StorageMode, Texture, TextureDescriptor, TexturePlace,
-        TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage, TextureViewKind,
+        Buffer, BufferLayout, BytesPlace, CommandQueue, Device, Error, Gap, IndexClass,
+        MemoryClass, PixelFormat, Refusal, Region, StorageMode, Texture, TextureDescriptor,
+        TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
+        TextureViewKind,
     };
 
     /// FNV-1a 64 of `bytes`.
@@ -285,6 +287,60 @@ mod on_device {
             assert_eq!(fnv(&read(&of_view)), 0x5d01_ec06_0898_5ec5);
             drop((views, of_view, formats, swizzled, cube));
             within("the textures freed", || counters.gauges().textures == 0);
+        });
+    }
+
+    #[test]
+    fn every_device_views_a_managed_texture_s_named_bytes() {
+        each_device("managed texture views", |name, _, device| {
+            let block = (device.take_block(MemoryClass::Shared, 1))
+                .expect("a Shared block")
+                .id;
+            let named = (device.new_buffer(block, 0, 4096, true)).expect("a buffer");
+            // A 4x4 2D array of 2 slices and 2 levels, each level and slice's rows 64 bytes
+            // apart, 512 bytes after the one before.
+            let places: Vec<BytesPlace> = (0..4)
+                .map(|at| BytesPlace {
+                    offset: at * 512,
+                    bytes_per_row: 64,
+                    bytes_per_image: 0,
+                })
+                .collect();
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2DArray, PixelFormat::RGBA8Unorm, 4, 4);
+            d.array_length = 2;
+            d.mipmap_level_count = 2;
+            d.usage = TextureUsage::RENDER_TARGET;
+            let texture = (device.new_managed_texture(&d, None, &named, &places))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let view = (texture.new_texture_view(
+                PixelFormat::RGBA8Unorm,
+                TextureType::Type2D,
+                1..2,
+                1..2,
+                None,
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let region = Region {
+                origin: [0; 3],
+                size: [2, 2, 1],
+            };
+            let written: Vec<u8> = (0..16).map(|i| i * 13 + 5).collect();
+            (view.replace_region(region, 0, 0, &written, 8, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // The texture's level 1 and slice 1 reads what the view wrote, from the same bytes.
+            let mut read = vec![0; 16];
+            (texture.get_bytes(&mut read, 8, 0, region, 1, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(read, written, "{name}: the texture reads the view's write");
+            let contents = named.contents().expect("a Shared buffer");
+            // SAFETY: no GPU work writes the buffer.
+            let row = unsafe { std::slice::from_raw_parts(contents.as_ptr().add(3 * 512), 8) };
+            assert_eq!(
+                row,
+                &written[..8],
+                "{name}: the write lies in the place of level 1, slice 1"
+            );
         });
     }
 }

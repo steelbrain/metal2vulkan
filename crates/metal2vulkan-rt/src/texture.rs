@@ -1615,7 +1615,9 @@ impl Texture {
     /// every level and every slice. The view keeps this texture, as Metal's `parentTexture`, and
     /// its descriptor is a view's in Metal: the extent of its first level, `levels.len()` levels
     /// and `slices.len()` slices (a cube's six faces each one). Copies and encoders that name the
-    /// view reach the levels and slices under it; its hazards are its parent's own.
+    /// view reach the levels and slices under it; its hazards are its parent's own. A view of a
+    /// Managed texture names the texture's bytes of those levels and slices, so the CPU's reads
+    /// and writes through either reach the same bytes, as Metal's do.
     ///
     /// Built: the texture's own pixel format, over every slice in the texture's own type, a slice
     /// subrange of a 1D or 2D array, or one slice of a 2D array as a 2D texture, each over any
@@ -1746,6 +1748,16 @@ impl Texture {
             Some(view) => view.parent.clone(),
             None => self.clone(),
         };
+        // A view of a Managed texture names the parent's bytes of its own levels and slices.
+        let per_level = self::slices(p);
+        let managed = (inner.managed.as_ref()).map(|(bytes, places)| {
+            let at = |level, slice| places[(level * per_level + slice) as usize];
+            let level_places = |level| slices.clone().map(move |slice| at(level, slice));
+            (
+                bytes.clone(),
+                levels.clone().flat_map(level_places).collect(),
+            )
+        });
         let view = TextureInner {
             device: inner.device.clone(),
             descriptor: d,
@@ -1755,7 +1767,7 @@ impl Texture {
             index,
             word: plan.word,
             id: inner.id,
-            managed: None,
+            managed,
             view: Some(View {
                 parent,
                 base,
