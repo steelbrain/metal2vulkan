@@ -7,9 +7,10 @@
 //!   translator's sampler word. A nearest state clamped to the edge takes one device sampler for
 //!   its plain and integer-texture uses, and an equal state, or one differing only in a border
 //!   colour no address mode reads, shares it; a linear state with a compare function takes three;
-//!   an anisotropic state is made. A cubic filter is `Gap::CubicSampler`. An index holds one state
-//!   at a time, its grant waits for it, and it is free once the state is gone. The device's
-//!   samplers come back to zero with the device.
+//!   an anisotropic state is made. A cubic filter is `Gap::CubicSampler`. A state made at an index
+//!   another holds takes it, and the earlier state's going leaves it; the grant waits for the
+//!   index's owner, and the index is free once that state is gone. The device's samplers come
+//!   back to zero with the device.
 
 use crate::error::{Error, Limit};
 use crate::sampler::SamplerTable;
@@ -115,14 +116,8 @@ mod on_device {
                 ),
                 "{name}"
             );
-            assert_eq!(
-                refused(device.new_sampler_state(&nearest, 1)),
-                Refusal::IndexInUse {
-                    class: IndexClass::Sampler,
-                    index: 1
-                },
-                "{name}"
-            );
+            // A state at the index `a` holds takes it; `a`'s going leaves it.
+            let later = state(&nearest, 1);
             assert_eq!(
                 refused(device.release_indices(grant)),
                 Refusal::IndicesInUse {
@@ -131,9 +126,12 @@ mod on_device {
                 },
                 "{name}"
             );
-            assert_eq!(counters.gauges().samplers, 5, "{name}");
+            assert_eq!(counters.gauges().samplers, 6, "{name}");
             assert_eq!(counters.gauges().descriptor_slots, 5, "{name}");
             drop(a);
+            assert_eq!(counters.gauges().descriptor_slots, 5, "{name}");
+            drop(later);
+            assert_eq!(counters.gauges().descriptor_slots, 4, "{name}");
             state(&linear, 1);
             drop((b, c, d, e));
             assert_eq!(counters.gauges().descriptor_slots, 0, "{name}");

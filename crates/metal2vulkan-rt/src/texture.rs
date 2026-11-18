@@ -21,7 +21,7 @@
 //! into the image by the device, and [`Texture::replace_region`] and [`Texture::get_bytes`] write
 //! and read them there.
 
-use crate::arrays::{IndexClass, ResourceId};
+use crate::arrays::{Owner, ResourceId};
 use crate::buffer::Buffer;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
@@ -182,8 +182,9 @@ struct TextureInner {
     /// How bytes move between the image and the CPU or another image; `None` where no copy is
     /// built.
     unit: Option<CopyUnit>,
-    /// Its index of the [`IndexClass::Texture`] class; `None` for a texture no shader reaches.
-    index: Option<u32>,
+    /// Its index of the [`IndexClass::Texture`](crate::IndexClass::Texture) class and its owner
+    /// word there; `None` for a texture no shader reaches.
+    index: Option<(u32, Owner)>,
     word: u32,
     /// Its resource id in the encoders' hazard sets.
     id: u32,
@@ -419,21 +420,17 @@ impl Drop for TextureInner {
                 core.work.released(self.image.bytes);
             }
         }
-        if let Some(index) = self.index {
-            // SAFETY: the texture owns its elements until it vacates the index below, and no
-            // work that reads them is pending: each command buffer that used the texture held it
-            // until it retired. A null view writes the storage element null too.
+        if let Some((index, owner)) = self.index {
+            // SAFETY: no work that reads its elements is pending: each command buffer that used
+            // the texture held it until it retired.
             unsafe {
-                (core.arrays).write_texture(
+                (core.arrays).vacate_texture(
                     &core.device,
-                    index,
-                    None,
-                    Some(vk::ImageView::null()),
+                    &core.counters,
+                    (index, owner),
                     self.image.feedback,
                 )
             };
-            lock(&core.arrays.grants).vacate(IndexClass::Texture, index);
-            core.counters.fall(Gauge::DescriptorSlots);
         }
     }
 }
@@ -442,10 +439,16 @@ impl Device {
     /// `newTextureWithDescriptor:`, at `index`: an optimal image of the descriptor in device-local
     /// memory, placed in a texture block ([`Texture`]), its contents undefined, as Metal's are.
     /// `index` is given exactly where shaders reach the texture (shader-read or shader-write
-    /// usage), and is then an index of a live [`IndexClass::Texture`] grant, whatever the usage. The
-    /// texture's elements of set 1 are written before the call returns, and its image moved to its
-    /// home layout ahead of every command buffer committed after it. Until the next submission
-    /// nothing else holds the texture: released first, it is freed at once.
+    /// usage), and is then an index of a live [`IndexClass::Texture`](crate::IndexClass::Texture)
+    /// grant, whatever the usage. The texture's elements of set 1 are written before the call
+    /// returns, and its image moved to its home layout ahead of every command buffer committed
+    /// after it. Until the next submission nothing else holds the texture: released first, it is
+    /// freed at once.
+    ///
+    /// An index another live texture holds is taken, as Metal's later texture at a resource ID
+    /// takes the ID: the new texture owns the index and its elements from then, and the earlier
+    /// one's going touches neither. No work in flight may read the earlier texture through the
+    /// index (the program's duty, as it is Metal's; nothing checks it).
     ///
     /// A swizzle composes with the view's own component mapping. Shader-write usage writes the
     /// storage element where the device stores the format through a storage image without a
@@ -456,8 +459,7 @@ impl Device {
     /// [`Refusal::TextureCubeNotSquare`], [`Refusal::TextureArrayLength`],
     /// [`Refusal::TextureLevelCount`], [`Refusal::TextureSampleCount`],
     /// [`Refusal::TextureSwizzleWithWrites`]); [`Refusal::TextureIndex`];
-    /// [`Refusal::IndicesNotGranted`] and [`Refusal::IndexInUse`] for an index not granted or
-    /// taken; [`Limit::TextureSize`] and [`Limit::TextureSamples`] past the device's;
+    /// [`Refusal::IndicesNotGranted`] for an index not granted; [`Limit::TextureSize`] and [`Limit::TextureSamples`] past the device's;
     /// [`Gap::TextureFormat`], [`Gap::TextureBuffer`] and [`Gap::MemorylessTexture`];
     /// [`Limit::MemoryAllocations`] where its memory would take the device past its count;
     /// [`Error::Vulkan`] where the image or its memory cannot be made; [`Error::Quiesced`].
@@ -697,14 +699,6 @@ impl Device {
             }
         };
         let (mut named, mut first, mut home) = (named, first, home);
-        let index = match index {
-            Some(index) => {
-                lock(&core.arrays.grants).occupy(IndexClass::Texture, index)?;
-                core.counters.rise(Gauge::DescriptorSlots);
-                Some(index)
-            }
-            None => None,
-        };
         let (bind, mut block) = match source {
             Source::Plain | Source::Managed(..) => (Bind::Pooled, None),
             Source::Heap(block, heap, offset) => {
@@ -757,16 +751,7 @@ impl Device {
             // SAFETY: as above.
             made = unsafe { make(core, &d, &shape, &plan, Bind::Pooled) };
         }
-        let (image, backing, bytes, sampled, storage) = match made {
-            Ok(made) => made,
-            Err(error) => {
-                if let Some(index) = index {
-                    lock(&core.arrays.grants).vacate(IndexClass::Texture, index);
-                    core.counters.fall(Gauge::DescriptorSlots);
-                }
-                return Err(error);
-            }
-        };
+        let (image, backing, bytes, sampled, storage) = made?;
         core.counters.rise(Gauge::Textures);
         let image = Arc::new(Image {
             core: Arc::clone(core),
@@ -782,6 +767,26 @@ impl Device {
             homed: AtomicBool::new(false),
             _under: block,
         });
+        // The texture's elements of set 1, written as it takes its index; a refusal frees the
+        // image as `image` drops.
+        let index = match index {
+            Some(index) => {
+                let sampled = sampled.map(|view| (view, home));
+                // SAFETY: the texture's views are live; its image is in its home layout whenever
+                // work uses it, the upload of the next submission going first.
+                let owner = unsafe {
+                    (core.arrays).place_texture(
+                        &core.device,
+                        &core.counters,
+                        index,
+                        (sampled, storage),
+                        image.feedback,
+                    )
+                }?;
+                Some((index, owner))
+            }
+            None => None,
+        };
         let inner = TextureInner {
             device: self.clone(),
             descriptor: d,
@@ -801,20 +806,6 @@ impl Device {
         let copied = (inner.named.as_ref()).filter(|named| named.form == Form::Copied);
         if copied.is_some_and(|named| named.buffer.held().1.is_none()) {
             core.copied_overs.fetch_add(1, Ordering::Relaxed);
-        }
-        if let Some(index) = index {
-            // SAFETY: the index is occupied for the texture, whose views are live; its image is
-            // in its home layout whenever work uses it, the upload of the next submission going
-            // first.
-            unsafe {
-                core.arrays.write_texture(
-                    &core.device,
-                    index,
-                    sampled.map(|view| (view, home)),
-                    storage,
-                    inner.image.feedback,
-                )
-            };
         }
         let texture = Texture {
             inner: Arc::new(inner),
@@ -2121,7 +2112,7 @@ impl Texture {
     /// texture's, and [`Refusal::TextureViewFormat`] for another pixel format of a texture made
     /// without `PixelFormatView` usage, as Metal's validation stops them; [`Gap::TextureView`]
     /// for another kind Metal makes, naming it; [`Refusal::TextureIndex`],
-    /// [`Refusal::IndicesNotGranted`] and [`Refusal::IndexInUse`] as [`Device::new_texture`];
+    /// [`Refusal::IndicesNotGranted`] as [`Device::new_texture`];
     /// [`Error::Vulkan`] where a view cannot be made.
     pub fn new_texture_view(
         &self,
@@ -2195,10 +2186,6 @@ impl Texture {
             base_array_layer: base[1],
             layer_count: shape.layers,
         };
-        if let Some(index) = index {
-            lock(&core.arrays.grants).occupy(IndexClass::Texture, index)?;
-            core.counters.rise(Gauge::DescriptorSlots);
-        }
         let image = inner.image.image;
         let make = |(components, aspect)| {
             let (view_type, format) = (shape.view_type, plan.format);
@@ -2231,6 +2218,27 @@ impl Texture {
         // The textures gauge counts the view from here; the reaper's free of its views lowers it.
         core.counters.rise(Gauge::Textures);
         let (sampled, storage) = (views.sampled, views.storage);
+        // A failed view's image views go to the reaper as `views` drops, and so do they where the
+        // view is refused its index.
+        made?;
+        let index = match index {
+            Some(index) => {
+                let sampled = sampled.map(|view| (view, inner.image.home));
+                // SAFETY: the view's image views are live; the image is in its home layout
+                // whenever work uses it.
+                let owner = unsafe {
+                    (core.arrays).place_texture(
+                        &core.device,
+                        &core.counters,
+                        index,
+                        (sampled, storage),
+                        inner.image.feedback,
+                    )
+                }?;
+                Some((index, owner))
+            }
+            None => None,
+        };
         let parent = match &inner.view {
             Some(view) => view.parent.clone(),
             None => self.clone(),
@@ -2265,21 +2273,6 @@ impl Texture {
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
         };
-        // A failed view drops here: its index is vacated and its views freed.
-        made?;
-        if let Some(index) = index {
-            // SAFETY: the index is occupied for the view, whose image views are live; the image
-            // is in its home layout whenever work uses it.
-            unsafe {
-                core.arrays.write_texture(
-                    &core.device,
-                    index,
-                    sampled.map(|view| (view, inner.image.home)),
-                    storage,
-                    inner.image.feedback,
-                )
-            };
-        }
         Ok(Texture {
             inner: Arc::new(view),
         })
@@ -2315,7 +2308,7 @@ impl Texture {
     /// texture no shader reaches.
     pub(crate) fn feedback_resource_id(&self) -> ResourceId {
         match self.inner.index {
-            Some(index) => ResourceId {
+            Some((index, _)) => ResourceId {
                 index: index + crate::floor::TEXTURES,
                 word: self.inner.word,
             },
@@ -2468,7 +2461,7 @@ impl Texture {
     /// `TextureWord` of its pixel format and swizzle.
     pub fn gpu_resource_id(&self) -> ResourceId {
         ResourceId {
-            index: self.inner.index.unwrap_or(0),
+            index: self.inner.index.map_or(0, |(index, _)| index),
             word: self.inner.word,
         }
     }

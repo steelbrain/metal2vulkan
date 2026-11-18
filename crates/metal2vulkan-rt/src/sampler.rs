@@ -9,7 +9,7 @@
 //! `maxSamplerAllocationCount` bounds the samplers, the arrays' two defaults among them; past it a
 //! state is refused. Nothing is made at bind time.
 
-use crate::arrays::{IndexClass, ResourceId};
+use crate::arrays::{Owner, ResourceId};
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit};
@@ -101,7 +101,8 @@ pub(crate) fn canonical(mut desc: SamplerDesc) -> SamplerDesc {
 ///
 /// A cheap handle: clones share one state. The state holds the device. Once its last handle is
 /// gone, and with it the last command buffer that used it, its elements read the arrays' defaults
-/// again and its index is free; a device sampler no other state holds goes to the reaper.
+/// again and its index is free, where it still owns the index; a device sampler no other state
+/// holds goes to the reaper.
 #[derive(Clone)]
 pub struct SamplerState {
     inner: Arc<SamplerInner>,
@@ -111,6 +112,8 @@ struct SamplerInner {
     device: Device,
     descriptor: SamplerDescriptor,
     index: u32,
+    /// Its owner word at the index.
+    owner: Owner,
     word: u32,
     /// The create info of each array's element at the index, plain, comparison and integer
     /// texture; `None` where the array keeps its default.
@@ -120,15 +123,11 @@ struct SamplerInner {
 impl Drop for SamplerInner {
     fn drop(&mut self) {
         let core = self.device.core();
-        // SAFETY: the state owns its elements until it vacates the index below, and no work that
-        // reads them is pending: each command buffer that used the state held it until it
-        // retired.
+        // SAFETY: no work that reads its elements is pending: each command buffer that used the
+        // state held it until it retired.
         unsafe {
-            core.arrays
-                .write_samplers(&core.device, self.index, &every([None; 3]))
+            (core.arrays).vacate_samplers(&core.device, &core.counters, self.index, self.owner)
         };
-        lock(&core.arrays.grants).vacate(IndexClass::Sampler, self.index);
-        core.counters.fall(Gauge::DescriptorSlots);
         core.counters.fall(Gauge::Samplers);
         give_back(core, &self.uses);
     }
@@ -140,23 +139,25 @@ fn every(samplers: [Option<vk::Sampler>; 3]) -> [(usize, Option<vk::Sampler>); 3
     [0, 1, 2].map(|array| (array, samplers[array]))
 }
 
-/// A constexpr sampler at an index of the sampler arrays: its state words, the create info of
-/// each array's element it holds there (plain, comparison, integer texture), and how many
-/// pipeline states number it there.
+/// A constexpr sampler at an index of the sampler arrays, by its index and state words: the
+/// create info of each array's element it holds there (plain, comparison, integer texture), how
+/// many pipeline states number it there, and its owner word at the index.
 pub(crate) struct Constexpr {
-    words: [u64; 2],
     uses: [Option<SamplerDesc>; 3],
     holders: u32,
+    owner: Owner,
 }
 
 /// One more pipeline state numbers the constexpr sampler of state words `words` at `index`, with
 /// the create info of each array's element it uses there (`None` for an array it does not use).
-/// The first holder occupies the index and writes its elements; a later one of the same words
-/// writes the elements of the arrays it adds and leaves the others, which pending work may read.
+/// The first holder places it at the index and writes its elements, taking the index from a
+/// sampler state or a constexpr sampler of other words there, as any placement does
+/// ([`Arrays::place_samplers`](crate::arrays::Arrays::place_samplers)); a later one of the same
+/// words writes the elements of the arrays it adds and leaves the others, which pending work may
+/// read, where the constexpr sampler still owns the index.
 ///
 /// Err: [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted);
-/// [`Refusal::IndexInUse`](crate::Refusal::IndexInUse) where a sampler state or another
-/// constexpr sampler lives at the index; [`Limit::DeviceSamplers`]; [`Error::Vulkan`].
+/// [`Limit::DeviceSamplers`]; [`Error::Vulkan`].
 pub(crate) fn hold_constexpr(
     core: &Core,
     index: u32,
@@ -164,23 +165,13 @@ pub(crate) fn hold_constexpr(
     uses: [Option<SamplerDesc>; 3],
 ) -> Result<(), Error> {
     let mut held = lock(&core.constexprs);
-    let present = match held.get(&index) {
-        Some(entry) if entry.words == words => Some(entry.uses),
-        Some(_) => {
-            return Err(Error::Refused(crate::Refusal::IndexInUse {
-                class: IndexClass::Sampler,
-                index,
-            }))
-        }
-        None => None,
-    };
-    if present.is_none() {
-        lock(&core.arrays.grants).occupy(IndexClass::Sampler, index)?;
-    }
+    let present = held
+        .get(&(index, words))
+        .map(|entry| (entry.uses, entry.owner));
     let mut added: Vec<(usize, SamplerDesc, vk::Sampler)> = Vec::new();
     for (array, desc) in uses.iter().enumerate() {
         let Some(desc) = desc else { continue };
-        if present.is_some_and(|present| present[array].is_some()) {
+        if present.is_some_and(|(present, _)| present[array].is_some()) {
             continue;
         }
         // Taken in a statement of its own, so the table's lock is let go before the arms: the
@@ -192,9 +183,6 @@ pub(crate) fn hold_constexpr(
                 let taken: Vec<Option<SamplerDesc>> =
                     added.iter().map(|&(_, desc, _)| Some(desc)).collect();
                 give_back(core, &taken);
-                if present.is_none() {
-                    lock(&core.arrays.grants).vacate(IndexClass::Sampler, index);
-                }
                 return Err(error);
             }
         }
@@ -203,17 +191,30 @@ pub(crate) fn hold_constexpr(
         .iter()
         .map(|&(array, _, sampler)| (array, Some(sampler)))
         .collect();
-    // SAFETY: the index is occupied for the constexpr sampler, no work reads an element it had
-    // not written (no state numbering it there uses that array), and each sampler is held while
-    // its element holds it.
-    unsafe { core.arrays.write_samplers(&core.device, index, &elements) };
-    let entry = held.entry(index).or_insert_with(|| {
-        core.counters.rise(Gauge::DescriptorSlots);
-        Constexpr {
-            words,
-            uses: [None; 3],
-            holders: 0,
+    let owner = match present {
+        // SAFETY: no work reads an element it had not written (no state numbering it there uses
+        // that array), and each sampler is held while its element holds it.
+        Some((_, owner)) => {
+            unsafe { (core.arrays).add_samplers(&core.device, index, owner, &elements) };
+            owner
         }
+        // SAFETY: each sampler is held while its element holds it.
+        None => match unsafe {
+            (core.arrays).place_samplers(&core.device, &core.counters, index, &elements)
+        } {
+            Ok(owner) => owner,
+            Err(error) => {
+                let taken: Vec<Option<SamplerDesc>> =
+                    added.iter().map(|&(_, desc, _)| Some(desc)).collect();
+                give_back(core, &taken);
+                return Err(error);
+            }
+        },
+    };
+    let entry = held.entry((index, words)).or_insert(Constexpr {
+        uses: [None; 3],
+        holders: 0,
+        owner,
     });
     for (array, desc, _) in added {
         entry.uses[array] = Some(desc);
@@ -222,28 +223,24 @@ pub(crate) fn hold_constexpr(
     Ok(())
 }
 
-/// One pipeline state fewer numbers the constexpr sampler at `index`: the last one's going writes
-/// the arrays' defaults there, frees the index and gives back its samplers.
-pub(crate) fn release_constexpr(core: &Core, index: u32) {
+/// One pipeline state fewer numbers the constexpr sampler of state words `words` at `index`: the
+/// last one's going gives back its samplers and, where it still owns the index, writes the arrays'
+/// defaults there and frees the index.
+pub(crate) fn release_constexpr(core: &Core, index: u32, words: [u64; 2]) {
     let mut held = lock(&core.constexprs);
-    let Some(entry) = held.get_mut(&index) else {
+    let Some(entry) = held.get_mut(&(index, words)) else {
         return;
     };
     entry.holders -= 1;
     if entry.holders > 0 {
         return;
     }
-    let Some(entry) = held.remove(&index) else {
+    let Some(entry) = held.remove(&(index, words)) else {
         return;
     };
     // SAFETY: no pending work reads the elements: each command buffer that used a state
     // numbering it held the state until it retired.
-    unsafe {
-        core.arrays
-            .write_samplers(&core.device, index, &every([None; 3]))
-    };
-    lock(&core.arrays.grants).vacate(IndexClass::Sampler, index);
-    core.counters.fall(Gauge::DescriptorSlots);
+    unsafe { (core.arrays).vacate_samplers(&core.device, &core.counters, index, entry.owner) };
     drop(held);
     give_back(core, &entry.uses);
 }
@@ -263,15 +260,17 @@ fn give_back(core: &Core, uses: &[Option<SamplerDesc>]) {
 }
 
 impl Device {
-    /// `newSamplerStateWithDescriptor:`, at `index` of a live [`IndexClass::Sampler`] grant: the
-    /// translator's device sampler of each use the state can be used in
-    /// (`metal::sampler::vk_sampler`), taken from the device's samplers, which share one
-    /// `VkSampler` per create info, and written into the three sampler arrays at `index` before
-    /// the call returns. The comparison array takes the state's sampler where its compare
-    /// function is not `Never`, and keeps its default otherwise.
+    /// `newSamplerStateWithDescriptor:`, at `index` of a live
+    /// [`IndexClass::Sampler`](crate::IndexClass::Sampler) grant: the translator's device sampler
+    /// of each use the state can be used in (`metal::sampler::vk_sampler`), taken from the
+    /// device's samplers, which share one `VkSampler` per create info, and written into the three
+    /// sampler arrays at `index` before the call returns. The comparison array takes the state's
+    /// sampler where its compare function is not `Never`, and keeps its default otherwise. An
+    /// index another live state or constexpr sampler holds is taken, as a texture's is
+    /// ([`Device::new_texture`](crate::Device::new_texture)): the earlier one's going leaves it.
     ///
-    /// Err: [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted) and
-    /// [`Refusal::IndexInUse`](crate::Refusal::IndexInUse); [`Gap::CubicSampler`];
+    /// Err: [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted);
+    /// [`Gap::CubicSampler`];
     /// [`Error::Translation`] where the translator makes no device sampler of the descriptor;
     /// [`Limit::DeviceSamplers`] past the device's `maxSamplerAllocationCount`; [`Error::Vulkan`]
     /// where `vkCreateSampler` fails.
@@ -299,7 +298,6 @@ impl Device {
             },
             Some(desc(false, true)?),
         ];
-        lock(&core.arrays.grants).occupy(IndexClass::Sampler, index)?;
         let mut taken = Vec::with_capacity(3);
         let mut samplers = [None; 3];
         for (slot, use_) in uses.iter().enumerate() {
@@ -312,24 +310,28 @@ impl Device {
                 }
                 Err(error) => {
                     give_back(core, &taken);
-                    lock(&core.arrays.grants).vacate(IndexClass::Sampler, index);
                     return Err(error);
                 }
             }
         }
-        core.counters.rise(Gauge::DescriptorSlots);
-        core.counters.rise(Gauge::Samplers);
-        // SAFETY: the index is occupied for the state, and each sampler is live while the state
-        // holds it.
-        unsafe {
-            core.arrays
-                .write_samplers(&core.device, index, &every(samplers))
+        // SAFETY: each sampler is live while the state holds it.
+        let placed = unsafe {
+            (core.arrays).place_samplers(&core.device, &core.counters, index, &every(samplers))
         };
+        let owner = match placed {
+            Ok(owner) => owner,
+            Err(error) => {
+                give_back(core, &taken);
+                return Err(error);
+            }
+        };
+        core.counters.rise(Gauge::Samplers);
         Ok(SamplerState {
             inner: Arc::new(SamplerInner {
                 device: self.clone(),
                 descriptor: *descriptor,
                 index,
+                owner,
                 word: SamplerWord::of(descriptor).0,
                 uses,
             }),

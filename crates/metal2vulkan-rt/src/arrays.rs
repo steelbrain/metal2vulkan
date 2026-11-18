@@ -36,6 +36,7 @@ use crate::error::{Error, Limit, Refusal};
 use crate::floor::{BelowFloor, Missing, SAMPLERS, SAMPLER_ARRAYS, TEXTURES};
 use crate::Device;
 use ash::vk;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Mutex;
 
@@ -154,19 +155,34 @@ impl Bits {
     }
 }
 
-/// The indices granted, and of those the indices an object lives at, one bit per index of each
-/// class's array.
+/// The word that names the object an index holds: the one [`Grants::place`] gave it, given to
+/// no other object of the device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Owner(u64);
+
+/// An object placed at an index ([`Grants::place`]).
+pub(crate) struct Placed {
+    /// The object's owner word.
+    pub(crate) owner: Owner,
+    /// Another object held the index, and no longer does.
+    pub(crate) displaced: bool,
+}
+
+/// The indices granted, one bit per index of each class's array, and of those the indices an
+/// object holds, each with its one owner: the object placed there last.
 pub(crate) struct Grants {
     granted: [Bits; 2],
-    occupied: [Bits; 2],
+    owners: [HashMap<u32, Owner>; 2],
+    /// The last owner word given.
+    last: u64,
 }
 
 impl Grants {
     pub(crate) fn new() -> Grants {
-        let bits = || [Bits::new(TEXTURES), Bits::new(SAMPLERS)];
         Grants {
-            granted: bits(),
-            occupied: bits(),
+            granted: [Bits::new(TEXTURES), Bits::new(SAMPLERS)],
+            owners: [HashMap::new(), HashMap::new()],
+            last: 0,
         }
     }
 
@@ -178,22 +194,32 @@ impl Grants {
         self.granted[class.slot()].put(index, on);
     }
 
-    /// Takes `index` of `class` for an object, where it is granted and no object lives there.
-    pub(crate) fn occupy(&mut self, class: IndexClass, index: u32) -> Result<(), Error> {
+    /// Places an object at `index` of `class`, where it is granted: the object owns the index
+    /// from now, and an object there before no longer does, as Metal's later texture at a
+    /// resource ID takes the ID.
+    pub(crate) fn place(&mut self, class: IndexClass, index: u32) -> Result<Placed, Error> {
         if !class.range().contains(&index) || !self.bit(class, index) {
             return Err(Error::Refused(Refusal::IndicesNotGranted { class, index }));
         }
-        let occupied = &mut self.occupied[class.slot()];
-        if occupied.get(index) {
-            return Err(Error::Refused(Refusal::IndexInUse { class, index }));
-        }
-        occupied.put(index, true);
-        Ok(())
+        self.last += 1;
+        let owner = Owner(self.last);
+        let displaced = self.owners[class.slot()].insert(index, owner).is_some();
+        Ok(Placed { owner, displaced })
     }
 
-    /// Gives back `index` of `class`, which [`Grants::occupy`] took.
-    pub(crate) fn vacate(&mut self, class: IndexClass, index: u32) {
-        self.occupied[class.slot()].put(index, false);
+    /// Whether `owner` owns `index` of `class`.
+    pub(crate) fn owns(&self, class: IndexClass, index: u32, owner: Owner) -> bool {
+        self.owners[class.slot()].get(&index) == Some(&owner)
+    }
+
+    /// Gives back `index` of `class` where `owner` still owns it: whether it did. An object
+    /// displaced from the index gives back nothing.
+    pub(crate) fn vacate(&mut self, class: IndexClass, index: u32, owner: Owner) -> bool {
+        let owns = self.owns(class, index, owner);
+        if owns {
+            self.owners[class.slot()].remove(&index);
+        }
+        owns
     }
 
     /// Grants `first..first + count` of `class` where the range is inside the class's and none of
@@ -229,7 +255,7 @@ impl Grants {
         Ok(grant)
     }
 
-    /// Returns `grant`, where every index of it is granted and no object lives at one.
+    /// Returns `grant`, where every index of it is granted and no object holds one.
     pub(crate) fn release(&mut self, grant: IndexGrant) -> Result<(), Error> {
         let IndexGrant { class, .. } = grant;
         let range = class.range();
@@ -245,8 +271,10 @@ impl Grants {
         if let Some(index) = missing {
             return Err(Error::Refused(Refusal::IndicesNotGranted { class, index }));
         }
-        let occupied = &self.occupied[class.slot()];
-        if let Some(index) = grant.indices().find(|&index| occupied.get(index)) {
+        let held = (self.owners[class.slot()].keys().copied())
+            .filter(|index| grant.indices().contains(index))
+            .min();
+        if let Some(index) = held {
             return Err(Error::Refused(Refusal::IndicesInUse { class, index }));
         }
         for index in grant.indices() {
@@ -270,6 +298,8 @@ pub(crate) struct Arrays {
     pub(crate) plain: vk::Sampler,
     /// The default sampler of the comparison array.
     pub(crate) compare: vk::Sampler,
+    /// Whether the sampled-texture array holds the feedback elements.
+    feedback: bool,
     pub(crate) grants: Mutex<Grants>,
 }
 
@@ -306,33 +336,100 @@ impl Arrays {
         [self.empty, self.layout]
     }
 
-    /// Writes a texture's elements at `index`: the sampled-texture array's with `sampled` and its
-    /// layout, a null descriptor where it is `None`, and the storage-texture array's with
-    /// `storage` where it is `Some`, a null descriptor where that view is null. A texture without
-    /// a storage view leaves its storage element null, as every element starts; one that goes
-    /// writes both null. With `feedback`, also the sampled-texture array's element at `index`
-    /// plus [`TEXTURES`], with the sampled view in the attachment feedback layout.
+    /// Places a texture at `index` ([`Grants::place`]) and writes its elements before another
+    /// object can be placed there: the sampled-texture array's with `sampled` and its layout, a
+    /// null descriptor where it is `None`, the storage-texture array's with `storage`, and with
+    /// `feedback` the feedback element (`index` plus [`TEXTURES`]) with the sampled view in the
+    /// attachment feedback layout. A texture without a storage view, or without the feedback
+    /// element, leaves that element null, as every element starts, unless it displaced a
+    /// texture, which may have had one: then it writes that element null, so nothing stale
+    /// answers there. The descriptor-slot gauge rises where no object held the index. Its owner
+    /// word, which [`Arrays::vacate_texture`] takes.
+    ///
+    /// Err: [`Refusal::IndicesNotGranted`].
     ///
     /// # Safety
     ///
-    /// The caller owns the elements (the index is occupied for it, or is being vacated by it), and
-    /// each view is live and of the device, of an image in that layout whenever work uses it;
-    /// `feedback` only where the set was made with the feedback elements.
-    pub(crate) unsafe fn write_texture(
+    /// Each view is live and of the device, of an image in that layout whenever work uses it,
+    /// `feedback` only where the set was made with the feedback elements and the image has the
+    /// feedback usage, and no work in flight reads a displaced texture through the index (the
+    /// program's duty, as it is Metal's).
+    pub(crate) unsafe fn place_texture(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        index: u32,
+        (sampled, storage): (
+            Option<(vk::ImageView, vk::ImageLayout)>,
+            Option<vk::ImageView>,
+        ),
+        feedback: bool,
+    ) -> Result<Owner, Error> {
+        let mut grants = lock(&self.grants);
+        let Placed { owner, displaced } = grants.place(IndexClass::Texture, index)?;
+        if !displaced {
+            counters.rise(Gauge::DescriptorSlots);
+        }
+        let storage = storage.or(displaced.then(vk::ImageView::null));
+        let looped = match feedback {
+            true => sampled.map(|(view, _)| view),
+            false => (displaced && self.feedback).then(vk::ImageView::null),
+        };
+        // SAFETY: the caller's contract; the texture owns the index, and the lock is held.
+        unsafe { self.write_texture(device, index, sampled, storage, looped) };
+        Ok(owner)
+    }
+
+    /// The texture of `owner` goes from `index`: where it still owns the index, the index is free
+    /// and its elements are null again (the feedback element too, where it has one), and the
+    /// descriptor-slot gauge falls. A displaced texture's going touches nothing.
+    ///
+    /// # Safety
+    ///
+    /// No work in flight reads the texture's elements.
+    pub(crate) unsafe fn vacate_texture(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        (index, owner): (u32, Owner),
+        feedback: bool,
+    ) {
+        let mut grants = lock(&self.grants);
+        if grants.vacate(IndexClass::Texture, index, owner) {
+            let (storage, looped) = (
+                Some(vk::ImageView::null()),
+                feedback.then(vk::ImageView::null),
+            );
+            // SAFETY: the caller's contract; the lock is held, so no object is placed there
+            // before its elements are null.
+            unsafe { self.write_texture(device, index, None, storage, looped) };
+            counters.fall(Gauge::DescriptorSlots);
+        }
+    }
+
+    /// Writes a texture's elements at `index`: the sampled-texture array's with `sampled` and its
+    /// layout, a null descriptor where it is `None`; the storage-texture array's with `storage`
+    /// where it is `Some`, a null descriptor where that view is null; and the feedback element,
+    /// the sampled-texture array's at `index` plus [`TEXTURES`], in the attachment feedback
+    /// layout, with `looped` where it is `Some`, a null descriptor where that view is null.
+    ///
+    /// # Safety
+    ///
+    /// The grants' lock is held by a placement or a vacating of the index, each view is live and
+    /// of the device, of an image in that layout whenever work uses it, and `looped` is `Some`
+    /// only where the set was made with the feedback elements.
+    unsafe fn write_texture(
         &self,
         device: &ash::Device,
         index: u32,
         sampled: Option<(vk::ImageView, vk::ImageLayout)>,
         storage: Option<vk::ImageView>,
-        feedback: bool,
+        looped: Option<vk::ImageView>,
     ) {
         let (view, layout) = sampled.unwrap_or((
             vk::ImageView::null(),
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         ));
-        let looped = [vk::DescriptorImageInfo::default()
-            .image_view(view)
-            .image_layout(vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)];
         let sampled = [vk::DescriptorImageInfo::default()
             .image_view(view)
             .image_layout(layout)];
@@ -340,7 +437,10 @@ impl Arrays {
         let storage = [vk::DescriptorImageInfo::default()
             .image_view(storage.unwrap_or_default())
             .image_layout(vk::ImageLayout::GENERAL)];
-        if feedback {
+        if let Some(looped) = looped {
+            let looped = [vk::DescriptorImageInfo::default()
+                .image_view(looped)
+                .image_layout(vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)];
             let write = write(
                 self.set,
                 SAMPLED_BINDING,
@@ -348,7 +448,7 @@ impl Arrays {
                 &looped,
             )
             .dst_array_element(index + TEXTURES);
-            // SAFETY: as below; the element is the texture's alone.
+            // SAFETY: as below; the element is the index's owner's alone.
             unsafe { device.update_descriptor_sets(&[write], &[]) };
         }
         let writes = [
@@ -373,16 +473,100 @@ impl Arrays {
         unsafe { device.update_descriptor_sets(&writes[..count], &[]) };
     }
 
+    /// Places a sampler state or a constexpr sampler at `index` ([`Grants::place`]) and writes its
+    /// elements before another object can be placed there: each of `elements`, `(array,
+    /// sampler)`, the array 0 plain, 1 comparison and 2 integer texture, the array's default where
+    /// the sampler is `None`. An array not listed keeps its element, its default, unless the
+    /// object displaced another: then that element is written its default too. The
+    /// descriptor-slot gauge rises where no object held the index. Its owner word.
+    ///
+    /// Err: [`Refusal::IndicesNotGranted`].
+    ///
+    /// # Safety
+    ///
+    /// Each sampler is live and of the device whenever work uses it, and no work in flight reads
+    /// a displaced object through the index.
+    pub(crate) unsafe fn place_samplers(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        index: u32,
+        elements: &[(usize, Option<vk::Sampler>)],
+    ) -> Result<Owner, Error> {
+        let mut grants = lock(&self.grants);
+        let Placed { owner, displaced } = grants.place(IndexClass::Sampler, index)?;
+        if !displaced {
+            counters.rise(Gauge::DescriptorSlots);
+        }
+        let mut all = elements.to_vec();
+        if displaced {
+            let listed = |array: &usize| elements.iter().any(|&(at, _)| at == *array);
+            all.extend(
+                (0..SAMPLER_ARRAYS as usize)
+                    .filter(|a| !listed(a))
+                    .map(|a| (a, None)),
+            );
+        }
+        // SAFETY: the caller's contract; the object owns the index, and the lock is held.
+        unsafe { self.write_samplers(device, index, &all) };
+        Ok(owner)
+    }
+
+    /// Writes `elements` at `index` as [`Arrays::place_samplers`] does, where the object of
+    /// `owner` still owns the index: a later holder of a constexpr sampler adds the arrays it
+    /// uses. Elsewhere it writes nothing.
+    ///
+    /// # Safety
+    ///
+    /// No pending work uses an element it writes, and each sampler is live and of the device
+    /// whenever work uses it.
+    pub(crate) unsafe fn add_samplers(
+        &self,
+        device: &ash::Device,
+        index: u32,
+        owner: Owner,
+        elements: &[(usize, Option<vk::Sampler>)],
+    ) {
+        let grants = lock(&self.grants);
+        if grants.owns(IndexClass::Sampler, index, owner) {
+            // SAFETY: the caller's contract; the object owns the index, and the lock is held.
+            unsafe { self.write_samplers(device, index, elements) };
+        }
+    }
+
+    /// The sampler state or constexpr sampler of `owner` goes from `index`: where it still owns
+    /// the index, the index is free and each array's element its default again, and the
+    /// descriptor-slot gauge falls. A displaced object's going touches nothing.
+    ///
+    /// # Safety
+    ///
+    /// No work in flight reads the object's elements.
+    pub(crate) unsafe fn vacate_samplers(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        index: u32,
+        owner: Owner,
+    ) {
+        let mut grants = lock(&self.grants);
+        if grants.vacate(IndexClass::Sampler, index, owner) {
+            // SAFETY: the caller's contract; the lock is held, so no object is placed there
+            // before every element is its default.
+            unsafe { self.write_samplers(device, index, &[(0, None), (1, None), (2, None)]) };
+            counters.fall(Gauge::DescriptorSlots);
+        }
+    }
+
     /// Writes elements at `index` of the sampler arrays, each `(array, sampler)`, the array 0
     /// plain, 1 comparison and 2 integer texture: the array's default where the sampler is `None`.
     /// The elements not listed are left as they are.
     ///
     /// # Safety
     ///
-    /// The caller owns the elements (the index is occupied for it, or is being vacated by it), no
-    /// pending work uses one it writes, and each sampler is live and of the device whenever work
-    /// uses it.
-    pub(crate) unsafe fn write_samplers(
+    /// The grants' lock is held by a placement, an addition or a vacating of the index, no
+    /// pending work uses an element it writes, and each sampler is live and of the device
+    /// whenever work uses it.
+    unsafe fn write_samplers(
         &self,
         device: &ash::Device,
         index: u32,
@@ -530,6 +714,7 @@ impl Made {
             set,
             plain,
             compare,
+            feedback,
             grants: Mutex::new(Grants::new()),
         })
     }

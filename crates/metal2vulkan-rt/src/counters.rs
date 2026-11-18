@@ -806,8 +806,8 @@ pub struct Gauges {
     pub attachment_views: u64,
     /// Command buffers not yet retired.
     pub command_buffers: u64,
-    /// Occupied indices of set 1's arrays: one for each texture made at an index and each sampler
-    /// state.
+    /// Held indices of set 1's arrays: one for each index a texture, a sampler state or a
+    /// constexpr sampler owns. A placement that takes an index from another object adds none.
     pub descriptor_slots: u64,
     /// Live `VkDeviceMemory` allocations: those blocks are ranges of, the idle ones among them,
     /// and the runtime's own.

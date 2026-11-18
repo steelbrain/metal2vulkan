@@ -4,10 +4,11 @@
 //! - A descriptor Metal stops is refused, each rule by its own refusal: a zero extent, a height
 //!   or depth the type does not take, a cube that is not square, an array length or sample count
 //!   the type does not take, and levels past the full chain (one for 1D and multisample types).
-//! - An index is taken by one object at a time: taking it again is `Refusal::IndexInUse`, taking
-//!   one not granted `Refusal::IndicesNotGranted`, and a grant is not released while an object
-//!   lives at one of its indices (`Refusal::IndicesInUse`); vacated, it is taken and released
-//!   again.
+//! - An index has one owner, the object placed there last, in each class: a placement where
+//!   another object holds the index displaces it, and only the owner's vacating frees the index;
+//!   placing at one not granted is `Refusal::IndicesNotGranted`, and a grant is not released while
+//!   an object holds one of its indices (`Refusal::IndicesInUse`); vacated, it is placed at and
+//!   released again.
 //! - A view's components are Metal's swizzle over the format's own mapping: zero and one stay,
 //!   and a channel source reads through the format's mapping.
 //! - The linear row rounding starts at the texel's bytes: rows laid at the row itself answer the
@@ -109,44 +110,46 @@ fn each_shape_metal_stops_is_refused() {
 }
 
 #[test]
-fn an_index_holds_one_object_at_a_time() {
+fn an_index_has_one_owner_the_object_placed_there_last() {
+    for (class, first) in [(IndexClass::Texture, 4096), (IndexClass::Sampler, 1)] {
+        let mut grants = Grants::new();
+        let grant = grants.grant(class, first, 4).expect("the grant");
+        let at = first + 1;
+        let place = |grants: &mut Grants| grants.place(class, at).expect("a placement");
+        let earlier = place(&mut grants);
+        assert!(!earlier.displaced, "{class:?}");
+        let later = place(&mut grants);
+        assert!(later.displaced, "{class:?}");
+        assert_ne!(earlier.owner, later.owner, "{class:?}");
+        assert!(grants.owns(class, at, later.owner), "{class:?}");
+        // The displaced object's vacating leaves the index the later one's.
+        assert!(!grants.vacate(class, at, earlier.owner), "{class:?}");
+        assert!(grants.owns(class, at, later.owner), "{class:?}");
+        assert!(matches!(
+            grants.place(class, first + 4),
+            Err(Error::Refused(Refusal::IndicesNotGranted { index, .. })) if index == first + 4
+        ));
+        assert_eq!(
+            refused(grants.release(grant)),
+            Refusal::IndicesInUse { class, index: at }
+        );
+        assert!(grants.vacate(class, at, later.owner), "{class:?}");
+        assert!(!grants.owns(class, at, later.owner), "{class:?}");
+        let again = place(&mut grants);
+        assert!(!again.displaced, "{class:?}");
+        assert!(grants.vacate(class, at, again.owner), "{class:?}");
+        assert!(grants.release(grant).is_ok(), "{class:?}");
+    }
+    // The classes are apart: a texture grant grants no sampler index.
     let mut grants = Grants::new();
-    let grant = grants
-        .grant(IndexClass::Texture, 4096, 4)
-        .expect("the grant");
-    assert!(grants.occupy(IndexClass::Texture, 4097).is_ok());
+    grants.grant(IndexClass::Texture, 1, 4).expect("the grant");
     assert_eq!(
-        refused(grants.occupy(IndexClass::Texture, 4097)),
-        Refusal::IndexInUse {
-            class: IndexClass::Texture,
-            index: 4097
-        }
-    );
-    assert_eq!(
-        refused(grants.occupy(IndexClass::Texture, 4100)),
-        Refusal::IndicesNotGranted {
-            class: IndexClass::Texture,
-            index: 4100
-        }
-    );
-    assert_eq!(
-        refused(grants.occupy(IndexClass::Sampler, 4097)),
+        refused(grants.place(IndexClass::Sampler, 2)),
         Refusal::IndicesNotGranted {
             class: IndexClass::Sampler,
-            index: 4097
+            index: 2
         }
     );
-    assert_eq!(
-        refused(grants.release(grant)),
-        Refusal::IndicesInUse {
-            class: IndexClass::Texture,
-            index: 4097
-        }
-    );
-    grants.vacate(IndexClass::Texture, 4097);
-    assert!(grants.occupy(IndexClass::Texture, 4097).is_ok());
-    grants.vacate(IndexClass::Texture, 4097);
-    assert!(grants.release(grant).is_ok());
 }
 
 #[test]
@@ -450,14 +453,6 @@ mod on_device {
             );
 
             // An index holds its texture until it is gone, and its grant waits for it.
-            assert_eq!(
-                refused(device.new_texture(&d, Some(4102))),
-                Refusal::IndexInUse {
-                    class: IndexClass::Texture,
-                    index: 4102
-                },
-                "{name}"
-            );
             assert_eq!(
                 refused(device.new_texture(&d, None)),
                 Refusal::TextureIndex { index: None },

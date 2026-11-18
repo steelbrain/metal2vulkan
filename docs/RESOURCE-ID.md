@@ -29,6 +29,14 @@ texture writes its sampled-image element and leaves its storage-image element nu
 shader reaches has no index. A texture view takes its own index of the texture class. A texture
 buffer has no index: it is a typed refusal under these domains.
 
+An index has one owner, the object placed there last, as Metal's later texture at a resource ID
+takes the ID. A texture or a sampler placed at an index another live object holds writes its
+elements and owns the index; where the earlier texture had a storage element and the later has
+none, the later one writes that element null, so nothing stale answers there. The earlier
+object's release touches neither the index nor its elements; the owner's release empties them.
+The rule rests on the duty Metal puts on a program: no work in flight reads the displaced object
+through that ID. The runtime does not check it.
+
 ## The arrays
 
 Under the identity domains set 1 has one layout for every pipeline: binding 0 is the sampled-image

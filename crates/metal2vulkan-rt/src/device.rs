@@ -185,8 +185,8 @@ pub(crate) struct Core {
     pub(crate) arrays: Arrays,
     /// The sampler states' device samplers, shared by create info.
     pub(crate) samplers: Mutex<SamplerTable>,
-    /// The constexpr samplers the live pipeline states number, by index.
-    pub(crate) constexprs: Mutex<HashMap<u32, Constexpr>>,
+    /// The constexpr samplers the live pipeline states number, by index and state words.
+    pub(crate) constexprs: Mutex<HashMap<(u32, [u64; 2]), Constexpr>>,
     /// [`Device::minimum_linear_texture_alignment`]'s answers, one per pixel format asked.
     pub(crate) linear_alignments: Mutex<HashMap<metal2vulkan::metal::PixelFormat, u64>>,
     /// The live textures over a buffer in an image of their own (`crate::over`): while there are

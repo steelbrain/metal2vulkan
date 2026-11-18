@@ -5,7 +5,10 @@
 //! sampler's index is shared between the states that number it there and freed with the last.
 //! A texture of any usage is made at any index of a texture grant: `sample_down` samples a texture
 //! of shader-read usage alone at an index below 4,096 and writes one of shader-write usage above
-//! it, in one dispatch.
+//! it, in one dispatch. An index belongs to the texture placed there last: sampling and writing
+//! through it reach that texture, a displaced texture's going touches nothing, a placement of a
+//! texture with no storage view empties the storage element an earlier one wrote, and once the
+//! last placed goes, the index samples zero.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
@@ -14,10 +17,10 @@ mod on_device {
     use crate::device::lock;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType, Error,
+        CommandQueue, ComputePipelineDescriptor, ComputePipelineState, Device, DispatchType, Error,
         FunctionDescriptor, IndexClass, Library, Limit, NumberedSampler, PixelFormat, Refusal,
-        Region, SamplerDescriptor, SamplerMinMagFilter, StageSource, Texture, TextureDescriptor,
-        TextureType, TextureUsage,
+        Region, SamplerDescriptor, SamplerMinMagFilter, SamplerState, StageSource, Texture,
+        TextureDescriptor, TextureType, TextureUsage,
     };
     use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
 
@@ -149,6 +152,49 @@ mod on_device {
             .collect()
     }
 
+    /// The state of the harness's `sample_down`, which numbers its texture write's sampler alone.
+    fn down_state(name: &str, device: &Device, library: &Library) -> ComputePipelineState {
+        let write = |s: &[NumberedSampler]| matches!(s, [NumberedSampler::Write]);
+        state(device, library, "sample_down", write, vec![0])
+            .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"))
+    }
+
+    /// A linear sampler state at `index`.
+    fn linear(name: &str, device: &Device, index: u32) -> SamplerState {
+        let mut linear = SamplerDescriptor::new();
+        linear.min_filter = SamplerMinMagFilter::Linear;
+        linear.mag_filter = SamplerMinMagFilter::Linear;
+        (device.new_sampler_state(&linear, index)).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    /// One dispatch of `sample_down` (`down`) in a command buffer of its own, sampling `source`,
+    /// `SIDE` a side, through `sampler` into `target`'s first half of each side, committed and
+    /// waited for.
+    fn sample_down(
+        name: &str,
+        queue: &CommandQueue,
+        (down, sampler): (&ComputePipelineState, &SamplerState),
+        [source, target]: [&Texture; 2],
+    ) {
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder = command_buffer
+            .compute_command_encoder(DispatchType::Serial)
+            .expect("an encoder");
+        encoder.set_compute_pipeline_state(down).expect("down");
+        encoder.set_texture(Some(source), 0).expect("source");
+        encoder.set_texture(Some(target), 1).expect("target");
+        encoder
+            .set_sampler_state(Some(sampler), 0)
+            .expect("sampler");
+        encoder
+            .dispatch_threads([SIDE / 2, SIDE / 2, 1], [4, 4, 1])
+            .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"));
+        encoder.end_encoding();
+        command_buffer.commit().expect("a commit");
+        finished(name, &command_buffer);
+        assert!(command_buffer.error().is_none(), "{name}");
+    }
+
     /// Whether `got` is the linear filter's `want`, within what a device's filter weights round.
     fn near(got: &[f32], want: &[f32]) -> bool {
         got.len() == want.len()
@@ -209,8 +255,8 @@ mod on_device {
             )
             .unwrap_or_else(|error| panic!("{name}: sample_up: {error}"));
             assert_eq!(counters.gauges().descriptor_slots, slots + 1, "{name}");
-            // A second state that numbers it at the same index shares it; a sampler state there,
-            // or an answer of another count, is refused.
+            // A second state that numbers it at the same index shares it; an answer of another
+            // count is refused.
             let again = state(
                 &device,
                 &library,
@@ -220,16 +266,6 @@ mod on_device {
             )
             .unwrap_or_else(|error| panic!("{name}: sample_up again: {error}"));
             assert_eq!(counters.gauges().descriptor_slots, slots + 1, "{name}");
-            assert!(
-                matches!(
-                    device.new_sampler_state(&linear, CONSTEXPR),
-                    Err(Error::Refused(Refusal::IndexInUse {
-                        class: IndexClass::Sampler,
-                        index: CONSTEXPR
-                    }))
-                ),
-                "{name}"
-            );
             assert!(
                 matches!(
                     state(&device, &library, "sample_up", constexpr, vec![CONSTEXPR]),
@@ -339,40 +375,102 @@ mod on_device {
                 "{name}"
             );
             fill(name, &source);
-            let mut linear = SamplerDescriptor::new();
-            linear.min_filter = SamplerMinMagFilter::Linear;
-            linear.mag_filter = SamplerMinMagFilter::Linear;
-            let sampler = (device.new_sampler_state(&linear, 1))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let down = state(
-                &device,
-                &library,
-                "sample_down",
-                |s| matches!(s, [NumberedSampler::Write]),
-                vec![0],
-            )
-            .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"));
+            let sampler = linear(name, &device, 1);
+            let down = down_state(name, &device, &library);
             let queue = device.new_command_queue(4).expect("a queue");
-            let command_buffer = queue.command_buffer().expect("a command buffer");
-            let mut encoder = command_buffer
-                .compute_command_encoder(DispatchType::Serial)
-                .expect("an encoder");
-            encoder.set_compute_pipeline_state(&down).expect("down");
-            encoder.set_texture(Some(&source), 0).expect("source");
-            encoder.set_texture(Some(&written), 1).expect("written");
-            encoder
-                .set_sampler_state(Some(&sampler), 0)
-                .expect("sampler");
-            encoder
-                .dispatch_threads([SIDE / 2, SIDE / 2, 1], [4, 4, 1])
-                .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"));
-            encoder.end_encoding();
-            command_buffer.commit().expect("a commit");
-            finished(name, &command_buffer);
-            assert!(command_buffer.error().is_none(), "{name}");
+            sample_down(name, &queue, (&down, &sampler), [&source, &written]);
             let (got, want) = (texels(&written, SIDE / 2), means());
             assert!(near(&got, &want), "{name}: {got:?} {want:?}");
-            drop((command_buffer, queue, down, sampler, source, written));
+            drop((queue, down, sampler, source, written));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    /// The owner rule (`docs/RESOURCE-ID.md`), at one index: a texture of shader-write usage D,
+    /// then one of shader-read usage alone A placed over it, whose placement empties D's storage
+    /// element (a write through the index is dropped, and D keeps its texels); then one of
+    /// shader-write usage B placed over A, and A goes, touching nothing. Sampling through the
+    /// index reads B, and writing through it writes B. Once B goes, the index's elements are
+    /// empty: sampling through D's ID, the same index, reads zero. The descriptor-slot gauge
+    /// counts the index once throughout, and not after B.
+    #[test]
+    fn every_device_gives_an_index_to_the_texture_placed_there_last() {
+        const AT: u32 = 3;
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("sampling", |name, _, device| {
+            let counters = device.counters();
+            let range = IndexClass::Texture.range();
+            let grants = [
+                (IndexClass::Texture, range.start, range.end - range.start),
+                (IndexClass::Sampler, 1, 1),
+            ]
+            .map(|(class, first, count)| {
+                (device.grant_indices(class, first, count))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let slots = counters.gauges().descriptor_slots;
+            let read = TextureUsage::SHADER_READ;
+            let write = read | TextureUsage::SHADER_WRITE;
+            let source = texture(&device, SIDE, read, 5000);
+            fill(name, &source);
+            let target = texture(&device, SIDE / 2, write, range.end - 1);
+            let sampler = linear(name, &device, 1);
+            let down = down_state(name, &device, &library);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let pass = |textures| sample_down(name, &queue, (&down, &sampler), textures);
+            let pattern: Vec<f32> = (0..SIDE)
+                .flat_map(|y| (0..SIDE).flat_map(move |x| texel(x, y)))
+                .collect();
+
+            let d = texture(&device, SIDE, write, AT);
+            fill(name, &d);
+            let a = texture(&device, SIDE, read, AT);
+            assert_eq!(counters.gauges().descriptor_slots, slots + 3, "{name}");
+            pass([&source, &a]);
+            assert_eq!(
+                texels(&d, SIDE),
+                pattern,
+                "{name}: D written through the index"
+            );
+
+            let b = texture(&device, SIDE, write, AT);
+            fill(name, &b);
+            drop(a);
+            assert_eq!(counters.gauges().descriptor_slots, slots + 3, "{name}");
+            pass([&b, &target]);
+            let got = texels(&target, SIDE / 2);
+            assert!(
+                near(&got, &means()),
+                "{name}: sampled through the index: {got:?}"
+            );
+            pass([&source, &b]);
+            let mean = means();
+            let half = SIDE / 2;
+            let want: Vec<f32> = (0..SIDE)
+                .flat_map(|y| (0..SIDE).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
+                .map(|(x, y, c)| match x < half && y < half {
+                    true => mean[(4 * (y * half + x) + c) as usize],
+                    false => texel(x, y)[c as usize],
+                })
+                .collect();
+            let got = texels(&b, SIDE);
+            assert!(
+                near(&got, &want),
+                "{name}: written through the index: {got:?}"
+            );
+
+            drop(b);
+            assert_eq!(counters.gauges().descriptor_slots, slots + 2, "{name}");
+            pass([&d, &target]);
+            let zero = vec![0.0; (half * half * 4) as usize];
+            assert_eq!(texels(&target, half), zero, "{name}: sampled once B went");
+            drop(d);
+            assert_eq!(counters.gauges().descriptor_slots, slots + 2, "{name}");
+            drop((queue, down, sampler, source, target));
             for grant in grants {
                 (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             }

@@ -180,9 +180,10 @@ and the (name id, value) answer pairs.
   object (its first `gpuResourceID` record, read ahead), else the lowest index of its class that
   no live object holds and the program did not reserve (`reserveResourceIndicesForResourceType:
   indices:indexCount:`), as Metal's pool hands out a sampler state's ID. A reserved index is taken
-  only where the stream names it. Where the runtime refuses a named index (an object of the play
-  still holds it, or it lies outside the object's class), the object takes the lowest free one,
-  and the report counts it.
+  only where the stream names it. A named index a live object of the play holds is taken from
+  it, as Metal's later texture at an ID takes the ID: the earlier object's release leaves the
+  index. Where the runtime refuses a named index (it lies outside the object's class), the object
+  takes the lowest free one, and the report counts it.
 - **Textures outside the program's IDs.** A texture the recorder makes for itself, not the
   program's (the host's cursor), comes from a texture descriptor record whose map holds
   `outside: true` and a device's `newTextureWithDescriptor:` of that descriptor. Live, it took no

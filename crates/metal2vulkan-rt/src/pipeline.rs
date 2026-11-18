@@ -202,7 +202,9 @@ impl Numbered {
     /// Gives up the constexpr samplers' elements the state holds.
     pub(crate) fn release(&mut self, core: &Core) {
         for at in self.held.drain(..) {
-            release_constexpr(core, self.ids[at]);
+            if let NumberedSampler::Constexpr(words) = self.samplers[at] {
+                release_constexpr(core, self.ids[at], words);
+            }
         }
     }
 }
@@ -473,8 +475,7 @@ impl crate::Device {
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::KernelInput`] for a kernel that reads what the
     /// compute encoder does not supply yet; [`Refusal::SamplerIds`] where `sampler_ids` answers
-    /// another count; [`Refusal::IndicesNotGranted`] and
-    /// [`Refusal::IndexInUse`] for a constexpr sampler's index;
+    /// another count; [`Refusal::IndicesNotGranted`] for a constexpr sampler's index;
     /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
     pub fn new_compute_pipeline_state(
         &self,

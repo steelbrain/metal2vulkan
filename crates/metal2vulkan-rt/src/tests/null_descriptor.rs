@@ -17,8 +17,8 @@ mod on_device {
 
     /// The sampled-image array: one element per texture index (`docs/RESOURCE-ID.md`).
     const SAMPLED: u32 = 65_536;
-    /// The storage-image array: one element per storage-capable texture index.
-    const STORAGE: u32 = 4_096;
+    /// The storage-image array: one element per texture index, as the sampled-image array.
+    const STORAGE: u32 = 65_536;
     /// The sampler array.
     const SAMPLERS: u32 = 4_000;
     /// The words the shader stores, each 0 where the device answers as Metal does.

@@ -275,24 +275,11 @@ pub enum Refusal {
         /// The first index of the range that is not granted.
         index: u32,
     },
-    /// A texture, a sampler state or a pipeline state's constexpr sampler at an index where
-    /// another object lives already ([`Device::new_texture`](crate::Device::new_texture),
-    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state),
-    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state); states
-    /// that number one constexpr sampler share its index). Metal has no counterpart: Metal
-    /// chooses its resource IDs itself.
+    /// A release of a grant while a texture, a sampler state or a constexpr sampler holds one of
+    /// its indices ([`Device::release_indices`](crate::Device::release_indices)). Metal has no
+    /// counterpart.
     ///
-    /// Basis: ours (an index names one object at a time, and its elements are that object's).
-    IndexInUse {
-        /// The class of the index.
-        class: IndexClass,
-        /// The index.
-        index: u32,
-    },
-    /// A release of a grant while a texture or a sampler state lives at one of its indices
-    /// ([`Device::release_indices`](crate::Device::release_indices)). Metal has no counterpart.
-    ///
-    /// Basis: ours (an object's index stays granted while the object lives).
+    /// Basis: ours (an object's index stays granted while the object holds it).
     IndicesInUse {
         /// The class of the index.
         class: IndexClass,
@@ -1230,9 +1217,6 @@ impl fmt::Display for Refusal {
             }
             Refusal::IndicesNotGranted { class, index } => {
                 write!(f, "{class:?} index {index} is not granted")
-            }
-            Refusal::IndexInUse { class, index } => {
-                write!(f, "an object lives at {class:?} index {index} already")
             }
             Refusal::IndicesInUse { class, index } => {
                 write!(f, "an object lives at {class:?} index {index} of the grant")

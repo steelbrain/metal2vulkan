@@ -214,7 +214,7 @@ impl crate::Device {
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::RenderPipeline`] for what the runtime does not
     /// build, naming it; [`Refusal::SamplerIds`](crate::Refusal::SamplerIds) where `sampler_ids`
     /// answers another count; [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted)
-    /// and [`Refusal::IndexInUse`](crate::Refusal::IndexInUse) for a constexpr sampler's index;
+    /// for a constexpr sampler's index;
     /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
     pub fn new_render_pipeline_state(
         &self,

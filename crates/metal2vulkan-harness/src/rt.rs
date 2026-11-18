@@ -21,10 +21,10 @@
 //! The runtime places a texture or a sampler state at the index its consumer gives, from the
 //! consumer's grants, and asks it for the index of each sampler a pipeline state numbers. The
 //! harness grants itself every texture index and every sampler index once the device is made
-//! (`Indices`): each texture a shader reaches takes the next texture index, each sampler state
-//! the next sampler index, passing over one an earlier object still holds, and a constexpr
-//! sampler the index the first state that numbered its state words took, as Metal gives an equal
-//! one the same ID. A texture read's or write's numbered sampler takes nothing at its index: 0.
+//! (`Indices`): each texture a shader reaches takes the next texture index and each sampler state
+//! the next sampler index, round each class's range, and a constexpr sampler the index the first
+//! state that numbered its state words took, as Metal gives an equal one the same ID; a sampler
+//! state passes over a constexpr sampler's index. A texture read's or write's numbered sampler takes nothing at its index: 0.
 //!
 //! The new runtime makes no heap and no texture over a buffer yet: a plan with such a texture is
 //! refused ([`Refused`]).
@@ -177,29 +177,22 @@ impl Device {
         self.device.new_managed_buffer(bytes, copy, length, 0)
     }
 
-    /// `make` at the next index of `class` that no earlier object still holds.
+    /// `make` at the next index of `class`, round the class's range: an object made there takes
+    /// the index from an earlier one, which the harness's workloads, each making far fewer objects
+    /// than the range holds, do not keep that long.
     fn place<T>(
         &self,
         class: rt::IndexClass,
         make: impl Fn(u32) -> std::result::Result<T, rt::Error>,
     ) -> Result<T> {
-        let range = class.range();
-        for _ in range.clone() {
-            let index = {
-                let mut indices = self.indices.borrow_mut();
-                let last = *indices.last(class);
-                let index = indices.next(class, last);
-                *indices.last(class) = index;
-                index
-            };
-            match make(index) {
-                Err(rt::Error::Refused(rt::Refusal::IndexInUse { .. })) => continue,
-                made => return made.map_err(error),
-            }
-        }
-        Err(Box::new(Refused(format!(
-            "every {class:?} index is in use"
-        ))))
+        let index = {
+            let mut indices = self.indices.borrow_mut();
+            let last = *indices.last(class);
+            let index = indices.next(class, last);
+            *indices.last(class) = index;
+            index
+        };
+        make(index).map_err(error)
     }
 
     /// The indices of a pipeline state's numbered samplers: a constexpr sampler takes the index

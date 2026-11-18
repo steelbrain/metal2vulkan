@@ -15,8 +15,7 @@ use super::value::{hex, Value};
 use crate::ScratchDir;
 use metal2vulkan_rt as rt;
 use sha2::{Digest, Sha256};
-use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -1152,20 +1151,15 @@ fn a_texture_marked_outside_takes_no_index_of_the_sequence() {
     assert_eq!((marked, marked_again), (end - 1, end - 2));
 }
 
-/// An object takes the index its record names where the runtime takes it; else, and for an
-/// object with none, the lowest index of its class that no live object holds and the program did
-/// not reserve, an index the runtime finds in use passed over; a released object's index is free
-/// again.
+/// An object takes the index its record names; else, and for an object with none, the lowest
+/// index of its class that no live object holds and the program did not reserve. A named index an
+/// object holds is taken from it, and the earlier object's release leaves it; a released object's
+/// index is free again.
 #[test]
 fn objects_take_the_named_index_else_the_lowest_free_one() {
     let class = rt::IndexClass::Sampler;
     let start = class.range().start;
-    // The runtime's own record: start + 1 held by work in flight of a released object.
-    let in_use = RefCell::new(HashSet::from([start + 1]));
-    let make = |index: u32| match in_use.borrow_mut().insert(index) {
-        true => Ok(index),
-        false => Err(rt::Error::Refused(rt::Refusal::IndexInUse { class, index })),
-    };
+    let make = |index: u32| Ok::<u32, rt::Error>(index);
     let mut indices = Indices::default();
     indices.reserve(class, start + 2);
     let take = |indices: &mut Indices, object, named| {
@@ -1178,24 +1172,28 @@ fn objects_take_the_named_index_else_the_lowest_free_one() {
         "the named index"
     );
     assert_eq!(take(&mut indices, 2, None), start, "the lowest");
-    // start + 1 is in use (work in flight holds it), start + 2 reserved.
-    assert_eq!(take(&mut indices, 3, None), start + 3);
-    // A named index an object holds: the lowest free one instead.
-    assert_eq!(take(&mut indices, 4, Some(start + 7)), start + 4);
+    // start + 2 is reserved.
+    assert_eq!(take(&mut indices, 3, None), start + 1);
+    assert_eq!(take(&mut indices, 4, None), start + 3);
+    // A named index an object holds: taken, and the earlier object's release leaves it.
+    assert_eq!(take(&mut indices, 5, Some(start + 7)), start + 7);
+    indices.give(1);
+    assert_eq!(indices.lowest(class, start + 7, |_| false), Some(start + 8));
     assert_eq!(
-        take(&mut indices, 5, Some(start + 2)),
+        take(&mut indices, 6, Some(start + 2)),
         start + 2,
         "the stream names a reserved index"
     );
     indices.give(2);
-    in_use.borrow_mut().remove(&start);
     assert_eq!(
-        take(&mut indices, 6, None),
+        take(&mut indices, 7, None),
         start,
         "free again after the release"
     );
+    indices.give(5);
+    assert_eq!(indices.lowest(class, start + 7, |_| false), Some(start + 7));
     assert!(
-        indices.line().starts_with("indices named 2:"),
+        indices.line().starts_with("indices named 3:"),
         "{}",
         indices.line()
     );

@@ -948,11 +948,13 @@ impl NewRuntime {
                         None => {
                             let fresh = |index| taken.iter().any(|&(_, i)| i == index);
                             let index = indices.lowest(rt::IndexClass::Sampler, 0, fresh);
-                            let index =
-                                index.ok_or(rt::Error::Refused(rt::Refusal::IndexInUse {
+                            // None free: the next would be past the class's range.
+                            let index = index.ok_or(rt::Error::Refused(
+                                rt::Refusal::IndicesNotGranted {
                                     class: rt::IndexClass::Sampler,
-                                    index: rt::IndexClass::Sampler.range().end - 1,
-                                }))?;
+                                    index: rt::IndexClass::Sampler.range().end,
+                                },
+                            ))?;
                             taken.push((*words, index));
                             index
                         }

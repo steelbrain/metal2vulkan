@@ -13715,7 +13715,6 @@ variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen
 variant	metal2vulkan-rt::Refusal::FillRange	FillRange { start: u64, end: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::HeapTexturePlace	HeapTexturePlace { offset: u64, size: u64, align: u64, heap_len: u64 }
 variant	metal2vulkan-rt::Refusal::IndexBufferOffset	IndexBufferOffset { offset: u64, length: u64 }
-variant	metal2vulkan-rt::Refusal::IndexInUse	IndexInUse { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesGranted	IndicesGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesInUse	IndicesInUse { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesNotGranted	IndicesNotGranted { class: IndexClass, index: u32 }

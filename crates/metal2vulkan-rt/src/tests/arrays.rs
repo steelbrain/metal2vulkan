@@ -13,8 +13,8 @@
 //!   past their capacity: every index of each class takes an object, the samplers' through one
 //!   grant and the textures' through one for a texture of shader-write usage and one for views
 //!   of it at every other index, and objects dropped one at a time give their index to the next,
-//!   more than 4,000 sampler states and 65,536 textures in all, none refused as in use, the
-//!   descriptor-slot gauge back to zero after them.
+//!   more than 4,000 sampler states and 65,536 textures in all, the descriptor-slot gauge
+//!   counting each index once and back to zero after them.
 
 use crate::arrays::Grants;
 use crate::error::{Error, Limit, Refusal};
@@ -169,7 +169,8 @@ mod on_device {
     /// Set 1's arrays filled past their capacity: 3,999 sampler states and 128 more, through one
     /// grant; a texture of shader-write usage at the first texture index and 65,534 views of it
     /// at every other, both elements written at each, and 128 views more. Every make is
-    /// unwrapped, so an index refused as in use (`Refusal::IndexInUse`) fails the test.
+    /// unwrapped, and the descriptor-slot gauge counts each index once, so no object took an index
+    /// another held.
     #[test]
     fn every_device_fills_set_1_past_its_capacity() {
         let instance = Instance::new(&[]).expect("an instance at the floor");
