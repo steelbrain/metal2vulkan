@@ -406,6 +406,10 @@ fn each_missing_feature_is_named() {
             feature(ROBUSTNESS2, "nullDescriptor"),
         ),
         (
+            |f| f.robustness2.robust_image_access2 = vk::FALSE,
+            feature(ROBUSTNESS2, "robustImageAccess2"),
+        ),
+        (
             |f| f.core.sampler_anisotropy = vk::FALSE,
             feature(CORE, "samplerAnisotropy"),
         ),
