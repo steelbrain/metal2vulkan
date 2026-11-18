@@ -11,6 +11,10 @@
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
 //!   commit, and a synchronize brings the GPU's bytes into the CPU's copy.
+//! - Sampler states take the lowest index of their class that no live object holds and the
+//!   program did not reserve: made and released past the class's 3,999 indices, they reuse the
+//!   released ones. A reserved index is taken only where the stream names it, by a descriptor's
+//!   resource index or by the ID the program saw of the state.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -68,6 +72,13 @@ fn written(
 /// `path` played on the new runtime's device, its report and the backend's lines printed; the
 /// play's end unwrapped.
 fn play(test: &str, path: &Path) -> (Report, Vec<String>) {
+    let (report, lines, _) = played(test, path, &[]);
+    (report, lines)
+}
+
+/// `path` played as [`play`] plays it, and the index (the low half of the `gpuResourceID`) the
+/// runtime then gives each of `objects`.
+fn played(test: &str, path: &Path, objects: &[u64]) -> (Report, Vec<String>, Vec<u32>) {
     let cache = ScratchCache::new().unwrap();
     let mut backend = NewRuntime::new(rt_device(cache.path())).unwrap();
     let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
@@ -77,7 +88,15 @@ fn play(test: &str, path: &Path) -> (Report, Vec<String>) {
         eprintln!("REPLAY {test} {line}");
     }
     ended.unwrap();
-    (report, lines)
+    let mut index = |object: &u64| backend.resource_id(*object).unwrap().expect("an ID") as u32;
+    let indices = objects.iter().map(&mut index).collect();
+    (report, lines, indices)
+}
+
+/// A sampler descriptor's map: the default descriptor, its resource index `index` where given.
+fn sampler(index: Option<u64>) -> Value {
+    let index = index.map(|index| ("resourceIndex".into(), Value::Uint(index)));
+    Value::Map(index.into_iter().collect())
 }
 
 /// A recorder struct's map of unsigned fields.
@@ -346,4 +365,57 @@ fn a_two_copy_stream_s_managed_buffer_keeps_both_copies() {
         let object = check.object;
         assert_eq!(Some(check.sha256), check.recorded, "#{object}: {lines:?}");
     }
+}
+
+#[test]
+fn sampler_states_made_and_released_past_their_class_reuse_the_lowest_free_index() {
+    let dir = ScratchDir::new("rt-replay-samplers").unwrap();
+    let made = "newSamplerStateWithDescriptor:";
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call(made, 1, 2, &[sampler(None)], &[])?;
+        // More than the class's 3,999 indices, each released before the next is made.
+        for object in 10..4110 {
+            w.call(made, 1, object, &[sampler(None)], &[])?;
+            w.call("release", object, 0, &[], &[])?;
+        }
+        w.call(made, 1, 3, &[sampler(None)], &[])
+    });
+    let (_, _, indices) = played("samplers", &path, &[2, 3]);
+    assert_eq!(indices, [1, 2]);
+}
+
+#[test]
+fn a_reserved_sampler_index_is_taken_only_where_the_stream_names_it() {
+    let dir = ScratchDir::new("rt-replay-reserved").unwrap();
+    let made = "newSamplerStateWithDescriptor:";
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        // The sampler type's indices 1 and 2, reserved.
+        let indices = Value::List(vec![Value::Uint(1), Value::Uint(2)]);
+        let reserve = [Value::Uint(1), indices, Value::Uint(2)];
+        let selector = "reserveResourceIndicesForResourceType:indices:indexCount:";
+        w.call(selector, 1, 0, &reserve, &[])?;
+        w.call(made, 1, 2, &[sampler(None)], &[])?;
+        w.call(made, 1, 3, &[sampler(Some(2))], &[])
+    });
+    let (_, _, indices) = played("reserved", &path, &[2, 3]);
+    assert_eq!(indices, [3, 2]);
+}
+
+#[test]
+fn a_sampler_state_takes_the_index_of_the_id_the_program_saw() {
+    let dir = ScratchDir::new("rt-replay-recorded").unwrap();
+    let made = "newSamplerStateWithDescriptor:";
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call(made, 1, 2, &[sampler(None)], &[])?;
+        w.call(made, 1, 3, &[sampler(None)], &[])?;
+        // The program saw #2 at index 7, the default descriptor's word 0 (docs/RESOURCE-ID.md).
+        let id = [("gpuResourceID", Value::Uint(7))];
+        w.call("gpuResourceID", 2, 0, &[], &id)
+    });
+    let (report, _, indices) = played("recorded", &path, &[2, 3]);
+    assert_eq!(indices, [7, 1]);
+    assert!(report.ids.is_empty(), "{:?}", report.ids);
 }

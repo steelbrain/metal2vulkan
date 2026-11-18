@@ -2,10 +2,10 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
+use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
 use super::new_runtime::second::merge;
 use super::new_runtime::unwritten::Unwritten;
-use super::new_runtime::{next_index, top_index};
 use super::player::{
     Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
     TextureWrites, WAIT_COMPLETED,
@@ -1099,26 +1099,75 @@ fn a_texture_marked_outside_whose_id_the_program_saw_stops_the_play() {
 /// index down.
 #[test]
 fn a_texture_marked_outside_takes_no_index_of_the_sequence() {
-    let range = 8..16;
-    let in_use = RefCell::new(HashSet::new());
+    let class = rt::IndexClass::Texture;
+    let make = |index: u32| Ok::<u32, rt::Error>(index);
+    let placed = |indices: &mut Indices, object| {
+        let made = indices.place(object, class, None, make);
+        made.expect("a free index").expect("made")
+    };
+    let topped = |indices: &mut Indices, object| {
+        let made = indices.top(object, class, make);
+        made.expect("a free index").expect("made")
+    };
+    let mut indices = Indices::default();
+    let unmarked = [placed(&mut indices, 1), placed(&mut indices, 2)];
+    let mut indices = Indices::default();
+    let first = placed(&mut indices, 1);
+    let marked = topped(&mut indices, 2);
+    let second = placed(&mut indices, 3);
+    let marked_again = topped(&mut indices, 4);
+    assert_eq!([first, second], unmarked);
+    let end = class.range().end;
+    assert_eq!((marked, marked_again), (end - 1, end - 2));
+}
+
+/// An object takes the index its record names where the runtime takes it; else, and for an
+/// object with none, the lowest index of its class that no live object holds and the program did
+/// not reserve, an index the runtime finds in use passed over; a released object's index is free
+/// again.
+#[test]
+fn objects_take_the_named_index_else_the_lowest_free_one() {
+    let class = rt::IndexClass::Sampler;
+    let start = class.range().start;
+    // The runtime's own record: start + 1 held by work in flight of a released object.
+    let in_use = RefCell::new(HashSet::from([start + 1]));
     let make = |index: u32| match in_use.borrow_mut().insert(index) {
         true => Ok(index),
-        false => Err(rt::Error::Refused(rt::Refusal::IndexInUse {
-            class: rt::IndexClass::Texture,
-            index,
-        })),
+        false => Err(rt::Error::Refused(rt::Refusal::IndexInUse { class, index })),
     };
-    let plain = |last: &mut u32| next_index(last, range.clone(), |_| false, make).unwrap();
-    let mut last = 0;
-    let unmarked = [plain(&mut last).unwrap(), plain(&mut last).unwrap()];
-    in_use.borrow_mut().clear();
-    let mut last = 0;
-    let first = plain(&mut last).unwrap();
-    let marked = top_index(range.clone(), make).unwrap().unwrap();
-    let second = plain(&mut last).unwrap();
-    let marked_again = top_index(range.clone(), make).unwrap().unwrap();
-    assert_eq!([first, second], unmarked);
-    assert_eq!((marked, marked_again), (15, 14));
+    let mut indices = Indices::default();
+    indices.reserve(class, start + 2);
+    let take = |indices: &mut Indices, object, named| {
+        let made = indices.place(object, class, named, make);
+        made.expect("a free index").expect("made")
+    };
+    assert_eq!(
+        take(&mut indices, 1, Some(start + 7)),
+        start + 7,
+        "the named index"
+    );
+    assert_eq!(take(&mut indices, 2, None), start, "the lowest");
+    // start + 1 is in use (work in flight holds it), start + 2 reserved.
+    assert_eq!(take(&mut indices, 3, None), start + 3);
+    // A named index an object holds: the lowest free one instead.
+    assert_eq!(take(&mut indices, 4, Some(start + 7)), start + 4);
+    assert_eq!(
+        take(&mut indices, 5, Some(start + 2)),
+        start + 2,
+        "the stream names a reserved index"
+    );
+    indices.give(2);
+    in_use.borrow_mut().remove(&start);
+    assert_eq!(
+        take(&mut indices, 6, None),
+        start,
+        "free again after the release"
+    );
+    assert!(
+        indices.line().starts_with("indices named 2:"),
+        "{}",
+        indices.line()
+    );
 }
 
 /// The first object of the player's own.

@@ -128,6 +128,12 @@ pub trait Backend {
     fn managed_texture(&self, _texture: u64) -> Option<bool> {
         None
     }
+
+    /// The `gpuResourceID` the program saw of `object`, which the next call makes, from the
+    /// stream's first `gpuResourceID` record of it (read ahead): a backend that places objects
+    /// at indices of its own choosing places it at that ID's. One that places them as the
+    /// recording's runtime did ignores it.
+    fn recorded_id(&mut self, _object: u64, _id: u64) {}
 }
 
 /// Why a play stopped.
@@ -786,6 +792,9 @@ pub struct Player<'b, B: Backend> {
     /// making an object have as their receiver (the lowest id of a tie). Only its identity record
     /// tells the backend the Managed form; none where no call makes an object on a device.
     guest_device: Option<u64>,
+    /// The ID the program saw of each object, read ahead: its first `gpuResourceID` record's
+    /// answer, by the object and the position of the call that made it.
+    recorded_ids: HashMap<(u64, u64), u64>,
     /// The next call's position: the calls stepped so far.
     position: u64,
     /// The compute encoders open while a record names a later dispatch.
@@ -1001,6 +1010,7 @@ impl<'b, B: Backend> Player<'b, B> {
             ahead: HashMap::new(),
             layouts: HashMap::new(),
             guest_device: None,
+            recorded_ids: HashMap::new(),
             position: 0,
             encoders: HashMap::new(),
             done: VecDeque::new(),
@@ -1105,12 +1115,15 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     /// Index the `m2v.privateBytes` records by the dispatch each names, which comes before it, and
-    /// lay out each placement heap for the runtime's answers (`relay`). A stream error ends the
-    /// reading: the play meets it where it lies, as it meets a placement whose size the runtime
-    /// does not answer.
+    /// the ID the program saw of each object by its making (`recorded_ids`), and lay out each
+    /// placement heap for the runtime's answers (`relay`). A stream error ends the reading: the
+    /// play meets it where it lies, as it meets a placement whose size the runtime does not
+    /// answer.
     fn read_ahead(&mut self, stream: &StreamReader) -> Result<(), PlayError> {
         let mut ahead = stream.reopened()?;
         let mut position = 0;
+        // The position of the call that made each object.
+        let mut made_at: HashMap<u64, u64> = HashMap::new();
         // Each live texture descriptor's calls: the one that made it, then its setters.
         let mut descriptors: HashMap<u64, Vec<Call>> = HashMap::new();
         // Each placement heap's recorded size and, by offset, the most bytes and the largest
@@ -1124,6 +1137,15 @@ impl<'b, B: Backend> Player<'b, B> {
             } else if call.result != 0 {
                 if let Some(made) = made_on.get_mut(&call.receiver) {
                     *made += 1;
+                }
+            }
+            if call.result != 0 {
+                made_at.insert(call.result, position);
+            }
+            let answer = call.answer("gpuResourceID").and_then(Value::as_uint);
+            if let (Some(id), "gpuResourceID") = (answer, &*call.selector) {
+                if let Some(&at) = made_at.get(&call.receiver) {
+                    self.recorded_ids.entry((call.receiver, at)).or_insert(id);
                 }
             }
             match &*call.selector {
@@ -1478,6 +1500,9 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         let resolved = self.placed(Call { args, ..call });
         let resolved = self.uploaded(resolved)?;
+        if let Some(&id) = (self.recorded_ids).get(&(resolved.result, self.position)) {
+            self.backend.recorded_id(resolved.result, id);
+        }
         let made = self.run(&resolved)?;
         self.track(&resolved);
         let backend = &*self.backend;

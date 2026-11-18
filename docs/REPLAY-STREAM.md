@@ -169,7 +169,14 @@ and the (name id, value) answer pairs.
 - **Resource IDs.** A descriptor's resource index places its object at that ID, as Metal places it
   whether or not the index is forced: a texture descriptor's and a render pipeline's
   `resourceIndex` (`[index, forced]`), a sampler's (an index), and a view's `resourceIndex:`
-  argument. Every other object takes the ID its runtime gives it.
+  argument. Every other object takes the ID its runtime gives it; on the new runtime, whose
+  consumer gives every texture and sampler index, the index of the ID the program saw of the
+  object (its first `gpuResourceID` record, read ahead), else the lowest index of its class that
+  no live object holds and the program did not reserve (`reserveResourceIndicesForResourceType:
+  indices:indexCount:`), as Metal's pool hands out a sampler state's ID. A reserved index is taken
+  only where the stream names it. Where the runtime refuses a named index (an object of the play
+  still holds it, or it lies outside the object's class), the object takes the lowest free one,
+  and the report counts it.
 - **Textures outside the program's IDs.** A texture the recorder makes for itself, not the
   program's (the host's cursor), comes from a texture descriptor record whose map holds
   `outside: true` and a device's `newTextureWithDescriptor:` of that descriptor. Live, it took no
@@ -528,7 +535,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
   runtime's blocks of 16 MiB of either class (a longer one in a block of its own), a
   range freed for reuse once every command buffer committed before its release completed, gives
   the runtime back a block or heap of the stream at its release (`release_block`), and gives
-  textures and sampler states indices from the whole of each index class. Its readback serves
+  textures and sampler states indices from the whole of each index class (section 5): its
+  `indices named N: ...` line counts the objects placed at the index the stream named, those
+  whose named index the runtime refused, and the indices the program reserved. Its readback serves
   Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives a
   compute or render pipeline state no `gpuResourceID`, so each one the program saw is reported on
   an `id` line as `none` and counted (`gap_pipeline_ids`); each skipped object's the program saw

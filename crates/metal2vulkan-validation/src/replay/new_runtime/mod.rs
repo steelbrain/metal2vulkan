@@ -10,6 +10,7 @@
 //! is refused.
 
 mod encoders;
+pub(super) mod indices;
 pub(super) mod places;
 mod render;
 pub(super) mod second;
@@ -198,10 +199,17 @@ pub struct NewRuntime {
     device: rt::Device,
     objects: HashMap<u64, Object>,
     places: Places,
-    /// The last index taken of each class: textures, storage-capable textures, samplers.
-    last: [u32; 3],
+    /// The indices textures and sampler states hold and the program reserved.
+    indices: indices::Indices,
+    /// The index the call being played names for the object it makes (a resource index).
+    named: Option<u32>,
+    /// The object the next call makes and the ID the program saw of it, where it saw one
+    /// (`Backend::recorded_id`).
+    recorded: Option<(u64, u64)>,
+    /// Each live texture descriptor's resource index, where its record sets one.
+    resource_indices: HashMap<u64, u32>,
     /// The texture descriptors the stream marks `outside` (section 5 of docs/REPLAY-STREAM.md):
-    /// a texture of one takes an index outside the sequence of `last`.
+    /// a texture of one takes an index outside those the program's objects take.
     outside: HashSet<u64>,
     /// Each constexpr sampler's index, by its state words.
     constexprs: HashMap<[u64; 2], u32>,
@@ -331,8 +339,8 @@ const TEXTURE_KEYS: [&str; 20] = [
     "outside",
 ];
 
-/// `f`'s properties set on `d`. The resource index is the guest's, which the player relocates
-/// the IDs of; the GPU-optimized contents are a hint.
+/// `f`'s properties set on `d`. The resource index places the texture (`named_index`); the
+/// GPU-optimized contents are a hint.
 fn texture_fields(call: &Call, f: &Fields, d: &mut rt::TextureDescriptor) -> Result<(), PlayError> {
     if let Some(kind) = f.metal("textureType")? {
         d.texture_type = kind;
@@ -408,6 +416,30 @@ fn made_texture_descriptor(call: &Call) -> Result<rt::TextureDescriptor, PlayErr
     }
 }
 
+/// The index of the resource index `call` sets on the texture descriptor it makes, where it sets
+/// one.
+fn resource_index(call: &Call) -> Result<Option<u32>, PlayError> {
+    match &*call.selector {
+        "m2v.textureDescriptor" => resource_index_of(call, &Fields::arg(call, 0, &TEXTURE_KEYS)?),
+        _ => Ok(None),
+    }
+}
+
+/// The index of a texture descriptor's `resourceIndex` (`[index, forced]`): Metal places the
+/// texture there whether or not it is forced.
+fn resource_index_of(call: &Call, f: &Fields) -> Result<Option<u32>, PlayError> {
+    let Some(list) = f.list("resourceIndex")? else {
+        return Ok(None);
+    };
+    match list {
+        [index, Value::Bool(_)] => match index.as_uint().map(u32::try_from) {
+            Some(Ok(index)) => Ok(Some(index)),
+            _ => Err(refuse(call, format!("resource index {index}"))),
+        },
+        _ => Err(refuse(call, "a resource index that is no [index, forced]")),
+    }
+}
+
 /// Texture descriptor `d` changed by `call`, one of its setters.
 fn set_texture_descriptor(call: &Call, d: &mut rt::TextureDescriptor) -> Result<(), PlayError> {
     let raw = uint(call, 0)?;
@@ -457,7 +489,10 @@ impl NewRuntime {
             places: Places::new(device.clone()),
             device,
             objects: HashMap::new(),
-            last: [0; 3],
+            indices: indices::Indices::default(),
+            named: None,
+            recorded: None,
+            resource_indices: HashMap::new(),
             outside: HashSet::new(),
             constexprs: HashMap::new(),
             commits: 0,
@@ -609,35 +644,34 @@ impl NewRuntime {
         self.completed
     }
 
-    /// `make` at the next index of `class` that no live object holds.
+    /// `make` at the index the stream names for the object `call` makes (`indices`): the call's
+    /// resource index (`named`), else the ID the program saw of the object (`recorded`); else at
+    /// the lowest free index of `class`.
     fn place<T>(
         &mut self,
         call: &Call,
         class: rt::IndexClass,
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Result<T, PlayError> {
-        let slot = match class {
-            rt::IndexClass::Texture => 0,
-            rt::IndexClass::StorageTexture => 1,
-            _ => 2,
-        };
-        let constexprs = &self.constexprs;
-        let skip =
-            |index| class == rt::IndexClass::Sampler && constexprs.values().any(|&i| i == index);
-        match next_index(&mut self.last[slot], class.range(), skip, make) {
+        let recorded = (self.recorded).filter(|&(object, _)| object == call.result);
+        // The ID's low half is its index (docs/RESOURCE-ID.md).
+        let recorded = recorded.map(|(_, id)| id as u32);
+        let named = self.named.or(recorded);
+        match self.indices.place(call.result, class, named, make) {
             Some(made) => made.map_err(failed(call)),
             None => Err(refuse(call, format!("every {class:?} index is in use"))),
         }
     }
 
-    /// `make` at the highest index of `class` that no live object holds ([`top_index`]).
+    /// `make` at the highest index of `class` that no object holds and the program did not
+    /// reserve (`Indices::top`): outside the indices the program's own objects take.
     fn place_outside<T>(
         &mut self,
         call: &Call,
         class: rt::IndexClass,
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Result<T, PlayError> {
-        match top_index(class.range(), make) {
+        match self.indices.top(call.result, class, make) {
             Some(made) => made.map_err(failed(call)),
             None => Err(refuse(call, format!("every {class:?} index is in use"))),
         }
@@ -734,6 +768,31 @@ impl NewRuntime {
         }
     }
 
+    /// The index `call` names for the texture it makes: its descriptor's resource index, or a
+    /// view's `resourceIndex:`.
+    fn named_index(&self, call: &Call) -> Result<Option<u32>, PlayError> {
+        let at = match &*call.selector {
+            "newTextureWithDescriptor:"
+            | "newTextureWithDescriptor:offset:"
+            | "newTextureWithDescriptor:offset:bytesPerRow:" => {
+                return match arg(call, 0)? {
+                    Value::Object(id) => Ok(self.resource_indices.get(id).copied()),
+                    map @ Value::Map(_) => {
+                        resource_index_of(call, &Fields::of(call, map, &TEXTURE_KEYS)?)
+                    }
+                    _ => Ok(None),
+                };
+            }
+            "newTextureViewWithPixelFormat:resourceIndex:" => 1,
+            "newTextureViewWithPixelFormat:textureType:levels:slices:resourceIndex:" => 4,
+            _ => return Ok(None),
+        };
+        let index = u32::try_from(uint(call, at)?);
+        index
+            .map(Some)
+            .map_err(|_| refuse(call, format!("resource index past u32 at {at}")))
+    }
+
     /// The function `call`'s library makes.
     fn library_call(&self, call: &Call, library: &rt::Library) -> Result<Function, PlayError> {
         let name = arg(call, 0)?.as_str();
@@ -820,52 +879,56 @@ impl NewRuntime {
         descriptor: &rt::ComputePipelineDescriptor,
     ) -> Result<rt::ComputePipelineState, PlayError> {
         self.numbered(|device, ids| {
-            device.new_compute_pipeline_state(descriptor, |samplers| Ok(ids(samplers)))
+            device.new_compute_pipeline_state(descriptor, |samplers| ids(samplers))
         })
         .map_err(failed(call))
     }
 
     /// The pipeline state `make` makes on the device with `ids`, which gives each numbered
-    /// constexpr sampler an index of its own, the same words one index.
+    /// constexpr sampler an index of its own, the lowest free one, the same words one index.
     fn numbered<T>(
         &mut self,
         make: impl FnOnce(
             &rt::Device,
-            &mut dyn FnMut(&[rt::NumberedSampler]) -> Vec<u32>,
+            &mut dyn FnMut(&[rt::NumberedSampler]) -> Result<Vec<u32>, rt::Error>,
         ) -> Result<T, rt::Error>,
     ) -> Result<T, rt::Error> {
-        let mut taken = Vec::new();
+        let mut taken: Vec<([u64; 2], u32)> = Vec::new();
         let made = {
-            let (constexprs, last) = (&self.constexprs, self.last[2]);
+            let (constexprs, indices) = (&self.constexprs, &self.indices);
             let mut sampler_ids = |samplers: &[rt::NumberedSampler]| {
-                let mut next = last;
-                let ids = samplers.iter().map(|sampler| match sampler {
-                    rt::NumberedSampler::Constexpr(words) => match constexprs
-                        .get(words)
-                        .copied()
-                        .or_else(|| taken.iter().find(|(w, _)| w == words).map(|&(_, i)| i))
-                    {
+                let mut ids = Vec::with_capacity(samplers.len());
+                for sampler in samplers {
+                    let rt::NumberedSampler::Constexpr(words) = sampler else {
+                        ids.push(0);
+                        continue;
+                    };
+                    let known = (constexprs.get(words).copied())
+                        .or_else(|| taken.iter().find(|(w, _)| w == words).map(|&(_, i)| i));
+                    let index = match known {
                         Some(index) => index,
+                        // The lowest free sampler index this call has not taken yet.
                         None => {
-                            let range = rt::IndexClass::Sampler.range();
-                            next = if range.contains(&(next + 1)) {
-                                next + 1
-                            } else {
-                                range.start
-                            };
-                            taken.push((*words, next));
-                            next
+                            let fresh = |index| taken.iter().any(|&(_, i)| i == index);
+                            let index = indices.lowest(rt::IndexClass::Sampler, 0, fresh);
+                            let index =
+                                index.ok_or(rt::Error::Refused(rt::Refusal::IndexInUse {
+                                    class: rt::IndexClass::Sampler,
+                                    index: rt::IndexClass::Sampler.range().end - 1,
+                                }))?;
+                            taken.push((*words, index));
+                            index
                         }
-                    },
-                    _ => 0,
-                });
-                ids.collect()
+                    };
+                    ids.push(index);
+                }
+                Ok(ids)
             };
             make(&self.device, &mut sampler_ids)
         };
         for (words, index) in taken {
             self.constexprs.insert(words, index);
-            self.last[2] = index;
+            self.indices.hold(None, rt::IndexClass::Sampler, index);
         }
         made
     }
@@ -1069,6 +1132,7 @@ impl NewRuntime {
                 if let Some(color) = f.metal("borderColor")? {
                     descriptor.border_color = color;
                 }
+                self.named = f.uint("resourceIndex")?.map(|index| index as u32);
                 let device = self.device.clone();
                 let state = self.place(call, rt::IndexClass::Sampler, |index| {
                     device.new_sampler_state(&descriptor, index)
@@ -1098,13 +1162,30 @@ impl NewRuntime {
                         self.outside.insert(call.result);
                     }
                 }
+                if let Some(index) = resource_index(call)? {
+                    self.resource_indices.insert(call.result, index);
+                }
                 unaddressed(Object::TextureDescriptor(Box::new(descriptor)))
             }
             // Every index is the backend's already.
-            "reserveResourceIndicesForResourceType:indices:indexCount:" => match uint(call, 0)? {
-                0 | 1 => Ok(None),
-                other => Err(refuse(call, format!("resource type {other}"))),
-            },
+            // Metal's one space of texture IDs is two classes here, by usage: an index is
+            // reserved in the class whose range holds it.
+            "reserveResourceIndicesForResourceType:indices:indexCount:" => {
+                let classes: &[rt::IndexClass] = match uint(call, 0)? {
+                    0 => &[rt::IndexClass::StorageTexture, rt::IndexClass::Texture],
+                    1 => &[rt::IndexClass::Sampler],
+                    other => return Err(refuse(call, format!("resource type {other}"))),
+                };
+                for index in super::args::list(call, 1)? {
+                    let index = index.as_uint().and_then(|i| u32::try_from(i).ok());
+                    let index =
+                        index.ok_or_else(|| refuse(call, "argument 1 is no list of indices"))?;
+                    for &class in classes {
+                        self.indices.reserve(class, index);
+                    }
+                }
+                Ok(None)
+            }
             "newEvent" => {
                 let event = self.device.new_event().map_err(failed(call))?;
                 unaddressed(Object::Event(event))
@@ -1346,7 +1427,7 @@ impl NewRuntime {
                 uint(call, 3)?,
                 0,
             ),
-            // The resource index is the guest's, which the player relocates the IDs of.
+            // The resource index places the view (`named_index`).
             "newTextureViewWithPixelFormat:" | "newTextureViewWithPixelFormat:resourceIndex:" => {
                 let d = *texture.descriptor();
                 let format = metal(call, uint(call, 0)?)?;
@@ -1410,50 +1491,9 @@ fn write_into(buffer: &rt::Buffer, offset: u64, bytes: &[u8]) -> Result<(), Play
     Ok(())
 }
 
-/// The index of `range` after `last` that `make` takes, `last` moved to each index tried: the
-/// sequence the program's own objects take, wrapping at the range's end. An index `skip` names or
-/// `make` finds in use is passed over; none where every index is.
-pub(super) fn next_index<T>(
-    last: &mut u32,
-    range: Range<u32>,
-    skip: impl Fn(u32) -> bool,
-    make: impl Fn(u32) -> Result<T, rt::Error>,
-) -> Option<Result<T, rt::Error>> {
-    for _ in range.clone() {
-        let mut index = *last + 1;
-        if !range.contains(&index) {
-            index = range.start;
-        }
-        *last = index;
-        if skip(index) {
-            continue;
-        }
-        match make(index) {
-            Err(rt::Error::Refused(rt::Refusal::IndexInUse { .. })) => continue,
-            made => return Some(made),
-        }
-    }
-    None
-}
-
-/// The highest index of `range` that `make` takes, an index in use passed over: one outside the
-/// sequence [`next_index`] hands out, which it leaves as it was, so the program's objects take the
-/// indices they take without this one. None where every index is in use.
-pub(super) fn top_index<T>(
-    range: Range<u32>,
-    make: impl Fn(u32) -> Result<T, rt::Error>,
-) -> Option<Result<T, rt::Error>> {
-    for index in range.rev() {
-        match make(index) {
-            Err(rt::Error::Refused(rt::Refusal::IndexInUse { .. })) => continue,
-            made => return Some(made),
-        }
-    }
-    None
-}
-
 impl Backend for NewRuntime {
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
+        self.named = self.named_index(call)?;
         if &*call.selector == "release" {
             self.owners.remove(&call.receiver);
             self.fresh.remove(&call.receiver);
@@ -1464,6 +1504,8 @@ impl Backend for NewRuntime {
             if let Some(place) = self.seconds.remove(call.receiver) {
                 self.places.give(place, self.commits, Vec::new());
             }
+            self.indices.give(call.receiver);
+            self.resource_indices.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => {
                     let users = (self.users.iter())
@@ -1897,6 +1939,7 @@ impl Backend for NewRuntime {
             lines.push(self.seconds.line());
         }
         lines.push(self.unwritten.line());
+        lines.push(self.indices.line());
         lines
     }
 
@@ -1919,6 +1962,10 @@ impl Backend for NewRuntime {
     /// The runtime makes no blits between buffers yet.
     fn snapshots(&self) -> bool {
         false
+    }
+
+    fn recorded_id(&mut self, object: u64, id: u64) {
+        self.recorded = Some((object, id));
     }
 
     fn managed_texture(&self, texture: u64) -> Option<bool> {

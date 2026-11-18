@@ -128,7 +128,7 @@ impl NewRuntime {
             )))
         })?;
         let made = self.numbered(|device, ids| {
-            device.new_render_pipeline_state(&descriptor, |samplers| Ok(ids(samplers)))
+            device.new_render_pipeline_state(&descriptor, |samplers| ids(samplers))
         });
         match made {
             Ok(state) => unaddressed(Object::RenderPipeline(state)),
