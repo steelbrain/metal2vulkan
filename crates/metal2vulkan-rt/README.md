@@ -779,21 +779,23 @@ that touch blocks first.
 ### The cache directory
 
 `DeviceOptions::pipeline_cache_dir` names a directory, made where it is missing, that the device
-keeps two things in, for compute pipeline states:
+keeps two things in, for compute and render pipeline states:
 
-- `translations/`: each kernel lowering, named by its `FunctionCompileKey`, which covers
-  everything that changes the lowering: the kernel's AIR, entry, constants and linked functions,
-  its lowering inputs (the variant), the device profile's fingerprint and the translator's
-  semantics version. A state whose lowering is there reads it in place of lowering
-  (`Metrics::translations_loaded`, beside `Metrics::translations`); a variant the translator
-  refused is kept too.
+- `translations/`: each function's lowering, a kernel's or a render pipeline's vertex or fragment
+  function's, named by its `FunctionCompileKey`, which covers everything that changes the
+  lowering: the function's AIR, entry, constants and linked functions, its lowering inputs (a
+  kernel's variant, or what its use in the render pipeline gives), the device profile's
+  fingerprint and the translator's semantics version. A state whose lowering is there reads it in
+  place of lowering (`Metrics::translations_loaded`, beside `Metrics::translations`); a kernel
+  variant the translator refused is kept too.
 - `pipelines/<pipelineCacheUUID>/`: one file per `VkPipeline`, named by a SHA-256 over everything
-  its creation takes (the module's SPIR-V and entry point, its stage's flags and required subgroup
-  size, its specialization and the runtime's pipeline layout). A `VkPipeline` is made through a
-  `VkPipelineCache` of its own, started from its file where there is one. The reaper then reads
-  the cache's data and writes it as the file, unless the data is no longer than the file's (the
-  pipeline came from it), and destroys the cache, so a pipeline's creation writes nothing on the
-  calling thread. At most 64 caches wait for the reaper; past that a pipeline's data is not
+  its creation takes (each module's SPIR-V and entry point, its stage's flags and required
+  subgroup size, its specialization and the runtime's pipeline layout; for a render pipeline also
+  its fixed-function state, its attachments' formats and its topology class). A `VkPipeline` is
+  made through a `VkPipelineCache` of its own, started from its file where there is one. The
+  reaper then reads the cache's data and writes it as the file, unless the data is no longer than
+  the file's (the pipeline came from it), and destroys the cache, so a pipeline's creation writes
+  nothing on the calling thread. At most 64 caches wait for the reaper; past that a pipeline's data is not
   written, and its next creation is a miss.
 
 The files of both kinds take at most `DeviceOptions::pipeline_cache_cap` bytes together (512 MiB
@@ -866,6 +868,46 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   on an RTX 3090 and Intel's Windows driver on a UHD 630 matched Metal in every lane of the same
   chains. Elsewhere a `half` `fma` is the device's `float` `Fma` on the operands, rounded to
   `half`, within one `half` ulp.
+
+## Render pipeline states
+
+- `Device::new_render_pipeline_state(&RenderPipelineDescriptor)` is
+  `newRenderPipelineStateWithDescriptor:error:` without reflection. The translator lowers the
+  vertex and fragment functions on the calling thread, which waits for them, within its 20-second
+  budget per lowering, for what device creation enabled and under its identity domains, as for a
+  compute state. A refusal of the translator is `Error::Translation`.
+- What a state compiles is its content, never the state: its descriptor's functions with their
+  constant values and linked functions, and the descriptor's fields that change the compile (the
+  translator's `Device::render_pipeline_key`). Every state of one content shares one compiled
+  content: its translation, its shader modules and their `VkPipeline`s, and its precision notes.
+  Render contents and compute kernels share the device's one map of the last 1,024 contents used,
+  so a state of a content it holds costs the key, which decodes the descriptor's functions, and a
+  lookup. `Gauges::render_contents` counts the compiled render contents alive.
+- A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content and the topology class
+  (point, line or triangle) of the draws it serves. It takes as dynamic state the viewport,
+  scissor, cull mode, front face, primitive topology within its class, primitive restart, depth
+  test, write and compare, stencil test, operations, masks and reference, depth bias, blend
+  constants and vertex buffer strides. It renders dynamically into its attachments' formats, with
+  no render pass.
+- The triangle class's `VkPipeline` is made with the state, through its file in the cache
+  directory where there is one; a point or line class's comes with the draws. Over the two replay
+  streams' 1,641 render contents, 1,631 draw only triangles; a content drawn only as points or
+  lines (8 of them) makes a triangle `VkPipeline` it never uses.
+
+### Known gaps of render pipeline states
+
+- There is no render encoder yet: a state holds its triangle class's `VkPipeline`, and nothing
+  draws with it.
+- Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: a depth
+  attachment, more than one sample, vertex amplification, a post-tessellation vertex function,
+  stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
+  fragment function's stencil output, alpha to one, an instance step rate above 1, samplers the
+  state numbers (a constexpr sampler, or a texture read or write's), constant data the binder
+  supplies, a specialization other than the sample and amplification counts, dynamic state beyond
+  Vulkan 1.3's, and a feature or extension device creation does not enable. A state for indirect
+  command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
+- Metal's triangle fill mode and depth clip mode, which Vulkan 1.3 bakes into a `VkPipeline`, are
+  their defaults.
 
 ## One path for every device
 

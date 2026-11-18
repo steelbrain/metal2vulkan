@@ -379,7 +379,7 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
         create.name,
         match create.makes {
             Makes::Buffers { length } => length.to_string(),
-            Makes::States { .. } => "state".to_owned(),
+            Makes::States { .. } | Makes::RenderStates { .. } => "state".to_owned(),
         },
         warmup(&report.warmup),
         us(10),

@@ -1419,6 +1419,7 @@ enum	metal2vulkan-rt::MemoryClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Ha
 enum	metal2vulkan-rt::NumberedSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NumberedSampler
 enum	metal2vulkan-rt::PrecisionNote	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum PrecisionNote
 enum	metal2vulkan-rt::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Refusal
+enum	metal2vulkan-rt::RenderPipelineKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RenderPipelineKind
 enum	metal2vulkan-rt::Resource	#[derive(Clone, Copy)] #[non_exhaustive] pub enum Resource<'a>
 enum	metal2vulkan-rt::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
 enum	metal2vulkan-rt::StorageMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum StorageMode
@@ -2239,6 +2240,15 @@ field	metal2vulkan-rt::BufferLayout.offset	pub offset: u64
 field	metal2vulkan-rt::BytesPlace.bytes_per_image	pub bytes_per_image: u64
 field	metal2vulkan-rt::BytesPlace.bytes_per_row	pub bytes_per_row: u64
 field	metal2vulkan-rt::BytesPlace.offset	pub offset: u64
+field	metal2vulkan-rt::ColorAttachmentDescriptor.alpha_blend_operation	pub alpha_blend_operation: metal::BlendOperation
+field	metal2vulkan-rt::ColorAttachmentDescriptor.blending_enabled	pub blending_enabled: bool
+field	metal2vulkan-rt::ColorAttachmentDescriptor.destination_alpha_blend_factor	pub destination_alpha_blend_factor: metal::BlendFactor
+field	metal2vulkan-rt::ColorAttachmentDescriptor.destination_rgb_blend_factor	pub destination_rgb_blend_factor: metal::BlendFactor
+field	metal2vulkan-rt::ColorAttachmentDescriptor.pixel_format	pub pixel_format: metal::PixelFormat
+field	metal2vulkan-rt::ColorAttachmentDescriptor.rgb_blend_operation	pub rgb_blend_operation: metal::BlendOperation
+field	metal2vulkan-rt::ColorAttachmentDescriptor.source_alpha_blend_factor	pub source_alpha_blend_factor: metal::BlendFactor
+field	metal2vulkan-rt::ColorAttachmentDescriptor.source_rgb_blend_factor	pub source_rgb_blend_factor: metal::BlendFactor
+field	metal2vulkan-rt::ColorAttachmentDescriptor.write_mask	pub write_mask: metal::ColorWriteMask
 field	metal2vulkan-rt::ComputePipelineDescriptor.buffers	pub buffers: BTreeMap<u32, metal::Mutability>
 field	metal2vulkan-rt::ComputePipelineDescriptor.kernel	pub kernel: StageSource
 field	metal2vulkan-rt::ComputePipelineDescriptor.max_call_stack_depth	pub max_call_stack_depth: u32
@@ -2270,6 +2280,7 @@ field	metal2vulkan-rt::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
 field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
+field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
@@ -2309,6 +2320,28 @@ field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::Physic
 field	metal2vulkan-rt::RawDevice.queue_family_index	pub queue_family_index: u32
 field	metal2vulkan-rt::Region.origin	pub origin: [u32; 3]
 field	metal2vulkan-rt::Region.size	pub size: [u32; 3]
+field	metal2vulkan-rt::RenderPipelineDescriptor.alpha_to_coverage	pub alpha_to_coverage: bool
+field	metal2vulkan-rt::RenderPipelineDescriptor.alpha_to_one	pub alpha_to_one: bool
+field	metal2vulkan-rt::RenderPipelineDescriptor.color_attachments	pub color_attachments: [Option<ColorAttachmentDescriptor>; 8]
+field	metal2vulkan-rt::RenderPipelineDescriptor.depth_format	pub depth_format: Option<metal::PixelFormat>
+field	metal2vulkan-rt::RenderPipelineDescriptor.fragment	pub fragment: Option<StageSource>
+field	metal2vulkan-rt::RenderPipelineDescriptor.fragment_buffers	pub fragment_buffers: BTreeMap<u32, metal::Mutability>
+field	metal2vulkan-rt::RenderPipelineDescriptor.input_primitive_topology	pub input_primitive_topology: metal::PrimitiveTopologyClass
+field	metal2vulkan-rt::RenderPipelineDescriptor.max_fragment_call_stack_depth	pub max_fragment_call_stack_depth: u32
+field	metal2vulkan-rt::RenderPipelineDescriptor.max_vertex_amplification_count	pub max_vertex_amplification_count: u32
+field	metal2vulkan-rt::RenderPipelineDescriptor.max_vertex_call_stack_depth	pub max_vertex_call_stack_depth: u32
+field	metal2vulkan-rt::RenderPipelineDescriptor.private	pub private: PrivateRenderState
+field	metal2vulkan-rt::RenderPipelineDescriptor.raster_sample_count	pub raster_sample_count: u32
+field	metal2vulkan-rt::RenderPipelineDescriptor.rasterization_enabled	pub rasterization_enabled: bool
+field	metal2vulkan-rt::RenderPipelineDescriptor.stencil_format	pub stencil_format: Option<metal::PixelFormat>
+field	metal2vulkan-rt::RenderPipelineDescriptor.support_adding_fragment_binary_functions	pub support_adding_fragment_binary_functions: bool
+field	metal2vulkan-rt::RenderPipelineDescriptor.support_adding_vertex_binary_functions	pub support_adding_vertex_binary_functions: bool
+field	metal2vulkan-rt::RenderPipelineDescriptor.support_indirect_command_buffers	pub support_indirect_command_buffers: bool
+field	metal2vulkan-rt::RenderPipelineDescriptor.tessellation	pub tessellation: Option<TessellationDescriptor>
+field	metal2vulkan-rt::RenderPipelineDescriptor.texture_write_rounding_mode	pub texture_write_rounding_mode: metal::TextureWriteRoundingMode
+field	metal2vulkan-rt::RenderPipelineDescriptor.vertex	pub vertex: StageSource
+field	metal2vulkan-rt::RenderPipelineDescriptor.vertex_buffers	pub vertex_buffers: BTreeMap<u32, metal::Mutability>
+field	metal2vulkan-rt::RenderPipelineDescriptor.vertex_descriptor	pub vertex_descriptor: Option<VertexDescriptor>
 field	metal2vulkan-rt::ResourceId.index	pub index: u32
 field	metal2vulkan-rt::ResourceId.word	pub word: u32
 field	metal2vulkan-rt::SamplerDescriptor.border_color	pub border_color: metal::SamplerBorderColor
@@ -2346,6 +2379,8 @@ field	metal2vulkan-rt::TextureSwizzleChannels.alpha	pub alpha: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.blue	pub blue: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.green	pub green: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.red	pub red: TextureSwizzle
+field	metal2vulkan-rt::VertexDescriptor.attributes	pub attributes: BTreeMap<u32, VertexAttributeDescriptor>
+field	metal2vulkan-rt::VertexDescriptor.layouts	pub layouts: BTreeMap<u32, VertexBufferLayoutDescriptor>
 field	metal2vulkan-rt::floor::BelowFloor.missing	pub missing: Vec<Missing>
 field	metal2vulkan-rt::floor::Capabilities.buffer_int64_atomics	pub buffer_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.extensions	pub extensions: Vec<&'static CStr>
@@ -9266,6 +9301,8 @@ method	metal2vulkan-rt::Buffer::gpu_address	pub fn gpu_address(&self) -> u64
 method	metal2vulkan-rt::Buffer::length	pub fn length(&self) -> u64
 method	metal2vulkan-rt::Buffer::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, offset: u64, bytes_per_row: u64) -> Result<Texture, Error>
 method	metal2vulkan-rt::Buffer::offset	pub fn offset(&self) -> u64
+method	metal2vulkan-rt::ColorAttachmentDescriptor::new	pub fn new(pixel_format: metal::PixelFormat) -> ColorAttachmentDescriptor
+method	metal2vulkan-rt::ColorAttachmentDescriptor::specialized	#[must_use] pub fn specialized(&self) -> ColorAttachmentDescriptor
 method	metal2vulkan-rt::CommandBuffer::add_completed_handler	pub fn add_completed_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::add_scheduled_handler	pub fn add_scheduled_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::blit_command_encoder	pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder, Error>
@@ -9368,6 +9405,14 @@ method	metal2vulkan-rt::PhysicalDevice::check	pub fn check(&self) -> Result<floo
 method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
 method	metal2vulkan-rt::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-rt::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan-rt::RenderPipelineDescriptor::fragment_writes_depth_unattached	pub fn fragment_writes_depth_unattached(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
+method	metal2vulkan-rt::RenderPipelineDescriptor::new	pub fn new(vertex: StageSource) -> RenderPipelineDescriptor
+method	metal2vulkan-rt::RenderPipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<RenderPipelineReflection, Error>
+method	metal2vulkan-rt::RenderPipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
+method	metal2vulkan-rt::RenderPipelineDescriptor::stages_using_direct_arguments	pub fn stages_using_direct_arguments(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Vec<DirectArgumentUse>, Error>
+method	metal2vulkan-rt::RenderPipelineDescriptor::unwritten_fragment_inputs	pub fn unwritten_fragment_inputs(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<Option<UnwrittenFragmentInputs>, Error>
+method	metal2vulkan-rt::RenderPipelineDescriptor::vertex_returns_value	pub fn vertex_returns_value(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
+method	metal2vulkan-rt::RenderPipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
 method	metal2vulkan-rt::ResourceId::to_bits	pub fn to_bits(self) -> u64
 method	metal2vulkan-rt::SamplerDescriptor::new	pub fn new() -> SamplerDescriptor
 method	metal2vulkan-rt::SamplerDescriptor::shape	pub fn shape(&self) -> SamplerShape
@@ -9388,6 +9433,7 @@ method	metal2vulkan-rt::TextureDescriptor::new	pub fn new(texture_type: TextureT
 method	metal2vulkan-rt::TextureSwizzleChannels::compose	pub fn compose(self, format: crate::vk::ComponentMapping) -> crate::vk::ComponentMapping
 method	metal2vulkan-rt::TextureSwizzleChannels::is_default	pub fn is_default(self) -> bool
 method	metal2vulkan-rt::TextureSwizzleChannels::new	pub fn new(red: TextureSwizzle, green: TextureSwizzle, blue: TextureSwizzle, alpha: TextureSwizzle) -> TextureSwizzleChannels
+method	metal2vulkan-rt::VertexDescriptor::new	pub fn new() -> VertexDescriptor
 method	metal2vulkan-runtime::AddressModeMap::constexpr_mode	pub fn constexpr_mode(&self, from: SamplerAddressMode) -> Option<SamplerAddressMode>
 method	metal2vulkan-runtime::AddressModeMap::is_identity	pub fn is_identity(&self) -> bool
 method	metal2vulkan-runtime::AddressModeMap::mode	pub fn mode(&self, from: SamplerAddressMode) -> SamplerAddressMode
@@ -11410,6 +11456,7 @@ struct	metal2vulkan-rt::BlockInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive
 struct	metal2vulkan-rt::Buffer	#[derive(Clone)] pub struct Buffer
 struct	metal2vulkan-rt::BufferLayout	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct BufferLayout
 struct	metal2vulkan-rt::BytesPlace	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct BytesPlace
+struct	metal2vulkan-rt::ColorAttachmentDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ColorAttachmentDescriptor
 struct	metal2vulkan-rt::CommandBuffer	#[derive(Clone)] pub struct CommandBuffer
 struct	metal2vulkan-rt::CommandQueue	#[derive(Clone)] pub struct CommandQueue
 struct	metal2vulkan-rt::ComputeCommandEncoder	pub struct ComputeCommandEncoder
@@ -11431,6 +11478,8 @@ struct	metal2vulkan-rt::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq,
 struct	metal2vulkan-rt::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
 struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
 struct	metal2vulkan-rt::Region	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Region
+struct	metal2vulkan-rt::RenderPipelineDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct RenderPipelineDescriptor
+struct	metal2vulkan-rt::RenderPipelineState	#[derive(Clone)] pub struct RenderPipelineState
 struct	metal2vulkan-rt::ResourceId	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct ResourceId
 struct	metal2vulkan-rt::ResourceUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct ResourceUsage(u32)
 struct	metal2vulkan-rt::SamplerDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerDescriptor
@@ -11441,6 +11490,7 @@ struct	metal2vulkan-rt::Texture	#[derive(Clone)] pub struct Texture
 struct	metal2vulkan-rt::TextureDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TextureDescriptor
 struct	metal2vulkan-rt::TexturePlace	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct TexturePlace
 struct	metal2vulkan-rt::TextureSwizzleChannels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct TextureSwizzleChannels
+struct	metal2vulkan-rt::VertexDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VertexDescriptor
 struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
 struct	metal2vulkan-rt::floor::Capabilities	pub struct Capabilities
 struct	metal2vulkan-rt::floor::Features	#[derive(Clone, Copy, Default)] pub struct Features
@@ -13340,6 +13390,7 @@ variant	metal2vulkan-rt::Gap::KernelInput	KernelInput
 variant	metal2vulkan-rt::Gap::MemorylessTexture	MemorylessTexture
 variant	metal2vulkan-rt::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_threadgroup: [u32; 3], width: u32 }
 variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
+variant	metal2vulkan-rt::Gap::RenderPipeline	RenderPipeline { kind: RenderPipelineKind }
 variant	metal2vulkan-rt::Gap::TextureBuffer	TextureBuffer
 variant	metal2vulkan-rt::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureCopy	TextureCopy { source: PixelFormat, destination: PixelFormat }
@@ -13483,6 +13534,21 @@ variant	metal2vulkan-rt::Refusal::TextureViewFormat	TextureViewFormat { texture:
 variant	metal2vulkan-rt::Refusal::TextureViewRange	TextureViewRange { level: u32, level_count: u32, slice: u32, slice_count: u32 }
 variant	metal2vulkan-rt::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
+variant	metal2vulkan-rt::RenderPipelineKind::AlphaToOne	AlphaToOne
+variant	metal2vulkan-rt::RenderPipelineKind::ConstantData	ConstantData
+variant	metal2vulkan-rt::RenderPipelineKind::DepthAttachment	DepthAttachment
+variant	metal2vulkan-rt::RenderPipelineKind::DeviceFeature	DeviceFeature
+variant	metal2vulkan-rt::RenderPipelineKind::DynamicState	DynamicState
+variant	metal2vulkan-rt::RenderPipelineKind::FramebufferFetch	FramebufferFetch
+variant	metal2vulkan-rt::RenderPipelineKind::Imageblock	Imageblock
+variant	metal2vulkan-rt::RenderPipelineKind::Multisample	Multisample
+variant	metal2vulkan-rt::RenderPipelineKind::Samplers	Samplers
+variant	metal2vulkan-rt::RenderPipelineKind::ShaderStencil	ShaderStencil
+variant	metal2vulkan-rt::RenderPipelineKind::Specialization	Specialization
+variant	metal2vulkan-rt::RenderPipelineKind::StepRate	StepRate
+variant	metal2vulkan-rt::RenderPipelineKind::SynthesizedStages	SynthesizedStages
+variant	metal2vulkan-rt::RenderPipelineKind::Tessellation	Tessellation
+variant	metal2vulkan-rt::RenderPipelineKind::VertexAmplification	VertexAmplification
 variant	metal2vulkan-rt::Resource::Buffer	Buffer(&'a Buffer)
 variant	metal2vulkan-rt::Resource::Texture	Texture(&'a Texture)
 variant	metal2vulkan-rt::StageSource::Compiled	Compiled(CompiledFunction)

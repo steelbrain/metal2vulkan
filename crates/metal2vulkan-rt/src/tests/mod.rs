@@ -21,6 +21,7 @@ mod over;
 mod places;
 mod push_window;
 mod readback;
+mod render;
 mod sampler;
 mod sampling;
 mod spill;

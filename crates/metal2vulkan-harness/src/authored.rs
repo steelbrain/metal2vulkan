@@ -7,6 +7,7 @@ use crate::plan::{
     SamplerPlan, Scaled, Source, TextureExpect, TexturePlan, Values,
 };
 use crate::{Result, Storage};
+use metal2vulkan::metal::PixelFormat;
 use std::ops::Range;
 
 /// An authored workload: its name, and the builder of its plan. A plan holds its inputs and
@@ -133,6 +134,16 @@ pub enum Makes {
         function: &'static str,
         constants: &'static [(u32, f32)],
     },
+    /// Render pipeline states of one content: the vertex function `vertex` and the fragment
+    /// function `fragment` of the render library ([`render_library_air`]), drawing into one colour
+    /// attachment of `color`. No other workload makes a render state, so the first creation is of
+    /// a content the device has not seen and each later one of a content it has.
+    /// [`STATE_CREATIONS`] are timed, whatever `--runs` says.
+    RenderStates {
+        vertex: &'static str,
+        fragment: &'static str,
+        color: PixelFormat,
+    },
 }
 
 /// The timed creations of a pipeline-state workload.
@@ -159,11 +170,31 @@ pub const CREATES: [Create; 4] = [
             constants: &[(0, 2.0), (1, -2.0)],
         },
     },
+    Create {
+        name: "create_render_state",
+        makes: Makes::RenderStates {
+            vertex: "colored_vertex",
+            fragment: "colored_fragment",
+            color: PixelFormat::BGRA8Unorm,
+        },
+    },
 ];
 
 /// The authored library's AIR bitcode: the fixture's LLVM text, assembled by `llvm-as`.
 pub fn library_air() -> Result<Vec<u8>> {
-    let ll = metal2vulkan_devtools::fixtures_dir().join("harness/workloads.ll");
+    assemble("harness/workloads.ll")
+}
+
+/// The render library's AIR bitcode: the public fixture `examples/runtime_examples.ll`, whose
+/// `colored_vertex` and `colored_fragment` draw a triangle list of flat colours, assembled by
+/// `llvm-as`.
+pub fn render_library_air() -> Result<Vec<u8>> {
+    assemble("examples/runtime_examples.ll")
+}
+
+/// The public fixture at `file`, LLVM text, assembled by `llvm-as`.
+fn assemble(file: &str) -> Result<Vec<u8>> {
+    let ll = metal2vulkan_devtools::fixtures_dir().join(file);
     metal2vulkan_devtools::llvm_assemble(&ll)
         .map_err(|why| format!("llvm-as {}: {why:?}", ll.display()).into())
 }

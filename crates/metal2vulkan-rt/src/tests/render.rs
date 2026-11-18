@@ -1,0 +1,267 @@
+//! Render pipeline states, under a device cfg on every device of the cfg's kind, of the owned
+//! fixture `examples/runtime_examples.ll`.
+//!
+//! - The first state of a content lowers its two functions and makes one `VkPipeline` (the
+//!   triangle class's); a second state of that descriptor lowers nothing, makes nothing and
+//!   shares the first's compiled content, which the device's map of contents holds beside its
+//!   compute kernels. Another colour format, a blended attachment, or a stencil attachment with a
+//!   second colour attachment is another content.
+//! - A depth attachment, more than one sample, or a fragment function with a constexpr sampler is
+//!   refused by kind, making no `VkPipeline`.
+//! - A device on a cache directory a device before it used lowers nothing at creation: both
+//!   lowerings are read from the directory, and the triangle class's `VkPipeline` is made from
+//!   its file; the first device writes one pipeline file for each `VkPipeline` it made, and the
+//!   second writes nothing.
+//!
+//! `llvm-as` assembles the fixture; without it a test skips visibly.
+
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod on_device {
+    use crate::tests::command::on_device::{each_device, within};
+    use crate::tests::devices_of_the_cfgs_kind;
+    use crate::{
+        ColorAttachmentDescriptor, Device, DeviceOptions, Error, FunctionDescriptor, Gap, Gauges,
+        Instance, Library, Metrics, PixelFormat, RenderPipelineDescriptor, RenderPipelineKind,
+        RenderPipelineState, StageSource,
+    };
+    use metal2vulkan::metal::BlendFactor;
+    use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+
+    /// The fixture's library, or None where `llvm-as` is missing.
+    fn library() -> Option<Library> {
+        let ll = fixtures_dir().join("examples/runtime_examples.ll");
+        match llvm_assemble(&ll) {
+            Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                None
+            }
+            Err(error) => panic!("{}: {error:?}", ll.display()),
+        }
+    }
+
+    /// `colored_vertex` with the fragment function `fragment`, drawing into one colour attachment
+    /// of `color`.
+    fn descriptor(
+        library: &Library,
+        fragment: &str,
+        color: PixelFormat,
+    ) -> RenderPipelineDescriptor {
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let mut d = RenderPipelineDescriptor::new(function("colored_vertex"));
+        d.fragment = Some(function(fragment));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(color));
+        d
+    }
+
+    fn state(name: &str, device: &Device, d: &RenderPipelineDescriptor) -> RenderPipelineState {
+        (device.new_render_pipeline_state(d)).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    /// Whether two states share their compiled content.
+    fn shared(a: &RenderPipelineState, b: &RenderPipelineState) -> bool {
+        Arc::ptr_eq(&a.compiled, &b.compiled)
+    }
+
+    /// The lowerings (made and read from the cache directory) and the `VkPipeline`s from `before`
+    /// to `after`.
+    fn made(before: &Metrics, after: &Metrics) -> (u64, u64) {
+        (
+            (after.translations + after.translations_loaded)
+                - (before.translations + before.translations_loaded),
+            after.pipelines_created - before.pipelines_created,
+        )
+    }
+
+    #[test]
+    fn every_device_shares_a_render_content_among_its_states() {
+        let Some(library) = library() else {
+            return;
+        };
+        let first = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
+        let mut blended = first.clone();
+        if let Some(color) = &mut blended.color_attachments[0] {
+            color.blending_enabled = true;
+            color.source_rgb_blend_factor = BlendFactor::SourceAlpha;
+            color.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
+        }
+        let mut stencil = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        stencil.color_attachments[1] =
+            Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        stencil.stencil_format = Some(PixelFormat::Stencil8);
+        let others = [
+            (
+                "another format",
+                descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm),
+            ),
+            ("blended", blended),
+            ("a stencil attachment and two colours", stencil),
+        ];
+        each_device("render_shared", |name, _, device| {
+            let counters = device.counters();
+            let gauges = counters.gauges();
+            let before = counters.metrics();
+            let a = state(name, &device, &first);
+            assert_eq!(
+                made(&before, &counters.metrics()),
+                (2, 1),
+                "{name}: the first state's lowerings and pipelines"
+            );
+            let held = counters.gauges();
+            assert_eq!(
+                (held.render_contents, held.kernel_entries),
+                (gauges.render_contents + 1, gauges.kernel_entries + 1),
+                "{name}: one content, held by the map"
+            );
+            let before = counters.metrics();
+            let b = state(name, &device, &first.clone());
+            assert_eq!(
+                made(&before, &counters.metrics()),
+                (0, 0),
+                "{name}: a second state of the content"
+            );
+            assert!(shared(&a, &b), "{name}: one compiled content");
+            for (other, d) in &others {
+                let before = counters.metrics();
+                let c = state(name, &device, d);
+                let (lowered, pipelines) = made(&before, &counters.metrics());
+                assert_eq!(pipelines, 1, "{name}: {other}: its own pipeline");
+                assert!(lowered <= 2, "{name}: {other}: at most two lowerings");
+                assert!(!shared(&a, &c), "{name}: {other}: another content");
+            }
+            assert_eq!(
+                counters.gauges().render_contents,
+                gauges.render_contents + 1 + others.len() as u64,
+                "{name}: a content each"
+            );
+            let compiled = Arc::clone(&a.compiled);
+            drop((a, b));
+            // The map holds it still, beside this test's handle.
+            assert_eq!(Arc::strong_count(&compiled), 2, "{name}: held by the map");
+            println!(
+                "{name}: two states of a content share it; {} other contents made apart",
+                others.len()
+            );
+        });
+    }
+
+    #[test]
+    fn every_device_refuses_what_it_does_not_build_by_kind() {
+        let Some(library) = library() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
+        let mut depth = plain.clone();
+        depth.depth_format = Some(PixelFormat::Depth32Float);
+        let mut samples = plain.clone();
+        samples.raster_sample_count = 4;
+        let sampled = descriptor(&library, "sampled_fragment", PixelFormat::RGBA16Float);
+        let cases = [
+            (
+                "a depth attachment",
+                depth,
+                RenderPipelineKind::DepthAttachment,
+            ),
+            ("four samples", samples, RenderPipelineKind::Multisample),
+            ("a constexpr sampler", sampled, RenderPipelineKind::Samplers),
+        ];
+        each_device("render_refused", |name, _, device| {
+            let counters = device.counters();
+            for (case, d, kind) in &cases {
+                let before = counters.metrics().pipelines_created;
+                match device.new_render_pipeline_state(d) {
+                    Err(Error::Unsupported(Gap::RenderPipeline { kind: refused })) => {
+                        assert_eq!(refused, *kind, "{name}: {case}")
+                    }
+                    Err(error) => panic!("{name}: {case}: {error}"),
+                    Ok(_) => panic!("{name}: {case}: made"),
+                }
+                assert_eq!(
+                    counters.metrics().pipelines_created,
+                    before,
+                    "{name}: {case}: no pipeline"
+                );
+            }
+            assert_eq!(counters.gauges().render_contents, 0, "{name}: no content");
+            println!("{name}: {} kinds refused, no pipeline made", cases.len());
+        });
+    }
+
+    /// The pipelines' files under `dir`, by path, with their lengths and times.
+    fn pipeline_files(dir: &Path) -> Vec<(String, u64, SystemTime)> {
+        let mut all = Vec::new();
+        let Ok(uuids) = std::fs::read_dir(dir.join("pipelines")) else {
+            return all;
+        };
+        for uuid in uuids.flatten() {
+            for file in std::fs::read_dir(uuid.path())
+                .expect("a directory")
+                .flatten()
+            {
+                let meta = file.metadata().expect("its metadata");
+                let path = file.path();
+                let path = path.strip_prefix(dir).expect("under the root");
+                let path = path.to_string_lossy().replace('\\', "/");
+                all.push((path, meta.len(), meta.modified().expect("its time")));
+            }
+        }
+        all.sort();
+        all
+    }
+
+    #[test]
+    fn every_device_takes_a_render_content_a_device_before_it_made_from_the_cache_directory() {
+        let Some(library) = library() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-render-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let mut first = Vec::new();
+            for round in 0..2 {
+                let options = DeviceOptions {
+                    pipeline_cache_dir: Some(dir.clone()),
+                    ..DeviceOptions::default()
+                };
+                let device = Device::new(physical, options)
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let counters = device.counters();
+                let made = state(name, &device, &d);
+                let metrics = counters.metrics();
+                let counted = (metrics.translations, metrics.translations_loaded);
+                assert_eq!(
+                    counted,
+                    [(2, 0), (0, 2)][round],
+                    "{name}: device {round}'s lowerings"
+                );
+                assert_eq!(metrics.pipelines_created, 1, "{name}: device {round}");
+                drop(made);
+                drop(device);
+                // The teardown ends once the reaper wrote what it was given.
+                within("the teardown", || counters.gauges() == Gauges::default());
+                let files = pipeline_files(&dir);
+                if round == 0 {
+                    assert_eq!(files.len(), 1, "{name}: a file for the pipeline");
+                    first = files;
+                } else {
+                    let written = counters.metrics().cache_bytes_written;
+                    assert_eq!(written, 0, "{name}: the second device writes nothing");
+                    assert_eq!(files, first, "{name}: the pipeline's file as it was");
+                }
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            println!("{name}: a second device lowers nothing and writes nothing");
+        }
+    }
+}

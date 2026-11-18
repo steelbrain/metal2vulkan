@@ -4,7 +4,9 @@
 
 use crate::plan::{self, Constant, TextureSource};
 use crate::{Code, Result, Size, Storage};
-use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
+use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, RenderPipelineDescriptor, StageSource,
+};
 use metal2vulkan_runtime as runtime;
 use runtime::{
     BlitOption, CommandBufferStatus, HeapDescriptor, HeapType, Origin, PipelineOptions,
@@ -81,6 +83,7 @@ impl crate::ComputeDevice for runtime::Device {
     type BlitCommandEncoder = runtime::BlitCommandEncoder;
     type Texture = Texture;
     type SamplerState = runtime::SamplerState;
+    type RenderPipelineState = runtime::RenderPipelineState;
 
     fn new_library(&self, code: Code<'_>) -> Result<runtime::Library> {
         match code {
@@ -111,6 +114,23 @@ impl crate::ComputeDevice for runtime::Device {
             self,
             &descriptor,
             &options,
+        )?)
+    }
+
+    fn new_render_pipeline_state(
+        &self,
+        vertex: &runtime::Function,
+        fragment: &runtime::Function,
+        color: metal2vulkan::metal::PixelFormat,
+    ) -> Result<runtime::RenderPipelineState> {
+        let vertex = StageSource::Function(vertex.function_descriptor());
+        let mut descriptor = RenderPipelineDescriptor::new(vertex);
+        descriptor.fragment = Some(StageSource::Function(fragment.function_descriptor()));
+        descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(color));
+        Ok(runtime::Device::new_render_pipeline_state(
+            self,
+            &descriptor,
+            &PipelineOptions::default(),
         )?)
     }
 

@@ -396,6 +396,7 @@ impl crate::ComputeDevice for Device {
     type BlitCommandEncoder = rt::BlitCommandEncoder;
     type Texture = rt::Texture;
     type SamplerState = rt::SamplerState;
+    type RenderPipelineState = rt::RenderPipelineState;
 
     fn new_library(&self, code: Code<'_>) -> Result<rt::Library> {
         Ok(match code {
@@ -431,6 +432,21 @@ impl crate::ComputeDevice for Device {
         };
         (self.device)
             .new_compute_pipeline_state(&descriptor, sampler_ids)
+            .map_err(error)
+    }
+
+    fn new_render_pipeline_state(
+        &self,
+        vertex: &rt::FunctionDescriptor,
+        fragment: &rt::FunctionDescriptor,
+        color: rt::PixelFormat,
+    ) -> Result<rt::RenderPipelineState> {
+        let mut descriptor =
+            rt::RenderPipelineDescriptor::new(rt::StageSource::Function(vertex.clone()));
+        descriptor.fragment = Some(rt::StageSource::Function(fragment.clone()));
+        descriptor.color_attachments[0] = Some(rt::ColorAttachmentDescriptor::new(color));
+        (self.device)
+            .new_render_pipeline_state(&descriptor)
             .map_err(error)
     }
 

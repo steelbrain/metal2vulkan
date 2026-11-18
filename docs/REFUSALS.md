@@ -39,7 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 40 | 40 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -57,7 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 14 | 8 | 0 | 0 | 18 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 17 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 18 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -674,7 +674,7 @@ Columns:
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
-| `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 1: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)` | `-` |
+| `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 2: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`, `crates/metal2vulkan-rt/src/render.rs (refuse)` | `-` |
 | `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 1: `crates/metal2vulkan-rt/src/pipeline.rs (gap)` | `-` |
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
@@ -689,6 +689,7 @@ Columns:
 | `HeapTexture` | A heap texture the runtime does not place (`Device::new_heap_texture` and `Device::heap_texture_size_and_align`) | every device (a public call's own check of its arguments) | `ours`: heap textures are built for Private heaps of placeable images | 2: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`, `crates/metal2vulkan-rt/src/texture.rs (new_heap_texture)` | `-` |
 | `BufferCopyAlignment` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose bytes no copy command in the floor addresses,... | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an aligned offset; each is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)` | `-` |
 | `FillAlignment` | `BlitCommandEncoder::fill_buffer` of a range that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal fills byte... | every device (a public call's own check of its arguments) | `ours`: `vkCmdFillBuffer` writes whole words; a byte fill is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (fill_range)` | `-` |
+| `RenderPipeline` | A render pipeline state of something the runtime does not build yet | every device (a public call's own check of its arguments) | `ours`: the replay streams' render pipelines draw into colour and stencil attachments of one sample, with no depth attachment, no tessellation and no framebuffer fetch; each other kind is built when a replay stream makes one | 4: `crates/metal2vulkan-rt/src/render.rs (of, 3 sites)`, `crates/metal2vulkan-rt/src/render.rs (refuse)` | `-` |
 | `FenceOtherQueue` | A `Fence` updated or waited on by an encoder of a queue other than the first that used it | every device (a public call's own check of its arguments) | `ours`: a fence is built for one queue; the replay streams use each on one queue | 1: `crates/metal2vulkan-rt/src/fence.rs (used_on)` | `-` |
 | `TextureView` | `Texture::new_texture_view` of a kind Metal makes and the runtime does not build | every device (a public call's own check of its arguments) | `ours`: the replay streams' views that compute binds are same-format views of every slice, 2D views of one slice of a 2D array, and level subranges; each other kind is built when a replay stream binds one | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)` | `-` |
 
@@ -1230,7 +1231,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-rt/src/sampler.rs (take)`
 - `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-rt/src/memory.rs (allocate)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
-- `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`
+- `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)`
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
@@ -1245,6 +1246,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::HeapTexture`: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`; `crates/metal2vulkan-rt/src/texture.rs (new_heap_texture)`
 - `rt:Gap::BufferCopyAlignment`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`
 - `rt:Gap::FillAlignment`: `crates/metal2vulkan-rt/src/blit.rs (fill_range)`
+- `rt:Gap::RenderPipeline`: `crates/metal2vulkan-rt/src/render.rs (of, 3 sites)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::FenceOtherQueue`: `crates/metal2vulkan-rt/src/fence.rs (used_on)`
 - `rt:Gap::TextureView`: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)`
 

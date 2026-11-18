@@ -654,6 +654,15 @@ pub enum Gap {
         /// The byte after its last.
         end: u64,
     },
+    /// A render pipeline state of something the runtime does not build yet: what `kind` names.
+    ///
+    /// Basis: ours (the replay streams' render pipelines draw into colour and stencil attachments
+    /// of one sample, with no depth attachment, no tessellation and no framebuffer fetch; each
+    /// other kind is built when a replay stream makes one).
+    RenderPipeline {
+        /// What the pipeline asks for.
+        kind: RenderPipelineKind,
+    },
     /// A [`Fence`](crate::Fence) updated or waited on by an encoder of a queue other than the first
     /// that used it: the runtime orders the encoders of one queue, so a fence would order nothing
     /// across two. Metal's fence orders the encoders of one queue; `MTLEvent` orders queues.
@@ -670,6 +679,44 @@ pub enum Gap {
         /// What the view changes that is not built.
         kind: TextureViewKind,
     },
+}
+
+/// What a render pipeline state asks that the runtime does not build ([`Gap::RenderPipeline`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RenderPipelineKind {
+    /// A depth attachment (`depthAttachmentPixelFormat`).
+    DepthAttachment,
+    /// More than one sample (`rasterSampleCount`).
+    Multisample,
+    /// Vertex amplification (`maxVertexAmplificationCount` above 1).
+    VertexAmplification,
+    /// A post-tessellation vertex function.
+    Tessellation,
+    /// Stages the translator synthesizes beside the functions': tessellation, geometry stages,
+    /// lines drawn as bands of triangles, a rate map's fan-out, or mesh records.
+    SynthesizedStages,
+    /// A fragment function that reads its colour attachments (framebuffer fetch).
+    FramebufferFetch,
+    /// A fragment function that reaches the render pass's imageblock.
+    Imageblock,
+    /// A fragment function's stencil output applied by the shader.
+    ShaderStencil,
+    /// `alphaToOneEnabled`, which needs a feature the floor does not require.
+    AlphaToOne,
+    /// A vertex buffer layout of an instance step rate above 1.
+    StepRate,
+    /// Samplers the state numbers: constexpr samplers, or a texture read or write's own.
+    Samplers,
+    /// A function that reads constant data the binder supplies.
+    ConstantData,
+    /// A specialization the draw would set, beside the sample and amplification counts.
+    Specialization,
+    /// Dynamic state the translator asks for beyond what Vulkan 1.3 leaves dynamic.
+    DynamicState,
+    /// A Vulkan feature or extension the translator's pipeline needs (its `Requirements`) that
+    /// device creation does not enable.
+    DeviceFeature,
 }
 
 /// What a texture view changes that the runtime does not build ([`Gap::TextureView`]).
@@ -1084,6 +1131,9 @@ impl fmt::Display for Gap {
                 "a fill of {start}..{end}, not whole 4-byte words, is not built"
             ),
             Gap::FenceOtherQueue => f.write_str("a fence used on a second queue is not built"),
+            Gap::RenderPipeline { kind } => {
+                write!(f, "a render pipeline state with {kind:?} is not built")
+            }
             Gap::TextureView { kind } => write!(f, "a texture view that changes {kind:?} is not built"),
         }
     }

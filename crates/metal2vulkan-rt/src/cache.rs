@@ -1,10 +1,11 @@
 //! The device's caches on disk, under [`DeviceOptions::pipeline_cache_dir`]: a kernel lowered and
-//! a `VkPipeline` compiled in one run cost little in the next. Compute pipelines only.
+//! a `VkPipeline` compiled in one run cost little in the next. Compute and render pipelines.
 //!
-//! - `translations/`: one file per lowered kernel, named by the hex of its `FunctionCompileKey`,
-//!   which covers everything that changes the lowering's output: the kernel's AIR, entry,
-//!   constants and linked functions, its lowering inputs (the variant), the device profile's
-//!   fingerprint and the translator's semantics version. The bytes are the translator's
+//! - `translations/`: one file per lowered function (a kernel, or a render pipeline's vertex or
+//!   fragment function), named by the hex of its `FunctionCompileKey`, which covers everything
+//!   that changes the lowering's output: the function's AIR, entry, constants and linked
+//!   functions, its lowering inputs, the device profile's fingerprint and the translator's
+//!   semantics version. The bytes are the translator's
 //!   self-checking encoding (`CompiledFunction::to_bytes`), and bytes that do not decode for the
 //!   key are a miss. A partial-threadgroups variant the translator refused is kept too, as a
 //!   marker.
@@ -280,9 +281,10 @@ pub(crate) fn frame(data: &[u8]) -> Vec<u8> {
     file
 }
 
-/// The key of a `VkPipeline`'s file: a SHA-256 over what its creation takes, `module` (the
-/// module's digest, [`module_digest`]) and its specialization's `values`, so two creations with
-/// one key make one pipeline.
+/// The key of a `VkPipeline`'s file: a SHA-256 over what its creation takes, `module` (a compute
+/// module's digest, [`module_digest`], or a render content's, over its modules' digests and its
+/// fixed-function state) and `values` (its specialization's, after a render pipeline's topology
+/// class), so two creations with one key make one pipeline.
 pub(crate) fn pipeline_key(module: &[u8; 32], values: &[u8]) -> [u8; 32] {
     let mut hash = Sha256::new();
     hash.update(module);

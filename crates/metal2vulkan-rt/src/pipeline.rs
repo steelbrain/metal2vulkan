@@ -640,7 +640,7 @@ fn grid_tiles(pipeline: &ComputePipeline) -> bool {
 
 /// The kernel `function` lowered under `inputs`: the lowering a device kept in the cache directory
 /// under its key, which covers everything that changes the output, or one made now and kept.
-fn lower(
+pub(crate) fn lower(
     core: &Core,
     function: &FunctionDescriptor,
     inputs: &LoweringInputs,
@@ -662,6 +662,63 @@ fn lower(
     core.caches
         .keep_translation(key.digest(), &lowered.to_bytes(), &core.counters);
     Ok(lowered)
+}
+
+/// The one `VkPipeline` that `create` makes through the cache it is given: with a cache directory,
+/// a `VkPipelineCache` of the pipeline's own, started from the file of `key` (the pipeline's
+/// [`pipeline_key`]), which the reaper then writes the data of; else none. `call` names `create`'s
+/// Vulkan call. Counted as made.
+pub(crate) fn made_through_cache(
+    core: &Core,
+    call: &'static str,
+    key: impl FnOnce() -> [u8; 32],
+    create: impl FnOnce(vk::PipelineCache) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)>,
+) -> Result<vk::Pipeline, Error> {
+    let device = &core.device;
+    let mut kept = None;
+    if core.caches.on_disk() {
+        let key = key();
+        let seed = core.caches.pipeline_data(&key).unwrap_or_default();
+        let cache_info = vk::PipelineCacheCreateInfo::default().initial_data(&seed);
+        // SAFETY: the data is empty or what `vkGetPipelineCacheData` gave for this device's
+        // `pipelineCacheUUID`, whole, as its checksum shows. A cache the driver refuses is a
+        // miss: the pipeline is made without one.
+        if let Ok(cache) = unsafe { device.create_pipeline_cache(&cache_info, None) } {
+            kept = Some(KeepPipeline {
+                cache,
+                key,
+                seeded: seed.len(),
+            });
+        }
+    }
+    let cache = kept
+        .as_ref()
+        .map_or(vk::PipelineCache::null(), |kept| kept.cache);
+    let made = create(cache);
+    if let Some(kept) = kept {
+        if made.is_ok() && core.caches.take_pending() {
+            core.reaper.give(Job::KeepPipeline(kept));
+        } else {
+            // SAFETY: no pipeline is being made from the cache.
+            unsafe { device.destroy_pipeline_cache(kept.cache, None) };
+        }
+    }
+    let pipeline = made.map_err(|(_, result)| Error::Vulkan { call, result })?[0];
+    core.counters.count(Metric::PipelinesCreated);
+    core.counters.rise(Gauge::Pipelines);
+    Ok(pipeline)
+}
+
+/// The words that describe the runtime's pipeline layout, which every pipeline takes: its push
+/// window's bytes and its bindings, for a module's digest ([`module_digest`]).
+pub(crate) fn layout_words() -> Vec<u32> {
+    std::iter::once(PUSH_BYTES)
+        .chain(
+            BINDINGS
+                .iter()
+                .flat_map(|&(binding, kind, count)| [binding, kind.as_raw() as u32, count]),
+        )
+        .collect()
 }
 
 /// The runtime's view of the translator's kernel, or [`Gap::KernelInput`] where the kernel reads
@@ -1125,20 +1182,13 @@ impl Kernel {
         let entry = CString::new(stage.entry_point).map_err(|_| gap())?;
         let digest = core.caches.on_disk().then(|| {
             let ids: Vec<u32> = interface.constants.iter().map(|&(id, _)| id).collect();
-            let layout: Vec<u32> = std::iter::once(PUSH_BYTES)
-                .chain(
-                    BINDINGS
-                        .iter()
-                        .flat_map(|&(binding, kind, count)| [binding, kind.as_raw() as u32, count]),
-                )
-                .collect();
             module_digest(
                 &stage.spirv,
                 entry.as_bytes(),
                 interface.stage_flags,
                 interface.required_subgroup_size,
                 &ids,
-                &layout,
+                &layout_words(),
             )
         });
         // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
@@ -1222,45 +1272,12 @@ impl Kernel {
         let info = vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(core.layout);
-        let device = &core.device;
-        // With a cache directory, a cache of the pipeline's own, started from its file.
-        let mut kept = None;
-        if core.caches.on_disk() {
-            let key = pipeline_key(&self.digest, &values);
-            let seed = core.caches.pipeline_data(&key).unwrap_or_default();
-            let cache_info = vk::PipelineCacheCreateInfo::default().initial_data(&seed);
-            // SAFETY: the data is empty or what `vkGetPipelineCacheData` gave for this device's
-            // `pipelineCacheUUID`, whole, as its checksum shows. A cache the driver refuses is a
-            // miss: the pipeline is made without one.
-            if let Ok(cache) = unsafe { device.create_pipeline_cache(&cache_info, None) } {
-                kept = Some(KeepPipeline {
-                    cache,
-                    key,
-                    seeded: seed.len(),
-                });
-            }
-        }
-        let cache = kept
-            .as_ref()
-            .map_or(vk::PipelineCache::null(), |kept| kept.cache);
-        // SAFETY: the module, the layout and the cache are the device's, and the specialization
-        // gives each of the kernel's constants a 4-byte value.
-        let made = unsafe { device.create_compute_pipelines(cache, &[info], None) };
-        if let Some(kept) = kept {
-            if made.is_ok() && core.caches.take_pending() {
-                core.reaper.give(Job::KeepPipeline(kept));
-            } else {
-                // SAFETY: no pipeline is being made from the cache.
-                unsafe { device.destroy_pipeline_cache(kept.cache, None) };
-            }
-        }
-        let pipeline = made.map_err(|(_, result)| Error::Vulkan {
-            call: "vkCreateComputePipelines",
-            result,
-        })?[0];
-        core.counters.count(Metric::PipelinesCreated);
-        core.counters.rise(Gauge::Pipelines);
-        Ok(pipeline)
+        let key = || pipeline_key(&self.digest, &values);
+        made_through_cache(core, "vkCreateComputePipelines", key, |cache| {
+            // SAFETY: the module, the layout and the cache are the device's, and the
+            // specialization gives each of the kernel's constants a 4-byte value.
+            unsafe { core.device.create_compute_pipelines(cache, &[info], None) }
+        })
     }
 
     /// Gives the module and its `VkPipeline`s to the reaper.

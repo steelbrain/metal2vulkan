@@ -31,7 +31,10 @@
 //! one content (`create_state`), the first of a content the device has not seen timed apart
 //! with one dispatch of it through to completion (`first`: a runtime may compile its pipeline in
 //! the creation or at the first dispatch, and the sum holds both; the row also shows the creation
-//! alone), then 1,000 of a content it has, each made and released in turn.
+//! alone), then 1,000 of a content it has, each made and released in turn; and render pipeline
+//! states of one content the same way, the first's creation alone (`create_render_state`: a
+//! vertex and a fragment function of the public fixture `examples/runtime_examples.ll`, into one
+//! `BGRA8Unorm` attachment).
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \
@@ -253,6 +256,8 @@ pub trait ComputeDevice: Device {
     type Texture: Texture;
     /// `MTLSamplerState`.
     type SamplerState;
+    /// `MTLRenderPipelineState`.
+    type RenderPipelineState;
 
     /// `newLibraryWithData:error:` of a metallib; of AIR bitcode, the translator's library.
     fn new_library(&self, code: Code<'_>) -> Result<Self::Library>;
@@ -263,6 +268,15 @@ pub trait ComputeDevice: Device {
         function: &Self::Function,
         private: &[Self::Function],
     ) -> Result<Self::ComputePipelineState>;
+
+    /// `newRenderPipelineStateWithDescriptor:error:` of `vertex` and `fragment`, drawing into one
+    /// colour attachment of `color`, with Metal's defaults otherwise.
+    fn new_render_pipeline_state(
+        &self,
+        vertex: &Self::Function,
+        fragment: &Self::Function,
+        color: metal2vulkan::metal::PixelFormat,
+    ) -> Result<Self::RenderPipelineState>;
 
     /// `newCommandQueue`.
     fn new_command_queue(&self) -> Result<Self::CommandQueue>;

@@ -34,6 +34,7 @@ mod queue;
 mod readback;
 mod reaper;
 mod record;
+mod render;
 mod ring;
 mod sampler;
 mod staging;
@@ -50,7 +51,7 @@ pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};
-pub use error::{Error, Gap, Limit, Refusal, TextureViewKind};
+pub use error::{Error, Gap, Limit, Refusal, RenderPipelineKind, TextureViewKind};
 pub use event::{Event, SharedEvent};
 pub use extension::{ConsumerFeature, DeviceExtension};
 pub use fence::Fence;
@@ -71,6 +72,11 @@ pub use metal2vulkan::metal::{
 pub use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
 };
+/// `MTLRenderPipelineDescriptor`, its `MTLRenderPipelineColorAttachmentDescriptor` and its
+/// `MTLVertexDescriptor`: the translator's.
+pub use metal2vulkan::pipeline::{
+    ColorAttachmentDescriptor, RenderPipelineDescriptor, VertexDescriptor,
+};
 /// `MTLComputePipelineDescriptor`, its kernel, a pipeline's precision notes, and the samplers a
 /// pipeline state numbers: the translator's.
 pub use metal2vulkan::pipeline::{
@@ -78,6 +84,7 @@ pub use metal2vulkan::pipeline::{
 };
 pub use pipeline::ComputePipelineState;
 pub use queue::CommandQueue;
+pub use render::RenderPipelineState;
 pub use sampler::SamplerState;
 pub use texture::{
     BytesPlace, HeapRange, Region, SizeAndAlign, StorageMode, Texture, TextureDescriptor,

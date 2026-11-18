@@ -364,10 +364,11 @@ fn run_scaled(
 pub struct CreateReport {
     /// Each timed creation call's wall time, in microseconds.
     pub create_us: Vec<f64>,
-    /// The first creation's wall time with one dispatch of what it made through to completion,
-    /// in microseconds, where it is timed apart: a pipeline state's of a content the device had
-    /// not seen. A runtime may pay its pipeline's compile in the creation or at the first
-    /// dispatch; the sum holds both.
+    /// The first creation's wall time, in microseconds, where it is timed apart: a pipeline
+    /// state's of a content the device had not seen. A compute pipeline state's holds one
+    /// dispatch of it through to completion, since a runtime may pay its pipeline's compile in the
+    /// creation or at the first dispatch and the sum holds both; a render pipeline state's is its
+    /// creation alone.
     pub first_us: Option<f64>,
     /// The first creation's wall time alone, in microseconds, the part of
     /// [`first_us`](Self::first_us) the creation call paid.
@@ -908,6 +909,21 @@ impl<D: ComputeDevice> Session for Harness<D> {
                 function,
                 constants,
             } => self.create_states(function, constants, runs),
+            Makes::RenderStates {
+                vertex,
+                fragment,
+                color,
+            } => {
+                let library = (self.device)
+                    .new_library(Code::Air(&crate::authored::render_library_air()?))?;
+                let vertex = library.new_function(vertex, &[])?;
+                let fragment = library.new_function(fragment, &[])?;
+                self.time_states(
+                    || (self.device).new_render_pipeline_state(&vertex, &fragment, color),
+                    None,
+                    runs,
+                )
+            }
         }
     }
 
@@ -971,17 +987,38 @@ impl<D: ComputeDevice> Harness<D> {
             })
             .collect();
         let function = self.authored.new_function(function, &values)?;
+        let (first_create, first) = self.first_state(&function, constants)?;
+        let mut report = self.time_states(
+            || self.device.new_compute_pipeline_state(&function, &[]),
+            Some(first),
+            runs,
+        )?;
+        report.first_create_us = Some(first_create);
+        Ok(report)
+    }
+
+    /// [`Session::create`] of the states `make` makes: the first timed apart (`first`, where the
+    /// caller timed it with more than its creation; else its creation here), then `runs`' warm-up
+    /// and [`STATE_CREATIONS`] timed ones, each released before the next.
+    fn time_states<S>(
+        &self,
+        make: impl Fn() -> Result<S>,
+        first: Option<f64>,
+        runs: Runs,
+    ) -> Result<CreateReport> {
         let once = || -> Result<f64> {
             let started = Instant::now();
-            let state = self.device.new_compute_pipeline_state(&function, &[])?;
+            let state = make()?;
             let made = started.elapsed();
             drop(state);
             Ok(made.as_secs_f64() * 1e6)
         };
-        let (first_create, first) = self.first_state(&function, constants)?;
+        let first = match first {
+            Some(first) => first,
+            None => once()?,
+        };
         let mut report = CreateReport {
             first_us: Some(first),
-            first_create_us: Some(first_create),
             warmup: warm_up(runs, &once)?,
             ..CreateReport::default()
         };

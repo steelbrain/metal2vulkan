@@ -1,12 +1,15 @@
-//! The device's compiled kernels by their content ([`KernelKey`]): every compute pipeline state of
-//! one content shares one translation, its shader modules and their `VkPipeline`s, and a state of
-//! a content the map holds costs a lookup. The map holds at most [`KERNEL_ENTRIES`], forgetting
-//! the least recently used past it. It bounds what it holds, not what lives: a state keeps the
-//! kernel it took, which goes once its last state and the map have let it go.
+//! The device's compiled pipelines by their content ([`KernelKey`]), compute and render alike in
+//! one map: every pipeline state of one content shares one translation, its shader modules and
+//! their `VkPipeline`s, and a state of a content the map holds costs a lookup. The map holds at
+//! most [`KERNEL_ENTRIES`], forgetting the least recently used past it. It bounds what it holds,
+//! not what lives: a state keeps the content it took, which goes once its last state and the map
+//! have let it go. The translator's keys name their kind (`compute` or `render`), so a key of
+//! one kind never meets a content of the other.
 
 use crate::counters::{Counters, Gauge};
 use crate::device::lock;
 use crate::pipeline::Compiled;
+use crate::render::RenderCompiled;
 use metal2vulkan::cache::PipelineKey;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -15,21 +18,30 @@ use std::sync::{Arc, Mutex};
 /// The entries the map holds at most.
 pub(crate) const KERNEL_ENTRIES: usize = 1024;
 
-/// What a compute pipeline state compiles: the translator's key of its descriptor
+/// What a pipeline state compiles: the translator's key of its descriptor
 /// (`Device::compute_pipeline_key`: the kernel's AIR and entry, its constant values, linked
 /// functions and dynamic libraries, its lowering inputs, the descriptor's fields that change the
-/// compile, the device's profile and the translator's semantics version), and the descriptor's
-/// `requiredThreadsPerThreadgroup`, which the state answers as its `maxTotalThreadsPerThreadgroup`
-/// and the translator's key leaves out.
+/// compile, the device's profile and the translator's semantics version; or
+/// `Device::render_pipeline_key`, the same of a render pipeline's functions and fields), and a
+/// compute descriptor's `requiredThreadsPerThreadgroup`, which the state answers as its
+/// `maxTotalThreadsPerThreadgroup` and the translator's key leaves out (`None` for a render
+/// pipeline).
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct KernelKey {
     pub(crate) pipeline: PipelineKey,
     pub(crate) required: Option<[u32; 3]>,
 }
 
-/// The device's map of compiled kernels.
+/// What one content compiles to.
+#[derive(Clone)]
+pub(crate) enum Content {
+    Kernel(Arc<Compiled>),
+    Render(Arc<RenderCompiled>),
+}
+
+/// The device's map of compiled contents.
 pub(crate) struct KernelMap {
-    map: Mutex<Lru<KernelKey, Arc<Compiled>>>,
+    map: Mutex<Lru<KernelKey, Content>>,
 }
 
 impl KernelMap {
@@ -42,7 +54,18 @@ impl KernelMap {
 
     /// The compiled kernel of `key`, where the map holds it.
     pub(crate) fn find(&self, key: &KernelKey) -> Option<Arc<Compiled>> {
-        lock(&self.map).get(key)
+        match lock(&self.map).get(key)? {
+            Content::Kernel(compiled) => Some(compiled),
+            Content::Render(_) => None,
+        }
+    }
+
+    /// The compiled render pipeline of `key`, where the map holds it.
+    pub(crate) fn find_render(&self, key: &KernelKey) -> Option<Arc<RenderCompiled>> {
+        match lock(&self.map).get(key)? {
+            Content::Render(compiled) => Some(compiled),
+            Content::Kernel(_) => None,
+        }
     }
 
     /// The kernel the map holds under `key`: the one it holds already (another thread compiled
@@ -54,8 +77,29 @@ impl KernelMap {
         compiled: Arc<Compiled>,
         counters: &Counters,
     ) -> Arc<Compiled> {
-        // What the map lets go is dropped after its lock, as a kernel's end gives the reaper work.
-        let (kept, gone) = lock(&self.map).keep(key, compiled);
+        match self.keep_content(key, Content::Kernel(Arc::clone(&compiled)), counters) {
+            Content::Kernel(kept) => kept,
+            Content::Render(_) => compiled,
+        }
+    }
+
+    /// The render pipeline the map holds under `key`, as [`keep`](Self::keep) keeps a kernel.
+    pub(crate) fn keep_render(
+        &self,
+        key: KernelKey,
+        compiled: Arc<RenderCompiled>,
+        counters: &Counters,
+    ) -> Arc<RenderCompiled> {
+        match self.keep_content(key, Content::Render(Arc::clone(&compiled)), counters) {
+            Content::Render(kept) => kept,
+            Content::Kernel(_) => compiled,
+        }
+    }
+
+    fn keep_content(&self, key: KernelKey, content: Content, counters: &Counters) -> Content {
+        // What the map lets go is dropped after its lock, as a content's end gives the reaper
+        // work.
+        let (kept, gone) = lock(&self.map).keep(key, content);
         // A new entry beside the others is one more; one in place of the oldest, or the entry
         // held already, leaves as many.
         if gone.is_none() {

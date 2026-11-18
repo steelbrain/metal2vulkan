@@ -58,6 +58,8 @@ pub(crate) enum Gauge {
     Kernels,
     /// [`Gauges::kernel_entries`].
     KernelEntries,
+    /// [`Gauges::render_contents`].
+    RenderContents,
     /// [`Gauges::blocks`].
     Blocks,
     /// [`Gauges::command_buffers`].
@@ -115,6 +117,7 @@ struct Atomics {
     pipelines: AtomicU64,
     kernels: AtomicU64,
     kernel_entries: AtomicU64,
+    render_contents: AtomicU64,
     command_buffers: AtomicU64,
     descriptor_slots: AtomicU64,
     blocks: AtomicU64,
@@ -252,6 +255,7 @@ impl Counters {
             Gauge::Pipelines => &a.pipelines,
             Gauge::Kernels => &a.kernels,
             Gauge::KernelEntries => &a.kernel_entries,
+            Gauge::RenderContents => &a.render_contents,
             Gauge::Blocks => &a.blocks,
             Gauge::CommandBuffers => &a.command_buffers,
             Gauge::Events => &a.events,
@@ -302,6 +306,7 @@ impl Counters {
             pipelines: a.pipelines.load(Relaxed),
             kernels: a.kernels.load(Relaxed),
             kernel_entries: a.kernel_entries.load(Relaxed),
+            render_contents: a.render_contents.load(Relaxed),
             command_buffers: a.command_buffers.load(Relaxed),
             descriptor_slots: a.descriptor_slots.load(Relaxed),
             blocks: a.blocks.load(Relaxed),
@@ -420,9 +425,14 @@ pub struct Gauges {
     /// their `VkPipeline`s, shared by every state of that content. One lives while a state or
     /// the device's map of kernels holds it.
     pub kernels: u64,
-    /// Entries of the device's map of compiled kernels by content, which holds at most 1,024 and
-    /// forgets the least recently used past them.
+    /// Entries of the device's map of compiled contents, compute and render, which holds at most
+    /// 1,024 and forgets the least recently used past them.
     pub kernel_entries: u64,
+    /// Compiled render pipelines: each the translation of one render pipeline content (its
+    /// descriptor's functions, their constant values and the fields that change the compile),
+    /// with its shader modules and their `VkPipeline`s, shared by every state of that content.
+    /// One lives while a state or the device's map of contents holds it.
+    pub render_contents: u64,
     /// Command buffers not yet retired.
     pub command_buffers: u64,
     /// Occupied indices of set 1's arrays: one for each texture made at an index and each sampler
