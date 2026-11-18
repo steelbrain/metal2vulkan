@@ -23,6 +23,7 @@ use crate::case::{
     Answer, Bindings, Failure, Handle, SamplerSpec, ShaderSource, Side, StageInRegion, StageInput,
     TextureSpec, Venue,
 };
+use crate::command_buffer_facts::CommandBufferFacts;
 use crate::device::Venues;
 use crate::empty_command_buffers::{
     Alone, Behind, EmptyCommandBuffers, ARRIVAL, EMPTY, FILL, FILL_BYTES,
@@ -40,6 +41,13 @@ use std::time::Duration;
 /// How long a wait for a command buffer waits before the side records that it never returned:
 /// the old runtime's side's bound.
 const WAIT: Duration = Duration::from_secs(60);
+
+/// The bytes the command-buffer facts' one blit fills, as the other sides fill.
+const TIMED_BYTES: usize = 256;
+
+/// Why the command-buffer facts' queue label and getters are not this side's to answer.
+const THE_CONSUMERS: &str = "a queue's label and a command buffer's device and commandQueue \
+                             never reach the GPU: metal2vulkan-rt leaves them to its consumer";
 
 /// The command buffers a queue of this side's holds at once: `newCommandQueue`'s.
 const QUEUE_COMMAND_BUFFERS: u32 = 64;
@@ -575,6 +583,49 @@ impl Side for RtSide<'_> {
         self.encode(pipeline, bindings, |encoder| {
             encoder.dispatch_threads(grid, threads)
         })
+    }
+
+    /// The facts the runtime holds: the status, the four times and the work's completion. The
+    /// queue's label and the command buffer's `device` and `commandQueue` are the consumer's own
+    /// bookkeeping ([`CommandBufferFacts::the_consumers`]), and the resource state encoder is the
+    /// sparse family's, which the runtime does not make.
+    fn command_buffer_facts(&mut self) -> Answer<CommandBufferFacts> {
+        let of_rt = |error: rt::Error| Failure::of_rt(&error);
+        let scratch = self.buffer(&[0u8; TIMED_BYTES])?;
+        let target = self.held(scratch)?.clone();
+        let queue = self.queue()?.clone();
+        let held = queue.command_buffer().map_err(of_rt)?;
+        let kernel_before = kernel_times(&held);
+        let gpu_before = gpu_times(&held);
+        // One blit of a few bytes of the side's own buffer: enough work that the GPU ran, and no
+        // shader, draw or dispatch at all.
+        let mut blit = held.blit_command_encoder().map_err(of_rt)?;
+        (blit.fill_buffer(&target, 0..TIMED_BYTES as u64, 0xa5)).map_err(of_rt)?;
+        blit.end_encoding();
+        held.commit().map_err(of_rt)?;
+        let settled = |command_buffer: &rt::CommandBuffer| {
+            waited_for(command_buffer, WAIT)
+                .map_or(Value::Nothing(Negative::NeverReturned), Value::unit_variant)
+        };
+        let status = settled(&held);
+        let (kernel_after, gpu_after) = (kernel_times(&held), gpu_times(&held));
+        // The command buffer the encoder would be opened on, committed with nothing in it.
+        let state_buffer = queue.command_buffer().map_err(of_rt)?;
+        state_buffer.commit().map_err(of_rt)?;
+        let state_encoder_status = settled(&state_buffer);
+        let facts = CommandBufferFacts::new(
+            false,
+            [false; 2],
+            kernel_before,
+            kernel_after,
+            Ok((gpu_before, gpu_after)),
+            false,
+            status,
+            state_encoder_status,
+        );
+        Ok(facts
+            .the_consumers(THE_CONSUMERS)
+            .without_resource_state_encoder(Failure::unavailable("resource_state_command_encoder")))
     }
 
     fn empty_command_buffers(&mut self) -> Answer<EmptyCommandBuffers> {

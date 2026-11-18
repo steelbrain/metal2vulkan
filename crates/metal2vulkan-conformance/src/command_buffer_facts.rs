@@ -70,11 +70,14 @@ pub struct GpuFlags {
 /// What one command buffer answered about itself.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandBufferFacts {
-    /// `device`: whether its `registryID` is that of the device the queue was made on.
-    pub device_is_the_queues: bool,
+    /// `device`: whether its `registryID` is that of the device the queue was made on, or the
+    /// side's answer that the getter is the consumer's own bookkeeping
+    /// ([`CommandBufferFacts::the_consumers`]).
+    pub device_is_the_queues: Result<bool, Failure>,
     /// `commandQueue`: for each of two distinctly labelled queues, whether the command buffer
-    /// made on it answers **its own** queue's label.
-    pub queue_label_is_its_own: [bool; 2],
+    /// made on it answers **its own** queue's label, or the side's answer that the label and the
+    /// getter are the consumer's own bookkeeping.
+    pub queue_label_is_its_own: Result<[bool; 2], Failure>,
     /// Whether `kernelStartTime` and `kernelEndTime` answered zero before the commit.
     pub kernel_zero_before: [bool; 2],
     /// Whether each answered a number greater than zero once the command buffer completed.
@@ -83,9 +86,10 @@ pub struct CommandBufferFacts {
     pub kernel_interval_is_ordered: bool,
     /// The GPU pair's flags, or the side's typed refusal of the two getters.
     pub gpu: Result<GpuFlags, Failure>,
-    /// `resourceStateCommandEncoder`: whether one was opened on a fresh command buffer. The
-    /// encoder is ended at once with nothing encoded into it.
-    pub resource_state_encoder_opened: bool,
+    /// `resourceStateCommandEncoder`: whether one was opened on a fresh command buffer, or the
+    /// side's typed refusal of the encoder. The encoder is ended at once with nothing encoded
+    /// into it.
+    pub resource_state_encoder_opened: Result<bool, Failure>,
     /// The status of the command buffer the timings were read from, once it completed.
     pub status: Value,
     /// The status of the command buffer the resource state encoder was opened on.
@@ -121,8 +125,8 @@ impl CommandBufferFacts {
         state_encoder_status: Value,
     ) -> Self {
         Self {
-            device_is_the_queues,
-            queue_label_is_its_own,
+            device_is_the_queues: Ok(device_is_the_queues),
+            queue_label_is_its_own: Ok(queue_label_is_its_own),
             kernel_zero_before: [kernel_before[0] == 0.0, kernel_before[1] == 0.0],
             kernel_positive_after: [kernel_after[0] > 0.0, kernel_after[1] > 0.0],
             kernel_interval_is_ordered: kernel_after[1] >= kernel_after[0],
@@ -133,27 +137,50 @@ impl CommandBufferFacts {
                 starts_no_earlier_than_the_kernel: after[0] >= kernel_after[0],
                 ends_no_earlier_than_the_kernel: after[1] >= kernel_after[1],
             }),
-            resource_state_encoder_opened,
+            resource_state_encoder_opened: Ok(resource_state_encoder_opened),
             status,
             state_encoder_status,
         }
     }
 
+    /// The facts of a side that keeps none of the consumer's own bookkeeping, `why` saying so:
+    /// a queue's label and a command buffer's `device` and `commandQueue` never reach the GPU,
+    /// so a runtime that leaves them to its consumer answers `TheConsumers` at their sites.
+    pub fn the_consumers(mut self, why: &str) -> Self {
+        let failure = Failure::named("TheConsumers", why);
+        self.device_is_the_queues = Err(failure.clone());
+        self.queue_label_is_its_own = Err(failure);
+        self
+    }
+
+    /// The facts of a side that refuses the resource state encoder, with its refusal.
+    pub fn without_resource_state_encoder(mut self, refusal: Failure) -> Self {
+        self.resource_state_encoder_opened = Err(refusal);
+        self
+    }
+
     /// The facts as the sites a case emits under one node, so both sides emit one shape.
     pub fn node(&self, name: impl Into<crate::transcript::NodeName>) -> Node {
         let flag = |at: String, held: bool| Node::leaf(at, Observed::value(Value::Bool(held)));
+        let answer = |at: String, held: Result<bool, &Failure>| {
+            Node::leaf(
+                at,
+                Observed::value(held.map_or_else(Failure::recorded, Value::Bool)),
+            )
+        };
+        let labels = self.queue_label_is_its_own.as_ref();
         let mut node = Node::branch(name, Vec::new())
-            .with(flag(
+            .with(answer(
                 "device-is-the-queues".to_owned(),
-                self.device_is_the_queues,
+                self.device_is_the_queues.as_ref().copied(),
             ))
-            .with(flag(
+            .with(answer(
                 "queue-label-is-its-own/0".to_owned(),
-                self.queue_label_is_its_own[0],
+                labels.map(|labels| labels[0]),
             ))
-            .with(flag(
+            .with(answer(
                 "queue-label-is-its-own/1".to_owned(),
-                self.queue_label_is_its_own[1],
+                labels.map(|labels| labels[1]),
             ));
         for (at, getter) in TIMERS[..2].iter().enumerate() {
             node = node.with(flag(
@@ -203,9 +230,9 @@ impl CommandBufferFacts {
                     ));
             }
         }
-        node.with(flag(
+        node.with(answer(
             "resource-state-encoder-opened".to_owned(),
-            self.resource_state_encoder_opened,
+            self.resource_state_encoder_opened.as_ref().copied(),
         ))
         .with(Node::leaf("status", Observed::value(self.status.clone())))
         .with(Node::leaf(
