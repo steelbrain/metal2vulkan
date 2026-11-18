@@ -297,8 +297,12 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
 
 /// The new runtime's backend on the first physical device of `device_type` that opens (a GPU:
 /// discrete, then integrated, then virtual), its compiled kernels kept in `cache`, and its name.
+/// A GPU opens only while the hang tripwire is absent, as the old runtime's device does.
 fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, String), String> {
     use ash::vk::PhysicalDeviceType as Kind;
+    if device_type == DeviceType::Gpu {
+        metal2vulkan_validation::gpu::tripwire::refuse_if_tripped()?;
+    }
     let instance = metal2vulkan_rt::Instance::new(&[]).map_err(|error| error.to_string())?;
     let (_, vk_instance) = instance.raw();
     let ranks: &[Kind] = match device_type {

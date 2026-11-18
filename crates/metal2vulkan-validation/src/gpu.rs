@@ -48,8 +48,10 @@ mod tests {
     /// Every device open goes through one of the functions that check the hang tripwire first:
     /// validation's Vulkan context, the Metal platform, the device validation makes through the
     /// runtime (`candidate::runtime_case::open_device`, which the runtime lane and the executor's
-    /// runtime path share), and the present tests' own device, which the runtime adopts. A new raw
-    /// open anywhere else in the crate fails here, before it can run.
+    /// runtime path share), the present tests' own device, which the runtime adopts, and the new
+    /// runtime's device in the player and in the replay tests, each after the tripwire check in its
+    /// own file. A new raw open anywhere else in the crate fails here, before it can run, and so
+    /// does a new-runtime open ahead of its check.
     #[test]
     fn device_opens_exist_only_behind_the_tripwire_check() {
         let root = metal2vulkan_devtools::validation_dir();
@@ -66,6 +68,8 @@ mod tests {
             // The runtime's own device creation (`metal2vulkan_runtime`).
             concat!("::system_", "default"),
             concat!("Device::", "all"),
+            // The new runtime's device creation (`metal2vulkan_rt`).
+            concat!("metal2vulkan_rt::Device", "::new("),
         ];
         let allowed: &[(&str, &str, usize)] = &[
             ("src/candidate/platform/device.rs", opens[2], 1),
@@ -78,7 +82,19 @@ mod tests {
             ("src/runtime_lane/presenting.rs", opens[2], 1),
             ("src/runtime_lane/presenting.rs", opens[3], 1),
             ("src/runtime_lane/presenting.rs", opens[4], 1),
+            // The new runtime's device: the player's and the replay tests'.
+            ("src/bin/command-replay.rs", opens[7], 1),
+            ("src/runtime_lane/rt_replay.rs", opens[7], 1),
         ];
+        let checked = concat!("refuse_if", "_tripped(");
+        for (file, open, _) in allowed.iter().filter(|(_, open, _)| *open == opens[7]) {
+            let text = std::fs::read_to_string(root.join(file)).unwrap();
+            let check = text.find(checked);
+            assert!(
+                check.is_some_and(|at| text.find(open).is_some_and(|open| at < open)),
+                "{file} opens the new runtime's device without the hang tripwire check before it"
+            );
+        }
         let mut found = Vec::new();
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
