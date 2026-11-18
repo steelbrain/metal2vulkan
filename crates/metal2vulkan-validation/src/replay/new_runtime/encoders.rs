@@ -4,7 +4,7 @@
 //! counted.
 
 use super::super::args::{arg, data, index, list, range, refuse, uint, Fields};
-use super::{failed, NewRuntime, Object};
+use super::{failed, Held, NewRuntime, Object};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
@@ -294,7 +294,6 @@ impl NewRuntime {
                 }
             }
             "useResource:usage:" => {
-                let object = Self::id(call, 0)?;
                 let usage = rt::ResourceUsage::READ;
                 let usage = match uint(call, 1)? {
                     1 => usage,
@@ -302,22 +301,15 @@ impl NewRuntime {
                     3 => usage | rt::ResourceUsage::WRITE,
                     raw => return Err(refuse(call, format!("resource usage {raw}"))),
                 };
-                match self.get(call, object)? {
-                    Object::Buffer(buffer, _) => {
-                        let buffer = buffer.clone();
-                        (self.compute(id).encoder)
-                            .use_resource(rt::Resource::Buffer(&buffer), usage)
-                    }
-                    Object::Texture(texture) => {
-                        let texture = texture.clone();
-                        (self.compute(id).encoder)
-                            .use_resource(rt::Resource::Texture(&texture), usage)
-                    }
-                    Object::Skipped => {
+                match self.resource(call, 0)? {
+                    Held::Buffer(buffer) => (self.compute(id).encoder)
+                        .use_resource(rt::Resource::Buffer(&buffer), usage),
+                    Held::Texture(texture) => (self.compute(id).encoder)
+                        .use_resource(rt::Resource::Texture(&texture), usage),
+                    Held::Skipped => {
                         self.skips.calls += 1;
                         Ok(())
                     }
-                    _ => return Err(refuse(call, "argument 0 is no buffer or texture")),
                 }
             }
             "updateFence:" => {
@@ -397,18 +389,15 @@ impl NewRuntime {
                 self.blit(id)
                     .copy_from_texture(&from, place, region, &to, to_place)
             }
-            "synchronizeResource:" => match self.get(call, Self::id(call, 0)?)? {
-                Object::Buffer(buffer, _) => {
-                    let buffer = buffer.clone();
-                    self.blit(id)
-                        .synchronize_resource(rt::Resource::Buffer(&buffer))
-                }
-                Object::Texture(texture) => {
-                    let texture = texture.clone();
-                    self.blit(id)
-                        .synchronize_resource(rt::Resource::Texture(&texture))
-                }
-                _ => return Err(refuse(call, "argument 0 is no buffer or texture")),
+            // A skipped resource is counted above, with the blits that name a skipped object.
+            "synchronizeResource:" => match self.resource(call, 0)? {
+                Held::Buffer(buffer) => self
+                    .blit(id)
+                    .synchronize_resource(rt::Resource::Buffer(&buffer)),
+                Held::Texture(texture) => self
+                    .blit(id)
+                    .synchronize_resource(rt::Resource::Texture(&texture)),
+                Held::Skipped => unreachable!("a blit naming a skipped object is skipped"),
             },
             "updateFence:" => {
                 let fence = self.fence_of(call, 0)?;

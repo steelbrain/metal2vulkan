@@ -10,7 +10,7 @@
 mod encoders;
 mod places;
 
-use super::args::{arg, data, metal, option_sets, refuse, uint, Fields};
+use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
 use super::player::{Backend, Counters, Made, PlayError};
 use super::stream::Call;
 use super::translator;
@@ -57,6 +57,13 @@ enum Object {
     SharedEvent(rt::SharedEvent),
     Fence(rt::Fence),
     /// What the runtime does not build yet.
+    Skipped,
+}
+
+/// A resource argument's object, `{Buffer: object}` or `{Texture: object}`, or a skipped one.
+enum Held {
+    Buffer(rt::Buffer),
+    Texture(rt::Texture),
     Skipped,
 }
 
@@ -308,6 +315,22 @@ impl NewRuntime {
             Value::List(items) => items.iter().any(|item| self.holds_skipped(item)),
             Value::Map(entries) => entries.iter().any(|(_, item)| self.holds_skipped(item)),
             _ => false,
+        }
+    }
+
+    /// Resource argument `at`: `{Buffer: object}` or `{Texture: object}`.
+    fn resource(&self, call: &Call, at: usize) -> Result<Held, PlayError> {
+        let (kind, object) = variant(call, arg(call, at)?)?;
+        let id = object
+            .as_object()
+            .ok_or_else(|| refuse(call, format!("{kind} {object}")))?;
+        if self.skipped(id) {
+            return Ok(Held::Skipped);
+        }
+        match kind {
+            "Buffer" => self.buffer_of(call, id).map(Held::Buffer),
+            "Texture" => self.texture_of(call, id).map(Held::Texture),
+            _ => Err(refuse(call, format!("a resource of kind {kind}"))),
         }
     }
 
