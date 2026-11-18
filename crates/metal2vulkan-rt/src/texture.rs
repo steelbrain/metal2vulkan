@@ -1059,7 +1059,7 @@ impl Texture {
     /// `region` of `level` and `slice` (a 3D texture's slice is 0), rows `bytes_per_row` and
     /// images `bytes_per_image` apart in `bytes`, a compressed format's rows being rows of
     /// blocks. The bytes go to the device's staging region before the call returns (a staging
-    /// buffer of their own past the region's 256 MiB), and the upload copies them into the image
+    /// buffer of their own past the region's 16 MiB), and the upload copies them into the image
     /// ahead of every command buffer committed after it, so the call is ordered as Metal's CPU
     /// write is. Where the region has no room, the call first waits for the oldest copy in it to
     /// complete. Counted in [`Metrics::bytes_copied`]. An empty region copies nothing.

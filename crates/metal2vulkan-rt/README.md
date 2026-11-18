@@ -87,10 +87,10 @@ in its memory.
   `BLOCK_LEN` a block is dedicated: the length rounded up to 64 KiB, made in the call, up to the
   device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
 - Every `VkDeviceMemory` the runtime holds counts against the device's
-  `maxMemoryAllocationCount`: each block, each texture's own allocation, the staging region
-  (one Shared block of the pool, from the first texture copy on), the staging buffer of a copy
-  larger than the region while it runs, the parameter ring's blocks and the zero source. One more past it is `Limit::MemoryAllocations`, refused before the
-  driver is called; `Gauges::blocks` counts those live. The limit is about 4.29 billion on RADV,
+  `maxMemoryAllocationCount`: each block, each texture's own allocation, the staging region (from
+  the first texture copy on), the staging buffer of a copy larger than the region while it runs,
+  the parameter ring's blocks and the zero source. One more past it is `Limit::MemoryAllocations`,
+  refused before the driver is called; `Gauges::blocks` counts those live. The limit is about 4.29 billion on RADV,
   NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD Graphics 630, and
   4,096 at Vulkan's minimum.
 - Every block reads zero when it is handed out, new or taken again, as Metal's new buffers do. A
@@ -203,13 +203,15 @@ made, with no lock, and never rewritten for layouts.
   layout and coming back, ahead of every command buffer committed after the call. `get_bytes`
   records the copy out into the upload, submits it at once, waits for it and copies the bytes
   out; as in Metal, the program has waited for the work that writes the texture.
-- The staging region is a Shared block of the pool, taken at the first copy and kept for the
-  device's life, so no copy allocates memory and the host writes resident pages. It is a ring:
-  each copy takes a span at a multiple of 256 bytes, free again once the submission that carries
-  the copy completes and no `get_bytes` reads it. Where the ring has no room, the call waits for
-  its oldest span's submission, submitting the upload first where the span is in it
-  (`Metrics::upload_waits`). A copy larger than the region's 256 MiB has a staging buffer of its
-  own, which counts against the upload's 64 MiB.
+- The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
+  copy, its pages written then, and kept for the device's life, so no copy allocates memory and
+  the host writes resident pages. It is a ring: each copy takes a span at a multiple of 256 bytes,
+  free again once the submission that carries the copy completes and no `get_bytes` reads it. The
+  upload is submitted, without a wait, once its copies' spans take 8 MiB, so the GPU copies while
+  the host writes the next. Where the ring has no room, the call waits for its oldest span's
+  submission, submitting the upload first where the span is in it (`Metrics::upload_waits`). A
+  copy larger than 16 MiB has a staging buffer of its own, which counts against the upload's
+  64 MiB.
 - A texture holds the device. Once its last handle and the last command buffer that used it are
   gone, its elements read null and its index is free at once; the reaper frees its image once the
   last upload that moves or copies it has retired. `Gauges::textures` counts images until then,

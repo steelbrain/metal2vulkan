@@ -1,19 +1,21 @@
 //! Staging: the bytes a copy between a texture and the CPU passes through.
 //!
-//! The device has one staging region, a Shared block of the pool taken at the first copy and kept
-//! for the device's life, so no copy allocates memory and the host writes pages already resident.
-//! It is a ring: each copy takes a span, which the host writes before the copy is recorded
-//! (`replace_region`) or reads once the copy has completed (`get_bytes`). A span is free again
-//! once the submission that carries its copy has completed and no host reads it. The next span
-//! goes after the last one taken, or back at the start where the end has no room and the start is
-//! free; with no span live the ring starts again at 0. Where no room is free, the caller waits for
-//! the oldest span's submission ([`Work::stage`](crate::submit::Work::stage)). A copy larger than
-//! the region has a staging buffer of its own, which the upload's bound counts.
+//! The device has one staging region of [`REGION_LEN`] bytes, an allocation of the Shared type
+//! made at the first copy, its pages written once then, and kept for the device's life: no copy
+//! allocates memory, and the host writes pages already resident. It is a ring: each copy takes a
+//! span, which the host writes before the copy is recorded (`replace_region`) or reads once the
+//! copy has completed (`get_bytes`). A span is free again once the submission that carries its
+//! copy has completed and no host reads it. The next span goes after the last one taken, or back
+//! at the start where the end has no room and the start is free; with no span live the ring starts
+//! again at 0. Where no room is free, the caller waits for the oldest span's submission
+//! ([`Work::stage`](crate::submit::Work::stage)); the pending upload goes without a wait once its
+//! spans take half the region, so the GPU copies while the host writes the rest. A copy larger
+//! than the region has a staging buffer of its own, which the upload's bound counts.
 
 use crate::counters::Gauge;
 use crate::device::Core;
 use crate::error::Error;
-use crate::memory::{self, Mapping, Memory, MemoryClass};
+use crate::memory::{self, Mapping, MemoryClass};
 use crate::reaper::{Free, Job};
 use ash::vk;
 use std::collections::VecDeque;
@@ -24,12 +26,13 @@ use std::sync::Arc;
 /// stencil copy needs, and of every device's optimal copy offset alignment.
 pub(crate) const SPAN_ALIGN: u64 = 256;
 
+/// The staging region's bytes.
+pub(crate) const REGION_LEN: u64 = 16 << 20;
+
 /// The ring's arithmetic: its spans, oldest first, each with the progress value at which it is
 /// free.
 pub(crate) struct Ring {
     len: u64,
-    /// The end of the last span taken.
-    head: u64,
     spans: VecDeque<Span>,
     /// The number of the front span; spans are numbered in the order they were taken.
     front: u64,
@@ -71,12 +74,13 @@ impl Ring {
     pub(crate) fn new(len: u64) -> Ring {
         Ring {
             len,
-            head: 0,
             spans: VecDeque::new(),
             front: 0,
         }
     }
 
+    /// For the tests: the ring's bytes.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> u64 {
         self.len
     }
@@ -97,20 +101,19 @@ impl Ring {
             self.spans.pop_front();
             self.front += 1;
         }
-        if self.spans.is_empty() {
-            self.head = 0;
-        }
     }
 
     /// A span of `len` bytes (at most the ring's) at a multiple of [`SPAN_ALIGN`]: its number and
     /// its offset, where there is room.
     pub(crate) fn take(&mut self, len: u64, read: bool) -> Option<(u64, u64)> {
         debug_assert!(len <= self.len);
-        let after = self.head.next_multiple_of(SPAN_ALIGN);
+        // The end of the last span taken, with none live 0.
+        let head = self.spans.back().map_or(0, |span| span.end);
+        let after = head.next_multiple_of(SPAN_ALIGN);
         let start = match self.spans.front().map(|span| span.start) {
             None => 0,
             // The live spans lie in `tail..head`: after them, else from the start.
-            Some(tail) if self.head > tail => match after.checked_add(len) {
+            Some(tail) if head > tail => match after.checked_add(len) {
                 Some(end) if end <= self.len => after,
                 _ if len <= tail => 0,
                 _ => return None,
@@ -127,7 +130,6 @@ impl Ring {
             at: At::Taken,
             read,
         });
-        self.head = start + len;
         Some((self.front + self.spans.len() as u64 - 1, start))
     }
 
@@ -169,29 +171,60 @@ impl Ring {
     }
 }
 
-/// The device's staging region: a Shared block of the pool, its mapping, and its ring.
+/// The device's staging region: its buffer, the allocation of its own that the buffer spans, its
+/// mapping, and its ring.
 pub(crate) struct Region {
-    pub(crate) memory: Memory,
-    pub(crate) host: Mapping,
+    pub(crate) buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    host: Mapping,
     pub(crate) ring: Ring,
 }
 
 impl Region {
-    /// The region over `memory`, a Shared block mapped at `host`.
-    pub(crate) fn new(memory: Memory, host: Mapping) -> Region {
-        Region {
-            ring: Ring::new(memory.len),
+    /// A region of [`REGION_LEN`] bytes, its pages written once.
+    ///
+    /// Err: what [`memory::allocate`] returns; [`Error::Vulkan`] where the buffer cannot be made,
+    /// bound or mapped.
+    pub(crate) fn new(core: &Core) -> Result<Region, Error> {
+        let (buffer, memory, host) = host_buffer(core, REGION_LEN)?;
+        // SAFETY: the mapping spans the region's bytes, which nothing else uses yet.
+        unsafe { host.get().as_ptr().write_bytes(0, REGION_LEN as usize) };
+        Ok(Region {
+            buffer,
             memory,
             host,
+            ring: Ring::new(REGION_LEN),
+        })
+    }
+
+    /// The host address of the byte at `offset`, at most [`REGION_LEN`].
+    pub(crate) fn host(&self, offset: u64) -> Mapping {
+        debug_assert!(offset <= REGION_LEN);
+        // SAFETY: the mapping spans the region, and `offset` is in it or one past its end.
+        Mapping::new(unsafe { self.host.at(offset) })
+    }
+
+    /// Frees the region, and its allocation's gauge.
+    ///
+    /// # Safety
+    ///
+    /// No GPU work that uses it is pending, and no host reads or writes it.
+    pub(crate) unsafe fn free(self, core: &Core) {
+        // SAFETY: the caller's; freeing the memory unmaps it.
+        unsafe {
+            core.device.destroy_buffer(self.buffer, None);
+            core.device.free_memory(self.memory, None);
         }
+        core.counters.fall(Gauge::Blocks);
     }
 }
 
 /// Where a copy's bytes are staged.
 pub(crate) enum Stage {
-    /// Span `number` of the region, at `offset` in its buffer.
+    /// Span `number` of the region, of `len` bytes at `offset` in its buffer.
     Region {
         number: u64,
+        len: u64,
         buffer: vk::Buffer,
         offset: u64,
         host: Mapping,
@@ -239,76 +272,86 @@ pub(crate) struct Staging {
 
 impl Staging {
     /// A staging buffer of `len` bytes.
+    ///
+    /// Err: what [`memory::allocate`] returns; [`Error::Vulkan`] where the buffer cannot be made,
+    /// bound or mapped.
     pub(crate) fn new(core: &Arc<Core>, len: u64) -> Result<Staging, Error> {
-        let device = &core.device;
-        let info = vk::BufferCreateInfo::default()
-            .size(len)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        // SAFETY: the device is live.
-        let buffer = unsafe { device.create_buffer(&info, None) }
-            .map_err(Error::vulkan("vkCreateBuffer"))?;
-        // SAFETY: the buffer is the device's.
-        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-        let allocate = vk::MemoryAllocateInfo::default()
-            .allocation_size(requirements.size)
-            .memory_type_index(core.memory_type(MemoryClass::Shared));
-        // SAFETY: the Shared type serves a buffer of every usage, so one of fewer too.
-        let allocated =
-            unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) };
-        let memory = match allocated {
-            Ok(memory) => memory,
-            Err(error) => {
-                // SAFETY: the buffer is unused.
-                unsafe { device.destroy_buffer(buffer, None) };
-                return Err(error);
-            }
-        };
-        // SAFETY: the allocation is the buffer's size, of a type it allows; the memory is
-        // host-visible and not mapped.
-        let mapped = unsafe {
-            device
-                .bind_buffer_memory(buffer, memory, 0)
-                .map_err(Error::vulkan("vkBindBufferMemory"))
-                .and_then(|()| {
-                    device
-                        .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                        .map_err(Error::vulkan("vkMapMemory"))
-                })
-        };
-        let pointer = match mapped {
-            Ok(pointer) => pointer,
-            Err(error) => {
-                // SAFETY: nothing uses them.
-                unsafe {
-                    device.destroy_buffer(buffer, None);
-                    device.free_memory(memory, None);
-                }
-                core.counters.fall(Gauge::Blocks);
-                return Err(error);
-            }
-        };
-        // A successful map gives a non-null address.
-        let Some(pointer) = NonNull::new(pointer.cast::<u8>()) else {
+        let (buffer, memory, mapping) = host_buffer(core, len)?;
+        Ok(Staging {
+            core: Arc::clone(core),
+            buffer,
+            memory,
+            mapping,
+            len,
+        })
+    }
+}
+
+/// A buffer of `len` bytes for copies to and from images, bound to an allocation of its own of the
+/// Shared type, mapped.
+fn host_buffer(core: &Core, len: u64) -> Result<(vk::Buffer, vk::DeviceMemory, Mapping), Error> {
+    let device = &core.device;
+    let info = vk::BufferCreateInfo::default()
+        .size(len)
+        .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    // SAFETY: the device is live.
+    let buffer =
+        unsafe { device.create_buffer(&info, None) }.map_err(Error::vulkan("vkCreateBuffer"))?;
+    // SAFETY: the buffer is the device's.
+    let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+    let allocate = vk::MemoryAllocateInfo::default()
+        .allocation_size(requirements.size)
+        .memory_type_index(core.memory_type(MemoryClass::Shared));
+    // SAFETY: the Shared type serves a buffer of every usage, so one of fewer too.
+    let allocated =
+        unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) };
+    let memory = match allocated {
+        Ok(memory) => memory,
+        Err(error) => {
+            // SAFETY: the buffer is unused.
+            unsafe { device.destroy_buffer(buffer, None) };
+            return Err(error);
+        }
+    };
+    // SAFETY: the allocation is the buffer's size, of a type it allows; the memory is
+    // host-visible and not mapped.
+    let mapped = unsafe {
+        device
+            .bind_buffer_memory(buffer, memory, 0)
+            .map_err(Error::vulkan("vkBindBufferMemory"))
+            .and_then(|()| {
+                device
+                    .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
+                    .map_err(Error::vulkan("vkMapMemory"))
+            })
+    };
+    let pointer = match mapped {
+        Ok(pointer) => pointer,
+        Err(error) => {
             // SAFETY: nothing uses them.
             unsafe {
                 device.destroy_buffer(buffer, None);
                 device.free_memory(memory, None);
             }
             core.counters.fall(Gauge::Blocks);
-            return Err(Error::Vulkan {
-                call: "vkMapMemory",
-                result: vk::Result::ERROR_MEMORY_MAP_FAILED,
-            });
-        };
-        Ok(Staging {
-            core: Arc::clone(core),
-            buffer,
-            memory,
-            mapping: Mapping::new(pointer),
-            len,
-        })
-    }
+            return Err(error);
+        }
+    };
+    // A successful map gives a non-null address.
+    let Some(pointer) = NonNull::new(pointer.cast::<u8>()) else {
+        // SAFETY: nothing uses them.
+        unsafe {
+            device.destroy_buffer(buffer, None);
+            device.free_memory(memory, None);
+        }
+        core.counters.fall(Gauge::Blocks);
+        return Err(Error::Vulkan {
+            call: "vkMapMemory",
+            result: vk::Result::ERROR_MEMORY_MAP_FAILED,
+        });
+    };
+    Ok((buffer, memory, Mapping::new(pointer)))
 }
 
 impl Drop for Staging {

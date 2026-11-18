@@ -5,9 +5,8 @@
 //! - textures made and released are freed at once: their moves to a home layout wait for a
 //!   submission, and hold nothing until one;
 //! - `replace_region` calls of twice the staging region's bytes into four textures stage every
-//!   copy in the region: no call allocates, the ring wraps, calls wait for the upload where it
-//!   has no room ([`Metrics::upload_waits`](crate::Metrics::upload_waits)), and each texture
-//!   reads its last call's bytes;
+//!   copy in the region: no call allocates, the ring wraps, the upload goes each time its copies
+//!   take half the region, and each texture reads its last call's bytes;
 //! - textures released while the upload holds them for a copy, and a block released while it
 //!   holds it for a zero fill, count against the bound, so the upload goes and frees them;
 //! - zero fills past [`UPLOAD_ENTRIES`] submit it;
@@ -16,6 +15,7 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::staging::REGION_LEN;
     use crate::submit::{HOMES_PRUNE, UPLOAD_BYTES, UPLOAD_ENTRIES};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
@@ -90,11 +90,12 @@ mod on_device {
             assert_eq!(submissions(), before, "{name}: textures made and released");
 
             // Whole-texture copies of 4,000,000 bytes, twice the staging region's length, into four
-            // textures in turn: the region's block, its replacement in the pool and the textures
-            // are the only allocations.
+            // textures in turn: the region and the textures are the only allocations, and the
+            // upload goes each time its copies take half the region.
             let side = 1000;
             let call = u64::from(side * side * 4);
-            let calls = 2 * BLOCK_LEN / call + 3;
+            let calls = 2 * REGION_LEN / call + 3;
+            let per_upload = (REGION_LEN / 2).div_ceil(call);
             let targets: Vec<_> = (0..4)
                 .map(|index| {
                     device
@@ -102,13 +103,14 @@ mod on_device {
                         .unwrap_or_else(|error| panic!("{name}: {error}"))
                 })
                 .collect();
-            let ceiling = base + targets.len() as u64 + 2;
+            let ceiling = base + targets.len() as u64 + 1;
             let pattern = |seed: u64| -> Vec<u8> {
                 (0..call)
                     .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed as u8))
                     .collect()
             };
             let waits = counters.metrics().upload_waits;
+            let before = submissions();
             for seed in 0..calls {
                 let target = &targets[(seed % 4) as usize];
                 target
@@ -124,8 +126,9 @@ mod on_device {
             }
             let waited = counters.metrics().upload_waits - waits;
             assert!(
-                waited >= 1,
-                "{name}: {calls} copies of {call} bytes never waited"
+                submissions() - before >= calls / per_upload,
+                "{name}: {calls} copies of {call} bytes went in {} submissions",
+                submissions() - before
             );
             for (index, target) in targets.iter().enumerate() {
                 let last = calls - 1 - (calls - 1 - index as u64) % 4;

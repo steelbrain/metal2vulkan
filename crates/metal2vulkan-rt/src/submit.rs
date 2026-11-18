@@ -15,7 +15,8 @@
 //! [`UPLOAD_BYTES`] of memory it alone keeps, has it submitted and waits for it to complete before
 //! it records. A new texture's move to its home layout holds nothing until the next submission,
 //! whose upload records it where the texture still lives. Copies stage their bytes in the
-//! device's staging region ([`crate::staging`]), which the work lock guards with the upload.
+//! device's staging region ([`crate::staging`]), which the work lock guards with the upload; the
+//! upload goes without a wait once its copies' spans take half the region.
 
 use crate::command::{CbInner, CommandBufferError, Handler, Pending, Segment};
 use crate::complete;
@@ -24,10 +25,10 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
 use crate::fill;
-use crate::memory::{Block, Mapping, Memory, MemoryClass};
+use crate::memory::Block;
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
-use crate::staging::{At, Oldest, Region, Stage, Staging};
+use crate::staging::{At, Oldest, Region, Stage, Staging, REGION_LEN};
 use crate::texture::Image;
 use crate::times;
 use ash::vk;
@@ -131,8 +132,9 @@ pub(crate) struct Upload {
     entries: usize,
     /// The bytes of the staging buffers of its own it holds.
     staging: u64,
-    /// The staging region's spans its copies use.
+    /// The staging region's spans its copies use, and their bytes.
     spans: Vec<u64>,
+    span_bytes: u64,
 }
 
 /// What an upload keeps until it retires.
@@ -171,6 +173,7 @@ impl Upload {
                 entries: 0,
                 staging: 0,
                 spans: Vec::new(),
+                span_bytes: 0,
             }),
             Err(error) => {
                 core.recorders.give_back(core, recorder);
@@ -332,8 +335,9 @@ impl Work {
     /// layout is moved there first.
     ///
     /// Where the upload is full ([`UPLOAD_ENTRIES`], [`UPLOAD_BYTES`]), it is submitted and the
-    /// call waits for it to complete first, without the lock. Where the call fails, `stage`'s
-    /// span is given up.
+    /// call waits for it to complete first, without the lock. Where its spans of the staging
+    /// region reach half the region, it is submitted, and the call does not wait. Where the call
+    /// fails, `stage`'s span is given up.
     ///
     /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made,
     /// and with `VK_ERROR_DEVICE_LOST` where the device is lost while the call waits.
@@ -402,9 +406,12 @@ impl Work {
                 upload.held.push(item);
             }
         }
+        let mut half = false;
         match stage {
-            Some(Stage::Region { number, .. }) => {
+            Some(Stage::Region { number, len, .. }) => {
                 upload.spans.push(*number);
+                upload.span_bytes += len;
+                half = upload.span_bytes >= REGION_LEN / 2;
                 if let Some(region) = &mut state.region {
                     region.ring.set(*number, At::Recorded);
                 }
@@ -412,28 +419,40 @@ impl Work {
             Some(Stage::Own(staging)) => upload.held.push(Held::Staging(Arc::clone(staging))),
             None => {}
         }
+        if half {
+            state.flush();
+            drop(state);
+            self.wake();
+        }
         Ok(())
     }
 
-    /// Staging for a copy of `len` bytes: a span of the device's staging region, made from a
-    /// Shared block of the pool at the first copy; a staging buffer of its own for a copy larger
-    /// than the region. Where the region has no room, the call waits, without the lock, for what
-    /// frees its oldest span: the submission that carries it, after submitting the pending upload
+    /// Staging for a copy of `len` bytes: a span of the device's staging region, made at the first
+    /// copy; a staging buffer of its own for a copy larger than the region. Where the region has
+    /// no room, the call waits, without the lock, for what frees its oldest span: the submission that carries it, after submitting the pending upload
     /// where it is in that. `read` keeps the span until [`unread`](Self::unread), for a copy the
     /// host reads once it completed. The caller passes the stage to [`upload`](Self::upload).
     ///
-    /// Err: [`Error::Quiesced`]; what taking the block or making the staging buffer can return;
+    /// Err: [`Error::Quiesced`]; what making the region or the staging buffer can return;
     /// [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` where the device is lost while the call
     /// waits.
     pub(crate) fn stage(&self, core: &Arc<Core>, len: u64, read: bool) -> Result<Stage, Error> {
+        if len > REGION_LEN {
+            if self.lock().closed {
+                return Err(Error::Quiesced);
+            }
+            return Ok(Stage::Own(Arc::new(Staging::new(core, len)?)));
+        }
         let mut state = self.lock();
         if state.region.is_none() {
             drop(state);
-            let memory = core.pool.take(MemoryClass::Shared)?;
+            let made = Region::new(core)?;
             state = self.lock();
-            match (&state.region, memory.mapping) {
-                (None, Some(host)) => state.region = Some(Region::new(memory, host)),
-                _ => core.pool.give_back(memory),
+            if state.region.is_none() {
+                state.region = Some(made);
+            } else {
+                // SAFETY: another call made the region first; nothing used this one.
+                unsafe { made.free(core) };
             }
         }
         // The progress value known complete: what the completion thread has seen, or what this
@@ -443,25 +462,18 @@ impl Work {
             if state.closed {
                 return Err(Error::Quiesced);
             }
-            // A Shared block is always mapped.
+            // Made above, and taken only at teardown.
             let Some(region) = &mut state.region else {
-                return Err(Error::Vulkan {
-                    call: "vkMapMemory",
-                    result: vk::Result::ERROR_MEMORY_MAP_FAILED,
-                });
+                return Err(Error::Quiesced);
             };
-            if len > region.ring.len() {
-                drop(state);
-                return Ok(Stage::Own(Arc::new(Staging::new(core, len)?)));
-            }
             region.ring.reclaim(completed.max(core.done.completed()));
             if let Some((number, offset)) = region.ring.take(len, read) {
                 return Ok(Stage::Region {
                     number,
-                    buffer: region.memory.buffer,
+                    len,
+                    buffer: region.buffer,
                     offset,
-                    // SAFETY: the span lies in the block, which the mapping spans.
-                    host: Mapping::new(unsafe { region.host.at(offset) }),
+                    host: region.host(offset),
                 });
             }
             let value = match region.ring.oldest() {
@@ -499,10 +511,10 @@ impl Work {
         }
     }
 
-    /// At teardown: the staging region's block, for the core to free.
-    pub(crate) fn take_region(&mut self) -> Option<Memory> {
+    /// At teardown: the staging region, for the core to free.
+    pub(crate) fn take_region(&mut self) -> Option<Region> {
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
-        state.region.take().map(|region| region.memory)
+        state.region.take()
     }
 
     /// A new texture's `image`: the next submission's upload moves it to its home layout where it
