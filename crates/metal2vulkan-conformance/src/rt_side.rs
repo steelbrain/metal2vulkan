@@ -38,6 +38,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+mod render;
+
 /// How long a wait for a command buffer waits before the side records that it never returned:
 /// the old runtime's side's bound.
 const WAIT: Duration = Duration::from_secs(60);
@@ -226,6 +228,8 @@ pub struct RtSide<'a> {
     textures: Vec<rt::Texture>,
     command_buffers: Vec<rt::CommandBuffer>,
     samplers: Vec<rt::SamplerState>,
+    render_pipelines: Vec<rt::RenderPipelineState>,
+    depth_stencils: Vec<rt::DepthStencilState>,
     /// The pipelines the case dispatched, whose precision notes [`Side::announced`] answers.
     dispatched: BTreeSet<usize>,
 }
@@ -242,6 +246,8 @@ impl<'a> RtSide<'a> {
             textures: Vec::new(),
             command_buffers: Vec::new(),
             samplers: Vec::new(),
+            render_pipelines: Vec::new(),
+            depth_stencils: Vec::new(),
             dispatched: BTreeSet::new(),
         }
     }
@@ -586,6 +592,44 @@ impl Side for RtSide<'_> {
         self.encode(pipeline, bindings, |encoder| {
             encoder.dispatch_threads(grid, threads)
         })
+    }
+
+    fn target(&mut self, spec: &crate::render::TargetSpec) -> Answer<Handle> {
+        self.make_target(spec)
+    }
+
+    fn render_pipeline(
+        &mut self,
+        library: Handle,
+        spec: &crate::render::RenderPipelineSpec<'_>,
+    ) -> Answer<Handle> {
+        self.make_render_pipeline(library, spec)
+    }
+
+    fn depth_stencil_state(&mut self, spec: &rt::DepthStencilDescriptor) -> Answer<Handle> {
+        let state = self.on.device.new_depth_stencil_state(spec);
+        Ok(keep(&mut self.depth_stencils, state))
+    }
+
+    fn replace_region(
+        &mut self,
+        texture: Handle,
+        size: [u32; 2],
+        row_pitch: u32,
+        bytes: &[u8],
+    ) -> Answer<()> {
+        let region = rt::Region {
+            origin: [0, 0, 0],
+            size: [size[0], size[1], 1],
+        };
+        (self
+            .held_texture(texture)?
+            .replace_region(region, 0, 0, bytes, row_pitch.into(), 0))
+        .map_err(|error| Failure::of_rt(&error))
+    }
+
+    fn render(&mut self, work: &[crate::render::RenderWork]) -> Answer<crate::case::PassOutcome> {
+        self.run_render(work)
     }
 
     /// The facts the runtime holds: the status, the four times and the work's completion. The
