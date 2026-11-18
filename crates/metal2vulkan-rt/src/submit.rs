@@ -533,15 +533,15 @@ impl Work {
             }
         };
         let mut copy_ins: Vec<CopyIn> = state.changes.carried.drain(..).collect();
-        let modified = state.changes.take();
+        let named = state.changes.take();
         let mut spans = Vec::new();
         // Each buffer's copies: from the ring, and from the consumer's bytes.
-        let mut copies = Vec::with_capacity(modified.len());
+        let mut copies = Vec::with_capacity(named.len());
         let (mut captured, mut live) = (0, 0);
         // The ring has no room for what is left: it is copied from the consumer's bytes.
         let mut full = false;
         let mut completed = core.done.completed();
-        for modified in &modified {
+        for modified in &named {
             let (mut staged, mut direct) = (Vec::new(), Vec::new());
             for &(start, end) in &modified.ranges {
                 let mut at = start;
@@ -566,8 +566,8 @@ impl Work {
                                 let waited = core.done.wait(core, value);
                                 state = self.lock();
                                 if let Err(error) = waited {
-                                    let error = self
-                                        .unwind(core, state, recorder, &spans, &modified, error);
+                                    let error =
+                                        self.unwind(core, state, recorder, &spans, &named, error);
                                     return Err(error);
                                 }
                                 completed = completed.max(value);
@@ -583,8 +583,7 @@ impl Work {
                         }
                         if state.closed {
                             let error = Error::Quiesced;
-                            let error =
-                                self.unwind(core, state, recorder, &spans, &modified, error);
+                            let error = self.unwind(core, state, recorder, &spans, &named, error);
                             return Err(error);
                         }
                         continue;
@@ -617,12 +616,12 @@ impl Work {
         }
         if state.closed {
             let error = Error::Quiesced;
-            return Err(self.unwind(core, state, recorder, &spans, &modified, error));
+            return Err(self.unwind(core, state, recorder, &spans, &named, error));
         }
         // The textures over the ranges in images of their own: the copies back owed to them go
         // first, so the consumer's bytes land over them, and their copies in last.
         let (mut backs, mut into) = (Vec::new(), Vec::new());
-        for modified in &modified {
+        for modified in &named {
             if modified.overs.any() {
                 (modified.overs).captured(&modified.ranges, &mut backs, &mut into);
             }
@@ -643,7 +642,7 @@ impl Work {
                 false => over::record_side(device, command, &back_copies, false, &core.counters),
             }
             let ring = state.changes.region.as_ref().map(|region| region.buffer);
-            for (modified, (staged, direct)) in modified.iter().zip(&copies) {
+            for (modified, (staged, direct)) in named.iter().zip(&copies) {
                 let sources = [(ring, staged), (Some(modified.cpu.memory.buffer), direct)];
                 for (source, regions) in sources {
                     if let Some(source) = source.filter(|_| !regions.is_empty()) {
@@ -666,7 +665,7 @@ impl Work {
                 call: "vkEndCommandBuffer",
                 result,
             };
-            return Err(self.unwind(core, state, recorder, &spans, &modified, error));
+            return Err(self.unwind(core, state, recorder, &spans, &named, error));
         }
         let images = (backs.into_iter().map(|(_, _, image)| image))
             .chain(into.into_iter().map(|(_, image)| image))
@@ -675,7 +674,7 @@ impl Work {
             recorder,
             command,
             spans,
-            modified,
+            modified: named,
             images,
         });
         Ok((state, copy_ins))

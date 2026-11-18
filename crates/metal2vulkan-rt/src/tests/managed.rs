@@ -54,6 +54,7 @@ mod on_device {
         TextureUsage,
     };
     use ash::vk;
+    use std::time::Instant;
 
     const LEN: u64 = 64 << 10;
 
@@ -332,7 +333,19 @@ mod on_device {
                         unsafe { device.cmd_copy_buffer(command, source, target, &[region]) };
                     })
                     .expect("a copy");
+                // The time in the commit: the capture's copy into the ring, and for the second a
+                // wait for the first's submission where it was still running.
+                let began = Instant::now();
                 command_buffer.commit().expect("a commit");
+                let took = began.elapsed();
+                println!(
+                    "managed past the ring: {name}: commit {index} of {} MiB took {:.2} ms \
+                     ({:.2} GB/s), waits {}",
+                    part >> 20,
+                    took.as_secs_f64() * 1e3,
+                    part as f64 / took.as_secs_f64() / 1e9,
+                    counters.metrics().capture_waits
+                );
                 command_buffer.wait_until_scheduled();
                 commits.push(command_buffer);
             }
