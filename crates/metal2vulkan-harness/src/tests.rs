@@ -4,7 +4,7 @@ use crate::authored::WORKLOADS;
 use crate::description;
 use crate::plan::{
     Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Filter, Grid, Output, Plan,
-    Scaled, Source, TextureExpect, TexturePlan, Values,
+    SamplerPlan, Scaled, Source, TextureExpect, TexturePlan, TextureSource, Values,
 };
 use crate::rt::{self, Ranges};
 use crate::run::{
@@ -143,11 +143,11 @@ fn a_plan_with_a_part_length_a_missing_buffer_or_no_dispatch_is_refused() {
 /// expectation of `expected` floats.
 fn one_texture_plan(side: u32, texels: Option<usize>, bound: usize, expected: usize) -> Plan {
     let mut plan = one_buffer_plan(16, None, 0);
-    plan.textures = vec![TexturePlan {
-        width: side,
-        height: side,
-        texels: texels.map(|count| vec![0.0; count]),
-    }];
+    plan.textures = vec![TexturePlan::rgba16_float(
+        side,
+        side,
+        texels.map(|count| vec![0.0; count]),
+    )];
     plan.dispatches[0].bindings = vec![
         Binding::Texture {
             index: 0,
@@ -155,7 +155,7 @@ fn one_texture_plan(side: u32, texels: Option<usize>, bound: usize, expected: us
         },
         Binding::Sampler {
             index: 0,
-            filter: Filter::Linear,
+            sampler: SamplerPlan::clamped(Filter::Linear),
         },
     ];
     plan.expect_textures = vec![TextureExpect {
@@ -185,6 +185,84 @@ fn a_plan_with_a_part_tile_texture_a_missing_texture_or_too_many_texels_is_refus
     let mut unknown = one_texture_plan(16, None, 0, 4);
     unknown.expect_textures[0].texture = 1;
     assert!(unknown.validate().is_err());
+}
+
+#[test]
+fn a_plan_refuses_a_texture_the_harness_cannot_make_or_fill() {
+    let problem = |change: fn(&mut TexturePlan)| {
+        let mut plan = one_texture_plan(16, None, 0, 4);
+        plan.expect_textures.clear();
+        change(&mut plan.textures[0]);
+        plan.validate().err().map(|why| why.to_string())
+    };
+    assert_eq!(problem(|_| {}), None);
+    assert_eq!(
+        problem(|t| t.texture_type = metal2vulkan::metal::TextureType::Type3D),
+        Some(
+            "probe: texture 0: a Type3D texture of 1 slices: the harness makes 2D textures and 2D \
+             arrays"
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        problem(|t| t.array_length = 2),
+        Some(
+            "probe: texture 0: a Type2D texture of 2 slices: the harness makes 2D textures and 2D \
+             arrays"
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        problem(|t| {
+            t.texture_type = metal2vulkan::metal::TextureType::Type2DArray;
+            t.array_length = 2;
+            t.source = TextureSource::OverBuffer;
+        }),
+        Some("probe: texture 0: a texture over a buffer is 2D, as Metal requires".to_owned())
+    );
+    assert_eq!(
+        problem(|t| t.pixel_format = metal2vulkan::metal::PixelFormat::BC1RGBA),
+        Some(
+            "probe: texture 0: format BC1RGBA is not one the harness knows the size of".to_owned()
+        )
+    );
+    assert_eq!(
+        problem(|t| t.bytes = Some(vec![0; 16 * 16 * 8])),
+        Some(
+            "probe: texture 0: its bytes are written by the CPU, which writes no private texture \
+             and none the texel kernel writes"
+                .to_owned()
+        )
+    );
+    assert_eq!(
+        problem(|t| {
+            t.storage = Storage::Shared;
+            t.bytes = Some(vec![0; 16 * 16 * 8]);
+        }),
+        None
+    );
+    assert_eq!(
+        problem(|t| {
+            t.storage = Storage::Managed;
+            t.bytes = Some(vec![0; 16]);
+        }),
+        Some("probe: texture 0: it has 16 bytes, not 2048".to_owned())
+    );
+    // Texels move through the authored texture's kernels alone.
+    assert_eq!(
+        problem(|t| {
+            t.pixel_format = metal2vulkan::metal::PixelFormat::RGBA8Unorm;
+            t.texels = Some(vec![0.0; 4 * 256]);
+        }),
+        Some(
+            "probe: texture 0: its texels move through the harness's texel kernels, which take a \
+             2D RGBA16Float texture of ShaderRead and ShaderWrite usage that the device made"
+                .to_owned()
+        )
+    );
+    let mut expected = one_texture_plan(16, None, 0, 4);
+    expected.textures[0].source = TextureSource::Heap;
+    assert!(expected.validate().is_err());
 }
 
 /// A run's dispatches cut into command buffers, and a command buffer's into encoders: whole parts
@@ -235,9 +313,16 @@ check 1 float 0.5
 
 workload second other.metallib
 buffer 16 private zero
+texture 2 70 4 2 1 1 shared plain words 5
+texture 3 20 2 2 3 3 managed heap zero
+texture 2 115 16 16 1 0 private over-buffer undefined
 set-buffer 0 0
 threadgroup-length 0 1024
 linked private f g
+set-texture 0 0
+set-texture 1 2
+set-sampler 0 nearest clamp-to-zero pixel
+set-sampler 1 linear clamp-to-edge normalized
 dispatch m threadgroups 1 1 1 16 1 1
 check 0 exact
 ";
@@ -323,6 +408,83 @@ fn a_description_makes_its_plans() {
     ));
     assert_eq!(second.dispatches[0].linked, ["f", "g"]);
     assert!(first.dispatches.iter().all(|d| d.linked.is_empty()));
+    let [words, array, undefined] = second.textures.as_slice() else {
+        panic!("three textures, not {}", second.textures.len());
+    };
+    use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, TextureType, TextureUsage};
+    assert_eq!(
+        (
+            words.texture_type,
+            words.pixel_format,
+            words.width,
+            words.height
+        ),
+        (TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 2)
+    );
+    assert_eq!(
+        (words.usage, words.storage, words.source),
+        (
+            TextureUsage::SHADER_READ,
+            Storage::Shared,
+            TextureSource::Plain
+        )
+    );
+    // Eight texels of 4 bytes: eight seeded words.
+    let seeded: Vec<u8> = (crate::plan::seeded_words(5, 8).iter())
+        .flat_map(|word| word.to_le_bytes())
+        .collect();
+    assert_eq!(words.bytes, Some(seeded));
+    // Three slices of 2x2 texels of 2 bytes, zero.
+    assert_eq!(
+        (
+            array.texture_type,
+            array.array_length,
+            array.storage,
+            array.source
+        ),
+        (
+            TextureType::Type2DArray,
+            3,
+            Storage::Managed,
+            TextureSource::Heap
+        )
+    );
+    assert_eq!(array.bytes, Some(vec![0; 24]));
+    assert_eq!(
+        (undefined.usage, undefined.source, &undefined.bytes),
+        (TextureUsage::UNKNOWN, TextureSource::OverBuffer, &None)
+    );
+    let bound = &second.dispatches[0].bindings;
+    assert!(matches!(
+        bound[2..4],
+        [
+            Binding::Texture {
+                index: 0,
+                texture: 0
+            },
+            Binding::Texture {
+                index: 1,
+                texture: 2
+            }
+        ]
+    ));
+    let pixel = SamplerPlan {
+        filter: Filter::Nearest,
+        address: SamplerAddressMode::ClampToZero,
+        normalized: false,
+    };
+    assert!(matches!(bound[4], Binding::Sampler { index: 0, sampler } if sampler == pixel));
+    assert!(matches!(
+        bound[5],
+        Binding::Sampler { index: 1, sampler } if sampler == SamplerPlan::clamped(Filter::Linear)
+    ));
+    assert!(first.textures.is_empty());
+    assert_eq!(
+        SamplerPlan::clamped(Filter::Linear)
+            .descriptor()
+            .r_address_mode,
+        SamplerAddressMode::ClampToEdge
+    );
 }
 
 /// The error of the description `text`.
@@ -401,6 +563,64 @@ fn a_faulty_description_is_refused_naming_its_line() {
     assert_eq!(
         refusal("linked private"),
         "line 3: linked takes private FUNCTION..."
+    );
+    assert_eq!(
+        refusal("texture 2 70 4 4 1 1 private plain zero"),
+        "line 3: a private texture takes undefined alone: the CPU writes none"
+    );
+    assert_eq!(
+        refusal("texture 2 70 4 4 1 1 shared plain noise"),
+        "line 3: fill noise is not undefined, zero or words SEED"
+    );
+    assert_eq!(
+        refusal("texture 2 70 4 4 1 1 memoryless plain undefined"),
+        "line 3: storage memoryless is not shared, managed or private"
+    );
+    assert_eq!(
+        refusal("texture 2 70 4 4 1 1 shared iosurface undefined"),
+        "line 3: source iosurface is not plain, heap or over-buffer"
+    );
+    assert_eq!(
+        refusal("texture 3 70 4 4 2 1 shared over-buffer undefined"),
+        "line 3: the texture: a texture over a buffer is 2D, as Metal requires"
+    );
+    assert_eq!(
+        refusal("texture 7 70 4 4 1 1 shared plain undefined"),
+        "line 3: the texture: a Type3D texture of 1 slices: the harness makes 2D textures and 2D \
+         arrays"
+    );
+    assert_eq!(
+        refusal("texture 2 70 4 0 1 1 shared plain undefined"),
+        "line 3: the texture: its size 4x0x1 is empty"
+    );
+    assert!(refusal("texture 2 9999 4 4 1 1 shared plain undefined").starts_with("line 3: "));
+    assert_eq!(
+        refusal("texture 2 70 4 4 1 1 shared plain"),
+        "line 3: texture takes TYPE FORMAT WIDTH HEIGHT ARRAY USAGE STORAGE SOURCE FILL"
+    );
+    assert_eq!(
+        refusal("set-texture 0"),
+        "line 3: set-texture takes INDEX TEXTURE"
+    );
+    assert_eq!(
+        refusal("set-sampler 0 cubic clamp-to-edge normalized"),
+        "line 3: filter cubic is neither nearest nor linear"
+    );
+    assert_eq!(
+        refusal("set-sampler 0 linear repeat normalized"),
+        "line 3: address mode repeat is neither clamp-to-edge nor clamp-to-zero"
+    );
+    assert_eq!(
+        refusal("set-sampler 0 linear clamp-to-edge texel"),
+        "line 3: coordinates texel are neither normalized nor pixel"
+    );
+    assert_eq!(
+        refusal("set-sampler 0 linear"),
+        "line 3: set-sampler takes INDEX FILTER ADDRESS COORDS"
+    );
+    assert_eq!(
+        refusal("set-texture 0 0\ndispatch k threadgroups 1 1 1 16 1 1"),
+        "w: dispatch 0 binds texture 0, which the plan lacks"
     );
     assert_eq!(refusal("set-buffer 0 0"), "workload w has no dispatch");
     assert_eq!(

@@ -15,6 +15,19 @@
 //! linked private FUNCTION...             the next dispatch's pipeline links FUNCTIONs, functions
 //!                                        of the metallib, as private functions, each made with
 //!                                        the dispatch's constants
+//! texture TYPE FORMAT WIDTH HEIGHT ARRAY USAGE STORAGE SOURCE FILL
+//!                                        the next texture, numbered from 0: its raw
+//!                                        MTLTextureType (2D or 2D array), MTLPixelFormat and
+//!                                        MTLTextureUsage, its array length (1 for 2D), its
+//!                                        storage (shared, managed or private) and what makes it
+//!                                        (plain: the device; heap: a heap of its own; over-buffer:
+//!                                        a buffer of its own, 2D alone)
+//! set-texture INDEX TEXTURE              setTexture:atIndex: before the next dispatch
+//! set-sampler INDEX FILTER ADDRESS COORDS
+//!                                        setSamplerState:atIndex: before the next dispatch, of a
+//!                                        sampler state of FILTER (nearest or linear) as its min
+//!                                        and mag filter, ADDRESS (clamp-to-edge or clamp-to-zero)
+//!                                        on every axis, and COORDS normalized or pixel
 //! constant INDEX TYPE HEX                a function constant of the next dispatch's kernel: its
 //!                                        index, raw MTLDataType and value's bytes
 //! dispatch FUNCTION threadgroups GX GY GZ TX TY TZ [repeat N]
@@ -29,11 +42,24 @@
 //! length is a multiple of 16 and a `unit` or `words` fill's a multiple of 4. `repeat N` makes the
 //! dispatch N times, its bindings set before the first. Every runtime runs a workload from the
 //! same starting contents, and its outputs after the first run must match the first runtime's.
+//!
+//! A texture has one level and one sample, of a format whose element size the harness knows
+//! ([`element_bytes`](crate::plan::element_bytes)). Its `FILL` is `undefined`, `zero` or
+//! `words SEED` (SplitMix64's words from SEED, cut to the texture's bytes). `undefined` leaves
+//! it as made: Metal leaves a new texture's contents undefined, and so do both runtimes, so a
+//! workload whose outputs read such texels before writing them can differ between runtimes. The
+//! others are written by `replaceRegion:` slice by slice, rows tightly packed, which the CPU does
+//! for a shared or managed texture alone: a private texture takes `undefined` alone. A texture
+//! Metal made over an IOSurface is described as a plain shared or managed one; the harness makes
+//! none over an IOSurface. The new runtime refuses a heap's texture and one over a buffer: it
+//! makes neither yet.
 
 use crate::plan::{
-    seeded_words, Binding, BufferPlan, Comparison, Constant, Dispatch, Grid, Output, Plan, Source,
+    seeded_words, Binding, BufferPlan, Comparison, Constant, Dispatch, Filter, Grid, Output, Plan,
+    SamplerPlan, Source, TexturePlan, TextureSource,
 };
 use crate::{Result, Size, Storage};
+use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, TextureType, TextureUsage};
 use std::path::{Path, PathBuf};
 
 /// A workload a description names: its lines, made into its plan when it runs, since a plan
@@ -112,6 +138,7 @@ impl Described {
                 match lines.next().transpose()? {
                     None => break None,
                     Some(Line::Buffer(buffer)) => plan.buffers.push(buffer),
+                    Some(Line::Texture(texture)) => plan.textures.push(texture),
                     Some(Line::Binding(binding)) => bindings.push(binding),
                     Some(Line::Constant(constant)) => constants.push(constant),
                     Some(Line::Linked(functions)) => linked.extend(functions),
@@ -165,6 +192,7 @@ impl Described {
 /// What a line inside a workload adds to it.
 enum Line {
     Buffer(BufferPlan),
+    Texture(TexturePlan),
     Binding(Binding),
     Constant(Constant),
     Linked(Vec<String>),
@@ -206,6 +234,58 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
                 buffer: number(buffer)?,
                 offset,
             })
+        }
+        ["texture", kind, format, width, height, slices, usage, storage, source, fill @ ..]
+            if !fill.is_empty() =>
+        {
+            Line::Texture(texture(
+                [kind, format, usage],
+                [width, height, slices],
+                storage,
+                source,
+                fill,
+            )?)
+        }
+        ["texture", ..] => {
+            return Err(
+                "texture takes TYPE FORMAT WIDTH HEIGHT ARRAY USAGE STORAGE SOURCE FILL".to_owned(),
+            )
+        }
+        ["set-texture", index, texture] => Line::Binding(Binding::Texture {
+            index: number(index)?,
+            texture: number(texture)?,
+        }),
+        ["set-texture", ..] => return Err("set-texture takes INDEX TEXTURE".to_owned()),
+        ["set-sampler", index, filter, address, coordinates] => Line::Binding(Binding::Sampler {
+            index: number(index)?,
+            sampler: SamplerPlan {
+                filter: match *filter {
+                    "nearest" => Filter::Nearest,
+                    "linear" => Filter::Linear,
+                    other => return Err(format!("filter {other} is neither nearest nor linear")),
+                },
+                address: match *address {
+                    "clamp-to-edge" => SamplerAddressMode::ClampToEdge,
+                    "clamp-to-zero" => SamplerAddressMode::ClampToZero,
+                    other => {
+                        return Err(format!(
+                            "address mode {other} is neither clamp-to-edge nor clamp-to-zero"
+                        ))
+                    }
+                },
+                normalized: match *coordinates {
+                    "normalized" => true,
+                    "pixel" => false,
+                    other => {
+                        return Err(format!(
+                            "coordinates {other} are neither normalized nor pixel"
+                        ))
+                    }
+                },
+            },
+        }),
+        ["set-sampler", ..] => {
+            return Err("set-sampler takes INDEX FILTER ADDRESS COORDS".to_owned())
         }
         ["set-bytes", index, length, fill @ ..] => Line::Binding(Binding::Bytes {
             index: number(index)?,
@@ -284,6 +364,66 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
         }),
         _ => return Err(format!("{} is no directive", words.join(" "))),
     })
+}
+
+/// The texture of a `texture` line: its raw type, format and usage, its size, storage, source
+/// and fill.
+fn texture(
+    [texture_type, pixel_format, usage]: [&str; 3],
+    [width, height, array_length]: [&str; 3],
+    storage: &str,
+    source: &str,
+    fill: &[&str],
+) -> std::result::Result<TexturePlan, String> {
+    let raw = |word: &str| number::<u32>(word);
+    let mut texture = TexturePlan {
+        texture_type: TextureType::try_from(raw(texture_type)?).map_err(|why| why.to_string())?,
+        pixel_format: PixelFormat::try_from(raw(pixel_format)?).map_err(|why| why.to_string())?,
+        width: number(width)?,
+        height: number(height)?,
+        array_length: number(array_length)?,
+        usage: TextureUsage::try_from(raw(usage)?).map_err(|why| why.to_string())?,
+        storage: match storage {
+            "shared" => Storage::Shared,
+            "managed" => Storage::Managed,
+            "private" => Storage::Private,
+            other => return Err(format!("storage {other} is not shared, managed or private")),
+        },
+        source: match source {
+            "plain" => TextureSource::Plain,
+            "heap" => TextureSource::Heap,
+            "over-buffer" => TextureSource::OverBuffer,
+            other => return Err(format!("source {other} is not plain, heap or over-buffer")),
+        },
+        texels: None,
+        bytes: None,
+    };
+    if let Some(problem) = texture.problem(false) {
+        return Err(format!("the texture: {problem}"));
+    }
+    let length = (texture.byte_length())
+        .and_then(|length| usize::try_from(length).ok())
+        .ok_or("the texture's bytes do not fit")?;
+    texture.bytes = match fill {
+        ["undefined"] => None,
+        _ if texture.storage == Storage::Private => {
+            return Err("a private texture takes undefined alone: the CPU writes none".to_owned())
+        }
+        ["zero"] => Some(vec![0; length]),
+        ["words", seed] => Some(
+            (seeded_words(number(seed)?, length.div_ceil(4)).iter())
+                .flat_map(|word| word.to_le_bytes())
+                .take(length)
+                .collect(),
+        ),
+        _ => {
+            return Err(format!(
+                "fill {} is not undefined, zero or words SEED",
+                fill.join(" ")
+            ))
+        }
+    };
+    Ok(texture)
 }
 
 /// A whole number.

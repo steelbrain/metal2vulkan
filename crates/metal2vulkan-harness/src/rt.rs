@@ -19,13 +19,17 @@
 //!
 //! The runtime places a texture or a sampler state at the index its consumer gives, from the
 //! consumer's grants, and asks it for the index of each sampler a pipeline state numbers. The
-//! harness grants itself every storage-capable texture index and every sampler index once the
-//! device is made (`Indices`): each texture (`ShaderRead | ShaderWrite`) and each sampler state
-//! takes the next index in turn, passing over one an earlier object still holds, and a constexpr
+//! harness grants itself every texture index of both classes and every sampler index once the
+//! device is made (`Indices`): each texture a shader reaches takes the next index of its class
+//! (a storage texture's with `ShaderWrite` usage, a sampled texture's without), each sampler
+//! state the next sampler index, passing over one an earlier object still holds, and a constexpr
 //! sampler the index the first state that numbered its state words took, as Metal gives an equal
 //! one the same ID. A texture read's or write's numbered sampler takes nothing at its index: 0.
+//!
+//! The new runtime makes no heap and no texture over a buffer yet: a plan with such a texture is
+//! refused ([`Refused`]).
 
-use crate::plan::{self, Constant, Filter};
+use crate::plan::{self, Constant, TextureSource};
 use crate::{Code, Refused, Result, Size, Storage, Waits};
 use ash::vk;
 use metal2vulkan_rt as rt;
@@ -92,7 +96,11 @@ pub fn system_default() -> Result<Device> {
     for (_, name, physical) in candidates {
         match rt::Device::new(&physical, rt::DeviceOptions::default()) {
             Ok(device) => {
-                for class in [rt::IndexClass::StorageTexture, rt::IndexClass::Sampler] {
+                for class in [
+                    rt::IndexClass::Texture,
+                    rt::IndexClass::StorageTexture,
+                    rt::IndexClass::Sampler,
+                ] {
                     let range = class.range();
                     device.grant_indices(class, range.start, range.end - range.start)?;
                 }
@@ -120,16 +128,26 @@ pub struct Device {
     indices: RefCell<Indices>,
 }
 
-/// The texture and sampler indices the harness hands out (the module's docs): the last texture
-/// and sampler index taken, and each constexpr sampler's index by its state words.
+/// The texture and sampler indices the harness hands out (the module's docs): the last index of
+/// each class taken, and each constexpr sampler's index by its state words.
 #[derive(Default)]
 struct Indices {
+    sampled: u32,
     texture: u32,
     sampler: u32,
     constexprs: HashMap<[u64; 2], u32>,
 }
 
 impl Indices {
+    /// The last index of `class` taken.
+    fn last(&mut self, class: rt::IndexClass) -> &mut u32 {
+        match class {
+            rt::IndexClass::Sampler => &mut self.sampler,
+            rt::IndexClass::StorageTexture => &mut self.texture,
+            _ => &mut self.sampled,
+        }
+    }
+
     /// The next index of `class` after `last`, past the end back to its first; a sampler index a
     /// constexpr sampler took is passed over.
     fn next(&self, class: rt::IndexClass, last: u32) -> u32 {
@@ -158,15 +176,9 @@ impl Device {
         for _ in range.clone() {
             let index = {
                 let mut indices = self.indices.borrow_mut();
-                let last = match class {
-                    rt::IndexClass::Sampler => indices.sampler,
-                    _ => indices.texture,
-                };
+                let last = *indices.last(class);
                 let index = indices.next(class, last);
-                match class {
-                    rt::IndexClass::Sampler => indices.sampler = index,
-                    _ => indices.texture = index,
-                }
+                *indices.last(class) = index;
                 index
             };
             match make(index) {
@@ -426,31 +438,72 @@ impl crate::ComputeDevice for Device {
             .map_err(error)
     }
 
-    fn new_texture(&self, width: u32, height: u32) -> Result<rt::Texture> {
+    fn new_texture(&self, texture: &plan::TexturePlan) -> Result<rt::Texture> {
+        let refused = match texture.source {
+            TextureSource::Plain => None,
+            TextureSource::Heap => {
+                Some("newTextureWithDescriptor: of a heap: the new runtime makes no heap yet")
+            }
+            TextureSource::OverBuffer => Some(
+                "newTextureWithDescriptor:offset:bytesPerRow: of a buffer: the new runtime makes \
+                 no texture over a buffer yet",
+            ),
+        };
+        if let Some(refused) = refused {
+            return Err(Box::new(Refused(refused.to_owned())));
+        }
         let mut descriptor = rt::TextureDescriptor::new(
-            rt::TextureType::Type2D,
-            rt::PixelFormat::RGBA16Float,
-            width,
-            height,
+            texture.texture_type,
+            texture.pixel_format,
+            texture.width,
+            texture.height,
         );
-        descriptor.usage = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
-        descriptor.storage_mode = rt::StorageMode::Private;
-        self.place(rt::IndexClass::StorageTexture, |index| {
+        descriptor.array_length = texture.array_length;
+        descriptor.usage = texture.usage;
+        descriptor.storage_mode = match texture.storage {
+            Storage::Shared => rt::StorageMode::Shared,
+            Storage::Managed => rt::StorageMode::Managed,
+            Storage::Private => rt::StorageMode::Private,
+        };
+        // Unknown usage is every usage, as the runtime takes it; a texture no shader reaches
+        // takes no index.
+        let usage = match texture.usage.is_empty() {
+            true => rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE,
+            false => texture.usage,
+        };
+        if !usage.intersects(rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE) {
+            return self.device.new_texture(&descriptor, None).map_err(error);
+        }
+        let class = match usage.contains(rt::TextureUsage::SHADER_WRITE) {
+            true => rt::IndexClass::StorageTexture,
+            false => rt::IndexClass::Texture,
+        };
+        self.place(class, |index| {
             self.device.new_texture(&descriptor, Some(index))
         })
     }
 
-    fn new_sampler_state(&self, filter: Filter) -> Result<rt::SamplerState> {
-        let mut descriptor = rt::SamplerDescriptor::new();
-        let filter = match filter {
-            Filter::Nearest => rt::SamplerMinMagFilter::Nearest,
-            Filter::Linear => rt::SamplerMinMagFilter::Linear,
-        };
-        descriptor.min_filter = filter;
-        descriptor.mag_filter = filter;
+    fn new_sampler_state(&self, sampler: plan::SamplerPlan) -> Result<rt::SamplerState> {
+        let descriptor = sampler.descriptor();
         self.place(rt::IndexClass::Sampler, |index| {
             self.device.new_sampler_state(&descriptor, index)
         })
+    }
+}
+
+impl crate::Texture for rt::Texture {
+    fn replace_region(
+        &self,
+        slice: u32,
+        [width, height]: [u32; 2],
+        bytes: &[u8],
+        bytes_per_row: u64,
+    ) -> Result<()> {
+        let region = rt::Region {
+            origin: [0, 0, 0],
+            size: [width, height, 1],
+        };
+        rt::Texture::replace_region(self, region, 0, slice, bytes, bytes_per_row, 0).map_err(error)
     }
 }
 

@@ -230,7 +230,7 @@ pub trait ComputeDevice: Device {
     /// `MTLComputeCommandEncoder`.
     type ComputeCommandEncoder: ComputeCommandEncoder<Self>;
     /// `MTLTexture`.
-    type Texture;
+    type Texture: Texture;
     /// `MTLSamplerState`.
     type SamplerState;
 
@@ -247,13 +247,25 @@ pub trait ComputeDevice: Device {
     /// `newCommandQueue`.
     fn new_command_queue(&self) -> Result<Self::CommandQueue>;
 
-    /// `newTextureWithDescriptor:` of a [`TexturePlan`](plan::TexturePlan)'s texture: 2D,
-    /// `RGBA16Float`, one level, `Private`, of `ShaderRead | ShaderWrite` usage.
-    fn new_texture(&self, width: u32, height: u32) -> Result<Self::Texture>;
+    /// `texture`'s texture, made as its [`TextureSource`](plan::TextureSource) says; a runtime
+    /// that makes no such texture refuses it ([`Refused`]).
+    fn new_texture(&self, texture: &plan::TexturePlan) -> Result<Self::Texture>;
 
-    /// `newSamplerStateWithDescriptor:` of `filter`'s min and mag filter, normalized coordinates
-    /// and every address mode clamped to the edge.
-    fn new_sampler_state(&self, filter: plan::Filter) -> Result<Self::SamplerState>;
+    /// `newSamplerStateWithDescriptor:` of `sampler`.
+    fn new_sampler_state(&self, sampler: plan::SamplerPlan) -> Result<Self::SamplerState>;
+}
+
+/// `MTLTexture`.
+pub trait Texture {
+    /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:` of all of level 0
+    /// of `slice`, `width` by `height` texels, rows `bytes_per_row` apart in `bytes`.
+    fn replace_region(
+        &self,
+        slice: u32,
+        size: [u32; 2],
+        bytes: &[u8],
+        bytes_per_row: u64,
+    ) -> Result<()>;
 }
 
 /// `MTLBuffer`.

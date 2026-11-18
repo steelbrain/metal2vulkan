@@ -15,8 +15,9 @@ use metal2vulkan_harness::run::{run_each, Harness, Runs, Session};
 use metal2vulkan_harness::{authored, description, old, rt};
 
 /// The description: each fill, both storage modes, a binding at an offset, bindings that stay
-/// set for the dispatches after, both dispatch calls, `repeat`, both comparisons, and a
-/// threadgroup memory length.
+/// set for the dispatches after, both dispatch calls, `repeat`, both comparisons, a threadgroup
+/// memory length, textures of each source with their bytes written by the CPU, and a sampler
+/// state.
 const DESCRIPTION: &str = "\
 # Synthetic workloads over the authored kernels.
 workload scale kernels.metallib
@@ -61,6 +62,47 @@ set-buffer 1 1
 threadgroup-length 0 1024   # a word for each of 256 threads
 dispatch group_sums threadgroups 16 1 1 256 1 1
 check 1 exact
+
+workload texels kernels.metallib
+texture 2 70 32 16 1 1 shared plain words 17   # RGBA8Unorm, ShaderRead
+buffer 8192 shared zero
+set-texture 0 0
+set-buffer 0 0
+set-bytes 1 4 hex 20000000   # its width, 32
+dispatch texels_out threadgroups 2 1 1 16 16 1
+check 0 exact
+
+workload heaped kernels.metallib
+texture 2 70 32 16 1 1 shared heap words 17
+buffer 8192 shared zero
+set-texture 0 0
+set-buffer 0 0
+set-bytes 1 4 hex 20000000
+dispatch texels_out threadgroups 2 1 1 16 16 1
+check 0 exact
+
+workload over kernels.metallib
+texture 2 70 32 16 1 1 shared over-buffer words 17
+buffer 8192 shared zero
+set-texture 0 0
+set-buffer 0 0
+set-bytes 1 4 hex 20000000
+dispatch texels_out threadgroups 2 1 1 16 16 1
+check 0 exact
+
+workload sampled kernels.metallib
+texture 2 70 32 32 1 1 managed plain words 19
+texture 2 115 16 16 1 3 private plain undefined   # RGBA16Float, ShaderRead | ShaderWrite
+buffer 4096 shared zero
+set-texture 0 0
+set-texture 1 1
+set-sampler 0 nearest clamp-to-zero normalized
+dispatch sample_down threadgroups 1 1 1 16 16 1
+set-texture 0 1
+set-buffer 0 0
+set-bytes 1 4 hex 10000000   # its width, 16
+dispatch texels_out threadgroups 1 1 1 16 16 1
+check 0 exact
 ";
 
 #[test]
@@ -73,6 +115,8 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
         "binomial3x3",
         "reduce_sum",
         "group_sums",
+        "texels_out",
+        "sample_down",
     ]
     .map(|name| MtlbFunction {
         name,
@@ -105,6 +149,7 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
         settle: false,
         timed: 2,
     };
+    let mut texels = None;
     for workload in &described {
         let plan = workload.plan().unwrap();
         let each = (run_each(&plan, &mut sessions, runs))
@@ -113,6 +158,20 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             .unwrap_or_else(|refused| panic!("{}: the old runtime refused: {refused}", plan.name));
         if let Err(refused) = &each[1] {
             println!("{}: REFUSED on the new runtime: {refused}", plan.name);
+        }
+        // The new runtime makes no heap and no texture over a buffer yet.
+        let missing = match plan.name.as_str() {
+            "heaped" => Some("makes no heap"),
+            "over" => Some("makes no texture over a buffer"),
+            _ => None,
+        };
+        if let Some(missing) = missing {
+            let refused = (each[1].as_ref().err()).map(ToString::to_string);
+            assert!(
+                refused.as_deref().is_some_and(|why| why.contains(missing)),
+                "{}: {refused:?}",
+                plan.name
+            );
         }
         assert_eq!(first.gpu_us.len(), 2, "{}", plan.name);
         if plan.name == "chain" {
@@ -130,6 +189,25 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
                 .collect();
             assert_eq!(got, want);
         }
+        if plan.name == "texels" {
+            // Each texel's four bytes as `float`s of [0, 1], read back where the CPU wrote them.
+            let bytes: Vec<u8> = (seeded_words(17, 512).iter())
+                .flat_map(|word| word.to_le_bytes())
+                .collect();
+            let got: Vec<f32> = (first.outputs[0].as_chunks::<4>().0.iter())
+                .map(|word| f32::from_le_bytes(*word))
+                .collect();
+            assert_eq!(got.len(), bytes.len());
+            for (at, (&got, &byte)) in got.iter().zip(&bytes).enumerate() {
+                let want = f32::from(byte) / 255.0;
+                assert!((got - want).abs() <= 1e-6, "channel {at}: {got} for {want}");
+            }
+            texels = Some(first.outputs[0].clone());
+        }
+        if plan.name == "heaped" || plan.name == "over" {
+            // The same texels as the device's own texture of them, on the old runtime.
+            assert_eq!(Some(&first.outputs[0]), texels.as_ref(), "{}", plan.name);
+        }
         if plan.name == "groups" {
             // Each threadgroup of 256 threads sums its words through the length the host set.
             let want: Vec<u32> = (seeded_words(13, 4096).chunks(256))
@@ -141,7 +219,7 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             assert_eq!(got, want);
         }
     }
-    assert_eq!(described.len(), 5);
+    assert_eq!(described.len(), 9);
 }
 
 /// The fixture's LLVM text `ll` with `kernel` its only entry point: every other kernel's

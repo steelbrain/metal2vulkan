@@ -4,7 +4,7 @@
 
 use crate::plan::{
     seeded_words as words, Binding, BufferPlan, Constant, Dispatch, Expect, Filter, Grid, Plan,
-    Scaled, Source, TextureExpect, TexturePlan, Values,
+    SamplerPlan, Scaled, Source, TextureExpect, TexturePlan, Values,
 };
 use crate::{Result, Storage};
 
@@ -873,22 +873,17 @@ fn sampling_plan(
     sampler: Option<Filter>,
 ) -> Plan {
     let mut bindings = vec![texture(0, 0), texture(1, 1)];
-    bindings.extend(sampler.map(|filter| Binding::Sampler { index: 0, filter }));
+    bindings.extend(sampler.map(|filter| Binding::Sampler {
+        index: 0,
+        sampler: SamplerPlan::clamped(filter),
+    }));
     Plan {
         name: name.to_owned(),
         library: Source::Authored,
         buffers: Vec::new(),
         textures: vec![
-            TexturePlan {
-                width: from,
-                height: from,
-                texels: Some(source),
-            },
-            TexturePlan {
-                width: to,
-                height: to,
-                texels: None,
-            },
+            TexturePlan::rgba16_float(from, from, Some(source)),
+            TexturePlan::rgba16_float(to, to, None),
         ],
         dispatches: vec![Dispatch {
             function: function.to_owned(),

@@ -2,8 +2,11 @@
 //! the first run must leave in the buffers, and which buffers runtimes compare.
 
 use crate::{Result, Size, Storage};
+use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
-use metal2vulkan::metal::DataType;
+use metal2vulkan::metal::{
+    DataType, PixelFormat, SamplerAddressMode, SamplerMinMagFilter, TextureType, TextureUsage,
+};
 use metal2vulkan::pipeline::{FunctionDescriptor, LinkedFunction, LinkedFunctions};
 use std::path::PathBuf;
 
@@ -120,27 +123,215 @@ pub(crate) fn with_private(
     function.with_linked(linked)
 }
 
-/// One texture of a plan: 2D, `RGBA16Float`, one level, `Private`, of `ShaderRead | ShaderWrite`
-/// usage. Its width and height are multiples of 16, the harness's transfer kernels' threadgroups.
+/// One texture of a plan: its `MTLTextureDescriptor` (one level, one sample, the default
+/// swizzle and CPU cache mode), what makes it, and what it starts with.
 #[derive(Clone, Debug)]
 pub struct TexturePlan {
+    /// `textureType`: 2D, or a 2D array.
+    pub texture_type: TextureType,
+    /// `pixelFormat`: one of those whose element size the harness knows ([`element_bytes`]).
+    pub pixel_format: PixelFormat,
     /// Its width in texels.
     pub width: u32,
     /// Its height in texels.
     pub height: u32,
+    /// `arrayLength`: 1 for a 2D texture.
+    pub array_length: u32,
+    /// `usage`.
+    pub usage: TextureUsage,
+    /// `storageMode`.
+    pub storage: Storage,
+    /// What makes it.
+    pub source: TextureSource,
     /// The texels it starts with, row by row, four `float`s each, written in by the harness's own
-    /// kernel (`texels_in`) from a `Shared` buffer. `None`: as `newTextureWithDescriptor:` made it.
+    /// kernel (`texels_in`) from a `Shared` buffer: a texture of the authored shape alone
+    /// ([`TexturePlan::rgba16_float`]).
     pub texels: Option<Vec<f32>>,
+    /// The bytes it starts with, slice by slice, rows tightly packed, written by
+    /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:`: a `Shared` or
+    /// `Managed` texture's alone, as the CPU writes no `Private` one. With neither `texels` nor
+    /// `bytes`, it is as made: Metal leaves a new texture's contents undefined.
+    pub bytes: Option<Vec<u8>>,
 }
 
-/// A sampler state's filter: its `minFilter` and `magFilter`. Its coordinates are normalized and
-/// each address mode clamps to the edge.
+impl TexturePlan {
+    /// The authored workloads' texture: 2D, `RGBA16Float`, `Private`, of `ShaderRead |
+    /// ShaderWrite` usage, made by the device, starting with `texels` where given. Its width and
+    /// height are multiples of 16, the harness's texel kernels' threadgroups.
+    pub fn rgba16_float(width: u32, height: u32, texels: Option<Vec<f32>>) -> TexturePlan {
+        TexturePlan {
+            texture_type: TextureType::Type2D,
+            pixel_format: PixelFormat::RGBA16Float,
+            width,
+            height,
+            array_length: 1,
+            usage: TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE,
+            storage: Storage::Private,
+            source: TextureSource::Plain,
+            texels,
+            bytes: None,
+        }
+    }
+
+    /// The bytes of one row of its texels, rows tightly packed; `None` for a format whose element
+    /// size the harness does not know.
+    pub fn row_bytes(&self) -> Option<u64> {
+        element_bytes(self.pixel_format).map(|element| u64::from(element) * u64::from(self.width))
+    }
+
+    /// The bytes of all its texels, slice by slice, rows tightly packed: `bytes`' length.
+    pub fn byte_length(&self) -> Option<u64> {
+        self.row_bytes()
+            .map(|row| row * u64::from(self.height) * u64::from(self.array_length))
+    }
+
+    /// What is wrong with it, if anything; `texels_move` where the harness's texel kernels move
+    /// its texels in or out (its `texels`, or an expectation of the plan's).
+    pub fn problem(&self, texels_move: bool) -> Option<String> {
+        let (width, height, slices) = (self.width, self.height, self.array_length);
+        if width == 0 || height == 0 || slices == 0 {
+            return Some(format!("its size {width}x{height}x{slices} is empty"));
+        }
+        match (self.texture_type, slices) {
+            (TextureType::Type2D, 1) | (TextureType::Type2DArray, _) => {}
+            (kind, _) => {
+                return Some(format!(
+                    "a {kind:?} texture of {slices} slices: the harness makes 2D textures and 2D \
+                     arrays"
+                ))
+            }
+        }
+        if self.source == TextureSource::OverBuffer && self.texture_type != TextureType::Type2D {
+            return Some("a texture over a buffer is 2D, as Metal requires".to_owned());
+        }
+        let Some(length) = self.byte_length() else {
+            return Some(format!(
+                "format {:?} is not one the harness knows the size of",
+                self.pixel_format
+            ));
+        };
+        if let Some(bytes) = &self.bytes {
+            if self.storage == Storage::Private || self.texels.is_some() {
+                return Some(
+                    "its bytes are written by the CPU, which writes no private texture and none \
+                     the texel kernel writes"
+                        .to_owned(),
+                );
+            }
+            if bytes.len() as u64 != length {
+                return Some(format!("it has {} bytes, not {length}", bytes.len()));
+            }
+        }
+        if !(texels_move || self.texels.is_some()) {
+            return None;
+        }
+        if width % 16 != 0 || height % 16 != 0 {
+            return Some(format!(
+                "its size {width}x{height} is not in whole 16x16 tiles"
+            ));
+        }
+        let authored = TexturePlan::rgba16_float(width, height, None);
+        if (self.texture_type, self.pixel_format, slices, self.source)
+            != (
+                authored.texture_type,
+                authored.pixel_format,
+                1,
+                authored.source,
+            )
+            || !self.usage.contains(authored.usage)
+        {
+            return Some(
+                "its texels move through the harness's texel kernels, which take a 2D \
+                 RGBA16Float texture of ShaderRead and ShaderWrite usage that the device made"
+                    .to_owned(),
+            );
+        }
+        match &self.texels {
+            Some(texels) if texels.len() as u64 != 4 * u64::from(width) * u64::from(height) => {
+                Some(format!(
+                    "it has {} floats of texels for {width}x{height}",
+                    texels.len()
+                ))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// What makes a texture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextureSource {
+    /// `newTextureWithDescriptor:` of the device.
+    Plain,
+    /// `newTextureWithDescriptor:` of an automatic heap of its own, of its storage mode, as large
+    /// as `heapTextureSizeAndAlignWithDescriptor:` says.
+    Heap,
+    /// `newTextureWithDescriptor:offset:bytesPerRow:` of a buffer of its own, of its storage
+    /// mode, at offset 0, its rows `minimumLinearTextureAlignmentForPixelFormat:` apart: 2D.
+    OverBuffer,
+}
+
+/// The bytes of one element of `pixel_format`, for the formats a description takes, Metal's
+/// sizes: the uncompressed color formats recorded workloads bind.
+pub fn element_bytes(pixel_format: PixelFormat) -> Option<u32> {
+    use PixelFormat as F;
+    Some(match pixel_format {
+        F::R16Unorm => 2,
+        F::R32Uint | F::RG16Unorm | F::RGBA8Unorm | F::RGBA8UnormSRGB | F::RGBA8Uint => 4,
+        F::BGRA8Unorm => 4,
+        F::RGBA16Float => 8,
+        F::RGBA32Float => 16,
+        _ => return None,
+    })
+}
+
+/// A sampler state's filter: its `minFilter` and `magFilter`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Filter {
     /// `MTLSamplerMinMagFilterNearest`.
     Nearest,
     /// `MTLSamplerMinMagFilterLinear`.
     Linear,
+}
+
+/// A sampler state's descriptor: its `minFilter` and `magFilter`, one address mode on every axis,
+/// and whether its coordinates are normalized; the rest Metal's defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SamplerPlan {
+    /// Its min and mag filter.
+    pub filter: Filter,
+    /// `sAddressMode`, `tAddressMode` and `rAddressMode`.
+    pub address: SamplerAddressMode,
+    /// `normalizedCoordinates`.
+    pub normalized: bool,
+}
+
+impl SamplerPlan {
+    /// The authored workloads' sampler state: `filter`, normalized coordinates, each address
+    /// mode clamped to the edge.
+    pub fn clamped(filter: Filter) -> SamplerPlan {
+        SamplerPlan {
+            filter,
+            address: SamplerAddressMode::ClampToEdge,
+            normalized: true,
+        }
+    }
+
+    /// Its descriptor, as both runtimes take it.
+    pub(crate) fn descriptor(self) -> SamplerDescriptor {
+        let filter = match self.filter {
+            Filter::Nearest => SamplerMinMagFilter::Nearest,
+            Filter::Linear => SamplerMinMagFilter::Linear,
+        };
+        let mut descriptor = SamplerDescriptor::new();
+        descriptor.min_filter = filter;
+        descriptor.mag_filter = filter;
+        descriptor.s_address_mode = self.address;
+        descriptor.t_address_mode = self.address;
+        descriptor.r_address_mode = self.address;
+        descriptor.normalized_coordinates = self.normalized;
+        descriptor
+    }
 }
 
 /// One dispatch: the calls an encoder makes for it. The pipeline state is set where it differs
@@ -208,12 +399,12 @@ pub enum Binding {
         /// The plan's texture.
         texture: usize,
     },
-    /// `setSamplerState:atIndex:` of a sampler state of `filter`, made once per plan.
+    /// `setSamplerState:atIndex:` of a sampler state of `sampler`, made once per plan.
     Sampler {
         /// The sampler table index.
         index: u32,
-        /// Its filter.
-        filter: Filter,
+        /// Its descriptor.
+        sampler: SamplerPlan,
     },
     /// `setThreadgroupMemoryLength:atIndex:`.
     ThreadgroupMemory {
@@ -383,6 +574,12 @@ impl Plan {
         (self.per_command_buffer).map_or(1, |per| self.dispatches.len().div_ceil(per))
     }
 
+    /// Whether the harness's texel kernels move texels of the plan's: into a texture that starts
+    /// with texels, or out of one the plan expects texels in.
+    pub(crate) fn moves_texels(&self) -> bool {
+        !self.expect_textures.is_empty() || self.textures.iter().any(|t| t.texels.is_some())
+    }
+
     /// `Ok` where every index it names exists and every length is whole and agrees.
     pub fn validate(&self) -> Result<()> {
         let name = &self.name;
@@ -406,21 +603,12 @@ impl Plan {
             }
         }
         for (i, texture) in self.textures.iter().enumerate() {
-            let (width, height) = (texture.width, texture.height);
-            if width == 0 || height == 0 || width % 16 != 0 || height % 16 != 0 {
-                return Err(format!(
-                    "{name}: texture {i}'s size {width}x{height} is not in whole 16x16 tiles"
-                )
-                .into());
-            }
-            if let Some(texels) = &texture.texels {
-                if texels.len() as u64 != 4 * u64::from(width) * u64::from(height) {
-                    return Err(format!(
-                        "{name}: texture {i} has {} floats of texels for {width}x{height}",
-                        texels.len()
-                    )
-                    .into());
-                }
+            let expected = self
+                .expect_textures
+                .iter()
+                .any(|expect| expect.texture == i);
+            if let Some(problem) = texture.problem(expected) {
+                return Err(format!("{name}: texture {i}: {problem}").into());
             }
         }
         let known = |buffer: usize| buffer < self.buffers.len();

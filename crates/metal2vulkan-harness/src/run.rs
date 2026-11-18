@@ -1,9 +1,11 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
-use crate::plan::{Binding, BufferPlan, Constant, Filter, Grid, Plan, Scaled, Source, TexturePlan};
+use crate::plan::{
+    Binding, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
+};
 use crate::{
     clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputeDevice,
-    Device, Failed, Library, Refused, Result, Storage, Waits,
+    Device, Failed, Library, Refused, Result, Storage, Texture, Waits,
 };
 use std::collections::HashMap;
 use std::ops::Range;
@@ -341,12 +343,12 @@ pub fn percentile(values: &[f64], p: u32) -> Option<f64> {
 }
 
 /// The harness on a device: its own queue, the authored library and its copy kernel, its texel
-/// kernels once a plan has textures, and the metallibs the plans named so far.
+/// kernels once a plan moves texels, and the metallibs the plans named so far.
 pub struct Harness<D: ComputeDevice> {
     queue: D::CommandQueue,
     copy: D::ComputePipelineState,
-    /// The pipeline states of [`TEXELS_FUNCTIONS`], made for the first plan with a texture, so a
-    /// session that runs none makes no more pipelines than before.
+    /// The pipeline states of [`TEXELS_FUNCTIONS`], made for the first plan that moves texels
+    /// ([`Plan::moves_texels`]), so a session that runs none makes no more pipelines than before.
     texels: Option<[D::ComputePipelineState; 2]>,
     authored: D::Library,
     metallibs: HashMap<PathBuf, D::Library>,
@@ -357,8 +359,8 @@ pub struct Harness<D: ComputeDevice> {
 struct Made<D: ComputeDevice> {
     buffers: Vec<D::Buffer>,
     textures: Vec<D::Texture>,
-    /// A sampler state for each filter the plan's bindings name.
-    samplers: Vec<(Filter, D::SamplerState)>,
+    /// A sampler state for each descriptor the plan's bindings name.
+    samplers: Vec<(SamplerPlan, D::SamplerState)>,
     states: Vec<D::ComputePipelineState>,
     /// The index in `states` of each dispatch's.
     state_of: Vec<usize>,
@@ -426,17 +428,17 @@ impl<D: ComputeDevice> Harness<D> {
     /// runtime that makes none refuses the plan for that before its kernels are translated.
     fn make(&self, plan: &Plan) -> Result<Made<D>> {
         let textures = (plan.textures.iter())
-            .map(|texture| self.device.new_texture(texture.width, texture.height))
+            .map(|texture| self.device.new_texture(texture))
             .collect::<Result<Vec<_>>>()?;
-        let mut samplers: Vec<(Filter, D::SamplerState)> = Vec::new();
+        let mut samplers: Vec<(SamplerPlan, D::SamplerState)> = Vec::new();
         for binding in plan
             .dispatches
             .iter()
             .flat_map(|dispatch| &dispatch.bindings)
         {
-            if let Binding::Sampler { filter, .. } = binding {
-                if !samplers.iter().any(|(made, _)| made == filter) {
-                    samplers.push((*filter, self.device.new_sampler_state(*filter)?));
+            if let Binding::Sampler { sampler, .. } = binding {
+                if !samplers.iter().any(|(made, _)| made == sampler) {
+                    samplers.push((*sampler, self.device.new_sampler_state(*sampler)?));
                 }
             }
         }
@@ -542,9 +544,9 @@ impl<D: ComputeDevice> Harness<D> {
                     Binding::Texture { index, texture } => {
                         encoder.set_texture(&made.textures[*texture], *index)?
                     }
-                    Binding::Sampler { index, filter } => {
-                        // `make` made one for every filter a binding names.
-                        let made = made.samplers.iter().find(|(made, _)| made == filter);
+                    Binding::Sampler { index, sampler } => {
+                        // `make` made one for every descriptor a binding names.
+                        let made = made.samplers.iter().find(|(made, _)| made == sampler);
                         let (_, sampler) =
                             made.ok_or("a sampler state the plan names is unmade")?;
                         encoder.set_sampler_state(sampler, *index)?
@@ -617,9 +619,23 @@ impl<D: ComputeDevice> Harness<D> {
         Ok(self.texels.as_ref().ok_or("the texel kernels are unmade")?)
     }
 
-    /// Every texture's starting texels, written in from `Shared` buffers by the texel kernel,
-    /// all in one command buffer, waited for.
+    /// Every texture's starting bytes, written by the CPU slice by slice, and its starting
+    /// texels, written in from `Shared` buffers by the texel kernel, all in one command buffer,
+    /// waited for.
     fn fill_textures(&self, plans: &[TexturePlan], textures: &[D::Texture]) -> Result<()> {
+        for (plan, texture) in plans.iter().zip(textures) {
+            let Some(bytes) = &plan.bytes else {
+                continue;
+            };
+            // `Plan::validate` checked the format's size and that the bytes are whole slices.
+            let row = plan
+                .row_bytes()
+                .ok_or("a texture's format has no known size")?;
+            let image = usize::try_from(row * u64::from(plan.height))?;
+            for (slice, image) in (0u32..).zip(bytes.chunks(image)) {
+                texture.replace_region(slice, [plan.width, plan.height], image, row)?;
+            }
+        }
         let mut staged = Vec::new();
         for (plan, texture) in plans.iter().zip(textures) {
             let Some(texels) = &plan.texels else {
@@ -701,7 +717,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
         plan.validate()?;
         self.load(&plan.library)?;
         let made = self.make(plan)?;
-        if !plan.textures.is_empty() && self.texels.is_none() {
+        if plan.moves_texels() && self.texels.is_none() {
             self.texels = Some(self.make_texels()?);
         }
         self.fill(&plan.buffers, &made.buffers)?;

@@ -2,13 +2,14 @@
 //! the same name. The cutover deletes this file, its `mod` line, the `--runtime old` arm of the
 //! command and the crate's dependency on the old runtime.
 
-use crate::plan::{self, Constant, Filter};
+use crate::plan::{self, Constant, TextureSource};
 use crate::{Code, Result, Size, Storage};
-use metal2vulkan::bind::SamplerDescriptor;
-use metal2vulkan::metal::{PixelFormat, SamplerMinMagFilter, TextureUsage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_runtime as runtime;
-use runtime::{CommandBufferStatus, PipelineOptions, ResourceOptions, TextureDescriptor};
+use runtime::{
+    CommandBufferStatus, HeapDescriptor, HeapType, PipelineOptions, ResourceOptions,
+    TextureDescriptor,
+};
 use std::ptr::NonNull;
 
 /// The old runtime's `MTLCreateSystemDefaultDevice`: the preferred Vulkan physical device
@@ -29,16 +30,7 @@ impl crate::Device for runtime::Device {
     }
 
     fn new_buffer(&self, length: u64, storage: Storage) -> Result<runtime::Buffer> {
-        let options = match storage {
-            Storage::Shared => ResourceOptions::shared(),
-            Storage::Private => ResourceOptions::private(),
-            Storage::Managed => ResourceOptions::new(
-                runtime::StorageMode::Managed,
-                runtime::CpuCacheMode::DefaultCache,
-                runtime::HazardTrackingMode::Default,
-            ),
-        };
-        Ok(runtime::Device::new_buffer(self, length, options)?)
+        Ok(runtime::Device::new_buffer(self, length, options(storage))?)
     }
 
     /// Its pooled and its dedicated `VkDeviceMemory` blocks with a placement in them
@@ -86,7 +78,7 @@ impl crate::ComputeDevice for runtime::Device {
     type CommandQueue = runtime::CommandQueue;
     type CommandBuffer = runtime::CommandBuffer;
     type ComputeCommandEncoder = runtime::ComputeCommandEncoder;
-    type Texture = runtime::Texture;
+    type Texture = Texture;
     type SamplerState = runtime::SamplerState;
 
     fn new_library(&self, code: Code<'_>) -> Result<runtime::Library> {
@@ -125,27 +117,92 @@ impl crate::ComputeDevice for runtime::Device {
         Ok(runtime::Device::new_command_queue(self)?)
     }
 
-    fn new_texture(&self, width: u32, height: u32) -> Result<runtime::Texture> {
-        let mut descriptor = TextureDescriptor::texture_2d(
-            PixelFormat::RGBA16Float,
-            width.into(),
-            height.into(),
-            false,
-        );
-        descriptor.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
-        descriptor.resource_options = ResourceOptions::private();
-        Ok(runtime::Device::new_texture(self, &descriptor)?)
+    fn new_texture(&self, texture: &plan::TexturePlan) -> Result<Texture> {
+        let options = options(texture.storage);
+        let mut descriptor = TextureDescriptor::default();
+        descriptor.texture_type = texture.texture_type;
+        descriptor.pixel_format = texture.pixel_format;
+        descriptor.width = texture.width.into();
+        descriptor.height = texture.height.into();
+        descriptor.array_length = texture.array_length.into();
+        descriptor.usage = texture.usage;
+        descriptor.resource_options = options;
+        let made = |texture, heap, buffer| Texture {
+            texture,
+            _heap: heap,
+            _buffer: buffer,
+        };
+        Ok(match texture.source {
+            TextureSource::Plain => {
+                made(runtime::Device::new_texture(self, &descriptor)?, None, None)
+            }
+            TextureSource::Heap => {
+                let size = self.heap_texture_size_and_align(&descriptor)?.size;
+                let heap =
+                    self.new_heap(&HeapDescriptor::new(HeapType::Automatic, size, options))?;
+                made(heap.new_texture(&descriptor)?, Some(heap), None)
+            }
+            TextureSource::OverBuffer => {
+                let align =
+                    self.minimum_linear_texture_alignment_for_pixel_format(texture.pixel_format)?;
+                let row = (texture.row_bytes())
+                    .ok_or("a texture's format has no known size")?
+                    .next_multiple_of(align);
+                let length = row * u64::from(texture.height);
+                let buffer = runtime::Device::new_buffer(self, length, options)?;
+                made(buffer.new_texture(&descriptor, 0, row)?, None, Some(buffer))
+            }
+        })
     }
 
-    fn new_sampler_state(&self, filter: Filter) -> Result<runtime::SamplerState> {
-        let filter = match filter {
-            Filter::Nearest => SamplerMinMagFilter::Nearest,
-            Filter::Linear => SamplerMinMagFilter::Linear,
+    fn new_sampler_state(&self, sampler: plan::SamplerPlan) -> Result<runtime::SamplerState> {
+        Ok(runtime::Device::new_sampler_state(
+            self,
+            &sampler.descriptor(),
+        )?)
+    }
+}
+
+/// The resource options of `storage`, the other modes Metal's defaults.
+fn options(storage: Storage) -> ResourceOptions {
+    match storage {
+        Storage::Shared => ResourceOptions::shared(),
+        Storage::Private => ResourceOptions::private(),
+        Storage::Managed => ResourceOptions::new(
+            runtime::StorageMode::Managed,
+            runtime::CpuCacheMode::DefaultCache,
+            runtime::HazardTrackingMode::Default,
+        ),
+    }
+}
+
+/// A texture of the old runtime with the heap or the buffer it was made of, which it holds as
+/// long as it lives: the old runtime's texture holds only their memory, and reaches a heap's
+/// bytes for a CPU write through the heap.
+pub struct Texture {
+    texture: runtime::Texture,
+    _heap: Option<runtime::Heap>,
+    _buffer: Option<runtime::Buffer>,
+}
+
+impl crate::Texture for Texture {
+    fn replace_region(
+        &self,
+        slice: u32,
+        [width, height]: [u32; 2],
+        bytes: &[u8],
+        bytes_per_row: u64,
+    ) -> Result<()> {
+        let region = runtime::Region {
+            origin: runtime::Origin { x: 0, y: 0, z: 0 },
+            size: runtime::Size {
+                width: width.into(),
+                height: height.into(),
+                depth: 1,
+            },
         };
-        let mut descriptor = SamplerDescriptor::new();
-        descriptor.min_filter = filter;
-        descriptor.mag_filter = filter;
-        Ok(runtime::Device::new_sampler_state(self, &descriptor)?)
+        let texture = &self.texture;
+        Ok(texture.replace_region(region, 0, slice.into(), bytes, bytes_per_row, 0)?)
     }
 }
 
@@ -234,10 +291,10 @@ impl crate::ComputeCommandEncoder<runtime::Device> for runtime::ComputeCommandEn
         )?)
     }
 
-    fn set_texture(&mut self, texture: &runtime::Texture, index: u32) -> Result<()> {
+    fn set_texture(&mut self, texture: &Texture, index: u32) -> Result<()> {
         Ok(runtime::ComputeCommandEncoder::set_texture(
             self,
-            Some(texture),
+            Some(&texture.texture),
             index,
         )?)
     }
