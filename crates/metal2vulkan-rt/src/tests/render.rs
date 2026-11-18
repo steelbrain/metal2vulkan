@@ -255,12 +255,17 @@ mod on_device {
         });
     }
 
-    /// The pipelines' files under `dir`, by path, with their lengths and times.
+    /// The pipelines' files under `dir`'s generations, by path, with their lengths and times.
     fn pipeline_files(dir: &Path) -> Vec<(String, u64, SystemTime)> {
         let mut all = Vec::new();
-        let Ok(uuids) = std::fs::read_dir(dir.join("pipelines")) else {
+        let Ok(generations) = std::fs::read_dir(dir) else {
             return all;
         };
+        let pipelines = generations
+            .flatten()
+            .map(|generation| generation.path().join("pipelines"));
+        let uuids =
+            pipelines.flat_map(|pipelines| std::fs::read_dir(pipelines).into_iter().flatten());
         for uuid in uuids.flatten() {
             for file in std::fs::read_dir(uuid.path())
                 .expect("a directory")
