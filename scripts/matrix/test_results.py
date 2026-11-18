@@ -89,50 +89,6 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(suite["problems"]), 5, suite["problems"])
         self.assertEqual(suite["records"]["metric"], {"a/z": 1})
 
-    def test_a_failure_reads_as_wrong_bytes_only_from_an_assertion_of_two_lists_and_nothing_else(self):
-        tests = ("bytes", "count", "lost", "vuid", "unwrap", "slow")
-        status = {name: "TIMEOUT" if name == "slow" else "FAIL" for name in tests}
-        lists = ["    assertion `left == right` failed: case 3: the words",
-                 "      left: [0, 255, 0x7f, 1.5]",
-                 "     right: [0, 255, 0x7f, 2.5]"]
-        stderr = {
-            "bytes": lists,
-            "count": ["    assertion `left == right` failed: the slots", "      left: 3", "     right: 1"],
-            "lost": ["    vkQueueSubmit2: ERROR_DEVICE_LOST"] + lists,
-            "vuid": ["    Validation Error: [ VUID-vkCmdDraw-None-08600 ] ..."] + lists,
-            "unwrap": ["    called `Result::unwrap()` on an `Err` value: Timeout"],
-            "slow": lists,
-        }
-        lines = [f"        {status[name]} [   1.000s] ({i + 1}/6) metal2vulkan-rt tests::{name}"
-                 for i, name in enumerate(tests)]
-        lines.append("     Summary [   6.000s] 6 tests run: 0 passed, 5 failed, 1 timed out, 0 skipped")
-        for i, name in enumerate(tests):
-            lines += [f"        {status[name]} [   1.000s] ({i + 1}/6) metal2vulkan-rt tests::{name}",
-                      "  stderr ───",
-                      f"    thread 'tests::{name}' panicked at crates/metal2vulkan-rt/src/tests/x.rs:1:1:",
-                      *stderr[name]]
-        suite = results.parse_suite(lines)
-        self.assertEqual(len(suite["failed"]), 6)
-        self.assertEqual(suite["wrong_bytes"], ["metal2vulkan-rt tests::bytes"])
-
-    def test_an_extra_leg_lists_a_wrong_bytes_failure_that_passed_on_the_leg_of_record_and_judges_the_rest(self):
-        bytes_, count = "metal2vulkan-rt tests::bytes", "metal2vulkan-rt tests::count"
-        leg = leg_of(recs(), code=100)
-        leg["suites"]["rt"].update(failed=[bytes_, count], wrong_bytes=[bytes_])
-        record = "the card reads stale host memory lines under load"
-        excused = results.record_excused(leg, {"rt": dict(run=2, failed=[])}, record)
-        self.assertEqual(list(excused), [bytes_])
-        self.assertEqual(results.leg_problems(leg, recs(), None, excused),
-                         [f"suite rt exited 100, 1 failed: {count}"])
-        self.assertEqual(results.leg_parked(leg, recs(), excused),
-                         [f"test {bytes_}: wrong bytes, passed on the card's leg of record at this commit: {record}"])
-        # Failed on the leg of record too, or the leg of record ran no such suite: judged.
-        self.assertEqual(results.record_excused(leg, {"rt": dict(run=2, failed=[bytes_])}, record), {})
-        self.assertEqual(results.record_excused(leg, {}, record), {})
-        self.assertEqual(results.record_excused(leg, {"rt": dict(run=0, failed=[])}, record), {})
-        self.assertEqual(results.leg_problems(leg, recs(), None, {}),
-                         [f"suite rt exited 100, 2 failed: {bytes_}, {count}"])
-
     def test_an_extra_leg_is_held_to_its_card_s_ceilings_and_floors(self):
         card = next(iter(results.HARNESS_CEILINGS))
         row = next(iter(results.HARNESS_CEILINGS[card]))

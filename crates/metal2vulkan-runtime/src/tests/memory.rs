@@ -168,58 +168,62 @@ fn dma_buf_imports_try_the_system_memory_types_the_host_maps_last() {
 
 /// A `Shared` import of a dma-buf takes the type its order ([`dma_buf_order`]) takes first where
 /// that type is host-coherent, trying the order's host-coherent types alone; where it is not, it
-/// tries nothing ([`dma_buf_candidates`]). Over each lab driver's memory types and the types it
-/// lists for a udmabuf among those a buffer takes, the type taken first before (the order whole)
+/// tries nothing ([`dma_buf_candidates`]). Over each lab driver's memory types (each type's
+/// property flags, as vulkaninfo lists them) and the types it lists for a udmabuf among those a
+/// buffer takes (`tests::export_after_dma_buf`), the type taken first before (the order whole)
 /// and after is the same everywhere but NVIDIA's, whose order takes type 0 (no property flag)
 /// first: refused there, with no import tried. Every other class's order is unchanged.
 #[cfg(unix)]
 #[test]
 fn a_shared_dma_buf_import_takes_host_coherent_types_or_none() {
     use vk::MemoryPropertyFlags as P;
-    let host = P::HOST_VISIBLE | P::HOST_COHERENT;
+    let listed = |flags: &[u32]| -> Vec<vk::MemoryType> {
+        flags.iter().map(|&raw| ty(P::from_raw(raw))).collect()
+    };
     // Each driver: its types, the udmabuf's among those a buffer takes, unified memory, and the
     // first type a `Shared` import takes before and after.
     let drivers = [
         (
-            "NVIDIA 620.70.06 (RTX 3090, RTX 2080)",
-            vec![
-                ty(P::empty()),
-                ty(P::DEVICE_LOCAL),
-                ty(P::DEVICE_LOCAL),
-                ty(host),
-                ty(host | P::HOST_CACHED),
-                ty(P::DEVICE_LOCAL | host),
-            ],
-            0x11,
+            "NVIDIA 620.70.06 (RTX 2080, RTX 3090)",
+            listed(&[0x0, 0x1, 0x1, 0x6, 0xe, 0x7]),
+            0b1_0001,
             false,
             (Some(0), None),
         ),
         (
-            "ANV, Mesa 26.2.x (Iris Xe)",
-            vec![
-                ty(P::DEVICE_LOCAL),
-                ty(P::DEVICE_LOCAL | host),
-                ty(P::DEVICE_LOCAL | host | P::HOST_CACHED),
-            ],
+            "ANV, Mesa 26.2.6 (Iris Xe, RPL-P)",
+            listed(&[0x1, 0x7, 0xf, 0x21, 0x1, 0x7, 0xf]),
             0b111,
             true,
             (Some(2), Some(2)),
         ),
         (
-            "RADV, a discrete GPU",
-            vec![
-                ty(P::DEVICE_LOCAL),
-                ty(host),
-                ty(P::DEVICE_LOCAL | host),
-                ty(host | P::HOST_CACHED),
-            ],
-            0b1010,
+            "RADV, Mesa 26.2.6 (RX 550, POLARIS12)",
+            listed(&[0x1, 0x1, 0x6, 0x7, 0x7, 0xe, 0xe]),
+            0b10_0000,
             false,
-            (Some(3), Some(3)),
+            (Some(5), Some(5)),
         ),
         (
-            "lavapipe",
-            vec![ty(P::DEVICE_LOCAL | host | P::HOST_CACHED)],
+            "RADV, Mesa 26.2.6 (RX 7900 XTX, NAVI31)",
+            listed(&[0x1, 0x1, 0x6, 0x7, 0x7, 0xe, 0xe, 0xc1, 0xc6, 0xc7, 0xce]),
+            0b100_0010_0000,
+            false,
+            (Some(5), Some(5)),
+        ),
+        (
+            "RADV, Mesa 26.2.6 (780M, PHOENIX)",
+            listed(&[
+                0x1, 0x1, 0x6, 0x7, 0x7, 0xe, 0xe, 0x21, 0x21, 0x21, 0x21, 0x20, 0x20, 0xc1, 0xc6,
+                0xc7, 0xce,
+            ]),
+            0b1_0000_1000_0010_0000,
+            true,
+            (Some(5), Some(5)),
+        ),
+        (
+            "lavapipe, Mesa 26.2.4",
+            listed(&[0xf]),
             0b1,
             true,
             (Some(0), Some(0)),

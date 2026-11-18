@@ -101,33 +101,6 @@ LIBTEST_RESULT = re.compile(r"^test result: \w+\. (\d+) passed; (\d+) failed")
 LIBTEST_FAILED = re.compile(r"^test (.+) \.\.\. FAILED\s*$")
 # The harness command's line for a workload that failed on one runtime.
 HARNESS_FAILED = re.compile(r"^\s*M2V-FAILED (\S+)\s*$")
-# nextest's status line of any test, in the captured outputs after its summary: each test's
-# output follows its own.
-NEXTEST_STATUS = re.compile(r"^\s*([A-Z][A-Z-]*) \[[^\]]*\]\s+(?:\(\s*\d+/\d+\)\s+)?(\S+ \S+)\s*$")
-#: A test's output that shows it read wrong bytes: Rust's `assert_eq!` message, whose two sides
-#: (WRONG_BYTES_SIDE) are each a list of numbers, the bytes, words or texels the test read against
-#: those it expected. A compare of one value (a count) is not wrong bytes.
-WRONG_BYTES_ASSERT = re.compile(r"assertion `left == right` failed")
-WRONG_BYTES_SIDE = re.compile(r"^\s*(left|right): \[\s*-?[0-9][0-9a-fA-FxX.eE+-]*"
-                              r"(?:,\s*-?[0-9][0-9a-fA-FxX.eE+-]*)+\s*\]\s*$")
-#: A test's output that shows something other than wrong bytes, whatever else it shows: a device
-#: loss or a validation message.
-NOT_WRONG_BYTES = re.compile(r"DEVICE_LOST|[Dd]evice ?[Ll]ost|VUID-|Validation Error")
-
-
-def wrong_bytes(lines):
-    """Whether a failed test's captured output LINES shows wrong bytes and nothing else: a
-    WRONG_BYTES_ASSERT with both its sides lists of numbers, and no NOT_WRONG_BYTES line. Any other
-    failure (a panic of another message, a device loss, a validation message, or output that does
-    not tell) is not wrong bytes."""
-    if any(NOT_WRONG_BYTES.search(line) for line in lines):
-        return False
-    if not any(WRONG_BYTES_ASSERT.search(line) for line in lines):
-        return False
-    sides = {m.group(1) for m in (WRONG_BYTES_SIDE.match(line) for line in lines) if m}
-    return sides == {"left", "right"}
-
-
 def empty_records():
     return {kind: {} for kind in KINDS}
 
@@ -136,26 +109,14 @@ def parse_suite(lines):
     """One suite's output: tests run and passed, the tests that failed, and its records, with
     the problems of the records themselves (an unknown kind, a value that is not a count, a key
     recorded twice, a gauge key without its point). A key recorded twice keeps its first value and
-    is listed, by kind, in `duplicated`. `wrong_bytes` lists the tests whose status was FAIL and
-    whose captured output after the summary shows wrong bytes (wrong_bytes): a TIMEOUT, a signal or
-    a leak never does."""
+    is listed, by kind, in `duplicated`."""
     run = passed = 0
     failed, problems = [], []
     records = empty_records()
     duplicated = set()
     golden = dict(changed=0, profile=0)
     summary = False
-    # Each FAIL test's captured output after the summary, by its name.
-    outputs, current = {}, None
     for line in lines:
-        if summary:
-            m = NEXTEST_STATUS.match(line)
-            if m:
-                current = m.group(2) if m.group(1) == "FAIL" else None
-                if current:
-                    outputs.setdefault(current, [])
-            elif current:
-                outputs[current].append(line)
         for kind, pattern in (("changed", GOLDEN_CHANGED), ("profile", GOLDEN_PROFILE)):
             m = pattern.search(line)
             if m:
@@ -192,8 +153,7 @@ def parse_suite(lines):
             else:
                 records[kind][key] = float(value) if kind == "time" else int(value)
     return dict(run=run, passed=passed, failed=failed, records=records, problems=problems,
-                golden=golden, duplicated=duplicated,
-                wrong_bytes=[name for name, output in outputs.items() if name in failed and wrong_bytes(output)])
+                golden=golden, duplicated=duplicated)
 
 
 def parse_job(text):
@@ -287,31 +247,10 @@ def extra_leg_id(card, node):
     return f"{card}@{node}"
 
 
-def record_excused(leg, record_suites, record):
-    """The failed tests of LEG, an extra leg under an open RECORD (the matrix config's
-    `open_records`, one line), that are listed with the record and not judged: each failed with
-    wrong bytes (parse_suite's `wrong_bytes`), in a suite that the card's leg of record ran at the
-    same commit (RECORD_SUITES, its suites, each with `run` and `failed`) without it failing there.
-    Where the leg of record has no such suite, nothing is excused. Returns {test: its line}."""
-    out = {}
-    for name, suite in leg["suites"].items():
-        theirs = record_suites.get(name)
-        if not theirs or not theirs.get("run"):
-            continue
-        for test in suite.get("wrong_bytes", ()):
-            if test in suite["failed"] and test not in theirs["failed"]:
-                out[test] = (f"test {test}: wrong bytes, passed on the card's leg of record at this "
-                             f"commit: {record}")
-    return out
-
-
-def leg_parked(leg, records, excused=None):
-    """The leg's parked failures (PARKED_TESTS, PARKED_RECORDS' gauges, and EXCUSED, record_excused's
-    lines), one line each."""
-    excused = excused or {}
+def leg_parked(leg, records):
+    """The leg's parked failures (PARKED_TESTS and PARKED_RECORDS' gauges), one line each."""
     out = [f"test {test}" for suite in leg["suites"].values() for test in suite["failed"]
            if test in PARKED_TESTS]
-    out += [excused[test] for suite in leg["suites"].values() for test in suite["failed"] if test in excused]
     gauges = records["gauge"]
     for key, value in sorted(gauges.items()):
         name, _, point = key.rpartition("@")
@@ -321,15 +260,14 @@ def leg_parked(leg, records, excused=None):
     return out
 
 
-def leg_problems(leg, records, base, excused=()):
+def leg_problems(leg, records, base):
     """What fails a leg: a suite that failed, a record's own problem, and the rules against the
     base leg's records (BASE None: no base, so only the rules that need none). A suite whose every
-    failed test is parked (PARKED_TESTS, or a harness workload of PARKED_RECORDS) or EXCUSED (the
-    tests record_excused lists) has not failed."""
+    failed test is parked (PARKED_TESTS, or a harness workload of PARKED_RECORDS) has not failed."""
     problems = []
     for name, suite in leg["suites"].items():
         failed = [test for test in suite["failed"]
-                  if test not in PARKED_TESTS and not test.startswith(PARKED_RECORDS) and test not in excused]
+                  if test not in PARKED_TESTS and not test.startswith(PARKED_RECORDS)]
         if failed or (suite["exit"] != 0 and not suite["failed"]):
             shown = ", ".join(failed[:5]) + (" ..." if len(failed) > 5 else "")
             problems.append(f"suite {name} exited {suite['exit']}"
