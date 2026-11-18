@@ -1949,9 +1949,10 @@ pub(crate) mod on_device {
 
     /// The command buffers of a group share submit infos where no event wait or signal separates
     /// them, and record what they record alone. A mix of a fill whose segment's end barrier
-    /// reaches commands, a Shared fill whose end barrier reaches the host, a command buffer with
-    /// nothing for the GPU (no timestamps, no info), and an event's signal and wait (which end and
-    /// lead infos) records the same barriers, passes and bytes copied and leaves the same words
+    /// reaches commands, a Shared fill whose end barrier reaches the host, an event's signal and
+    /// wait (which end and lead infos), and between them a command buffer with nothing for the GPU
+    /// (no timestamps, no info) records the same barriers, passes and bytes copied and leaves the
+    /// same words
     /// committed behind two busy submissions, held in groups, as committed one at a time. The
     /// groups pass two submit infos for the mix's four command buffers with commands: one for the
     /// fills up to the signal, which ends the group, and one the wait leads. One at a time passes
@@ -1975,21 +1976,23 @@ pub(crate) mod on_device {
                 encoder.fill_buffer(&b, 0..256, value).expect("a fill");
                 encoder.end_encoding();
                 commit(&shared);
-                let empty = queue.command_buffer().expect("a command buffer");
-                commit(&empty);
                 let signals = queue.command_buffer().expect("a command buffer");
                 fill(&signals, &a, base + 2);
                 signals
                     .encode_signal_event(event.as_event(), signal)
                     .expect("a signal");
                 commit(&signals);
+                // After the signal, which sent the group: one committed while a group is held
+                // would send it at once and end the group there.
+                let empty = queue.command_buffer().expect("a command buffer");
+                commit(&empty);
                 let waits = queue.command_buffer().expect("a command buffer");
                 waits
                     .encode_wait_for_event(event.as_event(), signal)
                     .expect("a wait");
                 fill(&waits, &a, base + 3);
                 commit(&waits);
-                vec![first, shared, empty, signals, waits]
+                vec![first, shared, signals, empty, waits]
             };
             let deterministic = || {
                 let m = counters.metrics();
