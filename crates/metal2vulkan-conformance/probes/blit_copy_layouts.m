@@ -13,6 +13,20 @@
 //   t2t-slices  slice 0 (pattern 3) (0,0) 5x5 of the array into its slice 1 (pattern 7) at (3,3)
 //   t2t-bc1     BC1RGBA 8x8 (pattern 8) (4,0) 4x4 into another (pattern 9) at (0,4)
 //
+// Copies between a Shared buffer and a texture, in one command buffer, each buffer `len` bytes of
+// pattern `seed`:
+//
+//   b2t-level   4x2 texels from a buffer (256, 11) at 16, rows 32 apart, into level 1 (pattern 12)
+//               of an RGBA8Unorm 13x7 texture of 3 levels at (1,1); the level read back
+//   t2b-slice   slice 2 (pattern 13) (2,3) 5x4 of an RGBA8Unorm 8x8 2D array of 3 into a buffer
+//               (1024, 14) at 64, rows 48 apart; the buffer read back
+//   t2b-volume  (1,0,0) 3x4x3 of an R8Unorm 4x4x3 3D texture (pattern 15) into a buffer (128, 16)
+//               at 8, rows 5 and images 24 apart; the buffer read back
+//   b2t-line    8 texels from a buffer (256, 18) at 16, rows 32 and images 40 apart, into slice 1
+//               (pattern 19) of an R32Float 1D array 16 wide of 2 at 3; the slice read back
+//   b2t-bc1     4x4 texels from a buffer (64, 17) at 8, rows 16 apart, into a BC1RGBA 8x8
+//               texture (pattern 20) at (4,4); the texture read back
+//
 // Build, and run plain and under Metal's validation layer, which stops the process at a copy it
 // does not take (`blit_copy_format_pairs.m` asks which):
 //
@@ -97,6 +111,16 @@ static void report(const char *name, Level l) {
                   slice:l.slice];
     printf("%s len %lu fnv %016llx\n", name, (unsigned long)bytes.length,
            (unsigned long long)fnv(bytes.bytes, bytes.length));
+}
+
+static id<MTLBuffer> patterned(id<MTLDevice> device, NSUInteger len, uint8_t seed) {
+    NSData *bytes = pattern(len, seed);
+    return [device newBufferWithBytes:bytes.bytes length:len options:MTLResourceStorageModeShared];
+}
+
+static void reportBuffer(const char *name, id<MTLBuffer> buffer) {
+    printf("%s len %lu fnv %016llx\n", name, (unsigned long)buffer.length,
+           (unsigned long long)fnv(buffer.contents, buffer.length));
 }
 
 static id<MTLTexture> texture(id<MTLDevice> device, MTLTextureType type, MTLPixelFormat format,
@@ -193,6 +217,83 @@ int main(void) {
             report("t2t-bc1", b);
         } else {
             printf("t2t-bc1 no BC1 texture\n");
+        }
+
+        id<MTLTexture> levels = texture(device, MTLTextureType2D, MTLPixelFormatRGBA8Unorm, 13, 7, 1, 3, 1);
+        id<MTLTexture> slices = texture(device, MTLTextureType2DArray, MTLPixelFormatRGBA8Unorm, 8, 8, 1, 1, 3);
+        id<MTLTexture> bytes3d = texture(device, MTLTextureType3D, MTLPixelFormatR8Unorm, 4, 4, 3, 1, 1);
+        id<MTLTexture> lines = texture(device, MTLTextureType1DArray, MTLPixelFormatR32Float, 16, 1, 1, 1, 2);
+        id<MTLTexture> blocks = texture(device, MTLTextureType2D, MTLPixelFormatBC1_RGBA, 8, 8, 1, 1, 1);
+        Level level1 = {levels, 0, 1, 4, 1}, slice2 = {slices, 2, 0, 4, 1};
+        Level volume0 = {bytes3d, 0, 0, 1, 1}, line1 = {lines, 1, 0, 4, 1};
+        Level blocks0 = {blocks, 0, 0, 8, 4};
+        fillLevel(level1, 12);
+        fillLevel(slice2, 13);
+        fillLevel(volume0, 15);
+        fillLevel(line1, 19);
+        fillLevel(blocks0, 20);
+        id<MTLBuffer> intoLevel = patterned(device, 256, 11);
+        id<MTLBuffer> fromSlice = patterned(device, 1024, 14);
+        id<MTLBuffer> fromVolume = patterned(device, 128, 16);
+        id<MTLBuffer> intoLine = patterned(device, 256, 18);
+        id<MTLBuffer> intoBlocks = patterned(device, 64, 17);
+        run(queue, ^(id<MTLBlitCommandEncoder> blit) {
+            [blit copyFromBuffer:intoLevel
+                       sourceOffset:16
+                  sourceBytesPerRow:32
+                sourceBytesPerImage:0
+                         sourceSize:MTLSizeMake(4, 2, 1)
+                          toTexture:levels
+                   destinationSlice:0
+                   destinationLevel:1
+                  destinationOrigin:MTLOriginMake(1, 1, 0)];
+            [blit copyFromTexture:slices
+                             sourceSlice:2
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(2, 3, 0)
+                              sourceSize:MTLSizeMake(5, 4, 1)
+                                toBuffer:fromSlice
+                       destinationOffset:64
+                  destinationBytesPerRow:48
+                destinationBytesPerImage:0];
+            [blit copyFromTexture:bytes3d
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(1, 0, 0)
+                              sourceSize:MTLSizeMake(3, 4, 3)
+                                toBuffer:fromVolume
+                       destinationOffset:8
+                  destinationBytesPerRow:5
+                destinationBytesPerImage:24];
+            [blit copyFromBuffer:intoLine
+                       sourceOffset:16
+                  sourceBytesPerRow:32
+                sourceBytesPerImage:40
+                         sourceSize:MTLSizeMake(8, 1, 1)
+                          toTexture:lines
+                   destinationSlice:1
+                   destinationLevel:0
+                  destinationOrigin:MTLOriginMake(3, 0, 0)];
+            if (blocks) {
+                [blit copyFromBuffer:intoBlocks
+                           sourceOffset:8
+                      sourceBytesPerRow:16
+                    sourceBytesPerImage:0
+                             sourceSize:MTLSizeMake(4, 4, 1)
+                              toTexture:blocks
+                       destinationSlice:0
+                       destinationLevel:0
+                      destinationOrigin:MTLOriginMake(4, 4, 0)];
+            }
+        });
+        report("b2t-level", level1);
+        reportBuffer("t2b-slice", fromSlice);
+        reportBuffer("t2b-volume", fromVolume);
+        report("b2t-line", line1);
+        if (blocks) {
+            report("b2t-bc1", blocks0);
+        } else {
+            printf("b2t-bc1 no BC1 texture\n");
         }
     }
     return 0;
