@@ -988,7 +988,7 @@ impl ComputeCommandEncoder {
                 true => nonuniform_region_bytes(base, threads, nominal),
                 false => region_bytes(base, threads, nominal),
             }
-            .ok_or_else(|| Error::Refused(Refusal::ThreadgroupSize { size, max }))
+            .ok_or(Error::Refused(Refusal::ThreadgroupSize { size, max }))
         };
         let ids = &state.numbered.ids;
         match (direct, grid) {

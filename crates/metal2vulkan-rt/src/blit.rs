@@ -445,7 +445,7 @@ impl BlitCommandEncoder {
                 command,
                 &vk::DependencyInfo::default()
                     .memory_barriers(&earlier)
-                    .image_memory_barriers(&away),
+                    .image_memory_barriers(away),
             );
             for region in copies.iter().flat_map(BufferCopy::regions) {
                 match into_image {
@@ -469,7 +469,7 @@ impl BlitCommandEncoder {
                 command,
                 &vk::DependencyInfo::default()
                     .memory_barriers(written)
-                    .image_memory_barriers(&back),
+                    .image_memory_barriers(back),
             );
         }
         building.count(Metric::Barriers);
