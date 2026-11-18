@@ -390,6 +390,18 @@ impl Image {
         )
     }
 
+    /// The layout a copy names the image in, for `transfer`, its role's transfer layout: home,
+    /// general, for an image made preinitialized (a linear image over a buffer in place), which
+    /// stays in a host-accessible layout through every use, copies included, so that it and the
+    /// buffer are aliases that interpret their bytes alike (Vulkan's memory aliasing); `transfer`
+    /// for any other image.
+    pub(crate) fn copy_layout(&self, transfer: vk::ImageLayout) -> vk::ImageLayout {
+        match self.first {
+            vk::ImageLayout::PREINITIALIZED => self.home,
+            _ => transfer,
+        }
+    }
+
     /// Whether its textures read it as an attachment through the attachment feedback loop: it has
     /// the feedback usage, and each texture's second element names the feedback layout.
     fn looped(&self) -> bool {
@@ -2052,9 +2064,10 @@ impl TextureInner {
         }))
     }
 
-    /// The barrier that moves `placed`'s level and layer, every aspect, from home to `layout`
-    /// (a transfer layout) for a copy's `access` (its reads or its writes), after every earlier
-    /// command's writes.
+    /// The barrier that moves `placed`'s level and layer, every aspect, from home to the copy
+    /// layout of `layout`, a transfer layout ([`Image::copy_layout`]: home itself for an image
+    /// over a buffer in place), for a copy's `access` (its reads or its writes), after every
+    /// earlier command's writes.
     fn away(
         &self,
         placed: &Placed,
@@ -2063,15 +2076,16 @@ impl TextureInner {
     ) -> vk::ImageMemoryBarrier2<'static> {
         use vk::AccessFlags2 as Access;
         use vk::PipelineStageFlags2 as Stage;
-        self.barrier(placed, self.image.home, layout)
+        self.barrier(placed, self.image.home, self.image.copy_layout(layout))
             .src_stage_mask(Stage::ALL_COMMANDS)
             .src_access_mask(Access::MEMORY_WRITE)
             .dst_stage_mask(Stage::COPY)
             .dst_access_mask(access)
     }
 
-    /// The barrier that moves `placed`'s level and layer back home from `layout` once a copy has
-    /// run, its writes (into `TRANSFER_DST_OPTIMAL`) visible to every later command.
+    /// The barrier that moves `placed`'s level and layer back home from the copy layout of
+    /// `layout` once a copy has run, its writes (a copy into the image, whose transfer layout is
+    /// `TRANSFER_DST_OPTIMAL`) visible to every later command.
     fn back(&self, placed: &Placed, layout: vk::ImageLayout) -> vk::ImageMemoryBarrier2<'static> {
         use vk::AccessFlags2 as Access;
         use vk::PipelineStageFlags2 as Stage;
@@ -2079,7 +2093,7 @@ impl TextureInner {
             vk::ImageLayout::TRANSFER_DST_OPTIMAL => Access::TRANSFER_WRITE,
             _ => Access::NONE,
         };
-        self.barrier(placed, layout, self.image.home)
+        self.barrier(placed, self.image.copy_layout(layout), self.image.home)
             .src_stage_mask(Stage::COPY)
             .src_access_mask(written)
             .dst_stage_mask(Stage::ALL_COMMANDS)
@@ -2196,6 +2210,7 @@ impl TextureInner {
         };
         let away = [self.away(&copy.placed, layout, access)];
         let home = [self.back(&copy.placed, layout)];
+        let named = self.image.copy_layout(layout);
         let host = [vk::MemoryBarrier2::default()
             .src_stage_mask(Stage::COPY)
             .src_access_mask(Access::TRANSFER_WRITE)
@@ -2207,7 +2222,7 @@ impl TextureInner {
             false => back.memory_barriers(&host),
         };
         let regions = [region];
-        // SAFETY: the caller's contract; the subresource is in `layout` between the barriers.
+        // SAFETY: the caller's contract; the subresource is in `named` between the barriers.
         unsafe {
             device.cmd_pipeline_barrier2(
                 command,
@@ -2218,13 +2233,13 @@ impl TextureInner {
                     command,
                     buffer,
                     self.image.image,
-                    layout,
+                    named,
                     &regions,
                 ),
                 false => device.cmd_copy_image_to_buffer(
                     command,
                     self.image.image,
-                    layout,
+                    named,
                     buffer,
                     &regions,
                 ),
@@ -2673,8 +2688,15 @@ impl Texture {
         Some((&named.buffer, &named.places))
     }
 
-    /// The barrier that moves `placed` from home to the transfer `layout` for a copy's
-    /// `access`, after every earlier command's writes.
+    /// The layout a copy names the texture's image in, for its role's transfer `layout`
+    /// ([`Image::copy_layout`]): general for a texture over a buffer in place, `layout` for any
+    /// other.
+    pub(crate) fn copy_layout(&self, layout: vk::ImageLayout) -> vk::ImageLayout {
+        self.inner.image.copy_layout(layout)
+    }
+
+    /// The barrier that moves `placed` from home to the copy layout of the transfer `layout` for
+    /// a copy's `access`, after every earlier command's writes.
     pub(crate) fn away(
         &self,
         placed: &Placed,
@@ -2684,8 +2706,8 @@ impl Texture {
         self.inner.away(placed, layout, access)
     }
 
-    /// The barrier that moves `placed` back home from the transfer `layout` once a copy has run,
-    /// its writes visible to every later command.
+    /// The barrier that moves `placed` back home from the copy layout of the transfer `layout`
+    /// once a copy has run, its writes visible to every later command.
     pub(crate) fn back(
         &self,
         placed: &Placed,

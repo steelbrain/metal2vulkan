@@ -415,6 +415,10 @@ impl Device {
         // `extension::choose` that it offers each of the consumer's and its features.
         let device = unsafe { vk_instance.create_device(raw, &info, None) }
             .map_err(Error::vulkan("vkCreateDevice"))?;
+        // The layouts its commands name, where a test records them (`tests::layouts`).
+        // SAFETY: the device was made from `vk_instance` just now, and nothing has used it.
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let device = unsafe { crate::tests::layouts::recorded(vk_instance, device) };
         drop(links);
         let mut vulkan11 = vk::PhysicalDeviceVulkan11Properties::default();
         let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();

@@ -428,7 +428,9 @@ made, with no lock, and never rewritten for layouts.
   the buffer are refused (`Refusal::BufferTextureLayout`). Its image is the device's own linear
   image, bound at the texture's place in the bytes shaders reach (a Managed buffer's device copy,
   where it has one), made preinitialized so its move home keeps the bytes, and kept in the general
-  layout: nothing is copied that the buffer does not copy. It is made so where the device's linear image of the texture's extent,
+  layout through every use, copies included, so that it and the buffer stay host-accessible
+  aliases, which Vulkan's memory aliasing says interpret their bytes alike: a write through the
+  image touches only its texels' bytes, and nothing is copied that the buffer does not copy. It is made so where the device's linear image of the texture's extent,
   format and usage lays its rows at `bytes_per_row` from the image's start
   (`vkGetImageSubresourceLayout`), the place meets the image's memory alignment and memory type,
   and the format's linear tiling has every feature of its optimal tiling that the usage uses

@@ -17,6 +17,8 @@ mod kernel_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kernels;
 mod large;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+pub(crate) mod layouts;
 #[cfg(m2v_gpu)]
 mod locks;
 mod managed;

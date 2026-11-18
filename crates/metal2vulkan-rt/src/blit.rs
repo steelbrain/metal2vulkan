@@ -180,9 +180,10 @@ impl BlitCommandEncoder {
             extent: copy.from.extent(),
         }];
         let device = &core.device;
+        let (named_read, named_write) = (source.copy_layout(read), destination.copy_layout(write));
         // SAFETY: the command buffer records outside any render pass and keeps both images until
         // it retires; each subresource is in its home layout between commands, and the two are
-        // different subresources where the textures are one (`texture_copy`), in their transfer
+        // different subresources where the textures are one (`texture_copy`), in their copy
         // layouts between the barriers; the region lies in both.
         unsafe {
             device.cmd_pipeline_barrier2(
@@ -194,9 +195,9 @@ impl BlitCommandEncoder {
             device.cmd_copy_image(
                 command,
                 source.image(),
-                read,
+                named_read,
                 destination.image(),
-                write,
+                named_write,
                 &regions,
             );
             device.cmd_pipeline_barrier2(
@@ -435,9 +436,10 @@ impl BlitCommandEncoder {
             false => &written[..],
         };
         let device = &core.device;
+        let named = texture.copy_layout(layout);
         // SAFETY: the command buffer records outside any render pass and keeps the image and the
         // buffer until it retires; each copy's level and slice is in its home layout between
-        // commands and in `layout` between the barriers; each region lies in the image and, by
+        // commands and in `named` between the barriers; each region lies in the image and, by
         // `buffer_copy`, in the buffer's device range, its offset aligned as the command
         // requires.
         unsafe {
@@ -453,13 +455,13 @@ impl BlitCommandEncoder {
                         command,
                         vk_buffer,
                         texture.image(),
-                        layout,
+                        named,
                         &[region],
                     ),
                     false => device.cmd_copy_image_to_buffer(
                         command,
                         texture.image(),
-                        layout,
+                        named,
                         vk_buffer,
                         &[region],
                     ),
