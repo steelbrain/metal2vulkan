@@ -927,7 +927,7 @@ impl<D: ComputeDevice> Harness<D> {
         constants: &[(u32, f32)],
         runs: Runs,
     ) -> Result<CreateReport> {
-        let constants: Vec<Constant> = (constants.iter())
+        let values: Vec<Constant> = (constants.iter())
             .map(|&(index, value)| Constant {
                 index,
                 // `MTLDataTypeFloat`.
@@ -935,7 +935,7 @@ impl<D: ComputeDevice> Harness<D> {
                 value: value.to_le_bytes().to_vec(),
             })
             .collect();
-        let function = self.authored.new_function(function, &constants)?;
+        let function = self.authored.new_function(function, &values)?;
         let once = || -> Result<f64> {
             let started = Instant::now();
             let state = self.device.new_compute_pipeline_state(&function, &[])?;
