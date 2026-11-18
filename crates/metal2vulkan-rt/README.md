@@ -702,6 +702,10 @@ that touch blocks first.
   (15 ms at the 90th). The last command buffer's own report is not late: on the 2080 it came
   97.2-97.5 ms after its commit, where the old runtime's came 94.9-96.4 ms after. The harness prints each command buffer's lateness, from
   its `gpu_end_time` to its completed handler (`late_us`).
+- GPU start and end times are the device's timestamps. On Mesa's Apple-GPU driver a command
+  buffer with no render pass reports `gpu_start_time` equal to its `gpu_end_time`: the driver
+  writes both timestamps with Metal's relaxed timestamp granularity, which gives two writes in one
+  compute pass one value. Vulkan allows it: a later timestamp is never lower.
 - Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through

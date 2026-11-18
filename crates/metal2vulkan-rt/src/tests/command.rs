@@ -1263,7 +1263,9 @@ pub(crate) mod on_device {
                     .map(|cb| (cb.gpu_start_time(), cb.gpu_end_time()))
                     .collect();
                 for &(start, end) in &times {
-                    assert!(0 < start && start < end, "{name}: {times:?}");
+                    // A later timestamp is never lower; a device may give two one value (Mesa's
+                    // Apple-GPU driver does, outside a render pass).
+                    assert!(0 < start && start <= end, "{name}: {times:?}");
                 }
                 for pair in times.windows(2) {
                     assert!(
@@ -1310,7 +1312,7 @@ pub(crate) mod on_device {
                 assert_eq!(again.status(), CommandBufferStatus::Completed, "{name}");
                 assert_eq!(word(&buffer), 5, "{name}");
                 let (start, end) = (again.gpu_start_time(), again.gpu_end_time());
-                assert!(0 < start && start < end, "{name}: {start} {end}");
+                assert!(0 < start && start <= end, "{name}: {start} {end}");
                 checked
             });
             drop((buffer, arena, queue, device));
