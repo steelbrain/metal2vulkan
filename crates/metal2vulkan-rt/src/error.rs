@@ -65,10 +65,11 @@ pub enum Refusal {
     EmptyBuffer,
     /// A buffer longer than [`MAX_BUFFER_LENGTH`](crate::MAX_BUFFER_LENGTH)
     /// ([`Device::new_buffer`](crate::Device::new_buffer)): a shader reaches a buffer argument's
-    /// bytes by 32-bit offsets from its bind address. Metal answers nil past a device's
-    /// `maxBufferLength`, which the consumer states no larger than this.
+    /// bytes by 32-bit offsets from its bind address, which the translator may read as signed.
+    /// Metal answers nil past a device's `maxBufferLength`, which the consumer states no larger
+    /// than this.
     ///
-    /// Basis: ours (this crate's cap: a buffer's every byte lies within 2^32 bytes of each bind
+    /// Basis: ours (this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind
     /// address in it).
     BufferTooLong {
         /// The buffer's length.

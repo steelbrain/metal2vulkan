@@ -101,12 +101,12 @@ in its memory.
   ahead of every command buffer committed after the call and ends with a barrier that makes the
   fills visible to every later command, and holds the block until it completes. A buffer
   placed in a heap passes false, since Metal does not zero heap memory. A length of 0, a length
-  past `MAX_BUFFER_LENGTH` (4 GiB) and a range past the block are refused, as Metal answers nil for
+  past `MAX_BUFFER_LENGTH` (2 GiB) and a range past the block are refused, as Metal answers nil for
   each.
-- A shader reaches a buffer argument's bytes by 32-bit offsets from its bind address, so the
-  consumer states a maximum buffer length (Metal's `maxBufferLength`) no larger than
-  `MAX_BUFFER_LENGTH`, and places no buffer longer than that in a block, whether Metal's
-  `newBufferWithLength:`, a heap's or a no-copy buffer stands behind it.
+- A shader reaches a buffer argument's bytes by 32-bit offsets from its bind address, which the
+  translator may read as signed, so the consumer states a maximum buffer length (Metal's
+  `maxBufferLength`) no larger than `MAX_BUFFER_LENGTH`, and places no buffer longer than that in
+  a block, whether Metal's `newBufferWithLength:`, a heap's or a no-copy buffer stands behind it.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
 the buffer there before has completed. A command buffer keeps each block it uses until it retires,

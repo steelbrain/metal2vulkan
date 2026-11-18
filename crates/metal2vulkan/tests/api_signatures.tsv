@@ -1190,7 +1190,7 @@ const-value	metal2vulkan-air::tensor_ops::PREFIX	b"__tensorops_impl_matmul2d_op_
 const-value	metal2vulkan-air::tensor_ops::RESERVED_INDEX	u16::MAX
 const-value	metal2vulkan-air::tensor_ops::SECTION	b"air.externally_defined"
 const-value	metal2vulkan-rt::BLOCK_LEN	256 <<20
-const-value	metal2vulkan-rt::MAX_BUFFER_LENGTH	1 <<32
+const-value	metal2vulkan-rt::MAX_BUFFER_LENGTH	1 <<31
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::khr::workgroup_memory_explicit_layout::NAME, ash::ext::robustness2::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]

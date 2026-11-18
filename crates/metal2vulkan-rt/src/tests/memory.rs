@@ -286,12 +286,12 @@ mod on_device {
         assert_eq!(unmapped, handed, "{name}: the blocks unmapped");
     }
 
-    /// A buffer of exactly [`MAX_BUFFER_LENGTH`] (4 GiB) is made in a Private block of that
+    /// A buffer of exactly [`MAX_BUFFER_LENGTH`] (2 GiB) is made in a Private block of that
     /// length, and one a byte longer is refused with a typed refusal, before its range is looked
     /// at; with the block released and the device dropped, every gauge is zero. A device whose
-    /// largest block or memory is smaller skips the 4 GiB buffer visibly.
+    /// largest block or memory is smaller skips the 2 GiB buffer visibly.
     #[test]
-    fn a_buffer_of_4_gib_is_made_and_a_longer_one_refused() {
+    fn a_buffer_of_2_gib_is_made_and_a_longer_one_refused() {
         let instance = Instance::new(&[]).expect("an instance at the floor");
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
@@ -313,7 +313,7 @@ mod on_device {
                         ..
                     }),
                 ) => {
-                    eprintln!("SKIPPED: {name}: no Private block of 4 GiB: {error}");
+                    eprintln!("SKIPPED: {name}: no Private block of 2 GiB: {error}");
                     continue;
                 }
                 Err(error) => panic!("{name}: {error}"),
@@ -321,7 +321,7 @@ mod on_device {
             assert_eq!(block.len, MAX_BUFFER_LENGTH, "{name}");
             let buffer = device
                 .new_buffer(block.id, 0, MAX_BUFFER_LENGTH, false)
-                .expect("a buffer of 4 GiB");
+                .expect("a buffer of 2 GiB");
             assert_eq!(
                 (buffer.gpu_address(), buffer.length()),
                 (block.gpu_address, MAX_BUFFER_LENGTH),
@@ -331,20 +331,20 @@ mod on_device {
                 Err(Error::Refused(Refusal::BufferTooLong { length, max })) => {
                     assert_eq!((length, max), (MAX_BUFFER_LENGTH + 1, MAX_BUFFER_LENGTH))
                 }
-                other => panic!("{name}: a buffer of 4 GiB and a byte: {:?}", other.err()),
+                other => panic!("{name}: a buffer of 2 GiB and a byte: {:?}", other.err()),
             }
             assert_eq!(
                 counters.gauges().buffers,
                 1,
-                "{name}: only the 4 GiB buffer"
+                "{name}: only the 2 GiB buffer"
             );
             drop(buffer);
             device.release_block(block.id).expect("a release");
             drop(device);
             let gauges = counters.gauges();
-            print_gauges_at_drop("buffer_4_gib", gauges);
+            print_gauges_at_drop("buffer_2_gib", gauges);
             assert_eq!(gauges, Gauges::default(), "{name}: gauges after teardown");
-            println!("memory: {name}: a buffer of 4 GiB made, 4 GiB and a byte refused");
+            println!("memory: {name}: a buffer of 2 GiB made, 2 GiB and a byte refused");
         }
     }
 
@@ -488,7 +488,7 @@ mod on_device {
                 device.new_buffer(shared.id, 0, 0, false),
                 Err(Error::Refused(Refusal::EmptyBuffer))
             ));
-            // Past 4 GiB, whatever the block: the length is refused before the range.
+            // Past 2 GiB, whatever the block: the length is refused before the range.
             for length in [MAX_BUFFER_LENGTH + 1, u64::MAX] {
                 match device.new_buffer(shared.id, 0, length, false) {
                     Err(Error::Refused(Refusal::BufferTooLong { length: l, max })) => {

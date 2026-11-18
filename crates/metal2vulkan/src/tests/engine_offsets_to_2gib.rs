@@ -1,9 +1,9 @@
-//! A buffer argument's offsets are Metal's unsigned 32-bit ones under the identity domains, and the
-//! runtime makes no buffer longer than 4 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so every byte
-//! of a bound buffer lies within 2^32 bytes of the bind address. On the CPU interpreter, which traps
-//! on an address that lies in no buffer, `ob1_storage_buffer` loads and stores at word indices up
-//! to the last word below 4 GiB through slots whose bytes are two buffers: one at the bind address
-//! and one ending at 4 GiB past it. Each access lands at its own word.
+//! A buffer argument's offsets are 32-bit under the identity domains, and the runtime makes no
+//! buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so every byte of a bound buffer
+//! lies within 2^31 bytes of the bind address. On the CPU interpreter, which traps on an address
+//! that lies in no buffer, `ob1_storage_buffer` loads and stores at word indices up to the last
+//! word below 2 GiB through slots whose bytes are two buffers: one at the bind address and one
+//! ending at 2 GiB past it. Each access lands at its own word.
 //!
 //! `llvm-as` assembles the fixture; without it the test skips visibly.
 
@@ -18,38 +18,38 @@ use crate::spirv::interp::{run, Buffer, Config, Resources};
 
 const FIXTURE: &str = "ob1_storage_buffer";
 const THREADS: u32 = 8;
-/// The word at byte 4 GiB of the slot, one past its last.
-const AT_4_GIB: u32 = 1 << 30;
+/// The word at byte 2 GiB of the slot, one past its last.
+const AT_2_GIB: u32 = 1 << 29;
 /// The device address of the index buffer, and the one `src` and `out` are both bound at.
 const IDX: u64 = 0x1_0000_0000;
 const SLOT: u64 = 0x10_0000_0000;
 /// The slot's words in the interpreter's buffers: the first 1024 at `SLOT`, and the last 1024
-/// below 4 GiB at `SLOT + 4 * HIGH`.
+/// below 2 GiB at `SLOT + 4 * HIGH`.
 const WORDS: u32 = 1024;
-const HIGH: u32 = AT_4_GIB - WORDS;
+const HIGH: u32 = AT_2_GIB - WORDS;
 
 /// Thread `t` loads `src[LOADS[t]]` into `out[t]` and stores `0xA0000000 | t` to
-/// `out[STORES[t]]`: one load and one store near the bind address, the rest below 4 GiB up to its
+/// `out[STORES[t]]`: one load and one store near the bind address, the rest below 2 GiB up to its
 /// last word.
 const LOADS: [u32; 8] = [
     70,
     HIGH,
     HIGH + 1,
-    AT_4_GIB - 300,
-    AT_4_GIB - 4,
-    AT_4_GIB - 3,
-    AT_4_GIB - 2,
-    AT_4_GIB - 1,
+    AT_2_GIB - 300,
+    AT_2_GIB - 4,
+    AT_2_GIB - 3,
+    AT_2_GIB - 2,
+    AT_2_GIB - 1,
 ];
 const STORES: [u32; 8] = [
     128,
     HIGH + 2,
     HIGH + 3,
-    AT_4_GIB - 400,
-    AT_4_GIB - 8,
-    AT_4_GIB - 7,
-    AT_4_GIB - 6,
-    AT_4_GIB - 5,
+    AT_2_GIB - 400,
+    AT_2_GIB - 8,
+    AT_2_GIB - 7,
+    AT_2_GIB - 6,
+    AT_2_GIB - 5,
 ];
 
 /// The interpreter buffer (1 low, 2 high) and byte offset in it of slot word `word`.
@@ -61,7 +61,7 @@ fn at(word: u32) -> (usize, usize) {
 }
 
 #[test]
-fn accesses_up_to_4_gib_land_at_their_own_words() {
+fn accesses_up_to_2_gib_land_at_their_own_words() {
     let bc = match llvm_assemble(&engine_dir().join(format!("{FIXTURE}.ll"))) {
         Ok(b) => b,
         Err(AssembleError::Missing(why)) => {

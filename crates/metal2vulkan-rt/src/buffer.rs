@@ -7,11 +7,11 @@ use crate::memory::{Block, BlockId, Mapping, MemoryClass};
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-/// The longest buffer [`Device::new_buffer`] makes: 4 GiB. A shader reaches a buffer argument's
-/// bytes by 32-bit offsets from its bind address, so a byte of a longer buffer could lie where no
-/// access reaches it. Metal answers nil past a device's `maxBufferLength`; the consumer states
-/// one no larger than this.
-pub const MAX_BUFFER_LENGTH: u64 = 1 << 32;
+/// The longest buffer [`Device::new_buffer`] makes: 2 GiB. A shader reaches a buffer argument's
+/// bytes by 32-bit offsets from its bind address, which the translator may read as signed, 2 GiB
+/// either side of it; a byte of a longer buffer could lie where no access reaches it. Metal
+/// answers nil past a device's `maxBufferLength`; the consumer states one no larger than this.
+pub const MAX_BUFFER_LENGTH: u64 = 1 << 31;
 
 /// `MTLBuffer`: `length` bytes at `offset` in a block the consumer took, with no `VkBuffer` or
 /// memory of its own. Shaders reach it by its device address.
