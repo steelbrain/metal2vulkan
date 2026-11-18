@@ -1779,6 +1779,22 @@ this GPU time (the median of 10 runs, in each of two passes):
 | RX 550 | 23,117 µs (2.9 GB/s) | 1,654 µs |
 | RX 7900 XTX | 9,320 µs (7.2 GB/s) | 162 to 249 µs |
 
+A kernel reading 64 MiB and writing 64 MiB once, in order (`scale_offset`, one thread a
+16-byte vector each way), with both buffers Shared or both Private, took this GPU time (the
+mean of two processes' median runs), the rate counting the bytes read and written:
+
+| GPU | Shared | Private | Shared over Private |
+|---|---|---|---|
+| RX 7900 XTX | 11,528 µs (11.6 GB/s) | 167 µs | 69 times |
+| RTX 3090, two hosts | 40,201 and 50,426 µs (3.3 and 2.7 GB/s) | 160 µs | 252 and 316 times |
+| RTX 2080 | 50,383 µs (2.7 GB/s) | 343 µs | 147 times |
+| RX 550 | 33,172 µs (4.0 GB/s) | 1,653 µs | 20 times |
+
+A 3x3 filter over a 1920x1080 image of `float4` texels in a buffer (`binomial3x3`, one thread a
+texel, nine reads and one write) took 2.8 ns a thread with Shared buffers on the RX 7900 XTX, 8.3
+on the RX 550, 10.0 and 12.5 on the RTX 3090 and 12.3 on the RTX 2080, against 0.015 to 0.40 ns
+with Private: 20 times (RX 550) to 305 times (RTX 3090) the Private time.
+
 Scattered reads widen the gap (RTX 3090: 2.9 s against 5.1 ms for the same 64 MiB). The
 device-local host-visible type is no alternative: the host reads it at 18 MB/s (RX 7900 XTX) and
 37 MB/s (RX 550), against about 5,500 MB/s from the Shared type, and where resizable BAR is off it
