@@ -441,7 +441,8 @@ old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `c
 nanoseconds from the frame before's end, or the first call played, to this frame's, the wait for
 its work included; the process's resident memory then where the system tells it, `VmRSS` on
 Linux; and the backend's gauges then, as they stand, never as growth: the new runtime's live
-blocks, buffers, textures, pipelines, kernels, command buffers and spilled bytes, and the bytes
+blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes and idle Shared and
+Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
 `private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),
 `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime

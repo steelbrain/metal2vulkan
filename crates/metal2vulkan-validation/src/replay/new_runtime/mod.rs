@@ -1195,6 +1195,11 @@ impl Backend for NewRuntime {
             ("first_use_waits", metrics.first_use_waits),
             ("first_use_wait_nanos", metrics.first_use_wait_nanos),
             ("blocks_made", metrics.blocks_made),
+            ("dedicated_blocks_reused", metrics.dedicated_blocks_reused),
+            (
+                "dispatches_without_effects",
+                metrics.dispatches_without_effects,
+            ),
             ("translations", metrics.translations),
             ("translations_loaded", metrics.translations_loaded),
             ("ring_writes", metrics.ring_writes),
@@ -1226,6 +1231,8 @@ impl Backend for NewRuntime {
             ("kernels", gauges.kernels),
             ("command_buffers", gauges.command_buffers),
             ("spilled_bytes", gauges.spilled_bytes),
+            ("shared_idle_bytes", gauges.shared_idle_bytes),
+            ("private_idle_bytes", gauges.private_idle_bytes),
             ("shared_block_bytes", held(rt::MemoryClass::Shared)),
             ("private_block_bytes", held(rt::MemoryClass::Private)),
         ])
