@@ -71,6 +71,7 @@ fn at_the_floor() -> Queried {
     features.core.independent_blend = vk::TRUE;
     features.core.fragment_stores_and_atomics = vk::TRUE;
     features.vulkan11.multiview = vk::TRUE;
+    features.vulkan11.shader_draw_parameters = vk::TRUE;
     features.vulkan12.shader_subgroup_extended_types = vk::TRUE;
     features.vulkan13.shader_demote_to_helper_invocation = vk::TRUE;
     features.vulkan13.shader_terminate_invocation = vk::TRUE;
