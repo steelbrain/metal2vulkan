@@ -117,13 +117,14 @@ pub enum Refusal {
     /// buffer", "Completed handler provided after commit call" and "Scheduled handler provided
     /// after commit call").
     Committed,
-    /// An event, a buffer or a pipeline state of another device in an encode call
+    /// An event, a buffer, a texture or a pipeline state of another device in an encode call
     /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event),
     /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event), or a
-    /// [`ComputeCommandEncoder`](crate::ComputeCommandEncoder) call).
+    /// [`ComputeCommandEncoder`](crate::ComputeCommandEncoder) or
+    /// [`BlitCommandEncoder`](crate::BlitCommandEncoder) call).
     ///
-    /// Basis: ours (an event's semaphore, a buffer's block and a pipeline belong to the
-    /// `VkDevice` that made them).
+    /// Basis: ours (an event's semaphore, a buffer's block, a texture's image and a pipeline
+    /// belong to the `VkDevice` that made them).
     OtherDevice,
     /// A queue that may hold no command buffer
     /// ([`Device::new_command_queue`](crate::Device::new_command_queue) with a count of 0).
@@ -314,9 +315,11 @@ pub enum Refusal {
     /// Basis: metal-documented (Apple's documentation of `MTLStorageModePrivate`: "The resource is
     /// accessible only to the GPU.").
     TextureBytesPrivate,
-    /// [`Texture::replace_region`](crate::Texture::replace_region) or
-    /// [`Texture::get_bytes`](crate::Texture::get_bytes) of a level or slice past the texture's,
-    /// or of a region that leaves the level or is off the format's block grid.
+    /// [`Texture::replace_region`](crate::Texture::replace_region),
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) or a blit copy
+    /// ([`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture))
+    /// of a level or slice past the texture's, or of a region that leaves the level or is off the
+    /// format's block grid.
     ///
     /// Basis: ours (no texel of the texture is there to copy).
     TextureRegion {
@@ -338,6 +341,21 @@ pub enum Refusal {
         bytes_per_image: u64,
         /// The bytes given.
         len: u64,
+    },
+    /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
+    /// between formats whose copy units differ in bytes, or between textures of different
+    /// sample counts. Plain Metal completes such a copy, storing its GPU's own layout of the
+    /// texels or samples, which neither Metal nor Vulkan defines.
+    ///
+    /// Basis: metal-takes (an M4 and an Apple M3 Max, macOS 27.0.1: plain Metal completes the copy
+    /// with no error; between formats of different units the bytes follow the GPU's own texel
+    /// layout, and between sample counts its own twiddled or compressed sample layout, so there is
+    /// no defined answer to put in its place).
+    TextureCopyMismatch {
+        /// The source texture's pixel format.
+        source: PixelFormat,
+        /// The destination texture's pixel format.
+        destination: PixelFormat,
     },
 }
 
@@ -439,6 +457,21 @@ pub enum Gap {
     FloatDepthUpload {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
+    },
+    /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
+    /// that no single `vkCmdCopyImage` in the floor makes: a multisample texture; a format of
+    /// depth and stencil both; a depth or stencil aspect with a color format or with another
+    /// format; a compressed format with a format of another block extent; an alpha-only image
+    /// (`A8Unorm` held as `A8_UNORM`) with another format; a 1D texture with one of another
+    /// type; or a region of one texture's level and slice into the same level and slice.
+    ///
+    /// Basis: ours (Vulkan 1.3 copies none of these with one command; each is built when a replay
+    /// stream makes one).
+    TextureCopy {
+        /// The source texture's pixel format.
+        source: PixelFormat,
+        /// The destination texture's pixel format.
+        destination: PixelFormat,
     },
 }
 
@@ -695,6 +728,13 @@ impl fmt::Display for Refusal {
                 f,
                 "rows {bytes_per_row} and images {bytes_per_image} bytes apart in {len} bytes do not hold the region"
             ),
+            Refusal::TextureCopyMismatch {
+                source,
+                destination,
+            } => write!(
+                f,
+                "a copy from {source:?} to {destination:?} moves units of different bytes or samples, which Metal leaves undefined"
+            ),
         }
     }
 }
@@ -736,6 +776,13 @@ impl fmt::Display for Gap {
             Gap::FloatDepthUpload { pixel_format } => write!(
                 f,
                 "bytes are not uploaded into the 32-bit float depth of this texture of {pixel_format:?}"
+            ),
+            Gap::TextureCopy {
+                source,
+                destination,
+            } => write!(
+                f,
+                "this copy from a texture of {source:?} to one of {destination:?} is not built"
             ),
         }
     }

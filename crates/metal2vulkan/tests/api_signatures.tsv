@@ -2312,6 +2312,9 @@ field	metal2vulkan-rt::TextureDescriptor.swizzle	pub swizzle: TextureSwizzleChan
 field	metal2vulkan-rt::TextureDescriptor.texture_type	pub texture_type: TextureType
 field	metal2vulkan-rt::TextureDescriptor.usage	pub usage: TextureUsage
 field	metal2vulkan-rt::TextureDescriptor.width	pub width: u32
+field	metal2vulkan-rt::TexturePlace.level	pub level: u32
+field	metal2vulkan-rt::TexturePlace.origin	pub origin: [u32; 3]
+field	metal2vulkan-rt::TexturePlace.slice	pub slice: u32
 field	metal2vulkan-rt::TextureSwizzleChannels.alpha	pub alpha: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.blue	pub blue: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.green	pub green: TextureSwizzle
@@ -9220,6 +9223,8 @@ method	metal2vulkan-air::tensor_ops::OperandForm::is_cooperative	pub const fn is
 method	metal2vulkan-air::tensor_ops::OperandIndex::from_raw	pub fn from_raw(raw: u64) -> Option<OperandIndex>
 method	metal2vulkan-air::tensor_ops::RunForm::arity	pub fn arity(&self) -> usize
 method	metal2vulkan-air::tensor_ops::RunForm::operand_args	pub fn operand_args(&self) -> [usize; 3]
+method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture	pub fn copy_from_texture(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
+method	metal2vulkan-rt::BlitCommandEncoder::end_encoding	pub fn end_encoding(mut self)
 method	metal2vulkan-rt::BlockId::get	pub fn get(self) -> u32
 method	metal2vulkan-rt::Buffer::block	pub fn block(&self) -> BlockId
 method	metal2vulkan-rt::Buffer::contents	pub fn contents(&self) -> Option<NonNull<u8>>
@@ -9229,6 +9234,7 @@ method	metal2vulkan-rt::Buffer::length	pub fn length(&self) -> u64
 method	metal2vulkan-rt::Buffer::offset	pub fn offset(&self) -> u64
 method	metal2vulkan-rt::CommandBuffer::add_completed_handler	pub fn add_completed_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::add_scheduled_handler	pub fn add_scheduled_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::blit_command_encoder	pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder, Error>
 method	metal2vulkan-rt::CommandBuffer::commit	pub fn commit(&self) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::compute_command_encoder	pub fn compute_command_encoder(&self, dispatch_type: DispatchType) -> Result<ComputeCommandEncoder, Error>
 method	metal2vulkan-rt::CommandBuffer::encode_signal_event	pub fn encode_signal_event(&self, event: &Event, value: u64) -> Result<(), Error>
@@ -11354,6 +11360,7 @@ struct	metal2vulkan-air::ir::ValueId	#[derive(Clone, Copy, Debug, PartialEq, Eq,
 struct	metal2vulkan-air::ir::ValueIndex	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct ValueIndex
 struct	metal2vulkan-air::tensor_ops::Descriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Descriptor
 struct	metal2vulkan-air::tensor_ops::RunForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct RunForm
+struct	metal2vulkan-rt::BlitCommandEncoder	pub struct BlitCommandEncoder
 struct	metal2vulkan-rt::BlockId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub struct BlockId(u32)
 struct	metal2vulkan-rt::BlockInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct BlockInfo
 struct	metal2vulkan-rt::Buffer	#[derive(Clone)] pub struct Buffer
@@ -11383,6 +11390,7 @@ struct	metal2vulkan-rt::SamplerState	#[derive(Clone)] pub struct SamplerState
 struct	metal2vulkan-rt::SharedEvent	#[derive(Clone)] pub struct SharedEvent
 struct	metal2vulkan-rt::Texture	#[derive(Clone)] pub struct Texture
 struct	metal2vulkan-rt::TextureDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TextureDescriptor
+struct	metal2vulkan-rt::TexturePlace	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct TexturePlace
 struct	metal2vulkan-rt::TextureSwizzleChannels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct TextureSwizzleChannels
 struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
 struct	metal2vulkan-rt::floor::Capabilities	pub struct Capabilities
@@ -11925,6 +11933,7 @@ trait-impl	metal2vulkan-air::ir::BlockId impl NodeId	impl NodeId for BlockId
 trait-impl	metal2vulkan-air::ir::Body impl Graph	impl Graph for Body
 trait-impl	metal2vulkan-air::ir::DataLayout impl Default	impl Default for DataLayout
 trait-impl	metal2vulkan-air::tensor_ops::Descriptor impl fmt::Display	impl fmt::Display for Descriptor
+trait-impl	metal2vulkan-rt::BlitCommandEncoder impl Drop	impl Drop for BlitCommandEncoder
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Send	unsafe impl Send for BlockInfo
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Sync	unsafe impl Sync for BlockInfo
 trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for ComputeCommandEncoder
@@ -13280,6 +13289,7 @@ variant	metal2vulkan-rt::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_
 variant	metal2vulkan-rt::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
 variant	metal2vulkan-rt::Gap::TextureBuffer	TextureBuffer
 variant	metal2vulkan-rt::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }
+variant	metal2vulkan-rt::Gap::TextureCopy	TextureCopy { source: PixelFormat, destination: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureFormat	TextureFormat { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
 variant	metal2vulkan-rt::IndexClass::StorageTexture	StorageTexture
@@ -13401,6 +13411,7 @@ variant	metal2vulkan-rt::Refusal::TextureArgumentIndex	TextureArgumentIndex { in
 variant	metal2vulkan-rt::Refusal::TextureArrayLength	TextureArrayLength { array_length: u32 }
 variant	metal2vulkan-rt::Refusal::TextureBytesLayout	TextureBytesLayout { bytes_per_row: u64, bytes_per_image: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::TextureBytesPrivate	TextureBytesPrivate
+variant	metal2vulkan-rt::Refusal::TextureCopyMismatch	TextureCopyMismatch { source: PixelFormat, destination: PixelFormat }
 variant	metal2vulkan-rt::Refusal::TextureCubeNotSquare	TextureCubeNotSquare
 variant	metal2vulkan-rt::Refusal::TextureExtentForType	TextureExtentForType
 variant	metal2vulkan-rt::Refusal::TextureIndex	TextureIndex { index: Option<u32> }

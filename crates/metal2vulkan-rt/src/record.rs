@@ -51,9 +51,10 @@ impl Recorder {
 pub(crate) enum Reach {
     /// Within a segment: the dispatches after it after the dispatches before it, their shader
     /// reads and writes seeing the earlier shader writes, and where `indirect` (the dispatch that
-    /// follows it reads its arguments from a buffer), their indirect argument reads too. A
-    /// segment records nothing else that reads or writes memory, so it orders the segment's
-    /// commands as [`Reach::Commands`] would.
+    /// follows it reads its arguments from a buffer), their indirect argument reads too. The
+    /// other commands a segment records that read or write memory, blit copies, order
+    /// themselves against every command before and after them with barriers of their own, so it
+    /// orders the segment's commands as [`Reach::Commands`] would.
     Dispatches { indirect: bool },
     /// Every later command, in this submission and every later one on the queue.
     Commands,
@@ -76,6 +77,15 @@ impl Reach {
 /// barrier the runtime records for buffers: none names a buffer or a range. The caller counts it
 /// where it is part of the queues' work.
 pub(crate) fn barrier(device: &ash::Device, buffer: vk::CommandBuffer, reach: Reach) {
+    let barrier = [memory_barrier(reach)];
+    let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
+    // SAFETY: the buffer is recording.
+    unsafe { device.cmd_pipeline_barrier2(buffer, &dependency) };
+}
+
+/// The global memory barrier [`barrier`] records for `reach`, for a caller that records it with
+/// image barriers of its own in one command.
+pub(crate) fn memory_barrier(reach: Reach) -> vk::MemoryBarrier2<'static> {
     let (source, written, stages, accesses) = match reach {
         Reach::Dispatches { indirect: false } => (
             vk::PipelineStageFlags2::COMPUTE_SHADER,
@@ -107,14 +117,11 @@ pub(crate) fn barrier(device: &ash::Device, buffer: vk::CommandBuffer, reach: Re
                 | vk::AccessFlags2::HOST_WRITE,
         ),
     };
-    let barrier = [vk::MemoryBarrier2::default()
+    vk::MemoryBarrier2::default()
         .src_stage_mask(source)
         .src_access_mask(written)
         .dst_stage_mask(stages)
-        .dst_access_mask(accesses)];
-    let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
-    // SAFETY: the buffer is recording.
-    unsafe { device.cmd_pipeline_barrier2(buffer, &dependency) };
+        .dst_access_mask(accesses)
 }
 
 /// Ends a segment's command buffer after its one barrier: a later command buffer's commands run

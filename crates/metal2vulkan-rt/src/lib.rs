@@ -9,6 +9,7 @@
 #![warn(missing_docs)]
 
 mod arrays;
+mod blit;
 mod buffer;
 mod cache;
 mod command;
@@ -40,6 +41,7 @@ mod texture;
 mod times;
 
 pub use arrays::{IndexClass, IndexGrant, ResourceId};
+pub use blit::{BlitCommandEncoder, TexturePlace};
 pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};

@@ -232,15 +232,17 @@ impl Counters {
 pub struct Metrics {
     /// `vkQueueSubmit2` calls.
     pub submissions: u64,
-    /// Encoders recorded: compute, and later blit and render.
+    /// Encoders recorded: compute and blit, and later render.
     pub passes: u64,
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each
-    /// segment with commands and of each upload, one before a dispatch at a hazard, and one owed
-    /// by an encoder that wrote or a memory barrier call, recorded before the next command. A
-    /// block's zero fill, made apart from any command buffer, is not counted.
+    /// segment with commands and of each upload, one before a dispatch at a hazard, one owed by
+    /// an encoder that wrote or a memory barrier call, recorded before the next command, and two
+    /// around each blit copy, the first of which pays what is owed. A block's zero fill, made
+    /// apart from any command buffer, is not counted.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
-    /// counted copy at commit where a device offers no linear image.
+    /// counted copy at commit where a device offers no linear image. A blit's own copy is the
+    /// program's and is not counted.
     pub bytes_copied: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,

@@ -5,8 +5,8 @@ takes its name when it does; until then it is unpublished.
 
 Its public API so far: the instance and the device, memory blocks and the buffers in them, the
 grants of texture and sampler indices, textures, sampler states, command queues, command buffers
-and events, the device's counters, and `floor`, the check of a Vulkan device against the floor
-below.
+and events, compute and blit encoders, the device's counters, and `floor`, the check of a Vulkan
+device against the floor below.
 
 ## Instance and device
 
@@ -291,7 +291,8 @@ made, with no lock, and never rewritten for layouts.
   wrote Shared memory (a Shared buffer bound or declared for writing, or a write through an address
   outside the dispatch's resources) or signals an event, so the host reads those writes once the
   command buffer completes or it sees the event; a segment that wrote only Private memory leaves
-  the host out. No segment starts with a barrier.
+  the host out. No segment starts with a barrier of its own; a blit copy records its own two
+  (see "Blit encoders").
   `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
   thread and returns. A committed command buffer holds no device handle.
 - The submit thread passes what is ready to `vkQueueSubmit2` in the device's commit order, each
@@ -442,9 +443,9 @@ that touch blocks first.
 - A barrier within a segment orders dispatches after dispatches: compute shader writes before it,
   compute shader reads and writes after it, and indirect argument reads only where the dispatch
   after it is indirect. An indirect dispatch after a write that no barrier since has ordered
-  before indirect argument reads gets one that does, in either kind of encoder. A segment records
-  nothing else that touches memory; the barrier at a segment's end takes every command and the
-  host.
+  before indirect argument reads gets one that does, in either kind of encoder. The other
+  commands a segment records that touch memory, blit copies, order themselves against everything
+  before and after them; the barrier at a segment's end takes every command and the host.
 - A buffer bound where its address, its `gpuAddress` plus the offset, is not a multiple of its
   kernel argument's alignment (`air.arg_type_align_size`, at most 16) is pushed rounded down to
   that alignment, where Metal's API validation refuses the bind; `docs/API.md` section 10 says
@@ -461,6 +462,33 @@ that touch blocks first.
 - The command buffer keeps each pipeline state it dispatches with, and each texture and sampler
   state an encoder binds or declares, until it retires, so their elements of set 1 stay theirs
   while work may read them.
+
+## Blit encoders
+
+- `CommandBuffer::blit_command_encoder` is `blitCommandEncoder`. While it is open it holds the
+  command buffer's recording, as a compute encoder does.
+- `copy_from_texture` is `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:`
+  `toTexture:destinationSlice:destinationLevel:destinationOrigin:`, a `TexturePlace` holding each
+  side's slice, level and origin. It records one `vkCmdCopyImage` between the two images, at once,
+  with nothing staged and no byte copied beyond the region. The bytes move as they are: formats
+  whose units have the same bytes copy into each other, as Metal copies them; a compressed
+  region is whole blocks or reaches the level's edge on both sides; a 3D texture's image copies
+  into or out of a 2D slice. A size of 0 on an axis a texture lacks copies one texel there; on
+  another axis the copy copies nothing.
+- A copy records two barriers. The first moves each texture's level and slice from its home
+  layout to the transfer layout after every earlier command, and makes every earlier write visible
+  to every later command; it pays a barrier an encoder owed, and the hazard sets start again. The
+  second moves them home once the copy has run, its writes visible to every later command. A copy
+  so needs no hazard tracking and leaves none: a command buffer of one copy has three barriers,
+  the segment's end among them. The encoder owes nothing at its end.
+- Refused: what Metal leaves undefined, formats whose units differ in bytes and textures of
+  different sample counts (`Refusal::TextureCopyMismatch`), and a region outside either texture
+  or off its block grid (`Refusal::TextureRegion`). Not built (`Gap::TextureCopy`): what one
+  `vkCmdCopyImage` in the floor does not make (a multisample texture, a format of depth and stencil
+  both, depth or stencil with another format, a compressed format with another block extent,
+  `A8_UNORM` with another format, a 1D texture with another type), and one level and slice of a
+  texture into itself. The slice-and-level and whole-texture forms of `copyFromTexture`, and the
+  other blit commands, are not built yet.
 
 ## Compute pipeline states
 

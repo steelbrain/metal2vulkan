@@ -628,17 +628,34 @@ impl Building {
     /// The current segment's command buffer, with the barrier owed recorded first, reaching what
     /// the caller records next (`reach`). Commands after a signal go in a new segment.
     pub(crate) fn command(&mut self, reach: Reach) -> Result<vk::CommandBuffer, Error> {
-        if !self.last().signals.is_empty() {
-            self.split()?;
-        }
-        let command = match self.last().command {
-            Some(command) => command,
-            None => self.begin()?,
-        };
+        let command = self.current()?;
         if self.owed {
             self.barrier(command, reach);
         }
         Ok(command)
+    }
+
+    /// The current segment's command buffer, for commands that record a barrier of their own
+    /// first that orders every earlier command before every later one and makes their writes
+    /// visible to them (a blit's): it pays what is owed, and the hazard sets start again.
+    pub(crate) fn ordered_command(&mut self) -> Result<vk::CommandBuffer, Error> {
+        let command = self.current()?;
+        self.owed = false;
+        self.args_unordered = false;
+        self.hazards().clear();
+        Ok(command)
+    }
+
+    /// The current segment's command buffer, begun where it has none. Commands after a signal go
+    /// in a new segment.
+    fn current(&mut self) -> Result<vk::CommandBuffer, Error> {
+        if !self.last().signals.is_empty() {
+            self.split()?;
+        }
+        match self.last().command {
+            Some(command) => Ok(command),
+            None => self.begin(),
+        }
     }
 
     /// Records a barrier into `command`, the current segment's, reaching what the caller records

@@ -133,7 +133,10 @@ struct TextureInner {
     device: Device,
     descriptor: TextureDescriptor,
     image: Arc<Image>,
-    /// How bytes move between the image and the CPU; `None` where no copy is built.
+    /// The image's format.
+    format: vk::Format,
+    /// How bytes move between the image and the CPU or another image; `None` where no copy is
+    /// built.
     unit: Option<CopyUnit>,
     /// Its class and index; `None` for a texture no shader reaches.
     index: Option<(IndexClass, u32)>,
@@ -205,13 +208,13 @@ pub(crate) enum Backing {
     Own(vk::DeviceMemory),
 }
 
-/// The unit of a copy between an image and bytes: the aspect, an element's bytes and the texels
-/// an element covers.
-#[derive(Clone, Copy)]
-struct CopyUnit {
-    aspect: vk::ImageAspectFlags,
-    bytes: u32,
-    block: [u32; 2],
+/// The unit of a copy between an image and bytes or another image: the aspect, an element's
+/// bytes and the texels an element covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CopyUnit {
+    pub(crate) aspect: vk::ImageAspectFlags,
+    pub(crate) bytes: u32,
+    pub(crate) block: [u32; 2],
 }
 
 impl CopyUnit {
@@ -347,6 +350,7 @@ impl Device {
             device: self.clone(),
             descriptor: d,
             image,
+            format: plan.format,
             unit: plan.unit,
             index,
             word: plan.word,
@@ -818,15 +822,90 @@ impl Made {
     }
 }
 
+/// A region of one level and slice of a texture, checked against the texture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Placed {
+    pub(crate) level: u32,
+    /// The image's array layer: the slice, 0 for a 3D texture.
+    pub(crate) layer: u32,
+    pub(crate) offset: vk::Offset3D,
+    pub(crate) extent: vk::Extent3D,
+}
+
+impl Placed {
+    /// Its level and layer in `aspect`, for a copy command.
+    pub(crate) fn layers(&self, aspect: vk::ImageAspectFlags) -> vk::ImageSubresourceLayers {
+        vk::ImageSubresourceLayers {
+            aspect_mask: aspect,
+            mip_level: self.level,
+            base_array_layer: self.layer,
+            layer_count: 1,
+        }
+    }
+}
+
+/// Checks `region` of `level` and `slice` of a texture of `d` whose copy unit covers `block`
+/// texels: the level and slice are the texture's (a cube's slices are six a cube, a 3D texture
+/// has slice 0 alone), and the region lies inside the level, its origin on the block grid and its
+/// size whole blocks or reaching the level's edge. `None` for an empty region.
+///
+/// Err: [`Refusal::TextureRegion`].
+pub(crate) fn place(
+    d: &TextureDescriptor,
+    block: [u32; 2],
+    region: Region,
+    level: u32,
+    slice: u32,
+) -> Result<Option<Placed>, Error> {
+    let outside = || Error::Refused(Refusal::TextureRegion { level, slice });
+    let three_d = d.texture_type == TextureType::Type3D;
+    let slices = match d.texture_type {
+        TextureType::Cube | TextureType::CubeArray => d.array_length * 6,
+        _ => d.array_length,
+    };
+    if level >= d.mipmap_level_count || slice >= slices {
+        return Err(outside());
+    }
+    let extent = [d.width, d.height, d.depth].map(|e| (e >> level).max(1));
+    let [bw, bh] = block;
+    let block = [bw, bh, 1];
+    for axis in 0..3 {
+        let (origin, size) = (region.origin[axis], region.size[axis]);
+        let end = origin.checked_add(size).ok_or_else(outside)?;
+        let on_grid = origin % block[axis] == 0 && (size % block[axis] == 0 || end == extent[axis]);
+        if end > extent[axis] || !on_grid {
+            return Err(outside());
+        }
+    }
+    if region.size.contains(&0) {
+        return Ok(None);
+    }
+    let [x, y, z] = region.origin;
+    let [width, height, depth] = region.size;
+    Ok(Some(Placed {
+        level,
+        layer: match three_d {
+            true => 0,
+            false => slice,
+        },
+        offset: vk::Offset3D {
+            x: x as i32,
+            y: y as i32,
+            z: z as i32,
+        },
+        extent: vk::Extent3D {
+            width,
+            height,
+            depth,
+        },
+    }))
+}
+
 /// A copy between the texture and bytes, checked: the subresource, the region and how its rows
 /// lie in the bytes.
 struct Transfer {
     unit: CopyUnit,
-    level: u32,
-    /// The array layer; 0 for a 3D texture.
-    layer: u32,
-    offset: vk::Offset3D,
-    extent: vk::Extent3D,
+    placed: Placed,
     /// One row of elements' bytes.
     row: u64,
     /// Rows of elements in an image.
@@ -869,14 +948,9 @@ impl Transfer {
             buffer_offset: offset,
             buffer_row_length: 0,
             buffer_image_height: 0,
-            image_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: self.unit.aspect,
-                mip_level: self.level,
-                base_array_layer: self.layer,
-                layer_count: 1,
-            },
-            image_offset: self.offset,
-            image_extent: self.extent,
+            image_subresource: self.placed.layers(self.unit.aspect),
+            image_offset: self.placed.offset,
+            image_extent: self.placed.extent,
         }
     }
 }
@@ -903,30 +977,10 @@ impl TextureInner {
         let unit = self.unit.ok_or(Error::Unsupported(Gap::TextureBytes {
             pixel_format: d.pixel_format,
         }))?;
-        let outside = || Error::Refused(Refusal::TextureRegion { level, slice });
-        let three_d = d.texture_type == TextureType::Type3D;
-        let slices = match d.texture_type {
-            TextureType::Cube | TextureType::CubeArray => d.array_length * 6,
-            _ => d.array_length,
-        };
-        if level >= d.mipmap_level_count || slice >= slices {
-            return Err(outside());
-        }
-        let extent = [d.width, d.height, d.depth].map(|e| (e >> level).max(1));
-        let [bw, bh] = unit.block;
-        let block = [bw, bh, 1];
-        for axis in 0..3 {
-            let (origin, size) = (region.origin[axis], region.size[axis]);
-            let end = origin.checked_add(size).ok_or_else(outside)?;
-            let on_grid =
-                origin % block[axis] == 0 && (size % block[axis] == 0 || end == extent[axis]);
-            if end > extent[axis] || !on_grid {
-                return Err(outside());
-            }
-        }
-        if region.size.contains(&0) {
+        let Some(placed) = place(d, unit.block, region, level, slice)? else {
             return Ok(None);
-        }
+        };
+        let [bw, bh] = unit.block;
         let [width, height, depth] = region.size;
         let row = u64::from(width.div_ceil(bw)) * u64::from(unit.bytes);
         let rows = u64::from(height.div_ceil(bh));
@@ -949,30 +1003,71 @@ impl TextureInner {
                 len,
             }));
         }
-        let [x, y, z] = region.origin;
         Ok(Some(Transfer {
             unit,
-            level,
-            layer: match three_d {
-                true => 0,
-                false => slice,
-            },
-            offset: vk::Offset3D {
-                x: x as i32,
-                y: y as i32,
-                z: z as i32,
-            },
-            extent: vk::Extent3D {
-                width,
-                height,
-                depth,
-            },
+            placed,
             row,
             rows,
             images,
             bytes_per_row,
             bytes_per_image,
         }))
+    }
+
+    /// The barrier that moves `placed`'s level and layer, every aspect, from home to `layout`
+    /// (a transfer layout) for a copy's `access` (its reads or its writes), after every earlier
+    /// command's writes.
+    fn away(
+        &self,
+        placed: &Placed,
+        layout: vk::ImageLayout,
+        access: vk::AccessFlags2,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        use vk::AccessFlags2 as Access;
+        use vk::PipelineStageFlags2 as Stage;
+        self.barrier(placed, self.image.home, layout)
+            .src_stage_mask(Stage::ALL_COMMANDS)
+            .src_access_mask(Access::MEMORY_WRITE)
+            .dst_stage_mask(Stage::COPY)
+            .dst_access_mask(access)
+    }
+
+    /// The barrier that moves `placed`'s level and layer back home from `layout` once a copy has
+    /// run, its writes (into `TRANSFER_DST_OPTIMAL`) visible to every later command.
+    fn back(&self, placed: &Placed, layout: vk::ImageLayout) -> vk::ImageMemoryBarrier2<'static> {
+        use vk::AccessFlags2 as Access;
+        use vk::PipelineStageFlags2 as Stage;
+        let written = match layout {
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL => Access::TRANSFER_WRITE,
+            _ => Access::NONE,
+        };
+        self.barrier(placed, layout, self.image.home)
+            .src_stage_mask(Stage::COPY)
+            .src_access_mask(written)
+            .dst_stage_mask(Stage::ALL_COMMANDS)
+            .dst_access_mask(Access::MEMORY_READ | Access::MEMORY_WRITE)
+    }
+
+    /// A layout change of `placed`'s level and layer, every aspect, with no scopes yet.
+    fn barrier(
+        &self,
+        placed: &Placed,
+        old: vk::ImageLayout,
+        new: vk::ImageLayout,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        vk::ImageMemoryBarrier2::default()
+            .old_layout(old)
+            .new_layout(new)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(self.image.image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: self.image.aspects,
+                base_mip_level: placed.level,
+                level_count: 1,
+                base_array_layer: placed.layer,
+                layer_count: 1,
+            })
     }
 
     /// Records `copy` between its staging and the image, `to_image` for a replace: the
@@ -999,46 +1094,8 @@ impl TextureInner {
             ),
             false => (vk::ImageLayout::TRANSFER_SRC_OPTIMAL, Access::TRANSFER_READ),
         };
-        let range = vk::ImageSubresourceRange {
-            aspect_mask: self.image.aspects,
-            base_mip_level: copy.level,
-            level_count: 1,
-            base_array_layer: copy.layer,
-            layer_count: 1,
-        };
-        let barrier = |old, new, src: (Stage, Access), dst: (Stage, Access)| {
-            vk::ImageMemoryBarrier2::default()
-                .src_stage_mask(src.0)
-                .src_access_mask(src.1)
-                .dst_stage_mask(dst.0)
-                .dst_access_mask(dst.1)
-                .old_layout(old)
-                .new_layout(new)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(self.image.image)
-                .subresource_range(range)
-        };
-        let anything = (
-            Stage::ALL_COMMANDS,
-            Access::MEMORY_READ | Access::MEMORY_WRITE,
-        );
-        let away = [barrier(
-            self.image.home,
-            layout,
-            (Stage::ALL_COMMANDS, Access::MEMORY_WRITE),
-            (Stage::COPY, access),
-        )];
-        let written = match to_image {
-            true => Access::TRANSFER_WRITE,
-            false => Access::NONE,
-        };
-        let home = [barrier(
-            layout,
-            self.image.home,
-            (Stage::COPY, written),
-            anything,
-        )];
+        let away = [self.away(&copy.placed, layout, access)];
+        let home = [self.back(&copy.placed, layout)];
         let host = [vk::MemoryBarrier2::default()
             .src_stage_mask(Stage::COPY)
             .src_access_mask(Access::TRANSFER_WRITE)
@@ -1086,6 +1143,42 @@ impl Texture {
     /// Whether `core` is the device this texture was made on.
     pub(crate) fn is_of(&self, core: &Arc<Core>) -> bool {
         Arc::ptr_eq(self.inner.device.core(), core)
+    }
+
+    /// Its image.
+    pub(crate) fn image(&self) -> vk::Image {
+        self.inner.image.image
+    }
+
+    /// Its image's format.
+    pub(crate) fn format(&self) -> vk::Format {
+        self.inner.format
+    }
+
+    /// The unit its copies move; `None` where no copy is built.
+    pub(crate) fn unit(&self) -> Option<CopyUnit> {
+        self.inner.unit
+    }
+
+    /// The barrier that moves `placed` from home to the transfer `layout` for a copy's
+    /// `access`, after every earlier command's writes.
+    pub(crate) fn away(
+        &self,
+        placed: &Placed,
+        layout: vk::ImageLayout,
+        access: vk::AccessFlags2,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        self.inner.away(placed, layout, access)
+    }
+
+    /// The barrier that moves `placed` back home from the transfer `layout` once a copy has run,
+    /// its writes visible to every later command.
+    pub(crate) fn back(
+        &self,
+        placed: &Placed,
+        layout: vk::ImageLayout,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        self.inner.back(placed, layout)
     }
 
     /// `gpuResourceID`: its index (0 for a texture no shader reaches) and the translator's

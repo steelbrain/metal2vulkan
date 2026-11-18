@@ -1,4 +1,5 @@
 mod arrays;
+mod blit;
 mod cache;
 mod command;
 mod compute;
