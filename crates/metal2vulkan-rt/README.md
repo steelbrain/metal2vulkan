@@ -1010,6 +1010,19 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
   79.7 against 50.0 µs; within one run, one form's rounds ranged up to 2.8 times apart). The old
   runtime's form, the 8x8x4 threadgroup as the workgroup and the buffer through a storage-buffer
   descriptor, took 0.97 of the tiles' time in this runtime in the first of those runs.
+- Such a kernel runs a grid one high and one deep in tiles too, and finds each thread's position
+  from the pushed tile in all three dimensions. On an RX 550 (RADV, Mesa 26.2.6), a kernel of
+  2^20 threads in a line, each reading 16 bytes 64 times from a 64 KiB `constant` table and
+  storing 4 bytes, took 1.18 times the old runtime's time (the median of three pairs of runs;
+  2,380.8 against 2,018.3 µs in the first). More than half of the difference is the position: 28
+  instructions at the kernel's start, where a workgroup of the kernel's 256x1 threadgroup needs
+  2; in such workgroups, which the runtime does not make, the kernel took 0.90 of its time in
+  tiles. The rest is in the reads: each takes its 64-bit address from two adds with a carry,
+  where the old runtime's read through a storage-buffer descriptor takes a 32-bit offset. On an
+  Iris Xe (Mesa 26.2.6) the kernel took 1.08 times the old runtime's time in one run (2,591.8
+  against 2,410.7 µs); which of the two it pays there is not measured. In the two recorded
+  streams measured, kernels that do not observe their partition ran 0.00% and 0.59% of their
+  threads over grids one high and one deep.
 - A dispatch of a size other than the descriptor's `requiredThreadsPerThreadgroup`, which Metal's
   validation stops, runs at the size it gives.
 - NVIDIA 615.71.09 on GA10x gives sign-extended bits for a mask over a signed clamp, to exactly N
