@@ -17,9 +17,9 @@ target triple = "air64_v28-apple-macosx26.0.0"
 define void @copy_words(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #0 {
   %4 = zext i32 %2 to i64
   %5 = getelementptr inbounds <4 x i32>, ptr addrspace(1) %0, i64 %4
-  %6 = load <4 x i32>, ptr addrspace(1) %5, align 16, !tbaa !126, !alias.scope !129, !noalias !132
+  %6 = load <4 x i32>, ptr addrspace(1) %5, align 16, !tbaa !129, !alias.scope !132, !noalias !135
   %7 = getelementptr inbounds <4 x i32>, ptr addrspace(1) %1, i64 %4
-  store <4 x i32> %6, ptr addrspace(1) %7, align 16, !tbaa !126, !alias.scope !132, !noalias !129
+  store <4 x i32> %6, ptr addrspace(1) %7, align 16, !tbaa !129, !alias.scope !135, !noalias !132
   ret void
 }
 
@@ -27,14 +27,14 @@ define void @copy_words(ptr addrspace(1) noundef readonly captures(none) "air-bu
 define void @scale_offset(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2, i32 noundef %3) local_unnamed_addr #0 {
   %5 = zext i32 %3 to i64
   %6 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %5
-  %7 = load <4 x float>, ptr addrspace(1) %6, align 16, !tbaa !126, !alias.scope !134, !noalias !137
-  %8 = load <2 x float>, ptr addrspace(2) %2, align 8, !alias.scope !140, !noalias !141
+  %7 = load <4 x float>, ptr addrspace(1) %6, align 16, !tbaa !129, !alias.scope !137, !noalias !140
+  %8 = load <2 x float>, ptr addrspace(2) %2, align 8, !alias.scope !143, !noalias !144
   %9 = shufflevector <2 x float> %8, <2 x float> undef, <4 x i32> zeroinitializer
   %10 = fmul fast <4 x float> %9, %7
   %11 = shufflevector <2 x float> %8, <2 x float> undef, <4 x i32> <i32 1, i32 1, i32 1, i32 1>
   %12 = fadd fast <4 x float> %10, %11
   %13 = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i64 %5
-  store <4 x float> %12, ptr addrspace(1) %13, align 16, !tbaa !126, !alias.scope !142, !noalias !143
+  store <4 x float> %12, ptr addrspace(1) %13, align 16, !tbaa !129, !alias.scope !145, !noalias !146
   ret void
 }
 
@@ -47,7 +47,7 @@ define void @fma_chains(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %8 = and i32 %7, 31
   %9 = tail call fast float @air.convert.f.f32.u.i32(i32 %8) #19
   %10 = fmul fast float %9, 3.125000e-02
-  %11 = load i32, ptr addrspace(2) %1, align 4, !tbaa !144, !alias.scope !146, !noalias !149
+  %11 = load i32, ptr addrspace(2) %1, align 4, !tbaa !147, !alias.scope !149, !noalias !152
   %12 = icmp eq i32 %11, 0
   br i1 %12, label %13, label %19
 
@@ -57,7 +57,7 @@ define void @fma_chains(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %16 = fadd fast float %15, %14
   %17 = zext i32 %2 to i64
   %18 = getelementptr inbounds float, ptr addrspace(1) %0, i64 %17
-  store float %16, ptr addrspace(1) %18, align 4, !tbaa !151, !alias.scope !149, !noalias !146
+  store float %16, ptr addrspace(1) %18, align 4, !tbaa !154, !alias.scope !152, !noalias !149
   ret void
 
 19:                                               ; preds = %19, %3
@@ -70,7 +70,7 @@ define void @fma_chains(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %26 = tail call fast float @air.fma.f32(float %21, float 8.750000e-01, float %25) #19
   %27 = add nuw i32 %20, 1
   %28 = icmp eq i32 %27, %11
-  br i1 %28, label %13, label %19, !llvm.loop !153
+  br i1 %28, label %13, label %19, !llvm.loop !156
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
@@ -80,16 +80,16 @@ declare float @air.convert.f.f32.u.i32(i32) local_unnamed_addr #2
 define void @block_scan(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, i32 noundef %2, i32 noundef %3) local_unnamed_addr #3 {
   %5 = zext i32 %2 to i64
   %6 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %5
-  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !144, !alias.scope !155, !noalias !158
+  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !147, !alias.scope !158, !noalias !161
   %8 = zext i32 %3 to i64
   %9 = getelementptr inbounds [256 x i32], ptr addrspace(3) @_ZZ10block_scanPU9MTLdeviceKjPU9MTLdevicejjjE4sums, i64 0, i64 %8
-  store i32 %7, ptr addrspace(3) %9, align 4, !tbaa !144
+  store i32 %7, ptr addrspace(3) %9, align 4, !tbaa !147
   tail call void @air.wg.barrier(i32 2, i32 1) #20
   br label %12
 
 10:                                               ; preds = %21
   %11 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %5
-  store i32 %23, ptr addrspace(1) %11, align 4, !tbaa !144, !alias.scope !158, !noalias !155
+  store i32 %23, ptr addrspace(1) %11, align 4, !tbaa !147, !alias.scope !161, !noalias !158
   ret void
 
 12:                                               ; preds = %21, %4
@@ -102,23 +102,23 @@ define void @block_scan(ptr addrspace(1) noundef readonly captures(none) "air-bu
   %17 = sub i32 %3, %14
   %18 = zext i32 %17 to i64
   %19 = getelementptr inbounds [256 x i32], ptr addrspace(3) @_ZZ10block_scanPU9MTLdeviceKjPU9MTLdevicejjjE4sums, i64 0, i64 %18
-  %20 = load i32, ptr addrspace(3) %19, align 4, !tbaa !144
+  %20 = load i32, ptr addrspace(3) %19, align 4, !tbaa !147
   br label %21
 
 21:                                               ; preds = %16, %12
   %22 = phi i32 [ %20, %16 ], [ 0, %12 ]
   tail call void @air.wg.barrier(i32 2, i32 1) #20
   %23 = add i32 %22, %13
-  store i32 %23, ptr addrspace(3) %9, align 4, !tbaa !144
+  store i32 %23, ptr addrspace(3) %9, align 4, !tbaa !147
   tail call void @air.wg.barrier(i32 2, i32 1) #20
   %24 = shl nuw nsw i32 %14, 1
   %25 = icmp ult i32 %14, 128
-  br i1 %25, label %12, label %10, !llvm.loop !160
+  br i1 %25, label %12, label %10, !llvm.loop !163
 }
 
 ; Function Attrs: convergent mustprogress nounwind
 define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2, i32 noundef %3, i32 noundef %4, i32 noundef %5, i32 noundef %6, i32 noundef %7, i32 noundef %8, i32 noundef %9) local_unnamed_addr #3 {
-  %11 = load <2 x i32>, ptr addrspace(2) %2, align 8, !alias.scope !161, !noalias !164
+  %11 = load <2 x i32>, ptr addrspace(2) %2, align 8, !alias.scope !164, !noalias !167
   %12 = extractelement <2 x i32> %11, i64 1
   %13 = mul i32 %12, %3
   %14 = add i32 %13, %12
@@ -139,16 +139,16 @@ define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-bu
   %25 = phi i32 [ %29, %23 ], [ 0, %10 ]
   %26 = zext i32 %24 to i64
   %27 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %26
-  %28 = load i32, ptr addrspace(1) %27, align 4, !tbaa !144, !alias.scope !167, !noalias !168
+  %28 = load i32, ptr addrspace(1) %27, align 4, !tbaa !147, !alias.scope !170, !noalias !171
   %29 = add i32 %28, %25
   %30 = add i32 %24, %5
   %31 = icmp ult i32 %30, %16
-  br i1 %31, label %23, label %19, !llvm.loop !169
+  br i1 %31, label %23, label %19, !llvm.loop !172
 
 32:                                               ; preds = %19
   %33 = zext i32 %7 to i64
   %34 = getelementptr inbounds [256 x i32], ptr addrspace(3) @_ZZ10reduce_sumPU9MTLdeviceKjPU9MTLdevicejRU11MTLconstantKDv2_jjjjjjjjE7partial, i64 0, i64 %33
-  store i32 %21, ptr addrspace(3) %34, align 4, !tbaa !144
+  store i32 %21, ptr addrspace(3) %34, align 4, !tbaa !147
   br label %35
 
 35:                                               ; preds = %32, %19
@@ -170,16 +170,16 @@ define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-bu
   %44 = phi i32 [ %48, %42 ], [ 0, %37 ]
   %45 = zext i32 %43 to i64
   %46 = getelementptr inbounds [256 x i32], ptr addrspace(3) @_ZZ10reduce_sumPU9MTLdeviceKjPU9MTLdevicejRU11MTLconstantKDv2_jjjjjjjjE7partial, i64 0, i64 %45
-  %47 = load i32, ptr addrspace(3) %46, align 4, !tbaa !144
+  %47 = load i32, ptr addrspace(3) %46, align 4, !tbaa !147
   %48 = add i32 %47, %44
   %49 = add i32 %43, %9
   %50 = icmp ult i32 %49, %8
-  br i1 %50, label %42, label %39, !llvm.loop !170
+  br i1 %50, label %42, label %39, !llvm.loop !173
 
 51:                                               ; preds = %39
   %52 = zext i32 %3 to i64
   %53 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %52
-  store i32 %41, ptr addrspace(1) %53, align 4, !tbaa !144, !alias.scope !171, !noalias !172
+  store i32 %41, ptr addrspace(1) %53, align 4, !tbaa !147, !alias.scope !174, !noalias !175
   br label %54
 
 54:                                               ; preds = %51, %39, %35
@@ -189,7 +189,7 @@ define void @reduce_sum(ptr addrspace(1) noundef readonly captures(none) "air-bu
 ; Function Attrs: mustprogress nofree nosync nounwind memory(argmem: readwrite)
 define void @binomial3x3(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(2) noundef readonly align 8 captures(none) dereferenceable(8) "air-buffer-no-alias" %2, <2 x i32> noundef %3) local_unnamed_addr #4 {
   %5 = extractelement <2 x i32> %3, i64 1
-  %6 = load <2 x i32>, ptr addrspace(2) %2, align 8, !alias.scope !173, !noalias !176
+  %6 = load <2 x i32>, ptr addrspace(2) %2, align 8, !alias.scope !176, !noalias !179
   %7 = extractelement <2 x i32> %6, i64 1
   %8 = add nsw i32 %7, -1
   %9 = extractelement <2 x i32> %3, i64 0
@@ -203,7 +203,7 @@ define void @binomial3x3(ptr addrspace(1) noundef readonly captures(none) "air-b
   %15 = add i32 %14, %9
   %16 = zext i32 %15 to i64
   %17 = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i64 %16
-  store <4 x float> %13, ptr addrspace(1) %17, align 16, !tbaa !126, !alias.scope !179, !noalias !180
+  store <4 x float> %13, ptr addrspace(1) %17, align 16, !tbaa !129, !alias.scope !182, !noalias !183
   ret void
 
 18:                                               ; preds = %26, %4
@@ -219,7 +219,7 @@ define void @binomial3x3(ptr addrspace(1) noundef readonly captures(none) "air-b
 26:                                               ; preds = %29
   %27 = add nsw i32 %20, 1
   %28 = icmp eq i32 %27, 2
-  br i1 %28, label %12, label %18, !llvm.loop !181
+  br i1 %28, label %12, label %18, !llvm.loop !184
 
 29:                                               ; preds = %29, %18
   %30 = phi <4 x float> [ %19, %18 ], [ %44, %29 ]
@@ -232,25 +232,25 @@ define void @binomial3x3(ptr addrspace(1) noundef readonly captures(none) "air-b
   %37 = add i32 %33, %25
   %38 = zext i32 %37 to i64
   %39 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %38
-  %40 = load <4 x float>, ptr addrspace(1) %39, align 16, !tbaa !126, !alias.scope !182, !noalias !183
+  %40 = load <4 x float>, ptr addrspace(1) %39, align 16, !tbaa !129, !alias.scope !185, !noalias !186
   %41 = insertelement <4 x float> poison, float %36, i64 0
   %42 = shufflevector <4 x float> %41, <4 x float> poison, <4 x i32> zeroinitializer
   %43 = fmul fast <4 x float> %42, %40
   %44 = fadd fast <4 x float> %43, %30
   %45 = add nsw i32 %31, 1
   %46 = icmp eq i32 %45, 2
-  br i1 %46, label %26, label %29, !llvm.loop !184
+  br i1 %46, label %26, label %29, !llvm.loop !187
 }
 
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(argmem: readwrite)
 define void @lcg_step(ptr addrspace(1) noundef captures(none) "air-buffer-no-alias" %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, i32 noundef %2) local_unnamed_addr #0 {
   %4 = zext i32 %2 to i64
   %5 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %4
-  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !144, !alias.scope !185, !noalias !188
+  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !147, !alias.scope !188, !noalias !191
   %7 = mul i32 %6, 1664525
-  %8 = load i32, ptr addrspace(2) %1, align 4, !tbaa !144, !alias.scope !188, !noalias !185
+  %8 = load i32, ptr addrspace(2) %1, align 4, !tbaa !147, !alias.scope !191, !noalias !188
   %9 = add i32 %7, %8
-  store i32 %9, ptr addrspace(1) %5, align 4, !tbaa !144, !alias.scope !185, !noalias !188
+  store i32 %9, ptr addrspace(1) %5, align 4, !tbaa !147, !alias.scope !188, !noalias !191
   ret void
 }
 
@@ -261,7 +261,7 @@ define void @narrow_mix(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %6 = xor i16 %4, 23130
   %7 = trunc i32 %2 to i8
   %8 = lshr i32 %2, 3
-  %9 = load i32, ptr addrspace(2) %1, align 4, !tbaa !144, !alias.scope !190, !noalias !193
+  %9 = load i32, ptr addrspace(2) %1, align 4, !tbaa !147, !alias.scope !193, !noalias !196
   %10 = icmp eq i32 %9, 0
   br i1 %10, label %11, label %27
 
@@ -281,7 +281,7 @@ define void @narrow_mix(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %24 = xor i32 %21, %23
   %25 = zext i32 %2 to i64
   %26 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %25
-  store i32 %24, ptr addrspace(1) %26, align 4, !tbaa !144, !alias.scope !193, !noalias !190
+  store i32 %24, ptr addrspace(1) %26, align 4, !tbaa !147, !alias.scope !196, !noalias !193
   ret void
 
 27:                                               ; preds = %27, %3
@@ -306,20 +306,20 @@ define void @narrow_mix(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %46 = add nsw i32 %45, %42
   %47 = add nuw i32 %28, 1
   %48 = icmp eq i32 %47, %9
-  br i1 %48, label %11, label %27, !llvm.loop !195
+  br i1 %48, label %11, label %27, !llvm.loop !198
 }
 
 ; Function Attrs: mustprogress nounwind willreturn
 define void @texels_in(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(2) noundef readonly align 4 captures(none) dereferenceable(4) "air-buffer-no-alias" %1, ptr addrspace(1) %2, <2 x i32> noundef %3) local_unnamed_addr #6 {
   %5 = extractelement <2 x i32> %3, i64 1
-  %6 = load i32, ptr addrspace(2) %1, align 4, !tbaa !144, !alias.scope !196, !noalias !199
+  %6 = load i32, ptr addrspace(2) %1, align 4, !tbaa !147, !alias.scope !199, !noalias !202
   %7 = mul i32 %6, %5
   %8 = extractelement <2 x i32> %3, i64 0
   %9 = add i32 %7, %8
   %10 = zext i32 %9 to i64
   %11 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %10
-  %12 = load <4 x float>, ptr addrspace(1) %11, align 16, !tbaa !126, !alias.scope !202, !noalias !203
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %2, <2 x i32> %3, <4 x float> %12, i32 0, i32 2) #21, !alias.scope !204, !noalias !205
+  %12 = load <4 x float>, ptr addrspace(1) %11, align 16, !tbaa !129, !alias.scope !205, !noalias !206
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %2, <2 x i32> %3, <4 x float> %12, i32 0, i32 2) #21, !alias.scope !207, !noalias !208
   ret void
 }
 
@@ -329,30 +329,30 @@ define void @texels_out(ptr addrspace(1) readonly captures(none) %0, ptr addrspa
   %6 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) %5, <2 x i32> %3, <2 x i32> zeroinitializer, i32 0, i32 1) #23
   %7 = extractvalue { <4 x float>, i8 } %6, 0
   %8 = extractelement <2 x i32> %3, i64 1
-  %9 = load i32, ptr addrspace(2) %2, align 4, !tbaa !144, !alias.scope !206, !noalias !209
+  %9 = load i32, ptr addrspace(2) %2, align 4, !tbaa !147, !alias.scope !209, !noalias !212
   %10 = mul i32 %9, %8
   %11 = extractelement <2 x i32> %3, i64 0
   %12 = add i32 %10, %11
   %13 = zext i32 %12 to i64
   %14 = getelementptr inbounds <4 x float>, ptr addrspace(1) %1, i64 %13
-  store <4 x float> %7, ptr addrspace(1) %14, align 16, !tbaa !126, !alias.scope !212, !noalias !213
+  store <4 x float> %7, ptr addrspace(1) %14, align 16, !tbaa !129, !alias.scope !215, !noalias !216
   ret void
 }
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 define void @sample_down(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(2) readonly captures(none) %2, <2 x i32> noundef %3) local_unnamed_addr #8 {
-  %5 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !214, !noalias !217
+  %5 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !217, !noalias !220
   %6 = tail call fast float @air.convert.f.f32.u.i32(i32 %5) #19
   %7 = insertelement <2 x float> undef, float %6, i64 0
-  %8 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !214, !noalias !217
+  %8 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !217, !noalias !220
   %9 = tail call fast float @air.convert.f.f32.u.i32(i32 %8) #19
   %10 = insertelement <2 x float> %7, float %9, i64 1
   %11 = tail call fast <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32> %3) #19
   %12 = fadd fast <2 x float> %11, splat (float 5.000000e-01)
   %13 = fdiv fast <2 x float> %12, %10
-  %14 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) readonly captures(none) %2, <2 x float> %13, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #24, !alias.scope !219
+  %14 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) readonly captures(none) %2, <2 x float> %13, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #24, !alias.scope !222
   %15 = extractvalue { <4 x float>, i8 } %14, 0
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %3, <4 x float> %15, i32 0, i32 2) #21, !alias.scope !214, !noalias !217
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %3, <4 x float> %15, i32 0, i32 2) #21, !alias.scope !217, !noalias !220
   ret void
 }
 
@@ -361,10 +361,10 @@ declare <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32>) local_unnamed_addr #
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 define void @sample_up(ptr addrspace(1) %0, ptr addrspace(1) %1, <2 x i32> noundef %2) local_unnamed_addr #8 {
-  %4 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !220
+  %4 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !223
   %5 = tail call fast float @air.convert.f.f32.u.i32(i32 %4) #19
   %6 = insertelement <2 x float> undef, float %5, i64 0
-  %7 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !220
+  %7 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !223
   %8 = tail call fast float @air.convert.f.f32.u.i32(i32 %7) #19
   %9 = insertelement <2 x float> %6, float %8, i64 1
   %10 = tail call fast <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32> %2) #19
@@ -372,7 +372,33 @@ define void @sample_up(ptr addrspace(1) %0, ptr addrspace(1) %1, <2 x i32> nound
   %12 = fdiv fast <2 x float> %11, %9
   %13 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) readonly captures(none) @__air_sampler_state, <2 x float> %12, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #24
   %14 = extractvalue { <4 x float>, i8 } %13, 0
-  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %2, <4 x float> %14, i32 0, i32 2) #21, !alias.scope !220
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %2, <4 x float> %14, i32 0, i32 2) #21, !alias.scope !223
+  ret void
+}
+
+; Function Attrs: convergent mustprogress nounwind willreturn
+define void @sample_down_layers(ptr addrspace(1) %0, ptr addrspace(1) %1, ptr addrspace(2) readonly captures(none) %2, <3 x i32> noundef %3) local_unnamed_addr #8 {
+  %5 = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) readonly captures(none) %0, i32 0) #23, !alias.scope !226, !noalias !229
+  %6 = lshr i32 %5, 1
+  %7 = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) readonly captures(none) %1, i32 0) #23, !alias.scope !226, !noalias !229
+  %8 = tail call fast float @air.convert.f.f32.u.i32(i32 %7) #19
+  %9 = insertelement <2 x float> undef, float %8, i64 0
+  %10 = tail call fast float @air.convert.f.f32.u.i32(i32 %6) #19
+  %11 = insertelement <2 x float> %9, float %10, i64 1
+  %12 = shufflevector <3 x i32> %3, <3 x i32> poison, <2 x i32> <i32 0, i32 1>
+  %13 = tail call fast <2 x float> @air.convert.f.v2f32.u.v2i32(<2 x i32> %12) #19
+  %14 = fadd fast <2 x float> %13, splat (float 5.000000e-01)
+  %15 = fdiv fast <2 x float> %14, %11
+  %16 = tail call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readonly captures(none) %0, ptr addrspace(2) readonly captures(none) %2, <2 x float> %15, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.000000e+00, float 0.000000e+00, i32 0) #24, !alias.scope !231
+  %17 = extractvalue { <4 x float>, i8 } %16, 0
+  %18 = extractelement <3 x i32> %3, i64 0
+  %19 = insertelement <2 x i32> undef, i32 %18, i64 0
+  %20 = extractelement <3 x i32> %3, i64 1
+  %21 = extractelement <3 x i32> %3, i64 2
+  %22 = mul i32 %6, %21
+  %23 = add i32 %22, %20
+  %24 = insertelement <2 x i32> %19, i32 %23, i64 1
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) captures(none) %1, <2 x i32> %24, <4 x float> %17, i32 0, i32 2) #21, !alias.scope !226, !noalias !229
   ret void
 }
 
@@ -380,97 +406,97 @@ define void @sample_up(ptr addrspace(1) %0, ptr addrspace(1) %1, <2 x i32> nound
 define void @wide_bindings(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %2, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %3, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %4, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %5, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %6, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %7, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %8, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %9, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %10, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %11, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %12, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %13, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %14, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %15, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %16, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %17, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %18, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %19, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %20, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %21, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %22, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %23, i32 noundef %24) local_unnamed_addr #0 {
   %26 = zext i32 %24 to i64
   %27 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %26
-  %28 = load i32, ptr addrspace(1) %27, align 4, !tbaa !144, !alias.scope !223, !noalias !226
+  %28 = load i32, ptr addrspace(1) %27, align 4, !tbaa !147, !alias.scope !232, !noalias !235
   %29 = mul i32 %28, 3
   %30 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %26
-  %31 = load i32, ptr addrspace(1) %30, align 4, !tbaa !144, !alias.scope !250, !noalias !251
+  %31 = load i32, ptr addrspace(1) %30, align 4, !tbaa !147, !alias.scope !259, !noalias !260
   %32 = add i32 %29, %31
   %33 = mul i32 %32, 3
   %34 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %26
-  %35 = load i32, ptr addrspace(1) %34, align 4, !tbaa !144, !alias.scope !252, !noalias !253
+  %35 = load i32, ptr addrspace(1) %34, align 4, !tbaa !147, !alias.scope !261, !noalias !262
   %36 = add i32 %33, %35
   %37 = mul i32 %36, 3
   %38 = getelementptr inbounds i32, ptr addrspace(1) %3, i64 %26
-  %39 = load i32, ptr addrspace(1) %38, align 4, !tbaa !144, !alias.scope !254, !noalias !255
+  %39 = load i32, ptr addrspace(1) %38, align 4, !tbaa !147, !alias.scope !263, !noalias !264
   %40 = add i32 %37, %39
   %41 = mul i32 %40, 3
   %42 = getelementptr inbounds i32, ptr addrspace(1) %4, i64 %26
-  %43 = load i32, ptr addrspace(1) %42, align 4, !tbaa !144, !alias.scope !256, !noalias !257
+  %43 = load i32, ptr addrspace(1) %42, align 4, !tbaa !147, !alias.scope !265, !noalias !266
   %44 = add i32 %41, %43
   %45 = mul i32 %44, 3
   %46 = getelementptr inbounds i32, ptr addrspace(1) %5, i64 %26
-  %47 = load i32, ptr addrspace(1) %46, align 4, !tbaa !144, !alias.scope !258, !noalias !259
+  %47 = load i32, ptr addrspace(1) %46, align 4, !tbaa !147, !alias.scope !267, !noalias !268
   %48 = add i32 %45, %47
   %49 = mul i32 %48, 3
   %50 = getelementptr inbounds i32, ptr addrspace(1) %6, i64 %26
-  %51 = load i32, ptr addrspace(1) %50, align 4, !tbaa !144, !alias.scope !260, !noalias !261
+  %51 = load i32, ptr addrspace(1) %50, align 4, !tbaa !147, !alias.scope !269, !noalias !270
   %52 = add i32 %49, %51
   %53 = mul i32 %52, 3
   %54 = getelementptr inbounds i32, ptr addrspace(1) %7, i64 %26
-  %55 = load i32, ptr addrspace(1) %54, align 4, !tbaa !144, !alias.scope !262, !noalias !263
+  %55 = load i32, ptr addrspace(1) %54, align 4, !tbaa !147, !alias.scope !271, !noalias !272
   %56 = add i32 %53, %55
   %57 = mul i32 %56, 3
   %58 = getelementptr inbounds i32, ptr addrspace(1) %8, i64 %26
-  %59 = load i32, ptr addrspace(1) %58, align 4, !tbaa !144, !alias.scope !264, !noalias !265
+  %59 = load i32, ptr addrspace(1) %58, align 4, !tbaa !147, !alias.scope !273, !noalias !274
   %60 = add i32 %57, %59
   %61 = mul i32 %60, 3
   %62 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 %26
-  %63 = load i32, ptr addrspace(1) %62, align 4, !tbaa !144, !alias.scope !266, !noalias !267
+  %63 = load i32, ptr addrspace(1) %62, align 4, !tbaa !147, !alias.scope !275, !noalias !276
   %64 = add i32 %61, %63
   %65 = mul i32 %64, 3
   %66 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 %26
-  %67 = load i32, ptr addrspace(1) %66, align 4, !tbaa !144, !alias.scope !268, !noalias !269
+  %67 = load i32, ptr addrspace(1) %66, align 4, !tbaa !147, !alias.scope !277, !noalias !278
   %68 = add i32 %65, %67
   %69 = mul i32 %68, 3
   %70 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 %26
-  %71 = load i32, ptr addrspace(1) %70, align 4, !tbaa !144, !alias.scope !270, !noalias !271
+  %71 = load i32, ptr addrspace(1) %70, align 4, !tbaa !147, !alias.scope !279, !noalias !280
   %72 = add i32 %69, %71
   %73 = mul i32 %72, 3
   %74 = getelementptr inbounds i32, ptr addrspace(1) %12, i64 %26
-  %75 = load i32, ptr addrspace(1) %74, align 4, !tbaa !144, !alias.scope !272, !noalias !273
+  %75 = load i32, ptr addrspace(1) %74, align 4, !tbaa !147, !alias.scope !281, !noalias !282
   %76 = add i32 %73, %75
   %77 = mul i32 %76, 3
   %78 = getelementptr inbounds i32, ptr addrspace(1) %13, i64 %26
-  %79 = load i32, ptr addrspace(1) %78, align 4, !tbaa !144, !alias.scope !274, !noalias !275
+  %79 = load i32, ptr addrspace(1) %78, align 4, !tbaa !147, !alias.scope !283, !noalias !284
   %80 = add i32 %77, %79
   %81 = mul i32 %80, 3
   %82 = getelementptr inbounds i32, ptr addrspace(1) %14, i64 %26
-  %83 = load i32, ptr addrspace(1) %82, align 4, !tbaa !144, !alias.scope !276, !noalias !277
+  %83 = load i32, ptr addrspace(1) %82, align 4, !tbaa !147, !alias.scope !285, !noalias !286
   %84 = add i32 %81, %83
   %85 = mul i32 %84, 3
   %86 = getelementptr inbounds i32, ptr addrspace(1) %15, i64 %26
-  %87 = load i32, ptr addrspace(1) %86, align 4, !tbaa !144, !alias.scope !278, !noalias !279
+  %87 = load i32, ptr addrspace(1) %86, align 4, !tbaa !147, !alias.scope !287, !noalias !288
   %88 = add i32 %85, %87
   %89 = mul i32 %88, 3
   %90 = getelementptr inbounds i32, ptr addrspace(1) %16, i64 %26
-  %91 = load i32, ptr addrspace(1) %90, align 4, !tbaa !144, !alias.scope !280, !noalias !281
+  %91 = load i32, ptr addrspace(1) %90, align 4, !tbaa !147, !alias.scope !289, !noalias !290
   %92 = add i32 %89, %91
   %93 = mul i32 %92, 3
   %94 = getelementptr inbounds i32, ptr addrspace(1) %17, i64 %26
-  %95 = load i32, ptr addrspace(1) %94, align 4, !tbaa !144, !alias.scope !282, !noalias !283
+  %95 = load i32, ptr addrspace(1) %94, align 4, !tbaa !147, !alias.scope !291, !noalias !292
   %96 = add i32 %93, %95
   %97 = mul i32 %96, 3
   %98 = getelementptr inbounds i32, ptr addrspace(1) %18, i64 %26
-  %99 = load i32, ptr addrspace(1) %98, align 4, !tbaa !144, !alias.scope !284, !noalias !285
+  %99 = load i32, ptr addrspace(1) %98, align 4, !tbaa !147, !alias.scope !293, !noalias !294
   %100 = add i32 %97, %99
   %101 = mul i32 %100, 3
   %102 = getelementptr inbounds i32, ptr addrspace(1) %19, i64 %26
-  %103 = load i32, ptr addrspace(1) %102, align 4, !tbaa !144, !alias.scope !286, !noalias !287
+  %103 = load i32, ptr addrspace(1) %102, align 4, !tbaa !147, !alias.scope !295, !noalias !296
   %104 = add i32 %101, %103
   %105 = mul i32 %104, 3
   %106 = getelementptr inbounds i32, ptr addrspace(1) %20, i64 %26
-  %107 = load i32, ptr addrspace(1) %106, align 4, !tbaa !144, !alias.scope !288, !noalias !289
+  %107 = load i32, ptr addrspace(1) %106, align 4, !tbaa !147, !alias.scope !297, !noalias !298
   %108 = add i32 %105, %107
   %109 = mul i32 %108, 3
   %110 = getelementptr inbounds i32, ptr addrspace(1) %21, i64 %26
-  %111 = load i32, ptr addrspace(1) %110, align 4, !tbaa !144, !alias.scope !290, !noalias !291
+  %111 = load i32, ptr addrspace(1) %110, align 4, !tbaa !147, !alias.scope !299, !noalias !300
   %112 = add i32 %109, %111
   %113 = mul i32 %112, 3
   %114 = getelementptr inbounds i32, ptr addrspace(1) %22, i64 %26
-  %115 = load i32, ptr addrspace(1) %114, align 4, !tbaa !144, !alias.scope !292, !noalias !293
+  %115 = load i32, ptr addrspace(1) %114, align 4, !tbaa !147, !alias.scope !301, !noalias !302
   %116 = add i32 %113, %115
   %117 = getelementptr inbounds i32, ptr addrspace(1) %23, i64 %26
-  store i32 %116, ptr addrspace(1) %117, align 4, !tbaa !144, !alias.scope !294, !noalias !295
+  store i32 %116, ptr addrspace(1) %117, align 4, !tbaa !147, !alias.scope !303, !noalias !304
   ret void
 }
 
@@ -480,11 +506,11 @@ define void @wave_store(ptr addrspace(1) noundef writeonly captures(none) "air-b
   %5 = mul i32 %4, 5600
   %6 = extractelement <2 x i32> %2, i64 0
   %7 = add i32 %5, %6
-  %8 = load i32, ptr addrspace(2) %1, align 4, !tbaa !144, !alias.scope !296, !noalias !299
+  %8 = load i32, ptr addrspace(2) %1, align 4, !tbaa !147, !alias.scope !305, !noalias !308
   %9 = add i32 %8, %7
   %10 = zext i32 %7 to i64
   %11 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %10
-  store i32 %9, ptr addrspace(1) %11, align 4, !tbaa !144, !alias.scope !299, !noalias !296
+  store i32 %9, ptr addrspace(1) %11, align 4, !tbaa !147, !alias.scope !308, !noalias !305
   ret void
 }
 
@@ -498,15 +524,15 @@ define void @signed_zero_products(ptr addrspace(1) noundef writeonly captures(no
   %9 = fneg fast float %8
   %10 = insertelement <4 x float> <float poison, float poison, float 5.000000e-01, float -2.500000e-01>, float %5, i64 0
   %11 = insertelement <4 x float> %10, float %9, i64 1
-  %12 = load i32, ptr addrspace(2) %1, align 4, !tbaa !144, !alias.scope !301, !noalias !304
+  %12 = load i32, ptr addrspace(2) %1, align 4, !tbaa !147, !alias.scope !310, !noalias !313
   %13 = icmp eq i32 %12, 0
   br i1 %13, label %21, label %14
 
 14:                                               ; preds = %3
-  %15 = load float, ptr addrspace(2) @_ZL13positive_zero, align 4, !tbaa !151
+  %15 = load float, ptr addrspace(2) @_ZL13positive_zero, align 4, !tbaa !154
   %16 = insertelement <4 x float> poison, float %15, i64 0
   %17 = shufflevector <4 x float> %16, <4 x float> poison, <4 x i32> zeroinitializer
-  %18 = load float, ptr addrspace(2) @_ZL13negative_zero, align 4, !tbaa !151
+  %18 = load float, ptr addrspace(2) @_ZL13negative_zero, align 4, !tbaa !154
   %19 = insertelement <4 x float> poison, float %18, i64 0
   %20 = shufflevector <4 x float> %19, <4 x float> poison, <4 x i32> zeroinitializer
   br label %27
@@ -517,7 +543,7 @@ define void @signed_zero_products(ptr addrspace(1) noundef writeonly captures(no
   %24 = fadd <4 x float> %22, %23
   %25 = zext i32 %2 to i64
   %26 = getelementptr inbounds <4 x float>, ptr addrspace(1) %0, i64 %25
-  store <4 x float> %24, ptr addrspace(1) %26, align 16, !tbaa !126, !alias.scope !304, !noalias !301
+  store <4 x float> %24, ptr addrspace(1) %26, align 16, !tbaa !129, !alias.scope !313, !noalias !310
   ret void
 
 27:                                               ; preds = %27, %14
@@ -531,14 +557,14 @@ define void @signed_zero_products(ptr addrspace(1) noundef writeonly captures(no
   %35 = tail call fast <4 x float> @air.fma.v4f32(<4 x float> %28, <4 x float> splat (float 9.687500e-01), <4 x float> splat (float 3.125000e-02)) #19
   %36 = add nuw i32 %30, 1
   %37 = icmp eq i32 %36, %12
-  br i1 %37, label %21, label %27, !llvm.loop !306
+  br i1 %37, label %21, label %27, !llvm.loop !315
 }
 
 ; Function Attrs: convergent mustprogress nounwind
 define void @vote_loop(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, i32 noundef %2, i32 noundef %3) local_unnamed_addr #11 {
   %5 = zext i32 %2 to i64
   %6 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %5
-  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !144, !alias.scope !307, !noalias !310
+  %7 = load i32, ptr addrspace(1) %6, align 4, !tbaa !147, !alias.scope !316, !noalias !319
   %8 = icmp eq i32 %7, 0
   br i1 %8, label %9, label %14
 
@@ -547,7 +573,7 @@ define void @vote_loop(ptr addrspace(1) noundef readonly captures(none) "air-buf
   %11 = insertelement <2 x i32> undef, i32 %10, i64 0
   %12 = insertelement <2 x i32> %11, i32 %3, i64 1
   %13 = getelementptr inbounds <2 x i32>, ptr addrspace(1) %1, i64 %5
-  store <2 x i32> %12, ptr addrspace(1) %13, align 8, !tbaa !126, !alias.scope !310, !noalias !307
+  store <2 x i32> %12, ptr addrspace(1) %13, align 8, !tbaa !129, !alias.scope !319, !noalias !316
   ret void
 
 14:                                               ; preds = %14, %4
@@ -558,17 +584,17 @@ define void @vote_loop(ptr addrspace(1) noundef readonly captures(none) "air-buf
   tail call void @air.simdgroup.barrier(i32 0, i32 4) #20
   %19 = add nuw i32 %15, 1
   %20 = icmp eq i32 %19, %7
-  br i1 %20, label %9, label %14, !llvm.loop !312
+  br i1 %20, label %9, label %14, !llvm.loop !321
 }
 
 ; Function Attrs: convergent mustprogress nounwind
 define void @group_sums(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(3) noundef captures(none) "air-buffer-no-alias" %2, i32 noundef %3, i32 noundef %4, i32 noundef %5, i32 noundef %6) local_unnamed_addr #11 {
   %8 = zext i32 %6 to i64
   %9 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %8
-  %10 = load i32, ptr addrspace(1) %9, align 4, !tbaa !144, !alias.scope !313, !noalias !316
+  %10 = load i32, ptr addrspace(1) %9, align 4, !tbaa !147, !alias.scope !322, !noalias !325
   %11 = zext i32 %3 to i64
   %12 = getelementptr inbounds i32, ptr addrspace(3) %2, i64 %11
-  store i32 %10, ptr addrspace(3) %12, align 4, !tbaa !144, !alias.scope !319, !noalias !320
+  store i32 %10, ptr addrspace(3) %12, align 4, !tbaa !147, !alias.scope !328, !noalias !329
   tail call void @air.wg.barrier(i32 2, i32 1) #20
   %13 = icmp ult i32 %4, 2
   br i1 %13, label %14, label %16
@@ -587,22 +613,22 @@ define void @group_sums(ptr addrspace(1) noundef readonly captures(none) "air-bu
   %21 = add i32 %18, %3
   %22 = zext i32 %21 to i64
   %23 = getelementptr inbounds i32, ptr addrspace(3) %2, i64 %22
-  %24 = load i32, ptr addrspace(3) %23, align 4, !tbaa !144, !alias.scope !319, !noalias !320
-  %25 = load i32, ptr addrspace(3) %12, align 4, !tbaa !144, !alias.scope !319, !noalias !320
+  %24 = load i32, ptr addrspace(3) %23, align 4, !tbaa !147, !alias.scope !328, !noalias !329
+  %25 = load i32, ptr addrspace(3) %12, align 4, !tbaa !147, !alias.scope !328, !noalias !329
   %26 = add i32 %25, %24
-  store i32 %26, ptr addrspace(3) %12, align 4, !tbaa !144, !alias.scope !319, !noalias !320
+  store i32 %26, ptr addrspace(3) %12, align 4, !tbaa !147, !alias.scope !328, !noalias !329
   br label %27
 
 27:                                               ; preds = %20, %16
   tail call void @air.wg.barrier(i32 2, i32 1) #20
   %28 = icmp ult i32 %17, 4
-  br i1 %28, label %14, label %16, !llvm.loop !321
+  br i1 %28, label %14, label %16, !llvm.loop !330
 
 29:                                               ; preds = %14
   %30 = zext i32 %5 to i64
   %31 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %30
-  %32 = load i32, ptr addrspace(3) %2, align 4, !tbaa !144, !alias.scope !319, !noalias !320
-  store i32 %32, ptr addrspace(1) %31, align 4, !tbaa !144, !alias.scope !322, !noalias !323
+  %32 = load i32, ptr addrspace(3) %2, align 4, !tbaa !147, !alias.scope !328, !noalias !329
+  store i32 %32, ptr addrspace(1) %31, align 4, !tbaa !147, !alias.scope !331, !noalias !332
   br label %33
 
 33:                                               ; preds = %29, %14
@@ -616,7 +642,7 @@ define void @constant_reads(ptr addrspace(2) noundef readonly captures(none) "ai
 4:                                                ; preds = %7
   %5 = zext i32 %2 to i64
   %6 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %5
-  store i32 %23, ptr addrspace(1) %6, align 4, !tbaa !144, !alias.scope !324, !noalias !327
+  store i32 %23, ptr addrspace(1) %6, align 4, !tbaa !147, !alias.scope !333, !noalias !336
   ret void
 
 7:                                                ; preds = %7, %3
@@ -627,7 +653,7 @@ define void @constant_reads(ptr addrspace(2) noundef readonly captures(none) "ai
   %12 = and i32 %11, 4095
   %13 = zext i32 %12 to i64
   %14 = getelementptr inbounds <4 x i32>, ptr addrspace(2) %0, i64 %13
-  %15 = load <4 x i32>, ptr addrspace(2) %14, align 16, !tbaa !126, !alias.scope !327, !noalias !324
+  %15 = load <4 x i32>, ptr addrspace(2) %14, align 16, !tbaa !129, !alias.scope !336, !noalias !333
   %16 = extractelement <4 x i32> %15, i64 0
   %17 = xor i32 %16, %8
   %18 = extractelement <4 x i32> %15, i64 1
@@ -638,7 +664,7 @@ define void @constant_reads(ptr addrspace(2) noundef readonly captures(none) "ai
   %23 = add i32 %19, %22
   %24 = add nuw nsw i32 %9, 1
   %25 = icmp eq i32 %24, 64
-  br i1 %25, label %4, label %7, !llvm.loop !329
+  br i1 %25, label %4, label %7, !llvm.loop !338
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
@@ -682,10 +708,10 @@ declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1) readon
 
 ; Function Attrs: mustprogress nofree norecurse nosync nounwind willreturn memory(write)
 define internal void @_GLOBAL__sub_I__() #18 section "air.static_init" {
-  %1 = load float, ptr addrspace(2) @_Z13positive_zero.MTL_FC_INIT_0_f, align 4, !tbaa !151
-  store float %1, ptr addrspace(2) @_ZL13positive_zero, align 4, !tbaa !151
-  %2 = load float, ptr addrspace(2) @_Z13negative_zero.MTL_FC_INIT_1_f, align 4, !tbaa !151
-  store float %2, ptr addrspace(2) @_ZL13negative_zero, align 4, !tbaa !151
+  %1 = load float, ptr addrspace(2) @_Z13positive_zero.MTL_FC_INIT_0_f, align 4, !tbaa !154
+  store float %1, ptr addrspace(2) @_ZL13positive_zero, align 4, !tbaa !154
+  %2 = load float, ptr addrspace(2) @_Z13negative_zero.MTL_FC_INIT_1_f, align 4, !tbaa !154
+  store float %2, ptr addrspace(2) @_ZL13negative_zero, align 4, !tbaa !154
   ret void
 }
 
@@ -716,13 +742,13 @@ attributes #23 = { nounwind willreturn memory(argmem: read) }
 attributes #24 = { convergent nounwind willreturn memory(argmem: read) }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.kernel = !{!9, !15, !21, !25, !30, !40, !44, !48, !51, !55, !60, !65, !68, !95, !98, !101, !106, !114}
-!air.compile_options = !{!117, !118, !119}
-!air.function_constants = !{!120, !121}
-!air.sampler_states = !{!122}
-!llvm.ident = !{!123}
-!air.version = !{!124}
-!air.language_version = !{!125}
+!air.kernel = !{!9, !15, !21, !25, !30, !40, !44, !48, !51, !55, !60, !65, !68, !71, !98, !101, !104, !109, !117}
+!air.compile_options = !{!120, !121, !122}
+!air.function_constants = !{!123, !124}
+!air.sampler_states = !{!125}
+!llvm.ident = !{!126}
+!air.version = !{!127}
+!air.language_version = !{!128}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -792,265 +818,274 @@ attributes #24 = { convergent nounwind willreturn memory(argmem: read) }
 !65 = !{ptr @sample_up, !10, !66}
 !66 = !{!62, !63, !67}
 !67 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint2", !"air.arg_name", !"position"}
-!68 = !{ptr @wide_bindings, !10, !69}
-!69 = !{!70, !71, !72, !73, !74, !75, !76, !77, !78, !79, !80, !81, !82, !83, !84, !85, !86, !87, !88, !89, !90, !91, !92, !93, !94}
-!70 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b0"}
-!71 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b1"}
-!72 = !{i32 2, !"air.buffer", !"air.location_index", i32 2, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b2"}
-!73 = !{i32 3, !"air.buffer", !"air.location_index", i32 3, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b3"}
-!74 = !{i32 4, !"air.buffer", !"air.location_index", i32 4, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b4"}
-!75 = !{i32 5, !"air.buffer", !"air.location_index", i32 5, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b5"}
-!76 = !{i32 6, !"air.buffer", !"air.location_index", i32 6, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b6"}
-!77 = !{i32 7, !"air.buffer", !"air.location_index", i32 7, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b7"}
-!78 = !{i32 8, !"air.buffer", !"air.location_index", i32 8, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b8"}
-!79 = !{i32 9, !"air.buffer", !"air.location_index", i32 9, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b9"}
-!80 = !{i32 10, !"air.buffer", !"air.location_index", i32 10, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b10"}
-!81 = !{i32 11, !"air.buffer", !"air.location_index", i32 11, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b11"}
-!82 = !{i32 12, !"air.buffer", !"air.location_index", i32 12, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b12"}
-!83 = !{i32 13, !"air.buffer", !"air.location_index", i32 13, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b13"}
-!84 = !{i32 14, !"air.buffer", !"air.location_index", i32 14, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b14"}
-!85 = !{i32 15, !"air.buffer", !"air.location_index", i32 15, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b15"}
-!86 = !{i32 16, !"air.buffer", !"air.location_index", i32 16, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b16"}
-!87 = !{i32 17, !"air.buffer", !"air.location_index", i32 17, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b17"}
-!88 = !{i32 18, !"air.buffer", !"air.location_index", i32 18, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b18"}
-!89 = !{i32 19, !"air.buffer", !"air.location_index", i32 19, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b19"}
-!90 = !{i32 20, !"air.buffer", !"air.location_index", i32 20, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b20"}
-!91 = !{i32 21, !"air.buffer", !"air.location_index", i32 21, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b21"}
-!92 = !{i32 22, !"air.buffer", !"air.location_index", i32 22, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b22"}
-!93 = !{i32 23, !"air.buffer", !"air.location_index", i32 23, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"destination"}
-!94 = !{i32 24, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"index"}
-!95 = !{ptr @wave_store, !10, !96}
-!96 = !{!50, !97, !67}
-!97 = !{i32 1, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"base"}
-!98 = !{ptr @signed_zero_products, !10, !99}
-!99 = !{!100, !24, !14}
-!100 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"destination"}
-!101 = !{ptr @vote_loop, !10, !102}
-!102 = !{!103, !104, !14, !105}
-!103 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"steps"}
-!104 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"uint2", !"air.arg_name", !"destination"}
-!105 = !{i32 3, !"air.thread_index_in_simdgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"lane"}
-!106 = !{ptr @group_sums, !10, !107}
-!107 = !{!27, !108, !109, !110, !111, !112, !113}
-!108 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"sums"}
-!109 = !{i32 2, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 3, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"scratch"}
-!110 = !{i32 3, !"air.thread_position_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"at"}
-!111 = !{i32 4, !"air.threads_per_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"size"}
-!112 = !{i32 5, !"air.threadgroup_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"group"}
-!113 = !{i32 6, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"index"}
-!114 = !{ptr @constant_reads, !10, !115}
-!115 = !{!116, !28, !14}
-!116 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"uint4", !"air.arg_name", !"table"}
-!117 = !{!"air.compile.denorms_disable"}
-!118 = !{!"air.compile.fast_math_enable"}
-!119 = !{!"air.compile.framebuffer_fetch_enable"}
-!120 = !{ptr addrspace(2) @_Z13positive_zero.MTL_FC_INIT_0_f, !"float", !"positive_zero", i32 0}
-!121 = !{ptr addrspace(2) @_Z13negative_zero.MTL_FC_INIT_1_f, !"float", !"negative_zero", i32 1}
-!122 = !{!"air.sampler_state", ptr addrspace(2) @__air_sampler_state}
-!123 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!124 = !{i32 2, i32 8, i32 0}
-!125 = !{!"Metal", i32 4, i32 0, i32 0}
-!126 = !{!127, !127, i64 0}
-!127 = !{!"omnipotent char", !128, i64 0}
-!128 = !{!"Simple C++ TBAA"}
-!129 = !{!130}
-!130 = distinct !{!130, !131, !"air-alias-scope-arg(0)"}
-!131 = distinct !{!131, !"air-alias-scopes(copy_words)"}
+!68 = !{ptr @sample_down_layers, !10, !69}
+!69 = !{!62, !63, !64, !70}
+!70 = !{i32 3, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint3", !"air.arg_name", !"position"}
+!71 = !{ptr @wide_bindings, !10, !72}
+!72 = !{!73, !74, !75, !76, !77, !78, !79, !80, !81, !82, !83, !84, !85, !86, !87, !88, !89, !90, !91, !92, !93, !94, !95, !96, !97}
+!73 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b0"}
+!74 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b1"}
+!75 = !{i32 2, !"air.buffer", !"air.location_index", i32 2, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b2"}
+!76 = !{i32 3, !"air.buffer", !"air.location_index", i32 3, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b3"}
+!77 = !{i32 4, !"air.buffer", !"air.location_index", i32 4, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b4"}
+!78 = !{i32 5, !"air.buffer", !"air.location_index", i32 5, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b5"}
+!79 = !{i32 6, !"air.buffer", !"air.location_index", i32 6, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b6"}
+!80 = !{i32 7, !"air.buffer", !"air.location_index", i32 7, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b7"}
+!81 = !{i32 8, !"air.buffer", !"air.location_index", i32 8, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b8"}
+!82 = !{i32 9, !"air.buffer", !"air.location_index", i32 9, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b9"}
+!83 = !{i32 10, !"air.buffer", !"air.location_index", i32 10, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b10"}
+!84 = !{i32 11, !"air.buffer", !"air.location_index", i32 11, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b11"}
+!85 = !{i32 12, !"air.buffer", !"air.location_index", i32 12, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b12"}
+!86 = !{i32 13, !"air.buffer", !"air.location_index", i32 13, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b13"}
+!87 = !{i32 14, !"air.buffer", !"air.location_index", i32 14, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b14"}
+!88 = !{i32 15, !"air.buffer", !"air.location_index", i32 15, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b15"}
+!89 = !{i32 16, !"air.buffer", !"air.location_index", i32 16, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b16"}
+!90 = !{i32 17, !"air.buffer", !"air.location_index", i32 17, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b17"}
+!91 = !{i32 18, !"air.buffer", !"air.location_index", i32 18, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b18"}
+!92 = !{i32 19, !"air.buffer", !"air.location_index", i32 19, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b19"}
+!93 = !{i32 20, !"air.buffer", !"air.location_index", i32 20, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b20"}
+!94 = !{i32 21, !"air.buffer", !"air.location_index", i32 21, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b21"}
+!95 = !{i32 22, !"air.buffer", !"air.location_index", i32 22, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b22"}
+!96 = !{i32 23, !"air.buffer", !"air.location_index", i32 23, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"destination"}
+!97 = !{i32 24, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"index"}
+!98 = !{ptr @wave_store, !10, !99}
+!99 = !{!50, !100, !67}
+!100 = !{i32 1, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"base"}
+!101 = !{ptr @signed_zero_products, !10, !102}
+!102 = !{!103, !24, !14}
+!103 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"destination"}
+!104 = !{ptr @vote_loop, !10, !105}
+!105 = !{!106, !107, !14, !108}
+!106 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"steps"}
+!107 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"uint2", !"air.arg_name", !"destination"}
+!108 = !{i32 3, !"air.thread_index_in_simdgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"lane"}
+!109 = !{ptr @group_sums, !10, !110}
+!110 = !{!27, !111, !112, !113, !114, !115, !116}
+!111 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"sums"}
+!112 = !{i32 2, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 3, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"scratch"}
+!113 = !{i32 3, !"air.thread_position_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"at"}
+!114 = !{i32 4, !"air.threads_per_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"size"}
+!115 = !{i32 5, !"air.threadgroup_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"group"}
+!116 = !{i32 6, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"index"}
+!117 = !{ptr @constant_reads, !10, !118}
+!118 = !{!119, !28, !14}
+!119 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"uint4", !"air.arg_name", !"table"}
+!120 = !{!"air.compile.denorms_disable"}
+!121 = !{!"air.compile.fast_math_enable"}
+!122 = !{!"air.compile.framebuffer_fetch_enable"}
+!123 = !{ptr addrspace(2) @_Z13positive_zero.MTL_FC_INIT_0_f, !"float", !"positive_zero", i32 0}
+!124 = !{ptr addrspace(2) @_Z13negative_zero.MTL_FC_INIT_1_f, !"float", !"negative_zero", i32 1}
+!125 = !{!"air.sampler_state", ptr addrspace(2) @__air_sampler_state}
+!126 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!127 = !{i32 2, i32 8, i32 0}
+!128 = !{!"Metal", i32 4, i32 0, i32 0}
+!129 = !{!130, !130, i64 0}
+!130 = !{!"omnipotent char", !131, i64 0}
+!131 = !{!"Simple C++ TBAA"}
 !132 = !{!133}
-!133 = distinct !{!133, !131, !"air-alias-scope-arg(1)"}
-!134 = !{!135}
-!135 = distinct !{!135, !136, !"air-alias-scope-arg(0)"}
-!136 = distinct !{!136, !"air-alias-scopes(scale_offset)"}
-!137 = !{!138, !139}
-!138 = distinct !{!138, !136, !"air-alias-scope-arg(1)"}
-!139 = distinct !{!139, !136, !"air-alias-scope-arg(2)"}
-!140 = !{!139}
-!141 = !{!135, !138}
-!142 = !{!138}
-!143 = !{!135, !139}
-!144 = !{!145, !145, i64 0}
-!145 = !{!"int", !127, i64 0}
-!146 = !{!147}
-!147 = distinct !{!147, !148, !"air-alias-scope-arg(1)"}
-!148 = distinct !{!148, !"air-alias-scopes(fma_chains)"}
+!133 = distinct !{!133, !134, !"air-alias-scope-arg(0)"}
+!134 = distinct !{!134, !"air-alias-scopes(copy_words)"}
+!135 = !{!136}
+!136 = distinct !{!136, !134, !"air-alias-scope-arg(1)"}
+!137 = !{!138}
+!138 = distinct !{!138, !139, !"air-alias-scope-arg(0)"}
+!139 = distinct !{!139, !"air-alias-scopes(scale_offset)"}
+!140 = !{!141, !142}
+!141 = distinct !{!141, !139, !"air-alias-scope-arg(1)"}
+!142 = distinct !{!142, !139, !"air-alias-scope-arg(2)"}
+!143 = !{!142}
+!144 = !{!138, !141}
+!145 = !{!141}
+!146 = !{!138, !142}
+!147 = !{!148, !148, i64 0}
+!148 = !{!"int", !130, i64 0}
 !149 = !{!150}
-!150 = distinct !{!150, !148, !"air-alias-scope-arg(0)"}
-!151 = !{!152, !152, i64 0}
-!152 = !{!"float", !127, i64 0}
-!153 = distinct !{!153, !154}
-!154 = !{!"llvm.loop.mustprogress"}
-!155 = !{!156}
-!156 = distinct !{!156, !157, !"air-alias-scope-arg(0)"}
-!157 = distinct !{!157, !"air-alias-scopes(block_scan)"}
+!150 = distinct !{!150, !151, !"air-alias-scope-arg(1)"}
+!151 = distinct !{!151, !"air-alias-scopes(fma_chains)"}
+!152 = !{!153}
+!153 = distinct !{!153, !151, !"air-alias-scope-arg(0)"}
+!154 = !{!155, !155, i64 0}
+!155 = !{!"float", !130, i64 0}
+!156 = distinct !{!156, !157}
+!157 = !{!"llvm.loop.mustprogress"}
 !158 = !{!159}
-!159 = distinct !{!159, !157, !"air-alias-scope-arg(1)"}
-!160 = distinct !{!160, !154}
+!159 = distinct !{!159, !160, !"air-alias-scope-arg(0)"}
+!160 = distinct !{!160, !"air-alias-scopes(block_scan)"}
 !161 = !{!162}
-!162 = distinct !{!162, !163, !"air-alias-scope-arg(2)"}
-!163 = distinct !{!163, !"air-alias-scopes(reduce_sum)"}
-!164 = !{!165, !166}
-!165 = distinct !{!165, !163, !"air-alias-scope-arg(0)"}
-!166 = distinct !{!166, !163, !"air-alias-scope-arg(1)"}
-!167 = !{!165}
-!168 = !{!166, !162}
-!169 = distinct !{!169, !154}
-!170 = distinct !{!170, !154}
-!171 = !{!166}
-!172 = !{!165, !162}
-!173 = !{!174}
-!174 = distinct !{!174, !175, !"air-alias-scope-arg(2)"}
-!175 = distinct !{!175, !"air-alias-scopes(binomial3x3)"}
-!176 = !{!177, !178}
-!177 = distinct !{!177, !175, !"air-alias-scope-arg(0)"}
-!178 = distinct !{!178, !175, !"air-alias-scope-arg(1)"}
-!179 = !{!178}
-!180 = !{!177, !174}
-!181 = distinct !{!181, !154}
-!182 = !{!177}
-!183 = !{!178, !174}
-!184 = distinct !{!184, !154}
-!185 = !{!186}
-!186 = distinct !{!186, !187, !"air-alias-scope-arg(0)"}
-!187 = distinct !{!187, !"air-alias-scopes(lcg_step)"}
+!162 = distinct !{!162, !160, !"air-alias-scope-arg(1)"}
+!163 = distinct !{!163, !157}
+!164 = !{!165}
+!165 = distinct !{!165, !166, !"air-alias-scope-arg(2)"}
+!166 = distinct !{!166, !"air-alias-scopes(reduce_sum)"}
+!167 = !{!168, !169}
+!168 = distinct !{!168, !166, !"air-alias-scope-arg(0)"}
+!169 = distinct !{!169, !166, !"air-alias-scope-arg(1)"}
+!170 = !{!168}
+!171 = !{!169, !165}
+!172 = distinct !{!172, !157}
+!173 = distinct !{!173, !157}
+!174 = !{!169}
+!175 = !{!168, !165}
+!176 = !{!177}
+!177 = distinct !{!177, !178, !"air-alias-scope-arg(2)"}
+!178 = distinct !{!178, !"air-alias-scopes(binomial3x3)"}
+!179 = !{!180, !181}
+!180 = distinct !{!180, !178, !"air-alias-scope-arg(0)"}
+!181 = distinct !{!181, !178, !"air-alias-scope-arg(1)"}
+!182 = !{!181}
+!183 = !{!180, !177}
+!184 = distinct !{!184, !157}
+!185 = !{!180}
+!186 = !{!181, !177}
+!187 = distinct !{!187, !157}
 !188 = !{!189}
-!189 = distinct !{!189, !187, !"air-alias-scope-arg(1)"}
-!190 = !{!191}
-!191 = distinct !{!191, !192, !"air-alias-scope-arg(1)"}
-!192 = distinct !{!192, !"air-alias-scopes(narrow_mix)"}
+!189 = distinct !{!189, !190, !"air-alias-scope-arg(0)"}
+!190 = distinct !{!190, !"air-alias-scopes(lcg_step)"}
+!191 = !{!192}
+!192 = distinct !{!192, !190, !"air-alias-scope-arg(1)"}
 !193 = !{!194}
-!194 = distinct !{!194, !192, !"air-alias-scope-arg(0)"}
-!195 = distinct !{!195, !154}
+!194 = distinct !{!194, !195, !"air-alias-scope-arg(1)"}
+!195 = distinct !{!195, !"air-alias-scopes(narrow_mix)"}
 !196 = !{!197}
-!197 = distinct !{!197, !198, !"air-alias-scope-arg(1)"}
-!198 = distinct !{!198, !"air-alias-scopes(texels_in)"}
-!199 = !{!200, !201}
-!200 = distinct !{!200, !198, !"air-alias-scope-arg(0)"}
-!201 = distinct !{!201, !198, !"air-alias-scope-textures"}
-!202 = !{!200}
-!203 = !{!197, !201}
-!204 = !{!201}
-!205 = !{!200, !197}
-!206 = !{!207}
-!207 = distinct !{!207, !208, !"air-alias-scope-arg(2)"}
-!208 = distinct !{!208, !"air-alias-scopes(texels_out)"}
-!209 = !{!210, !211}
-!210 = distinct !{!210, !208, !"air-alias-scope-textures"}
-!211 = distinct !{!211, !208, !"air-alias-scope-arg(1)"}
-!212 = !{!211}
-!213 = !{!210, !207}
-!214 = !{!215}
-!215 = distinct !{!215, !216, !"air-alias-scope-textures"}
-!216 = distinct !{!216, !"air-alias-scopes(sample_down)"}
+!197 = distinct !{!197, !195, !"air-alias-scope-arg(0)"}
+!198 = distinct !{!198, !157}
+!199 = !{!200}
+!200 = distinct !{!200, !201, !"air-alias-scope-arg(1)"}
+!201 = distinct !{!201, !"air-alias-scopes(texels_in)"}
+!202 = !{!203, !204}
+!203 = distinct !{!203, !201, !"air-alias-scope-arg(0)"}
+!204 = distinct !{!204, !201, !"air-alias-scope-textures"}
+!205 = !{!203}
+!206 = !{!200, !204}
+!207 = !{!204}
+!208 = !{!203, !200}
+!209 = !{!210}
+!210 = distinct !{!210, !211, !"air-alias-scope-arg(2)"}
+!211 = distinct !{!211, !"air-alias-scopes(texels_out)"}
+!212 = !{!213, !214}
+!213 = distinct !{!213, !211, !"air-alias-scope-textures"}
+!214 = distinct !{!214, !211, !"air-alias-scope-arg(1)"}
+!215 = !{!214}
+!216 = !{!213, !210}
 !217 = !{!218}
-!218 = distinct !{!218, !216, !"air-alias-scope-samplers"}
-!219 = !{!215, !218}
+!218 = distinct !{!218, !219, !"air-alias-scope-textures"}
+!219 = distinct !{!219, !"air-alias-scopes(sample_down)"}
 !220 = !{!221}
-!221 = distinct !{!221, !222, !"air-alias-scope-textures"}
-!222 = distinct !{!222, !"air-alias-scopes(sample_up)"}
+!221 = distinct !{!221, !219, !"air-alias-scope-samplers"}
+!222 = !{!218, !221}
 !223 = !{!224}
-!224 = distinct !{!224, !225, !"air-alias-scope-arg(0)"}
-!225 = distinct !{!225, !"air-alias-scopes(wide_bindings)"}
-!226 = !{!227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!227 = distinct !{!227, !225, !"air-alias-scope-arg(1)"}
-!228 = distinct !{!228, !225, !"air-alias-scope-arg(2)"}
-!229 = distinct !{!229, !225, !"air-alias-scope-arg(3)"}
-!230 = distinct !{!230, !225, !"air-alias-scope-arg(4)"}
-!231 = distinct !{!231, !225, !"air-alias-scope-arg(5)"}
-!232 = distinct !{!232, !225, !"air-alias-scope-arg(6)"}
-!233 = distinct !{!233, !225, !"air-alias-scope-arg(7)"}
-!234 = distinct !{!234, !225, !"air-alias-scope-arg(8)"}
-!235 = distinct !{!235, !225, !"air-alias-scope-arg(9)"}
-!236 = distinct !{!236, !225, !"air-alias-scope-arg(10)"}
-!237 = distinct !{!237, !225, !"air-alias-scope-arg(11)"}
-!238 = distinct !{!238, !225, !"air-alias-scope-arg(12)"}
-!239 = distinct !{!239, !225, !"air-alias-scope-arg(13)"}
-!240 = distinct !{!240, !225, !"air-alias-scope-arg(14)"}
-!241 = distinct !{!241, !225, !"air-alias-scope-arg(15)"}
-!242 = distinct !{!242, !225, !"air-alias-scope-arg(16)"}
-!243 = distinct !{!243, !225, !"air-alias-scope-arg(17)"}
-!244 = distinct !{!244, !225, !"air-alias-scope-arg(18)"}
-!245 = distinct !{!245, !225, !"air-alias-scope-arg(19)"}
-!246 = distinct !{!246, !225, !"air-alias-scope-arg(20)"}
-!247 = distinct !{!247, !225, !"air-alias-scope-arg(21)"}
-!248 = distinct !{!248, !225, !"air-alias-scope-arg(22)"}
-!249 = distinct !{!249, !225, !"air-alias-scope-arg(23)"}
-!250 = !{!227}
-!251 = !{!224, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!252 = !{!228}
-!253 = !{!224, !227, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!254 = !{!229}
-!255 = !{!224, !227, !228, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!256 = !{!230}
-!257 = !{!224, !227, !228, !229, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!258 = !{!231}
-!259 = !{!224, !227, !228, !229, !230, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!260 = !{!232}
-!261 = !{!224, !227, !228, !229, !230, !231, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!262 = !{!233}
-!263 = !{!224, !227, !228, !229, !230, !231, !232, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!264 = !{!234}
-!265 = !{!224, !227, !228, !229, !230, !231, !232, !233, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!266 = !{!235}
-!267 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!268 = !{!236}
-!269 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!270 = !{!237}
-!271 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!272 = !{!238}
-!273 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!274 = !{!239}
-!275 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!276 = !{!240}
-!277 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !241, !242, !243, !244, !245, !246, !247, !248, !249}
-!278 = !{!241}
-!279 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !242, !243, !244, !245, !246, !247, !248, !249}
-!280 = !{!242}
-!281 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !243, !244, !245, !246, !247, !248, !249}
-!282 = !{!243}
-!283 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !244, !245, !246, !247, !248, !249}
-!284 = !{!244}
-!285 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !245, !246, !247, !248, !249}
-!286 = !{!245}
-!287 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !246, !247, !248, !249}
-!288 = !{!246}
-!289 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !247, !248, !249}
-!290 = !{!247}
-!291 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !248, !249}
-!292 = !{!248}
-!293 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !249}
-!294 = !{!249}
-!295 = !{!224, !227, !228, !229, !230, !231, !232, !233, !234, !235, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248}
-!296 = !{!297}
-!297 = distinct !{!297, !298, !"air-alias-scope-arg(1)"}
-!298 = distinct !{!298, !"air-alias-scopes(wave_store)"}
-!299 = !{!300}
-!300 = distinct !{!300, !298, !"air-alias-scope-arg(0)"}
-!301 = !{!302}
-!302 = distinct !{!302, !303, !"air-alias-scope-arg(1)"}
-!303 = distinct !{!303, !"air-alias-scopes(signed_zero_products)"}
-!304 = !{!305}
-!305 = distinct !{!305, !303, !"air-alias-scope-arg(0)"}
-!306 = distinct !{!306, !154}
-!307 = !{!308}
-!308 = distinct !{!308, !309, !"air-alias-scope-arg(0)"}
-!309 = distinct !{!309, !"air-alias-scopes(vote_loop)"}
+!224 = distinct !{!224, !225, !"air-alias-scope-textures"}
+!225 = distinct !{!225, !"air-alias-scopes(sample_up)"}
+!226 = !{!227}
+!227 = distinct !{!227, !228, !"air-alias-scope-textures"}
+!228 = distinct !{!228, !"air-alias-scopes(sample_down_layers)"}
+!229 = !{!230}
+!230 = distinct !{!230, !228, !"air-alias-scope-samplers"}
+!231 = !{!227, !230}
+!232 = !{!233}
+!233 = distinct !{!233, !234, !"air-alias-scope-arg(0)"}
+!234 = distinct !{!234, !"air-alias-scopes(wide_bindings)"}
+!235 = !{!236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!236 = distinct !{!236, !234, !"air-alias-scope-arg(1)"}
+!237 = distinct !{!237, !234, !"air-alias-scope-arg(2)"}
+!238 = distinct !{!238, !234, !"air-alias-scope-arg(3)"}
+!239 = distinct !{!239, !234, !"air-alias-scope-arg(4)"}
+!240 = distinct !{!240, !234, !"air-alias-scope-arg(5)"}
+!241 = distinct !{!241, !234, !"air-alias-scope-arg(6)"}
+!242 = distinct !{!242, !234, !"air-alias-scope-arg(7)"}
+!243 = distinct !{!243, !234, !"air-alias-scope-arg(8)"}
+!244 = distinct !{!244, !234, !"air-alias-scope-arg(9)"}
+!245 = distinct !{!245, !234, !"air-alias-scope-arg(10)"}
+!246 = distinct !{!246, !234, !"air-alias-scope-arg(11)"}
+!247 = distinct !{!247, !234, !"air-alias-scope-arg(12)"}
+!248 = distinct !{!248, !234, !"air-alias-scope-arg(13)"}
+!249 = distinct !{!249, !234, !"air-alias-scope-arg(14)"}
+!250 = distinct !{!250, !234, !"air-alias-scope-arg(15)"}
+!251 = distinct !{!251, !234, !"air-alias-scope-arg(16)"}
+!252 = distinct !{!252, !234, !"air-alias-scope-arg(17)"}
+!253 = distinct !{!253, !234, !"air-alias-scope-arg(18)"}
+!254 = distinct !{!254, !234, !"air-alias-scope-arg(19)"}
+!255 = distinct !{!255, !234, !"air-alias-scope-arg(20)"}
+!256 = distinct !{!256, !234, !"air-alias-scope-arg(21)"}
+!257 = distinct !{!257, !234, !"air-alias-scope-arg(22)"}
+!258 = distinct !{!258, !234, !"air-alias-scope-arg(23)"}
+!259 = !{!236}
+!260 = !{!233, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!261 = !{!237}
+!262 = !{!233, !236, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!263 = !{!238}
+!264 = !{!233, !236, !237, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!265 = !{!239}
+!266 = !{!233, !236, !237, !238, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!267 = !{!240}
+!268 = !{!233, !236, !237, !238, !239, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!269 = !{!241}
+!270 = !{!233, !236, !237, !238, !239, !240, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!271 = !{!242}
+!272 = !{!233, !236, !237, !238, !239, !240, !241, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!273 = !{!243}
+!274 = !{!233, !236, !237, !238, !239, !240, !241, !242, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!275 = !{!244}
+!276 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!277 = !{!245}
+!278 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!279 = !{!246}
+!280 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!281 = !{!247}
+!282 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!283 = !{!248}
+!284 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !249, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!285 = !{!249}
+!286 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !250, !251, !252, !253, !254, !255, !256, !257, !258}
+!287 = !{!250}
+!288 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !251, !252, !253, !254, !255, !256, !257, !258}
+!289 = !{!251}
+!290 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !252, !253, !254, !255, !256, !257, !258}
+!291 = !{!252}
+!292 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !253, !254, !255, !256, !257, !258}
+!293 = !{!253}
+!294 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !254, !255, !256, !257, !258}
+!295 = !{!254}
+!296 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !255, !256, !257, !258}
+!297 = !{!255}
+!298 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !256, !257, !258}
+!299 = !{!256}
+!300 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !257, !258}
+!301 = !{!257}
+!302 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !258}
+!303 = !{!258}
+!304 = !{!233, !236, !237, !238, !239, !240, !241, !242, !243, !244, !245, !246, !247, !248, !249, !250, !251, !252, !253, !254, !255, !256, !257}
+!305 = !{!306}
+!306 = distinct !{!306, !307, !"air-alias-scope-arg(1)"}
+!307 = distinct !{!307, !"air-alias-scopes(wave_store)"}
+!308 = !{!309}
+!309 = distinct !{!309, !307, !"air-alias-scope-arg(0)"}
 !310 = !{!311}
-!311 = distinct !{!311, !309, !"air-alias-scope-arg(1)"}
-!312 = distinct !{!312, !154}
+!311 = distinct !{!311, !312, !"air-alias-scope-arg(1)"}
+!312 = distinct !{!312, !"air-alias-scopes(signed_zero_products)"}
 !313 = !{!314}
-!314 = distinct !{!314, !315, !"air-alias-scope-arg(0)"}
-!315 = distinct !{!315, !"air-alias-scopes(group_sums)"}
-!316 = !{!317, !318}
-!317 = distinct !{!317, !315, !"air-alias-scope-arg(1)"}
-!318 = distinct !{!318, !315, !"air-alias-scope-arg(2)"}
-!319 = !{!318}
-!320 = !{!314, !317}
-!321 = distinct !{!321, !154}
-!322 = !{!317}
-!323 = !{!314, !318}
-!324 = !{!325}
-!325 = distinct !{!325, !326, !"air-alias-scope-arg(1)"}
-!326 = distinct !{!326, !"air-alias-scopes(constant_reads)"}
-!327 = !{!328}
-!328 = distinct !{!328, !326, !"air-alias-scope-arg(0)"}
-!329 = distinct !{!329, !154}
+!314 = distinct !{!314, !312, !"air-alias-scope-arg(0)"}
+!315 = distinct !{!315, !157}
+!316 = !{!317}
+!317 = distinct !{!317, !318, !"air-alias-scope-arg(0)"}
+!318 = distinct !{!318, !"air-alias-scopes(vote_loop)"}
+!319 = !{!320}
+!320 = distinct !{!320, !318, !"air-alias-scope-arg(1)"}
+!321 = distinct !{!321, !157}
+!322 = !{!323}
+!323 = distinct !{!323, !324, !"air-alias-scope-arg(0)"}
+!324 = distinct !{!324, !"air-alias-scopes(group_sums)"}
+!325 = !{!326, !327}
+!326 = distinct !{!326, !324, !"air-alias-scope-arg(1)"}
+!327 = distinct !{!327, !324, !"air-alias-scope-arg(2)"}
+!328 = !{!327}
+!329 = !{!323, !326}
+!330 = distinct !{!330, !157}
+!331 = !{!326}
+!332 = !{!323, !327}
+!333 = !{!334}
+!334 = distinct !{!334, !335, !"air-alias-scope-arg(1)"}
+!335 = distinct !{!335, !"air-alias-scopes(constant_reads)"}
+!336 = !{!337}
+!337 = distinct !{!337, !335, !"air-alias-scope-arg(0)"}
+!338 = distinct !{!338, !157}

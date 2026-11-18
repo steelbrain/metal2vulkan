@@ -21,7 +21,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 25] = [
+pub const WORKLOADS: [Workload; 31] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -89,6 +89,30 @@ pub const WORKLOADS: [Workload; 25] = [
     Workload {
         name: "constexpr_sampling",
         plan: constexpr_sampling,
+    },
+    Workload {
+        name: "sampling_deep_152x152x6",
+        plan: sampling_deep_152x152x6,
+    },
+    Workload {
+        name: "sampling_deep_40x40x90",
+        plan: sampling_deep_40x40x90,
+    },
+    Workload {
+        name: "sampling_deep_64x64x16",
+        plan: sampling_deep_64x64x16,
+    },
+    Workload {
+        name: "sampling_deep_512x512x16",
+        plan: sampling_deep_512x512x16,
+    },
+    Workload {
+        name: "sampling_deep_4x16x252",
+        plan: sampling_deep_4x16x252,
+    },
+    Workload {
+        name: "sampling_deep_1x1x192",
+        plan: sampling_deep_1x1x192,
     },
     Workload {
         name: "wide_bindings",
@@ -1205,6 +1229,77 @@ fn constexpr_sampling() -> Plan {
         (double, expected),
         None,
     )
+}
+
+/// Sampling over a grid more than one deep (`sample_down_layers`, through a runtime sampler,
+/// linear, clamped to the edge): a grid `x` by `y` by `z` in threadgroups of 8x8x4, each layer a
+/// 2x downsample of a `2t` by `2t` `RGBA16Float` texture into its own `t` by `t` rows of the
+/// destination (`t` the larger of `x` and `y` rounded up to whole 16x16 tiles, as the harness's
+/// texel kernels need), one texture write a thread: each texel in the grid the mean of its four
+/// source texels, the rest left zero. The shapes are those a recorded stream's image-only kernels
+/// ran deep grids at, thin and ragged ones among them.
+fn sampling_deep(name: &str, [x, y, z]: [u32; 3]) -> Plan {
+    let t = x.max(y).next_multiple_of(16);
+    let side = 2 * t;
+    let source = sixteenths(18, side);
+    let at = |i: u32, j: u32, c: u32| source[(4 * (j * side + i) + c) as usize];
+    let layer: Vec<f32> = (0..t)
+        .flat_map(|j| (0..t).flat_map(move |i| (0..4).map(move |c| (i, j, c))))
+        .map(|(i, j, c)| match i < x && j < y {
+            true => {
+                let (i, j) = (2 * i, 2 * j);
+                (at(i, j, c) + at(i + 1, j, c) + at(i, j + 1, c) + at(i + 1, j + 1, c)) / 4.0
+            }
+            false => 0.0,
+        })
+        .collect();
+    let expected = (0..z).flat_map(|_| layer.iter().copied()).collect();
+    let mut plan = sampling_plan(
+        name,
+        "sample_down_layers",
+        (16, Vec::new()),
+        (16, expected),
+        Some(Filter::Linear),
+    );
+    plan.textures = vec![
+        TexturePlan::rgba16_float(side, side, Some(source)),
+        TexturePlan::rgba16_float(t, t * z, Some(vec![0.0; 4 * (t * t * z) as usize])),
+    ];
+    plan.dispatches[0].grid = Grid::Threads {
+        threads: [u64::from(x), u64::from(y), u64::from(z)],
+        per_group: [8, 8, 4],
+    };
+    plan
+}
+
+/// [`sampling_deep`] over a 152x152x6 grid.
+fn sampling_deep_152x152x6() -> Plan {
+    sampling_deep("sampling_deep_152x152x6", [152, 152, 6])
+}
+
+/// [`sampling_deep`] over a 40x40x90 grid.
+fn sampling_deep_40x40x90() -> Plan {
+    sampling_deep("sampling_deep_40x40x90", [40, 40, 90])
+}
+
+/// [`sampling_deep`] over a 64x64x16 grid.
+fn sampling_deep_64x64x16() -> Plan {
+    sampling_deep("sampling_deep_64x64x16", [64, 64, 16])
+}
+
+/// [`sampling_deep`] over a 512x512x16 grid.
+fn sampling_deep_512x512x16() -> Plan {
+    sampling_deep("sampling_deep_512x512x16", [512, 512, 16])
+}
+
+/// [`sampling_deep`] over a 4x16x252 grid.
+fn sampling_deep_4x16x252() -> Plan {
+    sampling_deep("sampling_deep_4x16x252", [4, 16, 252])
+}
+
+/// [`sampling_deep`] over a 1x1x192 grid.
+fn sampling_deep_1x1x192() -> Plan {
+    sampling_deep("sampling_deep_1x1x192", [1, 1, 192])
 }
 
 /// A texture read out to a buffer: each thread of a 2048x2048 grid, in threadgroups of 16x16,

@@ -1,9 +1,10 @@
 // Owned fixture: the kernels of the harness's authored workloads (crates/metal2vulkan-harness), each
 // standing for a class of compute work: bandwidth-bound, ALU-bound, threadgroup memory with
 // barriers, SIMD reductions, 2D image-like indexing, many tiny dispatches in a chain, narrow
-// integer arithmetic, sampling through a runtime sampler and through a constexpr one, products
-// by a constant zero of either sign, many buffers bound for each of many dispatches, many
-// one-wave threadgroups that each do almost nothing, and reads of a table of constants. Written
+// integer arithmetic, sampling through a runtime sampler, through a constexpr one and over a grid
+// more than one deep, products by a constant zero of either sign, many buffers bound for each of
+// many dispatches, many one-wave threadgroups that each do almost nothing, and reads of a table
+// of constants. Written
 // from scratch for it; `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir harness` compiles
 // it. The harness holds a CPU reference of every result. No translator sweep reads this directory.
 #include <metal_stdlib>
@@ -179,6 +180,19 @@ kernel void sample_up(texture2d<float, access::sample> source [[texture(0)]],
     constexpr sampler filter(coord::normalized, address::clamp_to_edge, filter::linear);
     float2 size = float2(destination.get_width(), destination.get_height());
     destination.write(source.sample(filter, (float2(position) + 0.5f) / size), position);
+}
+
+// Sampling over a grid more than one deep: a 2x downsample of the source into each layer's own
+// rows of the destination, layer `z` at row `z` times the source's height over 2, so every thread
+// writes a texel of its own; one texture write a thread.
+kernel void sample_down_layers(texture2d<float, access::sample> source [[texture(0)]],
+                               texture2d<float, access::write> destination [[texture(1)]],
+                               sampler filter [[sampler(0)]],
+                               uint3 position [[thread_position_in_grid]]) {
+    uint height = source.get_height() / 2;
+    float2 size = float2(destination.get_width(), height);
+    float4 texel = source.sample(filter, (float2(position.xy) + 0.5f) / size);
+    destination.write(texel, uint2(position.x, position.y + position.z * height));
 }
 
 // Many buffers bound for one kernel: each thread folds one word of each of 23 inputs into the
