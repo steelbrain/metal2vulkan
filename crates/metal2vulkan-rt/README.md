@@ -1479,6 +1479,15 @@ or does not check is rebuilt from the generations' names, with young counted ful
   target faster after a barrier (4,836.4 µs against 5,429.4 µs) and at the first read of a pass
   that loads it (3,849.6 µs against 4,218.2 µs), and within 1% at the first read of a pass that
   clears it (4,200.8 µs against 4,159.4 µs; at 1920 × 1080, 1,095.3 µs against 1,109.1 µs).
+- On the UHD 630, a pass that loads its `BGRA8Unorm` target and samples another texture of the
+  same size at each pixel is slower than the old runtime's at 1920 × 1080 (harness, release, GPU
+  p50 a pass, four rounds): 688.6 µs against 617.8 µs where that draw is the pass's first, and
+  923.5 µs against 831.8 µs after a plain draw. The cause is not known. It is not the target's
+  move out of shader-read-only and back: with a target of `RenderTarget` usage alone, which no
+  barrier moves, the pass takes 700.7 µs and 911.6 µs. The sampled texture, like a shadow, is
+  read in the shader-read-only layout and has sampled and transfer usage only (no storage, no
+  mutable format, no feedback usage). The same pass that clears its target is faster here
+  (666.9 µs against 870.7 µs).
 
 ## One path for every device
 
