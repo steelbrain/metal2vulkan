@@ -299,4 +299,119 @@ mod on_device {
             }
         });
     }
+
+    /// An image-only kernel that does not observe its threadgroup partition (`sample_down`) runs a
+    /// grid one deep in 16x16x1 workgroups on the one `VkPipeline` its state made, testing its
+    /// edge: over a grid of 20 by 12, ragged in both, a 32x32 destination holds the sample in the
+    /// grid's texels and nothing past them, with no first-use wait. A grid two deep runs in its
+    /// tiles on a `VkPipeline` that folds the tile, made at that dispatch: one wait, the same
+    /// texels.
+    #[test]
+    fn every_device_runs_an_image_only_kernel_in_square_workgroups() {
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("square", |name, _, device| {
+            let counters = device.counters();
+            for (class, first) in [
+                (IndexClass::Texture, 4096),
+                (IndexClass::StorageTexture, 1),
+                (IndexClass::Sampler, 1),
+            ] {
+                device
+                    .grant_indices(class, first, 4)
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            let read = TextureUsage::SHADER_READ;
+            let source = texture(&device, SIDE, read, 4096);
+            const OUT: u32 = 32;
+            let output = texture(&device, OUT, read | TextureUsage::SHADER_WRITE, 1);
+            // One texel everywhere, so every linear sample is it exactly.
+            let texel = [8.0, 4.0, 12.0, 16.0].map(|k: f32| k / 16.0);
+            let fill = |texture: &Texture, side: u32, value: [f32; 4]| {
+                let bytes: Vec<u8> = (0..side * side)
+                    .flat_map(|_| value)
+                    .flat_map(|v| half(v).to_le_bytes())
+                    .collect();
+                let whole = Region {
+                    origin: [0; 3],
+                    size: [side, side, 1],
+                };
+                texture
+                    .replace_region(
+                        whole,
+                        0,
+                        0,
+                        &bytes,
+                        u64::from(side * 8),
+                        u64::from(side * side * 8),
+                    )
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            };
+            fill(&source, SIDE, texel);
+            fill(&output, OUT, [0.0; 4]);
+            let mut linear = SamplerDescriptor::new();
+            linear.min_filter = SamplerMinMagFilter::Linear;
+            linear.mag_filter = SamplerMinMagFilter::Linear;
+            let sampler = device
+                .new_sampler_state(&linear, 1)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let made = counters.metrics();
+            let down = state(
+                &device,
+                &library,
+                "sample_down",
+                |s| matches!(s, [NumberedSampler::Write]),
+                vec![0],
+            )
+            .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"));
+            let created = counters.metrics();
+            assert_eq!(
+                created.pipelines_created - made.pipelines_created,
+                1,
+                "{name}: the square workgroups' pipeline, made with the state"
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let grid = [20, 12];
+            for (depth, waits) in [(1, 0), (2, 1)] {
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&down).expect("down");
+                encoder.set_texture(Some(&source), 0).expect("source");
+                encoder.set_texture(Some(&output), 1).expect("output");
+                encoder
+                    .set_sampler_state(Some(&sampler), 0)
+                    .expect("sampler");
+                encoder
+                    .dispatch_threads([grid[0], grid[1], depth], [4, 4, 1])
+                    .unwrap_or_else(|error| panic!("{name}: {depth} deep: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert!(command_buffer.error().is_none(), "{name}: {depth} deep");
+                let after = counters.metrics();
+                assert_eq!(
+                    after.first_use_waits - before.first_use_waits,
+                    waits,
+                    "{name}: {depth} deep"
+                );
+                let got = texels(&output, OUT);
+                for y in 0..OUT {
+                    for x in 0..OUT {
+                        let at = (4 * (y * OUT + x)) as usize;
+                        let inside = x < grid[0] && y < grid[1];
+                        let want = if inside { texel } else { [0.0; 4] };
+                        assert!(
+                            near(&got[at..at + 4], &want),
+                            "{name}: {depth} deep: texel {x}, {y}: {:?}",
+                            &got[at..at + 4]
+                        );
+                    }
+                }
+            }
+        });
+    }
 }

@@ -780,16 +780,27 @@ that touch blocks first.
 - Every kernel is lowered first as its partial-threadgroups variant. A kernel that does not
   observe its threadgroup partition (it holds no threadgroup memory, barrier, fence or atomic of
   threadgroup or SIMD-group scope, SIMD-group or quad function, and reads no builtin of the
-  partition; the translator decides from its AIR) keeps that module alone, which runs its grid in
-  tiles: every direct dispatch runs in workgroups of 256 threads on one `VkPipeline`, made with the
-  state, each workgroup one tile of the grid. The translator's `pipeline::grid_tile` picks the
-  tile from the grid's extents alone: power-of-two sides whose product is 256, launching the fewest
-  threads past the grid, then with the fewest tiles partly past it, then the shallowest, then
-  (where the grid has two rows or more) the height nearest 2, then the widest. Each region carries
-  the tile, and a thread's position is the tile's origin plus its index masked and shifted by the
-  tile's sides, with no division. Where the tile does not divide the grid, an invocation past the
-  grid returns before the kernel's body. An indirect
-  dispatch runs at its own threadgroup size. A kernel that observes its partition is lowered a
+  partition; the translator decides from its AIR) keeps that module alone, which runs a direct
+  dispatch in workgroups of the runtime's, whatever its threadgroup size:
+  - a grid one deep of a kernel that is image-only (`CompiledFunction::is_image_only`: it samples,
+    gathers or reads a texture, and loads, stores and updates atomically nothing through a
+    `device` pointer; `constant` loads and texture writes are allowed) in workgroups of 16 by 16
+    by 1 on one `VkPipeline`, made with the state, each thread's position the workgroup's origin
+    plus its place in it, with no decode;
+  - a grid one deep of any other such kernel in tiles: workgroups of 256 threads on one
+    `VkPipeline`, made with the state, each one tile of the grid, which its region carries. A
+    thread's position is the tile's origin plus its index masked and shifted by the tile's sides,
+    with no division;
+  - a grid more than one deep of either in tiles on a `VkPipeline` that folds the tile, so the
+    driver folds the masks and shifts when it specializes it: one per tile, made at the kernel's
+    first dispatch at that tile, which waits for it, and kept with the kernel's other pipelines.
+
+  The translator's `pipeline::grid_tile` picks the tile from the grid's extents alone:
+  power-of-two sides whose product is 256, launching the fewest threads past the grid, then with
+  the fewest tiles partly past it, then the shallowest, then (where the grid has two rows or more)
+  the height nearest 2, then the widest. Where the workgroups do not divide the grid, an
+  invocation past the grid returns before the kernel's body. An indirect dispatch runs at its own
+  threadgroup size. A kernel that observes its partition is lowered a
   second time, plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
   module at their own size, and a `dispatch_threads` grid that is not a whole number of
   threadgroups runs the variant.
@@ -806,9 +817,9 @@ that touch blocks first.
 - The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
   threadgroup (0, or a split piece's), the threadgroup size packed as
   `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's threads per grid; an indirect dispatch pushes a
-  zero grid, and its kernel takes the grid from its threadgroup count. The packed size is always
-  the pipeline's own workgroup size, so the kernel's `MultiRegion` constant stays at its default,
-  0, and the kernel takes the size from its workgroup size, with no decode.
+  zero grid, and its kernel takes the grid from its threadgroup count. Outside the tiles the packed
+  size is the pipeline's own workgroup size, so the kernel's `MultiRegion` constant stays at its
+  default, 0, and the kernel takes the size from its workgroup size, with no decode.
 - A compiled kernel makes one `VkPipeline` per module, threadgroup size and threadgroup memory
   lengths, on the encoding thread that first dispatches any of its states with them, which waits
   for it. Nothing the runtime records

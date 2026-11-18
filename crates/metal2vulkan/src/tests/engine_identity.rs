@@ -1794,11 +1794,10 @@ fn an_oblivious_kernels_tiles_run_at_a_chosen_size_and_fold_their_tile() {
 }
 
 /// Whether a kernel is image-only (`KernelFacts::image_only`), on the harness's kernels
-/// (`fixtures/public/harness/workloads.ll`): a kernel that samples one texture into another
-/// through a runtime sampler (`sample_down`), and one that reads one texture, writes another
-/// and loads its extent from `constant` memory (`sample_up_fetch_sized`), are; one that reads a
-/// texture into a `device` buffer (`texels_out`) and one that writes a texture from one
-/// (`texels_in`) are not.
+/// (`fixtures/public/harness/workloads.ll`): one that samples a texture into another through a
+/// runtime sampler (`sample_down`) and one that does through a constexpr sampler (`sample_up`)
+/// are; one that reads a texture into a `device` buffer (`texels_out`) and one that writes a
+/// texture from one (`texels_in`) are not.
 #[test]
 fn a_kernel_whose_memory_work_is_images_alone_is_image_only() {
     let Some(bc) = workloads() else {
@@ -1807,7 +1806,7 @@ fn a_kernel_whose_memory_work_is_images_alone_is_image_only() {
     let p = profile("lavapipe", identity()).unwrap_or_else(|e| panic!("{e}"));
     for (entry, want) in [
         ("sample_down", true),
-        ("sample_up_fetch_sized", true),
+        ("sample_up", true),
         ("texels_out", false),
         ("texels_in", false),
     ] {

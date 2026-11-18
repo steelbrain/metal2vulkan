@@ -3,9 +3,12 @@
 //! The translator lowers every kernel first as its partial-threadgroups variant, through one
 //! decode and specialization of its entry. A kernel that does not observe its threadgroup
 //! partition keeps that module alone, which runs its grid in tiles (`RuntimeFact::GridTiles`):
-//! every direct dispatch runs in workgroups of 256 threads, each one tile of the grid whose sides
-//! the translator's rule picks from the grid's extents (`grid_tile`) and its region carries, on
-//! one `VkPipeline` made with the state; an indirect dispatch runs at its own threadgroup size. A
+//! a direct dispatch of a grid one deep runs in workgroups of 256 threads, each one tile of the
+//! grid whose sides the translator's rule picks from the grid's extents (`grid_tile`) and its
+//! region carries, on one `VkPipeline` made with the state, or, for an image-only kernel
+//! (`CompiledFunction::is_image_only`), in workgroups of 16x16x1 on that one; a grid more than one
+//! deep runs in its tiles on a `VkPipeline` that folds the tile, one per tile, made at its first
+//! dispatch; an indirect dispatch runs at its own threadgroup size. A
 //! kernel that observes its partition is lowered
 //! once more, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that
 //! module at their own threadgroup size, and a `dispatchThreads` grid that is not a whole number
@@ -425,7 +428,8 @@ impl crate::Device {
     /// content the device does not hold, the translator compiles the kernel on the calling
     /// thread, which waits for it, within the translator's 20-second budget per lowering: once
     /// for a kernel that does not observe its threadgroup partition, whose 256-wide tile's
-    /// `VkPipeline` is made here too, and twice for one that does (its partial-threadgroups
+    /// `VkPipeline`, or an image-only kernel's 16x16 workgroups' one, is made here too, and
+    /// twice for one that does (its partial-threadgroups
     /// variant and its plain module). Where the device has a cache directory
     /// ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made before is read from it
     /// in place of lowering again, and every `VkPipeline` is made from its file there where it
