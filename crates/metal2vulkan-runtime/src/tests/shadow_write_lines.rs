@@ -482,6 +482,9 @@ fn a_copy_back_splices_by_the_device_s_check() {
             println!("{TEST}: {} lists no dma-buf route: not run", checked.name());
             return;
         }
+        if refuses_shared_dma_bufs(TEST, &checked) {
+            return;
+        }
         assert!(
             checked.settle_in_place_checks(CHECK_WAIT),
             "{TEST}: the device's check"
