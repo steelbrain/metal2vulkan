@@ -6,6 +6,7 @@ The job output below is nextest's own layout (0.9.140 and 0.9.151 print it alike
 the summary, then each test's captured output, indented, after a header naming the test.
 """
 
+import subprocess
 import unittest
 from unittest import mock
 
@@ -291,6 +292,58 @@ class HarnessBudgetTests(unittest.TestCase):
             # Recorded once each, it is judged.
             leg = results.parse_job(job(("10de:1e87", "harness", 0, once)))["10de:1e87"]
             self.assertEqual(results.harness_budget("10de:1e87", leg), ([], []))
+
+    def test_a_row_over_its_budget_is_judged_by_the_median_of_its_re_timed_pairs(self):
+        one = {"harness-old/vote_loop": 419.3, "harness-new/vote_loop": 470.8}
+        past = "harness budget vote_loop: new 470.8 us over old 419.3 us is 1.123, past 1.03"
+
+        def pairs(*news):
+            out = dict(one)
+            for pair, new in enumerate(news, 1):
+                out[f"harness-retime/vote_loop/{pair}/old"] = 419.0
+                out[f"harness-retime/vote_loop/{pair}/new"] = new
+            return out
+
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            # A clock episode in one pair's run decides nothing.
+            self.assertEqual(self.budget("1002:1900", pairs(415.7, 662.8, 415.5)), ([], [
+                f"{past}; re-timed in 3 pairs, 0.992, 1.582, 0.992, median 0.992, within: judged by the "
+                "median"]))
+            # A regression in every pair still fails.
+            self.assertEqual(self.budget("1002:1900", pairs(470.0, 466.0, 474.0)), ([
+                f"{past}; re-timed in 3 pairs, 1.122, 1.112, 1.131, median 1.122"], []))
+            # A row with a pair missing was not re-timed: its one time judges it.
+            missing = pairs(415.7, 662.8, 415.5)
+            del missing["harness-retime/vote_loop/3/new"]
+            self.assertEqual(self.budget("1002:1900", missing), ([past], []))
+        # A listed row is re-timed past its ceiling's limit, and judged against that limit.
+        with mock.patch.object(results, "HARNESS_CEILINGS", {"1002:1900": {"vote_loop": 1.05}}):
+            self.assertEqual(self.budget("1002:1900", pairs(440.0, 441.0, 700.0))[0], [])
+            self.assertEqual(len(self.budget("1002:1900", pairs(455.0, 456.0, 700.0))[0]), 1)
+
+    def test_a_leg_re_times_the_rows_the_budget_would_fail_on_their_one_time(self):
+        ceilings = {"a": {"listed": 2.0, "edge": 2.0}}
+        times = {"alu": (100.0, 103.0), "frame": (100.0, 103.5), "listed": (100.0, 230.0),
+                 "edge": (100.0, 206.0), "under": (100.0, 90.0)}
+        lines = [f"M2V-MATRIX time harness-{runtime}/{row} {pair[i]:.3f}"
+                 for row, pair in times.items() for i, runtime in enumerate(("old", "new"))]
+        lines += ["M2V-MATRIX time harness-new/authored/first_use_wait_total 900.000",
+                  "M2V-MATRIX gauge harness-new/alu/buffers@100 2", "a table row"]
+        with mock.patch.object(results, "HARNESS_CEILINGS", ceilings):
+            run = subprocess.run(["awk", "-v", f"limits={results.harness_limits('a')}", "-v",
+                                  f"budget={results.HARNESS_BUDGET!r}", results.RETIME_SELECT],
+                                 input="\n".join(lines) + "\n", capture_output=True, text=True, check=True)
+            chosen = sorted(line.split()[1] for line in run.stdout.splitlines())
+            records = {f"harness-{runtime}/{row}": pair[i]
+                       for row, pair in times.items() for i, runtime in enumerate(("old", "new"))}
+            failed = sorted(line.split()[2].rstrip(":") for line in self.budget("a", records)[0])
+            # Each limit reads back as the double harness_budget compares with.
+            self.assertEqual(results.harness_limits("a"), "edge=2.06 listed=2.06")
+        self.assertEqual(chosen, ["frame", "listed"])
+        self.assertEqual(chosen, failed)
+
+    def test_re_timed_pairs_are_parked_records(self):
+        self.assertTrue(f"{results.HARNESS_RETIME}vote_loop/1/new".startswith(results.PARKED_RECORDS))
 
     def test_every_ceiling_is_over_the_budget(self):
         for leg, rows in results.HARNESS_CEILINGS.items():

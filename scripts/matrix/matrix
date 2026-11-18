@@ -276,7 +276,10 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     USERPROFILE), so its first uses compile cold whatever ran on the node before.
     For HARNESS_WARM, a short second run on the same cache follows, before the suite's line, and
     its first-use records are kept under harness-<runtime>-warm/: the same first uses with the
-    driver's cache warm."""
+    driver's cache warm. After the last runtime's run, before its suite's line, the rows over their
+    budget (results.RETIME_SELECT, at most results.RETIME_ROWS, the furthest over first) are each
+    re-timed alone in results.RETIME_PAIRS pairs, old then new, the second pair new then old, their
+    times kept as harness-retime/<row>/<pair>/<runtime> (results.harness_budget)."""
     warm = " ".join(HARNESS_WARM)
     profile = unprofile = ""
     if windows:
@@ -286,22 +289,44 @@ def harness_runs(manifest_dir, command, leg, windows=False):
 """
         unprofile = '\n      export LOCALAPPDATA="$saved_local" USERPROFILE="$saved_profile"'
     rename = r"s#^M2V-MATRIX \([a-z]*\) harness-$runtime/\([a-z]*\)/first_use_#M2V-MATRIX \1 harness-$runtime-warm/\2/first_use_#p"
+    retime = r"s#^M2V-MATRIX time harness-$timed/$row #M2V-MATRIX time harness-retime/$row/$pair/$timed #p"
+    outputs = " ".join(f'"$out/{runtime}"' for runtime in HARNESS_RUNTIMES)
+    limits = "\n".join(f"        {leg_id}) limits='{results.harness_limits(leg_id)}' ;;"
+                        for leg_id in sorted(results.HARNESS_CEILINGS))
     return f"""rc=0
+    out=$(mktemp -d) || exit 3
     for runtime in {" ".join(HARNESS_RUNTIMES)}; do
       cache=$(mktemp -d) || exit 3
       export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
-{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime
-      r=$?
+{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime 2>&1 | tee "$out/$runtime"
+      r=${{PIPESTATUS[0]}}
       case " {warm} " in
         *" $runtime "*)
           CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --runs 5 --warmup 1 --no-settle 2>&1 |
             sed -n "{rename}" ;;
       esac
+      if [ "$runtime" = {HARNESS_RUNTIMES[-1]} ]; then
+        case "{leg}" in
+{limits}
+          *) limits= ;;
+        esac
+        select='{results.RETIME_SELECT}'
+        rows=$(awk -v limits="$limits" -v budget={results.HARNESS_BUDGET!r} "$select" {outputs} | sort -rn | head -n {results.RETIME_ROWS} | cut -d' ' -f2)
+        for row in $rows; do
+          for pair in $(seq {results.RETIME_PAIRS}); do
+            case $pair in 2) order="new old" ;; *) order="old new" ;; esac
+            for timed in $order; do
+              CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed --only "$row" 2>&1 | sed -n "{retime}"
+            done
+          done
+        done
+      fi
       unset MESA_SHADER_CACHE_DIR __GL_SHADER_DISK_CACHE_PATH{unprofile}
       rm -rf "$cache"
       echo "M2V-SUITE {leg} harness-$runtime exit $r"
       [ $r -eq 0 ] || rc=1
     done
+    rm -rf "$out"
     exit $rc"""
 
 

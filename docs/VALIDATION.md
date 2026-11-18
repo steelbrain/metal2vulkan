@@ -333,6 +333,12 @@ the old's. The rows over it are listed per GPU with their ratio as a ceiling (`H
 `scripts/matrix/results.py`): a listed row fails its leg past its ceiling times 1.03, the noise
 allowance parity gets, and one within that is named on the leg's line. A fix lowers its row's ceiling to the ratio it reaches, and a row within
 1.03 leaves the list. A row whose time either runtime recorded more than once fails, uncompared.
+A row over its limit is re-timed in its leg before the leg ends: three pairs of runs of the row
+alone, old then new, the second pair new then old. It is judged by the median of the pairs' ratios,
+so a clock episode in one run decides nothing, while a regression in every pair still fails. A leg
+re-times at most 8 rows, the furthest over first; a row it does not re-time is judged by its one
+time. The pairs are kept as `harness-retime/<row>/<pair>/<runtime>` records, parked for the
+`time` rule.
 The budget goes with the old runtime.
 
 The old runtime's translations do not move either. The golden hash table compiles through
