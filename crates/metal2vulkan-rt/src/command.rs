@@ -167,9 +167,6 @@ pub(crate) struct Gpu {
     /// The images of released textures whose copies back the commands make, kept until the
     /// command buffer retires.
     pub(crate) images: Vec<Arc<Image>>,
-    /// What its commit captured of Managed buffers' changed ranges (`crate::capture`): each
-    /// copy-in goes ahead of its first segment's commands, and is kept until it retires.
-    pub(crate) copy_ins: Vec<CopyIn>,
 }
 
 impl Gpu {
@@ -198,6 +195,10 @@ pub(crate) struct Segment {
     /// The textures over a Managed buffer's device copy in an image of their own that its
     /// commands wrote: its submission settles their copies back (`crate::over::ManagedOvers`).
     pub(crate) managed_wrote: Vec<Texture>,
+    /// Of the first segment: what the command buffer's commit captured of Managed buffers'
+    /// changed ranges (`crate::capture`). Each copy-in goes ahead of the segment's commands, after
+    /// its waits, and is kept until the command buffer retires.
+    pub(crate) copy_ins: Vec<CopyIn>,
 }
 
 pub(crate) struct Handlers {
@@ -262,7 +263,6 @@ impl CommandBuffer {
                             ring: Writes::default(),
                             managed: false,
                             images: Vec::new(),
-                            copy_ins: Vec::new(),
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -445,7 +445,7 @@ impl CommandBuffer {
             handlers,
             ..
         } = building;
-        gpu.copy_ins = copy_ins;
+        gpu.segments[0].copy_ins = copy_ins;
         state.times.kernel_start = times::host_time();
         let pending = Pending {
             seq: work.seq(),
@@ -1057,18 +1057,24 @@ pub(crate) fn retire(
         ring,
         managed: _,
         images,
-        copy_ins,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
-    for copy_in in copy_ins {
-        core.recorders.give_back(core, copy_in.recorder);
+    for segment in segments {
+        for CopyIn {
+            recorder,
+            modified,
+            images,
+            ..
+        } in segment.copy_ins
+        {
+            core.recorders.give_back(core, recorder);
+            drop((modified, images));
+        }
     }
     ring.give_back(core);
-    drop((
-        segments, blocks, copies, pipelines, textures, samplers, images,
-    ));
+    drop((blocks, copies, pipelines, textures, samplers, images));
     times::reset(
         &core.device,
         inner.queue.stamps.pool,

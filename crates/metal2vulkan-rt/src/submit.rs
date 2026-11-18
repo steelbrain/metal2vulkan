@@ -510,7 +510,7 @@ impl Work {
         mut state: MutexGuard<'a, WorkState>,
     ) -> Result<(MutexGuard<'a, WorkState>, Vec<CopyIn>), Error> {
         if !state.changes.named() {
-            let carried = state.changes.carried.drain(..).collect();
+            let carried = std::mem::take(&mut state.changes.carried);
             return Ok((state, carried));
         }
         if state.changes.region.is_none() {
@@ -532,7 +532,6 @@ impl Work {
                 return Err(error);
             }
         };
-        let mut copy_ins: Vec<CopyIn> = state.changes.carried.drain(..).collect();
         let named = state.changes.take();
         let mut spans = Vec::new();
         // Each buffer's copies: from the ring, and from the consumer's bytes.
@@ -670,6 +669,8 @@ impl Work {
         let images = (backs.into_iter().map(|(_, _, image)| image))
             .chain(into.into_iter().map(|(_, image)| image))
             .collect();
+        // Taken last, so a capture that failed before left them carried.
+        let mut copy_ins = std::mem::take(&mut state.changes.carried);
         copy_ins.push(CopyIn {
             recorder,
             command,
@@ -968,8 +969,8 @@ impl Work {
                         // Copy-ins not yet staged never run: their spans are given up, and their
                         // ranges named again.
                         let unstaged = (entry.pending.iter())
-                            .filter(|pending| pending.next == 0)
-                            .flat_map(|pending| &pending.gpu.copy_ins);
+                            .flat_map(|pending| &pending.gpu.segments[pending.next..])
+                            .flat_map(|segment| &segment.copy_ins);
                         for copy_in in unstaged {
                             let again = if state.closed {
                                 &[]
@@ -1215,7 +1216,10 @@ impl WorkState {
         if let Some(error) = entry.error {
             if let Some(entry) = fifo.entries.pop_front() {
                 // Its copy-ins never run: their ranges are named again for the next commit.
-                for copy_in in (entry.pending.iter()).flat_map(|pending| &pending.gpu.copy_ins) {
+                let copy_ins = (entry.pending.iter())
+                    .flat_map(|pending| &pending.gpu.segments)
+                    .flat_map(|segment| &segment.copy_ins);
+                for copy_in in copy_ins {
                     self.changes.give_up(&copy_in.spans, &copy_in.modified);
                 }
                 fifo.end(entry, error, ended);
@@ -1305,19 +1309,17 @@ impl WorkState {
             command,
             signals,
         } = stage(segment, &mut group.watch);
-        // The first segment's copy-ins go ahead of its commands, after its waits.
+        // The segment's copy-ins go ahead of its commands, after its waits.
         let mut waits = Some(waits);
-        if pending.next == 0 {
-            for copy_in in &pending.gpu.copy_ins {
-                group.segments.push(Staged {
-                    waits: waits.take().unwrap_or_default(),
-                    command: Some(
-                        vk::CommandBufferSubmitInfo::default().command_buffer(copy_in.command),
-                    ),
-                    signals: Vec::new(),
-                });
-                group.spans.extend(&copy_in.spans);
-            }
+        for copy_in in &segment.copy_ins {
+            group.segments.push(Staged {
+                waits: waits.take().unwrap_or_default(),
+                command: Some(
+                    vk::CommandBufferSubmitInfo::default().command_buffer(copy_in.command),
+                ),
+                signals: Vec::new(),
+            });
+            group.spans.extend(&copy_in.spans);
         }
         let staged = Staged {
             waits: waits.unwrap_or_default(),

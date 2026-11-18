@@ -91,7 +91,7 @@ impl Changes {
     /// The ranges named since the last capture, taken.
     pub(crate) fn take(&mut self) -> Vec<Modified> {
         self.at.clear();
-        self.modified.drain(..).collect()
+        std::mem::take(&mut self.modified)
     }
 
     /// Whether a range is named.
@@ -117,7 +117,7 @@ impl Changes {
     /// At the device's end: the ranges named are forgotten, and the copy-ins carried come back,
     /// for their recorders to be given back.
     pub(crate) fn clear(&mut self) -> (Vec<Modified>, Vec<CopyIn>) {
-        (self.take(), self.carried.drain(..).collect())
+        (self.take(), std::mem::take(&mut self.carried))
     }
 }
 
