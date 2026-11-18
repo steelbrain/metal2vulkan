@@ -1255,8 +1255,8 @@ mod on_device {
         std::fs::metadata(blob).map_or(0, |meta| meta.len())
     }
 
-    /// Makes the state of `descriptor` on `device` and waits for the reaper's look at the pipeline
-    /// cache once creation is quiet after it.
+    /// Makes the state of `descriptor`, a kernel whose state makes its `VkPipeline`, on `device`
+    /// and waits for the reaper's look at the pipeline cache once creation is quiet after it.
     fn state_and_look(
         name: &str,
         device: &Device,
@@ -1264,7 +1264,12 @@ mod on_device {
     ) -> ComputePipelineState {
         let caches = &device.core().caches;
         let looks = caches.looks_and_writes().0;
+        let pipelines = device.counters().metrics().pipelines_created;
         let made = state(name, device, descriptor);
+        assert!(
+            device.counters().metrics().pipelines_created > pipelines,
+            "{name}: the state made its VkPipeline"
+        );
         within("the reaper's look", || caches.looks_and_writes().0 > looks);
         made
     }
@@ -1278,7 +1283,7 @@ mod on_device {
         let (Some(first), Some(second), Some(third)) = (
             descriptor("a1_bool_from_float"),
             descriptor("a1_sign_and_division"),
-            descriptor("icb_replay_grid_template"),
+            descriptor("a1_sign_and_division_precise"),
         ) else {
             return;
         };

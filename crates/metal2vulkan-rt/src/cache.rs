@@ -772,7 +772,10 @@ impl Caches {
     /// The reaper's looks at the cache, and the blob writes of its looks and of the drop.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn looks_and_writes(&self) -> (usize, usize) {
-        (self.looks.load(Relaxed), self.writes.load(Relaxed))
+        (
+            self.looks.load(std::sync::atomic::Ordering::Acquire),
+            self.writes.load(std::sync::atomic::Ordering::Acquire),
+        )
     }
 
     fn translation_file(key: &[u8]) -> String {
@@ -891,9 +894,21 @@ impl Caches {
     ///
     /// `device` is the device of the caches.
     pub(crate) unsafe fn look(&self, device: &ash::Device, counters: &Counters) {
-        self.grown.store(false, SeqCst);
+        // SAFETY: the caller's contract.
+        unsafe { self.replace_or_write(device, counters) };
+        // Counted once the look's effects are in place, so a test that waits for it sees them.
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        self.looks.fetch_add(1, Relaxed);
+        self.looks
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The work of [`Caches::look`].
+    ///
+    /// # Safety
+    ///
+    /// `device` is the device of the caches.
+    unsafe fn replace_or_write(&self, device: &ash::Device, counters: &Counters) {
+        self.grown.store(false, SeqCst);
         // SAFETY: the caller's contract.
         let Some(current) = (unsafe { self.reap(device) }) else {
             return;
@@ -976,7 +991,8 @@ impl Caches {
             counters.cache_written(24 + len);
             lock(&self.pipelines).written = size;
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-            self.writes.fetch_add(1, Relaxed);
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::Release);
         }
     }
 
