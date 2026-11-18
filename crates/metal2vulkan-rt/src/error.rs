@@ -520,6 +520,33 @@ pub enum Refusal {
         destination_offset: u64,
         /// The bytes copied.
         size: u64,
+    /// A render pass attachment
+    /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder))
+    /// whose texture was made without `RenderTarget` usage.
+    ///
+    /// Basis: metal-documented (a texture a render pass renders into needs
+    /// `MTLTextureUsageRenderTarget`; Metal's validation stops the descriptor).
+    AttachmentUsage {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+    },
+    /// A render pass attachment of a level or slice past its texture's.
+    ///
+    /// Basis: ours (no texel of the texture is there to render into).
+    AttachmentPlace {
+        /// The level asked for.
+        level: u32,
+        /// The slice asked for.
+        slice: u32,
+    },
+    /// A render pass color attachment of a depth or stencil pixel format, or a stencil attachment
+    /// of a format without stencil.
+    ///
+    /// Basis: metal-documented (a color attachment takes a color-renderable format and a stencil
+    /// attachment a format with stencil; Metal's validation stops the descriptor).
+    AttachmentFormat {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
     },
 }
 
@@ -719,6 +746,18 @@ pub enum Gap {
         /// What the view changes that is not built.
         kind: TextureViewKind,
     },
+    /// A render pass of something the runtime does not build yet
+    /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)):
+    /// what `kind` names.
+    ///
+    /// Basis: ours (the replay streams' passes render into one to two color attachments and a
+    /// stencil attachment, each a level of a 2D texture of one sample, with no depth attachment,
+    /// no resolve and no store action left unknown; each other kind is built when a replay stream
+    /// makes one).
+    RenderPass {
+        /// What the pass asks for.
+        kind: RenderPassKind,
+    },
 }
 
 /// What a render pipeline state asks that the runtime does not build ([`Gap::RenderPipeline`]).
@@ -757,6 +796,29 @@ pub enum RenderPipelineKind {
     /// A Vulkan feature or extension the translator's pipeline needs (its `Requirements`) that
     /// device creation does not enable.
     DeviceFeature,
+}
+
+/// What a render pass asks that the runtime does not build ([`Gap::RenderPass`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RenderPassKind {
+    /// A depth attachment (`depthAttachment.texture`).
+    DepthAttachment,
+    /// An attachment of more than one sample.
+    Multisample,
+    /// A resolve texture, or a store action that resolves.
+    Resolve,
+    /// An attachment of a texture type but a 2D texture, a 2D array, a cube or a cube array: a 1D
+    /// texture's, or a 3D texture's depth plane.
+    TextureType,
+    /// `MTLStoreActionUnknown`, which the encoder's `setColorStoreAction:atIndex:` family decides
+    /// later, or `MTLStoreActionCustomSampleDepthStore`.
+    StoreAction,
+    /// A `Clear` load action on an attachment whose format the runtime clears only through a
+    /// shader: an extended-range, bfloat or YCbCr format.
+    ClearFormat,
+    /// A pass with no attachment, its size from `renderTargetWidth` and `renderTargetHeight` alone.
+    NoAttachment,
 }
 
 /// What a texture view changes that the runtime does not build ([`Gap::TextureView`]).
@@ -889,6 +951,18 @@ pub enum Limit {
         sample_count: u32,
         /// The counts the device makes, one bit each (`VkSampleCountFlags`).
         counts: u32,
+    },
+    /// A render pass whose color attachments reach past the device's `maxColorAttachments`
+    /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)):
+    /// its last color attachment with a texture is at index `count - 1`. Metal's counterpart is
+    /// its 8 color attachments on every device.
+    ///
+    /// Basis: device (the device's `maxColorAttachments`).
+    ColorAttachments {
+        /// The color attachments the pass reaches.
+        count: u32,
+        /// The device's most.
+        max: u32,
     },
 }
 
@@ -1122,6 +1196,17 @@ impl fmt::Display for Refusal {
             } => write!(
                 f,
                 "a copy of {size} bytes from {source_offset} to {destination_offset} reads bytes it writes"
+            Refusal::AttachmentUsage { pixel_format } => write!(
+                f,
+                "an attachment's texture of {pixel_format:?} was made without RenderTarget usage"
+            ),
+            Refusal::AttachmentPlace { level, slice } => write!(
+                f,
+                "an attachment's level {level}, slice {slice} is past its texture's"
+            ),
+            Refusal::AttachmentFormat { pixel_format } => write!(
+                f,
+                "an attachment of {pixel_format:?} is not of its kind's formats"
             ),
         }
     }
@@ -1198,6 +1283,7 @@ impl fmt::Display for Gap {
                 write!(f, "a render pipeline state with {kind:?} is not built")
             }
             Gap::TextureView { kind } => write!(f, "a texture view that changes {kind:?} is not built"),
+            Gap::RenderPass { kind } => write!(f, "a render pass with {kind:?} is not built"),
         }
     }
 }
@@ -1249,6 +1335,10 @@ impl fmt::Display for Limit {
             } => write!(
                 f,
                 "a sample count of {sample_count} is not among the device's ({counts:#x})"
+            ),
+            Limit::ColorAttachments { count, max } => write!(
+                f,
+                "a pass of {count} color attachments is past the device's {max}"
             ),
         }
     }

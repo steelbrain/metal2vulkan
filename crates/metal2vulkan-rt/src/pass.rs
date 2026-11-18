@@ -1,0 +1,503 @@
+//! Render pass descriptors: what a render command encoder renders into
+//! ([`RenderPassDescriptor`]), checked against its textures into the one dynamic rendering the
+//! encoder begins ([`Pass`]).
+//!
+//! Each attachment is one level and slice of its texture, viewed through an image view of that
+//! level and layer with the identity swizzle, which the texture keeps. Its load and store actions
+//! are Vulkan's of the same
+//! name: `Load`, `Clear` and `DontCare` load, `Store` and `DontCare` store. The render area is the
+//! smallest attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are
+//! set.
+
+use crate::device::Core;
+use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind};
+use crate::texture::{Attachment, Texture};
+use ash::vk;
+use metal2vulkan::metal::format::{self as formats, FormatEmulation};
+use metal2vulkan::metal::PixelFormat;
+use metal2vulkan::pipeline::SampledType;
+use std::sync::Arc;
+
+/// The color attachments a pass has (`MTLRenderPassDescriptor.colorAttachments`).
+pub const MAX_COLOR_ATTACHMENTS: usize = 8;
+
+/// `MTLLoadAction`: what an attachment holds as its pass starts.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LoadAction {
+    /// `MTLLoadActionDontCare`: texels the pass does not read, `VK_ATTACHMENT_LOAD_OP_DONT_CARE`.
+    #[default]
+    DontCare,
+    /// `MTLLoadActionLoad`: the attachment's texels, `VK_ATTACHMENT_LOAD_OP_LOAD`.
+    Load,
+    /// `MTLLoadActionClear`: the attachment's clear value, `VK_ATTACHMENT_LOAD_OP_CLEAR`.
+    Clear,
+}
+
+/// `MTLStoreAction`: what an attachment keeps as its pass ends.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum StoreAction {
+    /// `MTLStoreActionDontCare`: the pass's texels are not kept, and the attachment's are
+    /// undefined after it, `VK_ATTACHMENT_STORE_OP_DONT_CARE`.
+    DontCare,
+    /// `MTLStoreActionStore`: the pass's texels are kept, `VK_ATTACHMENT_STORE_OP_STORE`.
+    #[default]
+    Store,
+    /// `MTLStoreActionMultisampleResolve`: refused, [`Gap::RenderPass`] of
+    /// [`RenderPassKind::Resolve`].
+    MultisampleResolve,
+    /// `MTLStoreActionStoreAndMultisampleResolve`: refused, as `MultisampleResolve`.
+    StoreAndMultisampleResolve,
+    /// `MTLStoreActionUnknown`, left to the encoder to decide before it ends: refused,
+    /// [`Gap::RenderPass`] of [`RenderPassKind::StoreAction`].
+    Unknown,
+    /// `MTLStoreActionCustomSampleDepthStore`: refused, as `Unknown`.
+    CustomSampleDepthStore,
+}
+
+/// `MTLClearColor`: the color a `Clear` load action writes, in the attachment format's channels
+/// (red, green, blue, alpha).
+///
+/// A float, normalized or sRGB channel takes the value as a `float`, which the device converts to
+/// the format by its own rules (Vulkan clamps a normalized value and asks the device to round to
+/// nearest; Metal rounds to nearest even); an integer channel takes it truncated toward zero and
+/// saturated to the channel's range, NaN 0, as Metal does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClearColor {
+    /// `red`.
+    pub red: f64,
+    /// `green`.
+    pub green: f64,
+    /// `blue`.
+    pub blue: f64,
+    /// `alpha`.
+    pub alpha: f64,
+}
+
+impl Default for ClearColor {
+    /// Metal's default: opaque black.
+    fn default() -> ClearColor {
+        ClearColor::new(0.0, 0.0, 0.0, 1.0)
+    }
+}
+
+impl ClearColor {
+    /// `MTLClearColorMake(red, green, blue, alpha)`.
+    pub fn new(red: f64, green: f64, blue: f64, alpha: f64) -> ClearColor {
+        ClearColor {
+            red,
+            green,
+            blue,
+            alpha,
+        }
+    }
+}
+
+/// `MTLRenderPassColorAttachmentDescriptor`, with `MTLRenderPassAttachmentDescriptor`'s
+/// properties.
+///
+/// Not built: a resolve (`resolveTexture` with a resolving store action, refused by the store
+/// action), a 3D texture's `depthPlane` (refused by the texture's type) and
+/// `storeActionOptions`, whose one option needs more than one sample.
+#[derive(Clone, Debug)]
+pub struct RenderPassColorAttachmentDescriptor {
+    /// `texture`: the texture rendered into; `None` for no attachment at this index. It needs
+    /// `RenderTarget` usage and a color format, and one sample; a 2D texture, a 2D array, a cube
+    /// or a cube array.
+    pub texture: Option<Texture>,
+    /// `level`: the mipmap level rendered into.
+    pub level: u32,
+    /// `slice`: the array slice or cube face rendered into.
+    pub slice: u32,
+    /// `loadAction`: `DontCare` by default.
+    pub load_action: LoadAction,
+    /// `storeAction`: `Store` by default.
+    pub store_action: StoreAction,
+    /// `clearColor`: opaque black by default.
+    pub clear_color: ClearColor,
+}
+
+impl Default for RenderPassColorAttachmentDescriptor {
+    /// Metal's defaults: no texture, level and slice 0, `DontCare` load, `Store` store, opaque
+    /// black clear.
+    fn default() -> RenderPassColorAttachmentDescriptor {
+        RenderPassColorAttachmentDescriptor {
+            texture: None,
+            level: 0,
+            slice: 0,
+            load_action: LoadAction::DontCare,
+            store_action: StoreAction::Store,
+            clear_color: ClearColor::default(),
+        }
+    }
+}
+
+/// `MTLRenderPassDepthAttachmentDescriptor`: a pass with a depth texture is refused,
+/// [`Gap::RenderPass`] of [`RenderPassKind::DepthAttachment`].
+#[derive(Clone, Debug)]
+pub struct RenderPassDepthAttachmentDescriptor {
+    /// `texture`: the depth texture rendered into; `None` for no depth attachment.
+    pub texture: Option<Texture>,
+    /// `level`: the mipmap level rendered into.
+    pub level: u32,
+    /// `slice`: the array slice or cube face rendered into.
+    pub slice: u32,
+    /// `loadAction`: `Clear` by default.
+    pub load_action: LoadAction,
+    /// `storeAction`: `DontCare` by default.
+    pub store_action: StoreAction,
+    /// `clearDepth`: 1 by default.
+    pub clear_depth: f64,
+}
+
+impl Default for RenderPassDepthAttachmentDescriptor {
+    /// Metal's defaults: no texture, level and slice 0, `Clear` load, `DontCare` store, a clear
+    /// depth of 1.
+    fn default() -> RenderPassDepthAttachmentDescriptor {
+        RenderPassDepthAttachmentDescriptor {
+            texture: None,
+            level: 0,
+            slice: 0,
+            load_action: LoadAction::Clear,
+            store_action: StoreAction::DontCare,
+            clear_depth: 1.0,
+        }
+    }
+}
+
+/// `MTLRenderPassStencilAttachmentDescriptor`.
+///
+/// Not built: a resolve and a 3D texture's `depthPlane`, as a color attachment's.
+#[derive(Clone, Debug)]
+pub struct RenderPassStencilAttachmentDescriptor {
+    /// `texture`: the texture whose stencil is rendered into; `None` for no stencil attachment. It
+    /// needs `RenderTarget` usage, a format with stencil and one sample.
+    pub texture: Option<Texture>,
+    /// `level`: the mipmap level rendered into.
+    pub level: u32,
+    /// `slice`: the array slice or cube face rendered into.
+    pub slice: u32,
+    /// `loadAction`: `Clear` by default.
+    pub load_action: LoadAction,
+    /// `storeAction`: `DontCare` by default.
+    pub store_action: StoreAction,
+    /// `clearStencil`: 0 by default; its low 8 bits are the stencil's, as Metal keeps them.
+    pub clear_stencil: u32,
+}
+
+impl Default for RenderPassStencilAttachmentDescriptor {
+    /// Metal's defaults: no texture, level and slice 0, `Clear` load, `DontCare` store, a clear
+    /// stencil of 0.
+    fn default() -> RenderPassStencilAttachmentDescriptor {
+        RenderPassStencilAttachmentDescriptor {
+            texture: None,
+            level: 0,
+            slice: 0,
+            load_action: LoadAction::Clear,
+            store_action: StoreAction::DontCare,
+            clear_stencil: 0,
+        }
+    }
+}
+
+/// `MTLRenderPassDescriptor`: the attachments a render command encoder renders into
+/// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)).
+///
+/// Not built, and so not fields: a visibility result buffer, a rasterization rate map, tile
+/// sizes, imageblock and threadgroup memory lengths, sample buffer attachments, layered rendering
+/// (`renderTargetArrayLength`) and a pass with no attachment (`defaultRasterSampleCount`); a pass
+/// with no attachment is refused, [`Gap::RenderPass`] of [`RenderPassKind::NoAttachment`].
+#[derive(Clone, Debug, Default)]
+pub struct RenderPassDescriptor {
+    /// `colorAttachments`.
+    pub color_attachments: [RenderPassColorAttachmentDescriptor; MAX_COLOR_ATTACHMENTS],
+    /// `depthAttachment`.
+    pub depth_attachment: RenderPassDepthAttachmentDescriptor,
+    /// `stencilAttachment`.
+    pub stencil_attachment: RenderPassStencilAttachmentDescriptor,
+    /// `renderTargetWidth`: where nonzero, the render area's width, cut to the attachments'.
+    pub render_target_width: u32,
+    /// `renderTargetHeight`: where nonzero, the render area's height, cut to the attachments'.
+    pub render_target_height: u32,
+}
+
+/// One attachment of a checked pass.
+pub(crate) struct Target {
+    pub(crate) texture: Texture,
+    pub(crate) attachment: Attachment,
+    /// The layout the pass renders it in: its home, or the attachment layout for an image whose
+    /// home is shader-read-only, which the pass moves there and back.
+    pub(crate) layout: vk::ImageLayout,
+    load: vk::AttachmentLoadOp,
+    store: vk::AttachmentStoreOp,
+    clear: vk::ClearValue,
+}
+
+impl Target {
+    /// Whether the pass moves its image out of home and back.
+    pub(crate) fn moves(&self) -> bool {
+        self.layout != self.attachment.home
+    }
+
+    /// Its `VkRenderingAttachmentInfo`.
+    pub(crate) fn info(&self) -> vk::RenderingAttachmentInfo<'static> {
+        vk::RenderingAttachmentInfo::default()
+            .image_view(self.attachment.view)
+            .image_layout(self.layout)
+            .load_op(self.load)
+            .store_op(self.store)
+            .clear_value(self.clear)
+    }
+
+    /// The barrier that moves its level and layer, every aspect, from `old` to `new`, after every
+    /// earlier command and before every later one.
+    pub(crate) fn barrier(
+        &self,
+        old: vk::ImageLayout,
+        new: vk::ImageLayout,
+    ) -> vk::ImageMemoryBarrier2<'static> {
+        let a = &self.attachment;
+        vk::ImageMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
+            .old_layout(old)
+            .new_layout(new)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(a.image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: a.aspects,
+                base_mip_level: a.level,
+                level_count: 1,
+                base_array_layer: a.layer,
+                layer_count: 1,
+            })
+    }
+}
+
+/// A pass descriptor checked against its textures: its attachments, by index for the colors,
+/// and its render area.
+pub(crate) struct Pass {
+    /// Up to the last color attachment with a texture.
+    pub(crate) colors: Vec<Option<Target>>,
+    pub(crate) stencil: Option<Target>,
+    pub(crate) area: [u32; 2],
+}
+
+impl Pass {
+    /// Every attachment, colors first.
+    pub(crate) fn targets(&self) -> impl Iterator<Item = &Target> {
+        (self.colors.iter().flatten()).chain(&self.stencil)
+    }
+
+    /// Checks `d` on the device of `core`.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's texture; [`Refusal::AttachmentUsage`];
+    /// [`Refusal::AttachmentPlace`]; [`Refusal::AttachmentFormat`]; [`Gap::RenderPass`];
+    /// [`Limit::ColorAttachments`]; [`Error::Vulkan`] where an attachment's view cannot be made.
+    pub(crate) fn check(core: &Arc<Core>, d: &RenderPassDescriptor) -> Result<Pass, Error> {
+        let gap = |kind| Error::Unsupported(Gap::RenderPass { kind });
+        let mine = |texture: &Texture| match texture.is_of(core) {
+            true => Ok(()),
+            false => Err(Error::Refused(Refusal::OtherDevice)),
+        };
+        let mut colors = Vec::new();
+        for (index, c) in d.color_attachments.iter().enumerate() {
+            let Some(texture) = &c.texture else {
+                continue;
+            };
+            mine(texture)?;
+            let pf = texture.descriptor().pixel_format;
+            if formats::is_depth_stencil(pf) {
+                return Err(Error::Refused(Refusal::AttachmentFormat {
+                    pixel_format: pf,
+                }));
+            }
+            let attachment = texture.attachment(c.level, c.slice)?;
+            let clear = match c.load_action {
+                LoadAction::Clear => vk::ClearValue {
+                    color: clear_color(pf, texture.emulation(), c.clear_color)
+                        .ok_or_else(|| gap(RenderPassKind::ClearFormat))?,
+                },
+                LoadAction::Load | LoadAction::DontCare => vk::ClearValue::default(),
+            };
+            colors.resize_with(index + 1, || None);
+            colors[index] = Some(target(
+                texture,
+                attachment,
+                c.load_action,
+                c.store_action,
+                clear,
+            )?);
+        }
+        if let Some(texture) = &d.depth_attachment.texture {
+            mine(texture)?;
+            return Err(gap(RenderPassKind::DepthAttachment));
+        }
+        let s = &d.stencil_attachment;
+        let stencil = match &s.texture {
+            Some(texture) => {
+                mine(texture)?;
+                let pf = texture.descriptor().pixel_format;
+                let aspects = formats::aspects(pf).unwrap_or_default();
+                if !aspects.contains(vk::ImageAspectFlags::STENCIL) {
+                    return Err(Error::Refused(Refusal::AttachmentFormat {
+                        pixel_format: pf,
+                    }));
+                }
+                let attachment = texture.attachment(s.level, s.slice)?;
+                let clear = vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 0.0,
+                        stencil: s.clear_stencil & 0xff,
+                    },
+                };
+                Some(target(
+                    texture,
+                    attachment,
+                    s.load_action,
+                    s.store_action,
+                    clear,
+                )?)
+            }
+            None => None,
+        };
+        let max = core.translator.profile().limits.max_color_attachments;
+        if colors.len() > max as usize {
+            return Err(Error::Limit(Limit::ColorAttachments {
+                count: colors.len() as u32,
+                max,
+            }));
+        }
+        let mut pass = Pass {
+            colors,
+            stencil,
+            area: [u32::MAX; 2],
+        };
+        pass.area = pass.targets().fold(pass.area, |area, t| {
+            let extent = t.attachment.extent;
+            [area[0].min(extent[0]), area[1].min(extent[1])]
+        });
+        if pass.area[0] == u32::MAX {
+            return Err(gap(RenderPassKind::NoAttachment));
+        }
+        for (axis, set) in [d.render_target_width, d.render_target_height]
+            .into_iter()
+            .enumerate()
+        {
+            if set > 0 {
+                pass.area[axis] = pass.area[axis].min(set);
+            }
+        }
+        Ok(pass)
+    }
+}
+
+/// The Vulkan load and store operations of Metal's `load` and `store` actions, one to one.
+///
+/// Err: [`Gap::RenderPass`] of [`RenderPassKind::Resolve`] or [`RenderPassKind::StoreAction`].
+pub(crate) fn ops(
+    load: LoadAction,
+    store: StoreAction,
+) -> Result<(vk::AttachmentLoadOp, vk::AttachmentStoreOp), Error> {
+    let load = match load {
+        LoadAction::DontCare => vk::AttachmentLoadOp::DONT_CARE,
+        LoadAction::Load => vk::AttachmentLoadOp::LOAD,
+        LoadAction::Clear => vk::AttachmentLoadOp::CLEAR,
+    };
+    let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
+    let store = match store {
+        StoreAction::DontCare => vk::AttachmentStoreOp::DONT_CARE,
+        StoreAction::Store => vk::AttachmentStoreOp::STORE,
+        StoreAction::MultisampleResolve | StoreAction::StoreAndMultisampleResolve => {
+            return gap(RenderPassKind::Resolve)
+        }
+        StoreAction::Unknown | StoreAction::CustomSampleDepthStore => {
+            return gap(RenderPassKind::StoreAction)
+        }
+    };
+    Ok((load, store))
+}
+
+/// One attachment of `texture`, viewed as `attachment`, with its load and store actions and its
+/// clear value.
+///
+/// Err: as [`ops`].
+fn target(
+    texture: &Texture,
+    attachment: Attachment,
+    load: LoadAction,
+    store: StoreAction,
+    clear: vk::ClearValue,
+) -> Result<Target, Error> {
+    let (load, store) = ops(load, store)?;
+    let layout = match attachment.home {
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::ImageLayout::ATTACHMENT_OPTIMAL,
+        home => home,
+    };
+    Ok(Target {
+        texture: texture.clone(),
+        attachment,
+        layout,
+        load,
+        store,
+        clear,
+    })
+}
+
+/// The Vulkan clear value of `color` for a color attachment of `pf` held as `emulation`: an
+/// integer channel's value truncated toward zero and saturated to its range, NaN 0; any other
+/// channel's as a `float`, in the image's channels: a rotated format's, and `A8Unorm`'s held in
+/// `R8_UNORM`, rotated (`to_rotated_image`), so its alpha lands in red. `None` where only a shader
+/// clears the format: an extended-range, bfloat or YCbCr format.
+pub(crate) fn clear_color(
+    pf: PixelFormat,
+    emulation: FormatEmulation,
+    color: ClearColor,
+) -> Option<vk::ClearColorValue> {
+    let rgba = [color.red, color.green, color.blue, color.alpha];
+    if !matches!(
+        emulation,
+        FormatEmulation::Direct | FormatEmulation::RotatedView | FormatEmulation::AlphaInRed
+    ) {
+        return None;
+    }
+    // A channel narrower than 32 bits: byte `c` of the word holds `32 - bits`.
+    let word = formats::integer_channels_word(pf);
+    let bits: [u32; 4] = std::array::from_fn(|c| 32 - ((word >> (8 * c)) & 0xff));
+    match formats::sampled_type(pf)? {
+        SampledType::Uint => Some(vk::ClearColorValue {
+            uint32: std::array::from_fn(|c| {
+                let max = ((1u64 << bits[c]) - 1) as f64;
+                match rgba[c].is_nan() {
+                    true => 0,
+                    false => rgba[c].trunc().clamp(0.0, max) as u32,
+                }
+            }),
+        }),
+        SampledType::Sint => Some(vk::ClearColorValue {
+            int32: std::array::from_fn(|c| {
+                let half = (1u64 << (bits[c] - 1)) as f64;
+                match rgba[c].is_nan() {
+                    true => 0,
+                    false => rgba[c].trunc().clamp(-half, half - 1.0) as i32,
+                }
+            }),
+        }),
+        SampledType::Float => {
+            let float32 = rgba.map(|x| x as f32);
+            Some(vk::ClearColorValue {
+                float32: match emulation {
+                    FormatEmulation::RotatedView | FormatEmulation::AlphaInRed => {
+                        formats::to_rotated_image(float32)
+                    }
+                    _ => float32,
+                },
+            })
+        }
+        _ => None,
+    }
+}

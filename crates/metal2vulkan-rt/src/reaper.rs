@@ -61,6 +61,8 @@ pub(crate) enum Free {
     },
     /// A dropped texture view's image views; the textures gauge falls with them.
     Views([Option<vk::ImageView>; 2]),
+    /// A dropped texture's attachment views; the attachment views gauge falls with each.
+    AttachmentViews(Vec<vk::ImageView>),
     /// A device sampler no sampler state holds; the device samplers gauge falls with it.
     Sampler(vk::Sampler),
     /// A staging buffer of texture bytes, and its memory; the blocks gauge falls with it.
@@ -197,6 +199,17 @@ fn free(core: &Core, object: Free) {
                 }
             }
             core.counters.fall(Gauge::Textures);
+        }
+        Free::AttachmentViews(views) => {
+            // SAFETY: no pending work uses them: every command buffer whose pass rendered into
+            // the texture held it until it retired.
+            unsafe {
+                for &view in &views {
+                    device.destroy_image_view(view, None);
+                }
+            }
+            core.counters
+                .fall_by(Gauge::AttachmentViews, views.len() as u64);
         }
         Free::Sampler(sampler) => {
             // SAFETY: no element of set 1 holds it, and every command buffer that used a state

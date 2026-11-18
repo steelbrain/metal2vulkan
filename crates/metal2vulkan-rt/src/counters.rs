@@ -60,6 +60,8 @@ pub(crate) enum Gauge {
     KernelEntries,
     /// [`Gauges::render_contents`].
     RenderContents,
+    /// [`Gauges::attachment_views`].
+    AttachmentViews,
     /// [`Gauges::blocks`].
     Blocks,
     /// [`Gauges::command_buffers`].
@@ -119,6 +121,7 @@ struct Atomics {
     kernels: AtomicU64,
     kernel_entries: AtomicU64,
     render_contents: AtomicU64,
+    attachment_views: AtomicU64,
     command_buffers: AtomicU64,
     descriptor_slots: AtomicU64,
     blocks: AtomicU64,
@@ -262,6 +265,7 @@ impl Counters {
             Gauge::Kernels => &a.kernels,
             Gauge::KernelEntries => &a.kernel_entries,
             Gauge::RenderContents => &a.render_contents,
+            Gauge::AttachmentViews => &a.attachment_views,
             Gauge::Blocks => &a.blocks,
             Gauge::CommandBuffers => &a.command_buffers,
             Gauge::Events => &a.events,
@@ -314,6 +318,7 @@ impl Counters {
             kernels: a.kernels.load(Relaxed),
             kernel_entries: a.kernel_entries.load(Relaxed),
             render_contents: a.render_contents.load(Relaxed),
+            attachment_views: a.attachment_views.load(Relaxed),
             command_buffers: a.command_buffers.load(Relaxed),
             descriptor_slots: a.descriptor_slots.load(Relaxed),
             blocks: a.blocks.load(Relaxed),
@@ -336,13 +341,14 @@ pub struct Metrics {
     /// The `VkSubmitInfo2`s those calls passed: the command buffers of a submission that no event
     /// wait or signal separates share one, and the upload shares the first.
     pub submit_infos: u64,
-    /// Encoders recorded: compute and blit, and later render.
+    /// Encoders recorded: compute, blit and render.
     pub passes: u64,
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each
     /// segment with commands and of each upload, one before a dispatch at a hazard, one owed by
-    /// an encoder that wrote or a memory barrier call, recorded before the next command, and two
-    /// around each blit copy, fill and synchronize copy, the first of which pays what is owed. A block's zero fill, made
-    /// apart from any command buffer, is not counted.
+    /// an encoder that wrote or a memory barrier call, recorded before the next command, two
+    /// around each blit copy, fill and synchronize copy, and two around each render pass, the
+    /// first of each pair paying what is owed. A block's zero fill, made apart from any command
+    /// buffer, is not counted.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
     /// copies between a texture over a buffer and its image of its own
@@ -444,6 +450,9 @@ pub struct Gauges {
     /// with its shader modules and their `VkPipeline`s, shared by every state of that content.
     /// One lives while a state or the device's map of contents holds it.
     pub render_contents: u64,
+    /// The image views textures keep for render passes: one for each level and slice a pass
+    /// rendered into, freed with the texture.
+    pub attachment_views: u64,
     /// Command buffers not yet retired.
     pub command_buffers: u64,
     /// Occupied indices of set 1's arrays: one for each texture made at an index and each sampler

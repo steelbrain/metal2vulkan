@@ -1000,8 +1000,8 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
 
 ### Known gaps of render pipeline states
 
-- There is no render encoder yet: a state holds its triangle class's `VkPipeline`, and nothing
-  draws with it.
+- There is no draw yet: a render encoder renders its pass's load and store actions alone, and a
+  state holds its triangle class's `VkPipeline`, which nothing draws with.
 - Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: a depth
   attachment, more than one sample, vertex amplification, a post-tessellation vertex function,
   stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
@@ -1012,6 +1012,59 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
 - Metal's triangle fill mode and depth clip mode, which Vulkan 1.3 bakes into a `VkPipeline`, are
   their defaults.
+
+## Render encoders
+
+- `CommandBuffer::render_command_encoder(&RenderPassDescriptor)` is
+  `renderCommandEncoderWithDescriptor:`. While it is open it holds the command buffer's recording,
+  as a compute encoder does. It begins one dynamic rendering (`vkCmdBeginRendering`, in the floor)
+  into the pass's attachments, and `end_encoding` ends it (`vkCmdEndRendering`): one Vulkan
+  rendering a Metal render encoder, with no render pass object or framebuffer.
+- `RenderPassDescriptor` is `MTLRenderPassDescriptor`: eight color attachments
+  (`MAX_COLOR_ATTACHMENTS`), a depth and a stencil attachment, `renderTargetWidth` and
+  `renderTargetHeight`. Each attachment is one level and slice of its texture: a 2D texture, a 2D
+  array, a cube or a cube array, of one sample and `RenderTarget` usage. The texture keeps an
+  image view of that level and layer with the identity swizzle, made at the first pass that
+  renders into it and freed with the texture (`Gauges::attachment_views`).
+- Load and store actions are one to one: `Load`, `Clear` and `DontCare` are Vulkan's load
+  operations of those names, `Store` and `DontCare` its store operations. A `DontCare` store
+  leaves the attachment's texels undefined, as Metal's does. A clear color is a `float` in a
+  float, normalized or sRGB channel, which the device converts to the format by its own rules
+  (Vulkan clamps a normalized value and asks for rounding to nearest; Metal rounds to nearest
+  even); an integer channel's is truncated toward zero and saturated to the channel's width, NaN
+  0, as Metal's. A rotated format's clear color, and `A8Unorm`'s held in `R8_UNORM`, go through
+  the format's rotation. A clear stencil keeps its low 8 bits.
+- The render area is the smallest attachment's level, cut to `renderTargetWidth` and
+  `renderTargetHeight` where they are set.
+- A pass orders itself as a blit's copy does, with two barriers. The first runs it after every
+  earlier command, makes their writes visible to it, and moves each attachment whose home layout
+  is shader-read-only to the attachment layout; one whose home is general or the attachment layout
+  renders there. It pays a barrier an encoder owed, and the hazard sets start again. The second,
+  after the rendering ends, moves those attachments home and makes the pass's writes visible to
+  every later command. A command buffer of one pass has three barriers, the segment's end among
+  them, one pass in `Metrics::passes`, and copies nothing.
+- Refused, as Metal's validation stops them: an attachment's texture made without
+  `RenderTarget` usage (`Refusal::AttachmentUsage`), a level or slice past its texture's
+  (`Refusal::AttachmentPlace`), a color attachment of a depth or stencil format or a stencil
+  attachment of a format without stencil (`Refusal::AttachmentFormat`). A pass whose color
+  attachments reach past the device's `maxColorAttachments` is `Limit::ColorAttachments`. A refused
+  descriptor leaves the command buffer open for another encoder.
+
+### Known gaps of render encoders
+
+- Every encoder call but `end_encoding` is not built yet: a pass renders its load and store
+  actions alone.
+- Refused by `Gap::RenderPass`, naming its `RenderPassKind`: a depth attachment, an attachment of
+  more than one sample, a resolve, a 1D or 3D texture's attachment, the `Unknown` and
+  `CustomSampleDepthStore` store actions, a clear of a format only a shader clears (extended
+  range, bfloat, YCbCr), and a pass with no attachment. The descriptor has no field for a
+  visibility result buffer, a rasterization rate map, tile sizes, imageblock and threadgroup
+  memory, sample buffer attachments, layered rendering or store action options. The replay
+  streams' passes render into one or two color attachments and a stencil attachment, each a level
+  of a 2D texture of one sample, with `Load`, `Clear` and `DontCare` loads and `Store` and
+  `DontCare` stores.
+- An attachment whose home layout is shader-read-only (a texture of shader-read and render-target
+  usage) is moved to the attachment layout and back by every pass that renders into it.
 
 ## One path for every device
 

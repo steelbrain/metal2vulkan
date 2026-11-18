@@ -29,6 +29,7 @@ mod instance;
 mod kernel_map;
 mod memory;
 mod over;
+mod pass;
 mod pipeline;
 mod places;
 mod queue;
@@ -36,6 +37,7 @@ mod readback;
 mod reaper;
 mod record;
 mod render;
+mod render_encoder;
 mod ring;
 mod sampler;
 mod staging;
@@ -53,7 +55,7 @@ pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};
-pub use error::{Error, Gap, Limit, Refusal, RenderPipelineKind, TextureViewKind};
+pub use error::{Error, Gap, Limit, Refusal, RenderPassKind, RenderPipelineKind, TextureViewKind};
 pub use event::{Event, SharedEvent};
 pub use extension::{ConsumerFeature, DeviceExtension};
 pub use fence::Fence;
@@ -84,9 +86,15 @@ pub use metal2vulkan::pipeline::{
 pub use metal2vulkan::pipeline::{
     ComputePipelineDescriptor, FunctionDescriptor, NumberedSampler, PrecisionNote, StageSource,
 };
+pub use pass::{
+    ClearColor, LoadAction, RenderPassColorAttachmentDescriptor,
+    RenderPassDepthAttachmentDescriptor, RenderPassDescriptor,
+    RenderPassStencilAttachmentDescriptor, StoreAction, MAX_COLOR_ATTACHMENTS,
+};
 pub use pipeline::ComputePipelineState;
 pub use queue::CommandQueue;
 pub use render::RenderPipelineState;
+pub use render_encoder::RenderCommandEncoder;
 pub use sampler::SamplerState;
 pub use texture::{
     BytesPlace, HeapRange, Region, SizeAndAlign, StorageMode, Texture, TextureDescriptor,

@@ -25,7 +25,7 @@ use crate::arrays::{IndexClass, ResourceId};
 use crate::buffer::Buffer;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
-use crate::error::{Error, Gap, Limit, Refusal, TextureViewKind};
+use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::memory::{self, Block, BlockId, MemoryClass};
 use crate::places::Place;
 use crate::reaper::{Free, Job};
@@ -40,7 +40,7 @@ use metal2vulkan::metal::{
 };
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// `MTLStorageMode` of a texture. Shared, Managed and Private textures are all device images;
 /// Shared and Managed differ from Private only in that [`Texture::replace_region`] and
@@ -192,6 +192,35 @@ struct TextureInner {
     /// A view's parent and place in the image ([`Texture::new_texture_view`]); `None` for a
     /// texture with an image of its own.
     view: Option<View>,
+    /// How the image holds the pixel format, which a pass's clear value follows.
+    emulation: FormatEmulation,
+    /// The image views render passes rendered into, one for each level and layer of the image
+    /// (`Texture::attachment`), kept until the texture is gone: at most its levels times its
+    /// slices.
+    attachments: Mutex<Vec<AttachmentView>>,
+}
+
+/// An image view of one level and layer of a texture's image, for render passes.
+struct AttachmentView {
+    level: u32,
+    layer: u32,
+    view: vk::ImageView,
+}
+
+/// A level and slice of a texture as a render pass attachment ([`Texture::attachment`]).
+pub(crate) struct Attachment {
+    /// The image view of the level and layer, every aspect, with the identity swizzle.
+    pub(crate) view: vk::ImageView,
+    pub(crate) image: vk::Image,
+    /// The level and layer in the image.
+    pub(crate) level: u32,
+    pub(crate) layer: u32,
+    /// Every aspect of the image's format.
+    pub(crate) aspects: vk::ImageAspectFlags,
+    /// The image's home layout.
+    pub(crate) home: vk::ImageLayout,
+    /// The level's width and height.
+    pub(crate) extent: [u32; 2],
 }
 
 /// A texture's bytes in a buffer, which [`Texture::replace_region`] and [`Texture::get_bytes`]
@@ -358,6 +387,12 @@ pub(crate) struct Shape {
 impl Drop for TextureInner {
     fn drop(&mut self) {
         let core = self.device.core();
+        let attachments =
+            (self.attachments.get_mut()).unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !attachments.is_empty() {
+            let views = attachments.drain(..).map(|a| a.view).collect();
+            core.reaper.give(Job::Free(Free::AttachmentViews(views)));
+        }
         // A view's id and image are its parent's, which it keeps.
         if self.view.is_none() {
             if let Some(named) = (self.named.as_ref()).filter(|named| named.form == Form::Copied) {
@@ -747,6 +782,8 @@ impl Device {
             id: core.ids.take(),
             named,
             view: None,
+            emulation: plan.emulation,
+            attachments: Mutex::new(Vec::new()),
         };
         // Over a buffer of no device copy, the commands track what they write while it lives
         // (`crate::over`).
@@ -804,6 +841,7 @@ struct Plan {
     aspects: vk::ImageAspectFlags,
     unit: Option<CopyUnit>,
     word: u32,
+    emulation: FormatEmulation,
 }
 
 /// The slices of each level of a texture of descriptor `d`: a cube's six faces each a slice, and
@@ -1190,6 +1228,7 @@ fn plan(
         aspects,
         unit,
         word,
+        emulation: mapping.emulation,
     })
 }
 
@@ -2176,6 +2215,8 @@ impl Texture {
                 base,
                 _views: views,
             }),
+            emulation: plan.emulation,
+            attachments: Mutex::new(Vec::new()),
         };
         // A failed view drops here: its index is vacated and its views freed.
         made?;
@@ -2210,6 +2251,93 @@ impl Texture {
     /// Its image's format.
     pub(crate) fn format(&self) -> vk::Format {
         self.inner.format
+    }
+
+    /// How its image holds its pixel format.
+    pub(crate) fn emulation(&self) -> FormatEmulation {
+        self.inner.emulation
+    }
+
+    /// `level` and `slice` of the texture as a render pass attachment: the image view of that
+    /// one level and layer of its image, every aspect, with the identity swizzle, made at the
+    /// first pass that renders into it and kept with the texture.
+    ///
+    /// Err: [`Refusal::AttachmentUsage`] for a texture made without `RenderTarget` usage;
+    /// [`Gap::RenderPass`] of [`RenderPassKind::Multisample`] for one of more than one sample,
+    /// of [`RenderPassKind::TextureType`] for one but a 2D texture, a 2D array, a cube or a cube
+    /// array; [`Refusal::AttachmentPlace`] for a level or slice past the texture's;
+    /// [`Error::Vulkan`] where the view cannot be made.
+    pub(crate) fn attachment(&self, level: u32, slice: u32) -> Result<Attachment, Error> {
+        let d = &self.inner.descriptor;
+        if !d.usage.is_empty() && !d.usage.contains(TextureUsage::RENDER_TARGET) {
+            return Err(Error::Refused(Refusal::AttachmentUsage {
+                pixel_format: d.pixel_format,
+            }));
+        }
+        let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
+        match d.texture_type {
+            TextureType::Type2DMultisample | TextureType::Type2DMultisampleArray => {
+                return gap(RenderPassKind::Multisample)
+            }
+            _ if d.sample_count > 1 => return gap(RenderPassKind::Multisample),
+            TextureType::Type2D
+            | TextureType::Type2DArray
+            | TextureType::Cube
+            | TextureType::CubeArray => {}
+            _ => return gap(RenderPassKind::TextureType),
+        }
+        if level >= d.mipmap_level_count || slice >= slices(d) {
+            return Err(Error::Refused(Refusal::AttachmentPlace { level, slice }));
+        }
+        let [first_level, first_layer] = self.inner.base();
+        let (level_in_image, layer) = (first_level + level, first_layer + slice);
+        let image = &self.inner.image;
+        let mut views = lock(&self.inner.attachments);
+        let view = match views
+            .iter()
+            .find(|a| a.level == level_in_image && a.layer == layer)
+        {
+            Some(a) => a.view,
+            None => {
+                let core = self.inner.device.core();
+                let range = vk::ImageSubresourceRange {
+                    aspect_mask: image.aspects,
+                    base_mip_level: level_in_image,
+                    level_count: 1,
+                    base_array_layer: layer,
+                    layer_count: 1,
+                };
+                // SAFETY: the image is bound, of the texture's format, holds the level and layer
+                // (the texture's own, which lie in its image), and has the attachment usage its
+                // render target usage gave it.
+                let view = unsafe {
+                    image_view(
+                        &core.device,
+                        image.image,
+                        vk::ImageViewType::TYPE_2D,
+                        self.inner.format,
+                        vk::ComponentMapping::default(),
+                        range,
+                    )
+                }?;
+                core.counters.rise(Gauge::AttachmentViews);
+                views.push(AttachmentView {
+                    level: level_in_image,
+                    layer,
+                    view,
+                });
+                view
+            }
+        };
+        Ok(Attachment {
+            view,
+            image: image.image,
+            level: level_in_image,
+            layer,
+            aspects: image.aspects,
+            home: image.home,
+            extent: [(d.width >> level).max(1), (d.height >> level).max(1)],
+        })
     }
 
     /// The unit its copies move; `None` where no copy is built.

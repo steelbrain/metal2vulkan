@@ -37,9 +37,9 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 43 | 43 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 18 | 18 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 62 | 43 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 19 | 19 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -55,9 +55,9 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 14 | 10 | 0 | 0 | 19 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 18 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 14 | 10 | 0 | 0 | 38 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 8 | 3 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 19 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -620,7 +620,7 @@ Columns:
 | `ManagedBlockNotShared` | A Managed buffer whose bytes are in a Private block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: a Managed buffer's bytes are the consumer's, which it maps; a Private block has no mapping | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ModifiedRange` | A changed range that leaves its buffer (`Buffer::did_modify_range`) | every device (a public call's own check of its arguments) | `ours`: the copy of such a range would write past the buffer's device copy | 1: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)` | `-` |
 | `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
-| `OtherDevice` | An event, a buffer, a texture or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block, a texture's image, a pipeline and a block belong to the `VkDevice` that made them | 16: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-rt/src/blit.rs (copy_from_buffer_to_buffer)` (+13) | `-` |
+| `OtherDevice` | An event, a buffer, a texture or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block, a texture's image, a pipeline and a block belong to the `VkDevice` that made them | 17: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-rt/src/blit.rs (copy_from_buffer_to_buffer)` (+14) | `-` |
 | `NoCommandBuffers` | A queue that may hold no command buffer (`Device::new_command_queue` with a count of 0) | every device (a public call's own check of its arguments) | `ours`: its first `commandBuffer` call would wait forever | 1: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)` | `-` |
 | `EncoderOpen` | A second encoder, an encode call, or a commit or enqueue, while an encoder of the command buffer is open | every device (a public call's own check of its arguments) | `metal-documented`: a command buffer has one active encoder at a time, ended by `endEncoding` before another is made or the command buffer is committed | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
 | `NoPipeline` | A dispatch with no pipeline state set | every device (a public call's own check of its arguments) | `metal-documented`: a compute dispatch needs a compute pipeline state set first | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
@@ -657,6 +657,25 @@ Columns:
 | `BufferCopyRange` | A copy between buffers (`BlitCommandEncoder::copy_from_buffer_to_buffer`) whose range, `size` bytes from `offset`, leaves the source or the... | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation stops a copy past either buffer's length | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)` | `-` |
 | `BufferCopyUnaligned` | A copy between buffers whose source offset, destination offset or size is not a multiple of 4 | every device (a public call's own check of its arguments) | `metal-documented`: `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`: on macOS both offsets and the size are multiples of 4 | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)` | `-` |
 | `BufferCopyOverlap` | A copy between buffers whose source and destination share bytes | every device (a public call's own check of its arguments) | `ours`: Metal states no result for such a copy, and `vkCmdCopyBuffer` reads no byte it also writes, `VUID-vkCmdCopyBuffer-pRegions-00117`; the runtime does not emulate one | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_to_buffer)` | `-` |
+| `IndirectCommandBuffers` | A compute pipeline state for indirect command buffers (`supportIndirectCommandBuffers`) | every device (a public call's own check of its arguments) | `ours`: indirect command buffers are not built | 0 | `-` |
+| `KernelInput` | A kernel that reads something the compute encoder does not supply yet | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 0 | `-` |
+| `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 0 | `-` |
+| `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 0 | `-` |
+| `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 0 | `-` |
+| `TextureBuffer` | A texture buffer (`MTLTextureTypeTextureBuffer`) | every device (a public call's own check of its arguments) | `ours`: no texel-buffer array; no replay stream uses one | 0 | `-` |
+| `TextureFormat` | A texture of a pixel format the runtime makes no image of on this device for the descriptor's usage | every device (a public call's own check of its arguments) | `ours`: the device's format query, or the identity domains' shaders read every texture through its view alone | 0 | `-` |
+| `CubicSampler` | A sampler state whose minification or magnification filter is cubic (`Device::new_sampler_state`) | every device (a public call's own check of its arguments) | `ours`: the translator's identity domains do not filter bicubically, and Vulkan's cubic filter is not Metal's | 0 | `-` |
+| `TextureBytes` | `Texture::replace_region`, `Texture::get_bytes` or a blit copy between a buffer and a texture (`BlitCommandEncoder::copy_from_buffer`) of a... | every device (a public call's own check of its arguments) | `ours`: no copy between such an image and bytes is built | 0 | `-` |
+| `FloatDepthUpload` | `Texture::replace_region` or `BlitCommandEncoder::copy_from_buffer` into a 32-bit float depth (`Depth32Float`) | every device (a public call's own check of its arguments) | `ours`: no upload of a 32-bit float depth is built | 0 | `-` |
+| `TextureCopy` | `BlitCommandEncoder::copy_from_texture` that no single `vkCmdCopyImage` in the floor makes | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 copies none of these with one command; each is built when a replay stream makes one | 0 | `-` |
+| `TextureOverBuffer` | A texture over a buffer (`Buffer::new_texture`) the runtime does not make | every device (a public call's own check of its arguments) | `ours`: the in-place linear image and the copy form take one 2D color image | 0 | `-` |
+| `HeapTexture` | A heap texture the runtime does not place (`Device::new_heap_texture` and `Device::heap_texture_size_and_align`) | every device (a public call's own check of its arguments) | `ours`: heap textures are built for Private heaps of placeable images | 0 | `-` |
+| `BufferCopyAlignment` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose bytes no copy command in the floor addresses,... | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an aligned offset; each is built when a replay stream makes one | 0 | `-` |
+| `FillAlignment` | `BlitCommandEncoder::fill_buffer` of a range that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal fills byte... | every device (a public call's own check of its arguments) | `ours`: `vkCmdFillBuffer` writes whole words; a byte fill is built when a replay stream makes one | 0 | `-` |
+| `RenderPipeline` | A render pipeline state of something the runtime does not build yet | every device (a public call's own check of its arguments) | `ours`: the replay streams' render pipelines draw into colour and stencil attachments of one sample, with no depth attachment, no tessellation and no framebuffer fetch; each other kind is built when a replay stream makes one | 0 | `-` |
+| `FenceOtherQueue` | A `Fence` updated or waited on by an encoder of a queue other than the first that used it | every device (a public call's own check of its arguments) | `ours`: a fence is built for one queue; the replay streams use each on one queue | 0 | `-` |
+| `TextureView` | `Texture::new_texture_view` of a kind Metal makes and the runtime does not build | every device (a public call's own check of its arguments) | `ours`: the replay streams' views that compute binds are same-format views of every slice, 2D views of one slice of a 2D array, and level subranges; each other kind is built when a replay stream binds one | 0 | `-` |
+| `RenderPass` | A render pass of something the runtime does not build yet (`CommandBuffer::render_command_encoder`) | every device (a public call's own check of its arguments) | `ours`: the replay streams' passes render into one to two color attachments and a stencil attachment, each a level of a 2D texture of one sample, with no depth attachment, no resolve and no store action left unknown; each other kind is built when a replay stream makes one | 0 | `-` |
 
 ## 12. The new runtime's `Limit` (`Error::Limit(Limit)`)
 
@@ -672,6 +691,7 @@ Columns:
 | `DeviceSamplers` | A sampler state whose device samplers would take the device past its `maxSamplerAllocationCount`, less the sampler arrays' two defaults... | at the device's limit | `device`: the device's `maxSamplerAllocationCount` | 1: `crates/metal2vulkan-rt/src/sampler.rs (take)` | `-` |
 | `MemoryAllocations` | A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones, refused before the driver is called | at the device's limit | `device`: the device's `maxMemoryAllocationCount` | 1: `crates/metal2vulkan-rt/src/memory.rs (allocate)` | `-` |
 | `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
+| `ColorAttachments` | A render pass whose color attachments reach past the device's `maxColorAttachments` (`CommandBuffer::render_command_encoder`) | at the device's limit | `device`: the device's `maxColorAttachments` | 1: `crates/metal2vulkan-rt/src/pass.rs (check)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
 
@@ -695,6 +715,7 @@ Columns:
 | `RenderPipeline` | A render pipeline state of something the runtime does not build yet | every device (a public call's own check of its arguments) | `ours`: the replay streams' render pipelines draw into colour and stencil attachments of one sample, with no depth attachment, no tessellation and no framebuffer fetch; each other kind is built when a replay stream makes one | 4: `crates/metal2vulkan-rt/src/render.rs (of, 3 sites)`, `crates/metal2vulkan-rt/src/render.rs (refuse)` | `-` |
 | `FenceOtherQueue` | A `Fence` updated or waited on by an encoder of a queue other than the first that used it | every device (a public call's own check of its arguments) | `ours`: a fence is built for one queue; the replay streams use each on one queue | 1: `crates/metal2vulkan-rt/src/fence.rs (used_on)` | `-` |
 | `TextureView` | `Texture::new_texture_view` of a kind Metal makes and the runtime does not build | every device (a public call's own check of its arguments) | `ours`: the replay streams' views that compute binds are same-format views of every slice, 2D views of one slice of a 2D array, and level subranges; each other kind is built when a replay stream binds one | 1: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)` | `-` |
+| `RenderPass` | A render pass of something the runtime does not build yet (`CommandBuffer::render_command_encoder`) | every device (a public call's own check of its arguments) | `ours`: the replay streams' passes render into one to two color attachments and a stencil attachment, each a level of a 2D texture of one sample, with no depth attachment, no resolve and no store action left unknown; each other kind is built when a replay stream makes one | 3: `crates/metal2vulkan-rt/src/pass.rs (check)`, `crates/metal2vulkan-rt/src/pass.rs (ops)` (+1) | `-` |
 
 ## Appendix: every site
 
@@ -1190,7 +1211,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::ManagedBlockNotShared`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ModifiedRange`: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)`
 - `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (open)`
-- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_buffer_to_buffer)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_texture)`; `crates/metal2vulkan-rt/src/blit.rs (fill_buffer)`; `crates/metal2vulkan-rt/src/blit.rs (synchronize_resource)`; `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/device.rs (release_block)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource, 2 sites)`; `crates/metal2vulkan-rt/src/fence.rs (used_on)`; `crates/metal2vulkan-rt/src/texture.rs (new_managed_texture)`
+- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_buffer_to_buffer)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_texture)`; `crates/metal2vulkan-rt/src/blit.rs (fill_buffer)`; `crates/metal2vulkan-rt/src/blit.rs (synchronize_resource)`; `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/device.rs (release_block)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource, 2 sites)`; `crates/metal2vulkan-rt/src/fence.rs (used_on)`; `crates/metal2vulkan-rt/src/pass.rs (check)`; `crates/metal2vulkan-rt/src/texture.rs (new_managed_texture)`
 - `rt:Refusal::NoCommandBuffers`: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)`
 - `rt:Refusal::EncoderOpen`: `crates/metal2vulkan-rt/src/command.rs (open)`
 - `rt:Refusal::NoPipeline`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
@@ -1237,6 +1258,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-rt/src/sampler.rs (take)`
 - `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-rt/src/memory.rs (allocate)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
+- `rt:Limit::ColorAttachments`: `crates/metal2vulkan-rt/src/pass.rs (check)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/pipeline.rs (emulated_kernel)`
@@ -1255,4 +1277,5 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::RenderPipeline`: `crates/metal2vulkan-rt/src/render.rs (of, 3 sites)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::FenceOtherQueue`: `crates/metal2vulkan-rt/src/fence.rs (used_on)`
 - `rt:Gap::TextureView`: `crates/metal2vulkan-rt/src/texture.rs (new_texture_view)`
+- `rt:Gap::RenderPass`: `crates/metal2vulkan-rt/src/pass.rs (check)`; `crates/metal2vulkan-rt/src/pass.rs (ops)`; `crates/metal2vulkan-rt/src/texture.rs (attachment)`
 
