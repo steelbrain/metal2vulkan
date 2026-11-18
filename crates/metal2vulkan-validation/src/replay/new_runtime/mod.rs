@@ -1875,6 +1875,8 @@ impl Backend for NewRuntime {
         // Every metric that sums: a frame's is the difference of two reads.
         Counters::from([
             ("submissions", metrics.submissions),
+            ("pushes", metrics.pushes),
+            ("pushes_held", metrics.pushes_held),
             ("passes", metrics.passes),
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),
