@@ -99,7 +99,8 @@ in its memory.
 - `Device::new` makes one allocation of each class before it returns. After that the block-maker
   thread makes a class's next allocation of 16 MiB, off every caller's path, while the class's free
   bytes are fewer than 8 MiB, and at no other time: a take that leaves more free sets nothing off
-  beside the consumer's next calls. A driver may hold the device's other calls for the whole of an
+  beside the consumer's next calls. A take larger than what the pool has kept allocates on the
+  calling thread; the pool keeps 8 MiB ahead per class. A driver may hold the device's other calls for the whole of an
   allocation, longer for more bytes: on an RTX 3090 (NVIDIA's Linux driver) a pipeline state's
   creation beside a Shared allocation's making took 6 to 8 ms at 16 MiB and 40 to 45 ms at 256
   MiB; on an RTX 2080 a compute pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared
