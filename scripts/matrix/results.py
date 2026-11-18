@@ -578,8 +578,8 @@ def past_limit(leg_id, row, gpu=False):
 
 #: The harness's creation rows, by the start of their names. A leg times them apart from the
 #: other rows (the matrix's harness_runs): the process that times the others on both runtimes
-#: skips them, and they run alone after it, in FIRST_RUNS processes per runtime, the runtimes'
-#: alternating, each on a fresh driver cache and store, so no row before them moves their times.
+#: skips them, and they run alone after it, in FIRST_RUNS processes of their own, each timing both
+#: runtimes on a fresh driver cache and store, so no row before them moves their times.
 HARNESS_CREATES = "create_"
 #: A creation row's first samples (`<row>/first`, `/first_take`, `/next_take`,
 #: `/first_allocation_total`, `/device_first`) are one sample per process, so harness_budget judges
@@ -599,15 +599,15 @@ SHOWN_FIRST = {
     "/first_call": "the creation call alone, which old returns from before it makes its pipeline",
     "/device_first": "the warm-up, the first object of its kind on the device",
 }
-#: The sed program the first creation process's output goes through: its device's gauges at drop
+#: The sed program the first creation process's output goes through: its devices' gauges at drop
 #: become `harness-<runtime>/creates/device/...`, apart from the other rows' process's, so each
 #: key is recorded once.
 CREATES_APART = (r"s#^M2V-MATRIX gauge harness-\([a-z]*\)/device/#"
                  r"M2V-MATRIX gauge harness-\1/creates/device/#")
 #: The sed program (`sed -n`) each later creation process's output goes through: its first samples
-#: alone, as `harness-first/<row>/<n>/<runtime>`, the shell giving `$n` and `$runtime`.
-FIRST_KEEP = (r"s#^M2V-MATRIX time harness-$runtime/\(create_[A-Za-z0-9_]*/[a-z_]*\) #"
-              r"M2V-MATRIX time harness-first/\1/$n/$runtime #p")
+#: alone, each runtime's as `harness-first/<row>/<n>/<runtime>`, the shell giving `$n`.
+FIRST_KEEP = (r"s#^M2V-MATRIX time harness-\([a-z]*\)/\(create_[A-Za-z0-9_]*/[a-z_]*\) #"
+              r"M2V-MATRIX time harness-first/\2/$n/\1 #p")
 
 
 def first_row(row):

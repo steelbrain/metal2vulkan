@@ -160,7 +160,7 @@ done
 
 
 class HarnessRunTests(unittest.TestCase):
-    def test_both_runtimes_are_timed_in_one_process_and_their_creation_processes_alternate(self):
+    def test_both_runtimes_are_timed_in_one_process_and_so_are_the_creation_rows_in_each_of_theirs(self):
         with tempfile.TemporaryDirectory() as work:
             fake, log = Path(work) / "harness", Path(work) / "log"
             fake.write_text(FAKE_HARNESS)
@@ -171,8 +171,8 @@ class HarnessRunTests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr)
             calls = log.read_text().splitlines()
         # One process times both runtimes, the new runtime's pass first in each workload; the warm
-        # run is the new runtime's; the creation processes alternate, one runtime each.
-        self.assertEqual(calls, ["new,old all", "new all"] + ["new create_*", "old create_*"] * 5)
+        # run is the new runtime's; each of the five creation processes times both too.
+        self.assertEqual(calls, ["new,old all", "new all"] + ["new,old create_*"] * 5)
         legs = matrix.results.parse_job("M2V-LEG a begin\n" + run.stdout)
         suites = legs["a"]["suites"]
         self.assertEqual(list(suites), [matrix.HARNESS_SUITE])

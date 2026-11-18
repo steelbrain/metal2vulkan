@@ -372,10 +372,10 @@ runtimes: those records are judged. A short second run on the same directory and
 `harness-new-warm/<set>/first_use_*`, the same first uses with both warm; they are parked.
 
 Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run alone after them,
-`--only 'create_*'`, in five processes per runtime, the runtimes' alternating, each with a fresh
-empty cache directory and store, so no row before them moves their times. Each runtime's first
-process's records are kept whole, its
-device's gauges at drop as `harness-<runtime>/creates/device/...`; of each later process, only the
+`--only 'create_*'`, in five processes of their own, each timing both runtimes in the same order
+on a fresh empty cache directory and store, so no row before them moves their times: a
+creation's first sample on the new runtime is cold, and the old runtime's follows it on the same
+cache. The first process's records are kept whole, its devices' gauges at drop as `harness-<runtime>/creates/device/...`; of each later process, only the
 creation rows' first samples (`<row>/first`, `/first_call`, `/first_take`, `/next_take`,
 `/first_allocation_total`, `/device_first`, one sample per process), as
 `harness-first/<row>/<n>/<runtime>`,

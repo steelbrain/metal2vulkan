@@ -499,6 +499,8 @@ class HarnessBudgetTests(unittest.TestCase):
         others = ["M2V-MATRIX time harness-new/alu 10.000", "M2V-MATRIX gauge harness-new/device/blocks@drop 0"]
         creates = ["M2V-MATRIX time harness-new/create_64MiB 700.000",
                    "M2V-MATRIX time harness-new/create_64MiB/first_take 900.000",
+                   "M2V-MATRIX time harness-old/create_64MiB/first_take 950.000",
+                   "M2V-MATRIX time harness-gpu-old/create_64MiB/first_take 5.000",
                    "M2V-MATRIX metric harness-new/create_64MiB/first_allocations 1",
                    "M2V-MATRIX gauge harness-new/create_64MiB/buffers@100 0",
                    "M2V-MATRIX gauge harness-new/device/blocks@drop 0", "a table row"]
@@ -510,9 +512,11 @@ class HarnessBudgetTests(unittest.TestCase):
 
         first = sed(results.CREATES_APART, creates)
         # The shell gives the later processes' program its process and runtime.
-        keep = results.FIRST_KEEP.replace("$runtime", "new").replace("$n", "2")
+        keep = results.FIRST_KEEP.replace("$n", "2")
         later = sed(keep, creates, quiet=True)
-        self.assertEqual(later, [f"M2V-MATRIX time {results.HARNESS_FIRST}create_64MiB/first_take/2/new 900.000"])
+        # One process times both runtimes: each line's runtime names its sample.
+        self.assertEqual(later, [f"M2V-MATRIX time {results.HARNESS_FIRST}create_64MiB/first_take/2/new 900.000",
+                                 f"M2V-MATRIX time {results.HARNESS_FIRST}create_64MiB/first_take/2/old 950.000"])
         suite = results.parse_suite(others + first + later)
         self.assertEqual((suite["problems"], suite["duplicated"]), ([], set()))
         self.assertEqual(suite["records"]["gauge"], {"harness-new/device/blocks@drop": 0,
