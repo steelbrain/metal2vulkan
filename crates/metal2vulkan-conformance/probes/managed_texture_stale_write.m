@@ -19,9 +19,13 @@
 // Each case prints what each copy shows: "first" (the first bytes' rows), "second" (the second
 // write's rows) or "other", with the copy's FNV-1a 64.
 //
-// WHAT IT MEASURED: see the rt crate's README on textures over a Managed buffer's device copy,
-// with the run it came from. Apple GPUs may alias Managed memory, so the documented contract, not
-// this answer, is the runtime's rule.
+// The macOS 27 SDK marks Managed storage and didModifyRange: deprecated ("Managed storage has no
+// effect on Apple Silicon"), so the build warns four times.
+//
+// WHAT IT MEASURED: an M3 Max on macOS 27.0.1 shows "second" after both writes, the untold one
+// included: its texture over a Managed buffer aliases the buffer's bytes. The documented contract,
+// not this answer, is the runtime's rule (the rt crate's README, on textures over a Managed
+// buffer's device copy).
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

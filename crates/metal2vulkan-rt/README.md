@@ -309,8 +309,12 @@ made, with no lock, and never rewritten for layouts.
     submitted; that submission also owes each other texture over a range that meets its a copy
     in. A texture released while its copy back is owed leaves its image with the buffer until a reader takes it
     or the buffer is released, which drops it uncopied; `Gauges::textures` counts it meanwhile.
-    The texture over a buffer's bytes on an Apple GPU may alias the Managed memory itself; the
-    documented contract, not one GPU's answer, is the rule here.
+    A host write the program does not tell with `did_modify_range` reaches such a texture only
+    at a later event that copies it in; Metal leaves what the texture shows then undefined. An M3
+    Max on macOS 27.0.1 shows the untold write
+    (`crates/metal2vulkan-conformance/probes/managed_texture_stale_write.m`), and the macOS 27
+    SDK says Managed storage has no effect on Apple silicon; the documented contract, not that
+    answer, is the rule here.
 - `Device::minimum_linear_texture_alignment(pixel_format)` answers
   `minimumLinearTextureAlignmentForPixelFormat:` with the device's linear row rounding: the
   smallest power of two from 16 to 4,096 at which the device lays the rows of a 3-row linear
