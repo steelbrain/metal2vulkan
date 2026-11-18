@@ -732,6 +732,12 @@ that touch blocks first.
   counter heap, of at most 4,096 entries and at most 32 live in a process, so there at most
   65,536 command buffers of a process are timed at once, fewer where other devices of the
   process hold heaps.
+- On NVIDIA's Linux driver 620.70.06 (an RTX 3090), a process that makes and destroys a Vulkan
+  instance and a device over and over gets `VK_ERROR_INCOMPATIBLE_DRIVER` from its 27th
+  `vkCreateInstance`, with no runtime in the process: a bare loop made and destroyed 26, twice
+  alike. `Instance::new` fails there too. The runtime destroys each instance and device it makes:
+  under the validation layer on lavapipe, 36 device tests in one process made 34 instances and
+  destroyed 34, made 36 devices, and left no object undestroyed.
 - Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through
