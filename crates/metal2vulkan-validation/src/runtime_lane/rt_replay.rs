@@ -28,6 +28,9 @@
 //! - A sampler state placed at an index a held commit owes (its command buffer waits for an event
 //!   only a later record signals) takes it without waiting where its descriptor is the one placed
 //!   there last, and otherwise stops the play naming what holds the commit.
+//! - Buffers keep the slack of their recorded granule: two recorded at addresses of 32 KiB and
+//!   64 KiB granules lie apart by at least the lower one's granule, as the recording's addresses
+//!   that a third buffer holds come back from the player relocated.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -96,13 +99,25 @@ fn flagged(
 /// `path` played on the new runtime's device, its report and the backend's lines printed; the
 /// play's end unwrapped.
 fn play(test: &str, path: &Path) -> (Report, Vec<String>) {
-    let (report, lines, _) = played(test, path, &[]);
+    let (report, lines, ()) = play_then(test, path, |_| ());
     (report, lines)
 }
 
 /// `path` played as [`play`] plays it, and the index (the low half of the `gpuResourceID`) the
 /// runtime then gives each of `objects`.
 fn played(test: &str, path: &Path, objects: &[u64]) -> (Report, Vec<String>, Vec<u32>) {
+    play_then(test, path, |backend| {
+        let mut index = |object: &u64| backend.resource_id(*object).unwrap().expect("an ID") as u32;
+        objects.iter().map(&mut index).collect()
+    })
+}
+
+/// `path` played as [`play`] plays it, then `then` of the backend.
+fn play_then<T>(
+    test: &str,
+    path: &Path,
+    then: impl FnOnce(&mut NewRuntime) -> T,
+) -> (Report, Vec<String>, T) {
     let cache = ScratchCache::new().unwrap();
     let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
     let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
@@ -112,9 +127,8 @@ fn played(test: &str, path: &Path, objects: &[u64]) -> (Report, Vec<String>, Vec
         eprintln!("REPLAY {test} {line}");
     }
     ended.unwrap();
-    let mut index = |object: &u64| backend.resource_id(*object).unwrap().expect("an ID") as u32;
-    let indices = objects.iter().map(&mut index).collect();
-    (report, lines, indices)
+    let then = then(&mut backend);
+    (report, lines, then)
 }
 
 /// A sampler descriptor's map: the default descriptor, its resource index `index` where given.
@@ -716,4 +730,53 @@ fn a_buffer_placed_in_a_block_taken_again_reads_zero() {
         zeroed >= 2 * length,
         "each block zeroed at its making: {zeroed}"
     );
+}
+
+#[test]
+fn buffers_keep_the_slack_of_their_recorded_granule() {
+    let dir = ScratchDir::new("rt-replay-granule").unwrap();
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let made = "newBufferWithLength:options:";
+        let at = |address, length| {
+            [
+                ("gpuAddress", Value::Address(address)),
+                ("gpuLength", Value::Uint(length)),
+            ]
+        };
+        // #2 and #3, 4 bytes each, recorded 32 KiB apart: granules of 32 KiB and 64 KiB.
+        for (id, address) in [(2, 0x48000), (3, 0x50000)] {
+            w.call(
+                made,
+                1,
+                id,
+                &[Value::Uint(4), Value::Uint(0)],
+                &at(address, 4),
+            )?;
+        }
+        // #4 holds their recorded addresses, which the player puts there as the runtime's.
+        w.call(
+            made,
+            1,
+            4,
+            &[Value::Uint(16), Value::Uint(0)],
+            &at(0x60000, 16),
+        )?;
+        let words = [0x48000u64, 0x50000].iter().flat_map(|a| a.to_le_bytes());
+        let write = [Value::Uint(0), Value::Bytes(words.collect())];
+        w.call("m2v.write", 4, 0, &write, &[])
+    });
+    let (_, lines, words) = play_then("granule", &path, |backend| backend.read(4).unwrap());
+    let word = |at: usize| u64::from_le_bytes(words[at..at + 8].try_into().unwrap());
+    let (first, second) = (word(0), word(8));
+    let apart = match first < second {
+        true => second - first >= 32 << 10,
+        false => first - second >= 64 << 10,
+    };
+    assert!(apart, "#2 at {first:#x}, #3 at {second:#x}: {lines:?}");
+    let places = lines
+        .iter()
+        .find(|line| line.starts_with("places by recorded granule: "));
+    let places = places.unwrap_or_else(|| panic!("a places line: {lines:?}"));
+    assert!(places.contains("32768 B 1, 65536 B 2"), "{places}");
 }

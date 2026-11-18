@@ -582,12 +582,17 @@ counted from 0), completes the work committed so far, reports as at the stream's
   The counts are among its executed counters. A play with any of them above zero is no gate
   result: `report.txt` says so on a `skipped` line. It places buffers of their own, and the GPU
   copies of two-copy Managed buffers, in the runtime's blocks of 16 MiB of either class (a longer
-  one in a block of its own), a range freed for reuse once every command buffer committed before
-  its release completed, zeroes a block or heap of the stream once at its making (as the live
+  one in a block of its own), each place its length rounded up to the buffer's recorded granule:
+  the largest power of two that divides its recorded `gpuAddress`, from 256 bytes to 64 KiB (256
+  bytes where it has none). A program that writes past a buffer's end then writes into the slack
+  the buffer had in the recording, not into the next buffer; the backend's `places by recorded
+  granule` line counts the places by granule and gives the most bytes of slack held at once. A
+  place is free for reuse once every command buffer committed before its buffer's release
+  completed. The backend zeroes a block or heap of the stream once at its making (as the live
   system zeroes a heap's memory once: a buffer placed there reads zero where nothing wrote it,
-  though the runtime may take a released block's bytes again), gives
-  the runtime back a block or heap of the stream at its release (`release_block`), and gives
-  textures and sampler states indices from the whole of each index class (section 5): its
+  though the runtime may take a released block's bytes again), gives the runtime back a block or
+  heap of the stream at its release (`release_block`), and gives textures and sampler states
+  indices from the whole of each index class (section 5): its
   `indices named N: ...` line counts the objects placed at the index the stream named, those
   whose named index the runtime refused, the indices the program reserved, the placements
   that waited for an index's holders' commits, with the time waited, and the sampler states placed

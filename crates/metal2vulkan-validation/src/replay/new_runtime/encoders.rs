@@ -4,7 +4,7 @@
 //! names a skipped object, are skipped and counted.
 
 use super::super::args::{arg, data, index, list, range, refuse, uint, variant, Fields};
-use super::{failed, Held, NewRuntime, Object};
+use super::{failed, granule, Held, NewRuntime, Object};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
@@ -421,8 +421,11 @@ impl NewRuntime {
             return Ok(());
         }
         let completed = self.completed();
-        let place =
-            (self.places.take(rt::MemoryClass::Shared, len, completed)).map_err(failed(call))?;
+        // The player's own staging: no recorded slack.
+        let place = (self
+            .places
+            .take(rt::MemoryClass::Shared, len, granule(None), completed))
+        .map_err(failed(call))?;
         let staging = self
             .device
             .new_buffer(place.block, place.range.start, len, None);

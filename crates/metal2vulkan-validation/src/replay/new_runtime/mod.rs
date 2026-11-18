@@ -27,7 +27,7 @@ use crate::gpu::wait::SubmissionBackend;
 use crate::gpu::DeviceType;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions};
 use metal2vulkan_rt as rt;
-use places::{class_index, Place, Places};
+use places::{class_index, granule, Place, Places};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
@@ -904,7 +904,9 @@ impl NewRuntime {
             self.unwritten.made(call.result, None);
         }
         let completed = self.completed();
-        let place = (self.places.take(class, length, completed)).map_err(failed(call))?;
+        // Each copy's place keeps the slack the buffer had in the recording.
+        let recorded = granule(call.answer("gpuAddress").and_then(Value::as_address));
+        let place = (self.places.take(class, length, recorded, completed)).map_err(failed(call))?;
         let (start, block) = (place.range.start, place.block);
         let buffer = match mode {
             // A two-copy stream's Managed buffer on a one-copy device: the GPU's copy here, the
@@ -914,7 +916,7 @@ impl NewRuntime {
                 let gpu = gpu.map_err(failed(call))?;
                 write_into(&gpu, 0, bytes)?;
                 let cpu_place =
-                    (self.places.take(class, length, completed)).map_err(failed(call))?;
+                    (self.places.take(class, length, recorded, completed)).map_err(failed(call))?;
                 let at = (cpu_place.block, cpu_place.range.start);
                 let cpu = self.device.new_buffer(at.0, at.1, length, Some(0));
                 let cpu = cpu.map_err(failed(call))?;
@@ -2230,6 +2232,7 @@ impl Backend for NewRuntime {
             lines.push(self.seconds.line());
         }
         lines.push(self.asides.line());
+        lines.push(self.places.line());
         lines.push(self.unwritten.line());
         lines.push(self.indices.line());
         lines
