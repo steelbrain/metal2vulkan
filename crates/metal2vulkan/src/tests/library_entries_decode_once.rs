@@ -21,6 +21,11 @@
 //!   stage returns a value before it compiles it, and both the question and the compile need the
 //!   module's decode: through one object they read it once
 //!   ([`a_plain_answer_and_the_stages_entry_decode_the_module_once`]).
+//! - **A partition check and the compile share one order.** A compute creation asks whether its
+//!   kernel observes the threadgroup partition before it compiles it, and both read the kernel's
+//!   specialized entry ordered for the device: through one object the entry is ordered once, and
+//!   the compile reads the check's
+//!   ([`a_partition_check_and_the_kernels_compile_order_its_entry_once`]).
 //! - **Not across libraries.** Two libraries of different bytes read a decode each, however the
 //!   object is shared: the module's own AIR hash keys the decode, so nothing of one library is
 //!   taken for another ([`two_libraries_decode_their_modules_apart`]).
@@ -51,7 +56,9 @@ use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::library::{Library, LibraryType};
 use crate::lower::select::LowerInputs;
-use crate::pipeline::compile::{compile_stage, compile_stage_from, InputsFrom, StageEntries};
+use crate::pipeline::compile::{
+    compile_stage, compile_stage_from, kernel_observes_partition, InputsFrom, StageEntries,
+};
 use crate::pipeline::testing::{fixtures_dir, llvm_assemble, AssembleError};
 use crate::pipeline::FunctionDescriptor;
 
@@ -344,6 +351,59 @@ fn a_plain_answer_and_the_stages_entry_decode_the_module_once() {
         (2, 0),
         "the answer and the entry are each made once: nothing else was shared"
     );
+}
+
+/// Each kernel of one library, checked for whether it observes its threadgroup partition and then
+/// compiled, as a compute creation does, through one object: the check orders the kernel's
+/// specialized entry for the device and the compile finds that order rather than ordering again.
+/// Each compile is held to the kernel's own unshared compile word for word, byte for byte and
+/// unit for unit, so the kept order changes no output and spares no charge.
+#[test]
+fn a_partition_check_and_the_kernels_compile_order_its_entry_once() {
+    use crate::library::FunctionStage::Kernel;
+    let Some(bitcode) = fixture(MANY) else { return };
+    let device = device();
+    let library = Library::from_air(&bitcode).expect("library");
+    let kernels: Vec<FunctionDescriptor> = stages(&library)
+        .into_iter()
+        .filter(|fd| matches!(fd.function.info().stage, Kernel))
+        .collect();
+    assert!(
+        kernels.len() >= 2,
+        "{MANY} must hold the kernels this orders, not {}",
+        kernels.len()
+    );
+    for fd in &kernels {
+        let name = fd.function.info().name;
+        let expected = alone(fd, &device);
+        let entries = StageEntries::new();
+        let inputs = LowerInputs::new();
+        let mut meter = Meter::new(&Budget::standard());
+        kernel_observes_partition(
+            fd,
+            device.profile(),
+            InputsFrom::Given(&inputs),
+            &entries,
+            &mut meter,
+        )
+        .expect("the partition check");
+        assert_eq!(
+            entries.orders(),
+            (1, 0),
+            "the partition check orders the kernel's entry ({name})"
+        );
+        let work = from_entries(fd, &device, &entries, &expected);
+        assert_eq!(
+            entries.orders(),
+            (1, 1),
+            "the compile finds the entry the check ordered rather than ordering it again ({name})"
+        );
+        assert_eq!(
+            work, expected.2,
+            "the compile is charged the work units of its own unshared compile, the order it found \
+             included ({name})"
+        );
+    }
 }
 
 /// The AIR hash a library states of a function is the SHA-256 of the bitcode a compile of it

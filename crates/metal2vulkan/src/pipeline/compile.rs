@@ -51,6 +51,7 @@ use crate::library::{
 };
 use crate::lower::dispatch::LocalSizeForm;
 use crate::lower::select::{LowerInputs, Plan};
+use crate::lower::simd::lockstep::{self, OrderKey};
 use crate::pipeline::artifact::{PrecisionNote, Reconvergence, StrategyCensus, StrategyUse};
 use crate::pipeline::compile::key::{DynamicKey, LinkedKey};
 use crate::pipeline::descriptor::{
@@ -1000,6 +1001,10 @@ struct Kept {
     decodes_read: u64,
     decodes_copied: u64,
     decode_bytes: u64,
+    /// The entries ordered ([`StageEntries::ordered`]), and the asks that found one ordered
+    /// before.
+    orders_made: u64,
+    orders_found: u64,
 }
 
 /// One module decode of [`StageEntries`], with what tells it apart: the bitcode's own AIR hash,
@@ -1042,7 +1047,23 @@ struct StageEntry {
     /// counts the bytes it holds.
     spent: Spent,
     specialized: Arc<Specialized>,
+    /// The entry ordered for each key asked of it, least recently used first, at most
+    /// [`KEPT_ORDERS`]; the byte bound counts the bytes each holds.
+    ordered: Vec<KeptOrder>,
 }
+
+/// One ordered entry of a [`StageEntry`]: the specialized entry ordered for `key`
+/// ([`lockstep::order`]), with what ordering it charged, which every ask that finds it is charged
+/// beside what specializing it charged.
+struct KeptOrder {
+    key: OrderKey,
+    spent: Spent,
+    ordered: Arc<Specialized>,
+}
+
+/// The most ordered entries one [`StageEntry`] keeps. A device's profile fixes all of the key
+/// but whether the kernel is its one-row variant, so a creation asks for at most two.
+const KEPT_ORDERS: usize = 2;
 
 impl std::fmt::Debug for StageEntries {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1219,9 +1240,64 @@ impl StageEntries {
             open_cl_lines: inputs.open_cl_lines,
             spent,
             specialized: Arc::clone(&specialized),
+            ordered: Vec::new(),
         });
         kept.evict();
         Ok(specialized)
+    }
+
+    /// The entry of stage `fd` as [`StageEntries::specialized`] gives it, ordered for `key`
+    /// ([`lockstep::order`], under [`weights::LOCKSTEP`]): the one ordered before, charged to `m`
+    /// what specializing and ordering it charged, else ordered now under `m` and kept beside the
+    /// specialized entry. A creation's check of the partition its kernel observes
+    /// ([`kernel_observes_partition`]) and its compile ask for the same key, so the compile orders
+    /// nothing again. A refusal is not kept: the next ask orders it again.
+    fn ordered(
+        &self,
+        fd: &FunctionDescriptor,
+        depth: u32,
+        open_cl: (bool, &BTreeSet<SlotRef>),
+        key: OrderKey,
+        m: &mut Meter,
+    ) -> Result<Arc<Specialized>, Error> {
+        let depth = depth.max(1);
+        // The library's table states it without decoding (`Function::info`).
+        let air_hash = fd.function.info().air_hash;
+        let lock = || self.kept.lock().unwrap_or_else(|e| e.into_inner());
+        let found = lock().take_ordered(&air_hash, fd, depth, open_cl, key);
+        if let Some((ordered, specializing, ordering)) = found {
+            m.spend(specializing)?;
+            m.spend(ordering)?;
+            return Ok(ordered);
+        }
+        let specialized = self.specialized(fd, depth, open_cl, m)?;
+        let (ordered, spent) =
+            m.measured(|m| order_specialized(Specialized::clone(&specialized), key, m))?;
+        let ordered = Arc::new(ordered);
+        let mut kept = lock();
+        // Another caller may have ordered the same entry meanwhile: its order is this one, so the
+        // two share one.
+        if let Some((theirs, ..)) = kept.take_ordered(&air_hash, fd, depth, open_cl, key) {
+            return Ok(theirs);
+        }
+        kept.keep_ordered(
+            &air_hash,
+            fd,
+            depth,
+            open_cl,
+            (key, spent, Arc::clone(&ordered)),
+        );
+        kept.evict();
+        Ok(ordered)
+    }
+
+    /// How many entries it has ordered, and how many asks found one ordered before, over its
+    /// whole life (neither ever falls).
+    #[cfg(test)]
+    pub(crate) fn orders(&self) -> (u64, u64) {
+        let kept = self.kept.lock();
+        kept.as_ref()
+            .map_or((0, 0), |k| (k.orders_made, k.orders_found))
     }
 }
 
@@ -1234,8 +1310,24 @@ impl Kept {
         air_hash: &Hash256,
         fd: &FunctionDescriptor,
         depth: u32,
-        (open_cl_mode, open_cl_lines): (bool, &BTreeSet<SlotRef>),
+        open_cl: (bool, &BTreeSet<SlotRef>),
     ) -> Option<(Arc<Specialized>, Spent)> {
+        let entry = self.used(air_hash, fd, depth, open_cl)?;
+        let found = (Arc::clone(&entry.specialized), entry.spent);
+        self.found += 1;
+        Some(found)
+    }
+
+    /// The entry of `fd` at `depth` whose function's AIR hash is `air_hash`, made the most
+    /// recently used: `None` where none is held. The hash is compared first, so a scan reads a
+    /// function descriptor only where the hashes agree.
+    fn used(
+        &mut self,
+        air_hash: &Hash256,
+        fd: &FunctionDescriptor,
+        depth: u32,
+        (open_cl_mode, open_cl_lines): (bool, &BTreeSet<SlotRef>),
+    ) -> Option<&mut StageEntry> {
         let at = self.entries.iter().position(|e| {
             e.depth == depth
                 && e.open_cl_mode == open_cl_mode
@@ -1244,10 +1336,56 @@ impl Kept {
                 && e.function == *fd
         })?;
         let entry = self.entries.remove(at);
-        let found = (Arc::clone(&entry.specialized), entry.spent);
         self.entries.push(entry);
-        self.found += 1;
+        self.entries.last_mut()
+    }
+
+    /// The entry of `fd` at `depth` ordered for `key`, both made the most recently used, with
+    /// what specializing it and what ordering it charged: `None` where either is not held.
+    fn take_ordered(
+        &mut self,
+        air_hash: &Hash256,
+        fd: &FunctionDescriptor,
+        depth: u32,
+        open_cl: (bool, &BTreeSet<SlotRef>),
+        key: OrderKey,
+    ) -> Option<(Arc<Specialized>, Spent, Spent)> {
+        let entry = self.used(air_hash, fd, depth, open_cl)?;
+        let at = entry.ordered.iter().position(|o| o.key == key)?;
+        let order = entry.ordered.remove(at);
+        let found = (Arc::clone(&order.ordered), entry.spent, order.spent);
+        entry.ordered.push(order);
+        self.orders_found += 1;
         Some(found)
+    }
+
+    /// Keeps `ordered`, the entry of `fd` at `depth` ordered for its key with what ordering it
+    /// charged, beside that entry, dropping the entry's least recently used order past
+    /// [`KEPT_ORDERS`]. Nothing where the entry itself is no longer held.
+    fn keep_ordered(
+        &mut self,
+        air_hash: &Hash256,
+        fd: &FunctionDescriptor,
+        depth: u32,
+        open_cl: (bool, &BTreeSet<SlotRef>),
+        (key, spent, ordered): (OrderKey, Spent, Arc<Specialized>),
+    ) {
+        let Some(entry) = self.used(air_hash, fd, depth, open_cl) else {
+            return;
+        };
+        let mut bytes = spent.held();
+        entry.ordered.push(KeptOrder {
+            key,
+            spent,
+            ordered,
+        });
+        let mut freed = 0;
+        while entry.ordered.len() > KEPT_ORDERS {
+            freed += entry.ordered.remove(0).spent.held();
+        }
+        bytes = bytes.saturating_sub(freed);
+        self.orders_made += 1;
+        self.bytes = self.bytes.saturating_add(bytes);
     }
 
     /// The plain answer of `fd` whose function's AIR hash is `air_hash`, made the most recently
@@ -1285,7 +1423,10 @@ impl Kept {
             && (self.entries.len() > KEPT_ENTRIES || self.bytes > KEPT_ENTRY_BYTES)
         {
             let gone = self.entries.remove(0);
-            self.bytes = self.bytes.saturating_sub(gone.spent.held());
+            let ordered: u64 = gone.ordered.iter().map(|o| o.spent.held()).sum();
+            self.bytes = self
+                .bytes
+                .saturating_sub(gone.spent.held().saturating_add(ordered));
         }
         while self.answers.len() > KEPT_ENTRIES.max(1) {
             self.answers.remove(0);
@@ -2815,16 +2956,34 @@ fn decoded_module(r: &Request<'_>, m: &mut Meter) -> Result<air::Decoded, Error>
 /// explicit for `p`: the entry selection reads, whose instruction indices a refusal's location
 /// names. [`plan_one`] and `DeviceProfile::specialized_entry` both build it
 /// here, so a tool that resolves a refusal's location reads the compile's own entry.
+///
+/// A request that shares the creation's entries orders the entry there once for the creation
+/// ([`StageEntries::ordered`]): the check of the partition its kernel observes and its compile
+/// read one ordered entry.
 fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Specialized, Error> {
+    let key = OrderKey::of(p, r.inputs.one_row());
+    if let Shared::Entry(entries, fd) = r.shared {
+        let open_cl = (r.inputs.open_cl_mode(), r.inputs.open_cl_lines());
+        let kept = entries.ordered(fd, r.inputs.call_stack_depth(), open_cl, key, m)?;
+        return Ok(Specialized::clone(&kept));
+    }
+    order_specialized(specialize_one(r, m)?, key, m)
+}
+
+/// The specialized entry `specialized` ordered for `key` ([`lockstep::order`]), its work weighing
+/// [`weights::LOCKSTEP`].
+fn order_specialized(
+    specialized: Specialized,
+    key: OrderKey,
+    m: &mut Meter,
+) -> Result<Specialized, Error> {
     let Specialized {
         air_hash,
         entry,
         spec,
         before,
-    } = specialize_one(r, m)?;
-    let spec = m.weighted(crate::pipeline::compile::weights::LOCKSTEP, |m| {
-        crate::lower::simd::lockstep::order(spec, p, r.inputs.one_row(), m)
-    })?;
+    } = specialized;
+    let spec = m.weighted(weights::LOCKSTEP, |m| lockstep::order(spec, key, m))?;
     Ok(Specialized {
         air_hash,
         entry,

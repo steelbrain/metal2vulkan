@@ -631,35 +631,58 @@ struct Decision {
     device: u32,
 }
 
+/// What [`order`] reads besides the entry, which with it decides the order completely: of the
+/// device's profile, whether it runs a simdgroup in lockstep and whether a subgroup barrier where
+/// the simdgroup's threads diverge orders the threads that run it together; and whether the
+/// kernel is its one-row variant (`LoweringInputs::one_row`). Two asks with equal keys order an
+/// entry the same way, so an ordered entry is kept under its key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrderKey {
+    device: bool,
+    tangle: bool,
+    one_row: bool,
+}
+
+impl OrderKey {
+    /// The key of a device of profile `p`, for the one-row variant where `one_row`.
+    pub fn of(p: &DeviceProfile, one_row: bool) -> OrderKey {
+        let device = p
+            .fields()
+            .enabled
+            .properties
+            .contains(&VkProperty::SimdgroupLockstep);
+        // A subgroup barrier where the simdgroup's threads diverge orders the threads that run it
+        // together (the tangle) where the entry reconverges maximally on 32-lane subgroups, so no
+        // place needs the `Emulated` tier there.
+        let model = &p.fields().subgroup;
+        let tangle = model.maximal_reconvergence
+            && matches!(
+                tier(&SimdClass::CrossLane(OpBits::BASIC), Stage::Kernel, model),
+                Ok(Tier::Direct | Tier::Cluster32)
+            );
+        OrderKey {
+            device,
+            tangle,
+            one_row,
+        }
+    }
+}
+
 /// Order the threadgroup-memory and device-memory accesses of kernel `e` that only Apple's
 /// simdgroup lockstep orders, by inserting barriers into its body (see the module
-/// documentation), for a device of profile `p`. Where `one_row` (the kernel's one-row variant,
-/// `LoweringInputs::one_row`) and each simdgroup lying within one row orders no pair a
-/// simdgroup barrier would ([`Lockstep::rows`]), only the threadgroup barriers are inserted.
-/// An entry of another stage, or a kernel without such a pair, is returned unchanged.
-pub fn order(
-    mut e: Entry,
-    p: &DeviceProfile,
-    one_row: bool,
-    m: &mut Meter,
-) -> Result<Entry, Error> {
+/// documentation), for the device and variant of `key`. Where the key's one-row variant and
+/// each simdgroup lying within one row orders no pair a simdgroup barrier would
+/// ([`Lockstep::rows`]), only the threadgroup barriers are inserted. An entry of another stage,
+/// or a kernel without such a pair, is returned unchanged.
+pub fn order(mut e: Entry, key: OrderKey, m: &mut Meter) -> Result<Entry, Error> {
     if !matches!(e.ep.stage, AbiStage::Kernel { .. }) {
         return Ok(e);
     }
-    let device = p
-        .fields()
-        .enabled
-        .properties
-        .contains(&VkProperty::SimdgroupLockstep);
-    // A subgroup barrier where the simdgroup's threads diverge orders the threads that run it
-    // together (the tangle) where the entry reconverges maximally on 32-lane subgroups, so no place
-    // needs the `Emulated` tier there.
-    let model = &p.fields().subgroup;
-    let tangle = model.maximal_reconvergence
-        && matches!(
-            tier(&SimdClass::CrossLane(OpBits::BASIC), Stage::Kernel, model),
-            Ok(Tier::Direct | Tier::Cluster32)
-        );
+    let OrderKey {
+        device,
+        tangle,
+        one_row,
+    } = key;
     let before = m.ledger();
     let decided = decide(&e, (device, tangle), one_row, m);
     let spent = usize::try_from(m.ledger().saturating_sub(before)).unwrap_or(usize::MAX);
