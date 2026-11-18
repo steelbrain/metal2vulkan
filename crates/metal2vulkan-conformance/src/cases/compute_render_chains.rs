@@ -309,7 +309,15 @@ impl Case for ComputeRenderChain {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // The row whose fragment function samples the kernel's texture does so through a runtime
+        // sampler slot, which the new runtime's pipelines note as scaled
+        // (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it rests on).
+        let mut named = vec![crate::replay::shared_memory_notice()];
+        if self.subject.crossing == Crossing::KernelToFragment {
+            named.push(crate::replay::pixel_sampler_scaling_notice());
+        }
+        named
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -375,8 +375,10 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
 ///
 /// A declaration, like every [`notice_allowance`]: it loosens the notices site alone, and every
 /// value still compares exactly. Measured on lavapipe (Mesa 26.2.4) through the rt side: it fired
-/// for depth16-texel-reads, nearest-sample-positions and the six half-read-nans cases, each
-/// divergent at the notices site and at no value the old runtime's ledger does not list.
+/// for depth16-texel-reads, nearest-sample-positions and the six half-read-nans cases, and, with
+/// the notes of the render pipeline states the side's passes set, for the three render-then-sample
+/// cases, multi-draw-state-changes, frame-length-chain and kernel-writes-then-fragment-samples,
+/// each divergent at the notices site and at no value the old runtime's ledger does not list.
 pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::PixelSamplerScaling.code())
 }
