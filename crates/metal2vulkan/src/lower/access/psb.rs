@@ -167,9 +167,15 @@ pub fn prepare(
 /// How a device-address memory reaches its units.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reach {
-    /// From the 4-aligned device address below one access ([`prepare`], [`prepare_at`]): each
-    /// unit at that address plus its index times its size, in 64 bits.
+    /// From the 4-aligned device address below one access ([`prepare`]): each unit at that
+    /// address plus its index times its size, in 64 bits.
     Rounded,
+    /// From the 4-aligned device address below one access of a slot under the identity domains
+    /// ([`prepare_at`]): each unit at that address plus its index times its size, the product in
+    /// 32 bits and zero-extended. A unit lies within 2^31 bytes of that address, the runtime
+    /// making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the product is
+    /// exact, and no 64-bit shift or multiply scales an index.
+    Below,
     /// From a slot's own device address under the identity domains ([`prepare_direct`]): each
     /// unit at that address plus its 32-bit byte offset sign-extended, in 64-bit integers, then
     /// one `OpConvertUToPtr` to the unit's block (`NonWritable` for a load of an unwritten slot).
@@ -203,7 +209,10 @@ pub fn prepare_at(
     })?;
     let low = fb.convert(ConvOp::UConvert, low, u32_)?;
     Ok(PsbAccess {
-        mem: PsbMem::at(base),
+        mem: PsbMem {
+            reach: Reach::Below,
+            ..PsbMem::at(base)
+        },
         off: low,
         inb: None,
     })
@@ -329,11 +338,15 @@ impl PsbMem {
                 let addr = fb.binary(BinOp::IAdd, self.base, d)?;
                 self.place(fb, addr, ty, load)
             }
-            Reach::Direct => {
+            Reach::Below | Reach::Direct => {
                 let shift = crate::memory::leaf::k32(fb, bytes.trailing_zeros())?;
                 let at = crate::memory::leaf::u32_op(fb, BinOp::ShiftLeftLogical, index, shift)?;
                 let u64_ = u64_ty(fb)?;
-                let d = fb.convert(ConvOp::SConvert, at, u64_)?;
+                let widen = match self.reach {
+                    Reach::Direct => ConvOp::SConvert,
+                    _ => ConvOp::UConvert,
+                };
+                let d = fb.convert(widen, at, u64_)?;
                 let addr = fb.binary(BinOp::IAdd, self.base, d)?;
                 self.place(fb, addr, ty, load)
             }

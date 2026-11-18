@@ -15,6 +15,7 @@ mod engine_absent_handles;
 mod engine_absent_threadgroup;
 mod engine_absent_value_arguments;
 mod engine_access;
+mod engine_access_offsets;
 mod engine_aggregate_access;
 mod engine_agx;
 mod engine_air_2_1;
