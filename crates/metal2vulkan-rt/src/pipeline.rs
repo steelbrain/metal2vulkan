@@ -15,6 +15,15 @@
 //! once, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that module
 //! at their own threadgroup size, and a `dispatchThreads` grid that is not a whole number of
 //! threadgroups runs its partial-threadgroups variant at its size, lowered at the first such grid.
+//! Where it holds no threadgroup memory, which every variant would observe it through, and runs a
+//! lockstep barrier where each SIMD group lies within one row
+//! (`CompiledFunction::runs_lockstep_barriers_in_rows`), the translator answers too whether its
+//! one-row variant (`LoweringInputs::one_row`) of partial threadgroups observes it: a kernel whose
+//! only observations are lockstep pairs that are apart where each SIMD group lies within one row
+//! of its threadgroup has none there. Such a variant is lowered with the state, and
+//! a direct dispatch whose threadgroups keep each SIMD group in one row runs it in tiles, as a
+//! kernel that does not observe its partition runs every direct dispatch, on its own tile
+//! `VkPipeline` made with the state; any other dispatch runs the plain module, its order kept.
 //! Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
 //!
 //! What a state compiles is its content ([`KernelKey`]), never the state: the translator's key
@@ -102,11 +111,15 @@ pub(crate) struct Compiled {
     pub(crate) whole: Kernel,
     /// How a direct dispatch runs.
     pub(crate) form: Form,
+    /// An observing kernel's one-row variant of partial threadgroups, which does not observe its
+    /// partition: a direct dispatch whose threadgroups keep each SIMD group in one row runs it in
+    /// tiles (`encoder::keeps_rows`). Made with the state.
+    pub(crate) rows: Option<Kernel>,
     /// The emulated-SIMD-group variant of a kernel whose `whole` module runs only whole SIMD
     /// groups, lowered at the first dispatch that needs it.
     pub(crate) emulated: Option<Later>,
     /// The translator's notes of where the kernel's answers may differ from Metal's, of the
-    /// module made with the content.
+    /// modules made with the content.
     notes: Vec<PrecisionNote>,
 }
 
@@ -533,8 +546,12 @@ impl crate::Device {
     /// thread, which waits for it, within the translator's 20-second budget per lowering, once:
     /// a kernel that does not observe its threadgroup partition as its partial-threadgroups
     /// variant, whose 256-wide tile's `VkPipeline`, or an image-only kernel's 16x16 workgroups'
-    /// one, is made here too, and one that does as its plain module. The translator answers which
-    /// without lowering, where the cache directory holds no lowering of the variant to answer it.
+    /// one, is made here too, and one that does as its plain module, with its one-row variant
+    /// and that variant's tile `VkPipeline` where the kernel holds no threadgroup memory, runs a
+    /// lockstep barrier where each SIMD group lies within one row, and that variant does not
+    /// observe it: a direct dispatch whose threadgroups keep each SIMD group
+    /// within one row runs it in tiles. The translator answers which without lowering, where the
+    /// cache directory holds no lowering of the variant to answer it.
     /// Where the device has a cache directory ([`DeviceOptions::pipeline_cache_dir`]), a lowering a
     /// device made before is read from it in place of lowering again, and every `VkPipeline` is
     /// made from its file there where it has one. The content's other `VkPipeline`s are made
@@ -606,7 +623,7 @@ impl Compiled {
             compiled.kernel = StageSource::Compiled(function);
             translator.compile_compute_pipeline(&compiled, &budget)
         };
-        let (whole, partial, image_only, source) = match &descriptor.kernel {
+        let (whole, partial, image_only, source, rows) = match &descriptor.kernel {
             StageSource::Function(function) => {
                 let entries = &core.entries;
                 let plain = translator
@@ -661,20 +678,28 @@ impl Compiled {
                         let image_only = variant.is_image_only();
                         let pipeline = compiled(variant).map_err(Error::Translation)?;
                         let partial = (!grid_tiles(&pipeline)).then_some(None);
-                        (pipeline, partial, image_only, Some(source))
+                        (pipeline, partial, image_only, Some(source), None)
                     }
                     // The kernel observes its partition, or its variant is refused: its plain
-                    // module, the variant lowered at the first grid that needs it.
+                    // module, the variant lowered at the first grid that needs it, and its
+                    // one-row variant where that does not observe the partition. Only a kernel
+                    // that runs a lockstep barrier in one-row threadgroups is asked for it: in
+                    // any other the variant would run the same barriers as its own size does.
                     _ => {
-                        let plain = lower(&plain).and_then(compiled);
-                        let plain = plain.map_err(Error::Translation)?;
+                        let plain = lower(&plain).map_err(Error::Translation)?;
+                        let in_rows = plain.runs_lockstep_barriers_in_rows();
+                        let plain = compiled(plain).map_err(Error::Translation)?;
+                        let rows = match in_rows && !holds_threadgroup_memory(&plain) {
+                            true => one_row(&core, descriptor, function, &inputs, &budget)?,
+                            false => None,
+                        };
                         let partial = Box::new(Later {
                             descriptor: descriptor.clone(),
                             function: function.clone(),
                             inputs,
                             lowered: OnceLock::new(),
                         });
-                        (plain, Some(Some(partial)), false, Some(source))
+                        (plain, Some(Some(partial)), false, Some(source), rows)
                     }
                 }
             }
@@ -690,14 +715,36 @@ impl Compiled {
                 // variant states `GridTiles`: a module without it observes its partition or is
                 // the plain module, and runs at its own size.
                 let partial = (!grid_tiles(&pipeline)).then_some(None);
-                (pipeline, partial, function.is_image_only(), None)
+                (pipeline, partial, function.is_image_only(), None, None)
             }
         };
         let required = descriptor.required_threads_per_threadgroup;
         let mut notes = whole.stage.precision_notes.clone();
+        let whole = Kernel::new(&core, whole, required)?;
+        // The one-row module, where a state of the plain one holds every constexpr sampler use of
+        // it, as a variant lowered later must.
+        let rows = match rows.map(|rows| (rows.stage.precision_notes.clone(), rows)) {
+            Some((more, rows)) => match Kernel::new(&core, rows, required) {
+                Ok(rows) if covers(&whole.interface, &rows.interface) => {
+                    notes.extend(more);
+                    Some(rows)
+                }
+                Ok(mut rows) => {
+                    rows.release(&core);
+                    None
+                }
+                // A one-row module that reads what the encoder does not supply is left out.
+                Err(Error::Unsupported(Gap::KernelInput)) => None,
+                Err(error) => {
+                    let mut whole = whole;
+                    whole.release(&core);
+                    return Err(error);
+                }
+            },
+            None => None,
+        };
         notes.sort_unstable();
         notes.dedup();
-        let whole = Kernel::new(&core, whole, required)?;
         // A module that runs only whole SIMD groups has its emulated variant for the others.
         let emulated = source
             .filter(|_| !whole.interface.multiples.is_empty())
@@ -714,31 +761,34 @@ impl Compiled {
             (None, false) => Form::Tiled,
             (None, true) => Form::Square,
         };
-        let compiled = Compiled::new(core, whole, form, emulated, notes);
+        let compiled = Compiled::new(core, (whole, rows), form, emulated, notes);
         // A tiling kernel's grids one deep run on one `VkPipeline`, made with the state: its
-        // tiles', or an image-only kernel's square workgroups'.
-        let first = match compiled.form {
-            Form::Tiled => Some(([GRID_TILE_THREADS, 1, 1], true)),
-            Form::Square => Some((SQUARE, false)),
-            Form::Sized { .. } => None,
+        // tiles', or an image-only kernel's square workgroups'; and so do an observing kernel's
+        // one-row tiles.
+        let first = match (&compiled.form, &compiled.rows) {
+            (Form::Tiled, _) => Some((&compiled.whole, [GRID_TILE_THREADS, 1, 1], true)),
+            (Form::Square, _) => Some((&compiled.whole, SQUARE, false)),
+            (Form::Sized { .. }, Some(rows)) => Some((rows, [GRID_TILE_THREADS, 1, 1], true)),
+            (Form::Sized { .. }, None) => None,
         };
-        if let Some((size, tiles)) = first {
+        if let Some((kernel, size, tiles)) = first {
             let variant = Variant {
                 size,
-                threadgroup_lengths: vec![0; compiled.whole.interface.threadgroups.len()],
+                threadgroup_lengths: vec![0; kernel.interface.threadgroups.len()],
                 tiles,
             };
-            let made = compiled.whole.make(&compiled.core, &variant)?;
-            let variants = &compiled.whole.variants;
+            let made = kernel.make(&compiled.core, &variant)?;
+            let variants = &kernel.variants;
             variants.keep(&mut lock(&variants.more), variant, made);
         }
         Ok(compiled)
     }
 
-    /// The content of `whole`, its form, emulated variant and notes, counted live.
+    /// The content of `whole`, its one-row module, its form, emulated variant and notes, counted
+    /// live.
     fn new(
         core: Arc<Core>,
-        whole: Kernel,
+        (whole, rows): (Kernel, Option<Kernel>),
         form: Form,
         emulated: Option<Later>,
         notes: Vec<PrecisionNote>,
@@ -748,6 +798,7 @@ impl Compiled {
             core,
             whole,
             form,
+            rows,
             emulated,
             notes,
         }
@@ -761,6 +812,66 @@ fn grid_tiles(pipeline: &ComputePipeline) -> bool {
         .dependencies
         .iter()
         .any(|dependency| dependency.fact == RuntimeFact::GridTiles)
+}
+
+/// Whether `pipeline`'s kernel holds threadgroup memory: Metal's static part, or a
+/// `[[threadgroup(n)]]` argument, whose length the module specializes on.
+fn holds_threadgroup_memory(pipeline: &ComputePipeline) -> bool {
+    pipeline.metal_info.static_threadgroup_memory_length != 0
+        || (pipeline.stage.specialization.constants.iter())
+            .any(|constant| matches!(constant.key, SpecKey::TgLength(_)))
+}
+
+/// The kernel `function`'s one-row variant of partial threadgroups (`partial`, its
+/// partial-threadgroups inputs, with `one_row`), compiled for `descriptor`'s pipeline, where it
+/// does not observe its threadgroup partition and runs its grid in tiles: what the cache directory
+/// holds, else lowered unless the translator answers that it observes the partition, as the
+/// partial-threadgroups variant of a kernel is. The translator's refusal of it is kept like a
+/// lowering. `None` where it observes the partition, is refused, is image-only or runs no tiles.
+fn one_row(
+    core: &Core,
+    descriptor: &ComputePipelineDescriptor,
+    function: &FunctionDescriptor,
+    partial: &LoweringInputs,
+    budget: &Budget,
+) -> Result<Option<ComputePipeline>, Error> {
+    let translator = &core.translator;
+    let mut inputs = partial.clone();
+    inputs.one_row = true;
+    let key = *translator.function_compile_key(function, &inputs).digest();
+    if core.caches.refused(&key) {
+        core.counters.count(Metric::TranslationsLoaded);
+        return Ok(None);
+    }
+    let variant = match kept(core, function, &inputs) {
+        Some(kept) => kept,
+        None => {
+            let observes = (translator)
+                .kernel_observes_partition(function, &inputs, budget, &core.entries)
+                .map_err(Error::Translation);
+            core.note_entries();
+            if observes? {
+                return Ok(None);
+            }
+            match lower(core, function, &inputs, budget, &core.entries) {
+                Ok(variant) => variant,
+                Err(TranslationError::Unsupported(_)) => {
+                    cache::keep_refusal(core, &key);
+                    return Ok(None);
+                }
+                Err(error) => return Err(Error::Translation(error)),
+            }
+        }
+    };
+    if variant.observes_threadgroup_partition() || variant.is_image_only() {
+        return Ok(None);
+    }
+    let mut compiled = descriptor.clone();
+    compiled.kernel = StageSource::Compiled(variant);
+    let pipeline = translator
+        .compile_compute_pipeline(&compiled, budget)
+        .map_err(Error::Translation)?;
+    Ok(grid_tiles(&pipeline).then_some(pipeline))
 }
 
 /// The lowering of the kernel `function` under `inputs` a device kept in the cache directory under
@@ -882,6 +993,7 @@ fn interface(
             | RuntimeFact::IndirectGroupCount
             | RuntimeFact::PartialThreadgroups
             | RuntimeFact::GridTiles
+            | RuntimeFact::OneRow
             | RuntimeFact::DeviceAddresses { .. } => {}
             // What a variant could relieve, which the module runs without: a predicated walk
             // that unit axes would make less divergent, and lockstep barriers a one-row region
@@ -1119,10 +1231,11 @@ impl ComputePipelineState {
     }
 
     /// No Metal counterpart: where the kernel's answers may differ from Metal's on this device,
-    /// fixed per operation by the translator, for every module the state runs: the one made with
-    /// the state, and once a dispatch needed them, its variants: the emulated-SIMD-group module
-    /// that runs threadgroups of partial SIMD groups and an observing kernel's
-    /// partial-threadgroups module. Metal's answers are its own GPU's.
+    /// fixed per operation by the translator, for every module the state runs: those made with
+    /// the state (an observing kernel's one-row module among them), and once a dispatch needed
+    /// them, its variants: the emulated-SIMD-group module that runs threadgroups of partial SIMD
+    /// groups and an observing kernel's partial-threadgroups module. Metal's answers are its own
+    /// GPU's.
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
         let compiled = &self.inner.compiled;
         let mut notes = compiled.notes.clone();
@@ -1155,7 +1268,8 @@ impl ComputePipelineState {
             interface,
             variants: Variants::default(),
         };
-        let compiled = Compiled::new(core, whole, Form::Sized { partial: None }, None, Vec::new());
+        let form = Form::Sized { partial: None };
+        let compiled = Compiled::new(core, (whole, None), form, None, Vec::new());
         Ok(ComputePipelineState {
             inner: Arc::new(PipelineInner {
                 compiled: Arc::new(compiled),
@@ -1419,6 +1533,9 @@ impl Drop for Compiled {
         // it retired.
         self.core.counters.fall(Gauge::Kernels);
         self.whole.release(&self.core);
+        if let Some(rows) = &mut self.rows {
+            rows.release(&self.core);
+        }
         let partial = match &mut self.form {
             Form::Sized { partial } => partial.as_deref_mut(),
             Form::Tiled | Form::Square => None,

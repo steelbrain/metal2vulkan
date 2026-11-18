@@ -1050,7 +1050,23 @@ that touch blocks first.
   lowered plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
   module at their own size, and a `dispatch_threads` grid that is not a whole number of
   threadgroups runs its partial-threadgroups variant, which the reaper lowers for the first such
-  grid, which waits for it (a first-use wait).
+  grid, which waits for it (a first-use wait). One that holds no threadgroup memory (which any
+  variant of it observes the partition through) and runs a lockstep barrier where each SIMD group
+  lies within one row (`CompiledFunction::runs_lockstep_barriers_in_rows`) has its one-row variant
+  of partial threadgroups asked too (`LoweringInputs::one_row`, whose lockstep order leaves out the
+  barriers of pairs that meet only where a SIMD group spans two rows). A kernel whose lockstep
+  barriers all order such pairs is not asked: its own module runs them only where its threadgroup
+  size lets a SIMD group span two rows, a test the driver folds, so the variant would leave out
+  nothing more. Only the order's own barriers are left out: a
+  kernel that observes the partition otherwise (a barrier of its own, where a thread may read
+  what another row's thread stored before it; a fence or an atomic of threadgroup or SIMD-group
+  scope; a SIMD-group or quad function; a builtin of the partition) observes it in that variant
+  too, and keeps its own size. Where the translator answers that the variant does not observe
+  the partition, it is lowered with the state, its tiles' `VkPipeline` made with
+  it, and a direct dispatch whose threadgroups keep each SIMD group within one row (none has more
+  than one row, or every one's rows are a multiple of 32 threads wide, the grid's edge included)
+  runs it in tiles, as a kernel that does not observe its partition runs one; any other dispatch
+  runs the plain module at its own size, its order kept.
 - A threadgroup deeper than 64, the floor's `maxComputeWorkGroupSize[2]`, runs as one row of its
   threads, a workgroup of `x·y·z` by 1 by 1, each thread's position its index unflattened in
   Metal's order (the translator's `SpecKey::DeepThreadgroup`), on every device alike; any other
@@ -1063,7 +1079,8 @@ that touch blocks first.
   runs its grid in tiles, 46 for an image-only one (the square one and one per tile, three of
   whose tiles are deeper than 64), and for one that observes its partition one per threadgroup
   size and threadgroup memory lengths, and one more per size for grids that are not whole
-  threadgroups; for any kernel's indirect dispatches, one per size and lengths.
+  threadgroups, with one for its one-row module's tiles where it has that module; for any
+  kernel's indirect dispatches, one per size and lengths.
 - A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
   `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32), or one per
   32-lane cluster of a 64- or 128-lane subgroup, runs only workgroups of whole subgroups.
@@ -1234,9 +1251,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   loop need a vote word that does not fit beside its threadgroup memory in
   `maxComputeSharedMemorySize`.
 - A kernel that observes its threadgroup partition makes a `VkPipeline` per threadgroup size it
-  is dispatched at.
+  is dispatched at, but for the grids its one-row module runs in tiles.
 - A kernel that observes its threadgroup partition runs in workgroups of its own threadgroup
-  size, never in tiles. On Intel's Windows driver (101.2145) for the UHD 630, a kernel that
+  size, never in tiles, but for the grids its one-row module runs. On Intel's Windows driver (101.2145) for the UHD 630, a kernel that
   touches a buffer per thread through its device address runs slower in narrow square workgroups
   than in tiles or in wide workgroups. Over a 2048x2048 grid of `RGBA16Float` texels, a kernel
   reading one texel and storing 16 bytes per thread took 7,775 µs in 16x16 workgroups, against

@@ -3,11 +3,13 @@
 //! `MultiRegion` 0 in workgroups of 16x16x1 where it is one deep and of its tile where it is
 //! deeper, with no tile decode and its edge tested where they do not divide the grid. A kernel that
 //! does not observe it and is not image-only runs every grid in the tiles the region carries. An
-//! observing kernel runs at its own size. A size deeper than `DEEP_THREADGROUP` runs as one row of
+//! observing kernel runs at its own size, but one with its one-row module runs a grid whose
+//! threadgroups keep each SIMD group in one row in that module's tiles. A size deeper than
+//! `DEEP_THREADGROUP` runs as one row of
 //! its threads, so every workgroup is within the floor's `maxComputeWorkGroupSize`, whatever the
 //! threadgroup size.
 
-use crate::encoder::{choose, image_tile, Choice, Direct, Module};
+use crate::encoder::{choose, image_tile, keeps_rows, Choice, Direct, Module};
 use crate::floor::{WORKGROUP_INVOCATIONS, WORKGROUP_SIZE};
 use crate::pipeline::{Form, SQUARE};
 use metal2vulkan::pipeline::{grid_tile, DEEP_THREADGROUP, GRID_TILE_THREADS};
@@ -43,6 +45,7 @@ fn an_image_only_kernels_grid_one_deep_runs_in_square_workgroups() {
     ] {
         let choice = choose(
             &Form::Square,
+            false,
             Some(threads_of(threads, [8, 8, 1])),
             [8, 8, 1],
         );
@@ -67,6 +70,7 @@ fn an_image_only_kernels_deeper_grid_runs_in_workgroups_of_its_tile() {
         let tile = image_tile(threads, [4, 4, 4]);
         let choice = choose(
             &Form::Square,
+            false,
             Some(threads_of(threads, [4, 4, 4])),
             [4, 4, 4],
         );
@@ -146,6 +150,7 @@ fn a_tiling_kernel_runs_every_grid_in_its_regions_tiles() {
         let tile = grid_tile(threads);
         let choice = choose(
             &Form::Tiled,
+            false,
             Some(threads_of(threads, [32, 1, 1])),
             [32, 1, 1],
         );
@@ -167,12 +172,22 @@ fn a_tiling_kernel_runs_every_grid_in_its_regions_tiles() {
 #[test]
 fn an_observing_kernel_and_an_indirect_dispatch_run_at_their_own_size() {
     let sized = Form::Sized { partial: None };
-    let whole = choose(&sized, Some(threads_of([64, 64, 1], [8, 8, 1])), [8, 8, 1]);
+    let whole = choose(
+        &sized,
+        false,
+        Some(threads_of([64, 64, 1], [8, 8, 1])),
+        [8, 8, 1],
+    );
     assert_eq!((whole.module, whole.local), (Module::Whole, [8, 8, 1]));
-    let ragged = choose(&sized, Some(threads_of([60, 64, 1], [8, 8, 1])), [8, 8, 1]);
+    let ragged = choose(
+        &sized,
+        false,
+        Some(threads_of([60, 64, 1], [8, 8, 1])),
+        [8, 8, 1],
+    );
     assert_eq!(ragged.module, Module::Partial);
     for form in [Form::Tiled, Form::Square, Form::Sized { partial: None }] {
-        let indirect = choose(&form, None, [4, 2, 1]);
+        let indirect = choose(&form, false, None, [4, 2, 1]);
         assert_eq!(
             indirect,
             Choice {
@@ -211,20 +226,102 @@ fn a_threadgroup_deeper_than_the_floor_runs_as_one_row() {
     for threads in [[4, 16, 320], [64, 64, 1], [1, 1, 1024]] {
         let direct = Some(threads_of(threads, size));
         for form in [Form::Tiled, Form::Square, Form::Sized { partial: None }] {
-            let choice = choose(&form, direct, size);
+            let choice = choose(&form, false, direct, size);
             assert!(within(choice.local), "{threads:?}: {:?}", choice.local);
         }
-        let sized = choose(&Form::Sized { partial: None }, direct, size);
+        let sized = choose(&Form::Sized { partial: None }, false, direct, size);
         assert_eq!(workgroup(sized.local), [320, 1, 1], "{threads:?}");
     }
-    let indirect = choose(&Form::Sized { partial: None }, None, size);
+    let indirect = choose(&Form::Sized { partial: None }, false, None, size);
     assert_eq!(workgroup(indirect.local), [320, 1, 1]);
     let column = [1, 1, 1024];
     assert_eq!(grid_tile(column), [1, 1, 256]);
-    let choice = choose(&Form::Square, Some(threads_of(column, size)), size);
+    let choice = choose(&Form::Square, false, Some(threads_of(column, size)), size);
     assert_eq!(
         (choice.module, choice.local, choice.nominal),
         (Module::Whole, [1, 1, 256], [1, 1, 256])
     );
     assert_eq!(workgroup(choice.local), [256, 1, 1]);
+}
+
+/// Each SIMD group, 32 consecutive linear threads of its threadgroup, lies within one row where no
+/// threadgroup has more than one row, or where every threadgroup's rows are whole SIMD groups,
+/// the partial threadgroups at the grid's edge included.
+#[test]
+fn a_grid_keeps_its_simd_groups_in_rows_where_its_threadgroups_do() {
+    for (threads, size, keeps) in [
+        ([2048, 1024, 1], [32, 2, 1], true),
+        ([2048, 1024, 1], [64, 8, 1], true),
+        ([2048, 1024, 1], [512, 1, 1], true),
+        ([2048, 1024, 4], [32, 1, 2], true),
+        // One row whose width is not a multiple of 32, and a ragged one.
+        ([2000, 1, 1], [48, 1, 1], true),
+        ([2000, 7, 3], [48, 1, 1], true),
+        // A grid of one row in threadgroups of four: each is one row.
+        ([10, 1, 1], [16, 4, 1], true),
+        // Fewer rows at the edge, as wide.
+        ([2048, 1023, 1], [64, 4, 1], true),
+        // Rows of 16 or 48 threads: a SIMD group spans two.
+        ([2048, 1024, 1], [16, 2, 1], false),
+        ([2048, 1024, 1], [48, 2, 1], false),
+        ([2048, 1024, 2], [16, 1, 2], false),
+        // The edge's threadgroups are 56 wide.
+        ([2040, 1024, 1], [64, 4, 1], false),
+    ] {
+        assert_eq!(keeps_rows(threads, size), keeps, "{threads:?} in {size:?}");
+    }
+}
+
+/// An observing kernel with its one-row module runs a grid whose threadgroups keep each SIMD
+/// group in one row in that module's tiles, a ragged one included, as a tiling kernel runs every
+/// grid; any other grid, and every grid of a kernel without the module, at its own size; and an
+/// indirect dispatch at its own size.
+#[test]
+fn an_observing_kernels_grids_in_rows_run_its_one_row_tiles() {
+    let sized = Form::Sized { partial: None };
+    for (threads, size) in [
+        ([2048, 1024, 1], [32, 2, 1]),
+        ([2048, 1024, 1], [64, 8, 1]),
+        ([2048, 1024, 1], [512, 1, 1]),
+        ([2000, 7, 3], [48, 1, 1]),
+    ] {
+        let direct = Some(threads_of(threads, size));
+        let tile = grid_tile(threads);
+        assert_eq!(
+            choose(&sized, true, direct, size),
+            Choice {
+                module: Module::Rows,
+                local: [GRID_TILE_THREADS, 1, 1],
+                nominal: tile,
+                direct: Some(over(threads, tile)),
+            },
+            "{threads:?} in {size:?}"
+        );
+        let own = choose(&sized, false, direct, size);
+        let module = match threads_of(threads, size).ragged {
+            true => Module::Partial,
+            false => Module::Whole,
+        };
+        assert_eq!(
+            (own.module, own.local),
+            (module, size),
+            "{threads:?} in {size:?}"
+        );
+    }
+    for (threads, size, module) in [
+        ([2048, 1024, 1], [16, 2, 1], Module::Whole),
+        ([2040, 1024, 1], [64, 4, 1], Module::Partial),
+    ] {
+        let choice = choose(&sized, true, Some(threads_of(threads, size)), size);
+        assert_eq!(
+            (choice.module, choice.local),
+            (module, size),
+            "{threads:?} in {size:?}"
+        );
+    }
+    let indirect = choose(&sized, true, None, [32, 2, 1]);
+    assert_eq!(
+        (indirect.module, indirect.local),
+        (Module::Whole, [32, 2, 1])
+    );
 }

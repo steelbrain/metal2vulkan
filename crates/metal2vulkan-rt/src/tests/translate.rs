@@ -3,7 +3,11 @@
 //! `VkPipeline` made with its state, and an indirect dispatch at its own threadgroup size; a
 //! precise one answers the same words in a tile as at the app's shape. A kernel that does observe it runs whole grids at
 //! their own size, a `dispatchThreads` grid that is not a whole number of threadgroups on its
-//! partial-threadgroups variant, and a threadgroup count past the device's limit split. Each
+//! partial-threadgroups variant, and a threadgroup count past the device's limit split; one whose
+//! only observations are lockstep barriers that run where each SIMD group lies within one row runs
+//! grids in rows on its one-row tiles, while one whose lockstep barriers all order pairs across
+//! rows, and one that reads another row's word after a threadgroup barrier, keep their own size
+//! there. Each
 //! answer is checked against the program's, and each `VkPipeline` made after creation is a
 //! first-use wait the counters record. Vector accesses through pointers cast from a `uint`
 //! buffer land at their own addresses, 4, 8 or 12 bytes past a multiple of 16, as Metal places them.
@@ -1850,6 +1854,330 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                 "{name}: the nil buffer's words"
             );
             println!("{name}: a buffer argument bound to nothing read zeros");
+        });
+    }
+
+    /// The kernel `entry` of the harness fixture (`fixtures/public/harness/workloads.ll`, our
+    /// own), or None where `llvm-as` is missing.
+    fn harness_kernel(entry: &str) -> Option<ComputePipelineDescriptor> {
+        let fixture = metal2vulkan_devtools::fixtures_dir().join("harness/workloads.ll");
+        let bitcode = match llvm_assemble(&fixture) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return None;
+            }
+            Err(error) => panic!("{entry}: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function(entry).expect("the kernel");
+        Some(ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        )))
+    }
+
+    /// The state asks an observing kernel's one-row variant only where the kernel runs a
+    /// lockstep barrier in threadgroups whose SIMD groups each lie within one row
+    /// (`CompiledFunction::runs_lockstep_barriers_in_rows`). The harness fixture's `lcg_step`, a
+    /// step of each word in place at its thread's index, runs none there: its one barrier orders
+    /// only pairs that meet where a SIMD group spans two rows, so its own module leaves it out at
+    /// such a size. Its state makes no one-row module and no pipeline, and a grid of 256 threads in
+    /// threadgroups of 64 runs the plain module at its own size, a pipeline made by a first-use
+    /// wait, every word the program's. The fixture's `row_cells`, whose barriers stand past its
+    /// bounds test and so are SIMD-group barriers, keeps its one-row module, its tiles' pipeline
+    /// made with the state.
+    #[test]
+    fn every_device_makes_a_one_row_module_only_for_a_kernel_whose_lockstep_barriers_run_in_rows() {
+        let (Some(step), Some(cells)) = (harness_kernel("lcg_step"), harness_kernel("row_cells"))
+        else {
+            return;
+        };
+        const INCREMENT: u32 = 1_013_904_223;
+        each_device("compute_one_row_modules", |name, _, device| {
+            let made = device.counters().metrics();
+            let step_state = state(name, &device, &step);
+            let created = device.counters().metrics();
+            assert!(
+                step_state.inner.compiled.rows.is_none(),
+                "{name}: lcg_step has no one-row module"
+            );
+            assert_eq!(
+                created.pipelines_created, made.pipelines_created,
+                "{name}: lcg_step makes no pipeline with its state"
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut buffers = Buffers::new(&device, 1 << 16);
+            let words_in: Vec<u32> = (0..256).collect();
+            let buffer = buffers.buffer(4 * 256);
+            write(&buffer, 0, &le_bytes(&words_in));
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            (encoder.set_compute_pipeline_state(&step_state)).expect("a state");
+            encoder.set_buffer(Some(&buffer), 0, 0).expect("a buffer");
+            (encoder.set_bytes(&le_bytes(&[INCREMENT]), 1)).expect("the increment");
+            (encoder.dispatch_threads([256, 1, 1], [64, 1, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let want: Vec<u32> = (words_in.iter())
+                .map(|word| word.wrapping_mul(1_664_525).wrapping_add(INCREMENT))
+                .collect();
+            assert_eq!(words(&buffer, 0, 256), want, "{name}: lcg_step");
+            let ran = device.counters().metrics();
+            assert_eq!(
+                ran.pipelines_created - created.pipelines_created,
+                1,
+                "{name}: lcg_step at its own size"
+            );
+            assert_eq!(
+                ran.first_use_waits - created.first_use_waits,
+                1,
+                "{name}: first-use waits"
+            );
+            let cells_state = state(name, &device, &cells);
+            let after = device.counters().metrics();
+            assert!(
+                cells_state.inner.compiled.rows.is_some(),
+                "{name}: row_cells keeps its one-row module"
+            );
+            assert_eq!(
+                after.pipelines_created - ran.pipelines_created,
+                1,
+                "{name}: row_cells' one-row tiles, made with its state"
+            );
+            assert_eq!(
+                after.first_use_waits, ran.first_use_waits,
+                "{name}: first-use waits"
+            );
+            println!(
+                "{name}: lcg_step has no one-row module and ran at its own size; row_cells keeps it"
+            );
+        });
+    }
+
+    /// The harness fixture's `row_cells`: each thread inside the grid's width and height reads
+    /// `v = source[y * stride + x]` and writes `v`, `2 v` and `v + 1` to the words `3 cell` to
+    /// `3 cell + 2` of `destination`, `cell = y * width + x`, in `int` arithmetic, which Apple
+    /// compiles to `nsw` steps. It observes its threadgroup partition through its lockstep
+    /// barriers alone, which stand past the bounds test and run where each SIMD group lies
+    /// within one row, and its one-row variant, whose pairs are all apart, has none and does not
+    /// observe the partition: the state lowers that variant and makes its tile `VkPipeline` with
+    /// it, one pipeline and no first-use wait. Grids whose threadgroups keep each SIMD group in one
+    /// row (32 x 2, 64 x 8 and 512 x 1 over 256 x 24 threads, 64 x 4 over 256 x 23 and 48 x 1
+    /// over 200 x 23, the last three ragged) run on that pipeline, no other made and no wait;
+    /// threadgroups of 16 x 4 (whole subgroups of 32 or 64 lanes, their SIMD groups across rows)
+    /// run the plain module at their own size, its order kept: one more pipeline, made by a
+    /// first-use wait. Every answer is the program's.
+    #[test]
+    fn every_device_runs_grids_in_rows_of_an_observing_kernel_on_its_one_row_tiles() {
+        let Some(descriptor) = harness_kernel("row_cells") else {
+            return;
+        };
+        each_device("compute_row_cells", |name, _, device| {
+            let made = device.counters().metrics();
+            let state = state(name, &device, &descriptor);
+            let created = device.counters().metrics();
+            assert!(
+                state.inner.compiled.rows.is_some(),
+                "{name}: the one-row module, made with the state"
+            );
+            assert_eq!(
+                created.pipelines_created - made.pipelines_created,
+                1,
+                "{name}: the one-row tiles' pipeline, made with the state"
+            );
+            assert_eq!(
+                created.first_use_waits, made.first_use_waits,
+                "{name}: first-use waits"
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let mut buffers = Buffers::new(&device, 1 << 20);
+            let cells: u32 = 256 * 24;
+            let src = buffers.buffer(4 * u64::from(cells));
+            let value = |cell: u32| (7 * cell + 3) as f32;
+            let values: Vec<u32> = (0..cells).map(|cell| value(cell).to_bits()).collect();
+            write(&src, 0, &le_bytes(&values));
+            // Each dispatch: Metal's grid, its threadgroups, whether it is `dispatchThreads`.
+            let run = |grid: [u32; 3], size: [u32; 3], threads: bool| {
+                let width = match threads {
+                    true => grid[0],
+                    false => grid[0] * size[0],
+                };
+                let height = match threads {
+                    true => grid[1],
+                    false => grid[1] * size[1],
+                };
+                let mut buffers = Buffers::new(&device, 1 << 20);
+                let dst = buffers.buffer(12 * u64::from(cells));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&src), 0, 0).expect("a buffer");
+                encoder.set_buffer(Some(&dst), 0, 1).expect("a buffer");
+                for (index, word) in [(2, width), (3, height), (4, width)] {
+                    (encoder.set_bytes(&le_bytes(&[word]), index)).expect("a uniform");
+                }
+                let dispatched = match threads {
+                    true => encoder.dispatch_threads(grid, size),
+                    false => encoder.dispatch_threadgroups(grid, size),
+                };
+                dispatched.unwrap_or_else(|error| panic!("{name}: {grid:?} in {size:?}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let want: Vec<u32> = (0..width * height)
+                    .flat_map(|cell| {
+                        let v = value(cell);
+                        [v, 2.0 * v, v + 1.0].map(f32::to_bits)
+                    })
+                    .collect();
+                assert_eq!(
+                    words(&dst, 0, want.len()),
+                    want,
+                    "{name}: {grid:?} in {size:?}"
+                );
+            };
+            for size in [[32, 2, 1], [64, 8, 1], [512, 1, 1]] {
+                run([256, 24, 1], size, true);
+            }
+            run([256, 23, 1], [64, 4, 1], true);
+            run([200, 23, 1], [48, 1, 1], true);
+            let rows = device.counters().metrics();
+            assert_eq!(
+                rows.pipelines_created - created.pipelines_created,
+                0,
+                "{name}: grids in rows run on the one-row tiles' pipeline"
+            );
+            assert_eq!(
+                rows.first_use_waits, created.first_use_waits,
+                "{name}: first-use waits"
+            );
+            run([10, 6, 1], [16, 4, 1], false);
+            let after = device.counters().metrics();
+            assert_eq!(
+                after.pipelines_created - rows.pipelines_created,
+                1,
+                "{name}: threadgroups of 16 x 4 at their own size"
+            );
+            assert_eq!(
+                after.first_use_waits - rows.first_use_waits,
+                1,
+                "{name}: first-use waits"
+            );
+            println!(
+                "{name}: row cells checked in 32 x 2, 64 x 8, 512 x 1, 64 x 4 and 48 x 1 on the \
+                 one-row tiles (pipelines {} with the state, {} after), and in 16 x 4 at its own size",
+                created.pipelines_created - made.pipelines_created,
+                rows.pipelines_created - created.pipelines_created,
+            );
+        });
+    }
+
+    /// The harness fixture's `row_barrier` holds no threadgroup memory and observes its
+    /// threadgroup partition through `threadgroup_barrier(mem_flags::mem_device)`: each thread
+    /// stores `((y << 16) | x) + 1` to its cell, then, past the barrier, copies the word of its
+    /// column in row `y ^ 1` where that row is in the grid. Its one-row variant observes the
+    /// partition too, so the state makes no one-row module and no pipeline, and grids whose
+    /// threadgroups keep each SIMD group in one row run at their own size: 512 x 4 in 32 x 2 on
+    /// the plain module, 512 x 3 in 32 x 2 and 96 x 5 in 32 x 4 on the partial-threadgroups
+    /// variant, each its own pipeline made by a first-use wait; the first of those two waits once
+    /// more, for the variant's lowering. Every read sees the other row's
+    /// word, Metal's answer: the probe
+    /// `metal2vulkan-conformance/probes/row_barrier_reads.m` ran the same source over the same
+    /// grids on an Apple M3 Max under macOS 27.0.1, and no word of `seen` differed from it.
+    #[test]
+    fn every_device_keeps_a_kernel_that_reads_across_rows_after_a_barrier_at_its_own_size() {
+        let Some(descriptor) = harness_kernel("row_barrier") else {
+            return;
+        };
+        const FILL: u32 = 0xEEEE_EEEE;
+        each_device("compute_row_barrier", |name, _, device| {
+            let made = device.counters().metrics();
+            let state = state(name, &device, &descriptor);
+            let created = device.counters().metrics();
+            assert!(
+                state.inner.compiled.rows.is_none(),
+                "{name}: a kernel with a threadgroup barrier has no one-row module"
+            );
+            assert_eq!(
+                created.pipelines_created - made.pipelines_created,
+                0,
+                "{name}: no one-row tiles' pipeline made with the state"
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let run = |grid: [u32; 3], size: [u32; 3]| {
+                let count = grid[0] * grid[1];
+                let mut buffers = Buffers::new(&device, 1 << 20);
+                let cells = buffers.buffer(4 * u64::from(count));
+                let seen = buffers.buffer(4 * u64::from(count));
+                write(&cells, 0, &le_bytes(&vec![0; count as usize]));
+                write(&seen, 0, &le_bytes(&vec![FILL; count as usize]));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&cells), 0, 0).expect("a buffer");
+                encoder.set_buffer(Some(&seen), 0, 1).expect("a buffer");
+                (encoder.dispatch_threads(grid, size))
+                    .unwrap_or_else(|error| panic!("{name}: {grid:?} in {size:?}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let want: Vec<u32> = (0..grid[1])
+                    .flat_map(|y| {
+                        (0..grid[0]).map(move |x| match y ^ 1 {
+                            other if other < grid[1] => ((other << 16) | x) + 1,
+                            _ => FILL,
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    words(&seen, 0, want.len()),
+                    want,
+                    "{name}: {grid:?} in {size:?}"
+                );
+            };
+            // Each grid at a size its state has not run: one pipeline, made by a first-use wait.
+            // The first grid that is not whole threadgroups waits once more, for the lowering of
+            // the partial-threadgroups variant.
+            let mut before = created;
+            for (grid, size, waits, what) in [
+                ([512, 4, 1], [32, 2, 1], 1, "the plain module at 32 x 2"),
+                (
+                    [512, 3, 1],
+                    [32, 2, 1],
+                    2,
+                    "the partial variant, lowered, at 32 x 2",
+                ),
+                ([96, 5, 1], [32, 4, 1], 1, "the partial variant at 32 x 4"),
+            ] {
+                run(grid, size);
+                let after = device.counters().metrics();
+                assert_eq!(
+                    after.pipelines_created - before.pipelines_created,
+                    1,
+                    "{name}: pipelines made by {what}"
+                );
+                assert_eq!(
+                    after.first_use_waits - before.first_use_waits,
+                    waits,
+                    "{name}: first-use waits of {what}"
+                );
+                before = after;
+            }
+            println!(
+                "{name}: row barrier reads checked in 512 x 4 and 512 x 3 in 32 x 2 and 96 x 5 in \
+                 32 x 4, at their own size (no one-row module)"
+            );
         });
     }
 
