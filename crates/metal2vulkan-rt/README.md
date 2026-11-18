@@ -335,18 +335,21 @@ made, with no lock, and never rewritten for layouts.
     SDK says Managed storage has no effect on Apple silicon; the documented contract, not that
     answer, is the rule here.
 - `Device::minimum_linear_texture_alignment(pixel_format)` answers
-  `minimumLinearTextureAlignmentForPixelFormat:` with the device's linear row rounding: the
-  smallest power of two from 16 to 4,096 at which the device lays the rows of a 3-row linear
-  image of each width of 1, 3, 17, 64, 65, 100, 129, 1,000 and 1,920 texels at the row rounded up
-  to it; the largest over shader read, read and render, and read and write, where the device
-  makes such images; 16 where no candidate holds, and a texture of that format over a buffer is
-  then never in place. Each image is made, read and destroyed, never bound, once per format for
+  `minimumLinearTextureAlignmentForPixelFormat:` with the device's linear row rounding: the smallest
+  power of two from the format's texel bytes to 4,096 at which the device lays the rows of a 3-row
+  linear image of each width of 1, 3, 17, 64, 65, 100, 129, 1,000 and 1,920 texels at the row
+  rounded up to it; the largest over shader read, read and render, and read and write, where the
+  device makes such images; 16 where no candidate holds, and a texture of that format over a buffer
+  is then never in place. Each image is made, read and destroyed, never bound, once per format for
   the device's life. The answer leaves out the image's memory alignment
-  (`VkMemoryRequirements::alignment`): a texture whose pitch is a multiple of the answer is in
-  place, at the widths tried, only where its place in the buffer's memory is a multiple of that
-  alignment too, and copied elsewhere. NVIDIA and
-  AMD give the same number for both; the UHD 630 rounds rows to 64 bytes and aligns its linear
-  images' memory to 4,096. The answer promises nothing for widths not tried.
+  (`VkMemoryRequirements::alignment`): a texture whose pitch is its row rounded up to the answer is
+  in place, at the widths tried, only where its place in the buffer's memory is a multiple of that
+  alignment too, and copied elsewhere. NVIDIA gives the same number for both, as RADV (Mesa 26.2.6)
+  on the RX 550 does for texels of up to 4 bytes (256), where it answers 512 and 1,024 for 8- and
+  16-byte texels over a 256-byte alignment; the UHD 630 rounds rows to 64 bytes and aligns its
+  linear images' memory to 4,096; ANV (Mesa 26.2.6) on the Iris Xe of RPL-P lays each row at the row
+  itself with its memory aligned to the texel, so it answers the texel's bytes (4 for `RGBA8Unorm`,
+  1 for `R8Unorm`), below Metal's 16. The answer promises nothing for widths not tried.
 - The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
   copy, its pages written then, and kept for the device's life, so no copy allocates memory and
   the host writes resident pages. It is a ring: each copy takes a span at a multiple of 256 bytes,

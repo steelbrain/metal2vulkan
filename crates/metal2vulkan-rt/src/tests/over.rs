@@ -1,9 +1,9 @@
 //! Textures over a buffer: under a device cfg, on every device of the cfg's kind, the linear
-//! alignment answer is a power of two from 16 to 4,096, the same when asked again, and the count
-//! of formats that answer 16 is printed; at each width tried, a texture over a Shared buffer whose
+//! alignment answer is a power of two from the format's texel bytes to 4,096, the same when asked
+//! again, and the count of formats that answer 16 is printed; at each width tried, a texture over a Shared buffer whose
 //! pitch is its row rounded up to the answer, at a place of the linear image's memory alignment,
-//! is in place; an RGBA8Unorm texture over a Shared buffer at a pitch of the answer, its rows
-//! longer than their texels, at such a place, is made in place: it allocates nothing (live
+//! is in place; an RGBA8Unorm texture over a Shared buffer at its row rounded up to the answer
+//! (longer than its texels where the device pads rows), at such a place, is made in place: it allocates nothing (live
 //! allocations counted once the block-maker thread holds a ready block of each class, the count
 //! that a plain texture's allocation moves) and stages nothing, its image's bytes are the host's
 //! in the buffer as they change, `replace_region` and `get_bytes` write and read the
@@ -29,13 +29,13 @@ mod on_device {
     /// The buffer's offset in its block: a multiple of every answer and memory alignment.
     const AT: u64 = 65_536;
     const LEN: u64 = 65_536;
-    /// The formats whose answers are printed.
-    const FORMATS: [PixelFormat; 5] = [
-        PixelFormat::R8Unorm,
-        PixelFormat::RGBA8Unorm,
-        PixelFormat::R32Float,
-        PixelFormat::RGBA16Float,
-        PixelFormat::RGBA32Float,
+    /// The formats whose answers are printed, each with its texel bytes.
+    const FORMATS: [(PixelFormat, u64); 5] = [
+        (PixelFormat::R8Unorm, 1),
+        (PixelFormat::RGBA8Unorm, 4),
+        (PixelFormat::R32Float, 4),
+        (PixelFormat::RGBA16Float, 8),
+        (PixelFormat::RGBA32Float, 16),
     ];
 
     fn whole() -> Region {
@@ -100,11 +100,11 @@ mod on_device {
     fn every_device_holds_a_texture_over_a_buffer_in_place() {
         each_device("over", |name, _, device| {
             let mut answers = Vec::new();
-            for pf in FORMATS {
+            for (pf, texel) in FORMATS {
                 let answer = (device.minimum_linear_texture_alignment(pf))
                     .unwrap_or_else(|error| panic!("{name}: {pf:?}: {error}"));
                 assert!(
-                    answer.is_power_of_two() && (16..=4096).contains(&answer),
+                    answer.is_power_of_two() && (texel..=4096).contains(&answer),
                     "{name}: {pf:?}: {answer}"
                 );
                 answers.push((pf, answer));
@@ -151,7 +151,7 @@ mod on_device {
                     "{name}: width {width} at the answer's pitch is in place"
                 );
             }
-            let pitch = (ROW + 1).next_multiple_of(align);
+            let pitch = ROW.next_multiple_of(align);
             // Read and written by shaders, at indices of a grant.
             (device.grant_indices(IndexClass::StorageTexture, 1, 4)).expect("a grant");
             let mut d =

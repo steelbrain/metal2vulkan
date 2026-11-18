@@ -10,6 +10,8 @@
 //!   again.
 //! - A view's components are Metal's swizzle over the format's own mapping: zero and one stay,
 //!   and a channel source reads through the format's mapping.
+//! - The linear row rounding starts at the texel's bytes: rows laid at the row itself answer the
+//!   texel's bytes, rows padded to a power of two answer it, and rows padded otherwise answer none.
 //! - Under a device cfg, on every device of the cfg's kind: bytes written with `replace_region`
 //!   read back with `get_bytes`, the same, for a level of a 2D texture, rows apart at a pitch with
 //!   padding, a 3D region two images deep, a slice of an array, a cube's face, a depth texture,
@@ -21,7 +23,7 @@
 
 use crate::arrays::Grants;
 use crate::error::{Error, Refusal};
-use crate::texture::{components, shape};
+use crate::texture::{components, linear_rounding, shape};
 use crate::{IndexClass, PixelFormat, TextureDescriptor, TextureType};
 use ash::vk;
 use metal2vulkan::metal::{TextureSwizzle, TextureSwizzleChannels};
@@ -493,4 +495,31 @@ mod on_device {
             );
         }
     }
+}
+
+/// The linear row rounding of a format of `texel` bytes over the minimum linear texture
+/// alignment's widths, where the device lays a row of `row` bytes at `pitch(row)`.
+fn rounding(texel: u64, pitch: impl Fn(u64) -> u64) -> Option<u64> {
+    let rows: Vec<(u64, u64)> = [1, 3, 17, 64, 65, 100, 129, 1000, 1920]
+        .map(|width| {
+            let row = width * texel;
+            (row, pitch(row))
+        })
+        .to_vec();
+    linear_rounding(&rows, texel)
+}
+
+/// A device that lays a linear row at the row itself (ANV, Mesa 26.2.6, on the Iris Xe of RPL-P:
+/// every format and width the over test asks) answers each format's texel bytes, below 16 for all
+/// but the 16-byte texels; one that pads rows to a power of two (RADV on Polaris: 256 bytes, 512
+/// for 8-byte texels) answers that power; one whose rows have a floor besides their rounding
+/// answers none, which the device then reports as 16.
+#[test]
+fn the_linear_row_rounding_starts_at_the_texel() {
+    for texel in [1, 2, 4, 8, 16] {
+        assert_eq!(rounding(texel, |row| row), Some(texel), "{texel}");
+    }
+    assert_eq!(rounding(4, |row| row.next_multiple_of(256)), Some(256));
+    assert_eq!(rounding(8, |row| row.next_multiple_of(512)), Some(512));
+    assert_eq!(rounding(4, |row| row.max(64)), None);
 }

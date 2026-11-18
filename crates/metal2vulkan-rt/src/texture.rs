@@ -448,16 +448,17 @@ impl Device {
     }
 
     /// `minimumLinearTextureAlignmentForPixelFormat:`: the device's linear row rounding, the
-    /// smallest power of two from 16 to 4,096 at which the device lays the rows of a linear image
-    /// of the format, of every width tried, at the row rounded up to it; the largest over reading,
-    /// reading and rendering, and reading and a shader's writes, where the device makes such an
-    /// image; Metal's 16 where no candidate holds, so that a texture of the format over a buffer
-    /// is never in place. The device answers: each image is made, read with
-    /// `vkGetImageSubresourceLayout` and destroyed, never bound, once per format for the device's
-    /// life. The answer differs by device, as Metal's does by GPU.
+    /// smallest power of two from the format's texel bytes to 4,096 at which the device lays the
+    /// rows of a linear image of the format, of every width tried, at the row rounded up to it;
+    /// the largest over reading, reading and rendering, and reading and a shader's writes, where
+    /// the device makes such an image; Metal's 16 where no candidate holds, so that a texture of
+    /// the format over a buffer is never in place. The device answers: each image is made, read
+    /// with `vkGetImageSubresourceLayout` and destroyed, never bound, once per format for the
+    /// device's life. The answer differs by device, as Metal's does by GPU, and is below Metal's 16
+    /// on a device that lays a linear row at the row itself.
     ///
-    /// A texture over a buffer ([`Buffer::new_texture`]) whose pitch is a multiple of the answer
-    /// is in place where its place in the buffer's memory is also a multiple of the linear
+    /// A texture over a buffer ([`Buffer::new_texture`]) whose pitch is its row rounded up to the
+    /// answer is in place where its place in the buffer's memory is also a multiple of the linear
     /// image's memory alignment (`VkMemoryRequirements::alignment`), which the answer does not
     /// include; at any other place it is copied.
     ///
@@ -480,6 +481,7 @@ impl Device {
         let mut answer = None;
         for usage in usages {
             let mut rows = Vec::with_capacity(WIDTHS.len());
+            let mut texel = 1;
             for width in WIDTHS {
                 let mut d = TextureDescriptor::new(TextureType::Type2D, pixel_format, width, 3);
                 d.usage = usage;
@@ -494,16 +496,13 @@ impl Device {
                 let Some((pitch, _)) = linear_layout(core, &d, &shape, &plan) else {
                     break;
                 };
+                texel = u64::from(unit.bytes);
                 rows.push((u64::from(width * unit.bytes), pitch));
             }
             if rows.len() < WIDTHS.len() {
                 continue;
             }
-            let holds = |candidate: u64| {
-                (rows.iter()).all(|&(row, pitch)| pitch == row.next_multiple_of(candidate))
-            };
-            let found = (4..=12).map(|power| 1u64 << power).find(|&p| holds(p));
-            answer = answer.max(found);
+            answer = answer.max(linear_rounding(&rows, texel));
         }
         let answer = answer.unwrap_or(16);
         lock(&core.linear_alignments).insert(pixel_format, answer);
@@ -959,6 +958,18 @@ fn linear_extent(core: &Core, shape: &Shape, plan: &Plan) -> Option<vk::Extent3D
 
 /// The row pitch and memory alignment of a linear image of `d`, `shape` and `plan`, where the
 /// device makes one: the image is made, read and destroyed, never bound.
+/// The smallest power of two from `texel` (a texel's bytes, rounded up to one) to 4,096 at which
+/// every `(row, pitch)`, a linear image's row bytes and the pitch the device lays it at, has its
+/// pitch at the row rounded up to it; `None` where none has. A device that lays a row at the row
+/// itself answers the texel's bytes: a texture over a buffer at any pitch of whole texels is then
+/// its linear image.
+pub(crate) fn linear_rounding(rows: &[(u64, u64)], texel: u64) -> Option<u64> {
+    let first = texel.next_power_of_two().trailing_zeros();
+    (first..=12).map(|power| 1u64 << power).find(|&candidate| {
+        (rows.iter()).all(|&(row, pitch)| pitch == row.next_multiple_of(candidate))
+    })
+}
+
 fn linear_layout(
     core: &Core,
     d: &TextureDescriptor,
