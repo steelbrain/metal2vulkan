@@ -3,11 +3,12 @@
 //! encoder begins ([`Pass`]).
 //!
 //! Each attachment is one level and slice of its texture, viewed through an image view of that
-//! level and layer with the identity swizzle, which the texture keeps. Its load and store actions
-//! are Vulkan's of the same
-//! name: `Load`, `Clear` and `DontCare` load, `Store` and `DontCare` store. The render area is the
-//! smallest attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are
-//! set.
+//! level and layer with the identity swizzle, which the texture keeps. Its load actions are
+//! Vulkan's of the same name: `Load`, `Clear` and `DontCare`. Both store actions store: a pass may
+//! end its rendering before the encoder ends and begin it again, loading what it stored (a memory
+//! barrier after a draw that wrote memory, or a copy a draw needs first), so a `DontCare` store
+//! keeps the texels too, one of the outcomes Metal allows. The render area is the smallest
+//! attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are set.
 
 use crate::device::Core;
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind};
@@ -38,8 +39,9 @@ pub enum LoadAction {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum StoreAction {
-    /// `MTLStoreActionDontCare`: the pass's texels are not kept, and the attachment's are
-    /// undefined after it, `VK_ATTACHMENT_STORE_OP_DONT_CARE`.
+    /// `MTLStoreActionDontCare`: the attachment's texels are undefined after the pass. The
+    /// runtime keeps them, `VK_ATTACHMENT_STORE_OP_STORE`: a pass that ends its rendering early
+    /// and begins it again loads what it stored.
     DontCare,
     /// `MTLStoreActionStore`: the pass's texels are kept, `VK_ATTACHMENT_STORE_OP_STORE`.
     #[default]
@@ -228,12 +230,16 @@ impl Target {
         self.layout != self.attachment.home
     }
 
-    /// Its `VkRenderingAttachmentInfo`.
-    pub(crate) fn info(&self) -> vk::RenderingAttachmentInfo<'static> {
+    /// Its `VkRenderingAttachmentInfo`; `resumed`, for a rendering the pass begins again, which
+    /// loads what the pass stored.
+    pub(crate) fn info(&self, resumed: bool) -> vk::RenderingAttachmentInfo<'static> {
         vk::RenderingAttachmentInfo::default()
             .image_view(self.attachment.view)
             .image_layout(self.layout)
-            .load_op(self.load)
+            .load_op(match resumed {
+                true => vk::AttachmentLoadOp::LOAD,
+                false => self.load,
+            })
             .store_op(self.store)
             .clear_value(self.clear)
     }
@@ -279,6 +285,42 @@ impl Pass {
     /// Every attachment, colors first.
     pub(crate) fn targets(&self) -> impl Iterator<Item = &Target> {
         (self.colors.iter().flatten()).chain(&self.stencil)
+    }
+
+    /// Records `vkCmdBeginRendering` of the pass into `command`; `resumed`, again after the
+    /// encoder ended it early, loading what it stored.
+    ///
+    /// # Safety
+    ///
+    /// `command` records outside any rendering and keeps each attachment's texture until it
+    /// retires; each attachment is in the layout the pass renders it in.
+    pub(crate) unsafe fn begin(
+        &self,
+        device: &ash::Device,
+        command: vk::CommandBuffer,
+        resumed: bool,
+    ) {
+        let colors: Vec<vk::RenderingAttachmentInfo> = (self.colors.iter())
+            .map(|c| {
+                c.as_ref()
+                    .map_or_else(Default::default, |t| t.info(resumed))
+            })
+            .collect();
+        let stencil = self.stencil.as_ref().map(|t| t.info(resumed));
+        let [width, height] = self.area;
+        let mut info = vk::RenderingInfo::default()
+            .render_area(vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D { width, height },
+            })
+            .layer_count(1)
+            .color_attachments(&colors);
+        if let Some(stencil) = &stencil {
+            info = info.stencil_attachment(stencil);
+        }
+        // SAFETY: as the caller states; the render area lies inside every attachment, and each
+        // is a view of one level and layer of its image.
+        unsafe { device.cmd_begin_rendering(command, &info) };
     }
 
     /// Checks `d` on the device of `core`.
@@ -384,7 +426,8 @@ impl Pass {
     }
 }
 
-/// The Vulkan load and store operations of Metal's `load` and `store` actions, one to one.
+/// The Vulkan load and store operations of Metal's `load` and `store` actions: the load one to
+/// one, and `STORE` for both store actions ([`StoreAction::DontCare`]).
 ///
 /// Err: [`Gap::RenderPass`] of [`RenderPassKind::Resolve`] or [`RenderPassKind::StoreAction`].
 pub(crate) fn ops(
@@ -398,8 +441,7 @@ pub(crate) fn ops(
     };
     let gap = |kind| Err(Error::Unsupported(Gap::RenderPass { kind }));
     let store = match store {
-        StoreAction::DontCare => vk::AttachmentStoreOp::DONT_CARE,
-        StoreAction::Store => vk::AttachmentStoreOp::STORE,
+        StoreAction::DontCare | StoreAction::Store => vk::AttachmentStoreOp::STORE,
         StoreAction::MultisampleResolve | StoreAction::StoreAndMultisampleResolve => {
             return gap(RenderPassKind::Resolve)
         }

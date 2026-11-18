@@ -1,6 +1,7 @@
 //! The parameter ring: memory of the floor's ring type (device-local, host-visible, coherent) that
 //! the host writes and the GPU reads by address. It holds parameter blocks longer than the push
-//! range and the bytes of `set_bytes`.
+//! range and the bytes of `set_bytes`, which a draw's vertex input also reads through the block's
+//! buffer.
 //!
 //! The ring is made of 2 MiB blocks, each split into 64 KiB chunks. A command buffer takes chunks
 //! as it records, writes each byte once, and gives them back when it retires, so the GPU never
@@ -39,11 +40,22 @@ struct RingBlock {
     memory: vk::DeviceMemory,
 }
 
-/// A chunk: its device address and its host address.
+/// A chunk: its device address, its host address, and its block's buffer with its offset there.
 #[derive(Clone, Copy)]
 pub(crate) struct Chunk {
     address: u64,
     host: Mapping,
+    buffer: vk::Buffer,
+    offset: u64,
+}
+
+/// Where a write into the ring lies: its device address, and its block's buffer with its offset
+/// there.
+#[derive(Clone, Copy)]
+pub(crate) struct Placed {
+    pub(crate) address: u64,
+    pub(crate) buffer: vk::Buffer,
+    pub(crate) offset: u64,
 }
 
 impl Ring {
@@ -63,15 +75,23 @@ impl Ring {
             return Ok(chunk);
         }
         let (block, address, host) = make(core)?;
+        let buffer = block.buffer;
         state.blocks.push(block);
         for index in (1..BLOCK / CHUNK).rev() {
             state.free.push(Chunk {
                 address: address + index * CHUNK,
                 // SAFETY: the chunk lies in the block's mapping.
                 host: Mapping::new(unsafe { host.at(index * CHUNK) }),
+                buffer,
+                offset: index * CHUNK,
             });
         }
-        Ok(Chunk { address, host })
+        Ok(Chunk {
+            address,
+            host,
+            buffer,
+            offset: 0,
+        })
     }
 
     /// Takes back a retired command buffer's chunks.
@@ -178,8 +198,8 @@ pub(crate) struct Writes {
 
 impl Writes {
     /// Copies `bytes`, at most a chunk, into the ring at an address aligned to 16 bytes, and
-    /// returns that address.
-    pub(crate) fn write(&mut self, core: &Core, bytes: &[u8]) -> Result<u64, Error> {
+    /// returns where it lies.
+    pub(crate) fn write(&mut self, core: &Core, bytes: &[u8]) -> Result<Placed, Error> {
         let len = bytes.len() as u64;
         debug_assert!(len <= CHUNK);
         let start = self.used.next_multiple_of(ALIGN);
@@ -195,13 +215,21 @@ impl Writes {
                 (chunk, 0)
             }
         };
-        let (Chunk { address, host }, offset) = chunk;
+        let (chunk, offset) = chunk;
         // SAFETY: `offset..offset + len` lies in the chunk, which this command buffer alone writes
         // until it retires, and which no pending work reads: its last command buffer retired.
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), host.at(offset).as_ptr(), bytes.len())
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                chunk.host.at(offset).as_ptr(),
+                bytes.len(),
+            )
         };
-        Ok(address + offset)
+        Ok(Placed {
+            address: chunk.address + offset,
+            buffer: chunk.buffer,
+            offset: chunk.offset + offset,
+        })
     }
 
     /// Gives the chunks back once the command buffer retired or never ran.

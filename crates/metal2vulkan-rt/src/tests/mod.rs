@@ -6,6 +6,7 @@ mod command;
 mod compute;
 mod copy_over;
 mod device;
+mod draw;
 mod fence;
 mod floor;
 mod hazard;

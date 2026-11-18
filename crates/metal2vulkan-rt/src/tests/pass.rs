@@ -1,8 +1,8 @@
 //! Render passes: load and store actions, clear values, and what a pass does not build.
 //!
-//! - Metal's load and store actions are Vulkan's of the same name, one to one; a resolving store
-//!   action is `Gap::RenderPass` of `Resolve`, `Unknown` and `CustomSampleDepthStore` of
-//!   `StoreAction`.
+//! - Metal's load actions are Vulkan's of the same name, and both plain store actions store
+//!   (a pass that ends its rendering early loads what it stored); a resolving store action is
+//!   `Gap::RenderPass` of `Resolve`, `Unknown` and `CustomSampleDepthStore` of `StoreAction`.
 //! - A clear color is a `float` for a float, normalized or sRGB channel, rotated for a rotated
 //!   format and for `A8Unorm` held in `R8_UNORM`; an integer channel's is truncated toward zero
 //!   and saturated to its width, NaN 0; a format only a shader clears (extended range, bfloat)
@@ -23,10 +23,10 @@ use crate::{ClearColor, LoadAction, PixelFormat, StoreAction};
 use ash::vk;
 use metal2vulkan::metal::format::FormatEmulation;
 
-/// Each load action and the two plain store actions are Vulkan's of the same name; the others
-/// are gaps.
+/// Each load action is Vulkan's of the same name, and the two plain store actions store; the
+/// others are gaps.
 #[test]
-fn load_and_store_actions_are_one_to_one() {
+fn load_actions_are_one_to_one_and_plain_store_actions_store() {
     let pairs = [
         (LoadAction::DontCare, vk::AttachmentLoadOp::DONT_CARE),
         (LoadAction::Load, vk::AttachmentLoadOp::LOAD),
@@ -34,7 +34,7 @@ fn load_and_store_actions_are_one_to_one() {
     ];
     for (load, op) in pairs {
         for (store, store_op) in [
-            (StoreAction::DontCare, vk::AttachmentStoreOp::DONT_CARE),
+            (StoreAction::DontCare, vk::AttachmentStoreOp::STORE),
             (StoreAction::Store, vk::AttachmentStoreOp::STORE),
         ] {
             assert!(

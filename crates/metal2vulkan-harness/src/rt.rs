@@ -207,6 +207,28 @@ impl Device {
             "every {class:?} index is in use"
         ))))
     }
+
+    /// The indices of a pipeline state's numbered samplers: a constexpr sampler takes the index
+    /// its state words took first; a read's or a write's sampler takes nothing at its index.
+    fn sampler_ids(
+        &self,
+        samplers: &[rt::NumberedSampler],
+    ) -> std::result::Result<Vec<u32>, rt::Error> {
+        let mut indices = self.indices.borrow_mut();
+        let ids = samplers.iter().map(|sampler| match sampler {
+            rt::NumberedSampler::Constexpr(words) => match indices.constexprs.get(words) {
+                Some(&index) => index,
+                None => {
+                    let index = indices.next(rt::IndexClass::Sampler, indices.sampler);
+                    indices.sampler = index;
+                    indices.constexprs.insert(*words, index);
+                    index
+                }
+            },
+            _ => 0,
+        });
+        Ok(ids.collect())
+    }
 }
 
 /// `MTLBuffer`: the runtime's buffer, and its place, freed when it is dropped.
@@ -459,26 +481,8 @@ impl crate::ComputeDevice for Device {
     ) -> Result<rt::ComputePipelineState> {
         let function = plan::with_private(function.clone(), private);
         let descriptor = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(function));
-        // A constexpr sampler takes the index its state words took first; a read's or a write's
-        // sampler takes nothing at its index.
-        let sampler_ids = |samplers: &[rt::NumberedSampler]| {
-            let mut indices = self.indices.borrow_mut();
-            let ids = samplers.iter().map(|sampler| match sampler {
-                rt::NumberedSampler::Constexpr(words) => match indices.constexprs.get(words) {
-                    Some(&index) => index,
-                    None => {
-                        let index = indices.next(rt::IndexClass::Sampler, indices.sampler);
-                        indices.sampler = index;
-                        indices.constexprs.insert(*words, index);
-                        index
-                    }
-                },
-                _ => 0,
-            });
-            Ok(ids.collect())
-        };
         (self.device)
-            .new_compute_pipeline_state(&descriptor, sampler_ids)
+            .new_compute_pipeline_state(&descriptor, |samplers| self.sampler_ids(samplers))
             .map_err(error)
     }
 
@@ -493,7 +497,7 @@ impl crate::ComputeDevice for Device {
         descriptor.fragment = Some(rt::StageSource::Function(fragment.clone()));
         descriptor.color_attachments[0] = Some(rt::ColorAttachmentDescriptor::new(color));
         (self.device)
-            .new_render_pipeline_state(&descriptor)
+            .new_render_pipeline_state(&descriptor, |samplers| self.sampler_ids(samplers))
             .map_err(error)
     }
 

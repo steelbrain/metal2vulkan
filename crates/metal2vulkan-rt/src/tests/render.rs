@@ -9,8 +9,7 @@
 //! - Filled past a cap of 2, the map holds 2 render contents and forgets the least recently used,
 //!   which lives while a state holds it and goes once that state does; a forgotten content
 //!   compiles again, and one the map holds does not.
-//! - A depth attachment, more than one sample, or a fragment function with a constexpr sampler is
-//!   refused by kind, making no `VkPipeline`.
+//! - A depth attachment or more than one sample is refused by kind, making no `VkPipeline`.
 //! - A device on a cache directory a device before it used lowers nothing at creation: both
 //!   lowerings are read from the directory, and the triangle class's `VkPipeline` is made from
 //!   its file; the first device writes one pipeline file for each `VkPipeline` it made, and the
@@ -65,12 +64,13 @@ mod on_device {
     }
 
     fn state(name: &str, device: &Device, d: &RenderPipelineDescriptor) -> RenderPipelineState {
-        (device.new_render_pipeline_state(d)).unwrap_or_else(|error| panic!("{name}: {error}"))
+        (device.new_render_pipeline_state(d, crate::tests::no_constexpr_samplers))
+            .unwrap_or_else(|error| panic!("{name}: {error}"))
     }
 
     /// Whether two states share their compiled content.
     fn shared(a: &RenderPipelineState, b: &RenderPipelineState) -> bool {
-        Arc::ptr_eq(&a.compiled, &b.compiled)
+        Arc::ptr_eq(&a.inner.compiled, &b.inner.compiled)
     }
 
     /// The lowerings (made and read from the cache directory) and the `VkPipeline`s from `before`
@@ -144,7 +144,7 @@ mod on_device {
                 gauges.render_contents + 1 + others.len() as u64,
                 "{name}: a content each"
             );
-            let compiled = Arc::clone(&a.compiled);
+            let compiled = Arc::clone(&a.inner.compiled);
             drop((a, b));
             // The map holds it still, beside this test's handle.
             assert_eq!(Arc::strong_count(&compiled), 2, "{name}: held by the map");
@@ -223,7 +223,6 @@ mod on_device {
         depth.depth_format = Some(PixelFormat::Depth32Float);
         let mut samples = plain.clone();
         samples.raster_sample_count = 4;
-        let sampled = descriptor(&library, "sampled_fragment", PixelFormat::RGBA16Float);
         let cases = [
             (
                 "a depth attachment",
@@ -231,13 +230,12 @@ mod on_device {
                 RenderPipelineKind::DepthAttachment,
             ),
             ("four samples", samples, RenderPipelineKind::Multisample),
-            ("a constexpr sampler", sampled, RenderPipelineKind::Samplers),
         ];
         each_device("render_refused", |name, _, device| {
             let counters = device.counters();
             for (case, d, kind) in &cases {
                 let before = counters.metrics().pipelines_created;
-                match device.new_render_pipeline_state(d) {
+                match device.new_render_pipeline_state(d, crate::tests::no_constexpr_samplers) {
                     Err(Error::Unsupported(Gap::RenderPipeline { kind: refused })) => {
                         assert_eq!(refused, *kind, "{name}: {case}")
                     }

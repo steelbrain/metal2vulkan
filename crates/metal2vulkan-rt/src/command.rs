@@ -14,7 +14,8 @@ use crate::pipeline::ComputePipelineState;
 use crate::queue::QueueInner;
 use crate::readback;
 use crate::record::{self, Reach, Recorder};
-use crate::ring::Writes;
+use crate::render::RenderPipelineState;
+use crate::ring::{Placed, Writes};
 use crate::sampler::SamplerState;
 use crate::texture::{Image, OverCopy, Texture};
 use crate::times::{self, Stamps, Times};
@@ -137,8 +138,10 @@ pub(crate) struct Building {
     /// between dispatches leaves them out unless the dispatch after it is indirect, so an
     /// indirect dispatch after such a write needs one that reaches them.
     args_unordered: bool,
-    /// The pipeline bound in the current segment's command buffer.
+    /// The compute pipeline bound in the current segment's command buffer.
     bound: Option<vk::Pipeline>,
+    /// The graphics pipeline bound in the current segment's command buffer.
+    drawn: Option<vk::Pipeline>,
     /// The current segment wrote memory the host may read: its end barrier reaches the host.
     host_written: bool,
 }
@@ -155,6 +158,7 @@ pub(crate) struct Gpu {
     pub(crate) copies: Vec<Arc<DeviceCopy>>,
     /// The pipeline states the commands use, once each, kept until the command buffer retires.
     pub(crate) pipelines: Vec<ComputePipelineState>,
+    pub(crate) render_pipelines: Vec<RenderPipelineState>,
     /// The textures and sampler states the encoders bound or declared, once each, kept until the
     /// command buffer retires: their elements of set 1 stay theirs while work may read them.
     pub(crate) textures: Vec<Texture>,
@@ -258,6 +262,7 @@ impl CommandBuffer {
                             blocks: Vec::new(),
                             copies: Vec::new(),
                             pipelines: Vec::new(),
+                            render_pipelines: Vec::new(),
                             textures: Vec::new(),
                             samplers: Vec::new(),
                             ring: Writes::default(),
@@ -273,6 +278,7 @@ impl CommandBuffer {
                         owed: false,
                         args_unordered: false,
                         bound: None,
+                        drawn: None,
                         host_written: false,
                     }),
                     ended: None,
@@ -648,6 +654,7 @@ impl Building {
         }
         self.last().command = Some(command);
         self.bound = None;
+        self.drawn = None;
         Ok(command)
     }
 
@@ -803,20 +810,36 @@ impl Building {
         }
     }
 
-    /// Whether the current command buffer has no pipeline bound yet.
+    /// Whether the current command buffer has no compute pipeline bound yet.
     pub(crate) fn unbound(&self) -> bool {
         self.bound.is_none()
     }
 
-    /// Whether `pipeline` needs binding in the current command buffer; it is bound from now.
+    /// Whether the compute pipeline `pipeline` needs binding in the current command buffer; it is
+    /// bound from now.
     pub(crate) fn bind(&mut self, pipeline: vk::Pipeline) -> bool {
         let needed = self.bound != Some(pipeline);
         self.bound = Some(pipeline);
         needed
     }
 
+    /// Whether the graphics pipeline `pipeline` needs binding in the current command buffer, and
+    /// whether it is the command buffer's first, before which set 1 is bound at the graphics bind
+    /// point; it is bound from now.
+    pub(crate) fn bind_graphics(&mut self, pipeline: vk::Pipeline) -> (bool, bool) {
+        let first = self.drawn.is_none();
+        let needed = self.drawn != Some(pipeline);
+        self.drawn = Some(pipeline);
+        (needed, first)
+    }
+
     /// Copies `bytes` into the parameter ring, returning their address.
     pub(crate) fn write_ring(&mut self, bytes: &[u8]) -> Result<u64, Error> {
+        Ok(self.write_ring_placed(bytes)?.address)
+    }
+
+    /// Copies `bytes` into the parameter ring, returning where they lie.
+    pub(crate) fn write_ring_placed(&mut self, bytes: &[u8]) -> Result<Placed, Error> {
         let core = Arc::clone(self.device.core());
         core.counters.count(Metric::RingWrites);
         self.gpu.ring.write(&core, bytes)
@@ -846,6 +869,14 @@ impl Building {
     /// Keeps `state` until the command buffer retires.
     pub(crate) fn keep_pipeline(&mut self, state: &ComputePipelineState) {
         let pipelines = &mut self.gpu.pipelines;
+        if !pipelines.iter().rev().any(|kept| kept.is(state)) {
+            pipelines.push(state.clone());
+        }
+    }
+
+    /// Keeps `state` until the command buffer retires.
+    pub(crate) fn keep_render_pipeline(&mut self, state: &RenderPipelineState) {
+        let pipelines = &mut self.gpu.render_pipelines;
         if !pipelines.iter().rev().any(|kept| kept.is(state)) {
             pipelines.push(state.clone());
         }
@@ -883,11 +914,30 @@ impl Building {
         if !self.last().signals.is_empty() {
             self.split()?;
         }
+        let copies = self.overs_owed(accesses, unbound);
+        self.record_overs(copies)
+    }
+
+    /// The copies a command that makes `accesses` (by hazard id), `unbound` where it reaches
+    /// memory through an address outside its resources, needs first (`crate::over`), in the
+    /// current segment, which the caller records ([`record_overs`](Self::record_overs)): a draw's,
+    /// which ends its pass's rendering to record them. None while no texture over a buffer in an
+    /// image of its own lives.
+    pub(crate) fn overs_owed(&mut self, accesses: &[(u32, Access)], unbound: bool) -> over::Copies {
+        if !self.copies_over() {
+            return over::Copies::default();
+        }
         let segments = &mut self.gpu.segments;
         let last = segments.len() - 1;
-        let copies = segments[last]
+        segments[last]
             .overs
-            .before(accesses, &self.gpu.textures, unbound);
+            .before(accesses, &self.gpu.textures, unbound)
+    }
+
+    /// Records `copies`, ordered as a blit's copy is; nothing where there are none.
+    ///
+    /// Err: [`Error::Vulkan`] where the command buffer cannot record.
+    pub(crate) fn record_overs(&mut self, copies: over::Copies) -> Result<(), Error> {
         if copies.is_empty() {
             return Ok(());
         }
@@ -1052,6 +1102,7 @@ pub(crate) fn retire(
         blocks,
         copies,
         pipelines,
+        render_pipelines,
         textures,
         samplers,
         ring,
@@ -1065,7 +1116,15 @@ pub(crate) fn retire(
         copy_in.retire(core);
     }
     ring.give_back(core);
-    drop((blocks, copies, pipelines, textures, samplers, images));
+    drop((
+        blocks,
+        copies,
+        pipelines,
+        render_pipelines,
+        textures,
+        samplers,
+        images,
+    ));
     times::reset(
         &core.device,
         inner.queue.stamps.pool,

@@ -14,7 +14,7 @@ use crate::hazard::Ids;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::kernel_map::KernelMap;
 use crate::memory::{self, BlockId, BlockMappings, Memory, MemoryClass, Pool};
-use crate::pipeline::PUSH_BYTES;
+use crate::pipeline::{PUSH_BYTES, PUSH_STAGES};
 use crate::places::Places;
 use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
@@ -191,7 +191,7 @@ pub(crate) struct Core {
     /// any, the commands track what they write.
     pub(crate) copied_overs: AtomicUsize,
     /// The device's compute limits.
-    pub(crate) limits: ComputeLimits,
+    pub(crate) limits: EncoderLimits,
     /// The parameter ring.
     pub(crate) ring: Ring,
     /// Resource ids, for the hazard sets.
@@ -420,10 +420,12 @@ impl Device {
         let limits = &properties.properties.limits;
         // The sampler arrays' two defaults count against the device's samplers too.
         let sampler_cap = limits.max_sampler_allocation_count.saturating_sub(2);
-        let limits = ComputeLimits {
+        let limits = EncoderLimits {
             max_group_count: limits.max_compute_work_group_count,
             max_group_size: limits.max_compute_work_group_size,
             max_shared_memory: limits.max_compute_shared_memory_size,
+            max_viewport: limits.max_viewport_dimensions,
+            viewport_bounds: limits.viewport_bounds_range,
         };
         let max_block_len = vulkan11
             .max_memory_allocation_size
@@ -925,7 +927,7 @@ unsafe fn objects(
             }
         };
         let push = [vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::ALL,
+            stage_flags: PUSH_STAGES,
             offset: 0,
             size: PUSH_BYTES,
         }];
@@ -962,14 +964,18 @@ unsafe fn objects(
     }
 }
 
-/// The device's compute limits a dispatch is checked against.
-pub(crate) struct ComputeLimits {
+/// The device's limits a dispatch or a render encoder's state is checked against.
+pub(crate) struct EncoderLimits {
     /// `maxComputeWorkGroupCount`.
     pub(crate) max_group_count: [u32; 3],
     /// `maxComputeWorkGroupSize`.
     pub(crate) max_group_size: [u32; 3],
     /// `maxComputeSharedMemorySize`.
     pub(crate) max_shared_memory: u32,
+    /// `maxViewportDimensions`.
+    pub(crate) max_viewport: [u32; 2],
+    /// `viewportBoundsRange`.
+    pub(crate) viewport_bounds: [f32; 2],
 }
 
 impl Core {

@@ -138,9 +138,10 @@ pub enum Refusal {
     /// Basis: metal-documented (a command buffer has one active encoder at a time, ended by
     /// `endEncoding` before another is made or the command buffer is committed).
     EncoderOpen,
-    /// A dispatch with no pipeline state set.
+    /// A dispatch or a draw with no pipeline state set.
     ///
-    /// Basis: metal-documented (a compute dispatch needs a compute pipeline state set first).
+    /// Basis: metal-documented (a compute dispatch needs a compute pipeline state set first, and a
+    /// draw a render pipeline state).
     NoPipeline,
     /// A buffer argument index past Metal's 31 entries (`setBuffer`, `setBytes`,
     /// `setBufferOffset`, `setThreadgroupMemoryLength`).
@@ -177,9 +178,11 @@ pub enum Refusal {
         /// The indices given.
         given: usize,
     },
-    /// `setBufferOffset` at an index where no buffer is bound.
+    /// `setBufferOffset` at an index where no buffer is bound, or a draw whose vertex descriptor
+    /// reads a vertex buffer index where none is bound.
     ///
-    /// Basis: ours (there is no buffer whose offset to change).
+    /// Basis: ours (there is no buffer whose offset to change, and none whose vertices the draw
+    /// reads; Metal's validation stops such a draw).
     NoBufferAtIndex {
         /// The index asked for.
         index: u32,
@@ -567,6 +570,41 @@ pub enum Refusal {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
+    /// A draw whose vertex descriptor reads a vertex buffer at an offset at or past the buffer's
+    /// length.
+    ///
+    /// Basis: metal-documented (a buffer's offset lies inside it; Metal's validation stops the
+    /// bind).
+    VertexBufferOffset {
+        /// The vertex buffer index.
+        index: u32,
+        /// The offset bound.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+    },
+    /// An indexed draw whose index buffer offset is not a multiple of the index size, or whose
+    /// indices leave the buffer.
+    ///
+    /// Basis: metal-documented (the offset is a multiple of the index size and the indices lie in
+    /// the buffer; Metal's validation stops the draw).
+    IndexBufferOffset {
+        /// The offset asked for.
+        offset: u64,
+        /// The buffer's length.
+        length: u64,
+    },
+    /// A viewport with a field that is NaN or infinite (but its origin's x, which draws nothing).
+    ///
+    /// Basis: metal-measured (an Apple M4, macOS 27.0.1: Metal's validation stops a NaN or
+    /// infinite origin; the other fields are taken by the same rule).
+    ViewportNotFinite,
+    /// A draw under a depth-stencil state that tests the stencil, in a pass without a stencil
+    /// attachment.
+    ///
+    /// Basis: metal-measured (an Apple M4, macOS 27.0.1: Metal's validation stops the draw; plain
+    /// Metal tests it against a hidden stencil of 0 that the runtime does not keep).
+    StencilAttachment,
 }
 
 /// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
@@ -777,6 +815,16 @@ pub enum Gap {
         /// What the pass asks for.
         kind: RenderPassKind,
     },
+    /// A draw or render encoder state the runtime does not build yet
+    /// ([`RenderCommandEncoder`](crate::RenderCommandEncoder)): what `kind` names.
+    ///
+    /// Basis: ours (the replay streams draw lines and triangles under depth-stencil states that
+    /// test no depth, through viewports Vulkan's are, with pipeline states of their pass's formats;
+    /// each other kind is built when a replay stream draws one).
+    Draw {
+        /// What the draw asks for.
+        kind: DrawKind,
+    },
 }
 
 /// What a render pipeline state asks that the runtime does not build ([`Gap::RenderPipeline`]).
@@ -804,8 +852,6 @@ pub enum RenderPipelineKind {
     AlphaToOne,
     /// A vertex buffer layout of an instance step rate above 1.
     StepRate,
-    /// Samplers the state numbers: constexpr samplers, or a texture read or write's own.
-    Samplers,
     /// A function that reads constant data the binder supplies.
     ConstantData,
     /// A specialization the draw would set, beside the sample and amplification counts.
@@ -815,6 +861,28 @@ pub enum RenderPipelineKind {
     /// A Vulkan feature or extension the translator's pipeline needs (its `Requirements`) that
     /// device creation does not enable.
     DeviceFeature,
+    /// A function that reads what a draw does not supply yet: a function table, a table the
+    /// binder builds, a parameter block past the push range, a push field or bind-time fact the
+    /// render encoder does not fill, or an unnormalized constexpr sampler.
+    DrawInput,
+}
+
+/// What a draw asks that the runtime does not build ([`Gap::Draw`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DrawKind {
+    /// A draw of points (`MTLPrimitiveTypePoint`).
+    Points,
+    /// A depth-stencil state that tests or writes depth: no pass has a depth attachment yet.
+    DepthTest,
+    /// A viewport Vulkan's is not: a negative width (Metal mirrors the draw), a depth range past
+    /// `[0, 1]`, or bounds past the device's viewport limits.
+    Viewport,
+    /// A pipeline state whose colour or stencil formats are not its pass's attachments': Metal's
+    /// validation stops most such draws, and plain Metal zeroes or drops the colours.
+    AttachmentFormats,
+    /// A draw that binds a texture whose image the pass renders into.
+    AttachmentRead,
 }
 
 /// What a render pass asks that the runtime does not build ([`Gap::RenderPass`]).
@@ -1065,7 +1133,7 @@ impl fmt::Display for Refusal {
                 f.write_str("a command queue must hold at least one command buffer")
             }
             Refusal::EncoderOpen => f.write_str("an encoder of the command buffer is open"),
-            Refusal::NoPipeline => f.write_str("no compute pipeline state is set"),
+            Refusal::NoPipeline => f.write_str("no pipeline state is set"),
             Refusal::BufferIndex { index } => {
                 write!(f, "buffer index {index} is past the 31 entries")
             }
@@ -1236,6 +1304,22 @@ impl fmt::Display for Refusal {
                 f,
                 "an attachment of {pixel_format:?} is not of its kind's formats"
             ),
+            Refusal::VertexBufferOffset {
+                index,
+                offset,
+                length,
+            } => write!(
+                f,
+                "vertex buffer {index} at offset {offset} lies past its {length} bytes"
+            ),
+            Refusal::IndexBufferOffset { offset, length } => write!(
+                f,
+                "indices at offset {offset} of a {length}-byte buffer are misaligned or past its end"
+            ),
+            Refusal::ViewportNotFinite => f.write_str("a viewport field is NaN or infinite"),
+            Refusal::StencilAttachment => {
+                f.write_str("a draw tests the stencil in a pass without a stencil attachment")
+            }
         }
     }
 }
@@ -1312,6 +1396,7 @@ impl fmt::Display for Gap {
             }
             Gap::TextureView { kind } => write!(f, "a texture view that changes {kind:?} is not built"),
             Gap::RenderPass { kind } => write!(f, "a render pass with {kind:?} is not built"),
+            Gap::Draw { kind } => write!(f, "a draw with {kind:?} is not built"),
         }
     }
 }

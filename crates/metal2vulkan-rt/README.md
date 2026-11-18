@@ -1064,11 +1064,16 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
 
 ## Render pipeline states
 
-- `Device::new_render_pipeline_state(&RenderPipelineDescriptor)` is
+- `Device::new_render_pipeline_state(&RenderPipelineDescriptor, sampler_ids)` is
   `newRenderPipelineStateWithDescriptor:error:` without reflection. The translator lowers the
   vertex and fragment functions on the calling thread, which waits for them, within its 20-second
   budget per lowering, for what device creation enabled and under its identity domains, as for a
   compute state. A refusal of the translator is `Error::Translation`.
+- A state numbers its functions' samplers as a compute state numbers its kernel's:
+  `sampler_ids` takes the vertex function's, then the fragment function's, each in Metal's order,
+  and answers the index the consumer gives each. Each constexpr sampler a function samples
+  through takes its device samplers at its index before the call returns, and each draw pushes
+  the index.
 - What a state compiles is its content, never the state: its descriptor, with its functions'
   constant values and linked functions, and every field (the translator's
   `Device::queried_render_descriptor_key`). Every state of one content shares one compiled content: its
@@ -1086,27 +1091,30 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
   `Error::Translation` with `maxPushConstantsSize`'s limit; no pair in the replay streams comes
   near it (the most is 248 bytes).
 - A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content and the topology class
-  (point, line or triangle) of the draws it serves. It takes as dynamic state the viewport,
-  scissor, cull mode, front face, primitive topology within its class, primitive restart, depth
-  test, write and compare, stencil test, operations, masks and reference, depth bias, blend
-  constants and vertex buffer strides. It renders dynamically into its attachments' formats, with
-  no render pass.
+  (line or triangle) of the draws it serves. It takes as dynamic state the viewport, scissor, cull
+  mode, front face, primitive topology within its class, primitive restart, depth test, write and
+  compare, stencil test, operations, masks and reference, depth bias and blend constants. Vertex
+  buffer strides are the descriptor's, so the content's, and baked. It renders dynamically into
+  its attachments' formats, with no render pass.
 - The triangle class's `VkPipeline` is made with the state, through its file in the cache
-  directory where there is one; a point or line class's comes with the draws. Of the two replay
-  streams' 537 render contents drawn, 527 draw only triangles and 2 lines and triangles; a content
-  drawn only as points or lines (8 of them) makes a triangle `VkPipeline` it never uses.
+  directory where there is one; the line class's is made by the content's first draw of lines,
+  which waits for it (`Metrics::first_use_waits`). Of the two replay streams' 537 render contents
+  drawn, 527 draw only triangles and 2 lines and triangles; a content drawn only as lines (8 of
+  them) makes a triangle `VkPipeline` it never uses.
 
 ### Known gaps of render pipeline states
 
-- There is no draw yet: a render encoder renders its pass's load and store actions alone, and a
-  state holds its triangle class's `VkPipeline`, which nothing draws with.
 - Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: a depth
   attachment, more than one sample, vertex amplification, a post-tessellation vertex function,
   stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
-  fragment function's stencil output, alpha to one, an instance step rate above 1, samplers the
-  state numbers (a constexpr sampler, or a texture read or write's), constant data the binder
-  supplies, a specialization other than the sample and amplification counts, dynamic state beyond
-  Vulkan 1.3's, and a feature or extension device creation does not enable. A state for indirect
+  fragment function's stencil output, alpha to one, an instance step rate above 1, constant data
+  the binder supplies, a specialization other than the sample and amplification counts, dynamic
+  state beyond Vulkan 1.3's (a vertex buffer layout whose stride is set per bind among it), a
+  feature or extension device creation does not enable, and a function that reads what a draw
+  does not supply (`DrawInput`: a function table, a table the binder builds, a parameter block
+  past the push range, a push field or bind-time fact the encoder does not fill, an unnormalized
+  constexpr sampler). Of the replay streams' contents that translate, every one reads only its
+  slots' addresses, resource IDs and constexpr sampler indices. A state for indirect
   command buffers is `Gap::IndirectCommandBuffers`. The `completionHandler:` forms are not built.
 - Metal's triangle fill mode and depth clip mode, which Vulkan 1.3 bakes into a `VkPipeline`, are
   their defaults.
@@ -1124,9 +1132,10 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
   array, a cube or a cube array, of one sample and `RenderTarget` usage. The texture keeps an
   image view of that level and layer with the identity swizzle, made at the first pass that
   renders into it and freed with the texture (`Gauges::attachment_views`).
-- Load and store actions are one to one: `Load`, `Clear` and `DontCare` are Vulkan's load
-  operations of those names, `Store` and `DontCare` its store operations. A `DontCare` store
-  leaves the attachment's texels undefined, as Metal's does. A clear color is a `float` in a
+- Load actions are one to one: `Load`, `Clear` and `DontCare` are Vulkan's load operations of
+  those names. Both store actions store: a pass may end its rendering before the encoder ends and
+  begin it again, loading what it stored (below), so a `DontCare` store keeps the texels, one of
+  the outcomes Metal allows. A clear color is a `float` in a
   float, normalized or sRGB channel, which the device converts to the format by its own rules
   (Vulkan clamps a normalized value and asks for rounding to nearest; Metal rounds to nearest
   even); an integer channel's is truncated toward zero and saturated to the channel's width, NaN
@@ -1147,11 +1156,53 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
   attachment of a format without stencil (`Refusal::AttachmentFormat`). A pass whose color
   attachments reach past the device's `maxColorAttachments` is `Limit::ColorAttachments`. A refused
   descriptor leaves the command buffer open for another encoder.
+- An encoder holds Metal's render state: a pipeline state, the vertex and fragment functions'
+  buffers (`set_vertex_buffer`, `set_vertex_bytes` and their offsets, the fragment's alike),
+  textures and sampler states, one viewport and scissor rectangle, the cull mode, the
+  front-facing winding, a depth-stencil state (`Device::new_depth_stencil_state`), the stencil
+  references and the blend color, Metal's defaults where it set none. A vertex buffer slot serves
+  the vertex function's buffer argument of its index and the vertex descriptor's layout of its
+  index alike, a `set_vertex_bytes` copy too, read through the parameter ring's buffer.
+- `draw_primitives` and `draw_indexed_primitives` are one `vkCmdDraw` or `vkCmdDrawIndexed` each.
+  A draw pushes its functions' fields in the one push range (the addresses of their buffer slots
+  plus offsets, the resource IDs of their textures and sampler states, the state's constexpr
+  sampler indices), binds the vertex buffers its vertex descriptor reads and the index buffer,
+  and sets the dynamic state that changed since the encoder's last draw: all of it at the first.
+  A draw takes no barrier, as Metal orders none between the draws of one encoder, so a pass of
+  any number of draws is still its two barriers. A draw of no vertices, indices or instances
+  records nothing.
+- A viewport is Vulkan's with its height negated (from `y + height`): framebuffer rows, the
+  fragment position and derivatives follow Metal's clip space, whose y points up, and Metal's
+  front-facing winding is Vulkan's front face of the same name. A viewport of no width or height,
+  or with a NaN origin x, draws nothing, as Metal's. Metal clips a draw to the pixels its viewport
+  covers, so the scissor is Metal's rectangle cut to them; a rectangle past the render area,
+  which Metal's validation stops, is cut to it, as plain Metal cuts it. A stencil reference
+  saturates at 255, as Metal stores it.
+- `memory_barrier` after a draw of the encoder that wrote memory ends the rendering, records one
+  barrier and begins the rendering again, loading what it stored; after none it records nothing,
+  as the pass's first barrier ordered everything before it. A draw that needs a copy first, of a
+  texture over a buffer in an image of its own or over a Managed buffer's device copy, records it
+  the same way, between the rendering's end and its new beginning. Fences record nothing, as in a
+  compute encoder.
+- Refused, as Metal's validation stops them: a draw with no pipeline state
+  (`Refusal::NoPipeline`), a vertex buffer the vertex descriptor reads that is not bound
+  (`Refusal::NoBufferAtIndex`) or bound at an offset past its length
+  (`Refusal::VertexBufferOffset`), an index offset that is not a multiple of the index size or
+  indices past the buffer (`Refusal::IndexBufferOffset`), a viewport field NaN or infinite but its
+  origin's x (`Refusal::ViewportNotFinite`), and a stencil test in a pass without a stencil
+  attachment (`Refusal::StencilAttachment`).
 
 ### Known gaps of render encoders
 
-- Every encoder call but `end_encoding` is not built yet: a pass renders its load and store
-  actions alone.
+- Refused by `Gap::Draw`, naming its `DrawKind`: a draw of points, a depth-stencil state that
+  tests or writes depth (no pass has a depth attachment yet), a viewport Vulkan's is not (a
+  negative width, a depth range past `[0, 1]`, bounds past the device's viewport limits), a
+  pipeline state whose formats are not the pass's attachments', and a draw that binds a texture
+  whose image the pass renders into. The replay streams draw lines and triangles under
+  depth-stencil states that test no depth.
+- Not built, and so not methods: indirect draws, several viewports or scissor rectangles, the
+  triangle fill mode, the depth clip mode, depth bias, visibility results, `useResource:`, the
+  store action setters, tile functions and `setVertexBuffer:offset:attributeStride:atIndex:`.
 - Refused by `Gap::RenderPass`, naming its `RenderPassKind`: a depth attachment, an attachment of
   more than one sample, a resolve, a 1D or 3D texture's attachment, the `Unknown` and
   `CustomSampleDepthStore` store actions, a clear of a format only a shader clears (extended

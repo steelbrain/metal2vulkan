@@ -1413,6 +1413,7 @@ enum	metal2vulkan-rt::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq
 enum	metal2vulkan-rt::CompareFunction	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum CompareFunction
 enum	metal2vulkan-rt::ConsumerFeature	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ConsumerFeature
 enum	metal2vulkan-rt::DispatchType	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum DispatchType
+enum	metal2vulkan-rt::DrawKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DrawKind
 enum	metal2vulkan-rt::Error	#[derive(Debug)] #[non_exhaustive] pub enum Error
 enum	metal2vulkan-rt::Gap	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Gap
 enum	metal2vulkan-rt::IndexClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndexClass
@@ -2269,6 +2270,10 @@ field	metal2vulkan-rt::ComputePipelineDescriptor.stage_input	pub stage_input: Op
 field	metal2vulkan-rt::ComputePipelineDescriptor.support_adding_binary_functions	pub support_adding_binary_functions: bool
 field	metal2vulkan-rt::ComputePipelineDescriptor.support_indirect_command_buffers	pub support_indirect_command_buffers: bool
 field	metal2vulkan-rt::ComputePipelineDescriptor.threadgroup_size_is_multiple_of_execution_width	pub threadgroup_size_is_multiple_of_execution_width: bool
+field	metal2vulkan-rt::DepthStencilDescriptor.back_face_stencil	pub back_face_stencil: StencilDescriptor
+field	metal2vulkan-rt::DepthStencilDescriptor.depth_compare_function	pub depth_compare_function: CompareFunction
+field	metal2vulkan-rt::DepthStencilDescriptor.depth_write_enabled	pub depth_write_enabled: bool
+field	metal2vulkan-rt::DepthStencilDescriptor.front_face_stencil	pub front_face_stencil: StencilDescriptor
 field	metal2vulkan-rt::DeviceOptions.block_mappings	pub block_mappings: Option<Arc<dyn BlockMappings>>
 field	metal2vulkan-rt::DeviceOptions.extensions	pub extensions: Vec<DeviceExtension>
 field	metal2vulkan-rt::DeviceOptions.features	pub features: Vec<ConsumerFeature>
@@ -2302,6 +2307,9 @@ field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::HeapRange.block	pub block: BlockId
 field	metal2vulkan-rt::HeapRange.len	pub len: u64
 field	metal2vulkan-rt::HeapRange.offset	pub offset: u64
+field	metal2vulkan-rt::IndexBuffer.buffer	pub buffer: &'a Buffer
+field	metal2vulkan-rt::IndexBuffer.index_type	pub index_type: IndexType
+field	metal2vulkan-rt::IndexBuffer.offset	pub offset: u64
 field	metal2vulkan-rt::IndexGrant.class	pub class: IndexClass
 field	metal2vulkan-rt::IndexGrant.count	pub count: u32
 field	metal2vulkan-rt::IndexGrant.first	pub first: u32
@@ -2412,8 +2420,18 @@ field	metal2vulkan-rt::SamplerDescriptor.r_address_mode	pub r_address_mode: meta
 field	metal2vulkan-rt::SamplerDescriptor.reduction_mode	pub reduction_mode: metal::SamplerReductionMode
 field	metal2vulkan-rt::SamplerDescriptor.s_address_mode	pub s_address_mode: metal::SamplerAddressMode
 field	metal2vulkan-rt::SamplerDescriptor.t_address_mode	pub t_address_mode: metal::SamplerAddressMode
+field	metal2vulkan-rt::ScissorRect.height	pub height: u64
+field	metal2vulkan-rt::ScissorRect.width	pub width: u64
+field	metal2vulkan-rt::ScissorRect.x	pub x: u64
+field	metal2vulkan-rt::ScissorRect.y	pub y: u64
 field	metal2vulkan-rt::SizeAndAlign.align	pub align: u64
 field	metal2vulkan-rt::SizeAndAlign.size	pub size: u64
+field	metal2vulkan-rt::StencilDescriptor.depth_failure_operation	pub depth_failure_operation: StencilOperation
+field	metal2vulkan-rt::StencilDescriptor.depth_stencil_pass_operation	pub depth_stencil_pass_operation: StencilOperation
+field	metal2vulkan-rt::StencilDescriptor.read_mask	pub read_mask: u32
+field	metal2vulkan-rt::StencilDescriptor.stencil_compare_function	pub stencil_compare_function: CompareFunction
+field	metal2vulkan-rt::StencilDescriptor.stencil_failure_operation	pub stencil_failure_operation: StencilOperation
+field	metal2vulkan-rt::StencilDescriptor.write_mask	pub write_mask: u32
 field	metal2vulkan-rt::TextureDescriptor.array_length	pub array_length: u32
 field	metal2vulkan-rt::TextureDescriptor.depth	pub depth: u32
 field	metal2vulkan-rt::TextureDescriptor.height	pub height: u32
@@ -2434,6 +2452,12 @@ field	metal2vulkan-rt::TextureSwizzleChannels.green	pub green: TextureSwizzle
 field	metal2vulkan-rt::TextureSwizzleChannels.red	pub red: TextureSwizzle
 field	metal2vulkan-rt::VertexDescriptor.attributes	pub attributes: BTreeMap<u32, VertexAttributeDescriptor>
 field	metal2vulkan-rt::VertexDescriptor.layouts	pub layouts: BTreeMap<u32, VertexBufferLayoutDescriptor>
+field	metal2vulkan-rt::Viewport.height	pub height: f64
+field	metal2vulkan-rt::Viewport.origin_x	pub origin_x: f64
+field	metal2vulkan-rt::Viewport.origin_y	pub origin_y: f64
+field	metal2vulkan-rt::Viewport.width	pub width: f64
+field	metal2vulkan-rt::Viewport.zfar	pub zfar: f64
+field	metal2vulkan-rt::Viewport.znear	pub znear: f64
 field	metal2vulkan-rt::floor::BelowFloor.missing	pub missing: Vec<Missing>
 field	metal2vulkan-rt::floor::Capabilities.buffer_int64_atomics	pub buffer_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.extensions	pub extensions: Vec<&'static CStr>
@@ -6159,7 +6183,11 @@ macro-decl	metal2vulkan-air::ir::TypeId	id_type! TypeId
 macro-decl	metal2vulkan-air::ir::TypeId	ir_id! TypeId
 macro-decl	metal2vulkan-air::metal::DataType	metal_enum! DataType
 macro-decl	metal2vulkan-rt::CompareFunction	metal_enum! CompareFunction
+macro-decl	metal2vulkan-rt::CullMode	metal_enum! CullMode
+macro-decl	metal2vulkan-rt::IndexType	metal_enum! IndexType
+macro-decl	metal2vulkan-rt::IndexType	vk_enum! IndexType
 macro-decl	metal2vulkan-rt::PixelFormat	metal_enum! PixelFormat
+macro-decl	metal2vulkan-rt::PrimitiveType	metal_enum! PrimitiveType
 macro-decl	metal2vulkan-rt::SamplerAddressMode	metal_enum! SamplerAddressMode
 macro-decl	metal2vulkan-rt::SamplerAddressMode	vk_enum! SamplerAddressMode
 macro-decl	metal2vulkan-rt::SamplerBorderColor	metal_enum! SamplerBorderColor
@@ -6167,9 +6195,11 @@ macro-decl	metal2vulkan-rt::SamplerMinMagFilter	metal_enum! SamplerMinMagFilter
 macro-decl	metal2vulkan-rt::SamplerMipFilter	metal_enum! SamplerMipFilter
 macro-decl	metal2vulkan-rt::SamplerReductionMode	metal_enum! SamplerReductionMode
 macro-decl	metal2vulkan-rt::SamplerReductionMode	vk_enum! SamplerReductionMode
+macro-decl	metal2vulkan-rt::StencilOperation	metal_enum! StencilOperation
 macro-decl	metal2vulkan-rt::TextureSwizzle	metal_enum! TextureSwizzle
 macro-decl	metal2vulkan-rt::TextureType	metal_enum! TextureType
 macro-decl	metal2vulkan-rt::TextureUsage	metal_flags! TextureUsage
+macro-decl	metal2vulkan-rt::Winding	metal_enum! Winding
 macro-decl	metal2vulkan-runtime::Degradation	degradations! Degradation
 macro-decl	metal2vulkan::metal::ArgumentBuffersTier	metal_enum! ArgumentBuffersTier
 macro-decl	metal2vulkan::metal::AttributeFormat	metal_enum! AttributeFormat
@@ -6398,6 +6428,20 @@ macro-member	metal2vulkan-rt::CompareFunction::LessEqual	LessEqual = 3, "MTLComp
 macro-member	metal2vulkan-rt::CompareFunction::Never	Never = 0, "MTLCompareFunctionNever";
 macro-member	metal2vulkan-rt::CompareFunction::NotEqual	NotEqual = 5, "MTLCompareFunctionNotEqual";
 macro-member	metal2vulkan-rt::CompareFunction::aliases	aliases
+macro-member	metal2vulkan-rt::CullMode::Back	Back = 2, "MTLCullModeBack";
+macro-member	metal2vulkan-rt::CullMode::CullMode	CullMode = "MTLCullMode"
+macro-member	metal2vulkan-rt::CullMode::Front	Front = 1, "MTLCullModeFront";
+macro-member	metal2vulkan-rt::CullMode::None	None = 0, "MTLCullModeNone";
+macro-member	metal2vulkan-rt::CullMode::aliases	aliases
+macro-member	metal2vulkan-rt::IndexType::IndexType	IndexType = "MTLIndexType"
+macro-member	metal2vulkan-rt::IndexType::IndexType	IndexType(i32) = "VkIndexType"
+macro-member	metal2vulkan-rt::IndexType::NONE_KHR	NONE_KHR = 1000165000, "VK_INDEX_TYPE_NONE_KHR";
+macro-member	metal2vulkan-rt::IndexType::UINT16	UINT16 = 0, "VK_INDEX_TYPE_UINT16";
+macro-member	metal2vulkan-rt::IndexType::UINT32	UINT32 = 1, "VK_INDEX_TYPE_UINT32";
+macro-member	metal2vulkan-rt::IndexType::UINT8	UINT8 = 1000265000, "VK_INDEX_TYPE_UINT8";
+macro-member	metal2vulkan-rt::IndexType::UInt16	UInt16 = 0, "MTLIndexTypeUInt16";
+macro-member	metal2vulkan-rt::IndexType::UInt32	UInt32 = 1, "MTLIndexTypeUInt32";
+macro-member	metal2vulkan-rt::IndexType::aliases	aliases
 macro-member	metal2vulkan-rt::PixelFormat::A1BGR5Unorm	A1BGR5Unorm = 41, "MTLPixelFormatA1BGR5Unorm";
 macro-member	metal2vulkan-rt::PixelFormat::A8Unorm	A8Unorm = 1, "MTLPixelFormatA8Unorm";
 macro-member	metal2vulkan-rt::PixelFormat::ABGR4Unorm	ABGR4Unorm = 42, "MTLPixelFormatABGR4Unorm";
@@ -6701,6 +6745,13 @@ macro-member	metal2vulkan-rt::PixelFormat::YCBCR84442P	YCBCR84442P = 503, "MTLPi
 macro-member	metal2vulkan-rt::PixelFormat::YCBCR84442PSRGB	YCBCR84442PSRGB = 523, "MTLPixelFormatYCBCR8_444_2P_sRGB";
 macro-member	metal2vulkan-rt::PixelFormat::YCBCRA84441P	YCBCRA84441P = 560, "MTLPixelFormatYCBCRA8_444_1P";
 macro-member	metal2vulkan-rt::PixelFormat::aliases	aliases
+macro-member	metal2vulkan-rt::PrimitiveType::Line	Line = 1, "MTLPrimitiveTypeLine";
+macro-member	metal2vulkan-rt::PrimitiveType::LineStrip	LineStrip = 2, "MTLPrimitiveTypeLineStrip";
+macro-member	metal2vulkan-rt::PrimitiveType::Point	Point = 0, "MTLPrimitiveTypePoint";
+macro-member	metal2vulkan-rt::PrimitiveType::PrimitiveType	PrimitiveType = "MTLPrimitiveType"
+macro-member	metal2vulkan-rt::PrimitiveType::Triangle	Triangle = 3, "MTLPrimitiveTypeTriangle";
+macro-member	metal2vulkan-rt::PrimitiveType::TriangleStrip	TriangleStrip = 4, "MTLPrimitiveTypeTriangleStrip";
+macro-member	metal2vulkan-rt::PrimitiveType::aliases	aliases
 macro-member	metal2vulkan-rt::SamplerAddressMode::CLAMP_TO_BORDER	CLAMP_TO_BORDER = 3, "VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER";
 macro-member	metal2vulkan-rt::SamplerAddressMode::CLAMP_TO_EDGE	CLAMP_TO_EDGE = 2, "VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE";
 macro-member	metal2vulkan-rt::SamplerAddressMode::ClampToBorderColor	ClampToBorderColor = 5, "MTLSamplerAddressModeClampToBorderColor";
@@ -6740,6 +6791,16 @@ macro-member	metal2vulkan-rt::SamplerReductionMode::WEIGHTED_AVERAGE	WEIGHTED_AV
 macro-member	metal2vulkan-rt::SamplerReductionMode::WEIGHTED_AVERAGE_RANGECLAMP_QCOM	WEIGHTED_AVERAGE_RANGECLAMP_QCOM = 1000521000, "VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE_RANGECLAMP_QCOM";
 macro-member	metal2vulkan-rt::SamplerReductionMode::WeightedAverage	WeightedAverage = 0, "MTLSamplerReductionModeWeightedAverage";
 macro-member	metal2vulkan-rt::SamplerReductionMode::aliases	aliases
+macro-member	metal2vulkan-rt::StencilOperation::DecrementClamp	DecrementClamp = 4, "MTLStencilOperationDecrementClamp";
+macro-member	metal2vulkan-rt::StencilOperation::DecrementWrap	DecrementWrap = 7, "MTLStencilOperationDecrementWrap";
+macro-member	metal2vulkan-rt::StencilOperation::IncrementClamp	IncrementClamp = 3, "MTLStencilOperationIncrementClamp";
+macro-member	metal2vulkan-rt::StencilOperation::IncrementWrap	IncrementWrap = 6, "MTLStencilOperationIncrementWrap";
+macro-member	metal2vulkan-rt::StencilOperation::Invert	Invert = 5, "MTLStencilOperationInvert";
+macro-member	metal2vulkan-rt::StencilOperation::Keep	Keep = 0, "MTLStencilOperationKeep";
+macro-member	metal2vulkan-rt::StencilOperation::Replace	Replace = 2, "MTLStencilOperationReplace";
+macro-member	metal2vulkan-rt::StencilOperation::StencilOperation	StencilOperation = "MTLStencilOperation"
+macro-member	metal2vulkan-rt::StencilOperation::Zero	Zero = 1, "MTLStencilOperationZero";
+macro-member	metal2vulkan-rt::StencilOperation::aliases	aliases
 macro-member	metal2vulkan-rt::TextureSwizzle::Alpha	Alpha = 5, "MTLTextureSwizzleAlpha";
 macro-member	metal2vulkan-rt::TextureSwizzle::Blue	Blue = 4, "MTLTextureSwizzleBlue";
 macro-member	metal2vulkan-rt::TextureSwizzle::Green	Green = 3, "MTLTextureSwizzleGreen";
@@ -6772,6 +6833,10 @@ macro-member	metal2vulkan-rt::TextureUsage::UNKNOWN	UNKNOWN = 0x0, "MTLTextureUs
 macro-member	metal2vulkan-rt::TextureUsage::VIDEO	VIDEO = 0x8000, "MTLTextureUsageVideo";
 macro-member	metal2vulkan-rt::TextureUsage::aliases	aliases
 macro-member	metal2vulkan-rt::TextureUsage::dropped	dropped
+macro-member	metal2vulkan-rt::Winding::Clockwise	Clockwise = 0, "MTLWindingClockwise";
+macro-member	metal2vulkan-rt::Winding::CounterClockwise	CounterClockwise = 1, "MTLWindingCounterClockwise";
+macro-member	metal2vulkan-rt::Winding::Winding	Winding = "MTLWinding"
+macro-member	metal2vulkan-rt::Winding::aliases	aliases
 macro-member	metal2vulkan-runtime::Degradation::AbsentArgumentRead	AbsentArgumentRead = "absent-argument-read", Precision,
 macro-member	metal2vulkan-runtime::Degradation::AmplificationDraws	AmplificationDraws = "amplification-draws", Performance,
 macro-member	metal2vulkan-runtime::Degradation::AnisotropicFilter	AnisotropicFilter = "anisotropic-filter";
@@ -9405,6 +9470,7 @@ method	metal2vulkan-rt::ComputePipelineState::max_total_threads_per_threadgroup	
 method	metal2vulkan-rt::ComputePipelineState::precision_notes	pub fn precision_notes(&self) -> Vec<PrecisionNote>
 method	metal2vulkan-rt::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-rt::Counters::metrics	pub fn metrics(&self) -> Metrics
+method	metal2vulkan-rt::DepthStencilState::descriptor	pub fn descriptor(&self) -> &DepthStencilDescriptor
 method	metal2vulkan-rt::Device::counters	pub fn counters(&self) -> Counters
 method	metal2vulkan-rt::Device::extensions	pub fn extensions(&self) -> &[CString]
 method	metal2vulkan-rt::Device::features	pub fn features(&self) -> &[ConsumerFeature]
@@ -9416,6 +9482,7 @@ method	metal2vulkan-rt::Device::minimum_linear_texture_alignment	pub fn minimum_
 method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error>
 method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: BlockId, offset: u64, length: u64, zero_from: Option<u64>) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
+method	metal2vulkan-rt::Device::new_depth_stencil_state	pub fn new_depth_stencil_state(&self, descriptor: &DepthStencilDescriptor) -> DepthStencilState
 method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
 method	metal2vulkan-rt::Device::new_fence	pub fn new_fence(&self) -> Fence
 method	metal2vulkan-rt::Device::new_heap_texture	pub fn new_heap_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, heap: HeapRange, offset: u64) -> Result<Texture, Error>
@@ -9463,7 +9530,31 @@ method	metal2vulkan-rt::PhysicalDevice::check	pub fn check(&self) -> Result<floo
 method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
 method	metal2vulkan-rt::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
 method	metal2vulkan-rt::PrecisionNote::of_math_call	pub fn of_math_call(call: Math, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>
+method	metal2vulkan-rt::RenderCommandEncoder::draw_indexed_primitives	pub fn draw_indexed_primitives(&mut self, primitive_type: PrimitiveType, index_count: u32, indices: IndexBuffer<'_>, instance_count: u32, base_vertex: i32, base_instance: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::draw_primitives	pub fn draw_primitives(&mut self, primitive_type: PrimitiveType, vertex_start: u32, vertex_count: u32, instance_count: u32, base_instance: u32) -> Result<(), Error>
 method	metal2vulkan-rt::RenderCommandEncoder::end_encoding	pub fn end_encoding(mut self)
+method	metal2vulkan-rt::RenderCommandEncoder::memory_barrier	pub fn memory_barrier(&mut self) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_blend_color	pub fn set_blend_color(&mut self, red: f32, green: f32, blue: f32, alpha: f32)
+method	metal2vulkan-rt::RenderCommandEncoder::set_cull_mode	pub fn set_cull_mode(&mut self, mode: CullMode)
+method	metal2vulkan-rt::RenderCommandEncoder::set_depth_stencil_state	pub fn set_depth_stencil_state(&mut self, state: Option<&DepthStencilState>) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_buffer	pub fn set_fragment_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_buffer_offset	pub fn set_fragment_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_bytes	pub fn set_fragment_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_sampler_state	pub fn set_fragment_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_fragment_texture	pub fn set_fragment_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_front_facing_winding	pub fn set_front_facing_winding(&mut self, winding: Winding)
+method	metal2vulkan-rt::RenderCommandEncoder::set_render_pipeline_state	pub fn set_render_pipeline_state(&mut self, state: &RenderPipelineState) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_scissor_rect	pub fn set_scissor_rect(&mut self, rect: ScissorRect)
+method	metal2vulkan-rt::RenderCommandEncoder::set_stencil_front_back_reference_value	pub fn set_stencil_front_back_reference_value(&mut self, front: u32, back: u32)
+method	metal2vulkan-rt::RenderCommandEncoder::set_stencil_reference_value	pub fn set_stencil_reference_value(&mut self, value: u32)
+method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_buffer	pub fn set_vertex_buffer(&mut self, buffer: Option<&Buffer>, offset: u64, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_buffer_offset	pub fn set_vertex_buffer_offset(&mut self, offset: u64, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_bytes	pub fn set_vertex_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_sampler_state	pub fn set_vertex_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_vertex_texture	pub fn set_vertex_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::set_viewport	pub fn set_viewport(&mut self, viewport: Viewport) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
+method	metal2vulkan-rt::RenderCommandEncoder::wait_for_fence	pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-rt::RenderPipelineDescriptor::fragment_writes_depth_unattached	pub fn fragment_writes_depth_unattached(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
 method	metal2vulkan-rt::RenderPipelineDescriptor::new	pub fn new(vertex: StageSource) -> RenderPipelineDescriptor
 method	metal2vulkan-rt::RenderPipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<RenderPipelineReflection, Error>
@@ -11528,6 +11619,8 @@ struct	metal2vulkan-rt::ComputeCommandEncoder	pub struct ComputeCommandEncoder
 struct	metal2vulkan-rt::ComputePipelineDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct ComputePipelineDescriptor
 struct	metal2vulkan-rt::ComputePipelineState	#[derive(Clone)] pub struct ComputePipelineState
 struct	metal2vulkan-rt::Counters	#[derive(Clone)] pub struct Counters
+struct	metal2vulkan-rt::DepthStencilDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DepthStencilDescriptor
+struct	metal2vulkan-rt::DepthStencilState	#[derive(Clone)] pub struct DepthStencilState
 struct	metal2vulkan-rt::Device	#[derive(Clone)] pub struct Device
 struct	metal2vulkan-rt::DeviceExtension	#[derive(Clone)] pub struct DeviceExtension
 struct	metal2vulkan-rt::DeviceOptions	#[derive(Clone, Default)] #[non_exhaustive] pub struct DeviceOptions
@@ -11536,6 +11629,7 @@ struct	metal2vulkan-rt::Fence	#[derive(Clone)] pub struct Fence
 struct	metal2vulkan-rt::FunctionDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FunctionDescriptor
 struct	metal2vulkan-rt::Gauges	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Gauges
 struct	metal2vulkan-rt::HeapRange	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct HeapRange
+struct	metal2vulkan-rt::IndexBuffer	#[derive(Clone, Copy)] pub struct IndexBuffer<'a>
 struct	metal2vulkan-rt::IndexGrant	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct IndexGrant
 struct	metal2vulkan-rt::Instance	#[derive(Clone)] pub struct Instance
 struct	metal2vulkan-rt::Library	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct Library(Arc<LibraryInner>)
@@ -11554,13 +11648,16 @@ struct	metal2vulkan-rt::ResourceId	#[derive(Clone, Copy, Debug, Default, Partial
 struct	metal2vulkan-rt::ResourceUsage	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct ResourceUsage(u32)
 struct	metal2vulkan-rt::SamplerDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerDescriptor
 struct	metal2vulkan-rt::SamplerState	#[derive(Clone)] pub struct SamplerState
+struct	metal2vulkan-rt::ScissorRect	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct ScissorRect
 struct	metal2vulkan-rt::SharedEvent	#[derive(Clone)] pub struct SharedEvent
 struct	metal2vulkan-rt::SizeAndAlign	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct SizeAndAlign
+struct	metal2vulkan-rt::StencilDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StencilDescriptor
 struct	metal2vulkan-rt::Texture	#[derive(Clone)] pub struct Texture
 struct	metal2vulkan-rt::TextureDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct TextureDescriptor
 struct	metal2vulkan-rt::TexturePlace	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct TexturePlace
 struct	metal2vulkan-rt::TextureSwizzleChannels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct TextureSwizzleChannels
 struct	metal2vulkan-rt::VertexDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VertexDescriptor
+struct	metal2vulkan-rt::Viewport	#[derive(Clone, Copy, Debug, PartialEq)] pub struct Viewport
 struct	metal2vulkan-rt::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
 struct	metal2vulkan-rt::floor::Capabilities	pub struct Capabilities
 struct	metal2vulkan-rt::floor::Features	#[derive(Clone, Copy, Default)] pub struct Features
@@ -12110,6 +12207,7 @@ trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Send	unsafe impl Send for Blo
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Sync	unsafe impl Sync for BlockInfo
 trait-impl	metal2vulkan-rt::ClearColor impl Default	impl Default for ClearColor
 trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for ComputeCommandEncoder
+trait-impl	metal2vulkan-rt::DepthStencilDescriptor impl Default	impl Default for DepthStencilDescriptor
 trait-impl	metal2vulkan-rt::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-rt::Error impl std::error::Error	impl std::error::Error for Error
 trait-impl	metal2vulkan-rt::Gap impl fmt::Display	impl fmt::Display for Gap
@@ -12120,6 +12218,7 @@ trait-impl	metal2vulkan-rt::RenderPassDepthAttachmentDescriptor impl Default	imp
 trait-impl	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor impl Default	impl Default for RenderPassStencilAttachmentDescriptor
 trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsage
 trait-impl	metal2vulkan-rt::SamplerDescriptor impl Default	impl Default for SamplerDescriptor
+trait-impl	metal2vulkan-rt::StencilDescriptor impl Default	impl Default for StencilDescriptor
 trait-impl	metal2vulkan-rt::TextureSwizzleChannels impl Default	impl Default for TextureSwizzleChannels
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl fmt::Display	impl fmt::Display for BelowFloor
 trait-impl	metal2vulkan-rt::floor::BelowFloor impl std::error::Error	impl std::error::Error for BelowFloor
@@ -13446,6 +13545,11 @@ variant	metal2vulkan-rt::CompareFunction::NotEqual	NotEqual
 variant	metal2vulkan-rt::ConsumerFeature::SamplerYcbcrConversion	SamplerYcbcrConversion
 variant	metal2vulkan-rt::DispatchType::Concurrent	Concurrent
 variant	metal2vulkan-rt::DispatchType::Serial	Serial
+variant	metal2vulkan-rt::DrawKind::AttachmentFormats	AttachmentFormats
+variant	metal2vulkan-rt::DrawKind::AttachmentRead	AttachmentRead
+variant	metal2vulkan-rt::DrawKind::DepthTest	DepthTest
+variant	metal2vulkan-rt::DrawKind::Points	Points
+variant	metal2vulkan-rt::DrawKind::Viewport	Viewport
 variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)
 variant	metal2vulkan-rt::Error::Limit	Limit(Limit)
 variant	metal2vulkan-rt::Error::Loader	Loader(ash::LoadingError)
@@ -13458,6 +13562,7 @@ variant	metal2vulkan-rt::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
 variant	metal2vulkan-rt::Gap::BufferCopyAlignment	BufferCopyAlignment { pixel_format: PixelFormat, offset: u64, bytes_per_row: u64, bytes_per_image: u64 }
 variant	metal2vulkan-rt::Gap::CubicSampler	CubicSampler
+variant	metal2vulkan-rt::Gap::Draw	Draw { kind: DrawKind }
 variant	metal2vulkan-rt::Gap::FenceOtherQueue	FenceOtherQueue
 variant	metal2vulkan-rt::Gap::FillAlignment	FillAlignment { start: u64, end: u64 }
 variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: PixelFormat }
@@ -13593,6 +13698,7 @@ variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
 variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen
 variant	metal2vulkan-rt::Refusal::FillRange	FillRange { start: u64, end: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::HeapTexturePlace	HeapTexturePlace { offset: u64, size: u64, align: u64, heap_len: u64 }
+variant	metal2vulkan-rt::Refusal::IndexBufferOffset	IndexBufferOffset { offset: u64, length: u64 }
 variant	metal2vulkan-rt::Refusal::IndexInUse	IndexInUse { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesGranted	IndicesGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesInUse	IndicesInUse { class: IndexClass, index: u32 }
@@ -13607,6 +13713,7 @@ variant	metal2vulkan-rt::Refusal::NoPipeline	NoPipeline
 variant	metal2vulkan-rt::Refusal::OtherDevice	OtherDevice
 variant	metal2vulkan-rt::Refusal::SamplerArgumentIndex	SamplerArgumentIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::SamplerIds	SamplerIds { numbered: usize, given: usize }
+variant	metal2vulkan-rt::Refusal::StencilAttachment	StencilAttachment
 variant	metal2vulkan-rt::Refusal::TextureArgumentIndex	TextureArgumentIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::TextureArrayLength	TextureArrayLength { array_length: u32 }
 variant	metal2vulkan-rt::Refusal::TextureBytesLayout	TextureBytesLayout { bytes_per_row: u64, bytes_per_image: u64, len: u64 }
@@ -13623,6 +13730,8 @@ variant	metal2vulkan-rt::Refusal::TextureViewFormat	TextureViewFormat { texture:
 variant	metal2vulkan-rt::Refusal::TextureViewRange	TextureViewRange { level: u32, level_count: u32, slice: u32, slice_count: u32 }
 variant	metal2vulkan-rt::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
+variant	metal2vulkan-rt::Refusal::VertexBufferOffset	VertexBufferOffset { index: u32, offset: u64, length: u64 }
+variant	metal2vulkan-rt::Refusal::ViewportNotFinite	ViewportNotFinite
 variant	metal2vulkan-rt::RenderPassKind::ClearFormat	ClearFormat
 variant	metal2vulkan-rt::RenderPassKind::DepthAttachment	DepthAttachment
 variant	metal2vulkan-rt::RenderPassKind::Multisample	Multisample
@@ -13634,11 +13743,11 @@ variant	metal2vulkan-rt::RenderPipelineKind::AlphaToOne	AlphaToOne
 variant	metal2vulkan-rt::RenderPipelineKind::ConstantData	ConstantData
 variant	metal2vulkan-rt::RenderPipelineKind::DepthAttachment	DepthAttachment
 variant	metal2vulkan-rt::RenderPipelineKind::DeviceFeature	DeviceFeature
+variant	metal2vulkan-rt::RenderPipelineKind::DrawInput	DrawInput
 variant	metal2vulkan-rt::RenderPipelineKind::DynamicState	DynamicState
 variant	metal2vulkan-rt::RenderPipelineKind::FramebufferFetch	FramebufferFetch
 variant	metal2vulkan-rt::RenderPipelineKind::Imageblock	Imageblock
 variant	metal2vulkan-rt::RenderPipelineKind::Multisample	Multisample
-variant	metal2vulkan-rt::RenderPipelineKind::Samplers	Samplers
 variant	metal2vulkan-rt::RenderPipelineKind::ShaderStencil	ShaderStencil
 variant	metal2vulkan-rt::RenderPipelineKind::Specialization	Specialization
 variant	metal2vulkan-rt::RenderPipelineKind::StepRate	StepRate

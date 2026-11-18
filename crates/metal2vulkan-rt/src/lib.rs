@@ -17,6 +17,7 @@ mod capture;
 mod command;
 mod complete;
 mod counters;
+mod depth_stencil;
 mod device;
 mod encoder;
 mod error;
@@ -54,9 +55,12 @@ pub use block::Block;
 pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};
+pub use depth_stencil::DepthStencilState;
 pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};
-pub use error::{Error, Gap, Limit, Refusal, RenderPassKind, RenderPipelineKind, TextureViewKind};
+pub use error::{
+    DrawKind, Error, Gap, Limit, Refusal, RenderPassKind, RenderPipelineKind, TextureViewKind,
+};
 pub use event::{Event, SharedEvent};
 pub use extension::{ConsumerFeature, DeviceExtension};
 pub use fence::Fence;
@@ -66,12 +70,17 @@ pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass};
 /// `MTLSamplerDescriptor`: the translator's.
 pub use metal2vulkan::bind::SamplerDescriptor;
 pub use metal2vulkan::library::Library;
+/// `MTLDepthStencilDescriptor` and its `MTLStencilDescriptor`: the translator's.
+pub use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 /// `MTLSamplerMinMagFilter`, `MTLSamplerMipFilter`, `MTLSamplerAddressMode`,
 /// `MTLSamplerBorderColor`, `MTLCompareFunction` and `MTLSamplerReductionMode`: the translator's.
 pub use metal2vulkan::metal::{
     CompareFunction, SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter, SamplerMipFilter,
     SamplerReductionMode,
 };
+/// `MTLPrimitiveType`, `MTLIndexType`, `MTLCullMode`, `MTLWinding` and `MTLStencilOperation`:
+/// the translator's.
+pub use metal2vulkan::metal::{CullMode, IndexType, PrimitiveType, StencilOperation, Winding};
 /// `MTLPixelFormat`, `MTLTextureType`, `MTLTextureUsage` and `MTLTextureSwizzleChannels` with its
 /// `MTLTextureSwizzle`: the translator's.
 pub use metal2vulkan::metal::{
@@ -95,7 +104,7 @@ pub use pass::{
 pub use pipeline::ComputePipelineState;
 pub use queue::CommandQueue;
 pub use render::RenderPipelineState;
-pub use render_encoder::RenderCommandEncoder;
+pub use render_encoder::{IndexBuffer, RenderCommandEncoder, ScissorRect, Viewport};
 pub use sampler::SamplerState;
 pub use texture::{
     BytesPlace, HeapRange, Region, SizeAndAlign, StorageMode, Texture, TextureDescriptor,

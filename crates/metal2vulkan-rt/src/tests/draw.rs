@@ -1,0 +1,724 @@
+//! Draws: the render encoder's state and its draws.
+//!
+//! - A viewport is Vulkan's with its height negated, from `y + height`; one of no width or height
+//!   is one pixel wide or high and covers no pixel; the pixels a viewport covers are its own,
+//!   fractional edges widened, cut to the render area.
+//! - Under a device cfg, on every device of the cfg's kind, of the owned fixtures
+//!   `examples/runtime_examples.ll` and `engine/fca_vertex_unread_attribute.ll`:
+//!   - triangles whose vertex function reads its positions and colors from buffers by vertex ID
+//!     land where Metal's clip space puts them (y up): a direct draw, an indexed draw of 16-bit
+//!     indices through a scissor rectangle, and a direct draw through a viewport, which cuts it
+//!     to its pixels. The pass is one submission, its two barriers and the segment's end, makes no
+//!     pipeline and copies no byte of the runtime's own; a memory barrier after draws that wrote
+//!     no memory records nothing.
+//!   - a draw of lines makes its content's line `VkPipeline` once, a first-use wait, and draws
+//!     its row.
+//!   - a stencil state that replaces the stencil marks what a draw covers, and one that tests it
+//!     keeps a later draw to those pixels.
+//!   - a fragment function samples a texture through its constexpr sampler at the index the
+//!     consumer gave it: each pixel reads its own texel.
+//!   - a vertex function's `[[stage_in]]` attributes come from a vertex buffer, and from
+//!     `set_vertex_bytes`' copy.
+//!   - what Metal refuses is refused, and what a draw does not build is a gap: no pipeline state,
+//!     a pipeline state of other formats than the pass's, points, a depth test, a stencil test
+//!     without a stencil attachment, a misaligned index offset, a non-finite viewport and a
+//!     mirrored one.
+//!
+//! `llvm-as` assembles the fixtures; without it a device test skips visibly.
+
+use crate::render_encoder::{viewport_pixels, vk_viewport};
+use crate::Viewport;
+
+/// A viewport of `x`, `y`, `width` and `height`, depths 0 to 1.
+fn viewport(x: f64, y: f64, width: f64, height: f64) -> Viewport {
+    Viewport {
+        origin_x: x,
+        origin_y: y,
+        width,
+        height,
+        znear: 0.0,
+        zfar: 1.0,
+    }
+}
+
+/// Vulkan's viewport is Metal's flipped; one of no extent is a pixel that covers nothing.
+#[test]
+fn a_viewport_is_vulkans_flipped_and_covers_its_own_pixels() {
+    let v = vk_viewport(&viewport(2.0, 4.0, 8.0, 6.0));
+    assert_eq!([v.x, v.y, v.width, v.height], [2.0, 10.0, 8.0, -6.0]);
+    // Metal's own flip is a positive Vulkan height.
+    let v = vk_viewport(&viewport(0.0, 8.0, 4.0, -8.0));
+    assert_eq!([v.x, v.y, v.width, v.height], [0.0, 0.0, 4.0, 8.0]);
+    let v = vk_viewport(&viewport(1.0, 1.0, 0.0, 0.0));
+    assert_eq!([v.width, v.height], [1.0, -1.0]);
+    // Fractional edges widen to whole pixels, cut to the area; no extent covers nothing.
+    assert_eq!(
+        viewport_pixels(&viewport(0.5, 1.25, 3.0, 2.5), [8, 8]),
+        [[0, 4], [1, 4]]
+    );
+    assert_eq!(
+        viewport_pixels(&viewport(-4.0, 6.0, 16.0, 8.0), [8, 8]),
+        [[0, 8], [6, 8]]
+    );
+    assert_eq!(
+        viewport_pixels(&viewport(0.0, 8.0, 4.0, -8.0), [8, 8]),
+        [[0, 4], [0, 8]]
+    );
+    assert_eq!(
+        viewport_pixels(&viewport(2.0, 2.0, 0.0, 4.0), [8, 8]),
+        [[2, 2], [2, 2]]
+    );
+}
+
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod on_device {
+    use crate::tests::blit::on_device::settled;
+    use crate::tests::command::on_device::{each_device, finished};
+    use crate::{
+        Block, Buffer, ColorAttachmentDescriptor, CommandBuffer, CompareFunction, CullMode,
+        DepthStencilDescriptor, Device, DrawKind, Error, FunctionDescriptor, Gap, IndexBuffer,
+        IndexClass, IndexType, Library, MemoryClass, NumberedSampler, PixelFormat, PrimitiveType,
+        Refusal, Region, RenderPassDescriptor, RenderPipelineDescriptor, RenderPipelineState,
+        ScissorRect, StageSource, StencilOperation, StorageMode, Texture, TextureDescriptor,
+        TextureType, TextureUsage, Viewport,
+    };
+    use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
+    use metal2vulkan::metal::{DataType, VertexFormat};
+    use metal2vulkan::pipeline::{
+        VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
+    };
+    use metal2vulkan_devtools::{engine_dir, fixtures_dir, llvm_assemble, AssembleError};
+    use std::path::Path;
+
+    /// The side of the targets.
+    const SIDE: u32 = 8;
+    /// The constexpr sampler's index the test gives `sampled_fragment`.
+    const CONSTEXPR: u32 = 3;
+
+    /// The library of `ll`, or None where `llvm-as` is missing.
+    fn library(ll: &Path) -> Option<Library> {
+        match llvm_assemble(ll) {
+            Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                None
+            }
+            Err(error) => panic!("{}: {error:?}", ll.display()),
+        }
+    }
+
+    fn examples() -> Option<Library> {
+        library(&fixtures_dir().join("examples/runtime_examples.ll"))
+    }
+
+    /// `colored_vertex` with `fragment`, drawing into one colour attachment of `color`.
+    fn descriptor(
+        library: &Library,
+        fragment: &str,
+        color: PixelFormat,
+    ) -> RenderPipelineDescriptor {
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let mut d = RenderPipelineDescriptor::new(function("colored_vertex"));
+        d.fragment = Some(function(fragment));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(color));
+        d
+    }
+
+    fn state(name: &str, device: &Device, d: &RenderPipelineDescriptor) -> RenderPipelineState {
+        (device.new_render_pipeline_state(d, crate::tests::no_constexpr_samplers))
+            .unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
+    /// Shared buffers in one block, 256 bytes apart.
+    struct Buffers {
+        block: Block,
+        next: u64,
+    }
+
+    impl Buffers {
+        fn new(device: &Device) -> Buffers {
+            Buffers {
+                block: (device.take_block(MemoryClass::Shared, 65536)).expect("a block"),
+                next: 0,
+            }
+        }
+
+        /// A buffer of `bytes`.
+        fn of(&mut self, device: &Device, bytes: &[u8]) -> Buffer {
+            let len = bytes.len() as u64;
+            let buffer =
+                (device.new_buffer(self.block.id, self.next, len, true)).expect("a buffer");
+            self.next += len.next_multiple_of(256);
+            let contents = buffer.contents().expect("a Shared buffer");
+            // SAFETY: the range lies in the buffer, which is alive, and no GPU work uses it.
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len())
+            };
+            buffer
+        }
+    }
+
+    fn floats(values: &[f32]) -> Vec<u8> {
+        values.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    /// A 2D render target of `format`, `SIDE` a side.
+    fn target(device: &Device, format: PixelFormat, usage: TextureUsage) -> Texture {
+        let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
+        d.usage = usage;
+        d.storage_mode = StorageMode::Shared;
+        (device.new_texture(&d, None)).unwrap_or_else(|error| panic!("{format:?}: {error}"))
+    }
+
+    /// The texels of `texture`, `unit` bytes each.
+    fn read(texture: &Texture, unit: usize) -> Vec<u8> {
+        let row = SIDE as usize * unit;
+        let mut bytes = vec![0; row * SIDE as usize];
+        let region = Region {
+            origin: [0; 3],
+            size: [SIDE, SIDE, 1],
+        };
+        (texture.get_bytes(
+            &mut bytes,
+            row as u64,
+            (row * SIDE as usize) as u64,
+            region,
+            0,
+            0,
+        ))
+        .expect("get_bytes");
+        bytes
+    }
+
+    /// A pass that clears `color` to opaque black, with `stencil` cleared to 0 where given.
+    fn pass(color: &Texture, stencil: Option<&Texture>) -> RenderPassDescriptor {
+        let mut d = RenderPassDescriptor::default();
+        let c = &mut d.color_attachments[0];
+        c.texture = Some(color.clone());
+        c.load_action = crate::LoadAction::Clear;
+        if let Some(stencil) = stencil {
+            d.stencil_attachment.texture = Some(stencil.clone());
+        }
+        d
+    }
+
+    /// `command_buffer` committed and complete with no error.
+    fn run(name: &str, command_buffer: &CommandBuffer) {
+        command_buffer.commit().expect("a commit");
+        finished(name, command_buffer);
+        assert_eq!(command_buffer.error(), None, "{name}");
+    }
+
+    /// The RGBA8 texel `color` of a float colour of 0 or 1 channels.
+    fn rgba8(color: [f32; 4]) -> [u8; 4] {
+        color.map(|c| (c * 255.0) as u8)
+    }
+
+    const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+    const WHITE: [f32; 4] = [1.0; 4];
+
+    /// The fixture's vertices, positions and colors: the top half of clip space (y up) in green,
+    /// then the whole of it in blue and in white, three each.
+    fn vertices(device: &Device, buffers: &mut Buffers) -> (Buffer, Buffer) {
+        let top = [-1.0, 0.0, 3.0, 0.0, -1.0, 4.0];
+        let whole = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+        let positions: Vec<f32> = [top, whole, whole].concat();
+        let colors: Vec<f32> = [GREEN, BLUE, WHITE]
+            .iter()
+            .flat_map(|c| [*c; 3].concat())
+            .collect();
+        (
+            buffers.of(device, &floats(&positions)),
+            buffers.of(device, &floats(&colors)),
+        )
+    }
+
+    /// The texels of `SIDE` rows of `SIDE` texels, `texel(x, y)` each.
+    fn texels(texel: impl Fn(u32, u32) -> [f32; 4]) -> Vec<u8> {
+        (0..SIDE)
+            .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+            .flat_map(|(x, y)| rgba8(texel(x, y)))
+            .collect()
+    }
+
+    /// Triangles land where Metal's clip space puts them, through a scissor rectangle and a
+    /// viewport; the pass is three barriers, no pipeline made and no byte copied.
+    #[test]
+    fn every_device_draws_triangles_where_metal_puts_them() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("draw_triangles", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let indices = buffers.of(&device, &[3, 0, 4, 0, 5, 0, 0, 0]);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+            settled(&device);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            // The top half, green.
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            draw(encoder.memory_barrier());
+            // The whole target in blue, through the bottom-right quarter's rectangle.
+            encoder.set_scissor_rect(ScissorRect {
+                x: 4,
+                y: 4,
+                width: 4,
+                height: 40,
+            });
+            let indexed = IndexBuffer {
+                buffer: &indices,
+                offset: 0,
+                index_type: IndexType::UInt16,
+            };
+            draw(encoder.draw_indexed_primitives(PrimitiveType::Triangle, 3, indexed, 1, 0, 0));
+            // The whole target in white, through the bottom-left quarter's viewport, which cuts
+            // it to its pixels.
+            encoder.set_scissor_rect(ScissorRect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            });
+            draw(encoder.set_viewport(Viewport {
+                origin_x: 0.0,
+                origin_y: 4.0,
+                width: 4.0,
+                height: 4.0,
+                znear: 0.0,
+                zfar: 1.0,
+            }));
+            encoder.set_cull_mode(CullMode::None);
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 6, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - before.submissions,
+                    after.barriers - before.barriers,
+                    after.passes - before.passes,
+                    after.pipelines_created - before.pipelines_created,
+                    after.bytes_copied - before.bytes_copied,
+                ),
+                (1, 3, 1, 0, 0),
+                "{name}: submissions, barriers, passes, pipelines made, bytes copied"
+            );
+            let want = texels(|x, y| match (x, y) {
+                (_, 0..4) => GREEN,
+                (0..4, _) => WHITE,
+                _ => BLUE,
+            });
+            assert_eq!(read(&color, 4), want, "{name}: the texels");
+            println!("{name}: three draws in one pass, 3 barriers, no pipeline made");
+        });
+    }
+
+    /// A draw of lines makes the line pipeline once and draws its row.
+    #[test]
+    fn every_device_makes_its_line_pipeline_at_the_first_draw_of_lines() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("draw_lines", |name, _, device| {
+            let state = state(name, &device, &d);
+            // A line across row 2's centres, Metal's y up.
+            let y = 1.0 - 2.5 / 4.0;
+            let mut buffers = Buffers::new(&device);
+            let positions = buffers.of(&device, &floats(&[-1.0, y, 1.0, y]));
+            let colors = buffers.of(&device, &floats(&[GREEN, GREEN].concat()));
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+            for round in 0..2 {
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let draw =
+                    |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                draw(encoder.set_render_pipeline_state(&state));
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                draw(encoder.draw_primitives(PrimitiveType::Line, 0, 2, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let after = counters.metrics();
+                let made = u64::from(round == 0);
+                assert_eq!(
+                    (
+                        after.pipelines_created - before.pipelines_created,
+                        after.first_use_waits - before.first_use_waits,
+                    ),
+                    (made, made),
+                    "{name}: round {round}: pipelines made, first-use waits"
+                );
+                let texels = read(&color, 4);
+                let at = |x: u32, y: u32| {
+                    let i = ((y * SIDE + x) * 4) as usize;
+                    [texels[i], texels[i + 1], texels[i + 2], texels[i + 3]]
+                };
+                for x in 1..SIDE - 1 {
+                    assert_eq!(at(x, 2), rgba8(GREEN), "{name}: ({x}, 2)");
+                    assert_eq!(at(x, 5), rgba8(BLACK), "{name}: ({x}, 5)");
+                }
+            }
+            println!("{name}: one line pipeline, made at the first draw of lines");
+        });
+    }
+
+    /// A stencil state that replaces marks the top half; one that tests keeps a later draw there.
+    #[test]
+    fn every_device_marks_and_tests_the_stencil() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let mut d = plain.clone();
+        d.stencil_format = Some(PixelFormat::Stencil8);
+        each_device("draw_stencil", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let stencil = target(&device, PixelFormat::Stencil8, TextureUsage::RENDER_TARGET);
+            let mut replace = DepthStencilDescriptor::default();
+            for face in [
+                &mut replace.front_face_stencil,
+                &mut replace.back_face_stencil,
+            ] {
+                face.depth_stencil_pass_operation = StencilOperation::Replace;
+            }
+            let mut equal = DepthStencilDescriptor::default();
+            for face in [&mut equal.front_face_stencil, &mut equal.back_face_stencil] {
+                face.stencil_compare_function = CompareFunction::Equal;
+            }
+            let (replace, equal) = (
+                device.new_depth_stencil_state(&replace),
+                device.new_depth_stencil_state(&equal),
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer
+                .render_command_encoder(&pass(&color, Some(&stencil))))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            // 0x1a5 saturates to 255 as Metal stores it; the test compares what the first draw
+            // stored.
+            encoder.set_stencil_reference_value(0x1a5);
+            draw(encoder.set_depth_stencil_state(Some(&replace)));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            draw(encoder.set_depth_stencil_state(Some(&equal)));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let want = texels(|_, y| match y {
+                0..4 => BLUE,
+                _ => BLACK,
+            });
+            assert_eq!(read(&color, 4), want, "{name}: the tested draw");
+            if stencil.unit().is_some() {
+                let want: Vec<u8> = (0..SIDE * SIDE)
+                    .map(|i| if i < SIDE * SIDE / 2 { 255 } else { 0 })
+                    .collect();
+                assert_eq!(read(&stencil, 1), want, "{name}: the stencil");
+            }
+
+            // A stencil test in a pass without a stencil attachment is refused.
+            let plain = state(name, &device, &plain);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            draw(encoder.set_render_pipeline_state(&plain));
+            draw(encoder.set_depth_stencil_state(Some(&equal)));
+            assert!(
+                matches!(
+                    encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0),
+                    Err(Error::Refused(Refusal::StencilAttachment))
+                ),
+                "{name}: a stencil test without a stencil attachment"
+            );
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            println!("{name}: the stencil marks and tests");
+        });
+    }
+
+    /// Each pixel samples its own texel through the constexpr sampler at the consumer's index.
+    #[test]
+    fn every_device_samples_a_texture_through_a_constexpr_sampler_in_a_draw() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "sampled_fragment", PixelFormat::RGBA16Float);
+        each_device("draw_sampled", |name, _, device| {
+            for (class, first) in [(IndexClass::Texture, 4096), (IndexClass::Sampler, 1)] {
+                (device.grant_indices(class, first, 4))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            let state = (device.new_render_pipeline_state(&d, |samplers| {
+                assert!(
+                    matches!(samplers, [NumberedSampler::Constexpr(_)]),
+                    "{name}: {samplers:?}"
+                );
+                Ok(vec![CONSTEXPR])
+            }))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut sd =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA16Float, SIDE, SIDE);
+            sd.usage = TextureUsage::SHADER_READ;
+            let source = (device.new_texture(&sd, Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // Each texel's channels in sixteenths, which a half holds exactly: x, y, x + y, 1.
+            let half = |k: u32| -> [u8; 2] {
+                match k {
+                    0 => [0, 0],
+                    _ => {
+                        let bits = (k as f32 / 16.0).to_bits();
+                        let exponent = ((bits >> 23) & 0xff) as i32 - 127 + 15;
+                        (((exponent as u16) << 10) | ((bits >> 13) & 0x3ff) as u16).to_le_bytes()
+                    }
+                }
+            };
+            let bytes: Vec<u8> = (0..SIDE)
+                .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
+                .flat_map(|(x, y)| [x, y, x + y, 16].into_iter().flat_map(half))
+                .collect();
+            let whole = Region {
+                origin: [0; 3],
+                size: [SIDE, SIDE, 1],
+            };
+            let row = u64::from(SIDE * 8);
+            (source.replace_region(whole, 0, 0, &bytes, row, row * u64::from(SIDE)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA16Float,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_fragment_texture(Some(&source), 0));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            assert_eq!(read(&color, 8), bytes, "{name}: each pixel its own texel");
+            println!("{name}: a constexpr sampler at index {CONSTEXPR} sampled each texel");
+        });
+    }
+
+    /// `[[stage_in]]` attributes come from a vertex buffer, and from `set_vertex_bytes`' copy.
+    #[test]
+    fn every_device_fetches_vertex_attributes_from_vertex_buffers_and_bytes() {
+        let Some(library) = library(&engine_dir().join("fca_vertex_unread_attribute.ll")) else {
+            return;
+        };
+        let constants = FunctionConstantValues::defaults()
+            .with_index(0, FunctionConstantValue::new(DataType::Bool, [1]));
+        let function = |name| {
+            let mut f = FunctionDescriptor::new(library.function(name).expect("the function"));
+            f.constants = constants.clone();
+            f.specialized = true;
+            StageSource::Function(f)
+        };
+        let mut d = RenderPipelineDescriptor::new(function("fca_vertex_unread_attribute"));
+        d.fragment = Some(function("fca_fragment_unread_attribute"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        let mut vertex = VertexDescriptor::new();
+        for a in 0..2 {
+            let attribute = VertexAttributeDescriptor::new(VertexFormat::Float4, 16 * a, 0);
+            vertex.attributes.insert(a, attribute);
+        }
+        let layout = VertexBufferLayoutDescriptor::new(Some(32));
+        vertex.layouts.insert(0, layout);
+        d.vertex_descriptor = Some(vertex);
+        // Three `{ position, color }` vertices that cover the target, `color` (1, 0, 0, 1),
+        // which the vertex function scales by 0.5 and biases by 0.25.
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let records: Vec<f32> = [[-1.0, -1.0], [3.0, -1.0], [-1.0, 3.0]]
+            .iter()
+            .flat_map(|[x, y]| [[*x, *y, 0.0, 1.0], red].concat())
+            .collect();
+        let records = floats(&records);
+        each_device("draw_stage_in", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let vertices = buffers.of(&device, &records);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            for bytes in [false, true] {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let draw =
+                    |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                draw(encoder.set_render_pipeline_state(&state));
+                draw(match bytes {
+                    false => encoder.set_vertex_buffer(Some(&vertices), 0, 0),
+                    true => encoder.set_vertex_bytes(&records, 0),
+                });
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                // Metal's (191, 64, 64, 191), each channel within one code: near a tie the
+                // device may store the other code nearest it.
+                for texel in read(&color, 4).chunks(4) {
+                    let near = (texel.iter().zip([191u8, 64, 64, 191]))
+                        .all(|(&got, want)| got.abs_diff(want) <= 1);
+                    assert!(near, "{name}: bytes {bytes}: {texel:?}");
+                }
+            }
+            println!("{name}: attributes from a vertex buffer and from bytes");
+        });
+    }
+
+    /// What Metal refuses is refused, and what a draw does not build is a gap.
+    #[test]
+    fn every_device_refuses_the_draws_it_does_not_build() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let other = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
+        each_device("draw_refused", |name, _, device| {
+            let state = state(name, &device, &plain);
+            let other = self::state(name, &device, &other);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let indices = buffers.of(&device, &[3, 0, 4, 0, 5, 0, 0, 0]);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let mut depth = DepthStencilDescriptor::default();
+            depth.depth_compare_function = CompareFunction::Less;
+            let depth = device.new_depth_stencil_state(&depth);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let triangle = PrimitiveType::Triangle;
+            let gap = |kind| Err::<(), _>(Error::Unsupported(Gap::Draw { kind }));
+            let same = |got: Result<(), Error>, want: Result<(), Error>, case: &str| {
+                assert_eq!(format!("{got:?}"), format!("{want:?}"), "{name}: {case}");
+            };
+            same(
+                encoder.draw_primitives(triangle, 0, 3, 1, 0),
+                Err(Error::Refused(Refusal::NoPipeline)),
+                "no pipeline state",
+            );
+            encoder.set_render_pipeline_state(&other).expect("a state");
+            same(
+                encoder.draw_primitives(triangle, 0, 3, 1, 0),
+                gap(DrawKind::AttachmentFormats),
+                "another format",
+            );
+            encoder.set_render_pipeline_state(&state).expect("a state");
+            same(
+                encoder.draw_primitives(PrimitiveType::Point, 0, 3, 1, 0),
+                gap(DrawKind::Points),
+                "points",
+            );
+            encoder
+                .set_depth_stencil_state(Some(&depth))
+                .expect("a state");
+            same(
+                encoder.draw_primitives(triangle, 0, 3, 1, 0),
+                gap(DrawKind::DepthTest),
+                "a depth test",
+            );
+            encoder.set_depth_stencil_state(None).expect("no state");
+            let viewport = Viewport {
+                origin_x: 0.0,
+                origin_y: 0.0,
+                width: 4.0,
+                height: 4.0,
+                znear: 0.0,
+                zfar: 1.0,
+            };
+            same(
+                encoder.set_viewport(Viewport {
+                    height: f64::INFINITY,
+                    ..viewport
+                }),
+                Err(Error::Refused(Refusal::ViewportNotFinite)),
+                "an infinite height",
+            );
+            same(
+                encoder.set_viewport(Viewport {
+                    width: -4.0,
+                    ..viewport
+                }),
+                gap(DrawKind::Viewport),
+                "a mirrored viewport",
+            );
+            encoder
+                .set_vertex_buffer(Some(&positions), 0, 0)
+                .expect("a buffer");
+            encoder
+                .set_vertex_buffer(Some(&colors), 0, 1)
+                .expect("a buffer");
+            let misaligned = IndexBuffer {
+                buffer: &indices,
+                offset: 1,
+                index_type: IndexType::UInt16,
+            };
+            same(
+                encoder.draw_indexed_primitives(triangle, 3, misaligned, 1, 0, 0),
+                Err(Error::Refused(Refusal::IndexBufferOffset {
+                    offset: 1,
+                    length: 8,
+                })),
+                "a misaligned index offset",
+            );
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            println!("{name}: each draw refused by kind");
+        });
+    }
+}

@@ -9,7 +9,8 @@ use crate::hazard::Access;
 use crate::memory::BlockId;
 use crate::over;
 use crate::pipeline::{
-    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES, SQUARE,
+    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
+    PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
 use crate::ring::CHUNK;
@@ -22,11 +23,11 @@ use std::ops::BitOr;
 use std::sync::Arc;
 
 /// Metal's count of buffer argument table entries per stage.
-const BUFFER_SLOTS: u32 = 31;
+pub(crate) const BUFFER_SLOTS: u32 = 31;
 /// Metal's count of texture argument table entries per stage.
-const TEXTURE_SLOTS: u32 = 128;
+pub(crate) const TEXTURE_SLOTS: u32 = 128;
 /// Metal's count of sampler argument table entries per stage.
-const SAMPLER_SLOTS: u32 = 16;
+pub(crate) const SAMPLER_SLOTS: u32 = 16;
 
 /// `MTLDispatchType`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1157,7 +1158,7 @@ impl Building {
         let first = self.unbound();
         // SAFETY: the command buffer is recording outside any render pass; the pipeline, the
         // layout and set 1 are the device's, set 1 of that layout and update-after-bind, and the
-        // push range of the layout spans every stage's first 128 bytes.
+        // window lies in the layout's one push range, of `PUSH_STAGES`.
         unsafe {
             if first {
                 device.cmd_bind_descriptor_sets(
@@ -1173,7 +1174,7 @@ impl Building {
                 device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
             }
             if !push.is_empty() {
-                device.cmd_push_constants(command, core.layout, vk::ShaderStageFlags::ALL, 0, push);
+                device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, push);
             }
             match *launch {
                 Launch::Direct(groups) => {

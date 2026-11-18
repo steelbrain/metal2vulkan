@@ -465,7 +465,8 @@ pub struct Metrics {
     /// segment with commands and of each upload, one before a dispatch at a hazard, one owed by
     /// an encoder that wrote or a memory barrier call, recorded before the next command, two
     /// around each blit copy, fill and synchronize copy, and two around each render pass, the
-    /// first of each pair paying what is owed.
+    /// first of each pair paying what is owed, with one inside a render pass at a memory barrier
+    /// after a draw that wrote memory. A draw takes none.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
     /// copies between a texture over a buffer and its image of its own
@@ -482,7 +483,7 @@ pub struct Metrics {
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
     /// for a workgroup size (a threadgroup size, or the tile of an image-only kernel's grid more
     /// than one deep) or threadgroup memory lengths no state of the kernel's content had run with
-    /// before.
+    /// before, or for a render content's first draw of lines.
     pub first_use_waits: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) the first-use waits took, in total.
     pub first_use_wait_nanos: u64,
@@ -529,7 +530,8 @@ pub struct Metrics {
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     pub cache_bytes_written: u64,
     /// Writes into the parameter ring: a dispatch's parameter block, its fields past the push
-    /// window (a kernel with more than 28 buffers), and each `set_bytes` copy.
+    /// window (a kernel with more than 28 buffers), and each `set_bytes` copy, a render
+    /// encoder's too.
     pub ring_writes: u64,
     /// Calls that waited for an upload to complete before they recorded: the upload at its
     /// bound of calls or bytes, or the staging region with no room for a copy.

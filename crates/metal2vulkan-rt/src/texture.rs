@@ -221,6 +221,8 @@ pub(crate) struct Attachment {
     pub(crate) home: vk::ImageLayout,
     /// The level's width and height.
     pub(crate) extent: [u32; 2],
+    /// The image's format, the view's.
+    pub(crate) format: vk::Format,
 }
 
 /// A texture's bytes in a buffer, which [`Texture::replace_region`] and [`Texture::get_bytes`]
@@ -2349,6 +2351,7 @@ impl Texture {
             aspects: image.aspects,
             home: image.home,
             extent: [(d.width >> level).max(1), (d.height >> level).max(1)],
+            format: self.inner.format,
         })
     }
 

@@ -69,6 +69,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// parameter ring, whose address is a field in the window.
 pub(crate) const PUSH_BYTES: u32 = crate::floor::PUSH_CONSTANT_BYTES;
 
+/// The stages of the layout's one push range, which every `vkCmdPushConstants` names: a
+/// dispatch's and a draw's pushes are of one range over the compute, vertex and fragment stages.
+pub(crate) const PUSH_STAGES: vk::ShaderStageFlags = vk::ShaderStageFlags::ALL;
+
 /// `MTLComputePipelineState`.
 ///
 /// A cheap handle: clones share one state. A command buffer that dispatches with it keeps it until
@@ -150,6 +154,23 @@ fn number(
     {
         return Err(gap());
     }
+    let uses: Vec<(usize, CombinedSampler)> = (kernels.iter())
+        .flat_map(|kernel| kernel.interface.constexprs.iter().copied())
+        .collect();
+    number_samplers(core, samplers, &uses, sampler_ids, gap)
+}
+
+/// A state's numbered samplers `samplers`: `sampler_ids` gives an index to each, and each
+/// constexpr sampler of `uses` (by its place in `samplers`, with its use) takes the device sampler
+/// of each use at its index. `gap` is the error of a use whose sampler the translator cannot
+/// state.
+pub(crate) fn number_samplers(
+    core: &Core,
+    samplers: Vec<NumberedSampler>,
+    uses: &[(usize, CombinedSampler)],
+    sampler_ids: impl FnOnce(&[NumberedSampler]) -> Result<Vec<u32>, Error>,
+    gap: fn() -> Error,
+) -> Result<Numbered, Error> {
     let ids = sampler_ids(&samplers)?;
     if ids.len() != samplers.len() {
         return Err(Error::Refused(Refusal::SamplerIds {
@@ -167,22 +188,18 @@ fn number(
         let NumberedSampler::Constexpr(words) = *sampler else {
             continue;
         };
-        let mut uses = [None; 3];
-        let used = kernels
-            .iter()
-            .flat_map(|kernel| &kernel.interface.constexprs)
-            .filter(|(place, _)| *place == at);
-        for (_, sampler) in used {
+        let mut held = [None; 3];
+        for (_, sampler) in uses.iter().filter(|(place, _)| *place == at) {
             let desc = sampler
                 .constexpr_sampler(profile)
                 .map_err(Error::Translation)?
                 .ok_or_else(gap)?;
-            uses[sampler_array(sampler)] = Some(canonical(desc));
+            held[sampler_array(sampler)] = Some(canonical(desc));
         }
-        if uses.iter().all(Option::is_none) {
+        if held.iter().all(Option::is_none) {
             continue;
         }
-        if let Err(error) = hold_constexpr(core, numbered.ids[at], words, uses) {
+        if let Err(error) = hold_constexpr(core, numbered.ids[at], words, held) {
             numbered.release(core);
             return Err(error);
         }
@@ -193,7 +210,7 @@ fn number(
 
 impl Numbered {
     /// Gives up the constexpr samplers' elements the state holds.
-    fn release(&mut self, core: &Core) {
+    pub(crate) fn release(&mut self, core: &Core) {
         for at in self.held.drain(..) {
             release_constexpr(core, self.ids[at]);
         }
@@ -387,7 +404,8 @@ pub(crate) enum FieldValue {
     /// saturates to them (`metal::format::integer_channels_word`), 0 where none is.
     IntegerChannels(u32),
     /// A `u32`: the sampler index the consumer gave the constexpr sampler at this place of the
-    /// state's numbered samplers.
+    /// state's numbered samplers (a render state's: the vertex function's, then the fragment
+    /// function's).
     ConstexprSampler(usize),
     /// The dispatch's region, 32 bytes read as two `uvec4`: the first threadgroup of the dispatch
     /// in Metal's grid (0 for a whole dispatch) with the threadgroup size packed as
@@ -996,9 +1014,9 @@ fn gap() -> Error {
     Error::Unsupported(Gap::KernelInput)
 }
 
-/// Whether `set` of a kernel's layout is the device's: set 1 the device's texture and sampler
-/// arrays (those of them the kernel reads), any other set empty.
-fn of_the_device(set: &DescriptorSetLayout) -> bool {
+/// Whether `set` of a pipeline's layout is the device's: set 1 the device's texture and sampler
+/// arrays (those of them its functions read), any other set empty.
+pub(crate) fn of_the_device(set: &DescriptorSetLayout) -> bool {
     match set.set {
         1 => set.bindings.iter().all(|binding| {
             let ty: vk::DescriptorType = binding.ty.into();
@@ -1009,8 +1027,8 @@ fn of_the_device(set: &DescriptorSetLayout) -> bool {
     }
 }
 
-/// The hazard table's access of a texture slot the kernel samples, reads, writes, or several.
-fn texture_access(used: TextureAccess) -> Access {
+/// The hazard table's access of a texture slot a function samples, reads, writes, or several.
+pub(crate) fn texture_access(used: TextureAccess) -> Access {
     match (used.sample || used.read, used.write) {
         (_, false) => Access::Read,
         (false, true) => Access::Write,
@@ -1018,8 +1036,8 @@ fn texture_access(used: TextureAccess) -> Access {
     }
 }
 
-/// The hazard table's access of a slot the kernel reads, writes, or both.
-fn access(used: AccessSet) -> Access {
+/// The hazard table's access of a slot a function reads, writes, or both.
+pub(crate) fn access(used: AccessSet) -> Access {
     match (used.read, used.write) {
         (_, false) => Access::Read,
         (false, true) => Access::Write,
