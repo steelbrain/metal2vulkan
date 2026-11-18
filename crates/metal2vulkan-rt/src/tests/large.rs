@@ -4,7 +4,9 @@
 //! the very next commit and then written and read again; the same with other work in flight when
 //! it is made, with a blit into it, with two of them alive at once, and as the frame's three
 //! (two Shared, one Managed) alive at once. Every read sees the bytes its buffer holds, and every
-//! gauge reads zero after teardown.
+//! gauge reads zero after teardown. Also, for any length: a block given up while an encoded and
+//! uncommitted command buffer holds a buffer in it is not taken again until that command buffer
+//! retires, or is dropped uncommitted.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -90,7 +92,7 @@ mod on_device {
             encoder
                 .set_compute_pipeline_state(&self.twice)
                 .expect("a state");
-            for offset in offsets() {
+            for offset in offsets(big.length()) {
                 encoder
                     .set_buffer(Some(big), offset, 0)
                     .expect("the big buffer");
@@ -415,6 +417,85 @@ mod on_device {
                 }
                 drop((command_buffer, other, other_block));
             }
+        });
+    }
+
+    /// A Shared block of 4 MiB whose buffer a dispatch encoded in an uncommitted command buffer
+    /// writes, the buffer and the block given up before the commit: a take of the same class and
+    /// length then gets another block, whose bytes the dispatch leaves as they were once the
+    /// command buffer is committed and completes, while the first block's range reads the
+    /// dispatch's write through no handle. A command buffer dropped uncommitted gives such a
+    /// block back: the next take of its length gets it again.
+    #[test]
+    fn every_device_takes_no_block_an_encoded_uncommitted_command_buffer_holds() {
+        const SMALL: u64 = 4 << 20;
+        each_device("block_held_by_encoding", |name, _, device| {
+            let kernels = Kernels::new(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let take = || {
+                (device.take_block(MemoryClass::Shared, SMALL))
+                    .unwrap_or_else(|error| panic!("{name}: a block: {error}"))
+            };
+            let encode = |buffer: &Buffer| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder
+                    .set_compute_pipeline_state(&kernels.twice)
+                    .expect("a state");
+                encoder.set_buffer(Some(buffer), 0, 0).expect("the buffer");
+                encoder
+                    .dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1])
+                    .expect("a write");
+                encoder.end_encoding();
+                command_buffer
+            };
+            let first = take();
+            let first_address = first.gpu_address;
+            let buffer = (device.new_buffer(first.id, 0, SMALL, Some(0))).expect("a buffer");
+            let command_buffer = encode(&buffer);
+            drop((buffer, first));
+            let second = take();
+            assert!(
+                second.gpu_address + SMALL <= first_address
+                    || first_address + SMALL <= second.gpu_address,
+                "{name}: a take got the range an encoded command buffer holds"
+            );
+            let contents = second.contents.expect("a Shared block").cast::<u32>();
+            for index in 0..WORDS {
+                // SAFETY: the word lies in the block, which no GPU work uses.
+                unsafe {
+                    contents
+                        .as_ptr()
+                        .add(index)
+                        .write_volatile(0xabcd_0000 + index as u32)
+                };
+            }
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}: the write");
+            // SAFETY: the block is alive and holds `WORDS` words; the work completed.
+            let after: Vec<u32> = (0..WORDS)
+                .map(|index| unsafe { contents.as_ptr().add(index).read_volatile() })
+                .collect();
+            let expected: Vec<u32> = (0..WORDS as u32).map(|index| 0xabcd_0000 + index).collect();
+            assert_eq!(after, expected, "{name}: the other block's bytes");
+            drop((command_buffer, second));
+
+            // Dropped uncommitted, the command buffer gives the block back.
+            let third = take();
+            let third_address = third.gpu_address;
+            let buffer = (device.new_buffer(third.id, 0, SMALL, Some(0))).expect("a buffer");
+            let command_buffer = encode(&buffer);
+            drop((buffer, third));
+            drop(command_buffer);
+            let again = take();
+            assert_eq!(
+                again.gpu_address, third_address,
+                "{name}: the block given back"
+            );
+            drop(again);
         });
     }
 }
