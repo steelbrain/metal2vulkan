@@ -71,7 +71,7 @@ use crate::encoder::{check_alignment, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS
 use crate::error::{DrawKind, Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
-use crate::kept::{Handle, Lent};
+use crate::kept::{Handle, Lent, Uncounted};
 use crate::over;
 use crate::pass::{layout_barrier, Pass, RenderPassDescriptor};
 use crate::pipeline::{FieldValue, PUSH_STAGES};
@@ -374,8 +374,9 @@ enum Call<'a> {
 /// [`end_encoding`](Self::end_encoding) does.
 pub struct RenderCommandEncoder {
     command_buffer: CommandBuffer,
-    /// The device: each call borrows it, taking no reference of its own.
-    core: Arc<Core>,
+    /// The device, borrowed from the recording's own handle in `building` with no count of its
+    /// own: every use is while the encoder is open, and so while `building` holds that handle.
+    core: Uncounted<Core>,
     /// What the command buffer records, held while the encoder is open.
     building: Option<Building>,
     /// The checked pass, for its second barrier and to begin its rendering again.
@@ -448,7 +449,9 @@ impl CommandBuffer {
         descriptor: &RenderPassDescriptor,
     ) -> Result<RenderCommandEncoder, Error> {
         let mut building = self.open_encoder()?;
-        let core = Arc::clone(building.device.core());
+        // SAFETY: the encoder holds `building`, whose device handle keeps the core, until it ends;
+        // nothing uses the borrow after that, and a refused descriptor drops it with no use.
+        let core = unsafe { Uncounted::of(building.device.core()) };
         match begin(&mut building, &core, descriptor) {
             Ok((pass, command)) => {
                 let [width, height] = pass.area;

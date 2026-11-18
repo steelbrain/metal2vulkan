@@ -513,6 +513,9 @@ class Run:
         self.jobs, self.carries, self.failures = [], [], {}
         self.build_info = None
         #: Whether the commit has the harness, whose timed workloads each GPU leg runs.
+        #: Whether the commit has the lock budget, which a node naming its event must measure.
+        self.lock_budget = subprocess.run(["git", "cat-file", "-e", f"{sha}:crates/metal2vulkan-rt/src/tests/locks.rs"],
+                                          cwd=REPO, capture_output=True).returncode == 0
         self.harness = subprocess.run(["git", "cat-file", "-e", f"{sha}:crates/metal2vulkan-harness/Cargo.toml"],
                                       cwd=REPO, capture_output=True).returncode == 0
         #: The validation layer's carry: (--carry value, mirror variable, commit), or None.
@@ -833,6 +836,8 @@ def leg_entry(run, leg):
     excused = record and results.record_excused(parsed, record_suites(run, results.card_of(leg.id)), record) or {}
     problems += results.leg_problems(parsed, records, base_records, excused)
     problems += results.old_path_moved(parsed, run.since_bless)
+    if leg.id not in CPU_LEGS and run.lock_budget:
+        problems += results.lock_budget_missing(records, results.names_lock_event(run.setup(leg.node)))
     budget, budget_parked = results.harness_budget(leg.id, parsed)
     problems += budget
     if not parsed["suites"] and leg.id not in run.failures:

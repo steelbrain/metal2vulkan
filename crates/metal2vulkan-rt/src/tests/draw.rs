@@ -447,7 +447,7 @@ mod on_device {
             );
             let queue = device.new_command_queue(4).expect("a queue");
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-            locks.per_added(name, "draw", 2_000, |count| {
+            locks.per_added(name, ("draw", "draw"), 2_000, |count| {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -500,7 +500,7 @@ mod on_device {
             );
             let queue = device.new_command_queue(4).expect("a queue");
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-            locks.per_added(name, "bound draw", 2_000, |count| {
+            locks.per_added(name, ("bound draw", "bound_draw"), 2_000, |count| {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));

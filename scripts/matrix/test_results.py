@@ -161,6 +161,20 @@ class RuleTests(unittest.TestCase):
         records, problems = results.leg_records(leg)
         return problems + results.leg_problems(leg, records, base)
 
+    def test_a_node_naming_the_lock_event_fails_a_leg_without_the_budget_s_records(self):
+        self.assertTrue(results.names_lock_event("export M2V_LOCK_EVENT=cpu_core/r21d0"))
+        self.assertTrue(results.names_lock_event("renice -n 19 $$; export M2V_LOCK_EVENT=r1e25"))
+        self.assertFalse(results.names_lock_event("export CARGO_BUILD_JOBS=4"))
+        self.assertFalse(results.names_lock_event(None))
+        measured = recs(locks={"lock_budget/draw": 0, "lock_budget/bound_draw": 1500,
+                               "lock_budget/dispatch": 4000})
+        self.assertEqual(results.lock_budget_missing(measured, True), [])
+        partial = recs(locks={"lock_budget/draw": 0})
+        self.assertEqual(len(results.lock_budget_missing(partial, True)), 2)
+        self.assertEqual(results.lock_budget_missing(recs(), False), [])
+        suite = results.parse_suite(["    M2V-MATRIX locks lock_budget/draw 120"])
+        self.assertEqual((suite["records"]["locks"], suite["problems"]), ({"lock_budget/draw": 120}, []))
+
     def test_a_metric_fails_on_any_increase_and_passes_a_decrease(self):
         base = recs(metric={"a/barriers": 4, "a/passes": 2})
         self.assertEqual(self.problems(recs(metric={"a/barriers": 4, "a/passes": 1}), base), [])

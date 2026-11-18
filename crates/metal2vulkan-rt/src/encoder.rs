@@ -8,7 +8,7 @@ use crate::error::{Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::floor;
 use crate::hazard::Access;
-use crate::kept::{Handle, Lent};
+use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
 use crate::over;
 use crate::pipeline::{
@@ -170,8 +170,9 @@ enum Launch<'a> {
 /// [`end_encoding`](Self::end_encoding) does.
 pub struct ComputeCommandEncoder {
     command_buffer: CommandBuffer,
-    /// The device: each call borrows it, taking no reference of its own.
-    core: Arc<Core>,
+    /// The device, borrowed from the recording's own handle in `building` with no count of its
+    /// own: every use is while the encoder is open, and so while `building` holds that handle.
+    core: Uncounted<Core>,
     /// What the command buffer records, held while the encoder is open.
     building: Option<Building>,
     serial: bool,
@@ -387,7 +388,9 @@ impl CommandBuffer {
         dispatch_type: DispatchType,
     ) -> Result<ComputeCommandEncoder, Error> {
         let mut building = self.open_encoder()?;
-        let core = Arc::clone(building.device.core());
+        // SAFETY: the encoder holds `building`, whose device handle keeps the core, until it ends;
+        // nothing uses the borrow after that.
+        let core = unsafe { Uncounted::of(building.device.core()) };
         building.count(Metric::Passes);
         if dispatch_type == DispatchType::Concurrent {
             // Its dispatches take no barrier among themselves, so whatever earlier encoders read

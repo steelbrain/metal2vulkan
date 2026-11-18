@@ -392,7 +392,7 @@ pub(crate) mod on_device {
             let state = step(&device);
             let queue = device.new_command_queue(4).expect("a queue");
             let x = arena.buffer();
-            locks.per_added(name, "dispatch", 2_000, |count| {
+            locks.per_added(name, ("dispatch", "dispatch"), 2_000, |count| {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = command_buffer
                     .compute_command_encoder(DispatchType::Serial)

@@ -691,7 +691,7 @@ impl Building {
     /// timestamp queries from the device's pools and begins with the start timestamp, or, where
     /// it gets none, counts it untimed.
     fn begin(&mut self) -> Result<vk::CommandBuffer, Error> {
-        let core = Arc::clone(self.device.core());
+        let core = self.device.core();
         let recorder = match self.gpu.recorder.take() {
             Some(recorder) => recorder,
             None => core.recorders.take(&core.device)?,

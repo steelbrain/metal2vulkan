@@ -12,7 +12,7 @@ import statistics
 from pathlib import Path
 
 #: `size` is the size a harness row whose size follows the device ran at (harness_budget).
-KINDS = ("metric", "instructions", "gauge", "time", "size")
+KINDS = ("metric", "instructions", "gauge", "time", "size", "locks")
 #: A gauge's key ends in the point it was read at.
 GAUGE_POINTS = ("100", "200", "drop")
 #: The new runtime's memory pool's gauges, by their last key component: its `VkDeviceMemory`
@@ -247,6 +247,31 @@ def base_records(records, same_harness):
         return records
     return {kind: {key: value for key, value in values.items() if not key.startswith(HARNESS_RECORDS)}
             for kind, values in records.items()}
+
+
+#: The lock budget's records (`crates/metal2vulkan-rt/src/tests/locks.rs`): the locked
+#: instructions per million added commands of each kind, measured on a node whose matrix setup
+#: names its CPU's locked-instruction event (`M2V_LOCK_EVENT`). The test holds the bound; the
+#: matrix holds that the measurement ran where the node names the event, and carries the values.
+LOCK_BUDGET = ("lock_budget/draw", "lock_budget/bound_draw", "lock_budget/dispatch")
+#: A node setup's export of the event.
+LOCK_EVENT = re.compile(r"\bM2V_LOCK_EVENT=\S")
+
+
+def names_lock_event(setup):
+    """Whether a node's matrix setup (its shell, `matrix.json`'s `setup`) names the
+    locked-instruction event."""
+    return bool(LOCK_EVENT.search(setup or ""))
+
+
+def lock_budget_missing(records, named):
+    """Each lock budget record a leg's RECORDS lack, where its node names the event (NAMED): the
+    budget then measures, and a leg that printed no measurement fails. Elsewhere none: a node that
+    names no event measures nothing."""
+    if not named:
+        return []
+    return [f"lock budget {key}: not measured, though the node's setup names M2V_LOCK_EVENT"
+            for key in LOCK_BUDGET if key not in records["locks"]]
 
 
 def card_of(leg_id):

@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
+use std::sync::Arc;
 
 /// A handle to a shared object that is one `Arc` and nothing else.
 pub(crate) trait Handle: Clone {
@@ -60,6 +61,33 @@ impl<T: Handle> Clone for Lent<T> {
     fn clone(&self) -> Lent<T> {
         // SAFETY: the same object as `self`, which the recording keeps as long.
         unsafe { Lent::of(&self.0) }
+    }
+}
+
+/// An `Arc` borrowed from an owner that outlives every use of it: the same allocation, which this
+/// copy neither retains nor releases, so taking it executes no locked instruction.
+pub(crate) struct Uncounted<T>(ManuallyDrop<Arc<T>>);
+
+impl<T> Uncounted<T> {
+    /// A borrow of `arc`.
+    ///
+    /// # Safety
+    ///
+    /// `arc`'s allocation lives past the borrow's last use.
+    pub(crate) unsafe fn of(arc: &Arc<T>) -> Uncounted<T> {
+        // SAFETY: the pointer is a live `Arc`'s; the copy is never dropped, so it gives back no
+        // count it did not take, and the caller keeps the allocation alive past its last use.
+        Uncounted(ManuallyDrop::new(unsafe {
+            Arc::from_raw(Arc::as_ptr(arc))
+        }))
+    }
+}
+
+impl<T> Deref for Uncounted<T> {
+    type Target = Arc<T>;
+
+    fn deref(&self) -> &Arc<T> {
+        &self.0
     }
 }
 

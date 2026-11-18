@@ -16,8 +16,11 @@ use metal2vulkan_devtools::instructions::{pin_this_thread, ProcessEvent};
 const EVENT: &str = "M2V_LOCK_EVENT";
 /// Measured pairs of a recording of `n` and one of `2n` commands, after the warm-up.
 const ROUNDS: usize = 7;
-/// The most locked instructions an added command may add, the least of the rounds' counts each.
-const BOUND: f64 = 0.02;
+/// The most locked instructions an added command may add, the least of the rounds' counts each:
+/// one value on every device. A site of the runtime's that runs per command adds 1 or more, and
+/// the drivers' own growth stays far below it (0.14 per added bound draw on Intel's Iris Xe, its
+/// highest measured).
+const BOUND: f64 = 0.25;
 
 /// The node's locked-instruction counter, for the whole process from its opening.
 pub(crate) struct Locks {
@@ -54,8 +57,15 @@ impl Locks {
     /// Records, through `record`, `2n` commands of kind `what` twice to warm every ring, list and
     /// pool to the longer recording's size, then [`ROUNDS`] pairs of `n` and `2n`; prints the
     /// locked instructions per added command, the least count of each length's against the
-    /// other's, with every round's, and asserts it is at most [`BOUND`].
-    pub(crate) fn per_added(&self, device: &str, what: &str, n: u32, mut record: impl FnMut(u32)) {
+    /// other's, with every round's, and the matrix's `locks lock_budget/<key>` record of it per
+    /// million added commands (none below 0), and asserts it is at most [`BOUND`].
+    pub(crate) fn per_added(
+        &self,
+        device: &str,
+        (what, key): (&str, &str),
+        n: u32,
+        mut record: impl FnMut(u32),
+    ) {
         record(2 * n);
         record(2 * n);
         let mut short = Vec::with_capacity(ROUNDS);
@@ -80,6 +90,10 @@ impl Locks {
             spread.0,
             spread.1,
             self.name
+        );
+        println!(
+            "M2V-MATRIX locks lock_budget/{key} {}",
+            (added.max(0.0) * 1e6).round() as u64
         );
         assert!(
             added <= BOUND,
