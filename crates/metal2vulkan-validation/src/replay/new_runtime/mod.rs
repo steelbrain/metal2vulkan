@@ -1078,7 +1078,9 @@ impl Backend for NewRuntime {
         let id = match self.objects.get(&object) {
             Some(Object::Texture(texture)) => texture.gpu_resource_id(),
             Some(Object::Sampler(sampler)) => sampler.gpu_resource_id(),
-            Some(Object::Skipped) => return Ok(None),
+            // The runtime gives a compute pipeline state no resource ID: it builds no indirect
+            // command buffers. The player reports the ID as differing.
+            Some(Object::ComputePipeline(_) | Object::Skipped) => return Ok(None),
             _ => {
                 return Err(PlayError::Invalid(format!(
                     "gpuResourceID of #{object}, which has none"

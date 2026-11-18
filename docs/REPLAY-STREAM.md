@@ -425,7 +425,8 @@ old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `c
   256 MiB blocks of the runtime (a larger one in a block of its own), a range freed for reuse once every command buffer committed
   before its release completed, and gives textures and sampler states indices from the whole of
   each index class. Its readback serves Shared and Managed buffers only; a check of anything else
-  is a refusal.
+  is a refusal. The runtime gives a compute pipeline state no `gpuResourceID`, so each one the
+  program saw is reported on an `id` line as `none`.
 
 `report.txt` holds one line per item: `device NAME`, `completed IDS COUNTS`, `frame N COUNTS`,
 `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
