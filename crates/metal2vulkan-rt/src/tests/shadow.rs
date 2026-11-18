@@ -176,9 +176,10 @@ fn a_covering_area_drops_what_it_covers_and_past_eight_the_oldest_goes() {
     assert_eq!(held.plan(&[strips[0]]), vec![strips[0]]);
     // The last ones are still held.
     assert_eq!(held.plan(&[strips[8]]), Vec::<Area>::new());
-    // One area over every strip drops them all and holds them.
+    // One area over every strip copies what the held strip at its end leaves of it, one area,
+    // then drops them all and holds it.
     let all = rect([0, 72], [0, 8]);
-    assert_eq!(held.plan(&[all]), vec![all]);
+    assert_eq!(held.plan(&[all]), vec![rect([0, 64], [0, 8])]);
     for strip in &strips {
         assert_eq!(held.plan(&[*strip]), Vec::<Area>::new());
     }

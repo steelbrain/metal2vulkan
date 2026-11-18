@@ -1125,10 +1125,11 @@ mod on_device {
                 let shadows = counters.gauges();
                 // Through the loop: the pass's two, the move, the memory barrier's, the segment's
                 // end. Through a copy: the pass's two, two around each of the two copies, the
-                // segment's end.
+                // segment's end, and the upload's end, which moves the new shadow home ahead of
+                // the pass.
                 let barriers = match looped {
                     true => 5,
-                    false => 7,
+                    false => 8,
                 };
                 assert_eq!(
                     (
