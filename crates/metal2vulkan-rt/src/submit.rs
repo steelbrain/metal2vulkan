@@ -486,13 +486,36 @@ impl Work {
     /// `didModifyRange:` of a Managed buffer with a device copy: the consumer's bytes
     /// `start..end` of `buffer` changed. The range is only named, merged with the buffer's others
     /// where they overlap or touch; the next commit of a command buffer with commands captures it
-    /// ([`capture`](Self::capture)).
+    /// ([`capture`](Self::capture)). The device's first named range makes the capture ring, on
+    /// the naming thread without the work lock, so no commit waits for its allocation.
     ///
-    /// Err: [`Error::Quiesced`].
-    pub(crate) fn modify(&self, buffer: Named<'_>, start: u64, end: u64) -> Result<(), Error> {
+    /// Err: [`Error::Quiesced`]; what making the capture ring returns.
+    pub(crate) fn modify(
+        &self,
+        core: &Core,
+        buffer: Named<'_>,
+        start: u64,
+        end: u64,
+    ) -> Result<(), Error> {
         let mut state = self.lock();
         if state.closed {
             return Err(Error::Quiesced);
+        }
+        if state.changes.region.is_none() {
+            drop(state);
+            let made = Region::new(core, CAPTURE_LEN)?;
+            state = self.lock();
+            if state.changes.region.is_none() && !state.closed {
+                state.changes.region = Some(made);
+                core.counters.rise_by(Gauge::CaptureBytes, CAPTURE_LEN);
+            } else {
+                // SAFETY: another call made the ring first, or the device closed; nothing used
+                // this one.
+                unsafe { made.free(core) };
+            }
+            if state.closed {
+                return Err(Error::Quiesced);
+            }
         }
         state.changes.add(buffer, start, end);
         Ok(())
@@ -509,7 +532,8 @@ impl Work {
     /// ([`turn`](Self::turn)), on the committing thread, under the work lock `state` (released
     /// while it copies and while it waits): captures every Managed buffer's range named since the
     /// last capture (`crate::capture`). Each range's consumer's bytes are copied into spans of
-    /// the capture ring, made at the first capture, and the copies from them into the device
+    /// the capture ring, which the first named range made ([`modify`](Self::modify)), and the
+    /// copies from them into the device
     /// copies are recorded into copy-ins, command buffers of their own: the first after the copies
     /// back owed to textures over the ranges in images of their own, the last before the copies
     /// in those textures take.
@@ -522,7 +546,7 @@ impl Work {
     /// copy-ins the committing command buffer takes: a commit that failed after its capture left
     /// its own first.
     ///
-    /// Err: [`Error::Quiesced`]; what making the ring, a recorder or a staging block can return;
+    /// Err: [`Error::Quiesced`]; what making a recorder or a staging block can return;
     /// [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` where the device is lost while it waits.
     pub(crate) fn capture<'a>(
         &'a self,
@@ -532,17 +556,6 @@ impl Work {
         if !state.changes.named() {
             let carried = std::mem::take(&mut state.changes.carried);
             return Ok((state, carried));
-        }
-        if state.changes.region.is_none() {
-            // Only a capture makes the ring, in its turn.
-            drop(state);
-            let made = Region::new(core, CAPTURE_LEN)?;
-            core.counters.rise_by(Gauge::CaptureBytes, CAPTURE_LEN);
-            state = self.lock();
-            state.changes.region = Some(made);
-            if state.closed {
-                return Err(Error::Quiesced);
-            }
         }
         let named = state.changes.take();
         let mut chunk = match Chunk::begin(core, capture::backs(&named)) {
@@ -567,7 +580,7 @@ impl Work {
             let modified = &named[index];
             let len = (end - at).min(CAPTURE_LEN);
             let Some(region) = state.changes.region.as_mut() else {
-                unreachable!("the ring is made above, and freed only at the device's end");
+                unreachable!("the first named range made the ring, freed only at the device's end");
             };
             region.ring.reclaim(core.done.completed());
             if let Some((number, offset)) = region.ring.take(len, false) {

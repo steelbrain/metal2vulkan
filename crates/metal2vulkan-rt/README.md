@@ -215,7 +215,9 @@ in its memory.
   the buffer), merged with the buffer's others where they overlap or touch, and submits nothing.
   The next commit of a command buffer with commands, on any queue, takes the bytes of every range
   named since: on the committing thread, before `commit` returns, it copies each once into a
-  64 MiB staging ring of the Shared type, and the copies from the ring into the device copies go
+  64 MiB staging ring of the Shared type (made at the device's first `did_modify_range`, on its
+  thread, so no commit waits for the allocation; never zeroed, as each span is written before it
+  is copied), and the copies from the ring into the device copies go
   ahead of that command buffer's commands, after every earlier command on the device, which the
   barrier ending each earlier command buffer orders; the copies record one barrier, after them. So
   the bytes are taken at the commit; Metal takes them shortly after, before the command buffer is
@@ -478,8 +480,8 @@ made, with no lock, and never rewritten for layouts.
   itself with its memory aligned to the texel, so it answers the texel's bytes (4 for `RGBA8Unorm`,
   1 for `R8Unorm`), below Metal's 16. The answer promises nothing for widths not tried.
 - The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
-  copy, its pages written then, and kept for the device's life, so no copy allocates memory and
-  the host writes resident pages. It is a ring: each copy takes a span at a multiple of 256 bytes,
+  copy and kept for the device's life, so no copy allocates memory. Its bytes are never zeroed:
+  each copy's span is written, by the host or by the copy, before anything reads it. It is a ring: each copy takes a span at a multiple of 256 bytes,
   free again once the submission that carries the copy completes and no `get_bytes` reads it. The
   upload is submitted, without a wait, once its copies' spans take 8 MiB, so the GPU copies while
   the host writes the next. Where the ring has no room, the call waits for its oldest span's

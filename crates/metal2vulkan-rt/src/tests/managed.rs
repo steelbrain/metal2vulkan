@@ -14,7 +14,8 @@
 //! consumer places the device copy: at an odd offset of its Private block it holds the bytes there
 //! and nowhere else, the consumer's slack after it and the bytes before it as the consumer left
 //! them; a missing copy, a copy on a unified device, one in a Shared block and one past its block
-//! are refused.
+//! are refused. The device's first named range makes the capture ring on the naming thread: a
+//! commit on another thread, with that making parked, completes.
 //!
 //! Managed textures, on every device: the image takes the named bytes of a region at its upload
 //! and nothing outside it, `get_bytes` reads the named bytes, `replace_region` writes them and
@@ -54,6 +55,7 @@ fn changed_ranges_merge_where_they_overlap_or_touch() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
     use crate::capture::CAPTURE_LEN;
+    use crate::device::lock;
     use crate::tests::command::on_device::{each_device, finished, within, Arena};
     use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::{
@@ -62,6 +64,9 @@ pub(crate) mod on_device {
         TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use std::time::Instant;
 
     const LEN: u64 = 64 << 10;
@@ -612,6 +617,72 @@ pub(crate) mod on_device {
         write(&managed, 0, bytes);
         (managed.did_modify_range(0, len)).unwrap_or_else(|error| panic!("{name}: {error}"));
         (managed, into, [cpu, side])
+    }
+
+    /// The device's first named range makes the capture ring on the naming thread, never inside a
+    /// commit, so a commit on another thread does not wait for the ring's allocation: with the
+    /// making parked, another thread's commit of a command buffer with commands completes. Then
+    /// the named range reaches the device copy at the naming thread's commit.
+    #[test]
+    fn every_device_makes_the_capture_ring_outside_every_commit() {
+        each_device("capture ring off the commit", |name, _, device| {
+            if device.core().unified_memory() {
+                println!("capture ring off the commit: {name}: no device copy");
+                return;
+            }
+            let bytes: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8).collect();
+            let cpu = (device.take_block(MemoryClass::Shared, LEN))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let side = (device.take_block(MemoryClass::Shared, LEN))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let into = (device.new_buffer(side.id, 0, LEN, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed = (new_managed(&device, cpu.id, 0, LEN, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            write(&managed, 0, &bytes);
+            let park = Arc::new(Barrier::new(2));
+            *lock(&device.core().park_region) = Some(Arc::clone(&park));
+            // The naming thread: its range named, then a commit that captures it.
+            let namer = {
+                let (device, managed, into) = (device.clone(), managed.clone(), into.clone());
+                thread::spawn(move || {
+                    managed.did_modify_range(0, LEN).expect("the range named");
+                    let queue = device.new_command_queue(1).expect("a queue");
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    copy_out(&command_buffer, &managed, &into, 0, LEN);
+                    command_buffer.commit().expect("a commit");
+                    command_buffer
+                })
+            };
+            // It is parked where the ring is made.
+            park.wait();
+            *lock(&device.core().park_region) = None;
+            let other = {
+                let device = device.clone();
+                let done = Arc::new(AtomicBool::new(false));
+                let committed = Arc::clone(&done);
+                let thread = thread::spawn(move || {
+                    let mut arena = Arena::new(&device);
+                    let (from, to) = (arena.buffer(), arena.buffer());
+                    let queue = device.new_command_queue(1).expect("a queue");
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    copy_out(&command_buffer, &from, &to, 0, 256);
+                    command_buffer.commit().expect("a commit");
+                    finished("the other commit", &command_buffer);
+                    committed.store(true, Ordering::SeqCst);
+                });
+                within("another thread's commit while the ring is made", || {
+                    done.load(Ordering::SeqCst)
+                });
+                thread
+            };
+            park.wait();
+            other.join().expect("the other commit");
+            let command_buffer = namer.join().expect("the naming thread");
+            finished("the capture", &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert_eq!(read(&into, LEN as usize), bytes, "{name}: the named bytes");
+        });
     }
 
     /// A commit naming three times the capture ring with nothing held streams: each ring-full goes

@@ -1,10 +1,10 @@
 //! Staging: the bytes a copy between a texture and the CPU passes through.
 //!
 //! The device has one staging region of [`REGION_LEN`] bytes, an allocation of the Shared type
-//! made at the first copy, its pages written once then, and kept for the device's life: no copy
-//! allocates memory, and the host writes pages already resident. It is a ring: each copy takes a
-//! span, which the host writes before the copy is recorded (`replace_region`) or reads once the
-//! copy has completed (`get_bytes`). A span is free again once the submission that carries its
+//! made at the first copy and kept for the device's life: no copy allocates memory. It is a ring:
+//! each copy takes a span, which the host writes before the copy is recorded (`replace_region`) or
+//! reads once the copy has completed (`get_bytes`), every row packed, so nothing reads a byte of a
+//! span that its own copy's writer did not write, and the region's bytes are never zeroed. A span is free again once the submission that carries its
 //! copy has completed and no host reads it. The next span goes after the last one taken, or back
 //! at the start where the end has no room and the start is free; with no span live the ring starts
 //! again at 0. Where no room is free, the caller waits for the oldest span's submission
@@ -183,14 +183,21 @@ pub(crate) struct Region {
 }
 
 impl Region {
-    /// A region of `len` bytes, its pages written once.
+    /// A region of `len` bytes, as the driver leaves them: each user writes a span before it reads
+    /// it.
     ///
     /// Err: what [`memory::allocate`] returns; [`Error::Vulkan`] where the buffer cannot be made,
     /// bound or mapped.
     pub(crate) fn new(core: &Core, len: u64) -> Result<Region, Error> {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            let park = crate::device::lock(&core.park_region).clone();
+            if let Some(park) = park {
+                park.wait();
+                park.wait();
+            }
+        }
         let (buffer, memory, host) = host_buffer(core, len)?;
-        // SAFETY: the mapping spans the region's bytes, which nothing else uses yet.
-        unsafe { host.get().as_ptr().write_bytes(0, len as usize) };
         Ok(Region {
             buffer,
             memory,

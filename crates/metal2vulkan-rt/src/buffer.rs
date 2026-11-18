@@ -194,7 +194,8 @@ impl Device {
     /// bytes in a block the host does not map; [`Refusal::ManagedCopyMissing`] for no `copy` where
     /// the device keeps one, [`Refusal::ManagedCopyOnUnified`] for a `copy` where it keeps none
     /// and [`Refusal::ManagedCopyNotPrivate`] for a `copy` in a Shared block; for a device copy,
-    /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be made.
+    /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be made;
+    /// for one whose first bytes are copied, what [`Buffer::did_modify_range`] returns.
     pub fn new_managed_buffer(
         &self,
         bytes: (BlockId, u64),
@@ -387,10 +388,15 @@ impl Buffer {
     /// a command buffer runs does not reach it. A commit naming more than the staging ring holds
     /// sends its ring-fulls ahead and waits for them, or, behind a command buffer held on the
     /// host, takes staging of its own for the rest (the crate's README, Memory blocks and
-    /// buffers). Of any other buffer it does nothing, as the GPU reads the consumer's bytes.
+    /// buffers). Of any other buffer it does nothing, as the GPU reads the consumer's bytes. The
+    /// device's first range named makes the staging ring, on the calling thread, so no commit
+    /// waits for it.
     ///
     /// Err: [`Refusal::ModifiedRange`] for a range that leaves the buffer; for a copy,
-    /// [`Error::Quiesced`].
+    /// [`Error::Quiesced`], and at the device's first range named,
+    /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) where the staging ring's
+    /// memory would take the device past its count and [`Error::Vulkan`] where the ring cannot be
+    /// made.
     pub fn did_modify_range(&self, start: u64, length: u64) -> Result<(), Error> {
         let inner = &self.inner;
         let end = (start.checked_add(length))
@@ -414,7 +420,8 @@ impl Buffer {
             offset: inner.offset,
             overs: &inner.overs,
         };
-        inner.device.core().work.modify(named, start, end)
+        let core = inner.device.core();
+        core.work.modify(core, named, start, end)
     }
 
     /// `length`.

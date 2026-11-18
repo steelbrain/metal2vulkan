@@ -168,6 +168,10 @@ pub(crate) struct Core {
     /// of device memory, before the driver is called.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fail_private: std::sync::atomic::AtomicU32,
+    /// For the device tests: where set, the making of a staging or capture ring meets the test at
+    /// the barrier twice before it allocates, once parked and once released.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) park_region: Mutex<Option<Arc<std::sync::Barrier>>>,
     pub(crate) pool: Pool,
     /// The blocks the consumer holds handles of, by number ([`Block`]): each claim goes once its
     /// last handle drops, or at teardown.
@@ -490,6 +494,8 @@ impl Device {
             granularity,
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             fail_private: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            park_region: Mutex::new(None),
             pool,
             claims: Mutex::new(HashMap::new()),
             places: Places::new(),
