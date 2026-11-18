@@ -192,9 +192,9 @@ pub struct Report {
     /// included ([`count_instructions`]); empty where the kernel refused the counter.
     pub instructions: Vec<u64>,
     /// Each run's user-space instructions over the same span on the harness's own thread and the
-    /// threads the runtime started ([`Device::threads`](crate::Device::threads)), the runtime's own
-    /// work; empty where the runtime names no thread or the kernel refused the counter. The rest
-    /// of [`instructions`](Self::instructions) is the threads a driver started for itself.
+    /// threads the runtime started ([`Device::threads`]), the runtime's own work; empty where the
+    /// runtime names no thread or the kernel refused the counter. The rest of
+    /// [`instructions`](Self::instructions) is the threads a driver started for itself.
     pub own_instructions: Vec<u64>,
     /// Each timed command buffer's time from just before its `commit` until its completed
     /// handler ran, in microseconds, by its place in its run: one list per place, the first
@@ -511,8 +511,8 @@ impl<D: ComputeDevice> Harness<D> {
     }
 
     /// The counter of the runtime's own work: the harness's thread and the threads the runtime
-    /// started ([`Device::threads`](crate::Device::threads)); none where the runtime names no
-    /// thread or the kernel refuses the counter.
+    /// started ([`Device::threads`]); none where the runtime names no thread or the kernel
+    /// refuses the counter.
     fn own_threads(&self) -> Option<ThreadInstructions> {
         let runtime = self.device.threads();
         if runtime.is_empty() {
