@@ -210,7 +210,7 @@ pub(crate) enum Backing {
 
 /// The unit of a copy between an image and bytes or another image: the aspect, an element's
 /// bytes and the texels an element covers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub(crate) struct CopyUnit {
     pub(crate) aspect: vk::ImageAspectFlags,
     pub(crate) bytes: u32,
@@ -828,11 +828,29 @@ pub(crate) struct Placed {
     pub(crate) level: u32,
     /// The image's array layer: the slice, 0 for a 3D texture.
     pub(crate) layer: u32,
-    pub(crate) offset: vk::Offset3D,
-    pub(crate) extent: vk::Extent3D,
+    /// The region's first texel and its size in texels, inside the level.
+    pub(crate) origin: [u32; 3],
+    pub(crate) size: [u32; 3],
 }
 
 impl Placed {
+    /// Its first texel, for a copy command.
+    pub(crate) fn offset(&self) -> vk::Offset3D {
+        // Inside a level, whose extent is a `u32` the image format query bounds far below 2^31.
+        let [x, y, z] = self.origin.map(|axis| axis as i32);
+        vk::Offset3D { x, y, z }
+    }
+
+    /// Its size, for a copy command.
+    pub(crate) fn extent(&self) -> vk::Extent3D {
+        let [width, height, depth] = self.size;
+        vk::Extent3D {
+            width,
+            height,
+            depth,
+        }
+    }
+
     /// Its level and layer in `aspect`, for a copy command.
     pub(crate) fn layers(&self, aspect: vk::ImageAspectFlags) -> vk::ImageSubresourceLayers {
         vk::ImageSubresourceLayers {
@@ -880,24 +898,14 @@ pub(crate) fn place(
     if region.size.contains(&0) {
         return Ok(None);
     }
-    let [x, y, z] = region.origin;
-    let [width, height, depth] = region.size;
     Ok(Some(Placed {
         level,
         layer: match three_d {
             true => 0,
             false => slice,
         },
-        offset: vk::Offset3D {
-            x: x as i32,
-            y: y as i32,
-            z: z as i32,
-        },
-        extent: vk::Extent3D {
-            width,
-            height,
-            depth,
-        },
+        origin: region.origin,
+        size: region.size,
     }))
 }
 
@@ -949,8 +957,8 @@ impl Transfer {
             buffer_row_length: 0,
             buffer_image_height: 0,
             image_subresource: self.placed.layers(self.unit.aspect),
-            image_offset: self.placed.offset,
-            image_extent: self.placed.extent,
+            image_offset: self.placed.offset(),
+            image_extent: self.placed.extent(),
         }
     }
 }

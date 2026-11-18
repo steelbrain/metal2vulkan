@@ -55,34 +55,37 @@ fn at(slice: u32, level: u32, origin: [u32; 3]) -> TexturePlace {
     }
 }
 
-fn placed(level: u32, layer: u32, offset: [i32; 3], extent: [u32; 3]) -> Placed {
+fn placed(level: u32, layer: u32, origin: [u32; 3], size: [u32; 3]) -> Placed {
     Placed {
         level,
         layer,
-        offset: vk::Offset3D {
-            x: offset[0],
-            y: offset[1],
-            z: offset[2],
-        },
-        extent: vk::Extent3D {
-            width: extent[0],
-            height: extent[1],
-            depth: extent[2],
-        },
+        origin,
+        size,
     }
 }
 
-fn refused<T: std::fmt::Debug>(result: Result<T, Error>) -> Refusal {
+/// The copy `result` checked, which copies something.
+fn copied(result: Result<Option<ImageCopy>, Error>) -> ImageCopy {
+    match result {
+        Ok(Some(copy)) => copy,
+        Ok(None) => panic!("it copies nothing"),
+        Err(error) => panic!("{error}"),
+    }
+}
+
+fn refused(result: Result<Option<ImageCopy>, Error>) -> Refusal {
     match result {
         Err(Error::Refused(refusal)) => refusal,
-        other => panic!("not a refusal: {other:?}"),
+        Err(other) => panic!("not a refusal: {other}"),
+        Ok(_) => panic!("not a refusal: it was checked"),
     }
 }
 
-fn gap<T: std::fmt::Debug>(result: Result<T, Error>) -> Gap {
+fn gap(result: Result<Option<ImageCopy>, Error>) -> Gap {
     match result {
         Err(Error::Unsupported(gap)) => gap,
-        other => panic!("not a gap: {other:?}"),
+        Err(other) => panic!("not a gap: {other}"),
+        Ok(_) => panic!("not a gap: it was checked"),
     }
 }
 
@@ -94,36 +97,28 @@ fn a_copy_takes_formats_of_one_units_bytes_and_places_both_regions() {
     words.array_length = 3;
     let source = side(&rgba, vk::Format::R8G8B8A8_UNORM, color(4));
     let destination = side(&words, vk::Format::R32_UINT, color(4));
-    let copy = texture_copy(
+    let copy = copied(texture_copy(
         &source,
         at(0, 1, [1, 0, 0]),
         [4, 3, 1],
         &destination,
         at(2, 0, [2, 4, 0]),
         false,
-    )
-    .expect("a copy");
-    assert_eq!(
-        copy,
-        Some(ImageCopy {
-            from: placed(1, 0, [1, 0, 0], [4, 3, 1]),
-            to: placed(0, 2, [2, 4, 0], [4, 3, 1]),
-            aspect: vk::ImageAspectFlags::COLOR,
-        })
-    );
+    ));
+    assert_eq!(copy.from, placed(1, 0, [1, 0, 0], [4, 3, 1]));
+    assert_eq!(copy.to, placed(0, 2, [2, 4, 0], [4, 3, 1]));
+    assert!(copy.aspect == vk::ImageAspectFlags::COLOR);
     // A depth of 0 on 2D textures copies one image; a width of 0 copies nothing.
-    let flat = texture_copy(
+    let flat = copied(texture_copy(
         &source,
         at(0, 0, [0; 3]),
         [2, 2, 0],
         &destination,
         at(0, 0, [0; 3]),
         false,
-    )
-    .expect("a copy")
-    .expect("one image");
-    assert_eq!(flat.from.extent.depth, 1);
-    assert_eq!(
+    ));
+    assert_eq!(flat.from.size, [2, 2, 1]);
+    assert!(matches!(
         texture_copy(
             &source,
             at(0, 0, [0; 3]),
@@ -131,10 +126,9 @@ fn a_copy_takes_formats_of_one_units_bytes_and_places_both_regions() {
             &destination,
             at(0, 0, [0; 3]),
             false
-        )
-        .expect("nothing"),
-        None
-    );
+        ),
+        Ok(None)
+    ));
     // A level, a slice or a region past either texture.
     for (from, to, size) in [
         (at(0, 3, [0; 3]), at(0, 0, [0; 3]), [1, 1, 1]),

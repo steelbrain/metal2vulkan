@@ -117,10 +117,10 @@ impl BlitCommandEncoder {
         ];
         let regions = [vk::ImageCopy {
             src_subresource: copy.from.layers(copy.aspect),
-            src_offset: copy.from.offset,
+            src_offset: copy.from.offset(),
             dst_subresource: copy.to.layers(copy.aspect),
-            dst_offset: copy.to.offset,
-            extent: copy.from.extent,
+            dst_offset: copy.to.offset(),
+            extent: copy.from.extent(),
         }];
         let device = &core.device;
         // SAFETY: the command buffer records outside any render pass and keeps both images until
@@ -188,7 +188,6 @@ impl<'a> Side<'a> {
 }
 
 /// A copy between two textures, checked: the region in each, and the aspect it copies.
-#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ImageCopy {
     pub(crate) from: Placed,
     pub(crate) to: Placed,
