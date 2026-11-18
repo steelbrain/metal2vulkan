@@ -643,15 +643,16 @@ made, with no lock, and never rewritten for layouts.
 - The completion thread retires command buffers as the progress semaphore reaches them, a
   submission's in commit order: the status, the blocks they kept, their recorders and their place
   in the queue, then the completed handlers. Completed handlers and listeners run on it, in
-  turn. A wait in one for what that thread has not yet done is `Refusal::WaitOnOwnThread`, and
-  one already met answers at once: `wait_until_completed` for a command buffer not yet completed
-  (its own handler's command buffer has), `wait_until_scheduled` for one not yet scheduled,
-  `wait_until_signaled_value` for a value not yet reached, and `CommandQueue::command_buffer` on a
-  queue whose maximum count are made and not yet completed, which a scheduled handler answers
-  the same way. No wait of the runtime's hangs by construction. A command buffer of a group is seen complete
-  with the group's last: up to the GPU time of the fifteen after it late. Only a queue already three
-  submissions behind holds a group; one whose submissions have completed sends its next command
-  buffer alone. Without a wait or a hint, the lateness is bounded only while three submissions are
+  turn. A wait in one for what that thread has not yet done is `Refusal::WaitOnOwnThread`, and one
+  already met answers at once: `wait_until_completed` for a command buffer not yet completed (its
+  own handler's command buffer has), `wait_until_scheduled` for one not yet scheduled,
+  `wait_until_signaled_value` for a value not yet reached (a timed wait too: it is refused, never
+  false at its timeout, since the thread that would observe the value is the one waiting), and
+  `CommandQueue::command_buffer` on a queue whose maximum count are made and not yet completed,
+  which a scheduled handler answers the same way. No wait of the runtime's hangs by construction.
+  A command buffer of a group is seen complete with the group's last: up to the GPU time of the
+  fifteen after it late. Only a queue already three submissions behind holds a group; one whose
+  submissions have completed sends its next command buffer alone. Without a wait or a hint, the lateness is bounded only while three submissions are
   in flight, and the completion that leaves fewer sends the group (the measured lateness is under
   "Known gaps"). A command buffer ended while its queue holds a group joins it, and retires in its
   place; the group goes at once.

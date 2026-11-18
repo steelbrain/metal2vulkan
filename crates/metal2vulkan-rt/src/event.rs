@@ -157,7 +157,8 @@ impl SharedEvent {
     ///
     /// Err: [`Refusal::InScheduledHandler`](crate::Refusal::InScheduledHandler) in a scheduled
     /// handler; [`Refusal::WaitOnOwnThread`](crate::Refusal::WaitOnOwnThread) in a completed
-    /// handler or a listener of its device for a value not yet reached.
+    /// handler or a listener of its device for a value not yet reached, whatever `timeout`: no
+    /// false there, since that thread observes the value.
     pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> Result<bool, Error> {
         crate::command::not_in_scheduled_handler()?;
         let inner = &self.event.inner;

@@ -2153,8 +2153,8 @@ pub(crate) mod on_device {
     }
 
     /// On the completion thread, in a completed handler and in a listener, a wait for what that
-    /// thread has not yet done is refused with `WaitOnOwnThread`, and one already met answers at
-    /// once: the handler's own command buffer has completed. A command buffer asked of a full
+    /// thread has not yet done is refused with `WaitOnOwnThread`, a timed one too, never false at
+    /// its timeout, and one already met answers at once: the handler's own command buffer has completed. A command buffer asked of a full
     /// queue is refused there and in a scheduled handler, on the submit thread.
     #[test]
     fn every_device_refuses_in_a_handler_each_wait_its_own_thread_would_have_to_end() {
@@ -2200,7 +2200,14 @@ pub(crate) mod on_device {
                         ),
                         ("completed: value 0", format!("{:?}", waited(0))),
                         ("completed: value 1", format!("{:?}", waited(1))),
-                        ("completed: room", answer(made.as_ref().map(drop))),
+                        (
+                            "completed: value 1 at once",
+                            format!(
+                                "{:?}",
+                                in_event.wait_until_signaled_value(1, Duration::ZERO)
+                            ),
+                        ),
+                        ("completed: room", format!("{:?}", made.as_ref().map(drop))),
                         (
                             "completed: a full queue",
                             answer(in_queue.command_buffer().map(drop)),
@@ -2241,7 +2248,7 @@ pub(crate) mod on_device {
                             "listener: done completed",
                             answer(in_done.wait_until_completed()),
                         ),
-                        ("listener: room", answer(made.as_ref().map(drop))),
+                        ("listener: room", format!("{:?}", made.as_ref().map(drop))),
                         (
                             "listener: a full queue",
                             answer(in_queue.command_buffer().map(drop)),
@@ -2270,7 +2277,7 @@ pub(crate) mod on_device {
                 };
                 assert_eq!(*got, want, "{name}: {call}");
             }
-            assert_eq!(lines.len(), 15, "{name}: {lines:?}");
+            assert_eq!(lines.len(), 16, "{name}: {lines:?}");
             // Outside a handler the same waits answer as before.
             assert_eq!(word(&a), 5, "{name}");
             assert_eq!(held.status(), CommandBufferStatus::NotEnqueued, "{name}");
