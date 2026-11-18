@@ -1302,7 +1302,34 @@ fn an_index_is_owed_to_the_commits_that_named_its_holders() {
     assert!(
         line.ends_with(
             "1 placed at an index whose holders' commits were in flight, after waiting for them \
-             (7 ns)"
+             (7 ns); 0 sampler states placed without waiting at an index whose last sampler state \
+             had the same descriptor while its commits were in flight"
+        ),
+        "{line}"
+    );
+}
+
+#[test]
+fn an_equal_sampler_state_takes_an_owed_index_and_leaves_it_owed() {
+    let class = rt::IndexClass::Sampler;
+    let made = |index: u32| Ok::<u32, rt::Error>(index);
+    let mut indices = Indices::default();
+    let placed = indices.place(1, class, Some(16), made);
+    assert_eq!(placed.expect("a free index").expect("made"), 16);
+    assert_eq!(indices.index_of(1), Some(16));
+    indices.committed(&HashSet::from([1]), 4);
+    indices.give(1, 0);
+    // An equal sampler state at 16 while commit 4 is in flight: counted, and 16 stays owed.
+    indices.equal(class, 16, 3);
+    assert_eq!(indices.owed(class, 16, 3), Some(4), "still owed");
+    // Once commit 4 retired, nothing is owed and nothing counted.
+    indices.equal(class, 16, 4);
+    assert_eq!(indices.owed(class, 16, 0), None, "owed no more");
+    let line = indices.line();
+    assert!(
+        line.ends_with(
+            "1 sampler states placed without waiting at an index whose last sampler state had \
+             the same descriptor while its commits were in flight"
         ),
         "{line}"
     );

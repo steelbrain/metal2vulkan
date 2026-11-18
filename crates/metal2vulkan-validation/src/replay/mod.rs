@@ -15,8 +15,8 @@ pub use new_runtime::{ManagedCopies, NewRuntime};
 pub use old_runtime::OldRuntime;
 pub use player::WAIT_COMPLETED;
 pub use player::{
-    Backend, Check, Counters, Counts, End, IdDiffers, Made, PlayError, Player, PrivateBytes,
-    Relaid, Report, TextureWrites,
+    Backend, Check, Counters, Counts, End, HeldBuffer, IdDiffers, Made, PlayError, Player,
+    PrivateBytes, Relaid, Report, TextureWrites,
 };
 pub use stream::{
     segments, Call, StreamError, StreamReader, StreamWriter, FLAG_ANNOUNCED_BYTES_RECORDED,

@@ -25,6 +25,9 @@
 //! - A buffer placed in a block of the stream that the runtime may take from a released block's
 //!   bytes reads zero where nothing wrote it: the player zeroes each block and heap of the stream
 //!   once at its making, as the live system does.
+//! - A sampler state placed at an index a held commit owes (its command buffer waits for an event
+//!   only a later record signals) takes it without waiting where its descriptor is the one placed
+//!   there last, and otherwise stops the play naming what holds the commit.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -32,7 +35,8 @@
 use super::ScratchCache;
 use crate::gpu::{self, DeviceType};
 use crate::replay::{
-    Backend, NewRuntime, Player, Report, StreamReader, StreamWriter, Value, WAIT_COMPLETED,
+    Backend, NewRuntime, PlayError, Player, Report, StreamReader, StreamWriter, Value,
+    WAIT_COMPLETED,
 };
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
@@ -576,6 +580,81 @@ fn surface_textures_take_the_reserved_index_their_descriptor_names() {
         lines.iter().any(|line| line.starts_with(named)),
         "{lines:?}"
     );
+}
+
+/// A stream of a placement at an index a held commit owes: command buffer #6 of queue #2 waits for
+/// event #4 to reach 1, binds sampler state #5 (the default descriptor, index 16) and is
+/// committed; #5 is released and sampler state #8 made at index 16 with `descriptor`; only then
+/// does command buffer #10 of queue #3 signal #4 to 1, and the CPU waits for #6.
+fn held_placement(dir: &ScratchDir, descriptor: Value) -> PathBuf {
+    written(dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("newCommandQueue", 1, 3, &[], &[])?;
+        w.call("newEvent", 1, 4, &[], &[])?;
+        let made = "newSamplerStateWithDescriptor:";
+        let id = [("gpuResourceID", Value::Uint(16))];
+        w.call(made, 1, 5, &[sampler(None)], &[])?;
+        w.call("gpuResourceID", 5, 0, &[], &id)?;
+        let event = |value| [Value::Object(4), Value::Uint(value)];
+        w.call("commandBuffer", 2, 6, &[], &[])?;
+        w.call("encodeWaitForEvent:value:", 6, 0, &event(1), &[])?;
+        w.call("computeCommandEncoder", 6, 7, &[], &[])?;
+        let bound = [
+            Value::List(vec![Value::Object(5)]),
+            uints(&[("location", 0), ("length", 1)]),
+        ];
+        w.call("setSamplerStates:withRange:", 7, 0, &bound, &[])?;
+        w.call("endEncoding", 7, 0, &[], &[])?;
+        w.call("commit", 6, 0, &[], &[])?;
+        w.call("release", 5, 0, &[], &[])?;
+        w.call(made, 1, 8, &[descriptor], &[])?;
+        w.call("gpuResourceID", 8, 0, &[], &id)?;
+        w.call("commandBuffer", 3, 10, &[], &[])?;
+        w.call("encodeSignalEvent:value:", 10, 0, &event(1), &[])?;
+        w.call("commit", 10, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 6, 0, &[], &[])
+    })
+}
+
+#[test]
+fn an_equal_sampler_state_takes_an_index_a_held_commit_owes_without_waiting() {
+    let dir = ScratchDir::new("rt-replay-equal-sampler").unwrap();
+    let path = held_placement(&dir, sampler(None));
+    let (_, lines) = play("equal-sampler", &path);
+    let indices = lines.iter().find(|line| line.starts_with("indices named "));
+    let indices = indices.unwrap_or_else(|| panic!("an indices line: {lines:?}"));
+    assert!(
+        indices.contains("0 placed at an index whose holders' commits were in flight")
+            && indices.ends_with(
+                "1 sampler states placed without waiting at an index whose last sampler state \
+                 had the same descriptor while its commits were in flight"
+            ),
+        "{indices}"
+    );
+}
+
+#[test]
+fn a_placement_a_held_commit_owes_stops_the_play_naming_what_holds_it() {
+    let dir = ScratchDir::new("rt-replay-held-placement").unwrap();
+    // A sampler state of another descriptor at index 16: #6, which reads 16, waits for a signal
+    // only a later record makes.
+    let other = uints(&[("minFilter", 1), ("magFilter", 1)]);
+    let path = held_placement(&dir, other);
+    let cache = ScratchCache::new().unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path())).unwrap();
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let (_, ended) = Player::new(&mut backend).play(&mut reader);
+    match ended {
+        Err(PlayError::Held { awaited, chain, .. }) => {
+            assert_eq!(awaited, 6);
+            assert_eq!(
+                chain,
+                "#6 on queue #2 waits for #4 to reach 1, which no played record signals"
+            );
+        }
+        other => panic!("a held placement's stop: {other:?}"),
+    }
 }
 
 #[test]

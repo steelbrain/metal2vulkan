@@ -123,7 +123,7 @@ impl NewRuntime {
             }
         }
         blit.end_encoding();
-        self.commit(command_buffer).map_err(failed(call))?;
+        self.commit(command_buffer, 0).map_err(failed(call))?;
         for place in places {
             self.places.give(place, self.commits, Vec::new());
         }
@@ -172,7 +172,8 @@ impl NewRuntime {
             "parallelRenderCommandEncoderWithDescriptor:" => self.skip_encoder(),
             "commit" => {
                 self.copy_named(call)?;
-                self.commit(command_buffer).map_err(failed(call))?;
+                self.commit(command_buffer, call.receiver)
+                    .map_err(failed(call))?;
                 // Its first use committed, a no-copy Managed buffer's GPU copy changes only by
                 // `didModifyRange:` from here.
                 self.fresh.retain(|_, user| *user != Some(call.receiver));

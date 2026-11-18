@@ -18,7 +18,7 @@ pub(super) mod second;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
-use super::player::{Backend, Counters, Made, PlayError};
+use super::player::{Backend, Counters, HeldBuffer, Made, PlayError};
 use super::stream::Call;
 use super::translator;
 use super::value::Value;
@@ -218,7 +218,13 @@ pub struct NewRuntime {
     /// The commits so far, and the committed command buffers not yet seen retired, in order, each
     /// with the flag its completed handler sets ([`commit`](Self::commit)).
     commits: u64,
-    in_flight: VecDeque<(u64, rt::CommandBuffer, Arc<AtomicBool>)>,
+    in_flight: VecDeque<(u64, u64, rt::CommandBuffer, Arc<AtomicBool>)>,
+    /// The committed command buffers no record played so far lets complete, by stream id, as the
+    /// player last told them (`Backend::held`): a placement never waits for one.
+    held: HashMap<u64, HeldBuffer>,
+    /// The descriptor of the sampler state placed last at each sampler index, as recorded: a
+    /// later one of the same descriptor there displaces nothing that work in flight reads.
+    sampler_descriptors: HashMap<u32, Value>,
     /// The commits that have completed, every earlier one with them.
     completed: u64,
     skips: Skips,
@@ -499,6 +505,8 @@ impl NewRuntime {
             constexprs: HashMap::new(),
             commits: 0,
             in_flight: VecDeque::new(),
+            held: HashMap::new(),
+            sampler_descriptors: HashMap::new(),
             completed: 0,
             skips: Skips::default(),
             at: (0, 0),
@@ -657,24 +665,24 @@ impl NewRuntime {
         Ok(())
     }
 
-    /// Commits `command_buffer` as the next commit, in flight until its completed handler runs:
-    /// the runtime runs it once it has let go of what the command buffer held, the textures and
-    /// samplers it named with their indices among them, which its status alone does not say
-    /// (the status changes first).
-    fn commit(&mut self, command_buffer: rt::CommandBuffer) -> Result<(), rt::Error> {
+    /// Commits `command_buffer`, the stream's `id` (0 for one of the play's own), as the next
+    /// commit, in flight until its completed handler runs: the runtime runs it once it has let go
+    /// of what the command buffer held, the textures and samplers it named with their indices
+    /// among them, which its status alone does not say (the status changes first).
+    fn commit(&mut self, command_buffer: rt::CommandBuffer, id: u64) -> Result<(), rt::Error> {
         let retired = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&retired);
         command_buffer.add_completed_handler(move |_| flag.store(true, Ordering::Release))?;
         command_buffer.commit()?;
         self.commits += 1;
         self.in_flight
-            .push_back((self.commits, command_buffer, retired));
+            .push_back((self.commits, id, command_buffer, retired));
         Ok(())
     }
 
     /// The commits that have retired ([`commit`](Self::commit)), every earlier one with them.
     fn completed(&mut self) -> u64 {
-        while let Some((at, _, retired)) = self.in_flight.front() {
+        while let Some((at, _, _, retired)) = self.in_flight.front() {
             if !retired.load(Ordering::Acquire) {
                 break;
             }
@@ -685,26 +693,38 @@ impl NewRuntime {
     }
 
     /// Waits until the commits up to `commit` have retired: `wait_until_completed` returns once the
-    /// command buffer's handlers have run.
-    fn wait_for(&mut self, commit: u64) {
+    /// command buffer's handlers have run. Where one of them is held (`held`), no wait can end:
+    /// that one's stream id, unwaited.
+    fn wait_for(&mut self, commit: u64) -> Result<(), u64> {
+        let held = (self.in_flight.iter())
+            .take_while(|(at, ..)| *at <= commit)
+            .find(|(_, id, ..)| self.held.contains_key(id));
+        if let Some(&(_, id, ..)) = held {
+            return Err(id);
+        }
         while self.completed() < commit {
-            let Some((_, front, retired)) = self.in_flight.front() else {
-                return;
+            let Some((_, _, front, retired)) = self.in_flight.front() else {
+                return Ok(());
             };
             // Refused only in a scheduled handler, where the player never runs.
             if front.wait_until_completed().is_err() || !retired.load(Ordering::Acquire) {
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
 
     /// `make` at the index the stream names for the object `call` makes (`indices`): the call's
     /// resource index (`named`), else the ID the program saw of the object (`recorded`); else at
-    /// the lowest free index of `class`.
+    /// the lowest free index of `class`. `sampler` is a sampler state's recorded descriptor: where
+    /// the sampler state placed last at the index has the same one, the placement displaces
+    /// nothing work in flight reads (Metal hands an equal descriptor the same sampler and ID), and
+    /// it takes the index without waiting.
     fn place<T>(
         &mut self,
         call: &Call,
         class: rt::IndexClass,
+        sampler: Option<&Value>,
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Result<T, PlayError> {
         let recorded = (self.recorded).filter(|&(object, _)| object == call.result);
@@ -712,23 +732,80 @@ impl NewRuntime {
         let recorded = recorded.map(|(_, id)| id as u32);
         let named = self.named.or(recorded);
         if let Some(index) = self.indices.target(class, named) {
-            self.settle(class, index);
+            let equal = sampler.is_some() && self.sampler_descriptors.get(&index) == sampler;
+            match equal {
+                true => {
+                    let retired = self.completed();
+                    self.indices.equal(class, index, retired);
+                }
+                false => self.settle(call, class, index)?,
+            }
         }
-        match self.indices.place(call.result, class, named, make) {
-            Some(made) => made.map_err(failed(call)),
-            None => Err(refuse(call, format!("every {class:?} index is in use"))),
+        let made = match self.indices.place(call.result, class, named, make) {
+            Some(made) => made.map_err(failed(call))?,
+            None => return Err(refuse(call, format!("every {class:?} index is in use"))),
+        };
+        if let (Some(descriptor), Some(index)) = (sampler, self.indices.index_of(call.result)) {
+            self.sampler_descriptors.insert(index, descriptor.clone());
         }
+        Ok(made)
     }
 
-    /// Before a placement at `index` of `class`: waits for the commits that named an object
-    /// holding it to retire, where they have not (`Indices::owed`), and counts the wait.
-    fn settle(&mut self, class: rt::IndexClass, index: u32) {
+    /// Before a placement at `index` of `class` (`call`'s): waits for the commits that named an
+    /// object holding it to retire, where they have not (`Indices::owed`), and counts the wait.
+    /// Where one of them is held on records not yet played, the play stops ([`PlayError::Held`]):
+    /// no wait for it can end.
+    fn settle(&mut self, call: &Call, class: rt::IndexClass, index: u32) -> Result<(), PlayError> {
         let retired = self.completed();
         if let Some(commit) = self.indices.owed(class, index, retired) {
             let began = std::time::Instant::now();
-            self.wait_for(commit);
+            if let Err(awaited) = self.wait_for(commit) {
+                return Err(self.held_error(call, class, index, awaited));
+            }
             let nanos = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
             self.indices.waited(class, index, nanos);
+        }
+        Ok(())
+    }
+
+    /// The stop of a placement at `index` of `class` (`call`'s) that owes the index to held
+    /// command buffer `awaited`: what holds it, following each held command buffer ahead of it on
+    /// its queue.
+    fn held_error(
+        &self,
+        call: &Call,
+        class: rt::IndexClass,
+        index: u32,
+        awaited: u64,
+    ) -> PlayError {
+        let mut chain = Vec::new();
+        let mut at = self.held.get(&awaited);
+        while let Some(held) = at {
+            if !held.unmet.is_empty() {
+                let waits: Vec<String> = (held.unmet.iter())
+                    .map(|(event, value)| format!("#{event} to reach {value}"))
+                    .collect();
+                chain.push(format!(
+                    "#{} on queue #{} waits for {}, which no played record signals",
+                    held.command_buffer,
+                    held.queue,
+                    waits.join(" and ")
+                ));
+                break;
+            }
+            chain.push(format!(
+                "#{} on queue #{} is behind a held command buffer of its queue",
+                held.command_buffer, held.queue
+            ));
+            at = (self.held.values()).find(|h| h.queue == held.queue && !h.unmet.is_empty());
+        }
+        PlayError::Held {
+            placement: format!(
+                "{} (result #{}) at {class:?} index {index}",
+                call.selector, call.result
+            ),
+            awaited,
+            chain: chain.join("; "),
         }
     }
 
@@ -741,7 +818,7 @@ impl NewRuntime {
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Result<T, PlayError> {
         if let Some(index) = self.indices.highest(class, |_| false) {
-            self.settle(class, index);
+            self.settle(call, class, index)?;
         }
         match self.indices.top(call.result, class, make) {
             Some(made) => made.map_err(failed(call)),
@@ -845,7 +922,7 @@ impl NewRuntime {
             None => device.new_texture(descriptor, index),
         };
         match (texture_class(descriptor.usage), outside) {
-            (Some(class), false) => self.place(call, class, |index| make(Some(index))),
+            (Some(class), false) => self.place(call, class, None, |index| make(Some(index))),
             (Some(class), true) => self.place_outside(call, class, |index| make(Some(index))),
             (None, _) => make(None).map_err(failed(call)),
         }
@@ -1226,7 +1303,8 @@ impl NewRuntime {
                 }
                 self.named = f.uint("resourceIndex")?.map(|index| index as u32);
                 let device = self.device.clone();
-                let state = self.place(call, rt::IndexClass::Sampler, |index| {
+                let recorded = arg(call, 0)?;
+                let state = self.place(call, rt::IndexClass::Sampler, Some(recorded), |index| {
                     device.new_sampler_state(&descriptor, index)
                 })?;
                 unaddressed(Object::Sampler(state))
@@ -1344,7 +1422,7 @@ impl NewRuntime {
             made
         };
         let made = match texture_class(usage) {
-            Some(class) => self.place(call, class, |index| noted(Some(index))),
+            Some(class) => self.place(call, class, None, |index| noted(Some(index))),
             None => noted(None).map_err(failed(call)),
         };
         match made {
@@ -1599,6 +1677,12 @@ fn write_into(buffer: &rt::Buffer, offset: u64, bytes: &[u8]) -> Result<(), Play
 }
 
 impl Backend for NewRuntime {
+    fn held(&mut self, held: &[HeldBuffer]) {
+        self.held = (held.iter())
+            .map(|h| (h.command_buffer, h.clone()))
+            .collect();
+    }
+
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         self.named = self.named_index(call)?;
         if &*call.selector == "release" {

@@ -47,6 +47,9 @@ pub(in crate::replay) struct Indices {
     /// The placements that waited for an index's owed commits, and the nanoseconds they waited.
     waits: u64,
     wait_nanos: u64,
+    /// The placements of a sampler state equal to the one placed last at its index, which took
+    /// the index without waiting for the commits in flight it was owed to.
+    equal: u64,
 }
 
 impl Indices {
@@ -137,6 +140,24 @@ impl Indices {
             return None;
         }
         Some(commit)
+    }
+
+    /// A placement at `index` of `class` of a sampler state equal to the one placed there last:
+    /// it displaces nothing, so it takes the index without waiting for the commits the index is
+    /// owed to, and is counted where one of them has not retired (`retired`, the commits that
+    /// have). They stay owed: a placement of another sampler state there waits for them.
+    pub(in crate::replay) fn equal(&mut self, class: rt::IndexClass, index: u32, retired: u64) {
+        let key = (slot(class), index);
+        match self.owed.get(&key) {
+            Some(&commit) if commit > retired => self.equal += 1,
+            Some(_) => drop(self.owed.remove(&key)),
+            None => {}
+        }
+    }
+
+    /// The index `object` holds, where it holds one.
+    pub(in crate::replay) fn index_of(&self, object: u64) -> Option<u32> {
+        self.objects.get(&object).map(|&(_, index)| index)
     }
 
     /// A placement waited `nanos` for an index's owed commits, which have retired.
@@ -235,8 +256,10 @@ impl Indices {
         format!(
             "indices named {}: objects placed at the index the stream named; {} whose named index \
              the runtime refused, placed at the lowest free one; {reserved} reserved; {} placed \
-             at an index whose holders' commits were in flight, after waiting for them ({} ns)",
-            self.named, self.refused, self.waits, self.wait_nanos
+             at an index whose holders' commits were in flight, after waiting for them ({} ns); {} \
+             sampler states placed without waiting at an index whose last sampler state had the \
+             same descriptor while its commits were in flight",
+            self.named, self.refused, self.waits, self.wait_nanos, self.equal
         )
     }
 }

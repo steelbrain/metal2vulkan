@@ -286,7 +286,10 @@ and the (name id, value) answer pairs.
   `getBytes:...` has a nil destination and may answer `sha256`.
 - **Commits:** the order of `commit` records is the global commit order. A command buffer's queue is
   the receiver of the call that made it; each queue keeps its own order, and an event wait may hold
-  one queue while the others go on.
+  one queue while the others go on. Record order is the order of the program's calls, not of its
+  GPU work: a command buffer committed before a call may wait for an event that only a later
+  record signals, so a commit record does not promise that the work ran, or could run, before the
+  records after it.
 - **Synchronization:** `encodeSignalEvent:value:` and `encodeWaitForEvent:value:` on a command
   buffer; fences as encoder calls; `setSignaledValue:`; and `waitUntilCompleted` and
   `waitUntilSignaledValue:timeoutMS:` where the program's CPU waited.
@@ -586,8 +589,14 @@ counted from 0), completes the work committed so far, reports as at the stream's
   the runtime back a block or heap of the stream at its release (`release_block`), and gives
   textures and sampler states indices from the whole of each index class (section 5): its
   `indices named N: ...` line counts the objects placed at the index the stream named, those
-  whose named index the runtime refused, the indices the program reserved, and the placements
-  that waited for an index's holders' commits, with the time waited. Its readback serves
+  whose named index the runtime refused, the indices the program reserved, the placements
+  that waited for an index's holders' commits, with the time waited, and the sampler states placed
+  without waiting at an index whose last sampler state had the same recorded descriptor while its
+  commits were in flight (Metal hands an equal descriptor the same sampler state and ID, so work in
+  flight reads nothing new there). A placement that owes its index to a command buffer no record
+  played so far lets complete (its event waits only later records signal, or it is behind such a
+  one on its queue) stops the play with an `error` line naming that chain, rather than wait for
+  ever. Its readback serves
   Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives a
   compute or render pipeline state no `gpuResourceID`, so each one the program saw is reported on
   an `id` line as `none` and counted (`gap_pipeline_ids`); each skipped object's the program saw
