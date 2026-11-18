@@ -130,7 +130,9 @@ impl NewRuntime {
             }
             "blitCommandEncoder" => {
                 let encoder = command_buffer.blit_command_encoder();
-                super::unaddressed(Object::Blit(Box::new(encoder.map_err(failed(call))?)))
+                let encoder = encoder.map_err(failed(call))?;
+                self.blit_owners.insert(call.result, call.receiver);
+                super::unaddressed(Object::Blit(Box::new(encoder)))
             }
             "renderCommandEncoderWithDescriptor:"
             | "parallelRenderCommandEncoderWithDescriptor:" => {
@@ -141,6 +143,9 @@ impl NewRuntime {
                 command_buffer.commit().map_err(failed(call))?;
                 self.commits += 1;
                 self.in_flight.push_back((self.commits, command_buffer));
+                for place in self.staging.remove(&call.receiver).unwrap_or_default() {
+                    self.places.give(place, self.commits);
+                }
                 Ok(None)
             }
             "enqueue" => command_buffer
@@ -330,6 +335,82 @@ impl NewRuntime {
         result.map_err(failed(call))
     }
 
+    /// A copy from the guest's RAM into a buffer, the recording's own plumbing: each piece's bytes
+    /// in a Shared staging place of the play's own, then copied into the buffer by the blit
+    /// encoder, so the GPU's order holds. A buffer copy takes whole 4-byte words at 4-byte
+    /// offsets: a piece's edge bytes past its own come from the buffer's mapping where it has one,
+    /// as they stand; a piece with such edges into a buffer with none is skipped and counted. The
+    /// staging place is given back at the command buffer's commit, free once it completes.
+    fn guest_ram_copy(&mut self, call: &Call) -> Result<(), PlayError> {
+        let id = call.receiver;
+        let upload = crate::replay::player::upload(call)?;
+        let upload = upload.ok_or_else(|| refuse(call, "no guest-RAM copy"))?;
+        let target = self.buffer_of(call, upload.target)?;
+        let mapped = target.contents();
+        // Each piece's whole-word span in the target and its offset in the staging place.
+        let mut spans = Vec::new();
+        let mut len = 0;
+        for &(at, entry) in &upload.pieces {
+            let bytes = crate::replay::player::piece(&call.args, entry);
+            let end = at + bytes.len() as u64;
+            let (start, stop) = (at & !3, end.next_multiple_of(4));
+            if stop > target.length() {
+                return Err(refuse(call, "a piece past its buffer"));
+            }
+            if (start, stop) != (at, end) && mapped.is_none() {
+                self.skips.guest_ram_writes += 1;
+                continue;
+            }
+            spans.push((at, entry, start..stop, len));
+            len += stop - start;
+        }
+        if len == 0 {
+            return Ok(());
+        }
+        let completed = self.completed();
+        let place =
+            (self.places.take(rt::MemoryClass::Shared, len, completed)).map_err(failed(call))?;
+        let staging = self
+            .device
+            .new_buffer(place.block, place.range.start, len, false);
+        let staging = staging.map_err(failed(call))?;
+        for (at, entry, span, from) in &spans {
+            let bytes = crate::replay::player::piece(&call.args, *entry);
+            match (
+                mapped,
+                span.start == *at && span.end == at + bytes.len() as u64,
+            ) {
+                (Some(mapped), false) => {
+                    let mut words = vec![0; (span.end - span.start) as usize];
+                    // SAFETY: the span lies in the target's mapped bytes (checked above).
+                    let edges = unsafe {
+                        std::slice::from_raw_parts(
+                            mapped.as_ptr().add(span.start as usize),
+                            words.len(),
+                        )
+                    };
+                    words.copy_from_slice(edges);
+                    words[(at - span.start) as usize..][..bytes.len()].copy_from_slice(bytes);
+                    super::write_into(&staging, *from, &words)?;
+                }
+                _ => super::write_into(&staging, *from, bytes)?,
+            }
+        }
+        for (_, _, span, from) in &spans {
+            let size = span.end - span.start;
+            let copied = self
+                .blit(id)
+                .copy_from_buffer_to_buffer(&staging, *from, &target, span.start, size);
+            copied.map_err(failed(call))?;
+        }
+        self.staged_bytes += len;
+        match self.blit_owners.get(&id).copied() {
+            Some(command_buffer) => self.staging.entry(command_buffer).or_default().push(place),
+            None => self.places.give(place, self.commits),
+        }
+        Ok(())
+    }
+
     fn blit(&mut self, id: u64) -> &mut rt::BlitCommandEncoder {
         match self.objects.get_mut(&id) {
             Some(Object::Blit(encoder)) => encoder,
@@ -348,6 +429,7 @@ impl NewRuntime {
                 let Some(Object::Blit(encoder)) = self.objects.remove(&id) else {
                     unreachable!("a blit encoder's call");
                 };
+                self.blit_owners.remove(&id);
                 (*encoder).end_encoding();
                 Ok(())
             }
@@ -418,13 +500,20 @@ impl NewRuntime {
             "optimizeContentsForGPUAccess:" => Ok(()),
             // Not built yet: each skipped and counted by its kind.
             "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:" => {
-                self.skips.buffer_copies += 1;
-                Ok(())
+                let (from, to) = (
+                    self.buffer_of(call, Self::id(call, 0)?)?,
+                    self.buffer_of(call, Self::id(call, 2)?)?,
+                );
+                let (from_offset, to_offset) = (uint(call, 1)?, uint(call, 3)?);
+                self.blit(id).copy_from_buffer_to_buffer(
+                    &from,
+                    from_offset,
+                    &to,
+                    to_offset,
+                    uint(call, 4)?,
+                )
             }
-            "m2v.copyFromGuestRam" | "m2v.copyFromGuestRamAt" => {
-                self.skips.guest_ram_writes += 1;
-                Ok(())
-            }
+            "m2v.copyFromGuestRam" | "m2v.copyFromGuestRamAt" => return self.guest_ram_copy(call),
             // Nothing in a play reads the guest's RAM.
             "m2v.copyToGuestRam" => {
                 self.skips.guest_ram_reads += 1;

@@ -424,11 +424,19 @@ their times and memory compare. `command-replay dump --stream FILE` prints the c
     (`skipped_calls`, with `useResource:usage:` of one and a compute encoder's `useHeap:`);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
     (`skipped_dispatches`);
-  - blit commands that name a skipped object (`skipped_blits`), and by kind: buffer-to-buffer
-    copies (`skipped_buffer_copies`), the host's copies from the guest's RAM
-    (`skipped_guest_ram_writes`) and back to it, which nothing in a play reads
-    (`skipped_guest_ram_reads`), `synchronizeTexture:slice:level:` (`skipped_texture_syncs`) and
-    mipmaps (`skipped_mipmaps`). `optimizeContentsForGPUAccess:`, a layout hint, plays as nothing.
+  - blit commands that name a skipped object (`skipped_blits`), and by kind: the host's copies
+    back to the guest's RAM, which nothing in a play reads (`skipped_guest_ram_reads`),
+    `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), mipmaps (`skipped_mipmaps`), and
+    the pieces of a copy from the guest's RAM that are not whole 4-byte words at a 4-byte offset,
+    into a buffer with no mapping (`skipped_guest_ram_writes`). `optimizeContentsForGPUAccess:`,
+    a layout hint, plays as nothing.
+
+  A buffer-to-buffer copy plays as the runtime's (`copy_from_buffer_to_buffer`). A copy from the
+  guest's RAM, the recording's plumbing, plays as its pieces' bytes in a Shared staging place of
+  the backend's own, then a buffer copy into the target in the same blit encoder, so the GPU's
+  order holds; a piece's edge bytes up to whole words come from the target's mapping where it has
+  one. The staging place is given back at the command buffer's commit and free once it completes
+  (`staged_guest_ram_bytes`).
 
   Textures over a buffer play as the runtime's (`Buffer::new_texture`) and texture views as its
   views (`Texture::new_texture_view`). Where the runtime cannot make a texture the program made,
@@ -465,7 +473,9 @@ the wait for its work included; the process's resident memory then where the sys
 memory, `read` reading bytes back, `wait` waiting for command buffers, `resource` the calls that
 make or release a buffer, texture, heap or block and `resource_max` the longest of them,
 `pipeline` the calls that make a library, a function or a pipeline state and `pipeline_max` the
-longest of them, `other` every other call the runtime ran, `count` reading the runtime's
+longest of them, `other` every other call the runtime ran, `upload` the host's copies from the
+guest's RAM, which a backend stages and copies (the recording's plumbing, the player's share),
+`count` reading the runtime's
 counters, and `player` what of the wall time is left, the player's own work; then `gpu_busy`, the
 union of the GPU intervals of the command buffers the frame waited for, where the runtime gives
 them, which runs beside the rest; and the backend's gauges then, as they stand, never as growth:

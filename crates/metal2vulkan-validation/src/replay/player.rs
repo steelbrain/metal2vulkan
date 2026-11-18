@@ -264,6 +264,9 @@ pub struct Times {
     pub pipeline_max: u64,
     /// Every other call the runtime runs: encoders and their commands, commits, other objects.
     pub other: u64,
+    /// The host's copies from the guest's RAM, which the backend stages and copies: the
+    /// recording's plumbing, the player's share and not the runtime's.
+    pub upload: u64,
     /// Reading the runtime's counters (`Backend::counters`).
     pub count: u64,
     /// The union of the GPU intervals of the command buffers the frame waited for
@@ -283,6 +286,7 @@ impl Times {
             self.resource,
             self.pipeline,
             self.other,
+            self.upload,
             self.count,
         ];
         wall.saturating_sub(host.iter().sum())
@@ -299,6 +303,7 @@ impl Times {
                 self.pipeline_max = self.pipeline_max.max(nanos);
             }
             Cost::Other => self.other += nanos,
+            Cost::Upload => self.upload += nanos,
         }
     }
 }
@@ -308,6 +313,7 @@ impl Times {
 enum Cost {
     Resource,
     Pipeline,
+    Upload,
     Other,
 }
 
@@ -325,6 +331,8 @@ impl Cost {
         const PIPELINES: [&str; 3] = ["newLibrary", "newDefaultLibrary", "newFunction"];
         if RESOURCES.iter().any(|p| selector.starts_with(p)) {
             Cost::Resource
+        } else if selector.starts_with("m2v.copyFromGuestRam") {
+            Cost::Upload
         } else if PIPELINES.iter().any(|p| selector.starts_with(p))
             || (selector.starts_with("new") && selector.contains("PipelineState"))
         {
@@ -428,8 +436,8 @@ impl Report {
             let t = &end.times;
             lines.push(format!(
                 "end {at} wall_nanos={}{resident} times stream={} write={} read={} wait={} \
-                 resource={} resource_max={} pipeline={} pipeline_max={} other={} count={} \
-                 player={} gpu_busy={} live{live}",
+                 resource={} resource_max={} pipeline={} pipeline_max={} other={} upload={} \
+                 count={} player={} gpu_busy={} live{live}",
                 end.wall_nanos,
                 t.stream,
                 t.write,
@@ -440,6 +448,7 @@ impl Report {
                 t.pipeline,
                 t.pipeline_max,
                 t.other,
+                t.upload,
                 t.count,
                 t.player(end.wall_nanos),
                 t.gpu_busy,

@@ -34,9 +34,8 @@ struct Skips {
     dispatches: u64,
     /// Blit commands that name a skipped object.
     blits: u64,
-    /// Buffer-to-buffer blit copies, which the runtime does not build yet.
-    buffer_copies: u64,
-    /// The host's copies from the guest's RAM into a buffer, not played yet.
+    /// Pieces of the host's copies from the guest's RAM that the play cannot copy: a piece not of
+    /// whole 4-byte words at a 4-byte offset into a buffer with no mapping to fill the rest from.
     guest_ram_writes: u64,
     /// The host's copies back to the guest's RAM: nothing in a play reads that RAM.
     guest_ram_reads: u64,
@@ -128,6 +127,13 @@ pub struct NewRuntime {
     completed: u64,
     skips: Skips,
     substitutes: Substitutes,
+    /// Each open blit encoder's command buffer.
+    blit_owners: HashMap<u64, u64>,
+    /// The staging places of each command buffer not yet committed, which hold the bytes of its
+    /// guest-RAM copies: given back at its commit, free once it completes.
+    staging: HashMap<u64, Vec<Place>>,
+    /// The bytes those copies staged.
+    staged_bytes: u64,
     /// The compute pipeline states whose `gpuResourceID` the player asked, which the runtime does
     /// not give: a typed gap, counted.
     unanswered_pipeline_ids: u64,
@@ -335,6 +341,9 @@ impl NewRuntime {
             completed: 0,
             skips: Skips::default(),
             substitutes: Substitutes::default(),
+            blit_owners: HashMap::new(),
+            staging: HashMap::new(),
+            staged_bytes: 0,
             unanswered_pipeline_ids: 0,
             block_bytes: [0; 2],
             creations: Vec::new(),
@@ -1140,6 +1149,12 @@ impl Backend for NewRuntime {
                     self.device.release_block(block).map_err(failed(call))?;
                     self.block_bytes[class_index(class)] -= range.len;
                 }
+                // A command buffer released uncommitted runs nothing of its staging.
+                Some(Object::CommandBuffer(_)) => {
+                    for place in self.staging.remove(&call.receiver).unwrap_or_default() {
+                        self.places.give(place, self.commits);
+                    }
+                }
                 _ => {}
             }
             return Ok(Made::default());
@@ -1369,7 +1384,7 @@ impl Backend for NewRuntime {
             ("skipped_objects", self.skips.objects),
             ("skipped_dispatches", self.skips.dispatches),
             ("skipped_blits", self.skips.blits),
-            ("skipped_buffer_copies", self.skips.buffer_copies),
+            ("staged_guest_ram_bytes", self.staged_bytes),
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
             ("skipped_guest_ram_reads", self.skips.guest_ram_reads),
             ("skipped_texture_syncs", self.skips.texture_syncs),
