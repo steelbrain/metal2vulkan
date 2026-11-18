@@ -18,7 +18,10 @@
 //!   - a fragment function samples a texture through its constexpr sampler at the index the
 //!     consumer gave it: each pixel reads its own texel.
 //!   - a vertex function's `[[stage_in]]` attributes come from a vertex buffer, and from
-//!     `set_vertex_bytes`' copy.
+//!     `set_vertex_bytes`' copy, fetched in fixed function; an unnormalized signed-integer
+//!     attribute (the owned fixture `engine/icb_merged_attributes.ll`'s `short` mark) is
+//!     sign-extended into a variable declared `int`, and a layout stepped per instance at rate 2
+//!     is the translator's refusal.
 //!   - a draw whose vertex buffer is bound off its argument's alignment is refused before
 //!     anything is recorded, and the same buffers bound aligned draw.
 //!   - what Metal refuses is refused, and what a draw does not build is a gap: no pipeline state,
@@ -84,8 +87,9 @@ mod on_device {
         ScissorRect, StageSource, StencilOperation, StorageMode, Texture, TextureDescriptor,
         TextureType, TextureUsage, Viewport,
     };
+    use metal2vulkan::error::Feature;
     use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
-    use metal2vulkan::metal::{DataType, VertexFormat};
+    use metal2vulkan::metal::{DataType, VertexFormat, VertexStepFunction};
     use metal2vulkan::pipeline::{
         VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
     };
@@ -619,6 +623,83 @@ mod on_device {
                 }
             }
             println!("{name}: attributes from a vertex buffer and from bytes");
+        });
+    }
+
+    /// An unnormalized signed-integer attribute is fetched in fixed function into a variable
+    /// declared `int`: `ima_vertex`'s mark, a `short` of -2, reaches `ima_fragment`'s unsigned
+    /// output as its sign-extended bits. A layout stepped per instance at rate 2 is the
+    /// translator's refusal (`VertexStepRate`), which names the divisor feature device creation
+    /// does not enable.
+    #[test]
+    fn every_device_fetches_a_signed_attribute_in_fixed_function() {
+        let Some(library) = library(&engine_dir().join("icb_merged_attributes.ll")) else {
+            return;
+        };
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let mut d = RenderPipelineDescriptor::new(function("ima_vertex"));
+        d.fragment = Some(function("ima_fragment"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+        let mut vertex = VertexDescriptor::new();
+        let attributes = [(VertexFormat::Float2, 8), (VertexFormat::Short, 4)];
+        for (index, (format, stride)) in (0u32..).zip(attributes) {
+            let attribute = VertexAttributeDescriptor::new(format, 0, index);
+            vertex.attributes.insert(index, attribute);
+            vertex
+                .layouts
+                .insert(index, VertexBufferLayoutDescriptor::new(Some(stride)));
+        }
+        d.vertex_descriptor = Some(vertex);
+        // `ima_vertex` maps pixel positions to clip space by the frame's width and height: a
+        // triangle twice the target's side covers it.
+        let side = SIDE as f32;
+        let positions = floats(&[0.0, 0.0, 2.0 * side, 0.0, 0.0, 2.0 * side]);
+        let frame = floats(&[side, side, side, 0.0]);
+        // Three marks of -2, each a `short` at the start of its 4-byte element.
+        let marks: Vec<u8> = [(-2i16).to_le_bytes(), [0; 2]].concat().repeat(3);
+        each_device("draw_signed_attribute", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let xy = buffers.of(&device, &positions);
+            let mark = buffers.of(&device, &marks);
+            let color = target(
+                &device,
+                PixelFormat::RGBA32Uint,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&xy), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&mark), 0, 1));
+            draw(encoder.set_vertex_bytes(&frame, 2));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            for texel in read(&color, 16).chunks(16) {
+                let word = |at: usize| u32::from_le_bytes([0, 1, 2, 3].map(|i| texel[at + i]));
+                assert_eq!((word(0), word(12)), (0xFFFF_FFFE, 1), "{name}: {texel:?}");
+            }
+            let mut stepped = d.clone();
+            let layouts = &mut stepped.vertex_descriptor.as_mut().expect("layouts").layouts;
+            let layout = layouts.get_mut(&1).expect("layout 1");
+            layout.step_function = VertexStepFunction::PerInstance;
+            layout.step_rate = 2;
+            match device.new_render_pipeline_state(&stepped, crate::tests::no_constexpr_samplers) {
+                Err(Error::Translation(metal2vulkan::error::Error::Unsupported(u))) => {
+                    assert_eq!(u.feature, Feature::VertexStepRate, "{name}: {u:?}")
+                }
+                Err(other) => panic!("{name}: {other}"),
+                Ok(_) => panic!("{name}: a step rate of 2 made a state"),
+            }
+            println!("{name}: a short of -2 read as int, a step rate of 2 refused");
         });
     }
 

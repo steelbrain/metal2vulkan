@@ -1096,6 +1096,33 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
   compare, stencil test, operations, masks and reference, depth bias and blend constants. Vertex
   buffer strides are the descriptor's, so the content's, and baked. It renders dynamically into
   its attachments' formats, with no render pass.
+- Every `[[stage_in]]` attribute is fetched by fixed-function vertex input, the form native
+  Vulkan uses, with no second form: the vertex descriptor's formats, offsets, strides and steps
+  are the `VkPipeline`'s vertex input state. Of Metal's vertex descriptor:
+  - formats: each maps to the Vulkan format of its layout and conversion, taken where the
+    device's format query reports `VERTEX_BUFFER` for it: an 8- or 16-bit integer format read
+    into a `float` attribute in its `USCALED` or `SSCALED` form, an unnormalized signed-integer
+    format into an attribute declared `int`, `UChar4Normalized_BGRA` as `B8G8R8A8_UNORM`, the
+    10:10:10:2 formats as `A2B10G10R10`, `FloatRG11B10` as `B10G11R11_UFLOAT_PACK32`. The
+    validation crate's device profiles of RADV, ANV, NVIDIA and lavapipe report the bit for
+    every one of them but `FloatRGB9E5`, which only lavapipe's reports;
+  - steps: per vertex, and per instance at rate 1, map to the vertex and instance input rates;
+  - offsets and strides: the descriptor's, baked, each a multiple of the format's component size
+    and within the device's offset and stride limits.
+- What has no fixed-function equivalent on the floor is refused at creation by the translator,
+  `Error::Translation` naming what it needs, and never pulled into the shader:
+  - a per-instance step rate above 1, and the constant step (`VertexStepRate`): Vulkan divides the
+    instance index only with `VK_KHR_vertex_attribute_divisor`'s features and
+    `supportsNonZeroFirstInstance`, which the floor does not enable;
+  - a format the device's query does not report for `VERTEX_BUFFER` (`Format`, with the format),
+    and `FloatRGB9E5` on every device (`Format`, not implemented: of those profiles only
+    lavapipe's reports the format, and its fetch answers 0 for the fourth component, where Metal
+    and Vulkan give 1);
+  - an offset or stride that is not a multiple of the format's component size, which Metal takes,
+    and one past `maxVertexInputAttributeOffset` or `maxVertexInputBindingStride`, and more
+    attributes or layouts than `maxVertexInputAttributes` or `maxVertexInputBindings`
+    (`VertexInputLayout`, with the limit where one is passed);
+  - the per-patch and per-patch-control-point steps, with tessellation (`Tessellation`).
 - The triangle class's `VkPipeline` is made with the state, through its file in the cache
   directory where there is one; the line class's is made by the content's first draw of lines,
   which waits for it (`Metrics::first_use_waits`). Of the two replay streams' 537 render contents
@@ -1107,9 +1134,9 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
 - Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: a depth
   attachment, more than one sample, vertex amplification, a post-tessellation vertex function,
   stages the translator synthesizes beside the functions', framebuffer fetch, an imageblock, a
-  fragment function's stencil output, alpha to one, an instance step rate above 1, constant data
-  the binder supplies, a specialization other than the sample and amplification counts, dynamic
-  state beyond Vulkan 1.3's (a vertex buffer layout whose stride is set per bind among it), a
+  fragment function's stencil output, alpha to one, constant data the binder supplies, a
+  specialization other than the sample and amplification counts, dynamic state beyond Vulkan
+  1.3's (a vertex buffer layout whose stride is set per bind among it), a
   feature or extension device creation does not enable, and a function that reads what a draw
   does not supply (`DrawInput`: a function table, a table the binder builds, a parameter block
   past the push range, a push field or bind-time fact the encoder does not fill, an unnormalized
@@ -1200,6 +1227,8 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
   pipeline state whose formats are not the pass's attachments', and a draw that binds a texture
   whose image the pass renders into. The replay streams draw lines and triangles under
   depth-stencil states that test no depth.
+- A vertex fetch outside its buffer returns what the device gives: the floor enables no buffer
+  robustness, so there is no bounds guarantee beyond the device's.
 - Not built, and so not methods: indirect draws, several viewports or scissor rectangles, the
   triangle fill mode, the depth clip mode, depth bias, visibility results, `useResource:`, the
   store action setters, tile functions and `setVertexBuffer:offset:attributeStride:atIndex:`.

@@ -6,10 +6,14 @@
 //! shader from its buffer) otherwise. There is no third representation: widening a 3-component
 //! 8/16-bit format to 4 components reads past the attribute, which at the end of a buffer is
 //! out of bounds and may replace the whole attribute.
+//!
+//! Under the identity domains there is only the first: every attribute is fetched in fixed
+//! function, bounded only as the device bounds it, and what fixed-function input cannot take is
+//! refused ([`attribute_fetch`]).
 
-use crate::device::requirements::FormatUsage;
+use crate::device::requirements::{FormatUsage, VkFeature, VkLimit};
 use crate::device::DeviceProfile;
-use crate::error::{DescriptorError, Error, Feature, Unsupported};
+use crate::error::{Capability, DescriptorError, Error, Feature, Unsupported};
 use crate::memory::contain::{self, Check};
 use crate::metal::{VertexFormat, VertexStepFunction};
 use crate::vk;
@@ -202,6 +206,17 @@ pub enum AttributeFetch {
 ///   fixed function.
 /// - `PerPatch`/`PerPatchControlPoint`: tessellation, refused. A `PerInstance` rate of 0 is an
 ///   invalid descriptor.
+///
+/// Under the identity domains (`Device::from_queries`' profile) nothing is pulled: the pulled
+/// fetch reads through a descriptor, which those domains hold none of. Every attribute is fetched
+/// in fixed function, and the containment rule above does not move it: the device bounds the
+/// fetch as it bounds any (with no buffer robustness, a fetch outside its buffer reads what the
+/// device gives). What fixed-function input cannot take is refused by what it needs: a rate above
+/// 1 or the constant step without the divisor it takes ([`Feature::VertexStepRate`], with the
+/// missing `vertexAttributeInstanceRate*Divisor` feature or the `maxVertexAttribDivisor` limit), a
+/// format the profile cannot fetch as `VERTEX_BUFFER` ([`Feature::Format`], with that format
+/// usage), and `FloatRGB9E5`, whose fixed-function fetch a conformant device's answer differs from
+/// (`Feature::Format`, not implemented).
 pub fn attribute_fetch(
     format: VertexFormat,
     step: VertexStepFunction,
@@ -221,6 +236,12 @@ pub(crate) fn fetch_as(
     profile: &DeviceProfile,
 ) -> Result<AttributeFetch, Error> {
     let f = profile.fields();
+    // Under the identity domains the pulled fetch is not taken, and its case is refused.
+    let identity = crate::lower::access::identity(profile);
+    let pulled = |refusal: Unsupported| match identity {
+        true => Err(Error::from(refusal)),
+        false => Ok(AttributeFetch::Pulled),
+    };
     let (input_rate, divisor) = match step {
         VertexStepFunction::PerVertex => (vk::VertexInputRate::VERTEX, 1),
         VertexStepFunction::PerInstance => match step_rate {
@@ -238,7 +259,7 @@ pub(crate) fn fetch_as(
             {
                 (vk::VertexInputRate::INSTANCE, n)
             }
-            _ => return Ok(AttributeFetch::Pulled),
+            n => return pulled(divided(profile, Some(n))),
         },
         // Metal's constant step reads the layout's first element whatever the base instance, and a
         // zero divisor reads element `firstInstance`: the same element for every draw exactly on a
@@ -253,25 +274,68 @@ pub(crate) fn fetch_as(
         {
             (vk::VertexInputRate::INSTANCE, 0)
         }
-        VertexStepFunction::Constant => return Ok(AttributeFetch::Pulled),
+        VertexStepFunction::Constant => return pulled(divided(profile, None)),
         VertexStepFunction::PerPatch | VertexStepFunction::PerPatchControlPoint => {
             return Err(Unsupported::not_implemented(Feature::Tessellation).into())
         }
     };
     // Without buffer robustness nothing bounds fixed-function input (VUID-vkCmdDraw-None-02721).
-    if contain::encoding(profile) == Check::InShader {
+    // Under the identity domains the device's own bounds stand: there is no pulled fetch to move
+    // the attribute to.
+    if !identity && contain::encoding(profile) == Check::InShader {
         return Ok(AttributeFetch::Pulled);
     }
-    if !fixed_function_format(vk_format)
-        || !profile.supports_format(vk_format, FormatUsage::VertexBuffer)
-    {
-        return Ok(AttributeFetch::Pulled);
+    if !fixed_function_format(vk_format) {
+        return pulled(Unsupported::not_implemented(Feature::Format));
+    }
+    if !profile.supports_format(vk_format, FormatUsage::VertexBuffer) {
+        return pulled(Unsupported::needs(
+            Feature::Format,
+            Capability::Format {
+                format: vk_format,
+                usage: FormatUsage::VertexBuffer,
+            },
+        ));
     }
     Ok(AttributeFetch::FixedFunction {
         format: vk_format,
         input_rate,
         divisor,
     })
+}
+
+/// The refusal of a divided instance step that fixed-function input cannot take on `profile`:
+/// Metal's per-instance step at rate `n` above 1 (`Some(n)`), or its constant step (`None`). It
+/// names what the profile lacks of the divisor: `vertexAttributeInstanceRateDivisor`, and
+/// `vertexAttributeInstanceRateZeroDivisor` for the constant step, or the rate past
+/// `maxVertexAttribDivisor`; where it lacks none of those, `supportsNonZeroFirstInstance` (or the
+/// portability subset's stride of 0, for the constant step), which no capability names.
+fn divided(profile: &DeviceProfile, rate: Option<u32>) -> Unsupported {
+    let f = profile.fields();
+    let divisor = f.fragment.vertex_attribute_divisor;
+    let mut needs = Vec::new();
+    if !divisor {
+        needs.push(Capability::Feature(
+            VkFeature::VertexAttributeInstanceRateDivisor,
+        ));
+    }
+    match rate {
+        None if !f.fragment.vertex_attribute_zero_divisor => needs.push(Capability::Feature(
+            VkFeature::VertexAttributeInstanceRateZeroDivisor,
+        )),
+        Some(n) if divisor && n > f.limits.max_vertex_attrib_divisor => {
+            needs.push(Capability::Limit {
+                limit: VkLimit::MaxVertexAttribDivisor,
+                required: u64::from(n),
+                available: u64::from(f.limits.max_vertex_attrib_divisor),
+            })
+        }
+        _ => {}
+    }
+    match needs.is_empty() {
+        true => Unsupported::not_implemented(Feature::VertexStepRate),
+        false => Unsupported::needs_any_of(Feature::VertexStepRate, vec![needs]),
+    }
 }
 
 /// Whether fixed-function input delivers an attribute of `vk_format` where the profile reports

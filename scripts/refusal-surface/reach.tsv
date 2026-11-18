@@ -73,6 +73,8 @@ feature	PixelCoverageAtSampleRate	rare	coverage read at sample rate
 feature	InterfaceComponents	rare	too many varyings or attachments for a device
 feature	UnmatchedVarying	none	a Metal link error
 feature	KernelStageIn	rare	kernel stage-in combinations Metal leaves unestablished
+feature	VertexStepRate	app	instanced vertex layouts stepped at a rate above 1, or constant
+feature	VertexInputLayout	rare	vertex offsets or strides off their format's alignment, or past a device's limits
 feature	Tessellation	rare	tessellation
 feature	MeshShading	rare	mesh pipelines
 feature	TileShading	rare	tile shaders (Apple GPU families)

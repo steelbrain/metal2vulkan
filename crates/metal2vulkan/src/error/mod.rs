@@ -1313,7 +1313,7 @@ pub enum Feature {
     Float64Arithmetic,
 
     // ---- Textures and samplers (lowering B2, B3) ----
-    /// A pixel format not supported for the required use.
+    /// A pixel or vertex format not supported for the required use.
     Format,
     /// Divergent implicit-LOD sampling or LOD query through a multi-candidate handle.
     DivergentImplicitLod,
@@ -1405,6 +1405,22 @@ pub enum Feature {
     /// Kernel `[[stage_in]]`: a stage-input descriptor combination whose Metal meaning is not
     /// established.
     KernelStageIn,
+    /// A vertex buffer layout stepped per instance at a rate above 1, or at the constant step
+    /// (`MTLVertexStepFunctionConstant`), on a profile that fetches every attribute in fixed
+    /// function (the identity domains, where the pulled fetch is not taken): fixed-function input
+    /// divides the instance index only with `vertexAttributeInstanceRateDivisor` (and
+    /// `vertexAttributeInstanceRateZeroDivisor` for the constant step), a rate within
+    /// `maxVertexAttribDivisor`, and `supportsNonZeroFirstInstance`, as a Metal draw may carry a
+    /// base instance.
+    VertexStepRate,
+    /// A vertex attribute whose layout fixed-function input cannot fetch, on a profile that fetches
+    /// every attribute in fixed function (the identity domains, where the pulled fetch is not
+    /// taken): an offset or static stride that is not a multiple of the format's component size
+    /// (Metal takes any byte multiple), an offset or stride past `maxVertexInputAttributeOffset` or
+    /// `maxVertexInputBindingStride`, more attributes or layouts than `maxVertexInputAttributes` or
+    /// `maxVertexInputBindings`, or an attribute that ends past its layout's static stride where
+    /// the strides are dynamic state.
+    VertexInputLayout,
 
     // ---- the refused families, not implemented yet ----
     /// Tessellation: a post-tessellation vertex function and its pipeline's patch draws, through

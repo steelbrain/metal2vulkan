@@ -675,22 +675,25 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
             }
             // Fixed-function input: the format is link-time state, and so is what the device's
             // conversion of it may answer otherwise than Metal's fetch, which link notes on the
-            // pipeline's vertex stage (`pipeline::link::vertex::fixed_function_notes`).
+            // pipeline's vertex stage (`pipeline::link::vertex::fixed_function_notes`). A signed
+            // format's variable is declared `int` (`VertexFetch::SignedFixedFunction`), its bits
+            // read by `OpBitcast`.
+            let mut ty = io_type(f);
+            if entry == Some(VertexFetch::SignedFixedFunction) {
+                if f.is_float() {
+                    return Err(not_lowered());
+                }
+                ty.numeric = IoNumeric::Sint;
+            }
             let key = VaryingKey::attribute(index);
             let sp = &mut cx.families.stage_io;
-            let object = user(
-                sp,
-                key.clone(),
-                IoDir::Input,
-                io_type(f),
-                IoDecor::default(),
-            )?;
+            let object = user(sp, key.clone(), IoDir::Input, ty, IoDecor::default())?;
             push_var(
                 &mut sp.interface.inputs,
                 IoVariable {
                     key,
                     role: IoRole::Attribute { index },
-                    ty: io_type(f),
+                    ty,
                 },
             );
             Link {

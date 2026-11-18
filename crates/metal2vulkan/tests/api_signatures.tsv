@@ -13750,7 +13750,6 @@ variant	metal2vulkan-rt::RenderPipelineKind::Imageblock	Imageblock
 variant	metal2vulkan-rt::RenderPipelineKind::Multisample	Multisample
 variant	metal2vulkan-rt::RenderPipelineKind::ShaderStencil	ShaderStencil
 variant	metal2vulkan-rt::RenderPipelineKind::Specialization	Specialization
-variant	metal2vulkan-rt::RenderPipelineKind::StepRate	StepRate
 variant	metal2vulkan-rt::RenderPipelineKind::SynthesizedStages	SynthesizedStages
 variant	metal2vulkan-rt::RenderPipelineKind::Tessellation	Tessellation
 variant	metal2vulkan-rt::RenderPipelineKind::VertexAmplification	VertexAmplification
@@ -16197,6 +16196,8 @@ variant	metal2vulkan::error::Feature::UndeclaredTextureUsage	UndeclaredTextureUs
 variant	metal2vulkan::error::Feature::UnknownIntrinsic	UnknownIntrinsic
 variant	metal2vulkan::error::Feature::UnmatchedVarying	UnmatchedVarying
 variant	metal2vulkan::error::Feature::VertexAmplification	VertexAmplification
+variant	metal2vulkan::error::Feature::VertexInputLayout	VertexInputLayout
+variant	metal2vulkan::error::Feature::VertexStepRate	VertexStepRate
 variant	metal2vulkan::error::Feature::ViewFormatReinterpretation	ViewFormatReinterpretation
 variant	metal2vulkan::error::Feature::ViewportDepthRange	ViewportDepthRange
 variant	metal2vulkan::error::Feature::VulkanVersion	VulkanVersion
@@ -16926,6 +16927,7 @@ variant	metal2vulkan::pipeline::UniformViewChoice::Spare	Spare
 variant	metal2vulkan::pipeline::UniformViewChoice::Viewed	Viewed
 variant	metal2vulkan::pipeline::VertexFetch::FixedFunction	FixedFunction
 variant	metal2vulkan::pipeline::VertexFetch::Pulled	Pulled { format: metal::VertexFormat, buffer_index: u32, offset: u32, step_function: metal::VertexStepFunction, step_rate: u32 }
+variant	metal2vulkan::pipeline::VertexFetch::SignedFixedFunction	SignedFixedFunction
 variant	metal2vulkan::pipeline::VertexStride::PerBind	PerBind
 variant	metal2vulkan::pipeline::VertexStride::Static	Static(u32)
 variant	metal2vulkan::pipeline::Window::Bounded	Bounded { start: i64, len: u64 }

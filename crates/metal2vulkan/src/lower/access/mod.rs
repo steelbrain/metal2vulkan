@@ -1848,8 +1848,13 @@ fn plan_replay(cx: &mut SelectCx<'_>, sources: &[SlotRef]) -> Result<(), Error> 
     // (`bind::mesh_arguments`).
     let pieces = cx.inputs.folded_groups && cx.stage == Stage::Object;
     let fetches = (cx.inputs.vertex_fetch.as_ref()).is_some_and(|f| {
-        (f.attributes.values())
-            .any(|a| *a == crate::pipeline::lower_inputs::VertexFetch::FixedFunction)
+        (f.attributes.values()).any(|a| {
+            use crate::pipeline::lower_inputs::VertexFetch;
+            matches!(
+                a,
+                VertexFetch::FixedFunction | VertexFetch::SignedFixedFunction
+            )
+        })
     });
     // A drawn vertex function's sources are its pulled attributes' buffers, which its slot table
     // holds; a kernel's are its stage-in fetch's.

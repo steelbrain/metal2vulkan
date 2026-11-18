@@ -1142,7 +1142,7 @@ fn uint_lanes(form: Form) -> Form {
 /// `x`, a value loaded through `link`, as the lowered representation of its form: a narrow
 /// integer masked to its width, a narrow float rounded to its format, a `bool` carried as `uint`
 /// compared with 0, a `bool` builtin read into an integer as 1 or 0, the weights of a
-/// [`Place::Weights`] read.
+/// [`Place::Weights`] read, a variable declared `int` read as its bits by `OpBitcast`.
 fn to_lowered(
     cx: &EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1160,6 +1160,28 @@ fn to_lowered(
         let zero = ops::splat(fb, form, 0)?;
         return fb.select(x, one, zero);
     }
+    // A variable declared `int` (a signed format's fixed-function attribute): its bits, held
+    // unsigned.
+    let x = if let Some(IoObject::User {
+        numeric: IoNumeric::Sint,
+        components,
+        ..
+    }) = cx.plan.families.stage_io.objects.get(link.object)
+    {
+        let components = *components;
+        let elem = io_elem(fb.module(), IoNumeric::Uint, false)?;
+        let ty = if components == 1 {
+            elem
+        } else {
+            fb.module().ty(SType::Vector {
+                elem,
+                len: components,
+            })?
+        };
+        fb.convert(ConvOp::Bitcast, x, ty)?
+    } else {
+        x
+    };
     let x = ops::mask(fb, form, x)?;
     narrow::round(fb, form, x)
 }

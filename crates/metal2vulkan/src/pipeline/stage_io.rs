@@ -534,12 +534,17 @@ impl StageIo {
 
     /// Every vertex attribute the function reads, by attribute index, with its declared numeric
     /// class and the fetch it was compiled under: fixed function for an `Attribute` input
-    /// variable, the listed fetch for a pulled one.
+    /// variable (into an `int` one for a signed format, `VertexFetch::SignedFixedFunction`), the
+    /// listed fetch for a pulled one.
     pub fn attributes(&self) -> BTreeMap<u32, (IoNumeric, VertexFetch)> {
         let mut out = BTreeMap::new();
         for v in &self.inputs {
             if let IoRole::Attribute { index } = v.role {
-                out.insert(index, (v.ty.numeric, VertexFetch::FixedFunction));
+                let fetch = match v.ty.numeric {
+                    IoNumeric::Sint => VertexFetch::SignedFixedFunction,
+                    _ => VertexFetch::FixedFunction,
+                };
+                out.insert(index, (v.ty.numeric, fetch));
             }
         }
         for p in &self.pulled {

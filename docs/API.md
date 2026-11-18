@@ -1166,7 +1166,15 @@ A `RenderPipeline` holds:
   pulled in the shader instead, and so is every attribute on a device without
   `robustBufferAccess` (unless containment is off). A `FloatRGB9E5` attribute is pulled on every
   device: no device must fetch the shared-exponent format as vertex input, and its decode is
-  exact, so the shader's is the answer a conformant fetch gives;
+  exact, so the shader's is the answer a conformant fetch gives. Under the identity domains
+  (`Device::from_queries`' profile) nothing is pulled, as the pulled fetch reads through a
+  descriptor: every attribute is fetched in fixed function, with or without buffer robustness
+  (a fetch outside its buffer reads what the device gives), an unnormalized signed-integer format
+  into a variable declared `int`; an attribute fixed-function input cannot take is refused,
+  `Unsupported{VertexStepRate}` (a per-instance rate above 1 or the constant step without the
+  divisor features), `Unsupported{Format}` (a format the device cannot fetch as `VERTEX_BUFFER`,
+  and `FloatRGB9E5`) or `Unsupported{VertexInputLayout}` (an offset or stride off the format's
+  alignment or past the device's limits, or more attributes or layouts than its limits);
 - `graphics`: the fixed-function state (topology, attachment formats and blend states, sample
   count, dynamic states, input attachments, ...). Build
   `VkPipelineColorBlendStateCreateInfo::pAttachments` from `graphics.color_blend_attachments()`.

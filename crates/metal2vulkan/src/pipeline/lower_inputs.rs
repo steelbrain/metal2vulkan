@@ -1566,6 +1566,12 @@ pub enum VertexFetch {
     /// NaN) is noted where the render pipeline links, on its vertex stage
     /// (`PrecisionNote::DeviceVertexConversion`, `PrecisionNote::DeviceNanEncoding`).
     FixedFunction,
+    /// Fixed-function vertex input of an unnormalized signed-integer format, into a variable
+    /// declared `int`: Vulkan's numeric-type match lets a `SINT` format feed a signed variable
+    /// only, and the device sign-extends each component as Metal's fetch does. The module reads
+    /// the variable's bits by `OpBitcast`. Taken under the identity domains, where the pulled
+    /// fetch is not; elsewhere such an attribute is pulled and sign-extended in the shader.
+    SignedFixedFunction,
     /// Fetched in the shader from a buffer, decoding this Metal format.
     ///
     /// Everything that changes the fetch code is here: the source buffer, the attribute's

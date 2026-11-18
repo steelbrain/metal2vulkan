@@ -850,8 +850,6 @@ pub enum RenderPipelineKind {
     ShaderStencil,
     /// `alphaToOneEnabled`, which needs a feature the floor does not require.
     AlphaToOne,
-    /// A vertex buffer layout of an instance step rate above 1.
-    StepRate,
     /// A function that reads constant data the binder supplies.
     ConstantData,
     /// A specialization the draw would set, beside the sample and amplification counts.

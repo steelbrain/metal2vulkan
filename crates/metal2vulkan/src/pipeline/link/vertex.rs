@@ -15,7 +15,9 @@
 //!    (`Unsupported{Lowering(StageIo), NotImplemented}`): Metal's meaning for that conversion is
 //!    not established, so neither fetch path guesses one. A signed-integer format feeds a `uint`
 //!    variable, which fixed-function input may not (Vulkan's numeric-type match), so it is pulled
-//!    and sign-extended in the shader;
+//!    and sign-extended in the shader; under the identity domains it is fetched in fixed function
+//!    into a variable declared `int` (`VertexFetch::SignedFixedFunction`), the device's `SINT`
+//!    fetch sign-extending each component as Metal's does;
 //! 2. the per-attribute choice of `metal::vertex::attribute_fetch` (format, step, profile), in
 //!    item 1's Vulkan format. It
 //!    pulls every attribute when the profile's buffer containment is checked in the shader
@@ -60,6 +62,11 @@
 //!    would fetch at the stream position, where the function reads the vertex its index names. The
 //!    layouts they pull are not a pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
 //!
+//! Under the identity domains (`Device::from_queries`' profile) items 2 to 6 pull nothing: the
+//! pulled fetch reads through a descriptor, which those domains hold none of. Item 2's cases are
+//! `metal::vertex::attribute_fetch`'s refusals, and an attribute items 3 to 6 would pull is refused
+//! as `Feature::VertexInputLayout`, with the limit it passes where it passes one.
+//!
 //! A fixed-function entry keeps nothing of the format (`VertexFetch::FixedFunction`): no
 //! instruction of the module names it, so every format the device fetches in fixed function
 //! compiles one module, whatever its encoding, offset or stride. The format is the
@@ -77,9 +84,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::device::requirements::{VkFeature, VkProperty};
+use crate::device::requirements::{VkFeature, VkLimit, VkProperty};
 use crate::device::DeviceProfile;
-use crate::error::{DescriptorError, DriverDeviation, Error, InternalError, InternalKind};
+use crate::error::{
+    Capability, DescriptorError, DriverDeviation, Error, Feature, InternalError, InternalKind,
+    Unsupported,
+};
 use crate::lower::stage_io::fetch::{class_match, encoding, ClassMatch, Encoding};
 use crate::metal::vertex::{
     fetch_as, vertex_alignment, vk_scaled_vertex_format, vk_vertex_format, AttributeFetch,
@@ -100,10 +110,11 @@ use crate::pipeline::vertex::{
 use crate::vk;
 
 /// How attribute `attribute` of `format` meets a variable of class `declared` (item 1 of the
-/// module docs): the Vulkan format fixed-function input would deliver it in, and whether it can
-/// (not an unnormalized signed-integer format into the `uint` variable every integer attribute is
-/// declared as, which Vulkan's numeric-type match does not allow and which is pulled and
-/// sign-extended in the shader), or the class refusals of `fetch::class_match`.
+/// module docs): the Vulkan format fixed-function input would deliver it in, and whether that
+/// format is an unnormalized signed-integer one, which Vulkan's numeric-type match lets feed only
+/// a variable declared `int` (pulled and sign-extended in the shader where the module declares it
+/// `uint`, as every integer attribute is but under the identity domains), or the class refusals
+/// of `fetch::class_match`.
 ///
 /// A signed **normalized** format is not that case: it is a float-class format (`Encoding`'s
 /// `is_float`), so `fetch::class_match` admits it to a `float` variable alone and refuses it to
@@ -118,7 +129,7 @@ fn class_format(
     match class_match(e, declared == IoNumeric::Float, attribute)? {
         ClassMatch::Same => Ok((
             vk_vertex_format(format)?,
-            !matches!(
+            matches!(
                 e,
                 Encoding::Int {
                     signed: true,
@@ -128,7 +139,7 @@ fn class_format(
             ),
         )),
         ClassMatch::IntToFloat => vk_scaled_vertex_format(format)
-            .map(|f| (f, true))
+            .map(|f| (f, false))
             .ok_or_else(|| {
                 Error::Internal(InternalError::new(
                     InternalKind::Invariant,
@@ -167,6 +178,8 @@ struct Resolved<'a> {
     attr: &'a VertexAttributeDescriptor,
     layout: &'a VertexBufferLayoutDescriptor,
     fetch: AttributeFetch,
+    /// The format is an unnormalized signed-integer one ([`class_format`]).
+    signed: bool,
 }
 
 /// Every attribute of `attributes` resolved (items 1-8 of the module docs; item 8 when
@@ -181,6 +194,8 @@ fn resolve<'a>(
     pull_every: bool,
 ) -> Result<(BTreeMap<u32, Resolved<'a>>, BTreeSet<u32>), Error> {
     let l = &p.fields().limits;
+    // Under the identity domains nothing is pulled (the module docs).
+    let identity = crate::lower::access::identity(p);
     if let Some(d) = desc {
         d.check_layouts()?;
     }
@@ -196,7 +211,9 @@ fn resolve<'a>(
                 layout: attr.buffer_index,
             }),
         )?;
-        let (vk_format, fits) = class_format(attr.format, numeric, a)?;
+        let (vk_format, signed) = class_format(attr.format, numeric, a)?;
+        // A signed format feeds a variable declared `int` under the identity domains alone.
+        let fits = !signed || identity;
         let mut fetch = fetch_as(vk_format, layout.step_function, layout.step_rate, p)?;
         let emitted = binding_stride(fetch, layout);
         let beyond_stride = match (fetch, emitted) {
@@ -206,16 +223,41 @@ fn resolve<'a>(
             }
             _ => false,
         };
-        let pulled = !fits
-            || (beyond_stride
-                && p.fields()
-                    .enabled
-                    .portability_withholds(VkFeature::VertexAttributeAccessBeyondStride))
+        let unaligned = (beyond_stride
+            && p.fields()
+                .enabled
+                .portability_withholds(VkFeature::VertexAttributeAccessBeyondStride))
             || !aligned(attr.format, attr.offset, emitted)?
-            || emitted.is_some_and(|s| !l.portable_vertex_stride(s))
-            || attr.offset > l.max_vertex_input_attribute_offset
-            || emitted.is_some_and(|s| s > l.max_vertex_input_binding_stride);
-        if pulled {
+            || emitted.is_some_and(|s| !l.portable_vertex_stride(s));
+        let past = |limit, value: u32, max: u32| {
+            (value > max).then_some(Capability::Limit {
+                limit,
+                required: u64::from(value),
+                available: u64::from(max),
+            })
+        };
+        let limit = past(
+            VkLimit::MaxVertexInputAttributeOffset,
+            attr.offset,
+            l.max_vertex_input_attribute_offset,
+        )
+        .or_else(|| {
+            emitted.and_then(|s| {
+                past(
+                    VkLimit::MaxVertexInputBindingStride,
+                    s,
+                    l.max_vertex_input_binding_stride,
+                )
+            })
+        });
+        if identity && matches!(fetch, AttributeFetch::FixedFunction { .. }) {
+            if let Some(limit) = limit {
+                return Err(Unsupported::needs(Feature::VertexInputLayout, limit).into());
+            }
+            if unaligned {
+                return Err(Unsupported::not_implemented(Feature::VertexInputLayout).into());
+            }
+        } else if !fits || unaligned || limit.is_some() {
             fetch = AttributeFetch::Pulled;
         }
         out.insert(
@@ -224,6 +266,7 @@ fn resolve<'a>(
                 attr,
                 layout,
                 fetch,
+                signed,
             },
         );
     }
@@ -235,10 +278,31 @@ fn resolve<'a>(
             .filter(|r| matches!(r.fetch, AttributeFetch::FixedFunction { .. }))
             .collect();
         let layouts: BTreeSet<u32> = fixed.iter().map(|r| r.attr.buffer_index).collect();
-        if fixed.len() as u64 <= u64::from(l.max_vertex_input_attributes)
-            && layouts.len() as u64 <= u64::from(l.max_vertex_input_bindings)
-        {
+        let counts = [
+            (
+                VkLimit::MaxVertexInputAttributes,
+                fixed.len(),
+                l.max_vertex_input_attributes,
+            ),
+            (
+                VkLimit::MaxVertexInputBindings,
+                layouts.len(),
+                l.max_vertex_input_bindings,
+            ),
+        ];
+        let over = counts
+            .into_iter()
+            .find(|&(_, count, max)| count as u64 > u64::from(max));
+        let Some((limit, count, max)) = over else {
             break;
+        };
+        if identity {
+            let limit = Capability::Limit {
+                limit,
+                required: count as u64,
+                available: u64::from(max),
+            };
+            return Err(Unsupported::needs(Feature::VertexInputLayout, limit).into());
         }
         match out
             .values_mut()
@@ -263,6 +327,9 @@ fn resolve<'a>(
             {
                 let size = format.block().map_or(u32::MAX, |b| b.size);
                 if stride != 0 && r.attr.offset.saturating_add(size) > stride {
+                    if identity {
+                        return Err(Unsupported::not_implemented(Feature::VertexInputLayout).into());
+                    }
                     r.fetch = AttributeFetch::Pulled;
                 }
             }
@@ -332,10 +399,11 @@ pub fn vertex_fetch_projection_for(
     Ok(out)
 }
 
-/// The projection entry of a resolved attribute: fixed function, or the pulled fetch of its
-/// format, offset and step.
+/// The projection entry of a resolved attribute: fixed function (into a variable declared `int`
+/// for an unnormalized signed-integer format), or the pulled fetch of its format, offset and step.
 fn fetch_of(r: &Resolved<'_>) -> VertexFetch {
     match r.fetch {
+        AttributeFetch::FixedFunction { .. } if r.signed => VertexFetch::SignedFixedFunction,
         AttributeFetch::FixedFunction { .. } => VertexFetch::FixedFunction,
         _ => VertexFetch::pulled(r.attr, r.layout),
     }
@@ -386,7 +454,10 @@ pub(crate) fn fixed_function_notes(
     let mut notes = BTreeSet::new();
     let mut properties = BTreeSet::new();
     for (a, (_, fetch)) in vs.io.attributes() {
-        if fetch != VertexFetch::FixedFunction {
+        if !matches!(
+            fetch,
+            VertexFetch::FixedFunction | VertexFetch::SignedFixedFunction
+        ) {
             continue;
         }
         let attr = desc

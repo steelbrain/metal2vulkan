@@ -465,8 +465,6 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
         RenderPipelineKind::ShaderStencil
     } else if g.alpha_to_one {
         RenderPipelineKind::AlphaToOne
-    } else if (pipeline.vertex_input.bindings.iter()).any(|binding| binding.divisor > 1) {
-        RenderPipelineKind::StepRate
     } else if (pipeline.stages.iter()).any(|stage| stage.constant_blob.is_some()) {
         RenderPipelineKind::ConstantData
     } else if !(g.dynamic_states.iter()).all(|state| DYNAMIC.contains(&dynamic(*state))) {

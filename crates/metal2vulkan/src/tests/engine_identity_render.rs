@@ -15,21 +15,30 @@
 //!   them at 64. A fragment compiled on its own at base 0 and linked after that vertex function is
 //!   `InvalidDescriptor(PushBase)`; compiled under the vertex function's
 //!   `CompiledFunction::fragment_push_base` it links.
+//! - On `Device::from_queries`' profile with no buffer robustness enabled, every `[[stage_in]]`
+//!   attribute is fetched in fixed function (the owned fixture `engine/icb_merged_attributes`'s
+//!   `ima_vertex`, a `float2` position and a mark read from a `short`): two bindings, the formats
+//!   `R32G32_SFLOAT` and `R16_SINT`, nothing pulled, both modules L3-valid. A layout stepped per
+//!   instance at rate 2 without the divisor feature is refused as `Unsupported{VertexStepRate}`,
+//!   needing `vertexAttributeInstanceRateDivisor`.
 //!
 //! `llvm-as` assembles the fixture; a missing tool skips visibly. No GPU is used.
 
 use crate::budget::Budget;
+use crate::device::requirements::VkFeature;
 use crate::device::{Device, DevicePolicy, HandleDomain, PointerDomain};
-use crate::error::{DescriptorError, Error, Feature, Needs};
+use crate::error::{Capability, DescriptorError, Error, Feature, Needs};
 use crate::library::Library;
-use crate::metal::PixelFormat;
+use crate::metal::{PixelFormat, VertexFormat, VertexStepFunction};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
+    VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{PushField, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{description, engine_dir, llvm_assemble, AssembleError};
 use crate::spirv::testing::check_words_valid;
+use crate::vk;
 
 /// Profiles with `bufferDeviceAddress` and `shaderInt64`.
 const PROFILES: [&str; 2] = ["lavapipe", "moltenvk-m3"];
@@ -203,6 +212,91 @@ fn device_new_still_refuses_render_functions_under_the_identity_domains() {
                     "{stem}"
                 );
             }
+            other => panic!("{stem}: {:?}", other.map(|_| "compiled")),
+        }
+    }
+}
+
+/// Under the identity domains with no buffer robustness, `ima_vertex`'s attributes are fetched in
+/// fixed function, its `short` mark into a variable declared `int`, and a layout stepped per
+/// instance at rate 2 is refused by the divisor feature it needs.
+#[test]
+fn from_queries_fetches_every_attribute_in_fixed_function() {
+    let ll = engine_dir().join("icb_merged_attributes.ll");
+    let library = match llvm_assemble(&ll) {
+        Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(e) => panic!("{}: {e:?}", ll.display()),
+    };
+    let function = |name| {
+        StageSource::Function(FunctionDescriptor::new(
+            library.function(name).expect("the function"),
+        ))
+    };
+    let mut d = RenderPipelineDescriptor::new(function("ima_vertex"));
+    d.fragment = Some(function("ima_fragment"));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+    let mut vertex = VertexDescriptor::new();
+    let attributes = [(VertexFormat::Float2, 0), (VertexFormat::Short, 1)];
+    for (a, (format, layout)) in attributes.into_iter().enumerate() {
+        let attribute = VertexAttributeDescriptor::new(format, 0, layout);
+        vertex.attributes.insert(a as u32, attribute);
+    }
+    vertex
+        .layouts
+        .insert(0, VertexBufferLayoutDescriptor::new(Some(8)));
+    vertex
+        .layouts
+        .insert(1, VertexBufferLayoutDescriptor::new(Some(4)));
+    d.vertex_descriptor = Some(vertex);
+    for stem in PROFILES {
+        let mut desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
+        for robust in [
+            VkFeature::RobustBufferAccess,
+            VkFeature::RobustBufferAccess2,
+        ] {
+            desc.features.remove(&robust);
+        }
+        desc.features
+            .remove(&VkFeature::VertexAttributeInstanceRateDivisor);
+        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let p = (device.compile_render_pipeline(&d, &Budget::standard()))
+            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        let formats: Vec<vk::Format> = p.vertex_input.attributes.iter().map(|a| a.format).collect();
+        assert_eq!(
+            formats,
+            [vk::Format::R32G32_SFLOAT, vk::Format::R16_SINT],
+            "{stem}: both attributes in fixed function"
+        );
+        assert_eq!(p.vertex_input.bindings.len(), 2, "{stem}");
+        assert!(p.vertex_input.pulled.is_empty(), "{stem}: nothing pulled");
+        for stage in &p.stages {
+            check_words_valid(&stage.spirv, &p.requirements, device.profile())
+                .unwrap_or_else(|e| panic!("{stem}: {:?}: {e}", stage.stage));
+        }
+        let mut stepped = d.clone();
+        let layouts = &mut stepped
+            .vertex_descriptor
+            .as_mut()
+            .expect("the layouts")
+            .layouts;
+        let layout = layouts.get_mut(&1).expect("layout 1");
+        layout.step_function = VertexStepFunction::PerInstance;
+        layout.step_rate = 2;
+        match device.compile_render_pipeline(&stepped, &Budget::standard()) {
+            Err(Error::Unsupported(u)) => assert_eq!(
+                (u.feature, u.needs),
+                (
+                    Feature::VertexStepRate,
+                    Needs::AnyOf(vec![vec![Capability::Feature(
+                        VkFeature::VertexAttributeInstanceRateDivisor
+                    )]])
+                ),
+                "{stem}"
+            ),
             other => panic!("{stem}: {:?}", other.map(|_| "compiled")),
         }
     }
