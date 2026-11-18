@@ -421,7 +421,8 @@ mod on_device {
     }
 
     /// A commit naming more than the ring behind a command buffer that waits on an event the host
-    /// has not signalled cannot send its ring-full ahead: the rest takes staging of its own, the
+    /// has not signalled, committed before the bytes were named, cannot send its ring-full ahead:
+    /// the rest takes staging of its own, the
     /// command buffer reads the bytes of its commit, not those written and named after it, and the
     /// staging goes back once it retires.
     #[test]
@@ -434,12 +435,13 @@ mod on_device {
             let counters = device.counters();
             let len = CAPTURE_LEN / 2 * 3;
             let first = vec![0xA1; len as usize];
-            let (managed, into, blocks) = named_whole(&device, name, len, &first);
             let queue = device.new_command_queue(4).expect("a queue");
             let event = device.new_shared_event().expect("an event");
             let held = queue.command_buffer().expect("a command buffer");
             (held.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            // Committed before the buffer's bytes are named, so its own capture takes none.
             held.commit().expect("a commit");
+            let (managed, into, blocks) = named_whole(&device, name, len, &first);
             let before = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             copy_out(&command_buffer, &managed, &into, 0, len);
