@@ -57,8 +57,6 @@ struct Skips {
     /// Pieces of the host's copies from the guest's RAM that the play cannot copy: a piece not of
     /// whole 4-byte words at a 4-byte offset into a buffer with no mapping to fill the rest from.
     guest_ram_writes: u64,
-    /// The host's copies back to the guest's RAM: nothing in a play reads that RAM.
-    guest_ram_reads: u64,
     /// `synchronizeTexture:slice:level:` and `generateMipmapsForTexture:`, which the runtime
     /// does not build yet.
     texture_syncs: u64,
@@ -91,7 +89,6 @@ impl Skips {
             render_commands: _,
             blits,
             guest_ram_writes,
-            guest_ram_reads,
             texture_syncs,
             mipmaps,
             calls,
@@ -105,7 +102,6 @@ impl Skips {
             draws,
             blits,
             guest_ram_writes,
-            guest_ram_reads,
             texture_syncs,
             mipmaps,
             calls,
@@ -301,6 +297,8 @@ pub struct NewRuntime {
     queue_of: HashMap<u64, u64>,
     /// The bytes those copies staged.
     staged_bytes: u64,
+    /// The bytes the host's copies back to the guest's RAM copied into the play's own sinks.
+    copied_back_bytes: u64,
     /// The compute pipeline states whose `gpuResourceID` the player asked, which the runtime does
     /// not give: a typed gap, counted.
     unanswered_pipeline_ids: u64,
@@ -558,6 +556,7 @@ impl NewRuntime {
             device_copies: HashMap::new(),
             queue_of: HashMap::new(),
             staged_bytes: 0,
+            copied_back_bytes: 0,
             unanswered_pipeline_ids: 0,
             block_bytes: [0; 2],
             creations: Vec::new(),
@@ -2145,8 +2144,8 @@ impl Backend for NewRuntime {
             ("skipped_render_commands", self.skips.render_command_count()),
             ("skipped_blits", self.skips.blits),
             ("staged_guest_ram_bytes", self.staged_bytes),
+            ("copied_back_guest_ram_bytes", self.copied_back_bytes),
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
-            ("skipped_guest_ram_reads", self.skips.guest_ram_reads),
             ("skipped_texture_syncs", self.skips.texture_syncs),
             ("skipped_mipmaps", self.skips.mipmaps),
             ("substituted_surface_textures", self.substitutes.surfaces),

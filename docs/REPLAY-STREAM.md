@@ -556,8 +556,7 @@ counted from 0), completes the work committed so far, reports as at the stream's
     either stage, or whose index buffer is one (`skipped_draws`);
   - render commands the runtime answers with a typed gap, a draw it does not build among them
     (`skipped_render_commands`, and a line for each gap with its first frame and call);
-  - blit commands that name a skipped object (`skipped_blits`), and by kind: the host's copies
-    back to the guest's RAM, which nothing in a play reads (`skipped_guest_ram_reads`),
+  - blit commands that name a skipped object (`skipped_blits`), and by kind:
     `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), mipmaps (`skipped_mipmaps`), and
     the pieces of a copy from the guest's RAM that are not whole 4-byte words at a 4-byte offset,
     into a buffer with no mapping (`skipped_guest_ram_writes`). `optimizeContentsForGPUAccess:`,
@@ -568,7 +567,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   the backend's own, then a buffer copy into the target in the same blit encoder, so the GPU's
   order holds; a piece's edge bytes up to whole words come from the target's mapping where it has
   one. The staging place is given back at the command buffer's commit and free once it completes
-  (`staged_guest_ram_bytes`).
+  (`staged_guest_ram_bytes`). A copy back to the guest's RAM, the recording host's own work, plays
+  as buffer copies of its runs, each widened to the whole words it touches within the buffer, into
+  a Shared place of the backend's own that nothing reads, in the same blit encoder, given back the
+  same way (`copied_back_guest_ram_bytes`).
 
   Textures over a buffer play as the runtime's (`Buffer::new_texture`) and texture views as its
   views (`Texture::new_texture_view`). Where the runtime cannot make a texture the program made,

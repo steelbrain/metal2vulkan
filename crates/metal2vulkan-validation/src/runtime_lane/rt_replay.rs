@@ -780,3 +780,40 @@ fn buffers_keep_the_slack_of_their_recorded_granule() {
     let places = places.unwrap_or_else(|| panic!("a places line: {lines:?}"));
     assert!(places.contains("32768 B 1, 65536 B 2"), "{places}");
 }
+
+/// A copy back to the guest's RAM plays as the runtime's buffer copies into a sink of the play's
+/// own, each run widened to the whole words it touches within the buffer: nothing is skipped, the
+/// bytes it copied are counted, and the buffer keeps its bytes.
+#[test]
+fn a_copy_back_to_the_guest_s_ram_plays_as_buffer_copies() {
+    let dir = ScratchDir::new("rt-replay-copy-back").unwrap();
+    let bytes = vec![0x5a_u8; 100];
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let made = [Value::Uint(100), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 3, &made, &[])?;
+        let write = [Value::Uint(0), Value::Bytes(bytes.clone())];
+        w.call("m2v.write", 3, 0, &write, &[])?;
+        w.call("commandBuffer", 2, 4, &[], &[])?;
+        w.call("blitCommandEncoder", 4, 5, &[], &[])?;
+        let run = |at: u64, start: u64, end: u64| {
+            let host = Value::List(vec![Value::Uint(start), Value::Uint(end)]);
+            Value::List(vec![Value::Uint(at), host])
+        };
+        // Bytes 1..17, and 90..100, the buffer's last.
+        let runs = Value::List(vec![run(1, 0x1000, 0x1010), run(90, 0x2000, 0x200a)]);
+        w.call("m2v.copyToGuestRam", 5, 0, &[Value::Object(3), runs], &[])?;
+        w.call("endEncoding", 5, 0, &[], &[])?;
+        w.call("commit", 4, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 4, 0, &[], &[])?;
+        let sum = Value::List(vec![Value::Bytes(Sha256::digest(&bytes).to_vec())]);
+        w.call("m2v.check", 0, 0, &[Value::Object(3)], &[("sha256", sum)])
+    });
+    let (report, _) = play("copy-back", &path);
+    assert_eq!(report.first_skip, None);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    // 1..17 is the words 0..20, and 90..100 the words 88..100.
+    let copied = report.total.executed["copied_back_guest_ram_bytes"];
+    assert_eq!(copied, 20 + 12);
+}

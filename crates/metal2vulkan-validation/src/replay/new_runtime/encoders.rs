@@ -389,6 +389,59 @@ impl NewRuntime {
         })
     }
 
+    /// A copy back to the guest's RAM, the recording host's own work: each run of the buffer copied
+    /// by the blit encoder, in its order, into a Shared place of the play's own that nothing reads
+    /// (the guest's later reads of that RAM carry their own bytes). A buffer copy takes whole
+    /// 4-byte words at 4-byte offsets, so each run is widened to the words it touches, within the
+    /// buffer. The place is given back at the command buffer's commit, as a copy from the guest's
+    /// RAM gives back its staging.
+    fn copy_back(&mut self, call: &Call) -> Result<(), PlayError> {
+        let id = call.receiver;
+        let from = self.buffer_of(call, Self::id(call, 0)?)?;
+        let runs = crate::replay::player::placed_runs(arg(call, 1)?);
+        let runs = runs.ok_or_else(|| refuse(call, "argument 1 is no list of placed runs"))?;
+        let words = from.length() / 4 * 4;
+        let mut spans = Vec::new();
+        let mut len = 0;
+        for (at, length) in runs {
+            let end = at.checked_add(length);
+            let end = end.ok_or_else(|| refuse(call, "a run past 2^64 bytes"))?;
+            if end > from.length() {
+                return Err(refuse(call, "a run past its buffer"));
+            }
+            let (start, stop) = (at & !3, end.next_multiple_of(4).min(words));
+            if start < stop {
+                spans.push((start, stop - start, len));
+                len += stop - start;
+            }
+        }
+        if len == 0 {
+            return Ok(());
+        }
+        let completed = self.completed();
+        // The player's own sink: no recorded slack.
+        let place = (self
+            .places
+            .take(rt::MemoryClass::Shared, len, granule(None), completed))
+        .map_err(failed(call))?;
+        let sink = self
+            .device
+            .new_buffer(place.block, place.range.start, len, None);
+        let sink = sink.map_err(failed(call))?;
+        for &(start, size, into) in &spans {
+            let copied = self
+                .blit(id)
+                .copy_from_buffer_to_buffer(&from, start, &sink, into, size);
+            copied.map_err(failed(call))?;
+        }
+        self.copied_back_bytes += len;
+        match self.owners.get(&id).copied() {
+            Some(command_buffer) => self.staging.entry(command_buffer).or_default().push(place),
+            None => self.places.give(place, self.commits, Vec::new()),
+        }
+        Ok(())
+    }
+
     /// A copy from the guest's RAM into a buffer, the recording's own plumbing: each piece's bytes
     /// in a Shared staging place of the play's own, then copied into the buffer by the blit
     /// encoder, so the GPU's order holds. A buffer copy takes whole 4-byte words at 4-byte
@@ -595,11 +648,7 @@ impl NewRuntime {
                 )
             }
             "m2v.copyFromGuestRam" | "m2v.copyFromGuestRamAt" => return self.guest_ram_copy(call),
-            // Nothing in a play reads the guest's RAM.
-            "m2v.copyToGuestRam" => {
-                self.skips.guest_ram_reads += 1;
-                Ok(())
-            }
+            "m2v.copyToGuestRam" => return self.copy_back(call),
             "synchronizeTexture:slice:level:" => {
                 self.skips.texture_syncs += 1;
                 Ok(())
