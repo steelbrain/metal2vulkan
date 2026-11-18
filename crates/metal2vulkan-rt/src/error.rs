@@ -209,9 +209,9 @@ pub enum Refusal {
         /// The buffer's length.
         length: u64,
     },
-    /// A dispatch whose kernel reaches a buffer bound where its address, the buffer's
-    /// `gpuAddress` plus the bind offset, is not a multiple of the kernel argument's alignment
-    /// (`air.arg_type_align_size`, at most 16). Plain Metal runs such a dispatch at addresses of
+    /// A dispatch whose kernel, or a draw whose vertex or fragment function, reaches a buffer
+    /// bound where its address, the buffer's `gpuAddress` plus the bind offset, is not a multiple
+    /// of the argument's alignment (`air.arg_type_align_size`, at most 16). Plain Metal runs such a dispatch at addresses of
     /// its own: an Apple M3 Max reaches each element at its address rounded down to the smaller of
     /// the element's alignment and 4 (`probes/misaligned_buffer_binds.m` in the conformance
     /// crate).

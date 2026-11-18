@@ -27,7 +27,7 @@ use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Tests};
-use crate::encoder::{BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS};
+use crate::encoder::{check_alignment, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS};
 use crate::error::{DrawKind, Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
@@ -716,7 +716,9 @@ impl RenderCommandEncoder {
     ///
     /// Err: [`Refusal::NoPipeline`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the vertex
     /// descriptor reads that is not bound; [`Refusal::VertexBufferOffset`];
-    /// [`Refusal::StencilAttachment`]; [`Gap::Draw`] for what the runtime does not build, naming
+    /// [`Refusal::BufferOffsetAlignment`] for a buffer a function reaches bound off its argument's
+    /// alignment, checked before anything is recorded; [`Refusal::StencilAttachment`];
+    /// [`Gap::Draw`] for what the runtime does not build, naming
     /// it; [`Error::Vulkan`] where a pipeline cannot be made or the command buffer cannot record.
     pub fn draw_primitives(
         &mut self,
@@ -855,6 +857,15 @@ impl RenderCommandEncoder {
         });
         if rendered {
             return gap(DrawKind::AttachmentRead);
+        }
+        for &(_, table, value) in &draws.fields {
+            if let FieldValue::BufferAddress { slot, mask } = value {
+                if let Some(Bound::Buffer { buffer, offset }) =
+                    tables[table].buffers.get(slot as usize)
+                {
+                    check_alignment(slot, mask, buffer, *offset)?;
+                }
+            }
         }
         let count = match call {
             Call::Direct { vertex_count, .. } => vertex_count,
@@ -1015,8 +1026,9 @@ impl RenderCommandEncoder {
             let tables = &self.tables[table];
             let at = offset as usize;
             match value {
-                FieldValue::BufferAddress { slot, mask } => {
-                    let address = tables.address(slot) & !mask;
+                // At a multiple of the argument's alignment, which the draw checked first.
+                FieldValue::BufferAddress { slot, .. } => {
+                    let address = tables.address(slot);
                     push[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }
                 FieldValue::TextureId(slot) => {

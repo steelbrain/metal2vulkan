@@ -97,6 +97,27 @@ enum Slot {
     Bytes(u64),
 }
 
+/// [`Refusal::BufferOffsetAlignment`] where `buffer`, bound at `offset` to buffer argument
+/// `slot`, is at an address (its `gpuAddress` plus the offset) that is not a multiple of the
+/// alignment the module takes the argument to have, `mask + 1` (`FieldValue::BufferAddress`'s
+/// mask). A dispatch and a draw check each buffer their functions reach before they record
+/// anything.
+pub(crate) fn check_alignment(
+    slot: u32,
+    mask: u64,
+    buffer: &Buffer,
+    offset: u64,
+) -> Result<(), Error> {
+    if buffer.gpu_address().wrapping_add(offset) & mask != 0 {
+        return Err(Error::Refused(Refusal::BufferOffsetAlignment {
+            index: slot,
+            offset,
+            alignment: mask + 1,
+        }));
+    }
+    Ok(())
+}
+
 /// The grid of a dispatch.
 enum Grid<'a> {
     /// Threadgroups per grid at the call's threadgroup size, the grid in threads, and whether the
@@ -693,7 +714,7 @@ impl ComputeCommandEncoder {
         }
         // Every module of a state is the same function, with the same arguments and alignments,
         // so the whole module answers this check and the next.
-        self.check_alignment(&inner.whole.interface)?;
+        self.check_alignments(&inner.whole.interface)?;
         let core = Arc::clone(self.building().device.core());
         let limits = &core.limits;
         // A kernel that writes no memory has no effect a program can observe: once checked as
@@ -934,23 +955,15 @@ impl ComputeCommandEncoder {
         building.record_dispatch(pipeline, &mut self.parameters, &launch)
     }
 
-    /// [`Refusal::BufferOffsetAlignment`] where a buffer `interface` reaches is bound at an
-    /// address, its `gpuAddress` plus the offset, that is not a multiple of the alignment the
-    /// module takes it to have (`FieldValue::BufferAddress`'s mask). A `set_bytes` copy is at a
+    /// [`check_alignment`] of each buffer `interface` reaches. A `set_bytes` copy is at a
     /// multiple of 16 in the ring, which every mask divides.
-    fn check_alignment(&self, interface: &Interface) -> Result<(), Error> {
+    fn check_alignments(&self, interface: &Interface) -> Result<(), Error> {
         for field in &interface.fields {
             let FieldValue::BufferAddress { slot, mask } = field.value else {
                 continue;
             };
             if let Some(Slot::Buffer { buffer, offset }) = self.slots.get(slot as usize) {
-                if buffer.gpu_address().wrapping_add(*offset) & mask != 0 {
-                    return Err(Error::Refused(Refusal::BufferOffsetAlignment {
-                        index: slot,
-                        offset: *offset,
-                        alignment: mask + 1,
-                    }));
-                }
+                check_alignment(slot, mask, buffer, *offset)?;
             }
         }
         Ok(())
@@ -970,7 +983,7 @@ impl ComputeCommandEncoder {
     /// once the block is in the ring.
     ///
     /// Every buffer address is a multiple of the alignment the module takes it to have, which the
-    /// dispatch checked first (`check_alignment`).
+    /// dispatch checked first (`check_alignments`).
     fn fill_parameters(&mut self, kernel: &Kernel, sampler_ids: &[u32], region: &[u8; 32]) {
         let interface: &Interface = &kernel.interface;
         let parameters = &mut self.parameters;

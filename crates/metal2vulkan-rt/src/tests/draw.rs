@@ -19,6 +19,8 @@
 //!     consumer gave it: each pixel reads its own texel.
 //!   - a vertex function's `[[stage_in]]` attributes come from a vertex buffer, and from
 //!     `set_vertex_bytes`' copy.
+//!   - a draw whose vertex buffer is bound off its argument's alignment is refused before
+//!     anything is recorded, and the same buffers bound aligned draw.
 //!   - what Metal refuses is refused, and what a draw does not build is a gap: no pipeline state,
 //!     a pipeline state of other formats than the pass's, points, a depth test, a stencil test
 //!     without a stencil attachment, a misaligned index offset, a non-finite viewport and a
@@ -617,6 +619,85 @@ mod on_device {
                 }
             }
             println!("{name}: attributes from a vertex buffer and from bytes");
+        });
+    }
+
+    /// A draw whose vertex function takes a bound buffer's address to be a multiple of its
+    /// argument's alignment (`colored_vertex`'s `float2` positions, 8, and `float4` colours, 16)
+    /// that the address, the buffer's `gpuAddress` plus the offset, is not is refused before
+    /// anything is recorded, as Metal's API validation refuses the bind offset
+    /// (`Refusal::BufferOffsetAlignment`); the same buffers bound 16 bytes in then draw, and the
+    /// pass is its two barriers and the segment's end.
+    #[test]
+    fn every_device_refuses_a_draw_whose_buffer_is_off_its_alignment() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("draw_misaligned_address", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            // The top half's triangle in green, 16 bytes into each buffer.
+            let positions = floats(&[0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 3.0, 0.0, -1.0, 4.0]);
+            let colors: Vec<f32> = [[0.0; 4], GREEN, GREEN, GREEN].concat();
+            let (positions, colors) = (
+                buffers.of(&device, &positions),
+                buffers.of(&device, &floats(&colors)),
+            );
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            run(name, &first);
+            let counters = device.counters();
+            settled(&device);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            for (positions_at, colors_at, index, alignment) in [(20, 16, 0, 8), (16, 24, 1, 16)] {
+                draw(encoder.set_vertex_buffer(Some(&positions), positions_at, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), colors_at, 1));
+                let at = [positions_at, colors_at][index as usize];
+                match encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0) {
+                    Err(Error::Refused(Refusal::BufferOffsetAlignment {
+                        index: refused,
+                        offset,
+                        alignment: align,
+                    })) => assert_eq!(
+                        (refused, offset, align),
+                        (index, at, alignment),
+                        "{name}: buffer {index} bound at {at}"
+                    ),
+                    other => panic!("{name}: buffer {index} bound at {at}: {other:?}"),
+                }
+            }
+            draw(encoder.set_vertex_buffer(Some(&colors), 16, 1));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - before.submissions,
+                    after.barriers - before.barriers,
+                    after.passes - before.passes,
+                ),
+                (1, 3, 1),
+                "{name}: submissions, barriers, passes"
+            );
+            let want = texels(|_, y| match y {
+                0..4 => GREEN,
+                _ => BLACK,
+            });
+            assert_eq!(read(&color, 4), want, "{name}: the texels");
+            println!("{name}: binds off 8 and 16 refused before recording; aligned binds drew");
         });
     }
 
