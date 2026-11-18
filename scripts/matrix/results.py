@@ -292,15 +292,12 @@ def time_outliers(times, bases):
 HARNESS_BUDGET = 1.03
 HARNESS_NEW = "harness-new/"
 HARNESS_OLD = "harness-old/"
-#: The harness rows over HARNESS_BUDGET, per GPU leg, each with its ratio as its ceiling: a row
-#: past its ceiling fails its leg, so an open row can neither hide nor grow. A fix lowers the
-#: ceiling to the ratio the row then reaches, and a row within HARNESS_BUDGET leaves the list.
-#: Each ceiling is a ratio of host times; a row a matrix has not yet timed on the host has none,
-#: and the first matrix that does sets it. frame_5cb's are its commit-to-complete ratios at
-#: 594b86d1f2 (the p50 of its command buffers in that matrix's harness output).
-HARNESS_CEILINGS = {
-    "10de:1e87": {"frame_5cb": 1.166},
-}
+#: The harness rows over HARNESS_BUDGET that a ruling gave a ceiling, per GPU leg, each a ratio of
+#: host times: a row past its ceiling fails its leg, so an open row can neither hide nor grow. A
+#: ceiling is ruled after the work on its row, never taken from a measured ratio; a fix lowers it
+#: to the ratio the row then reaches, and a row within HARNESS_BUDGET leaves the list. A row over
+#: HARNESS_BUDGET with no ceiling fails its leg.
+HARNESS_CEILINGS = {}
 
 
 #: A row over its budget in a leg (its ceiling times HARNESS_BUDGET, else HARNESS_BUDGET) is
