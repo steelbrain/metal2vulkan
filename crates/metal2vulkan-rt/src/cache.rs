@@ -110,7 +110,11 @@ pub(crate) const PENDING_BYTES: u64 = 8 << 20;
 const REFUSED: &[u8] = b"m2v-refused";
 /// What a partial-threadgroups variant's translation file holds where the translator answered
 /// that the kernel observes its threadgroup partition, until the variant is lowered over it:
-/// bytes no lowering encodes to, nor [`REFUSED`], and that a file cut short is not.
+/// bytes no lowering encodes to, nor [`REFUSED`], and that a file cut short is not. The file is
+/// named by the variant's `FunctionCompileKey`, which covers everything that changes the answer:
+/// the kernel's AIR, entry, constants and linked functions, its lowering inputs, the device
+/// profile's fingerprint and the translator's semantics version, which a change to the answer
+/// bumps. It is 12 bytes, written and counted as a lowering is, within the store's cap.
 const OBSERVES: &[u8] = b"m2v-observes";
 /// The translations' directory, under a generation.
 const TRANSLATIONS: &str = "translations";

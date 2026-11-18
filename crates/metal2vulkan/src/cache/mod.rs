@@ -56,8 +56,9 @@ mod tests;
 /// artifact and key.
 ///
 /// Bump it whenever the output for any input may change under an unchanged key: a module's words,
-/// a refusal or its class, a requirement, a reflection, interface or binding-plan fact, or a
-/// precision note. `src/tests/golden_hashes.rs` fails when a golden output hash changes under an
+/// a refusal or its class, a requirement, a reflection, interface or binding-plan fact (whether a
+/// kernel observes its threadgroup partition among them, which a runtime may keep beside the
+/// lowerings), or a precision note. `src/tests/golden_hashes.rs` fails when a golden output hash changes under an
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
