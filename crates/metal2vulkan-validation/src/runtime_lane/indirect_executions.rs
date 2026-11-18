@@ -487,9 +487,10 @@ fn same_variant(a: &Execution, b: &Execution) -> bool {
 /// shape. A case the runtime refuses directly is refused the same from a command. A run whose
 /// command buffer does not complete within its bound of the device's own time ([`run`]) fails as
 /// timed out: the dispatch's, [`HANG`], against a hang alone; the command's, held to the
-/// dispatch's own time ([`command_bound`]). A run whose command buffer fails as Metal's timeout
-/// (the runtime's watchdog, `CommandBufferError::GpuHang`) fails as hung, whatever the other run
-/// gave ([`unfinished`]). A case whose dispatch timed out runs no command;
+/// dispatch's own time ([`command_bound`]). A hang on either form fails the shard: a run whose
+/// command buffer fails as Metal's timeout (the runtime's watchdog, `CommandBufferError::GpuHang`)
+/// is hung, whatever the other run gave, never agreement and never a refusal ([`unfinished`]). A
+/// case whose dispatch timed out runs no command;
 /// where the device still runs its work after as long again, the shard stops there and says how
 /// many of its cases did not run. Each case's waits print with their wall time and the part of it
 /// a thread of the process waited for a CPU.
