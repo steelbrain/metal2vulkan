@@ -2248,6 +2248,12 @@ impl Texture {
         self.inner.id
     }
 
+    /// Whether `other` is this texture object: a view is not its parent, though it shares its
+    /// [`id`](Self::id), and each holds elements of set 1 and image views of its own.
+    pub(crate) fn is(&self, other: &Texture) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Where the texture starts in its image: a view's first level and array layer.
     pub(crate) fn base(&self) -> [u32; 2] {
         self.inner.base()

@@ -7,12 +7,17 @@
 //! stops is `Refusal::TextureViewRange` or `Refusal::TextureViewFormat`, and each kind of view
 //! the runtime does not build `Gap::TextureView` naming it. Every gauge comes back to zero with the
 //! device, the views' image views among them. A view of a Managed texture writes the texture's own
-//! named bytes.
+//! named bytes. A command buffer keeps a view it uses after its parent, as Metal's retains every
+//! object its encoders use: released while the command buffer is pending, the view keeps its image
+//! views and its element of set 1 until it retires.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use std::thread;
+    use std::time::Duration;
+
     use crate::tests::blit::on_device::settled;
-    use crate::tests::command::on_device::{each_device, finished, within};
+    use crate::tests::command::on_device::{each_device, finished, shared_event, within};
     use crate::{
         Buffer, BufferLayout, BytesPlace, CommandQueue, Device, Error, Gap, IndexClass,
         MemoryClass, PixelFormat, Refusal, Region, StorageMode, Texture, TextureDescriptor,
@@ -337,6 +342,66 @@ mod on_device {
                 &written[..8],
                 "{name}: the write lies in the place of level 1, slice 1"
             );
+        });
+    }
+
+    #[test]
+    fn every_device_keeps_a_view_bound_after_its_parent_until_its_command_buffer_retires() {
+        each_device("view_retention", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 32)
+                .expect("a grant");
+            let flat = parent(&device, false, 4096);
+            let view = (flat.new_texture_view(
+                PixelFormat::RGBA8Unorm,
+                TextureType::Type2D,
+                1..3,
+                0..1,
+                Some(4100),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let block = (device.take_block(MemoryClass::Shared, 256)).expect("a Shared block");
+            let out = (device.new_buffer(block.id, 0, 256, Some(0))).expect("a buffer");
+            let queue = device.new_command_queue(1).expect("a queue");
+            let f = shared_event(&device);
+            let held = queue.command_buffer().expect("a command buffer");
+            let mut encoder = held.blit_command_encoder().expect("an encoder");
+            let layout = BufferLayout {
+                offset: 0,
+                bytes_per_row: 16,
+                bytes_per_image: 0,
+            };
+            // The parent first, then its view, which shares its hazard id.
+            for texture in [&flat, &view] {
+                (encoder.copy_from_texture_to_buffer(
+                    texture,
+                    TexturePlace::default(),
+                    [4, 4, 1],
+                    &out,
+                    layout,
+                ))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            encoder.end_encoding();
+            held.encode_wait_for_event(f.as_event(), 1).expect("a wait");
+            held.commit().expect("a commit");
+            let counters = device.counters();
+            let before = counters.gauges();
+            let kept = |gauges: crate::Gauges| (gauges.textures, gauges.descriptor_slots);
+            drop(view);
+            thread::sleep(Duration::from_millis(50));
+            assert_eq!(
+                kept(counters.gauges()),
+                kept(before),
+                "{name}: the released view's image views and element of set 1 while its command \
+                 buffer is pending"
+            );
+            f.set_signaled_value(1);
+            finished(name, &held);
+            assert_eq!(held.error(), None, "{name}");
+            within("the view's going", || {
+                kept(counters.gauges()) == (before.textures - 1, before.descriptor_slots - 1)
+            });
         });
     }
 }

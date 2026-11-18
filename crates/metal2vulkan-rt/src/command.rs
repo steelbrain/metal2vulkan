@@ -952,10 +952,11 @@ impl Building {
         }
     }
 
-    /// Keeps `texture` until the command buffer retires.
+    /// Keeps `texture` until the command buffer retires, as Metal's command buffer retains every
+    /// object its encoders bind: each object once, a view apart from its parent.
     pub(crate) fn keep_texture(&mut self, texture: &Texture) {
         let textures = &mut self.gpu.textures;
-        if !textures.iter().rev().any(|kept| kept.id() == texture.id()) {
+        if !textures.iter().rev().any(|kept| kept.is(texture)) {
             self.gpu.managed |= texture.managed_over().is_some();
             textures.push(texture.clone());
         }
