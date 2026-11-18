@@ -34,7 +34,8 @@
 use metal2vulkan_harness::authored::{Create, Makes};
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
-    matrix_time, percentile, run_each, steady, CreateReport, Harness, Report, Runs, Session, Warmup,
+    count_instructions, matrix_time, percentile, run_each, steady, CreateReport, Harness, Report,
+    Runs, Session, Warmup,
 };
 use metal2vulkan_harness::{authored, description, old, rt, Error, Failed, Result, Waits};
 use std::path::{Path, PathBuf};
@@ -61,7 +62,7 @@ const USAGE: &str = "usage: harness --runtime old|new[,old|new...] [--runs N] [-
 
 fn main() -> ExitCode {
     // Before any device starts its threads, so that theirs count too.
-    run::count_instructions();
+    count_instructions();
     match parse(std::env::args().skip(1)).and_then(|args| run_all(&args)) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
