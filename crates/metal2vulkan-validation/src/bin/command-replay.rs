@@ -2,8 +2,10 @@
 //! or the new one, or print its records.
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-//! [--blobs DIR] [--runtime old|rt]` plays the stream whose first segment is `FILE` through the
-//! old runtime (the default) or the new one (`rt`) and writes `DIR/report.txt`: `device NAME`,
+//! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no]` plays the stream whose first segment is
+//! `FILE` through the old runtime (the default) or the new one (`rt`), with `--snapshots no`
+//! taking no `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), and
+//! writes `DIR/report.txt`: `device NAME`,
 //! the player's report lines, the backend's own lines, `cut SEGMENT OFFSET` where the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
@@ -31,7 +33,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
-                     --shader-cache DIR [--blobs DIR] [--runtime old|rt]\n       command-replay dump --stream FILE\n       \
+                     --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no]\n       command-replay dump --stream FILE\n       \
                      command-replay shapes --stream FILE";
 
 fn main() {
@@ -202,6 +204,14 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    let snapshots = match options.get("snapshots").map(String::as_str) {
+        None | Some("yes") => true,
+        Some("no") => false,
+        Some(other) => {
+            report.line(&format!("error snapshots: {other} is neither yes nor no"));
+            return 2;
+        }
+    };
     let cache = PathBuf::from(&options["shader-cache"]);
     match options.get("runtime").map(String::as_str) {
         None | Some("old") => {
@@ -217,7 +227,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             };
             report.line(&format!("device {}", device.name()));
             let mut backend = OldRuntime::new(device, device_type);
-            run(&mut backend, &mut reader, &mut report)
+            run(&mut backend, &mut reader, &mut report, snapshots)
         }
         Some("rt") => {
             let mut backend = match open_rt(device_type, cache) {
@@ -230,7 +240,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                     return 2;
                 }
             };
-            run(&mut backend, &mut reader, &mut report)
+            run(&mut backend, &mut reader, &mut report, snapshots)
         }
         Some(other) => {
             report.line(&format!("error runtime: {other} is neither old nor rt"));
@@ -285,8 +295,18 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
 }
 
 /// Play `reader` through `backend` into `report`: the exit status.
-fn run<B: Backend>(backend: &mut B, reader: &mut StreamReader, report: &mut ReportFile) -> i32 {
-    let (played, ended) = Player::new(backend).play(reader);
+fn run<B: Backend>(
+    backend: &mut B,
+    reader: &mut StreamReader,
+    report: &mut ReportFile,
+    snapshots: bool,
+) -> i32 {
+    let player = Player::new(backend);
+    let player = match snapshots {
+        true => player,
+        false => player.without_snapshots(),
+    };
+    let (played, ended) = player.play(reader);
     for line in played.lines() {
         report.line(&line);
     }

@@ -339,8 +339,11 @@ and the (name id, value) answer pairs.
 ## 10. The player
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-[--blobs DIR] [--runtime old|rt]` plays a stream (its first segment) on one device through the
-old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `command-replay dump --stream FILE` prints the call records as text, and
+[--blobs DIR] [--runtime old|rt] [--snapshots yes|no]` plays a stream (its first segment) on one
+device through the old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`.
+With `--snapshots no` it takes no `m2v.privateBytes` snapshot on either runtime: each such dispatch
+plays as it is, counted on the `unsnapshotted` line, so two runtimes' plays do the same work and
+their times and memory compare. `command-replay dump --stream FILE` prints the call records as text, and
 `command-replay shapes --stream FILE` each selector's argument shapes, with no data.
 
 - It relocates (section 5) and plays the host's plumbing as the plain calls it stands for

@@ -1175,38 +1175,49 @@ fn a_frame_end_reports_the_gauges_as_they_stand() {
     assert!(ends[1].ends_with(" live calls=3"), "{lines:?}");
 }
 
-/// On a backend that takes no snapshots, a dispatch an `m2v.privateBytes` record names plays as it
-/// is, with none of the player's own calls, and the report counts it.
+/// On a backend that takes no snapshots, or with a player that takes none, a dispatch an
+/// `m2v.privateBytes` record names plays as it is, with none of the player's own calls, and the
+/// report counts it.
 #[test]
 fn a_backend_without_snapshots_plays_the_dispatch_as_it_is() {
-    let bytes: Vec<u8> = (0..4).collect();
-    let mut kept = Kept {
-        declines_snapshots: true,
-        ..Kept::default()
-    };
-    let (report, ended) = played(&mut kept, |w| {
-        let word = w.blob(&bytes)?;
-        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
-        w.call("newCommandQueue", 1, 2, &[], &[])?;
-        let private = [Value::Uint(4), Value::Uint(0x20)];
-        w.call("newBufferWithLength:options:", 1, 3, &private, &[])?;
-        w.call("commandBuffer", 2, 4, &[], &[])?;
-        w.call("computeCommandEncoder", 4, 5, &[], &[])?;
-        let threads = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
-        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
-        w.call(dispatch, 5, 0, &[threads.clone(), threads], &[])?;
-        w.call("endEncoding", 5, 0, &[], &[])?;
-        w.call("commit", 4, 0, &[], &[])?;
-        let range = map(&[("location", Value::Uint(0)), ("length", Value::Uint(4))]);
-        let args = [Value::Uint(5), range, Value::Blob(word), Value::Blob(word)];
-        w.call("m2v.privateBytes", 3, 0, &args, &[])?;
-        Ok(())
-    });
-    ended.unwrap();
-    assert!(kept.calls.iter().all(|c| !c.contains(&format!("#{OWN}"))));
-    assert_eq!((report.unsnapshotted, report.splits), (1, 0));
-    assert!(report.private.is_empty());
-    assert!(report.lines().contains(&"unsnapshotted 1".to_string()));
+    for player_declines in [false, true] {
+        let bytes: Vec<u8> = (0..4).collect();
+        let mut kept = Kept {
+            declines_snapshots: !player_declines,
+            ..Kept::default()
+        };
+        let dir = ScratchDir::new("replay-player").unwrap();
+        let path = written(&dir, "s.m2vr", |w| {
+            let word = w.blob(&bytes)?;
+            w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+            w.call("newCommandQueue", 1, 2, &[], &[])?;
+            let private = [Value::Uint(4), Value::Uint(0x20)];
+            w.call("newBufferWithLength:options:", 1, 3, &private, &[])?;
+            w.call("commandBuffer", 2, 4, &[], &[])?;
+            w.call("computeCommandEncoder", 4, 5, &[], &[])?;
+            let threads = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+            let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+            w.call(dispatch, 5, 0, &[threads.clone(), threads], &[])?;
+            w.call("endEncoding", 5, 0, &[], &[])?;
+            w.call("commit", 4, 0, &[], &[])?;
+            let range = map(&[("location", Value::Uint(0)), ("length", Value::Uint(4))]);
+            let args = [Value::Uint(5), range, Value::Blob(word), Value::Blob(word)];
+            w.call("m2v.privateBytes", 3, 0, &args, &[])?;
+            Ok(())
+        });
+        let mut reader = StreamReader::open(&[path], None).unwrap();
+        let player = Player::new(&mut kept);
+        let player = match player_declines {
+            true => player.without_snapshots(),
+            false => player,
+        };
+        let (report, ended) = player.play(&mut reader);
+        ended.unwrap();
+        assert!(kept.calls.iter().all(|c| !c.contains(&format!("#{OWN}"))));
+        assert_eq!((report.unsnapshotted, report.splits), (1, 0));
+        assert!(report.private.is_empty());
+        assert!(report.lines().contains(&"unsnapshotted 1".to_string()));
+    }
 }
 
 /// A record must name an earlier call, and that call a compute encoder's dispatch; a blob must hold

@@ -512,6 +512,9 @@ pub struct Player<'b, B: Backend> {
     frame: Counts,
     /// When the frame being played began: the first call played, or the frame before's end.
     frame_began: Option<std::time::Instant>,
+    /// Whether the player takes the `m2v.privateBytes` snapshots where the backend does
+    /// (`Player::without_snapshots`).
+    snapshots: bool,
     report: Report,
 }
 
@@ -704,8 +707,17 @@ impl<'b, B: Backend> Player<'b, B> {
             fixed,
             frame: Counts::default(),
             frame_began: None,
+            snapshots: true,
             report: Report::default(),
         }
+    }
+
+    /// The player that takes no `m2v.privateBytes` snapshots on any backend: every dispatch plays as
+    /// the program made it, counted (`Report::unsnapshotted`), so that two runtimes' plays do the
+    /// same work and their times and memory compare.
+    pub fn without_snapshots(mut self) -> Self {
+        self.snapshots = false;
+        self
     }
 
     /// Play every call of `stream`; the report holds what ran, whether or not it all did.
@@ -736,7 +748,7 @@ impl<'b, B: Backend> Player<'b, B> {
             self.frame_began.get_or_insert_with(std::time::Instant::now);
             let issued = self.issued(&call);
             match self.ahead.remove(&self.position) {
-                Some(ranges) if self.backend.snapshots() => {
+                Some(ranges) if self.snapshots && self.backend.snapshots() => {
                     self.split(stream, call, ranges, left_out)?
                 }
                 Some(_) => {
