@@ -1629,6 +1629,15 @@ fn stage(segment: &Segment, watch: &mut Vec<Arc<EventInner>>) -> Staged {
                 .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
         );
     }
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    for &(semaphore, value) in &segment.test_waits {
+        staged.waits.push(
+            vk::SemaphoreSubmitInfo::default()
+                .semaphore(semaphore)
+                .value(value)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
+        );
+    }
     for (event, value) in &segment.signals {
         let mut state = lock(&event.state);
         if *value <= state.submitted.max(state.floor) {

@@ -240,6 +240,10 @@ pub(crate) struct Segment {
     /// changed ranges (`crate::capture`). Each copy-in goes ahead of the segment's commands, after
     /// its waits, and is kept until the command buffer retires.
     pub(crate) copy_ins: Vec<CopyIn>,
+    /// For the device tests: timeline semaphore waits its submission makes whether or not any
+    /// signal was submitted ([`CommandBuffer::wait_semaphore_for_test`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) test_waits: Vec<(vk::Semaphore, u64)>,
 }
 
 pub(crate) struct Handlers {
@@ -644,6 +648,26 @@ impl CommandBuffer {
             }
             Ok(())
         })
+    }
+
+    /// For the device tests: the current segment's submission waits for `semaphore`, a timeline
+    /// semaphore of the device, to reach `value`, which the test signals from the host
+    /// (`vkSignalSemaphore`) once the submission is made: a wait before its signal, which Vulkan
+    /// defines for timeline semaphores. The submit thread does not hold the segment for it, so it
+    /// is submitted and in flight, and completes only after the host's signal. Called before the
+    /// segment records any command.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn wait_semaphore_for_test(&self, semaphore: vk::Semaphore, value: u64) {
+        self.building(|building| {
+            let segment = building.last();
+            assert!(
+                segment.command.is_none(),
+                "a wait ahead of the segment's commands"
+            );
+            segment.test_waits.push((semaphore, value));
+            Ok(())
+        })
+        .expect("a command buffer being recorded");
     }
 }
 

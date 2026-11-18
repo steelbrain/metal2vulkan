@@ -266,6 +266,79 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A command buffer made and enqueued beforehand, encoded on another thread and committed after
+    /// the one enqueued behind it: two command buffers made and enqueued in order on one thread,
+    /// the second encoded and committed there, then the first encoded and committed on a second
+    /// thread. The second waits behind the first until the first is committed, they complete in
+    /// enqueue order, and each has its own status, handlers and GPU times.
+    #[test]
+    fn every_device_runs_enqueued_command_buffers_in_enqueue_order_across_threads() {
+        each_device("command_enqueue_threads", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (a, b) = (arena.buffer(), arena.buffer());
+            let queue = queue(&device);
+            let log = Log::default();
+            let first = queue.command_buffer().expect("a command buffer");
+            let second = queue.command_buffer().expect("a command buffer");
+            first.enqueue().expect("an enqueue");
+            second.enqueue().expect("an enqueue");
+            log.handlers("first", &first);
+            log.handlers("second", &second);
+            fill(&second, &b, 2);
+            second.commit().expect("a commit");
+            thread::sleep(Duration::from_millis(50));
+            assert_eq!(
+                (first.status(), second.status()),
+                (
+                    CommandBufferStatus::Enqueued,
+                    CommandBufferStatus::Committed
+                ),
+                "{name}: the second waits behind the first"
+            );
+            assert!(log.lines().is_empty(), "{name}: {:?}", log.lines());
+            let encoder = {
+                let (first, a) = (first.clone(), a.clone());
+                thread::spawn(move || {
+                    fill(&first, &a, 1);
+                    first.commit().expect("a commit");
+                })
+            };
+            encoder.join().expect("the encoding thread");
+            waits_return(
+                name,
+                "enqueued across threads",
+                vec![first.clone(), second.clone()],
+            );
+            for command_buffer in [&first, &second] {
+                assert_eq!(
+                    (command_buffer.status(), command_buffer.error()),
+                    (CommandBufferStatus::Completed, None),
+                    "{name}"
+                );
+            }
+            assert_eq!((word(&a), word(&b)), (1, 2), "{name}");
+            let lines = log.lines();
+            let at = |line: &str| {
+                (lines.iter().position(|logged| logged == line))
+                    .unwrap_or_else(|| panic!("{name}: no {line:?} in {lines:?}"))
+            };
+            assert_eq!(lines.len(), 4, "{name}: {lines:?}");
+            assert!(at("first scheduled Scheduled") < at("first completed Completed None"));
+            assert!(at("second scheduled Scheduled") < at("second completed Completed None"));
+            assert!(
+                at("first completed Completed None") < at("second completed Completed None"),
+                "{name}: completions in enqueue order: {lines:?}"
+            );
+            let times = [&first, &second].map(|cb| (cb.gpu_start_time(), cb.gpu_end_time()));
+            println!("{name}: GPU start and end of the first and the second {times:?}");
+            for (start, end) in times {
+                assert!(0 < start && start <= end, "{name}: {times:?}");
+            }
+            assert!(times[0].1 <= times[1].1, "{name}: {times:?}");
+            drop((first, second, a, b, arena, queue, device));
+        });
+    }
+
     /// The physical device a device was opened on, for a second device.
     fn physical_of(instance: &Instance, device: &Device) -> crate::PhysicalDevice {
         let raw = device.raw().physical_device;
@@ -936,29 +1009,33 @@ pub(crate) mod on_device {
             .expect("a buffer")
     }
 
-    /// Busy work a queue keeps in flight until the test lets it end: each command buffer waits on
-    /// the GPU for a `VkEvent` that only the host sets ([`Busy::open`]), then fills a block. It is
-    /// submitted and does not complete before the test's checks are made, however fast the device
-    /// or however loaded the host. A wait for an event the host sets after the wait was submitted
-    /// is valid outside a render pass, with the host stage as its first scope (`vkCmdWaitEvents`).
-    /// Dropped, it opens the event and waits for each one, so a failed check does not leave the
-    /// device's work waiting forever.
+    /// Busy work a queue keeps in flight until the test lets it end: each command buffer's
+    /// submission waits for a timeline semaphore to reach 1, which only the host signals
+    /// ([`Busy::open`]), then fills a block. It is submitted and does not complete before the
+    /// test's checks are made, however fast the device or however loaded the host. A wait
+    /// submitted before its signal is defined for a timeline semaphore, and the host signals it
+    /// with `vkSignalSemaphore` (an event the host sets while a command buffer waiting on it is
+    /// pending is not: `VUID-vkSetEvent-event-09543`). Dropped, it opens the work and waits for
+    /// each one, so a failed check does not leave the device's work waiting forever.
     struct Busy {
         device: Device,
-        event: vk::Event,
+        semaphore: vk::Semaphore,
         work: Buffer,
         running: Vec<CommandBuffer>,
     }
 
     impl Busy {
         fn new(device: &Device) -> Busy {
-            let info = vk::EventCreateInfo::default();
-            // SAFETY: the device is live; the event is destroyed in `drop`.
-            let event =
-                unsafe { device.core().device.create_event(&info, None) }.expect("an event");
+            let mut timeline = vk::SemaphoreTypeCreateInfo::default()
+                .semaphore_type(vk::SemaphoreType::TIMELINE)
+                .initial_value(0);
+            let info = vk::SemaphoreCreateInfo::default().push_next(&mut timeline);
+            // SAFETY: the device is live; the semaphore is destroyed in `drop`.
+            let semaphore = unsafe { device.core().device.create_semaphore(&info, None) }
+                .expect("a timeline semaphore");
             Busy {
                 device: device.clone(),
-                event,
+                semaphore,
                 work: private(device),
                 running: Vec::new(),
             }
@@ -975,25 +1052,14 @@ pub(crate) mod on_device {
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let (target, offset) = self.work.device_range();
             let size = self.work.length();
-            let event = self.event;
+            command_buffer.wait_semaphore_for_test(self.semaphore, 1);
             command_buffer
                 .record_for_test(&[&self.work], |device, command| {
-                    // SAFETY: the command buffer is recording outside any render pass; only the
-                    // host sets the event; the range is the buffer's, in whole words.
-                    unsafe {
-                        device.cmd_wait_events(
-                            command,
-                            &[event],
-                            vk::PipelineStageFlags::HOST,
-                            vk::PipelineStageFlags::TRANSFER,
-                            &[],
-                            &[],
-                            &[],
-                        );
-                        device.cmd_fill_buffer(command, target, offset, size, 1);
-                    }
+                    // SAFETY: the command buffer is recording outside any render pass; the range
+                    // is the buffer's, in whole words.
+                    unsafe { device.cmd_fill_buffer(command, target, offset, size, 1) };
                 })
-                .expect("a wait and a fill");
+                .expect("a fill");
             command_buffer.commit().expect("a commit");
             within(name, || device.counters().metrics().submissions > before);
             self.running.push(command_buffer.clone());
@@ -1005,10 +1071,20 @@ pub(crate) mod on_device {
             &self.running
         }
 
-        /// Lets the busy work end: the host sets the event. A second call changes nothing.
+        /// Lets the busy work end: the host signals the semaphore to 1. A second call changes
+        /// nothing.
         fn open(&self) {
-            // SAFETY: the event is the device's, and only this thread sets it.
-            unsafe { self.device.core().device.set_event(self.event) }.expect("an event set");
+            let device = &self.device.core().device;
+            // SAFETY: the semaphore is the device's timeline semaphore.
+            let value = unsafe { device.get_semaphore_counter_value(self.semaphore) }
+                .expect("the semaphore's value");
+            if value == 0 {
+                let signal = vk::SemaphoreSignalInfo::default()
+                    .semaphore(self.semaphore)
+                    .value(1);
+                // SAFETY: only this thread signals it, and 1 is above its value.
+                unsafe { device.signal_semaphore(&signal) }.expect("a host signal");
+            }
         }
     }
 
@@ -1018,8 +1094,8 @@ pub(crate) mod on_device {
             for command_buffer in &self.running {
                 command_buffer.wait_until_completed();
             }
-            // SAFETY: every command buffer that waits on it completed.
-            unsafe { self.device.core().device.destroy_event(self.event, None) };
+            // SAFETY: every submission that waits on it completed.
+            unsafe { (self.device.core().device).destroy_semaphore(self.semaphore, None) };
         }
     }
 
