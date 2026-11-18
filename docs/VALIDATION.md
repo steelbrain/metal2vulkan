@@ -376,7 +376,13 @@ creation rows' first samples (`<row>/first`, `/first_call`, `/first_take`, `/nex
 parked for the `time` rule.
 
 The harness budget compares the two runtimes rather than two commits, apart from the `time` rule
-and the parked records. On each GPU, a harness row timed on both runtimes in the leg
+and the parked records. The old runtime, frozen, is its noise meter: on each GPU, the old
+runtime's time a row is judged on (its GPU time where it is judged on that, a creation row's
+median of five processes) is compared with the same time in the leg's base, the previous round,
+and a row whose old time moved more than 10% either way is VOID for the round on that GPU: it is
+named on the leg's line and judged on nothing, and its comparison comes only from a re-time in
+one process with both runtimes interleaved. The report shows that move on every row the base has
+(`FROZEN_DRIFT` in `scripts/matrix/results.py`). On each GPU, a harness row timed on both runtimes in the leg
 (`harness-new/<row>` and `harness-old/<row>`) holds the new runtime's time to at most 1.03 times
 the old's, times the row's floor on that GPU where it has one: the widest ratio between two of
 the old runtime's own runs of the row there (`scripts/matrix/floors.tsv`, measured again when the

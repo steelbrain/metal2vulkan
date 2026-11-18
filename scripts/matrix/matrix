@@ -7,7 +7,8 @@ run through potluck, with the results attached to the commit as a git note
     scripts/matrix/matrix show [SHA]
 
 SHA defaults to development's tip. Both print each leg's verdict line, then every harness row's
-time and GPU time on both runtimes (results.harness_rows). A leg is a GPU, named by its PCI
+time and GPU time on both runtimes, with the old runtime's move on the leg's base, and the rows
+that move voids (results.harness_rows, results.FROZEN_DRIFT). A leg is a GPU, named by its PCI
 vendor:device (`1002:744c`), or `lavapipe`. docs/VALIDATION.md ("The matrix") has the legs, the
 records and the rules; CONTRIBUTING.md has how to run it.
 
@@ -822,7 +823,7 @@ def leg_entry(run, leg):
     problems += results.old_path_moved(parsed, run.since_bless)
     if leg.id not in CPU_LEGS and run.lock_budget:
         problems += results.lock_budget_missing(records, results.names_lock_event(run.setup(leg.node)))
-    budget, budget_parked = results.harness_budget(leg.id, parsed)
+    budget, budget_parked = results.harness_budget(leg.id, parsed, base and base["records"]["time"])
     problems += budget
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
@@ -914,10 +915,17 @@ def run_cmd(sha, only, dry):
 
 
 def print_leg(leg_id, leg):
-    """A leg's verdict line, then each of its harness rows' times and GPU times."""
+    """A leg's verdict line, then each of its harness rows' times and GPU times, with the frozen
+    arm's move on its base (results.frozen_move), and the rows the frozen arm voids."""
     print(results.verdict_line(leg_id, leg))
-    for line in results.harness_rows(leg["records"]):
+    base = leg.get("base") and (note(leg["base"]) or {}).get("legs", {}).get(leg_id)
+    base = base and base["records"]["time"]
+    for line in results.harness_rows(leg["records"], base):
         print(f"  {line}")
+    if base:
+        void = results.frozen_void(leg["records"]["time"], base)
+        print(f"  frozen arm against {leg['base'][:10]}: {len(void)} row(s) VOID, old moved past "
+              f"{results.FROZEN_DRIFT:.0%}" + "".join(f"; {row} {move:+.1%}" for row, _, _, move in void))
 
 
 def show_cmd(sha):

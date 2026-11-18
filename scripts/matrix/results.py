@@ -692,7 +692,48 @@ def retimed(times, row, gpu=False):
     return ratios
 
 
-def harness_budget(leg_id, leg):
+#: The frozen arm is the noise meter. The old runtime takes regression fixes only, so its time of a
+#: harness row moves from one round to the next with the node, the driver and the harness, not
+#: with the change under test. Each round compares, per card and row, the old runtime's time that
+#: harness_budget judges the row on (frozen_old) with the same time in the previous round: the
+#: leg's base, the nearest first-parent ancestor whose note has the leg. Where it moved more than
+#: FROZEN_DRIFT either way, the row's comparison is VOID for the round on that card: harness_budget
+#: names it and judges nothing from it, and it is re-timed in one process with both runtimes
+#: interleaved. harness_rows shows the move on every row the base has.
+FROZEN_DRIFT = 0.10
+
+
+def frozen_old(times, row, gpu):
+    """The old runtime's time of ROW in TIMES that harness_budget judges it on: the median of the
+    FIRST_RUNS processes' samples for a creation row's first sample (first_row), else its GPU time
+    where GPU, else its time; None where TIMES lacks any of it."""
+    if first_row(row):
+        values = [times.get(f"{HARNESS_OLD}{row}")]
+        values += [times.get(f"{HARNESS_FIRST}{row}/{n}/old") for n in range(2, FIRST_RUNS + 1)]
+        return None if None in values else statistics.median(values)
+    return times.get(f"{HARNESS_GPU}old/{row}" if gpu else f"{HARNESS_OLD}{row}")
+
+
+def frozen_move(times, base, row):
+    """The old runtime's move on ROW from the base's times, BASE, to TIMES, of the time it is
+    judged on in TIMES (gpu_judged): (base's, now, now over base's less one), or None where
+    either has none."""
+    gpu = gpu_judged(times, row)
+    was, now = frozen_old(base or {}, row, gpu), frozen_old(times, row, gpu)
+    if not was or not now:
+        return None
+    return was, now, now / was - 1
+
+
+def frozen_void(times, base):
+    """The rows of TIMES whose comparison the frozen arm voids against BASE (FROZEN_DRIFT), each
+    `(row, base's, now, move)`, in row order."""
+    rows = sorted({key[len(HARNESS_OLD):] for key in times if key.startswith(HARNESS_OLD)})
+    moves = ((row, frozen_move(times, base, row)) for row in rows)
+    return [(row, *move) for row, move in moves if move and abs(move[2]) > FROZEN_DRIFT]
+
+
+def harness_budget(leg_id, leg, base=None):
     """The harness budget on LEG, the parsed leg LEG_ID: each row timed on both runtimes
     (`harness-new/<row>` and `harness-old/<row>`) against its limit, row_limit: HARNESS_BUDGET times
     the greater of its ceiling (HARNESS_CEILINGS) and its floor. A row with a GPU time on both
@@ -711,7 +752,9 @@ def harness_budget(leg_id, leg):
     (`M2V-FAILED harness-old/<row>`) is named as not compared and fails nothing here (PARKED_RECORDS);
     one that failed on the new runtime fails its suite (leg_problems). A row whose size follows the
     device (`size` records) is compared only where both runtimes ran it at one size: at two, the
-    row is a problem, its times measuring different work."""
+    row is a problem, its times measuring different work. BASE is the times of the leg's base: a
+    judged row whose old time moved past FROZEN_DRIFT from the base's is VOID, named and not
+    judged (frozen_move)."""
     problems, parked = [], []
     suites = leg["suites"].values()
     for row in sorted({test[len(HARNESS_OLD):] for suite in suites for test in suite["failed"]
@@ -748,6 +791,12 @@ def harness_budget(leg_id, leg):
                 old, new = (statistics.median(values) for values in samples)
                 parked.append(f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us "
                               f"over old {old:.1f} us is {new / old:.3f}: shown, not judged: {shown}")
+            continue
+        move = frozen_move(times, base, row)
+        if move and abs(move[2]) > FROZEN_DRIFT:
+            parked.append(f"harness budget {row}: VOID: old moved {move[2]:+.1%} from the base's, "
+                          f"{move[0]:.1f} us to {move[1]:.1f} us, so the round judges nothing from it: "
+                          "re-time it in one process, both runtimes interleaved")
             continue
         if first_row(row):
             samples = first_samples(times, row)
@@ -802,11 +851,13 @@ def harness_budget(leg_id, leg):
     return problems, parked
 
 
-def harness_rows(records):
+def harness_rows(records, base=None):
     """Every harness row timed on either runtime in a leg's RECORDS, one line each: its time, its
     GPU time (HARNESS_GPU) and, where recorded, its instructions per run (with its own threads'
     where the runtime names them), on the new runtime and on the old, `-` where it has none, and
-    new over old of the times and of the instructions (and of new's own over old's whole)."""
+    new over old of the times and of the instructions (and of new's own over old's whole). Where
+    BASE, the times of the leg's base, has the row, the frozen arm's move: the old runtime's time
+    the row is judged on against the base's (frozen_move), VOID past FROZEN_DRIFT."""
     times, counted = records["time"], records["instructions"]
     rows = sorted({key.split("/", 1)[1] for key in times if key.startswith((HARNESS_NEW, HARNESS_OLD))})
     lines = []
@@ -832,6 +883,9 @@ def harness_rows(records):
             own = counted.get(f"harness-new/{row}{OWN_PER_RUN}")
             if own is not None:
                 line += f", own over old {own / old_i:.3f}"
+        move = frozen_move(times, base, row)
+        if move:
+            line += f", old {move[2]:+.1%} on the base" + (" VOID" if abs(move[2]) > FROZEN_DRIFT else "")
         lines.append(line)
     return lines
 

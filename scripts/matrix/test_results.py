@@ -636,6 +636,42 @@ class HarnessBudgetTests(unittest.TestCase):
             # Another GPU's row is judged.
             self.assertEqual(len(self.budget("b", times)[0]), 1)
 
+    def test_the_frozen_arm_voids_a_row_whose_old_time_moved_past_ten_percent_on_the_base(self):
+        row = "create_state/first"
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 150.0,
+                 "harness-old/alu": 100.0, "harness-new/alu": 150.0,
+                 "harness-old/sampling": 30.0, "harness-new/sampling": 30.0,
+                 "harness-gpu-old/sampling": 20.0, "harness-gpu-new/sampling": 30.0,
+                 f"harness-old/{row}": 1000.0, f"harness-new/{row}": 2000.0}
+        for n in range(2, results.FIRST_RUNS + 1):
+            times[f"{results.HARNESS_FIRST}{row}/{n}/old"] = 1000.0
+            times[f"{results.HARNESS_FIRST}{row}/{n}/new"] = 2000.0
+        # The base's old: frame's time moved +25%, alu's +5%; sampling's host time held while its
+        # GPU time, which it is judged on, moved -20%; the first's median moved +11.1%, one slow
+        # process of five deciding nothing.
+        base = dict(times, **{"harness-old/frame": 80.0, "harness-old/alu": 95.24,
+                              "harness-gpu-old/sampling": 25.0, f"harness-old/{row}": 5000.0})
+        for n in range(2, results.FIRST_RUNS + 1):
+            base[f"{results.HARNESS_FIRST}{row}/{n}/old"] = 900.0
+        void = "so the round judges nothing from it: re-time it in one process, both runtimes interleaved"
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            problems, parked = results.harness_budget("a", leg_of(recs(time=times)), base)
+            self.assertEqual(problems, ["harness budget alu: new 150.0 us over old 100.0 us is 1.500, past 1.03"])
+            self.assertEqual(parked, [
+                f"harness budget {row}: VOID: old moved +11.1% from the base's, 900.0 us to 1000.0 us, {void}",
+                f"harness budget frame: VOID: old moved +25.0% from the base's, 80.0 us to 100.0 us, {void}",
+                f"harness budget sampling: VOID: old moved -20.0% from the base's, 25.0 us to 20.0 us, {void}"])
+            self.assertEqual([(row, round(move, 3)) for row, _, _, move in results.frozen_void(times, base)],
+                             [(row, 0.111), ("frame", 0.25), ("sampling", -0.2)])
+            # No base, or a base without the row, voids nothing.
+            self.assertEqual(len(self.budget("a", times)[0]), 4)
+            self.assertEqual(len(results.harness_budget("a", leg_of(recs(time=times)), {"loop/gpu": 1.0})[0]), 4)
+        lines = results.harness_rows(recs(time=times), base)
+        self.assertEqual([line.split(" | ")[-1] for line in lines], [
+            "1.500, old +5.0% on the base", "2.000, old +11.1% on the base VOID",
+            "1.500, old +25.0% on the base VOID", "1.000, old -20.0% on the base VOID"])
+        self.assertEqual(results.harness_rows(recs(time=times)), [line.split(", old ")[0] for line in lines])
+
     def test_a_re_timed_run_keeps_the_row_s_time_and_gpu_time(self):
         output = ["M2V-MATRIX time harness-new/sampling 36.000", "M2V-MATRIX time harness-gpu-new/sampling 17.600",
                   "M2V-MATRIX time harness-new/alu 10.000", "a table row"]
