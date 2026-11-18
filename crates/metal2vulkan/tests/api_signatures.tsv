@@ -2355,6 +2355,8 @@ field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured
 field	metal2vulkan-rt::Metrics.over_copies	pub over_copies: u64
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
+field	metal2vulkan-rt::Metrics.pushes	pub pushes: u64
+field	metal2vulkan-rt::Metrics.pushes_held	pub pushes_held: u64
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-rt::Metrics.submissions_during_frees	pub submissions_during_frees: u64

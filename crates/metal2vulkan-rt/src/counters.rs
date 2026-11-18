@@ -49,6 +49,10 @@ pub(crate) enum Metric {
     CacheWritesDropped,
     /// [`Metrics::ring_writes`].
     RingWrites,
+    /// [`Metrics::pushes`].
+    Pushes,
+    /// [`Metrics::pushes_held`].
+    PushesHeld,
     /// [`Metrics::upload_waits`].
     UploadWaits,
     /// [`Metrics::synchronizations`].
@@ -160,6 +164,8 @@ struct Atomics {
     creations_before_seed: AtomicU64,
     cache_writes_dropped: AtomicU64,
     ring_writes: AtomicU64,
+    pushes: AtomicU64,
+    pushes_held: AtomicU64,
     upload_waits: AtomicU64,
     synchronizations: AtomicU64,
     commit_lock_wait_nanos: AtomicU64,
@@ -238,6 +244,8 @@ impl Counters {
             Metric::CreationsBeforeSeed => &a.creations_before_seed,
             Metric::CacheWritesDropped => &a.cache_writes_dropped,
             Metric::RingWrites => &a.ring_writes,
+            Metric::Pushes => &a.pushes,
+            Metric::PushesHeld => &a.pushes_held,
             Metric::UploadWaits => &a.upload_waits,
             Metric::Synchronizations => &a.synchronizations,
             Metric::GroupsBesideAnotherQueue => &a.groups_beside_another_queue,
@@ -471,6 +479,8 @@ impl Counters {
             cache_writes_dropped: a.cache_writes_dropped.load(Relaxed),
             cache_bytes_written: a.cache_bytes_written.load(Relaxed),
             ring_writes: a.ring_writes.load(Relaxed),
+            pushes: a.pushes.load(Relaxed),
+            pushes_held: a.pushes_held.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
             synchronizations: a.synchronizations.load(Relaxed),
             commit_lock_wait_nanos: a.commit_lock_wait_nanos.load(Relaxed),
@@ -642,6 +652,13 @@ pub struct Metrics {
     /// window (a kernel with more than 28 buffers), and each `set_bytes` copy, a render
     /// encoder's too.
     pub ring_writes: u64,
+    /// `vkCmdPushConstants` recorded: a draw's or a dispatch's push bytes, where the command
+    /// buffer did not already hold them.
+    pub pushes: u64,
+    /// Draws and dispatches whose push bytes the command buffer already held, which recorded no
+    /// push: every pipeline shares the device's one layout and push range, so a push stays for the
+    /// draws and dispatches after it.
+    pub pushes_held: u64,
     /// Calls that waited for an upload to complete before they recorded: the upload at its
     /// bound of calls or bytes, or the staging region with no room for a copy.
     pub upload_waits: u64,

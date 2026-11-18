@@ -1115,6 +1115,9 @@ impl RenderCommandEncoder {
         self.drew = true;
         let (bind, first) = building.bind_graphics(pipeline);
         self.fill_push(&state);
+        let building = (self.building.as_mut())
+            .expect("an encoder holds its command buffer's recording until it ends");
+        let push = !self.push.is_empty() && building.push_needed(&self.push);
         let device = &core.device;
         let command = self.command;
         // SAFETY: the command buffer is inside the pass's rendering, which the pipeline renders
@@ -1140,7 +1143,7 @@ impl RenderCommandEncoder {
             for &(binding, buffer, offset) in &self.vertex_buffers {
                 device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
             }
-            if !self.push.is_empty() {
+            if push {
                 device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, &self.push);
             }
             match (call, index) {

@@ -142,8 +142,36 @@ pub(crate) struct Building {
     bound: Option<vk::Pipeline>,
     /// The graphics pipeline bound in the current segment's command buffer.
     drawn: Option<vk::Pipeline>,
+    /// The push constant bytes the current segment's command buffer holds.
+    pushed: Pushed,
     /// The current segment wrote memory the host may read: its end barrier reaches the host.
     host_written: bool,
+}
+
+/// The push constant bytes a command buffer holds, from offset 0, as its pushes left them.
+///
+/// Every pipeline, compute and graphics, has the device's one layout and its one push range of
+/// [`PUSH_STAGES`](crate::pipeline::PUSH_STAGES), so a push stays across pipeline binds and both
+/// bind points until the next one: a dispatch or a draw whose push bytes are already there
+/// records none, as a Metal argument set once stays bound for the commands after it.
+#[derive(Default)]
+pub(crate) struct Pushed {
+    bytes: Vec<u8>,
+}
+
+impl Pushed {
+    /// Whether `push`, written from offset 0, changes the bytes held; they are `push` from now,
+    /// with the held bytes past its end kept.
+    pub(crate) fn needed(&mut self, push: &[u8]) -> bool {
+        if self.bytes.get(..push.len()) == Some(push) {
+            return false;
+        }
+        if self.bytes.len() < push.len() {
+            self.bytes.resize(push.len(), 0);
+        }
+        self.bytes[..push.len()].copy_from_slice(push);
+        true
+    }
 }
 
 /// What the GPU uses: the recorder, the segments, and the blocks kept until retirement.
@@ -279,6 +307,7 @@ impl CommandBuffer {
                         args_unordered: false,
                         bound: None,
                         drawn: None,
+                        pushed: Pushed::default(),
                         host_written: false,
                     }),
                     ended: None,
@@ -653,6 +682,7 @@ impl Building {
         self.last().command = Some(command);
         self.bound = None;
         self.drawn = None;
+        self.pushed = Pushed::default();
         Ok(command)
     }
 
@@ -829,6 +859,18 @@ impl Building {
         let needed = self.drawn != Some(pipeline);
         self.drawn = Some(pipeline);
         (needed, first)
+    }
+
+    /// Whether `push`, the push bytes of a dispatch or a draw from offset 0, needs recording in
+    /// the current command buffer: its push bytes do not already begin with it. They do from now.
+    pub(crate) fn push_needed(&mut self, push: &[u8]) -> bool {
+        let needed = self.pushed.needed(push);
+        let metric = match needed {
+            true => Metric::Pushes,
+            false => Metric::PushesHeld,
+        };
+        self.device.core().counters.count(metric);
+        needed
     }
 
     /// Copies `bytes` into the parameter ring, returning their address.

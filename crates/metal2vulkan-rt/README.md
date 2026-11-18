@@ -76,7 +76,8 @@ and a call that needs a runtime thread after `Device::quiesce` (`Error::Quiesced
 
 `Device::counters` returns a handle that stays readable after the device is gone. `metrics()` are
 cumulative counts (submissions, passes, barriers, bytes copied, pipelines created, blocks made,
-first-use waits, kernels lowered, kernels read from the cache directory, and upload waits);
+first-use waits, kernels lowered, kernels read from the cache directory, upload waits, pushes,
+and the draws and dispatches whose push bytes the command buffer already held);
 `gauges()` are live counts per kind of resource, every one zero after teardown. They are relaxed
 atomics, always on.
 
@@ -1299,6 +1300,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   plus offsets, the resource IDs of their textures and sampler states, the state's constexpr
   sampler indices), binds the vertex buffers its vertex descriptor reads and the index buffer,
   and sets the dynamic state that changed since the encoder's last draw: all of it at the first.
+  A draw or a dispatch whose push bytes the command buffer already holds pushes nothing: the push
+  stays across pipelines, which share the one layout, so 2,000 draws of unchanged bindings are one
+  push and 2,000 `vkCmdDraw`s, as Metal's bindings set once stay for the draws after them.
+  `Counters::metrics`' `pushes` counts each push recorded and `pushes_held` each one skipped.
   A draw takes no barrier, as Metal orders none between the draws of one encoder, so a pass of
   any number of draws is still its two barriers. A draw of no vertices, indices or instances
   records nothing.

@@ -1192,7 +1192,7 @@ impl Building {
             if self.bind(pipeline) {
                 device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
             }
-            if !push.is_empty() {
+            if !push.is_empty() && self.push_needed(push) {
                 device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, push);
             }
             match *launch {

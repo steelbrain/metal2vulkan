@@ -1,7 +1,8 @@
 //! The push window, under a device cfg on every device of the cfg's kind: a kernel that reads its
 //! grid position and 24 buffers (a dispatch region and 24 addresses, 224 bytes) passes every
 //! address in push constants and writes nothing into the parameter ring, and one of 30 buffers
-//! (272 bytes) writes one parameter block per dispatch. Both answer the fold of their inputs.
+//! (272 bytes) writes one parameter block per dispatch. Both answer the fold of their inputs; the
+//! first's dispatches after the first push nothing, their bytes held, and the second's each push.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
@@ -73,11 +74,12 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
         (k + 1).wrapping_mul(0x9e37_79b9) ^ gid.wrapping_mul(0x85eb_ca6b)
     }
 
-    /// The kernel of 24 buffers writes nothing into the ring; the kernel of 30 writes one block a
-    /// dispatch. Each answers the fold of its inputs.
+    /// The kernel of 24 buffers writes nothing into the ring, and pushes once for its three
+    /// dispatches of the same bindings; the kernel of 30 writes one block a dispatch, whose new
+    /// address each dispatch pushes. Each answers the fold of its inputs.
     #[test]
     fn every_device_pushes_24_buffer_addresses_and_rings_30() {
-        for (buffers, blocks) in [(24u32, 0u64), (30, 1)] {
+        for (buffers, blocks, pushes) in [(24u32, 0u64, 1u64), (30, 1, DISPATCHES)] {
             let bitcode = match llvm_assemble_text(&kernel(buffers)) {
                 Ok(bitcode) => bitcode,
                 Err(AssembleError::Missing(why)) => {
@@ -123,7 +125,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                 }
                 let queue = device.new_command_queue(4).expect("a queue");
                 let command_buffer = queue.command_buffer().expect("a command buffer");
-                let before = device.counters().metrics().ring_writes;
+                let before = device.counters().metrics();
                 let mut encoder = command_buffer
                     .compute_command_encoder(DispatchType::Serial)
                     .expect("an encoder");
@@ -141,9 +143,17 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                 encoder.end_encoding();
                 command_buffer.commit().expect("a commit");
                 finished(name, &command_buffer);
-                let writes = device.counters().metrics().ring_writes - before;
+                let after = device.counters().metrics();
+                let writes = after.ring_writes - before.ring_writes;
                 assert_eq!(command_buffer.error(), None, "{what}");
                 assert_eq!(writes, blocks * DISPATCHES, "{what}: ring writes");
+                let pushed = after.pushes - before.pushes;
+                let held = after.pushes_held - before.pushes_held;
+                assert_eq!(
+                    (pushed, held),
+                    (pushes, DISPATCHES - pushes),
+                    "{what}: pushes, held"
+                );
                 let inputs = buffers - 1;
                 let contents = bound[inputs as usize].contents().expect("a Shared buffer");
                 for gid in 0..THREADS {
@@ -160,7 +170,9 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                     };
                     assert_eq!(got, want, "{what}: thread {gid}");
                 }
-                println!("{what}: {writes} ring writes over {DISPATCHES} dispatches");
+                println!(
+                    "{what}: {writes} ring writes and {pushed} pushes over {DISPATCHES} dispatches"
+                );
             });
         }
     }

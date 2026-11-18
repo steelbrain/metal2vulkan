@@ -4,7 +4,24 @@
 //! with work held; refusals of what has started; a loss; a released block kept until its last
 //! command buffer retires; a block whose last handle drops freed once its last command buffer
 //! retires; a block's clones, one dropped giving nothing back, and a handle outliving its
-//! device; and the thread gauge holding the device's four threads as it is made.
+//! device; and the thread gauge holding the device's four threads as it is made. Without a
+//! device: a push whose bytes the command buffer holds is not recorded again.
+
+use crate::command::Pushed;
+
+/// A push whose bytes the command buffer already holds from offset 0 records nothing; one that
+/// changes any of them records, and keeps the held bytes past its end.
+#[test]
+fn a_push_of_the_bytes_a_command_buffer_holds_records_nothing() {
+    let mut pushed = Pushed::default();
+    assert!(pushed.needed(&[1, 2, 3, 4]), "the first push");
+    assert!(!pushed.needed(&[1, 2, 3, 4]), "the same bytes again");
+    assert!(!pushed.needed(&[1, 2]), "a shorter push of bytes held");
+    assert!(pushed.needed(&[1, 9]), "a shorter push that changes one");
+    assert!(!pushed.needed(&[1, 9, 3, 4]), "the bytes past it kept");
+    assert!(pushed.needed(&[1, 9, 3, 4, 5]), "a longer push");
+    assert!(Pushed::default().needed(&[1, 9]), "a new command buffer's");
+}
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
