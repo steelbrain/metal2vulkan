@@ -402,9 +402,9 @@ pub struct Metrics {
     /// blocks, by the block-maker thread or in a take. The difference of two reads is what a
     /// frame allocated.
     pub block_bytes_made: u64,
-    /// `vkAllocateMemory` calls made on the consumer's threads, inside its calls: the device's
-    /// making, takes that no free range fits, textures' allocations of their own, the staging
-    /// region and the parameter ring's blocks. A driver may hold the device's other calls for an
+    /// `vkAllocateMemory` calls made on the consumer's threads, inside its calls: takes that no
+    /// free range fits, textures' allocations of their own, the staging region and the parameter
+    /// ring's blocks, and the zero source. A driver may hold the device's other calls for an
     /// allocation's whole length.
     pub consumer_allocations: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) those calls took, in total.
@@ -412,9 +412,9 @@ pub struct Metrics {
     /// The longest of those calls, in nanoseconds; a maximum since the device was made, so the
     /// difference of two reads does not apply to it.
     pub consumer_allocation_max_nanos: u64,
-    /// The nanoseconds of [`host_time`](crate::host_time) the block-maker thread's
-    /// `vkAllocateMemory` calls took, in total: allocations made ahead of need, off the
-    /// consumer's threads.
+    /// The nanoseconds of [`host_time`](crate::host_time) the allocations made ahead of need
+    /// took, in total: the block-maker thread's, off the consumer's threads, and each class's
+    /// first allocation in the device's making.
     pub maker_allocation_nanos: u64,
     /// Blocks taken again: a take of the length of a block given back and kept, which took that
     /// block with its number, address and mapping, and no new range or allocation.

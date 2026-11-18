@@ -471,6 +471,24 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
             _ => String::new(),
         },
     );
+    if let Some(waits) = report.first_allocations {
+        println!(
+            "{:<17} {runtime:<8} the first's allocations on this thread: {}, {:.1} us in all; the longest since the device was made took {:.1} us",
+            create.name,
+            waits.count,
+            waits.nanos as f64 / 1e3,
+            waits.longest_nanos as f64 / 1e3,
+        );
+        println!(
+            "M2V-MATRIX metric harness-{runtime}/{}/first_allocations {}",
+            create.name, waits.count
+        );
+        println!(
+            "M2V-MATRIX time harness-{runtime}/{}/first_allocation_total {:.3}",
+            create.name,
+            waits.nanos as f64 / 1e3
+        );
+    }
     matrix(
         runtime,
         create.name,

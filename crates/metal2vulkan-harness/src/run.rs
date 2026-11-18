@@ -381,8 +381,9 @@ pub struct CreateReport {
     /// The first creation's wall time, in microseconds, where it is timed apart: a pipeline
     /// state's of a content the device had not seen. A compute pipeline state's holds one
     /// dispatch of it through to completion, since a runtime may pay its pipeline's compile in the
-    /// creation or at the first dispatch and the sum holds both; a render pipeline state's is its
-    /// creation alone.
+    /// creation or at the first dispatch and the sum holds both, and the creation of the 16-byte
+    /// buffer the dispatch writes, the guest's take of memory beside it; a render pipeline state's
+    /// is its creation alone.
     pub first_us: Option<f64>,
     /// The first creation's wall time alone, in microseconds: for a pipeline state, the part of
     /// [`first_us`](Self::first_us) the creation call paid, all of it for a render pipeline
@@ -391,6 +392,11 @@ pub struct CreateReport {
     /// For a buffer, the second creation's wall time, in microseconds: the first after the first
     /// buffer was released, which a runtime may serve from the memory that buffer gave back.
     pub again_us: Option<f64>,
+    /// The runtime's memory allocations on the caller's thread during the first creation (with
+    /// its dispatch and its buffer, for a compute pipeline state): their count and time, and the
+    /// longest since the device was made ([`Device::allocations`]); `None` where it does not count
+    /// them.
+    pub first_allocations: Option<Waits>,
     /// The device's gauges after the 100th and the 200th timed creation, where there were that
     /// many.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
@@ -1011,13 +1017,16 @@ impl<D: ComputeDevice> Harness<D> {
             })
             .collect();
         let function = self.authored.new_function(function, &values)?;
+        let before = self.device.allocations();
         let (first_create, first) = self.first_state(&function, constants)?;
+        let allocations = since(before, self.device.allocations());
         let mut report = self.time_states(
             || self.device.new_compute_pipeline_state(&function, &[]),
             Some(first),
             runs,
         )?;
         report.first_create_us = Some(first_create);
+        report.first_allocations = allocations;
         Ok(report)
     }
 
@@ -1065,10 +1074,11 @@ impl<D: ComputeDevice> Harness<D> {
     /// round, through to completion: the creation's wall time and the whole's, in microseconds.
     /// The thread's `float4` is checked against the kernel's arithmetic.
     fn first_state(&self, function: &D::Function, constants: &[(u32, f32)]) -> Result<(f64, f64)> {
-        let destination = self.device.new_buffer(16, Storage::Shared)?;
         let started = Instant::now();
+        let destination = self.device.new_buffer(16, Storage::Shared)?;
+        let creating = Instant::now();
         let state = self.device.new_compute_pipeline_state(function, &[])?;
-        let made = started.elapsed();
+        let made = creating.elapsed();
         let command_buffer = self.queue.command_buffer()?;
         let mut encoder = command_buffer.compute_command_encoder()?;
         encoder.set_compute_pipeline_state(&state)?;
@@ -1104,6 +1114,17 @@ impl<D: ComputeDevice> Harness<D> {
     }
 }
 
+/// The allocations between two reads of [`Device::allocations`]: their count and time, and
+/// the longest since the device was made.
+fn since(before: Option<Waits>, after: Option<Waits>) -> Option<Waits> {
+    let (before, after) = (before?, after?);
+    Some(Waits {
+        count: after.count - before.count,
+        nanos: after.nanos - before.nanos,
+        longest_nanos: after.longest_nanos,
+    })
+}
+
 /// [`Session::create`] of buffers on `device`.
 fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport> {
     // A creation's time, its buffer checked zero at every `stride`th byte, then written all over
@@ -1117,11 +1138,14 @@ fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport
         Ok(created.as_secs_f64() * 1e6)
     };
     // The first take of memory for a buffer of the length, then the first after its release.
+    let before = device.allocations();
     let first = once(4)?;
+    let first_allocations = since(before, device.allocations());
     let again = once(4)?;
     let mut report = CreateReport {
         first_create_us: Some(first),
         again_us: Some(again),
+        first_allocations,
         warmup: warm_up(runs, || once(4096))?,
         ..CreateReport::default()
     };

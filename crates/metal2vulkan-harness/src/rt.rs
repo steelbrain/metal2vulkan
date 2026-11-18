@@ -3,8 +3,8 @@
 //! The new runtime places a buffer where its consumer says, in a block the consumer took
 //! (`Device::take_block`, `Device::new_buffer`); the harness is that consumer here. It places each
 //! buffer at the lowest free range of a block of its storage mode that holds it, at a multiple of
-//! 256 bytes, taking a pooled block when none does and a dedicated block for a buffer longer than
-//! a pooled one. A dropped buffer frees its range at once, or releases its dedicated block: the
+//! 256 bytes, taking a block of `MemoryClass::block_len` (16 MiB) when none does, as a guest's
+//! allocator takes chunks of that length, and a block of its own for a buffer longer than that. A dropped buffer frees its range at once, or releases its dedicated block: the
 //! harness drops a buffer only once the work that used it has completed, as Metal frees a
 //! buffer's memory only then. So a buffer made after one of the same length was dropped takes
 //! the same range, which the runtime zeroes as `newBufferWithLength:options:` does.
@@ -253,7 +253,7 @@ impl Heap {
         let (block, start) = match found {
             Some(found) => found,
             None => {
-                let block = self.device.take_block(class, span).map_err(error)?;
+                let block = (self.device.take_block(class, class.block_len())).map_err(error)?;
                 let mut free = Ranges::new(block.len);
                 let start =
                     (free.take(span)).ok_or("a new pooled block is shorter than a buffer")?;
@@ -389,6 +389,16 @@ impl crate::Device for Device {
     /// `Metrics::submit_infos`.
     fn submit_infos(&self) -> Option<u64> {
         Some(self.device.counters().metrics().submit_infos)
+    }
+
+    /// `Metrics::consumer_allocations`, with their time and the longest.
+    fn allocations(&self) -> Option<Waits> {
+        let metrics = self.device.counters().metrics();
+        Some(Waits {
+            count: metrics.consumer_allocations,
+            nanos: metrics.consumer_allocation_nanos,
+            longest_nanos: metrics.consumer_allocation_max_nanos,
+        })
     }
 
     /// `Metrics::first_use_waits`, with their time and the longest.

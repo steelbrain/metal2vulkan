@@ -245,6 +245,11 @@ pub trait Device: Sized {
     /// The runtime's first-use waits so far; `None` where it does not count them. No Metal
     /// counterpart.
     fn first_use_waits(&self) -> Option<Waits>;
+
+    /// The runtime's memory allocations on the caller's threads so far, inside its calls after
+    /// the device was made, as a count, their time and the longest; `None` where it does not
+    /// count them. No Metal counterpart.
+    fn allocations(&self) -> Option<Waits>;
 }
 
 /// A reader of a runtime's gauges that outlives its device ([`Device::gauges_after_drop`]).

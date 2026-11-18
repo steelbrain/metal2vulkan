@@ -83,6 +83,11 @@ impl crate::Device for runtime::Device {
     fn first_use_waits(&self) -> Option<crate::Waits> {
         None
     }
+
+    /// `None`: it does not count them.
+    fn allocations(&self) -> Option<crate::Waits> {
+        None
+    }
 }
 
 impl crate::ComputeDevice for runtime::Device {

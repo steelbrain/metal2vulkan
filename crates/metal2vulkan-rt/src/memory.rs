@@ -401,7 +401,9 @@ struct State {
 }
 
 thread_local! {
-    /// Whether this thread is the block-maker thread ([`run`]), for the allocation-time metrics.
+    /// Whether this thread makes allocations ahead of need: the block-maker thread ([`run`]), or
+    /// the device's making while it makes the first allocations ([`stock`]). For the
+    /// allocation-time metrics.
     static ON_MAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -864,6 +866,8 @@ fn number(state: &mut State) -> Result<BlockId, Error> {
 /// ready, and nothing is allocated beside the consumer's first calls. Where one cannot be made,
 /// the block-maker thread tries again after the class's next take or give-back.
 pub(crate) fn stock(core: &Core) {
+    // Made ahead of need, as the block-maker thread's are: counted with them.
+    ON_MAKER.set(true);
     for class in MemoryClass::ALL {
         let made = make_allocation(core, class, ALLOCATION_LEN);
         let mut state = core.pool.lock();
@@ -873,6 +877,7 @@ pub(crate) fn stock(core: &Core) {
         }
         core.pool.settle(&mut state, class);
     }
+    ON_MAKER.set(false);
 }
 
 /// The block-maker thread, until the device's teardown stops it. Off every caller's path, in
