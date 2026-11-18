@@ -8,7 +8,7 @@ use crate::fence::Fence;
 use crate::hazard::Access;
 use crate::over;
 use crate::pipeline::{
-    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
+    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES, SQUARE,
 };
 use crate::record::Reach;
 use crate::ring::CHUNK;
@@ -157,9 +157,9 @@ pub struct ComputeCommandEncoder {
     declared: Vec<(u32, Access)>,
     /// A `use_resource` declaration writes a Shared buffer.
     declared_shared_write: bool,
-    /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state and the
-    /// threadgroup memory lengths are unchanged.
-    last: Option<(Module, [u32; 3], vk::Pipeline)>,
+    /// The module, workgroup size, folded tile and `VkPipeline` of the last dispatch, while the
+    /// state and the threadgroup memory lengths are unchanged.
+    last: Option<(Module, [u32; 3], Option<[u32; 3]>, vk::Pipeline)>,
     /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
     /// Whether a dispatch of the encoder wrote anything.
@@ -167,8 +167,8 @@ pub struct ComputeCommandEncoder {
 }
 
 /// Which of its state's modules a dispatch runs.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Module {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Module {
     /// The state's whole module.
     Whole,
     /// The whole module of a kernel that runs its grid in tiles, at `MultiRegion` 1.
@@ -177,6 +177,94 @@ enum Module {
     Partial,
     /// The emulated-SIMD-group variant.
     Emulated,
+}
+
+/// A direct dispatch's grid: Metal's threadgroups, its threads, and whether the last threadgroup
+/// along some axis is partial.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Direct {
+    pub(crate) groups: [u32; 3],
+    pub(crate) threads: [u32; 3],
+    pub(crate) ragged: bool,
+}
+
+/// What runs a dispatch ([`choose`]): which of the state's modules, its workgroup size, the
+/// threadgroup size its regions carry, the tile its `VkPipeline` folds, and for a direct
+/// dispatch Metal's grid, the workgroups, and whether the last along some axis is partial.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Choice {
+    pub(crate) module: Module,
+    pub(crate) local: [u32; 3],
+    pub(crate) nominal: [u32; 3],
+    pub(crate) fold: Option<[u32; 3]>,
+    pub(crate) direct: Option<([u32; 3], [u32; 3], bool)>,
+}
+
+/// How a state of `form` runs a dispatch of threadgroup size `size`, direct over `direct` or
+/// indirect:
+/// - indirect: the whole module at its own size;
+/// - an image-only kernel's grid one deep ([`Form::Square`]): the whole module in workgroups of
+///   [`SQUARE`] at `MultiRegion` 0, the region carrying them, flagged where they do not divide
+///   the grid;
+/// - a tiling kernel's grid one deep ([`Form::Tiled`]): its tiles, workgroups of
+///   `GRID_TILE_THREADS`, each one `grid_tile` tile of the grid, which its region carries;
+/// - either's grid more than one deep: the same tiles on a `VkPipeline` that folds the tile;
+/// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
+///   partial-threadgroups variant.
+pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3]) -> Choice {
+    let Some(direct) = direct else {
+        return Choice {
+            module: Module::Whole,
+            local: size,
+            nominal: size,
+            fold: None,
+            direct: None,
+        };
+    };
+    let Direct {
+        groups,
+        threads,
+        ragged,
+    } = direct;
+    let over = |shape: [u32; 3]| {
+        let groups = std::array::from_fn(|axis| threads[axis].div_ceil(shape[axis]));
+        let ragged = (0..3).any(|axis| !threads[axis].is_multiple_of(shape[axis]));
+        Some((threads, groups, ragged))
+    };
+    match form {
+        Form::Square if threads[2] == 1 => Choice {
+            module: Module::Whole,
+            local: SQUARE,
+            nominal: SQUARE,
+            fold: None,
+            direct: over(SQUARE),
+        },
+        Form::Tiled | Form::Square => {
+            let tile = grid_tile(threads);
+            Choice {
+                module: Module::Tiles,
+                local: [GRID_TILE_THREADS, 1, 1],
+                nominal: tile,
+                fold: (threads[2] > 1).then_some(tile),
+                direct: over(tile),
+            }
+        }
+        Form::Sized { .. } => Choice {
+            module: match ragged {
+                false => Module::Whole,
+                true => Module::Partial,
+            },
+            local: size,
+            nominal: size,
+            fold: None,
+            direct: Some((threads, groups, ragged)),
+        },
+    }
+}
+
+/// Whether a workgroup of `local` is within the device's `maxComputeWorkGroupSize`, `max`.
+pub(crate) fn fits(local: [u32; 3], max: [u32; 3]) -> bool {
+    local.iter().zip(max).all(|(&axis, max)| axis <= max)
 }
 
 impl CommandBuffer {
@@ -578,16 +666,6 @@ impl ComputeCommandEncoder {
         }
         let core = Arc::clone(self.building().device.core());
         let limits = &core.limits;
-        if size
-            .iter()
-            .zip(limits.max_group_size)
-            .any(|(&axis, max)| axis > max)
-        {
-            return Err(Error::Limit(Limit::ThreadgroupShape {
-                size,
-                max: limits.max_group_size,
-            }));
-        }
         // A kernel that writes no memory has no effect a program can observe: once checked as
         // Metal checks it, the dispatch records nothing, binds nothing and reads no indirect
         // buffer. Every module of a state is the same function, so the whole module answers.
@@ -607,53 +685,46 @@ impl ComputeCommandEncoder {
                 threads_per_threadgroup: size,
             })
         };
-        let (kernel, module, local, nominal, direct) = match (&grid, &inner.form) {
-            (Grid::Indirect(..), _) => (&inner.whole, Module::Whole, size, size, None),
-            // A kernel's grid tiles: workgroups of `GRID_TILE_THREADS`, each one tile of the
-            // grid, which its region carries as the threadgroup size.
-            (&Grid::Direct { threads, .. }, Form::Tiled) => {
-                let tile = grid_tile(threads);
-                let ragged = (0..3).any(|axis| !threads[axis].is_multiple_of(tile[axis]));
-                let groups = std::array::from_fn(|axis| threads[axis].div_ceil(tile[axis]));
-                (
-                    &inner.whole,
-                    Module::Tiles,
-                    [GRID_TILE_THREADS, 1, 1],
-                    tile,
-                    Some((threads, groups, ragged)),
-                )
+        let direct = match &grid {
+            &Grid::Direct {
+                groups,
+                threads,
+                ragged,
+            } => Some(Direct {
+                groups,
+                threads,
+                ragged,
+            }),
+            Grid::Indirect(..) => None,
+        };
+        let Choice {
+            module,
+            local,
+            nominal,
+            fold,
+            direct,
+        } = choose(&inner.form, direct, size);
+        // The workgroup Vulkan runs is within the device's sizes: the threadgroup itself where it
+        // is the workgroup, else the tiles' or the square workgroup, which the floor holds.
+        if !fits(local, limits.max_group_size) {
+            return Err(Error::Limit(Limit::ThreadgroupShape {
+                size: local,
+                max: limits.max_group_size,
+            }));
+        }
+        let kernel = match (module, &inner.form) {
+            (
+                Module::Partial,
+                Form::Sized {
+                    partial: Some(kernel),
+                },
+            ) => &**kernel,
+            (Module::Partial, _) => {
+                return Err(partial_threadgroups(
+                    direct.map_or([0; 3], |(threads, ..)| threads),
+                ))
             }
-            (
-                &Grid::Direct {
-                    groups,
-                    threads,
-                    ragged: false,
-                },
-                Form::Sized { .. },
-            ) => (
-                &inner.whole,
-                Module::Whole,
-                size,
-                size,
-                Some((threads, groups, false)),
-            ),
-            (
-                &Grid::Direct {
-                    groups,
-                    threads,
-                    ragged: true,
-                },
-                Form::Sized { partial },
-            ) => match partial {
-                Some(kernel) => (
-                    &**kernel,
-                    Module::Partial,
-                    size,
-                    size,
-                    Some((threads, groups, true)),
-                ),
-                None => return Err(partial_threadgroups(threads)),
-            },
+            _ => &inner.whole,
         };
         // A threadgroup that is not whole groups of a module that runs only whole ones runs the
         // emulated module; the partial-threadgroups variant has none.
@@ -678,7 +749,9 @@ impl ComputeCommandEncoder {
             return Ok(());
         }
         let vk_pipeline = match self.last {
-            Some((last, at, made)) if last == module && at == local => made,
+            Some((last, at, folded, made)) if last == module && at == local && folded == fold => {
+                made
+            }
             _ => {
                 let variant = Variant {
                     size: local,
@@ -689,6 +762,7 @@ impl ComputeCommandEncoder {
                         .map(|&index| self.threadgroup_length(index))
                         .collect(),
                     tiles: module == Module::Tiles,
+                    fold,
                 };
                 let length = kernel
                     .interface
@@ -703,7 +777,7 @@ impl ComputeCommandEncoder {
                 kernel.pipeline(&core, &variant)?
             }
         };
-        self.last = Some((module, local, vk_pipeline));
+        self.last = Some((module, local, fold, vk_pipeline));
         let serial = self.serial;
         // A write the host may read once the command buffer completes: to a Shared buffer or a
         // texture over one, bound or declared, or through an address outside the dispatch's

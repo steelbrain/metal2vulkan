@@ -320,6 +320,17 @@ impl CompiledFunction {
         self.0.kernel.partition_simdgroups
     }
 
+    /// Whether the function, a kernel, is image-only: it samples, gathers or reads a texture, and
+    /// loads, stores and updates atomically nothing in device memory, through no load, store,
+    /// atomic or call but a texture or sampler operation on a pointer into the `device` address
+    /// space. Loads of `constant` memory and texture writes are allowed. Decided from its AIR
+    /// alone. A runtime may run such a kernel that does not observe its threadgroup partition
+    /// ([`observes_threadgroup_partition`](Self::observes_threadgroup_partition)) in square
+    /// workgroups. `false` for a function that is not a kernel.
+    pub fn is_image_only(&self) -> bool {
+        self.0.kernel.image_only
+    }
+
     /// The function's own `[[max_total_threads_per_threadgroup(n)]]` (`air.max_work_group_size`),
     /// `None` without one: the most threads Metal compiles a threadgroup of the function for.
     pub fn max_total_threads_attribute(&self) -> Option<u32> {
@@ -483,4 +494,10 @@ pub struct KernelFacts {
     /// `false` for a kernel that does not observe its partition
     /// ([`partition_oblivious`](Self::partition_oblivious)). Decided as that one is.
     pub partition_simdgroups: bool,
+    /// The kernel reads an image and loads, stores and updates atomically nothing in device
+    /// memory (`pipeline::compile`'s `images`): it samples, gathers or reads a texture, and no
+    /// load, store or atomic, and no call but a texture or sampler operation, goes through a
+    /// pointer into the `device` address space. Loads of `constant` memory and texture writes are
+    /// allowed. Decided from the entry's AIR alone; `false` for a function that is not a kernel.
+    pub image_only: bool,
 }

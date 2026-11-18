@@ -16,6 +16,7 @@
 pub mod api;
 pub(crate) mod color_group;
 mod entry;
+mod images;
 pub mod key;
 mod numbered;
 pub(crate) mod partition;
@@ -2807,7 +2808,7 @@ fn plan_one(
 
 /// What [`plan_one`] reads of a request before it selects: the ordered entry, what its code read
 /// before specialization, the inputs it lowers under, its key, its memory plan, the partition
-/// it observes, and what it reads and writes through anything but its bound slots. A plan made again past the stage bound (`stage_bound`) selects from it again,
+/// it observes, whether it is image-only, and what it reads and writes through anything but its bound slots. A plan made again past the stage bound (`stage_bound`) selects from it again,
 /// without decoding, specializing, ordering or analyzing the entry again.
 struct Analyzed {
     key: FunctionCompileKey,
@@ -2816,6 +2817,7 @@ struct Analyzed {
     inputs: LowerInputs,
     memory: crate::memory::plan::MemoryPlan,
     observed: Partition,
+    image_only: bool,
     unbound: unbound::Unbound,
 }
 
@@ -2849,6 +2851,7 @@ impl Analyzed {
             },
             partition_oblivious: observed == Partition::Oblivious,
             partition_simdgroups: observed == Partition::Simdgroups,
+            image_only: self.image_only,
         };
         Ok((plan, kernel))
     }
@@ -2881,6 +2884,7 @@ fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Anal
     // its partition computes the same there; one of the call's threadgroups, also a kernel that
     // observes it through its simdgroups alone.
     let observed = partition::partition(&spec);
+    let image_only = images::image_only(&spec);
     let flat_runs = match inputs.call_threadgroups {
         false => observed == Partition::Oblivious,
         true => observed <= Partition::Simdgroups,
@@ -2921,6 +2925,7 @@ fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Anal
         inputs,
         memory,
         observed,
+        image_only,
         unbound,
     })
 }

@@ -125,9 +125,13 @@
 //! `s` the bits of `L − 1` per axis, all of them uniform values, so nothing divides. Where the
 //! region is flagged [`NONUNIFORM`] (the tile does not divide the grid) an invocation whose
 //! position is past the region's grid on some axis returns before the body, behind a branch on
-//! the flag, so a whole grid tests no lane. Under `MultiRegion` 0 (an indirect dispatch) it runs
-//! at its pipeline's size, its position `(base + WorkgroupId) · (sx, sy, sz)` plus its position in
-//! the workgroup, every invocation live. `Device::new`'s profile answers Metal's partial
+//! the flag, so a whole grid tests no lane. A pipeline may fold the tile (`SpecKey::FoldedTile`,
+//! the tile packed as `L` is, default 0): the kernel takes it in place of the region's, so the
+//! driver folds the masks and shifts when it specializes. Under `MultiRegion` 0 it runs at its
+//! pipeline's size, its position `(base + WorkgroupId) · (sx, sy, sz)` plus its position in the
+//! workgroup: an indirect dispatch, every invocation live, or a direct one in workgroups of a size
+//! its runtime picks, whose invocations past the grid return before the body where the region is
+//! flagged [`NONUNIFORM`], as a tile's do. `Device::new`'s profile answers Metal's partial
 //! threadgroup as above.
 //!
 //! **Flat grids**. A flat variant (`LoweringInputs::flat_grid`, of a device replay or not) of a
@@ -817,8 +821,8 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
             |fb: &mut FunctionBuilder<'_>| cx.push_field(fb, PushField::DispatchRegion);
         if plan.grid_edge {
             // A grid tile's invocation past the grid returns where its region is flagged ragged
-            // (under `MultiRegion` 1): a test of uniform values first, so a tile inside the grid
-            // tests no lane.
+            // (under either `MultiRegion`): a test of uniform values first, so a region inside the
+            // grid tests no lane.
             let pos = decl.edge_position(fb, &mut region)?;
             let (ragged, grid) = decl.edge_ragged(fb, &mut region)?;
             tested_position = Some(pos);
@@ -998,6 +1002,9 @@ pub struct KernelDecl {
     /// Its threadgroups run whole, its invocations past the grid return
     /// ([`DispatchPlan::grid_edge`]).
     grid_edge: bool,
+    /// Of a grid edge, `SpecKey::FoldedTile`: the packed tile the pipeline folds, 0 where the
+    /// region's nominal size gives it ([`KernelDecl::edge_position`]).
+    folded_tile: Option<ConstId>,
 }
 
 /// The threadgroup position and grid of a kernel whose entry wrapper computes them
@@ -1274,6 +1281,13 @@ impl KernelDecl {
                 })
             }
         };
+        // A grid edge's tile, which a pipeline may fold.
+        let folded_tile = match (dp.grid_edge, &multi_region) {
+            (true, Some(RegionSelect::Sized(_))) => {
+                Some(mb.spec(SpecKey::FoldedTile, u32_, ConstBits(0))?)
+            }
+            _ => None,
+        };
         let needs = Needs::of(dp);
         let flat = dp.local_size == LocalSizeForm::Flat;
         // A flat grid counts its threads by `LocalInvocationIndex` in either form: it reads no
@@ -1340,6 +1354,7 @@ impl KernelDecl {
             object_grid: dp.object_grid,
             partial_groups: dp.partial_groups,
             grid_edge: dp.grid_edge,
+            folded_tile,
         })
     }
 
@@ -1584,7 +1599,8 @@ impl KernelDecl {
 
     /// Of [`DispatchPlan::grid_edge`], the invocation's position in the grid (a `uvec3`). Under
     /// `MultiRegion` 1 its workgroup is one tile of the grid whose sides the region's nominal size
-    /// `L` gives, each a power of two whose product is the workgroup's threads: with `m = L − 1`
+    /// `L` gives, or `SpecKey::FoldedTile` where it is not 0, each a power of two whose product is
+    /// the workgroup's threads: with `m = L − 1`
     /// and `s` the bits set in `m` per axis, the position is `((base + WorkgroupId) << s) + (lin &
     /// m.x, (lin >> s.x) & m.y, lin >> (s.x + s.y))`, masks and shifts by uniform values, where
     /// `lin` is `LocalInvocationIndex`. Under `MultiRegion` 0 it is the uniform one at the
@@ -1601,7 +1617,13 @@ impl KernelDecl {
         let r = region(fb)?;
         let r0 = fb.composite_extract(r, &[0])?;
         let base = fb.vector_shuffle(r0, r0, &[0, 1, 2])?;
-        let packed = fb.composite_extract(r0, &[3])?;
+        let mut packed = fb.composite_extract(r0, &[3])?;
+        if let Some(tile) = self.folded_tile {
+            let tile = fb.module().const_value(tile)?;
+            let zero = Self::k(fb, 0)?;
+            let folded = fb.binary(BinOp::INotEqual, tile, zero)?;
+            packed = fb.select(folded, tile, packed)?;
+        }
         let axis = Self::k(fb, (1 << NOMINAL_AXIS_BITS) - 1)?;
         let mask_x = fb.binary(BinOp::BitwiseAnd, packed, axis)?;
         let mut above = [mask_x; 2];
@@ -1633,14 +1655,14 @@ impl KernelDecl {
     }
 
     /// Of [`DispatchPlan::grid_edge`], whether the region may hold invocations past the grid (a
-    /// workgroup-uniform `bool`: `MultiRegion` 1 and the region flagged [`NONUNIFORM`]), and the
-    /// grid, `region[1].xyz`.
+    /// workgroup-uniform `bool`: the region flagged [`NONUNIFORM`], under either `MultiRegion`),
+    /// and the grid, `region[1].xyz`.
     pub fn edge_ragged(
         &self,
         fb: &mut FunctionBuilder<'_>,
         region: &mut RegionFn<'_>,
     ) -> BResult<(SValue, SValue)> {
-        let Some(RegionSelect::Sized(sized)) = self.multi_region else {
+        let Some(RegionSelect::Sized(_)) = self.multi_region else {
             return Err(dangling_value());
         };
         let r = region(fb)?;
@@ -1651,9 +1673,7 @@ impl KernelDecl {
         let flag = fb.binary(BinOp::BitwiseAnd, flags, bit)?;
         let zero = Self::k(fb, 0)?;
         let flagged = fb.binary(BinOp::INotEqual, flag, zero)?;
-        let sized = fb.module().const_value(sized)?;
-        let ragged = fb.binary(BinOp::LogicalAnd, sized, flagged)?;
-        Ok((ragged, grid))
+        Ok((flagged, grid))
     }
 
     /// A `bool` constant.

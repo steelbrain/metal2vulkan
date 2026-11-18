@@ -10973,6 +10973,7 @@ method	metal2vulkan::library::CompiledFunction::attribute_fetches	pub fn attribu
 method	metal2vulkan::library::CompiledFunction::fragment_push_base	pub fn fragment_push_base(&self) -> u32
 method	metal2vulkan::library::CompiledFunction::from_bytes	pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<CompiledFunction, ArtifactError>
 method	metal2vulkan::library::CompiledFunction::from_bytes_for_key	pub fn from_bytes_for_key(bytes: &[u8], key: &FunctionCompileKey, device: &Device) -> Result<CompiledFunction, ArtifactError>
+method	metal2vulkan::library::CompiledFunction::is_image_only	pub fn is_image_only(&self) -> bool
 method	metal2vulkan::library::CompiledFunction::key	pub fn key(&self) -> &FunctionCompileKey
 method	metal2vulkan::library::CompiledFunction::max_total_threads_attribute	pub fn max_total_threads_attribute(&self) -> Option<u32>
 method	metal2vulkan::library::CompiledFunction::module_stats	pub fn module_stats(&self) -> ModuleStats
@@ -16641,6 +16642,7 @@ variant	metal2vulkan::pipeline::SpecKey::BoundTexelFormat	BoundTexelFormat(SlotR
 variant	metal2vulkan::pipeline::SpecKey::ConstantLanes	ConstantLanes(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::FilteringArgumentSampler	FilteringArgumentSampler
 variant	metal2vulkan::pipeline::SpecKey::FlatLocalSize	FlatLocalSize
+variant	metal2vulkan::pipeline::SpecKey::FoldedTile	FoldedTile
 variant	metal2vulkan::pipeline::SpecKey::HeapNanFamilies	HeapNanFamilies(Stage)
 variant	metal2vulkan::pipeline::SpecKey::HeapRawTextures	HeapRawTextures(Stage)
 variant	metal2vulkan::pipeline::SpecKey::HeapYCbCrTextures	HeapYCbCrTextures(Stage)

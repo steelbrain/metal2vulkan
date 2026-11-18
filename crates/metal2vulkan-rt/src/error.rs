@@ -796,7 +796,10 @@ pub enum Limit {
     /// Basis: ours (block numbers are 32 bits).
     BlockIds,
     /// A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds
-    /// 1,024 by 1,024 by 64). Metal's go to 1,024 on every axis.
+    /// 1,024 by 1,024 by 64), where the threadgroup is the Vulkan workgroup: a kernel that observes
+    /// its threadgroup partition, and any kernel's indirect dispatch. A direct dispatch of a kernel
+    /// that does not observe it runs in workgroups of the runtime's, within the floor, whatever its
+    /// threadgroup size. Metal's go to 1,024 on every axis.
     ///
     /// Basis: device (the device's `maxComputeWorkGroupSize`).
     ThreadgroupShape {

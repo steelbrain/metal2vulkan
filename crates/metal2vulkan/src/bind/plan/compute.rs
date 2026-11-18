@@ -708,6 +708,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             | SpecKey::FlatLocalSize
             | SpecKey::MultiRegion
             | SpecKey::StageInReach => continue,
+            // A grid tile's region carries its tile.
+            SpecKey::FoldedTile => 0,
             SpecKey::TgLength(n) => {
                 let len = u64::from(ks.threadgroup_lengths.get(&n).copied().unwrap_or(0));
                 let len = len.next_multiple_of(TG_ALIGN);

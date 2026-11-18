@@ -1,6 +1,7 @@
 mod arrays;
 mod blit;
 mod cache;
+mod choice;
 mod command;
 mod compute;
 mod copy_over;

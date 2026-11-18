@@ -223,8 +223,14 @@ pub(crate) enum Form {
     /// The kernel does not observe its threadgroup partition: `whole`, its partial-threadgroups
     /// variant, runs its grid in tiles (`RuntimeFact::GridTiles`): every direct dispatch in
     /// workgroups of `GRID_TILE_THREADS`, each a `grid_tile` tile of its grid, whatever the
-    /// threadgroup size.
+    /// threadgroup size; a grid more than one deep on a `VkPipeline` that folds its tile
+    /// ([`Variant::fold`]).
     Tiled,
+    /// The kernel does not observe its partition and is image-only
+    /// (`CompiledFunction::is_image_only`): `whole` runs a direct dispatch of a grid one deep in
+    /// workgroups of [`SQUARE`] at `MultiRegion` 0, whatever the threadgroup size, and a deeper
+    /// grid as [`Form::Tiled`] does.
+    Square,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, and a
     /// `dispatchThreads` grid that is not a whole number of threadgroups on the
     /// partial-threadgroups variant, where the translator made one.
@@ -346,6 +352,9 @@ pub(crate) enum Constant {
     /// tile; 0 for every other launch, whose region states the pipeline's own threadgroup size,
     /// so the kernel takes `L` from its workgroup size and reads no decode.
     MultiRegion,
+    /// `FoldedTile`: the tile a kernel's grid tiles' pipeline folds ([`Variant::fold`]), packed
+    /// as a region packs it, 0 for none.
+    FoldedTile,
 }
 
 /// A parameter and where it goes.
@@ -388,14 +397,22 @@ pub(crate) enum FieldValue {
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
-/// order of [`Interface::threadgroups`], and whether it runs a kernel's grid tiles.
+/// order of [`Interface::threadgroups`], whether it runs a kernel's grid tiles, and the tile it
+/// folds.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Variant {
     pub(crate) size: [u32; 3],
     pub(crate) threadgroup_lengths: Vec<u32>,
     /// The launches are a kernel's grid tiles (`MultiRegion` 1).
     pub(crate) tiles: bool,
+    /// The tile the grid tiles' `VkPipeline` folds (`SpecKey::FoldedTile`), so the driver folds
+    /// its masks and shifts; `None` where each region carries it.
+    pub(crate) fold: Option<[u32; 3]>,
 }
+
+/// The workgroup an image-only kernel that does not observe its threadgroup partition runs a grid
+/// one deep in ([`Form::Square`]).
+pub(crate) const SQUARE: [u32; 3] = [16, 16, 1];
 
 impl crate::Device {
     /// `newComputePipelineStateWithDescriptor:options:reflection:error:`, without reflection.
@@ -482,7 +499,7 @@ impl Compiled {
             compiled.kernel = StageSource::Compiled(function);
             translator.compile_compute_pipeline(&compiled, &budget)
         };
-        let (whole, partial, observes, source) = match &descriptor.kernel {
+        let (whole, partial, observes, image_only, source) = match &descriptor.kernel {
             StageSource::Function(function) => {
                 let entries = StageEntries::new();
                 let plain = translator
@@ -516,9 +533,10 @@ impl Compiled {
                 };
                 match variant {
                     Some(variant) if !variant.observes_threadgroup_partition() => {
+                        let image_only = variant.is_image_only();
                         let pipeline = compiled(variant).map_err(Error::Translation)?;
                         let observes = !grid_tiles(&pipeline);
-                        (pipeline, None, observes, Some(source))
+                        (pipeline, None, observes, image_only, Some(source))
                     }
                     Some(variant) => {
                         let plain = lower(&plain).and_then(compiled);
@@ -527,17 +545,19 @@ impl Compiled {
                             plain.map_err(Error::Translation)?,
                             Some(variant.map_err(Error::Translation)?),
                             true,
+                            false,
                             Some(source),
                         )
                     }
                     None => {
                         let plain = lower(&plain).and_then(compiled);
-                        (plain.map_err(Error::Translation)?, None, true, Some(source))
+                        let plain = plain.map_err(Error::Translation)?;
+                        (plain, None, true, false, Some(source))
                     }
                 }
             }
             // A kernel the consumer compiled: the variant it was compiled under.
-            StageSource::Compiled(_) => {
+            StageSource::Compiled(function) => {
                 let pipeline = translator
                     .compile_compute_pipeline(descriptor, &budget)
                     .map_err(Error::Translation)?;
@@ -548,7 +568,7 @@ impl Compiled {
                 // variant states `GridTiles`: a module without it observes its partition or is
                 // the plain module, and runs at its own size.
                 let observes = !grid_tiles(&pipeline);
-                (pipeline, None, observes, None)
+                (pipeline, None, observes, function.is_image_only(), None)
             }
         };
         let required = descriptor.required_threads_per_threadgroup;
@@ -572,9 +592,10 @@ impl Compiled {
         let mut compiled = Compiled::new(
             core,
             whole,
-            match observes {
-                false => Form::Tiled,
-                true => Form::Sized { partial: None },
+            match (observes, image_only) {
+                (false, false) => Form::Tiled,
+                (false, true) => Form::Square,
+                (true, _) => Form::Sized { partial: None },
             },
             emulated,
             notes,
@@ -585,11 +606,19 @@ impl Compiled {
                 partial: Some(Box::new(partial)),
             };
         }
-        if let Form::Tiled = compiled.form {
+        // A tiling kernel's grids one deep run on one `VkPipeline`, made with the state: its
+        // tiles', or an image-only kernel's square workgroups'.
+        let first = match compiled.form {
+            Form::Tiled => Some(([GRID_TILE_THREADS, 1, 1], true)),
+            Form::Square => Some((SQUARE, false)),
+            Form::Sized { .. } => None,
+        };
+        if let Some((size, tiles)) = first {
             let variant = Variant {
-                size: [GRID_TILE_THREADS, 1, 1],
+                size,
                 threadgroup_lengths: vec![0; compiled.whole.interface.threadgroups.len()],
-                tiles: true,
+                tiles,
+                fold: None,
             };
             let made = compiled.whole.make(&compiled.core, &variant)?;
             lock(&compiled.whole.variants).push((variant, made));
@@ -926,6 +955,7 @@ fn interface(
                     .ok_or_else(gap)?,
             ),
             SpecKey::MultiRegion => Constant::MultiRegion,
+            SpecKey::FoldedTile => Constant::FoldedTile,
             _ => return Err(gap()),
         };
         constants.push((constant.id, set));
@@ -1247,6 +1277,9 @@ impl Kernel {
                 Constant::Threads => variant.size.iter().product(),
                 Constant::ThreadgroupLength(at) => variant.threadgroup_lengths[at],
                 Constant::MultiRegion => u32::from(variant.tiles),
+                Constant::FoldedTile => variant
+                    .fold
+                    .map_or(0, |t| (t[0] - 1) | (t[1] - 1) << 10 | (t[2] - 1) << 20),
             })
             .flat_map(u32::to_ne_bytes)
             .collect();

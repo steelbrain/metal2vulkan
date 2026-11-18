@@ -1704,6 +1704,118 @@ fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
     }
 }
 
+/// On `Device::from_queries`' profile the module of a kernel's grid tiles runs a direct dispatch
+/// at a size its runtime picks, at `MultiRegion` 0: over grids ragged along every axis, along
+/// one, and whole, in workgroups of 16x16x1, the region flagged `NONUNIFORM` where they do not
+/// divide the grid, each of the grid's threads stores Metal's position once and no invocation
+/// past the grid stores anything. A pipeline that folds the tile (`SpecKey::FoldedTile`, the
+/// tile packed as the region packs its nominal size) runs the tile it folds whatever the region
+/// states: with each region stating 256x1x1, the folded tile's workgroups store the grid's
+/// positions as that tile's.
+#[test]
+fn an_oblivious_kernels_tiles_run_at_a_chosen_size_and_fold_their_tile() {
+    use crate::lower::dispatch::{grid_tile, GRID_TILE_THREADS};
+    let Some(bc) = assemble_text("edge", &edge_kernel()) else {
+        return;
+    };
+    let mut inputs = LowerInputs::new();
+    inputs.partial_threadgroups = true;
+    let packed = |t: [u32; 3]| u64::from((t[0] - 1) | (t[1] - 1) << 10 | (t[2] - 1) << 20);
+    for stem in PROFILES {
+        let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let p = device.profile();
+        let a = compile_with(&bc, "edge", p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(
+            a.interface
+                .spec
+                .iter()
+                .any(|c| c.key == SpecKey::FoldedTile),
+            "{stem}: GridTiles without FoldedTile"
+        );
+        let (plan, module) =
+            typed_module_with(&bc, "edge", p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        for grid in [
+            [7, 5, 3],
+            [20, 40, 2],
+            [300, 1, 1],
+            [32, 16, 1],
+            [24, 24, 8],
+        ] {
+            for (local, fold) in [
+                ([16, 16, 1], None),
+                ([GRID_TILE_THREADS, 1, 1], Some(grid_tile(grid))),
+            ] {
+                let tile = fold.unwrap_or(local);
+                let groups: [u32; 3] = std::array::from_fn(|i| grid[i].div_ceil(tile[i]));
+                let ragged = (0..3).any(|i| !grid[i].is_multiple_of(tile[i]));
+                // Every word a launched invocation could store at, so a store past the grid shows.
+                let len = ((groups[2] * tile[2] * grid[1] + groups[1] * tile[1]) * grid[0]
+                    + groups[0] * tile[0]) as usize;
+                // A folded pipeline's regions state another tile.
+                let nominal = if fold.is_some() {
+                    [GRID_TILE_THREADS, 1, 1]
+                } else {
+                    local
+                };
+                let mut region = region_bytes([0; 3], grid, nominal).expect("packs");
+                if ragged {
+                    region[28..32].copy_from_slice(&NONUNIFORM.to_le_bytes());
+                }
+                let mut spec = local_size3(local);
+                if let Some(fold) = fold {
+                    spec.insert(SpecKey::MultiRegion, 1);
+                    spec.insert(SpecKey::FoldedTile, packed(fold));
+                }
+                let res = Resources {
+                    buffers: vec![Buffer {
+                        slot: None,
+                        address: Some(OUT),
+                        bytes: vec![0; 4 * len],
+                    }],
+                    push: grid_push(&plan, OUT, region),
+                    spec,
+                };
+                let cfg = Config {
+                    workgroups: groups,
+                    ..Config::default()
+                };
+                let got = run(&module, &cfg, res)
+                    .unwrap_or_else(|e| panic!("{stem} {grid:?} {tile:?}: {e}"));
+                assert_eq!(
+                    got.buffers[0],
+                    edge_words(grid, len),
+                    "{stem} {grid:?} {tile:?} folded {}",
+                    fold.is_some()
+                );
+            }
+        }
+    }
+}
+
+/// Whether a kernel is image-only (`KernelFacts::image_only`), on the harness's kernels
+/// (`fixtures/public/harness/workloads.ll`): a kernel that samples one texture into another
+/// through a runtime sampler (`sample_down`), and one that reads one texture, writes another
+/// and loads its extent from `constant` memory (`sample_up_fetch_sized`), are; one that reads a
+/// texture into a `device` buffer (`texels_out`) and one that writes a texture from one
+/// (`texels_in`) are not.
+#[test]
+fn a_kernel_whose_memory_work_is_images_alone_is_image_only() {
+    let Some(bc) = workloads() else {
+        return;
+    };
+    let p = profile("lavapipe", identity()).unwrap_or_else(|e| panic!("{e}"));
+    for (entry, want) in [
+        ("sample_down", true),
+        ("sample_up_fetch_sized", true),
+        ("texels_out", false),
+        ("texels_in", false),
+    ] {
+        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));
+        assert_eq!(a.kernel.image_only, want, "{entry}");
+    }
+}
+
 /// The `OpControlBarrier`s of disassembly `text`: how many open a block that only a branch on
 /// `1 < N` (an `OpSpecConstantOp ULessThan` of the constant 1) enters, and how many others.
 fn barrier_guards(text: &str) -> (usize, usize) {

@@ -887,7 +887,7 @@ codec_enum! {
         SamplerAnisotropy(f0), RangeAtBindOffset(f0), PlainHalfTexels(f0),
         NearestPixelSampler(f0), BoundSamplerWord(f0), HeapYCbCrTextures(f0),
         FilteringArgumentSampler, StageInReach, HeapRawTextures(f0), BorderTexels(f0),
-        HeapNanFamilies(f0), HeapYCbCrWrites(f0),
+        HeapNanFamilies(f0), HeapYCbCrWrites(f0), FoldedTile,
     }
     PushField {
         RootTableAddress, ExecutionStatusAddress, DispatchRegion, BaseVertexInstance,
@@ -1368,7 +1368,7 @@ codec_struct! {
     TextureReferenceType { data_type, texture_type, access, depth }
     KernelFacts {
         max_total_threads, work_group_size, flat_local_size, static_threadgroup_bytes,
-        partition_oblivious, partition_simdgroups,
+        partition_oblivious, partition_simdgroups, image_only,
     }
     StrategyCensus { entries }
     StrategyUse { uses, words }
