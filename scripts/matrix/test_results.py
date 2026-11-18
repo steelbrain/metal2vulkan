@@ -502,25 +502,6 @@ class HarnessBudgetTests(unittest.TestCase):
                                   results.RETIME_SELECT], input=lines, capture_output=True, text=True, check=True)
         self.assertEqual([line.split()[1] for line in run.stdout.splitlines()], ["frame"])
 
-    def test_a_row_within_its_limit_only_on_a_seeded_floor_over_1_10_is_named(self):
-        floors = {"a": {"frame": 1.2, "alu": 1.2, "listed": 1.2, "narrow": 1.08}}
-        ceilings = {"a": {"listed": 1.1}}
-        times = {"harness-old/frame": 100.0, "harness-new/frame": 115.0,
-                 "harness-old/alu": 100.0, "harness-new/alu": 102.0,
-                 "harness-old/listed": 100.0, "harness-new/listed": 116.0,
-                 "harness-old/narrow": 100.0, "harness-new/narrow": 110.0}
-        with mock.patch.object(results, "HARNESS_CEILINGS", ceilings), \
-                mock.patch.object(results, "HARNESS_FLOORS", floors):
-            self.assertEqual(self.budget("a", times), ([], [
-                "harness budget frame: new 115.0 us over old 100.0 us is 1.150, passed on a seeded floor "
-                "> 1.10, its floor 1.2",
-                "harness budget listed: new 116.0 us over old 100.0 us is 1.160, its ceiling 1.1, passed on a "
-                "seeded floor > 1.10, its floor 1.2"]))
-            # Within the budget, or within its ceiling's allowance, the floor decides nothing.
-            times["harness-new/listed"] = 113.0
-            self.assertEqual(self.budget("a", times)[1][1],
-                             "harness budget listed: new 113.0 us over old 100.0 us is 1.130, its ceiling 1.1")
-
     def test_every_row_shows_its_times_and_gpu_times_on_both_runtimes(self):
         times = {"harness-old/frame": 100.0, "harness-new/frame": 120.0,
                  "harness-gpu-old/frame": 80.25, "harness-gpu-new/frame": 81.0,

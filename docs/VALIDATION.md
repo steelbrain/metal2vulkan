@@ -361,9 +361,6 @@ alone, old then new, then new then old (A B B A). It fails only if the median of
 is past its limit too. A leg re-times at most 8 rows, the furthest over first; a row it does not
 re-time is judged by its one time. The pairs are kept as `harness-retime/<row>/<pair>/<runtime>` records, parked for the
 `time` rule.
-The floors table is seeded from the old runtime's runs under an earlier harness, so a row within
-its limit only because its floor there is over 1.10 is named on the leg's line ("passed on a
-seeded floor > 1.10") until the table is measured again with this harness.
 Each row's GPU time on each runtime, the p50 over its timed runs of a run's first GPU start to its
 last GPU end, is recorded as `time harness-gpu-<runtime>/<row>` where the row has one. It is
 judged by nothing: the budget's lines show it beside the row's times, and it is parked for the

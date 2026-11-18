@@ -357,11 +357,6 @@ def read_floors(text):
 #: runtime's. The table is measured again when the harness or the old runtime's build changes; a
 #: row or leg it does not list has a floor of 1.
 HARNESS_FLOORS = read_floors((Path(__file__).resolve().parent / "floors.tsv").read_text())
-#: The floors table is seeded from the old runtime's runs under an earlier harness, so no row
-#: closes on it: a row within its limit only because its floor is over this is named on its leg's
-#: line (seeded_floor). The table measured again with this harness replaces the seed and deletes
-#: this.
-SEEDED_FLOOR_OPEN = 1.10
 
 
 def row_limit(leg_id, row):
@@ -380,17 +375,6 @@ def past_limit(leg_id, row):
         return f"past {HARNESS_BUDGET}"
     name, value = ("ceiling", ceiling) if ceiling >= floor else ("floor", floor)
     return f"past its {name} {value} with its allowance, {row_limit(leg_id, row):.3f}"
-
-
-def seeded_floor(leg_id, row, ratio):
-    """How a line names ROW passing on LEG_ID at RATIO only on a seeded floor over
-    SEEDED_FLOOR_OPEN (within its limit, past HARNESS_BUDGET times its ceiling or the budget
-    alone), or nothing."""
-    floor = HARNESS_FLOORS.get(leg_id, {}).get(row, 1.0)
-    ceiling = HARNESS_CEILINGS.get(leg_id, {}).get(row, 1.0)
-    if floor > SEEDED_FLOOR_OPEN and HARNESS_BUDGET * ceiling < ratio <= row_limit(leg_id, row):
-        return f", passed on a seeded floor > {SEEDED_FLOOR_OPEN:.2f}, its floor {floor}"
-    return ""
 
 
 #: The harness's creation rows, by the start of their names. A leg times them apart from the
@@ -532,18 +516,14 @@ def harness_budget(leg_id, leg):
             old, new = (statistics.median(values) for values in samples)
             line = (f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us over old "
                     f"{old:.1f} us is {new / old:.3f}")
-            seeded = seeded_floor(leg_id, row, new / old)
             if new / old > limit:
                 problems.append(f"{line}, {past_limit(leg_id, row)}")
             elif row in ceilings:
-                parked.append(f"{line}, its ceiling {ceilings[row]}{seeded}")
-            elif seeded:
-                parked.append(f"{line}{seeded}")
+                parked.append(f"{line}, its ceiling {ceilings[row]}")
             continue
         ratio = new / old
         line = (f"harness budget {row}: new {new:.1f} us{gpu_beside(times, 'new', row)} over old "
                 f"{old:.1f} us{gpu_beside(times, 'old', row)} is {ratio:.3f}")
-        seeded = seeded_floor(leg_id, row, ratio)
         if ratio > limit:
             past = f"{line}, {past_limit(leg_id, row)}"
             ratios = retimed(times, row)
@@ -556,13 +536,13 @@ def harness_budget(leg_id, leg):
             if median > limit:
                 problems.append(pairs)
             else:
-                parked.append(f"{pairs}, within: judged by the median{seeded_floor(leg_id, row, median)}")
-        elif row in ceilings and ratio > HARNESS_BUDGET:
-            parked.append(f"{line}, its ceiling {ceilings[row]}{seeded}")
-        elif row in ceilings:
+                parked.append(f"{pairs}, within: judged by the median")
+        elif row not in ceilings:
+            continue
+        elif ratio > HARNESS_BUDGET:
+            parked.append(f"{line}, its ceiling {ceilings[row]}")
+        else:
             parked.append(f"{line}, within {HARNESS_BUDGET}: its ceiling {ceilings[row]} leaves the list")
-        elif seeded:
-            parked.append(f"{line}{seeded}")
     return problems, parked
 
 
