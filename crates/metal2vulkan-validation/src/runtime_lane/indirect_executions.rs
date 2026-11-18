@@ -487,14 +487,18 @@ fn same_variant(a: &Execution, b: &Execution) -> bool {
 /// shape. A case the runtime refuses directly is refused the same from a command. A run whose
 /// command buffer does not complete within its bound of the device's own time ([`run`]) fails as
 /// timed out: the dispatch's, [`HANG`], against a hang alone; the command's, held to the
-/// dispatch's own time ([`command_bound`]). A case whose dispatch timed out runs no command;
+/// dispatch's own time ([`command_bound`]). A run whose command buffer fails as Metal's timeout
+/// (the runtime's watchdog, `CommandBufferError::GpuHang`) fails as hung, whatever the other run
+/// gave ([`unfinished`]). A case whose dispatch timed out runs no command;
 /// where the device still runs its work after as long again, the shard stops there and says how
 /// many of its cases did not run. Each case's waits print with their wall time and the part of it
 /// a thread of the process waited for a CPU.
 ///
 /// The cases are split into `SHARDS` tests by their place in the cases' order, every
-/// `SHARDS`th case to one, so nextest runs the pieces in parallel (one test of all of them took
-/// about 325 s on lavapipe). A shard maps only its own cases: assembling and mapping each case
+/// `SHARDS`th case to one, so each piece stays within a test's time (one test of all of them took
+/// about 325 s on lavapipe). Each piece runs alone (`.config/nextest.toml`), so that a case's work
+/// has the device and the host's CPUs to itself against Metal's bound, which the runtime's
+/// watchdog holds it to. A shard maps only its own cases: assembling and mapping each case
 /// (`llvm-as`, the AIR interface, the Metal observation) took most of that time, and one shard that
 /// mapped every case took 224 s alone.
 fn every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch(shard: usize) {
@@ -506,7 +510,7 @@ fn every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch(shard: usize)
     .unwrap();
     let messages = Messages::default();
     let (mut alike, mut refused, mut failed) = (Vec::new(), Vec::new(), Vec::new());
-    let (mut compile_failed, mut timed_out) = (Vec::new(), Vec::new());
+    let (mut compile_failed, mut timed_out, mut hung) = (Vec::new(), Vec::new(), Vec::new());
     let mut skipped = 0;
     // The case whose work the device still ran after its timeout, that timeout's bound, and how
     // many cases followed it.
@@ -575,39 +579,44 @@ fn every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch(shard: usize)
                         failed.push(format!("{name}: {}", differs.join("; ")));
                     }
                 }
-                (direct, indirect) if timed(&direct) || timed(&indirect) => {
-                    timed_out.push(format!(
+                (direct, indirect) => {
+                    let (direct, indirect) = (direct.err(), indirect.err());
+                    let both = format!(
                         "{name}: the dispatch gave {:?}, the command {:?}",
-                        direct.err().map(|e| e.to_string()),
-                        indirect.err().map(|e| e.to_string())
-                    ))
-                }
-                (Err(direct), Err(indirect))
-                    if compile_failed_alike(
-                        &direct,
-                        &indirect,
+                        direct.as_ref().map(|e| e.to_string()),
+                        indirect.as_ref().map(|e| e.to_string())
+                    );
+                    let verdict = unfinished(
+                        direct.as_ref(),
+                        indirect.as_ref(),
                         &direct_reported,
                         &indirect_reported,
-                    ) =>
-                {
-                    let texts: BTreeSet<&str> =
-                        direct_reported.iter().map(|m| m.text.as_str()).collect();
-                    let (dispatch, command) = (direct_reported.len(), indirect_reported.len());
-                    compile_failed.push(format!(
-                        "{name}: {direct} (from the command: {indirect}); the device reported \
-                         {dispatch} times for the dispatch and {command} for the command \
-                         {texts:?}"
-                    ));
-                    device_failure = true;
+                    );
+                    match (verdict, direct, indirect) {
+                        (Unfinished::Hung, ..) => hung.push(format!(
+                            "{both}; {}; {}",
+                            clocks("the dispatch", direct_waited),
+                            clocks("the command", indirect_waited)
+                        )),
+                        (Unfinished::TimedOut, ..) => timed_out.push(both),
+                        (Unfinished::CompileFailedAlike, Some(direct), Some(indirect)) => {
+                            let texts: BTreeSet<&str> =
+                                direct_reported.iter().map(|m| m.text.as_str()).collect();
+                            let (dispatch, command) =
+                                (direct_reported.len(), indirect_reported.len());
+                            compile_failed.push(format!(
+                                "{name}: {direct} (from the command: {indirect}); the device \
+                                 reported {dispatch} times for the dispatch and {command} for \
+                                 the command {texts:?}"
+                            ));
+                            device_failure = true;
+                        }
+                        (Unfinished::RefusedAlike, Some(direct), Some(indirect)) => {
+                            refused.push(format!("{name}: {direct} (from the command: {indirect})"))
+                        }
+                        _ => failed.push(both),
+                    }
                 }
-                (Err(direct), Err(indirect)) => {
-                    refused.push(format!("{name}: {direct} (from the command: {indirect})"))
-                }
-                (direct, indirect) => failed.push(format!(
-                    "{name}: the dispatch gave {:?}, the command {:?}",
-                    direct.err().map(|e| e.to_string()),
-                    indirect.err().map(|e| e.to_string())
-                )),
             }
             let reported = [direct_reported, indirect_reported].concat();
             if !device_failure && !reported.is_empty() {
@@ -624,11 +633,12 @@ fn every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch(shard: usize)
     eprintln!(
         "runtime indirect commands on {device_name}, shard {shard} of {SHARDS}: {} match their \
          own dispatch, {} refused alike, {} failed to compile alike on the device, {} timed out, \
-         {} failed, of {} cases of buffers alone ({skipped} others)",
+         {} hung, {} failed, of {} cases of buffers alone ({skipped} others)",
         alike.len(),
         refused.len(),
         compile_failed.len(),
         timed_out.len(),
+        hung.len(),
         failed.len(),
         cases.len() - skipped - stopped.map_or(0, |(_, _, after)| after)
     );
@@ -656,10 +666,13 @@ fn every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch(shard: usize)
         eprintln!("compile failed alike: {why}");
     }
     assert!(
-        failed.is_empty() && timed_out.is_empty() && leaked.is_empty(),
-        "failed:\n{}\ntimed out:\n{}\nat device destruction: {leaked:#?}",
+        failed.is_empty() && timed_out.is_empty() && hung.is_empty() && leaked.is_empty(),
+        "failed:\n{}\ntimed out:\n{}\nhung (the runtime's watchdog, Metal's timeout, failed the \
+         command buffer, so the forms were not compared):\n{}\nat device destruction: \
+         {leaked:#?}",
         failed.join("\n"),
-        timed_out.join("\n")
+        timed_out.join("\n"),
+        hung.join("\n")
     );
     layer_reported_nothing(
         &messages,
@@ -671,6 +684,78 @@ fn every_case_of_buffers_alone_runs_from_a_command_as_its_dispatch(shard: usize)
 /// Whether `run` timed out ([`Failed::TimedOut`]).
 fn timed(run: &Result<Run, Failed>) -> bool {
     matches!(run, Err(Failed::TimedOut { .. }))
+}
+
+/// How a case's two runs stand where at least one did not complete ([`unfinished`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unfinished {
+    /// A run's command buffer failed as the runtime's watchdog fails one that runs past Metal's
+    /// bound (`CommandBufferError::GpuHang`, Metal's timeout): its work did not finish, so the
+    /// forms were not compared. It fails the shard whatever the other run did: neither agreement
+    /// nor a refusal.
+    Hung,
+    /// A run did not complete within the test's own bound ([`Failed::TimedOut`]).
+    TimedOut,
+    /// Both failed making the case's pipeline alike ([`compile_failed_alike`]).
+    CompileFailedAlike,
+    /// Both were refused, otherwise.
+    RefusedAlike,
+    /// One completed and the other failed.
+    Differs,
+}
+
+/// How a case's dispatch and its command stand where at least one did not complete: `direct`
+/// and `indirect` are their failures, `None` for a run that completed, and `direct_reported` and
+/// `indirect_reported` what the device reported for each. A hang on either form comes first.
+fn unfinished(
+    direct: Option<&Failed>,
+    indirect: Option<&Failed>,
+    direct_reported: &[DebugMessage],
+    indirect_reported: &[DebugMessage],
+) -> Unfinished {
+    let hung = |failed: Option<&Failed>| {
+        matches!(
+            failed,
+            Some(Failed::Command(Some(CommandBufferError::GpuHang), _))
+        )
+    };
+    let timed = |failed: Option<&Failed>| matches!(failed, Some(Failed::TimedOut { .. }));
+    if hung(direct) || hung(indirect) {
+        return Unfinished::Hung;
+    }
+    if timed(direct) || timed(indirect) {
+        return Unfinished::TimedOut;
+    }
+    match (direct, indirect) {
+        (Some(direct), Some(indirect))
+            if compile_failed_alike(direct, indirect, direct_reported, indirect_reported) =>
+        {
+            Unfinished::CompileFailedAlike
+        }
+        (Some(_), Some(_)) => Unfinished::RefusedAlike,
+        _ => Unfinished::Differs,
+    }
+}
+
+/// A hang is never agreement and never a refusal: two runs that both failed as Metal's timeout
+/// fail as hung, as does one beside a run that completed or was refused; two refusals stay
+/// refused alike. Without the device: the classification alone.
+#[test]
+fn a_hang_on_either_form_is_hung_and_never_refused_alike() {
+    let hang = || Failed::Command(Some(CommandBufferError::GpuHang), None);
+    let refusal = || Failed::Other("refused".to_owned());
+    let verdict = |direct: Option<Failed>, indirect: Option<Failed>| {
+        unfinished(direct.as_ref(), indirect.as_ref(), &[], &[])
+    };
+    assert_eq!(verdict(Some(hang()), Some(hang())), Unfinished::Hung);
+    assert_eq!(verdict(None, Some(hang())), Unfinished::Hung);
+    assert_eq!(verdict(Some(hang()), None), Unfinished::Hung);
+    assert_eq!(verdict(Some(refusal()), Some(hang())), Unfinished::Hung);
+    assert_eq!(
+        verdict(Some(refusal()), Some(refusal())),
+        Unfinished::RefusedAlike
+    );
+    assert_eq!(verdict(None, Some(refusal())), Unfinished::Differs);
 }
 
 /// The bound `run` timed out at, where the device still ran its work after as long again.
