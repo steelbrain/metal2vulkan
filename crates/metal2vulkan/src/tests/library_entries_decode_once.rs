@@ -399,6 +399,11 @@ fn a_partition_check_and_the_kernels_compile_order_its_entry_once() {
             "the compile finds the entry the check ordered rather than ordering it again ({name})"
         );
         assert_eq!(
+            entries.counts(),
+            (1, 1),
+            "the check made the specialized entry and the compile found it ({name})"
+        );
+        assert_eq!(
             work, expected.2,
             "the compile is charged the work units of its own unshared compile, the order it found \
              included ({name})"

@@ -1341,7 +1341,8 @@ impl Kept {
     }
 
     /// The entry of `fd` at `depth` ordered for `key`, both made the most recently used, with
-    /// what specializing it and what ordering it charged: `None` where either is not held.
+    /// what specializing it and what ordering it charged, counted found as an entry and as an
+    /// order: `None` where either is not held.
     fn take_ordered(
         &mut self,
         air_hash: &Hash256,
@@ -1355,6 +1356,8 @@ impl Kept {
         let order = entry.ordered.remove(at);
         let found = (Arc::clone(&order.ordered), entry.spent, order.spent);
         entry.ordered.push(order);
+        // The ask found the specialized entry too, as `take` counts it.
+        self.found += 1;
         self.orders_found += 1;
         Some(found)
     }
