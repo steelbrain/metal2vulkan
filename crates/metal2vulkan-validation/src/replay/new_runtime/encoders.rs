@@ -3,7 +3,7 @@
 //! whose bindings hold a skipped object, and a blit command the runtime does not build or that
 //! names a skipped object, are skipped and counted.
 
-use super::super::args::{arg, data, index, list, range, refuse, uint, Fields};
+use super::super::args::{arg, data, index, list, range, refuse, uint, variant, Fields};
 use super::{failed, Held, NewRuntime, Object};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
@@ -517,16 +517,22 @@ impl NewRuntime {
             // A skipped resource is counted above, with the blits that name a skipped object.
             "synchronizeResource:" => match self.resource(call, 0)? {
                 // A buffer with a second copy: the GPU's copy into the CPU's, its whole words.
-                Held::Buffer(buffer) => match self.seconds.cpu(Self::id(call, 0)?).cloned() {
-                    Some(cpu) => {
-                        let words = buffer.length() / 4 * 4;
-                        self.blit(id)
-                            .copy_from_buffer_to_buffer(&buffer, 0, &cpu, 0, words)
+                Held::Buffer(buffer) => {
+                    let (_, object) = variant(call, arg(call, 0)?)?;
+                    let second = object
+                        .as_object()
+                        .and_then(|object| self.seconds.cpu(object));
+                    match second.cloned() {
+                        Some(cpu) => {
+                            let words = buffer.length() / 4 * 4;
+                            self.blit(id)
+                                .copy_from_buffer_to_buffer(&buffer, 0, &cpu, 0, words)
+                        }
+                        None => self
+                            .blit(id)
+                            .synchronize_resource(rt::Resource::Buffer(&buffer)),
                     }
-                    None => self
-                        .blit(id)
-                        .synchronize_resource(rt::Resource::Buffer(&buffer)),
-                },
+                }
                 Held::Texture(texture) => self
                     .blit(id)
                     .synchronize_resource(rt::Resource::Texture(&texture)),
