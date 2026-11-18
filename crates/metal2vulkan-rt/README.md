@@ -908,6 +908,16 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   took 3,585 and 4,605 µs in 16x16 workgroups; the runtime binds buffers only by address. In the
   two recorded streams measured, kernels that observe their partition, store to device memory and
   run threadgroups 32 threads wide or narrower ran 2.0% and 3.4% of the threads dispatched.
+- A kernel that does not observe its threadgroup partition and is not image-only runs a grid more
+  than one deep in the tiles its regions carry, as it does a grid one deep. On an RX 550 (RADV,
+  Mesa 26.2.6), a kernel storing 4 bytes per thread through its device address took 2.6, 9.4 and
+  30.2 µs over grids of 4x16x312, 24x24x252 and 256x256x8 in tiles, and 2.2, 8.6 and 25.0 µs on a
+  pipeline that took the tile as a specialization constant, which the runtime does not make. On
+  Intel's Windows driver (101.2145) for the UHD 630, the same kernel over the 24x24x252 grid took
+  1.26 and 1.59 times the old runtime's time in two runs (medians of 93.6 against 74.0 µs and
+  79.7 against 50.0 µs; within one run, one form's rounds ranged up to 2.8 times apart). The old
+  runtime's form, the 8x8x4 threadgroup as the workgroup and the buffer through a storage-buffer
+  descriptor, took 0.97 of the tiles' time in this runtime in the first of those runs.
 - A dispatch of a size other than the descriptor's `requiredThreadsPerThreadgroup`, which Metal's
   validation stops, runs at the size it gives.
 - NVIDIA 615.71.09 on GA10x gives sign-extended bits for a mask over a signed clamp, to exactly N
