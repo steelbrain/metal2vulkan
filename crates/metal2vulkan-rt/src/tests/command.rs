@@ -721,8 +721,10 @@ pub(crate) mod on_device {
     /// What a second queue adds, counted: with the first queue's two busy command buffers
     /// running, the second queue's first two commits go alone (two lone submissions across
     /// queues); once both queues have two running, a commit on each is held, the second opening
-    /// its group beside the first's (one group beside another queue). No group goes for a reason
-    /// that is not its own queue's.
+    /// its group beside the first's (one group beside another queue). Both counted before any
+    /// busy one completes: a held group that goes as its own queue's work retires is lone too
+    /// where the other queue's is still in flight, which turns on when the completion thread
+    /// looks. No group goes for a reason that is not its own queue's.
     #[test]
     fn every_device_counts_what_a_second_queue_adds() {
         each_device("command_cross_queue", |name, _, device| {
@@ -747,7 +749,8 @@ pub(crate) mod on_device {
                         command_buffer.status() != CommandBufferStatus::Committed
                     });
                 }
-                // Every busy one ran past the held ones' staging: the counts are this test's.
+                let held_now = device.counters().metrics();
+                // Every busy one ran past that read: no retirement sent anything counted in it.
                 let ran = running.iter().all(|command_buffer| {
                     command_buffer.status() != CommandBufferStatus::Completed
                 });
@@ -761,8 +764,8 @@ pub(crate) mod on_device {
                     "{name}"
                 );
                 let counted = (
-                    after.lone_submissions_across_queues - before.lone_submissions_across_queues,
-                    after.groups_beside_another_queue - before.groups_beside_another_queue,
+                    held_now.lone_submissions_across_queues - before.lone_submissions_across_queues,
+                    held_now.groups_beside_another_queue - before.groups_beside_another_queue,
                 );
                 if ran {
                     assert_eq!(counted, (2, 1), "{name}: lone submissions, groups beside");
@@ -775,7 +778,8 @@ pub(crate) mod on_device {
     }
 
     /// A commit's wait for the submission lock is counted: one made while another thread holds
-    /// the lock for 20 ms waits at least that long.
+    /// the lock for 20 ms waits at least half that long (the committing thread starts within the
+    /// 20 ms, not before them).
     #[test]
     fn every_device_counts_a_commits_wait_for_the_submission_lock() {
         each_device("command_lock_wait", |name, _, device| {
@@ -795,7 +799,7 @@ pub(crate) mod on_device {
             finished(name, &command_buffer);
             let metrics = device.counters().metrics();
             assert!(
-                metrics.commit_lock_wait_max_nanos >= 20_000_000,
+                metrics.commit_lock_wait_max_nanos >= 10_000_000,
                 "{name}: {}",
                 metrics.commit_lock_wait_max_nanos
             );
