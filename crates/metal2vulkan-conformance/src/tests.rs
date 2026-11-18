@@ -7922,3 +7922,35 @@ fn an_in_set_write_takes_the_whole_case_set_alone() {
     assert_eq!(write_refusal(Shape::Alone, 36, whole), None);
     assert_eq!(write_refusal(Shape::Alone, whole, whole), None);
 }
+
+/// A translator refusal is the venue's lack only where the device offers none of its alternatives:
+/// an alternative whose features and extensions it all offers makes the refusal the runtime's
+/// (`rt_side::offers_one`); a limit, a missing feature, or a refusal naming no alternative does not.
+#[test]
+fn a_refusal_of_what_the_device_offers_is_the_runtime_s() {
+    use metal2vulkan::device::{ApiVersion, DeviceDescription, VkExtension, VkFeature};
+    use metal2vulkan::error::{Capability, Feature, Unsupported};
+    let mut offered = DeviceDescription::new(ApiVersion::V1_3);
+    offered.features.insert(VkFeature::SampleRateShading);
+    let feature = |f| Capability::Feature(f);
+    let any = |alternatives| Unsupported::needs_any_of(Feature::SampleRateShading, alternatives);
+    let offers = |u: &Unsupported| crate::rt_side::offers_one(&offered, u);
+    assert!(offers(&any(vec![vec![feature(
+        VkFeature::SampleRateShading
+    )]])));
+    // One alternative offered whole is enough; one offered in part is not.
+    assert!(offers(&any(vec![
+        vec![Capability::Extension(VkExtension::KhrShaderDrawParameters)],
+        vec![feature(VkFeature::SampleRateShading)],
+    ])));
+    assert!(!offers(&any(vec![vec![
+        feature(VkFeature::SampleRateShading),
+        feature(VkFeature::ShaderDrawParameters),
+    ]])));
+    assert!(!offers(&any(vec![vec![Capability::Extension(
+        VkExtension::KhrShaderDrawParameters
+    )]])));
+    assert!(!offers(&Unsupported::not_implemented(
+        Feature::SampleRateShading
+    )));
+}

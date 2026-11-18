@@ -147,7 +147,7 @@ impl RtSide<'_> {
         let stage = |stage: &StageFunction<'_>| -> Answer<rt::StageSource> {
             let named = stage.library.unwrap_or(library);
             let function = (self.held_library(named)?.function(stage.entry))
-                .map_err(|error| Failure::of_translation(&error))?;
+                .map_err(|error| self.on.translation_failure(&error))?;
             Ok(rt::StageSource::Function(rt::FunctionDescriptor::new(
                 function,
             )))
@@ -169,7 +169,7 @@ impl RtSide<'_> {
         let on = self.on;
         let state = (on.device)
             .new_render_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
-            .map_err(of_rt)?;
+            .map_err(|error| on.failure(&error))?;
         Ok(keep(&mut self.render_pipelines, state))
     }
 

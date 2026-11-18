@@ -5,7 +5,9 @@
 //! ends refused, its row naming the call: nothing is skipped, and nothing is answered for it. The
 //! rows it refuses are held to their own ledger, `known-gaps-rt.tsv`
 //! ([`crate::known_gaps::rt_ledger`]). The old runtime's side ([`crate::runtime_side`]) is
-//! untouched by this one.
+//! untouched by this one. A translator refusal that names capabilities the device offers is the
+//! runtime's refusal and not the venue's lack: the runtime's floor leaves them off
+//! (`RtDevice::failure`).
 //!
 //! The runtime places a buffer where its consumer says, in a block the consumer took; this side
 //! takes a block of the buffer's own length for each buffer, Shared, as a case's buffers are, and
@@ -32,6 +34,7 @@ use crate::empty_command_buffers::{
 use crate::event_orders::Status;
 use crate::transcript::{Negative, Value};
 use ash::vk;
+use metal2vulkan::device::{ApiVersion, DeviceDescription};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan_rt as rt;
 use std::cell::RefCell;
@@ -39,6 +42,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
+mod compute;
 mod render;
 
 /// How long a wait for a command buffer waits before the side records that it never returned:
@@ -61,6 +65,10 @@ pub struct RtDevice {
     device: rt::Device,
     venue: Venue,
     indices: RefCell<Indices>,
+    /// What the physical device offers, as the translator's description reads it: what decides
+    /// whether a refusal that names capabilities is the venue's lack or the runtime's
+    /// ([`RtDevice::failure`]).
+    offered: DeviceDescription,
 }
 
 impl RtDevice {
@@ -91,6 +99,16 @@ impl RtDevice {
         let mut refused = Vec::new();
         for (_, physical) in candidates {
             let venue = venue(&instance, &physical);
+            // SAFETY: the physical device is the instance's, which the runtime made at its
+            // floor's version.
+            let offered = unsafe {
+                DeviceDescription::query(
+                    raw,
+                    physical.raw(),
+                    ApiVersion::from_packed(rt::floor::VERSION),
+                )
+            }
+            .map_err(|error| format!("{}: {error}", venue.device))?;
             match rt::Device::new(&physical, rt::DeviceOptions::default()) {
                 Ok(device) => {
                     for class in [rt::IndexClass::Texture, rt::IndexClass::Sampler] {
@@ -102,6 +120,7 @@ impl RtDevice {
                         device,
                         venue,
                         indices: RefCell::default(),
+                        offered,
                     });
                 }
                 Err(why) => refused.push(format!("{}: {why}", venue.device)),
@@ -121,6 +140,33 @@ impl RtDevice {
     /// The runtime's device.
     pub fn device(&self) -> &rt::Device {
         &self.device
+    }
+
+    /// The failure a typed error of the runtime is on this device. A translator refusal that names
+    /// capabilities is the venue's lack only where the device offers none of its alternatives;
+    /// where it offers one, the capability is one `metal2vulkan-rt`'s floor leaves off, a typed
+    /// refusal of the runtime's until a stream uses it, and the failure is the runtime's refusal.
+    pub(crate) fn failure(&self, error: &rt::Error) -> Failure {
+        let mut failure = Failure::of_rt(error);
+        if let rt::Error::Translation(metal2vulkan::error::Error::Unsupported(unsupported)) = error
+        {
+            if offers_one(&self.offered, unsupported) {
+                failure.lacks = None;
+            }
+        }
+        failure
+    }
+
+    /// [`RtDevice::failure`] of a translator error, where the side calls the translator's library
+    /// itself.
+    pub(crate) fn translation_failure(&self, error: &metal2vulkan::error::Error) -> Failure {
+        let mut failure = Failure::of_translation(error);
+        if let metal2vulkan::error::Error::Unsupported(unsupported) = error {
+            if offers_one(&self.offered, unsupported) {
+                failure.lacks = None;
+            }
+        }
+        failure
     }
 
     /// The next index of `class`, round the class's range: an object made there takes the index
@@ -161,6 +207,26 @@ impl RtDevice {
             })
             .collect()
     }
+}
+
+/// Whether `offered` holds every capability of one of the alternatives `unsupported` names: its
+/// features and extensions. A property, limit, format or version is the device's own answer,
+/// which device creation does not choose, and a refusal of another kind names no alternative.
+pub(crate) fn offers_one(
+    offered: &DeviceDescription,
+    unsupported: &metal2vulkan::error::Unsupported,
+) -> bool {
+    use metal2vulkan::error::{Capability, Needs};
+    let Needs::AnyOf(alternatives) = &unsupported.needs else {
+        return false;
+    };
+    alternatives.iter().any(|all| {
+        all.iter().all(|capability| match capability {
+            Capability::Feature(feature) => offered.features.contains(feature),
+            Capability::Extension(extension) => offered.extensions.contains(extension),
+            _ => false,
+        })
+    })
 }
 
 /// The texture and sampler indices the side hands out: the last index of each class taken, and
@@ -384,20 +450,20 @@ impl Side for RtSide<'_> {
 
     fn library(&mut self, source: &ShaderSource<'_>) -> Answer<Handle> {
         let library = rt::Library::from_air(source.bitcode)
-            .map_err(|error| Failure::of_translation(&error))?;
+            .map_err(|error| self.on.translation_failure(&error))?;
         Ok(keep(&mut self.libraries, library))
     }
 
     fn compute_pipeline(&mut self, library: Handle, entry: &str) -> Answer<Handle> {
         let function = (self.held_library(library)?.function(entry))
-            .map_err(|error| Failure::of_translation(&error))?;
+            .map_err(|error| self.on.translation_failure(&error))?;
         let descriptor = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(
             rt::FunctionDescriptor::new(function),
         ));
         let on = self.on;
         let state = (on.device)
             .new_compute_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
-            .map_err(|error| Failure::of_rt(&error))?;
+            .map_err(|error| on.failure(&error))?;
         Ok(keep(&mut self.pipelines, state))
     }
 
@@ -524,7 +590,7 @@ impl Side for RtSide<'_> {
         stage_input: &StageInput,
     ) -> Answer<Handle> {
         let function = (self.held_library(library)?.function(entry))
-            .map_err(|error| Failure::of_translation(&error))?;
+            .map_err(|error| self.on.translation_failure(&error))?;
         let mut descriptor = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(
             rt::FunctionDescriptor::new(function),
         ));
@@ -532,7 +598,7 @@ impl Side for RtSide<'_> {
         let on = self.on;
         let state = (on.device)
             .new_compute_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
-            .map_err(|error| Failure::of_rt(&error))?;
+            .map_err(|error| on.failure(&error))?;
         Ok(keep(&mut self.pipelines, state))
     }
 
@@ -640,6 +706,13 @@ impl Side for RtSide<'_> {
 
     fn render(&mut self, work: &[crate::render::RenderWork]) -> Answer<crate::case::PassOutcome> {
         self.run_render(work)
+    }
+
+    fn compute_pass(
+        &mut self,
+        pass: &crate::compute_pass::ComputePass<'_>,
+    ) -> Answer<crate::compute_pass::ComputePassOutcome> {
+        self.run_compute_pass(pass)
     }
 
     /// The facts the runtime holds: the status, the four times and the work's completion. The
