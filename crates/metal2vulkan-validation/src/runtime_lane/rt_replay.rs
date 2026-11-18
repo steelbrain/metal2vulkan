@@ -86,22 +86,40 @@ fn floats(values: &[f32]) -> Value {
     Value::Bytes(values.iter().flat_map(|v| v.to_le_bytes()).collect())
 }
 
-/// The render library's `colored_vertex` (a vertex function of positions and colours by vertex
-/// index, from buffers 0 and 1) and `colored_fragment` (its colour), in a metallib.
-fn render_library() -> Vec<u8> {
+/// The render fixture's `colored_vertex` (a vertex function of positions and colours by vertex
+/// index, from buffers 0 and 1) and `colored_fragment` (its colour), in a metallib. A metallib
+/// function's module declares that function as its one entry, so each function's module is the
+/// fixture with its entry lists cut to that function's, assembled in `dir`.
+fn render_library(dir: &ScratchDir) -> Vec<u8> {
     let ll = metal2vulkan_devtools::fixtures_dir().join("examples/runtime_examples.ll");
-    let bitcode = wrap(&metal2vulkan_devtools::llvm_assemble(&ll).unwrap());
-    let function = |name, type_code| MtlbFunction {
-        name,
-        type_code,
-        bitcode: bitcode.clone(),
-        constants: Vec::new(),
-        public: Vec::new(),
-        tags: Vec::new(),
+    let text = std::fs::read_to_string(ll).unwrap();
+    let lists = ["!air.kernel = ", "!air.vertex = ", "!air.fragment = "];
+    let function = |name: &'static str, type_code, list: &str| {
+        let mut module: String = (text.lines())
+            .filter(|line| !lists.iter().any(|list| line.starts_with(list)))
+            .flat_map(|line| [line, "\n"])
+            .collect();
+        // The function's own entry node: `!N = !{ptr @name, ...}`.
+        let node = text.lines().find_map(|line| {
+            let (node, rest) = line.split_once(" = ")?;
+            rest.starts_with(&format!("!{{ptr @{name}, "))
+                .then_some(node)
+        });
+        module.push_str(&format!("{list}!{{{}}}\n", node.expect("the entry node")));
+        let path = dir.path().join(format!("{name}.ll"));
+        std::fs::write(&path, module).unwrap();
+        MtlbFunction {
+            name,
+            type_code,
+            bitcode: wrap(&metal2vulkan_devtools::llvm_assemble(&path).unwrap()),
+            constants: Vec::new(),
+            public: Vec::new(),
+            tags: Vec::new(),
+        }
     };
     metallib(&[
-        function("colored_vertex", 0),
-        function("colored_fragment", 1),
+        function("colored_vertex", 0, lists[1]),
+        function("colored_fragment", 1, lists[2]),
     ])
 }
 
@@ -110,7 +128,7 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
     let dir = ScratchDir::new("rt-replay-draw").unwrap();
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
     let path = written(&dir, |w| {
-        let library = w.blob(&render_library())?;
+        let library = w.blob(&render_library(&dir))?;
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
         w.call("newCommandQueue", 1, 2, &[], &[])?;
         w.call(
