@@ -299,8 +299,8 @@ fn words_outside_the_live_ranges_span_stay() {
     ];
     let mut bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     assert_eq!(map.relocate(&mut bytes, 0), (2, 0));
-    let after: Vec<u64> = (bytes.chunks_exact(8))
-        .map(|w| u64::from_le_bytes(w.try_into().unwrap()))
+    let after: Vec<u64> = (bytes.as_chunks::<8>().0.iter())
+        .map(|&w| u64::from_le_bytes(w))
         .collect();
     assert_eq!(
         after,
