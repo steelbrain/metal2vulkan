@@ -107,7 +107,7 @@ fn failed<'c>(call: &'c Call) -> impl Fn(rt::Error) -> PlayError + 'c {
     }
 }
 
-fn translated<'c>(call: &'c Call) -> impl Fn(metal2vulkan::Error) -> PlayError + 'c {
+fn translated<'c, E: std::fmt::Display>(call: &'c Call) -> impl Fn(E) -> PlayError + 'c {
     move |error| PlayError::Runtime {
         selector: call.selector.to_string(),
         error: error.to_string(),
