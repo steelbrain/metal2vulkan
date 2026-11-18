@@ -13,6 +13,9 @@
 //!     no memory records nothing.
 //!   - 2,000 draws in one encoder move none of the device's counters while it is open; its end
 //!     adds the pass, the push and the 1,999 pushes held.
+//!   - on a GPU, the lock budget (`crate::tests::locks`): 2,000 draws more in a recording, and
+//!     2,000 more each with a vertex buffer and a fragment texture set before it, add no locked
+//!     instruction.
 //!   - a draw of lines makes its content's line `VkPipeline` once, a first-use wait, and draws
 //!     its row.
 //!   - a stencil state that replaces the stencil marks what a draw covers, and one that tests it
@@ -417,6 +420,93 @@ mod on_device {
             });
             assert_eq!(read(&color, 4), want, "{name}: the texels");
             println!("{name}: 2,000 draws counted once, at the encoder's end");
+        });
+    }
+
+    /// The lock budget of draws (`crate::tests::locks`): a recording of 4,000 draws executes no
+    /// more locked instructions than one of 2,000.
+    #[test]
+    #[cfg(m2v_gpu)]
+    fn every_gpu_adds_no_locked_instruction_per_draw() {
+        use crate::tests::locks::Locks;
+        let Some(library) = examples() else {
+            return;
+        };
+        let Some(locks) = Locks::open("draw_locks") else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("draw_locks", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            locks.per_added(name, "draw", 2_000, |count| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                draw(encoder.set_render_pipeline_state(&state));
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                for _ in 0..count {
+                    draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                }
+                encoder.end_encoding();
+                run(name, &command_buffer);
+            });
+        });
+    }
+
+    /// The lock budget of binds (`crate::tests::locks`): a recording of 4,000 draws, each with a
+    /// vertex buffer and a fragment texture set before it, both alternating between two objects
+    /// so that every set changes its slot, executes no more locked instructions than one of
+    /// 2,000.
+    #[test]
+    #[cfg(m2v_gpu)]
+    fn every_gpu_adds_no_locked_instruction_per_bind() {
+        use crate::tests::locks::Locks;
+        let Some(library) = examples() else {
+            return;
+        };
+        let Some(locks) = Locks::open("bind_locks") else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("bind_locks", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let (other, _) = vertices(&device, &mut buffers);
+            let positions = [positions, other];
+            let textures = [(), ()]
+                .map(|()| target(&device, PixelFormat::RGBA8Unorm, TextureUsage::SHADER_READ));
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            locks.per_added(name, "bound draw", 2_000, |count| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                draw(encoder.set_render_pipeline_state(&state));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                for at in 0..count as usize {
+                    draw(encoder.set_vertex_buffer(Some(&positions[at % 2]), 0, 0));
+                    draw(encoder.set_fragment_texture(Some(&textures[at % 2]), 0));
+                    draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                }
+                encoder.end_encoding();
+                run(name, &command_buffer);
+            });
         });
     }
 

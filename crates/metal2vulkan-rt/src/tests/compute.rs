@@ -4,7 +4,8 @@
 //! block, barriers only at hazards in a serial encoder and only on
 //! request in a concurrent one, end barriers that reach the host only after Shared writes and
 //! signals, a dispatch of a kernel without effects that records nothing, 2,000 dispatches whose
-//! counts reach the device's counters only at their encoder's end, and Metal's refusals.
+//! counts reach the device's counters only at their encoder's end, on a GPU the lock budget of
+//! dispatches (`crate::tests::locks`), and Metal's refusals.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
@@ -373,6 +374,39 @@ pub(crate) mod on_device {
             let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
             assert_eq!(words(&x), expected, "{name}");
             println!("{name}: 2,000 dispatches counted once, at the encoder's end");
+        });
+    }
+
+    /// The lock budget of dispatches (`crate::tests::locks`): a recording of 4,000 dispatches,
+    /// each reading the one before's writes, executes no more locked instructions than one of
+    /// 2,000.
+    #[test]
+    #[cfg(m2v_gpu)]
+    fn every_gpu_adds_no_locked_instruction_per_dispatch() {
+        use crate::tests::locks::Locks;
+        let Some(locks) = Locks::open("compute_locks") else {
+            return;
+        };
+        each_device("compute_locks", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let state = step(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let x = arena.buffer();
+            locks.per_added(name, "dispatch", 2_000, |count| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&x), 0, 0).expect("a buffer");
+                for _ in 0..count {
+                    encoder
+                        .dispatch_threadgroups([4, 1, 1], [16, 1, 1])
+                        .expect("a dispatch");
+                }
+                encoder.end_encoding();
+                run(name, &command_buffer);
+            });
         });
     }
 

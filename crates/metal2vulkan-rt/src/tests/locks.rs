@@ -1,0 +1,89 @@
+//! The lock budget: the locked instructions an encoder call executes, counted as the difference
+//! between a recording of `2n` commands and one of `n`, over the `n` added. A locked instruction
+//! between two recorded commands flushes a write-combining command stream (on a discrete Radeon,
+//! about 490 ns each), so an encoder call's success path executes none (the runtime's README,
+//! "Encoder calls"). The count is the whole test process's in user space: the encoding thread's,
+//! the runtime's threads' and the driver's, whose locks per added command count as much.
+//!
+//! A node names the event that counts locked instructions on its CPU in `M2V_LOCK_EVENT`, as
+//! `perf` names a raw event (`metal2vulkan_devtools::instructions::ProcessEvent`):
+//! `cpu_core/r21d0` (an Intel performance core's `MEM_INST_RETIRED.LOCK_LOADS`) or `r1e25` (a
+//! Zen 4 core's locked instructions). A node that names none prints that it measured nothing.
+
+use metal2vulkan_devtools::instructions::{pin_this_thread, ProcessEvent};
+
+/// The variable naming the node's locked-instruction event.
+const EVENT: &str = "M2V_LOCK_EVENT";
+/// Measured pairs of a recording of `n` and one of `2n` commands, after the warm-up.
+const ROUNDS: usize = 7;
+/// The most locked instructions an added command may add, the least of the rounds' counts each.
+const BOUND: f64 = 0.02;
+
+/// The node's locked-instruction counter, for the whole process from its opening.
+pub(crate) struct Locks {
+    name: String,
+    event: ProcessEvent,
+}
+
+impl Locks {
+    /// The counter of the event the node names, with this thread, and so every thread it starts
+    /// after, pinned to the CPUs its unit counts on; `None`, printed, where the node names none.
+    /// Opened before the test makes its instance, so the runtime's and the driver's threads
+    /// count.
+    pub(crate) fn open(test: &str) -> Option<Locks> {
+        let Ok(name) = std::env::var(EVENT) else {
+            println!("LOCKS-UNMEASURED {test}: the node names no {EVENT}");
+            return None;
+        };
+        let event =
+            ProcessEvent::new(&name).unwrap_or_else(|error| panic!("{EVENT}={name}: {error}"));
+        if !event.cpus().is_empty() {
+            pin_this_thread(event.cpus())
+                .unwrap_or_else(|error| panic!("pinning to {name}'s CPUs: {error}"));
+        }
+        Some(Locks { name, event })
+    }
+
+    /// The locked instructions the process executed while `work` ran.
+    fn count(&self, work: impl FnOnce()) -> u64 {
+        let before = self.event.read().expect("reading the lock counter");
+        work();
+        self.event.read().expect("reading the lock counter") - before
+    }
+
+    /// Records, through `record`, `2n` commands of kind `what` twice to warm every ring, list and
+    /// pool to the longer recording's size, then [`ROUNDS`] pairs of `n` and `2n`; prints the
+    /// locked instructions per added command, the least count of each length's against the
+    /// other's, with every round's, and asserts it is at most [`BOUND`].
+    pub(crate) fn per_added(&self, device: &str, what: &str, n: u32, mut record: impl FnMut(u32)) {
+        record(2 * n);
+        record(2 * n);
+        let mut short = Vec::with_capacity(ROUNDS);
+        let mut long = Vec::with_capacity(ROUNDS);
+        for _ in 0..ROUNDS {
+            short.push(self.count(|| record(n)));
+            long.push(self.count(|| record(2 * n)));
+        }
+        let least = |counts: &[u64]| *counts.iter().min().expect("a round") as f64;
+        let added = (least(&long) - least(&short)) / f64::from(n);
+        let each: Vec<f64> = (short.iter().zip(&long))
+            .map(|(&short, &long)| (long as f64 - short as f64) / f64::from(n))
+            .collect();
+        let spread = (each.iter().copied()).fold((f64::MAX, f64::MIN), |(low, high), round| {
+            (low.min(round), high.max(round))
+        });
+        println!(
+            "LOCKS {device}: {added:.4} locked instructions per added {what} ({} {what}s less {n}, \
+             least of {ROUNDS} rounds each; the rounds' {:.4} to {:.4}; {short:?} and {long:?}; \
+             {})",
+            2 * n,
+            spread.0,
+            spread.1,
+            self.name
+        );
+        assert!(
+            added <= BOUND,
+            "{device}: {added:.4} locked instructions per added {what}, over the budget's {BOUND}"
+        );
+    }
+}

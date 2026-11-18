@@ -19,9 +19,14 @@
 //! [`ThreadInstructions`] counts named threads alone, by their OS ids: the harness's own thread and
 //! the threads a runtime says it started, apart from the threads a driver starts for itself.
 //!
+//! [`ProcessEvent`] counts the whole process in user space as [`ProcessInstructions`] does, for a
+//! raw event of one unit named the way `perf` names it: what the runtime's lock budget counts
+//! locked instructions with.
+//!
 //! Only Linux offers the counters (read here on its little-endian targets): elsewhere
-//! [`InstructionCounter::new`], [`ProcessInstructions::new`] and [`ThreadInstructions::new`] answer
-//! [`io::ErrorKind::Unsupported`], and nothing records an `instructions` line there.
+//! [`InstructionCounter::new`], [`ProcessInstructions::new`], [`ThreadInstructions::new`] and
+//! [`ProcessEvent::new`] answer [`io::ErrorKind::Unsupported`], and nothing records an
+//! `instructions` line there.
 
 use std::io;
 use std::marker::PhantomData;
@@ -206,6 +211,145 @@ impl ThreadInstructions {
     }
 }
 
+/// A raw event the whole process retires in user space, on one performance-monitoring unit: the
+/// thread that opens it and every thread started after it, as [`ProcessInstructions`] counts
+/// instructions.
+///
+/// [`ProcessEvent::new`] takes the event as `perf` names a raw one: `<unit>/r<hex>`, the raw
+/// `config` `<hex>` on the unit the kernel lists as `<unit>` (`cpu_core/r21d0`: an Intel
+/// performance core's `MEM_INST_RETIRED.LOCK_LOADS`, one per locked instruction), or `r<hex>` on
+/// the unit `cpu` (`r1e25`: a Zen 4 core's locked instructions, event 0x25 with unit mask 0x1e). A
+/// trailing `/`, `/u` or `:u` changes nothing: the count is user space's alone. The unit of one
+/// core type of a hybrid CPU counts on that type's CPUs alone ([`ProcessEvent::cpus`]), so a
+/// program pins itself to them ([`pin_this_thread`]) before it opens the counter and starts its
+/// threads.
+pub struct ProcessEvent {
+    #[cfg(all(target_os = "linux", target_endian = "little"))]
+    event: std::fs::File,
+    #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+    never: std::convert::Infallible,
+    cpus: Vec<usize>,
+}
+
+impl ProcessEvent {
+    /// Opens the event `name`, counting from now. An error is a name of another form
+    /// ([`io::ErrorKind::InvalidInput`]), a unit the kernel does not list, the kernel's refusal, or
+    /// [`io::ErrorKind::Unsupported`] off Linux.
+    pub fn new(name: &str) -> io::Result<Self> {
+        let (unit, config) = raw_event(name)?;
+        #[cfg(all(target_os = "linux", target_endian = "little"))]
+        {
+            let (kind, cpus) = linux::unit(unit)?;
+            let event = linux::open_raw_inherited(kind, config)?;
+            Ok(Self { event, cpus })
+        }
+        #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+        {
+            let _ = (unit, config);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "user-space event counters are read through Linux's perf_event_open alone",
+            ))
+        }
+    }
+
+    /// The events the process retired since the open: its threads still running and those that
+    /// ended.
+    pub fn read(&self) -> io::Result<u64> {
+        #[cfg(all(target_os = "linux", target_endian = "little"))]
+        {
+            linux::read(&self.event)
+        }
+        #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+        {
+            match self.never {}
+        }
+    }
+
+    /// The CPUs the unit counts on, where the kernel lists them (a hybrid CPU's core type); empty
+    /// where it counts on every CPU.
+    pub fn cpus(&self) -> &[usize] {
+        &self.cpus
+    }
+}
+
+/// The unit and raw `config` of an event named `<unit>/r<hex>` or `r<hex>` (on the unit `cpu`),
+/// with an optional trailing `/`, `/u` or `:u`.
+fn raw_event(name: &str) -> io::Result<(&str, u64)> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{name:?} is not a raw event (`<unit>/r<hex>` or `r<hex>`)"),
+        )
+    };
+    let bare = ["/u", ":u", "/"]
+        .iter()
+        .find_map(|suffix| name.strip_suffix(suffix))
+        .unwrap_or(name);
+    let (unit, event) = match bare.split_once('/') {
+        Some((unit, event)) if !unit.is_empty() => (unit, event),
+        Some(_) => return Err(invalid()),
+        None => ("cpu", bare),
+    };
+    let hex = event.strip_prefix('r').ok_or_else(invalid)?;
+    let config = u64::from_str_radix(hex, 16).map_err(|_| invalid())?;
+    Ok((unit, config))
+}
+
+/// The CPUs of a kernel CPU list (`0-11,16`).
+fn cpu_list(text: &str) -> io::Result<Vec<usize>> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{text:?} is not a CPU list"),
+        )
+    };
+    let mut cpus = Vec::new();
+    for part in text.trim().split(',').filter(|part| !part.is_empty()) {
+        let (first, last) = part.split_once('-').unwrap_or((part, part));
+        let first: usize = first.parse().map_err(|_| invalid())?;
+        let last: usize = last.parse().map_err(|_| invalid())?;
+        if last < first {
+            return Err(invalid());
+        }
+        cpus.extend(first..=last);
+    }
+    Ok(cpus)
+}
+
+/// Pins the calling thread to `cpus`, and so every thread it starts after. An error is the
+/// kernel's refusal, or [`io::ErrorKind::Unsupported`] off Linux.
+pub fn pin_this_thread(cpus: &[usize]) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: a zeroed `cpu_set_t` is an empty set.
+        let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
+        for &cpu in cpus {
+            if cpu >= libc::CPU_SETSIZE as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("CPU {cpu} is past the set's size"),
+                ));
+            }
+            // SAFETY: `cpu` is below `CPU_SETSIZE`.
+            unsafe { libc::CPU_SET(cpu, &mut set) };
+        }
+        // SAFETY: `set` is a valid `cpu_set_t` of the size passed.
+        if unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&set), &set) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cpus;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "threads are pinned through Linux's sched_setaffinity alone",
+        ))
+    }
+}
+
 /// The calling thread's Linux thread id (`gettid`), which [`ThreadInstructions::new`] takes; `None`
 /// off Linux.
 pub fn this_thread() -> Option<u64> {
@@ -279,6 +423,31 @@ mod linux {
         Ok(events)
     }
 
+    /// The `type` number and the CPUs (empty: every CPU) of the unit the kernel lists as `unit`.
+    pub(super) fn unit(unit: &str) -> io::Result<(u32, Vec<usize>)> {
+        let dir = std::path::Path::new(UNITS).join(unit);
+        let kind = fs::read_to_string(dir.join("type"))
+            .map_err(|error| io::Error::new(error.kind(), format!("{}: {error}", dir.display())))?;
+        let kind = kind.trim().parse().map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}/type: {error}", dir.display()),
+            )
+        })?;
+        let cpus = match fs::read_to_string(dir.join("cpus")) {
+            Ok(list) => super::cpu_list(&list)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        Ok((kind, cpus))
+    }
+
+    /// The raw user-space event `config` of the unit of `type` `kind`, of the calling thread and
+    /// every thread it starts after, counting from now.
+    pub(super) fn open_raw_inherited(kind: u32, config: u64) -> io::Result<File> {
+        open_on(0, kind, config, INHERIT | EXCLUDE_KERNEL | EXCLUDE_HV)
+    }
+
     /// The calling thread's user-space instructions event of `config`, disabled until enabled.
     pub(super) fn open(config: u64) -> io::Result<File> {
         open_with(config, DISABLED | EXCLUDE_KERNEL | EXCLUDE_HV)
@@ -292,19 +461,19 @@ mod linux {
 
     /// Thread `thread`'s own user-space instructions event of `config`, counting from now.
     pub(super) fn open_thread(thread: libc::pid_t, config: u64) -> io::Result<File> {
-        open_on(thread, config, EXCLUDE_KERNEL | EXCLUDE_HV)
+        open_on(thread, TYPE_HARDWARE, config, EXCLUDE_KERNEL | EXCLUDE_HV)
     }
 
     /// The calling thread's user-space instructions event of `config` with the bit fields `flags`.
     fn open_with(config: u64, flags: u64) -> io::Result<File> {
-        open_on(0, config, flags)
+        open_on(0, TYPE_HARDWARE, config, flags)
     }
 
-    /// Thread `thread`'s user-space instructions event of `config` (0: the calling thread) with the
-    /// bit fields `flags`.
-    fn open_on(thread: libc::pid_t, config: u64, flags: u64) -> io::Result<File> {
+    /// Thread `thread`'s (0: the calling thread's) event of `config` on the unit of `type` `kind`,
+    /// with the bit fields `flags`.
+    fn open_on(thread: libc::pid_t, kind: u32, config: u64, flags: u64) -> io::Result<File> {
         let mut attr = [0u8; ATTR_SIZE];
-        attr[ATTR_TYPE..ATTR_TYPE + 4].copy_from_slice(&TYPE_HARDWARE.to_ne_bytes());
+        attr[ATTR_TYPE..ATTR_TYPE + 4].copy_from_slice(&kind.to_ne_bytes());
         attr[ATTR_SIZE_FIELD..ATTR_SIZE_FIELD + 4]
             .copy_from_slice(&(ATTR_SIZE as u32).to_ne_bytes());
         attr[ATTR_CONFIG..ATTR_CONFIG + 8].copy_from_slice(&config.to_ne_bytes());
@@ -348,9 +517,55 @@ mod linux {
     }
 }
 
+#[cfg(test)]
+mod names {
+    use super::{cpu_list, raw_event};
+
+    /// A raw event's name gives its unit and config, `cpu` where it names none; a trailing `/`,
+    /// `/u` or `:u` is taken; anything else is refused.
+    #[test]
+    fn a_raw_event_name_gives_its_unit_and_config() {
+        for (name, want) in [
+            ("cpu_core/r21d0", ("cpu_core", 0x21d0)),
+            ("cpu_core/r21d0/", ("cpu_core", 0x21d0)),
+            ("cpu_core/r21d0/u", ("cpu_core", 0x21d0)),
+            ("r1e25", ("cpu", 0x1e25)),
+            ("r1e25:u", ("cpu", 0x1e25)),
+        ] {
+            assert_eq!(raw_event(name).expect(name), want, "{name}");
+        }
+        for name in [
+            "",
+            "r",
+            "1e25",
+            "/r1e25",
+            "cpu_core/mem_inst_retired.lock_loads/u",
+            "rxyz",
+        ] {
+            assert!(raw_event(name).is_err(), "{name:?} was taken");
+        }
+    }
+
+    /// A kernel CPU list gives its CPUs in order; a list of another form is refused.
+    #[test]
+    fn a_cpu_list_gives_its_cpus() {
+        assert_eq!(
+            cpu_list("0-3,8,10-11\n").expect("a list"),
+            [0, 1, 2, 3, 8, 10, 11]
+        );
+        assert_eq!(cpu_list("").expect("an empty list"), Vec::<usize>::new());
+        for list in ["3-1", "a", "0-"] {
+            assert!(cpu_list(list).is_err(), "{list:?} was taken");
+        }
+    }
+}
+
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
-    use super::{this_thread, InstructionCounter, ProcessInstructions, ThreadInstructions};
+    use super::{
+        pin_this_thread, this_thread, InstructionCounter, ProcessEvent, ProcessInstructions,
+        ThreadInstructions,
+    };
     use std::path::Path;
 
     /// Iterations of the fixed loop on each CPU.
@@ -392,20 +607,7 @@ mod tests {
 
     /// Pins this thread to `cpus`.
     fn pin(cpus: &[usize]) {
-        // SAFETY: a zeroed `cpu_set_t` is an empty set.
-        let mut set: libc::cpu_set_t = unsafe { std::mem::zeroed() };
-        for &cpu in cpus {
-            // SAFETY: `cpu` came from `allowed_cpus`, so it is below `CPU_SETSIZE`.
-            unsafe { libc::CPU_SET(cpu, &mut set) };
-        }
-        // SAFETY: `set` is a valid `cpu_set_t` of the size passed.
-        let got = unsafe { libc::sched_setaffinity(0, std::mem::size_of_val(&set), &set) };
-        assert_eq!(
-            got,
-            0,
-            "sched_setaffinity: {}",
-            std::io::Error::last_os_error()
-        );
+        pin_this_thread(cpus).unwrap_or_else(|error| panic!("sched_setaffinity: {error}"));
     }
 
     /// Exactly two instructions per iteration: a decrement and a branch.
@@ -506,6 +708,56 @@ mod tests {
         assert!(
             (expected..expected + expected / 20).contains(&counted),
             "{counted} user-space instructions counted for {expected}"
+        );
+    }
+
+    /// A raw event counts as `perf` names it: `rc0`, the instructions retired on Intel's and on
+    /// AMD's x86 cores alike (Intel's architectural event 0xc0, AMD's PMCx0C0), on the performance
+    /// cores' unit where the CPU has one, counts a thread's fixed loop, started after it opened, on
+    /// every CPU of that unit.
+    #[test]
+    fn a_raw_event_counts_a_thread_started_after_it_opened() {
+        if !counters_offered() {
+            assert!(
+                ProcessEvent::new("rc0").is_err(),
+                "the host offers no counters, yet a counter opened"
+            );
+            return;
+        }
+        let hybrid = Path::new("/sys/bus/event_source/devices/cpu_core").exists();
+        let name = if hybrid { "cpu_core/rc0/u" } else { "rc0" };
+        let allowed = allowed_cpus();
+        let cpus = match hybrid {
+            true => {
+                let unit = std::fs::read_to_string("/sys/bus/event_source/devices/cpu_core/cpus")
+                    .expect("the performance cores");
+                let unit = super::cpu_list(&unit).expect("a CPU list");
+                (allowed.iter().copied())
+                    .filter(|cpu| unit.contains(cpu))
+                    .collect::<Vec<_>>()
+            }
+            false => allowed.clone(),
+        };
+        pin(&cpus);
+        let event = ProcessEvent::new(name).expect("the host offers counters");
+        if hybrid {
+            assert!(!event.cpus().is_empty(), "{name}: the unit's CPUs");
+        }
+        let expected = 2 * ITERATIONS * cpus.len() as u64;
+        let before = event.read().expect("reading the counter");
+        let worker = std::thread::spawn(move || {
+            for &cpu in &cpus {
+                pin(&[cpu]);
+                fixed_loop(ITERATIONS);
+            }
+        });
+        worker.join().expect("the loop's thread");
+        let counted = event.read().expect("reading the counter") - before;
+        pin(&allowed);
+        // Starting and ending the thread and the pinning add their own instructions.
+        assert!(
+            (expected..expected + expected / 20).contains(&counted),
+            "{name}: {counted} counted for {expected} instructions"
         );
     }
 
