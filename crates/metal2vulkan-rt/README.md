@@ -515,7 +515,8 @@ that touch blocks first.
 - Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through
-  arithmetic defined for every value and never later than its `gpu_end_time`; and
+  arithmetic defined for every value and never later than its `gpu_end_time`, read once both were
+  written by a completed submission, waiting for the driver to make them available; and
   `Texture::get_bytes`'s copy out of its staging span, whose bytes reach only the caller's
   buffer, at offsets and lengths from the call's checked region. The parameter ring
   and an indirect dispatch's arguments are read only by the GPU: the runtime writes the ring and

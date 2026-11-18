@@ -9,12 +9,18 @@ use ash::vk;
 /// A completed command buffer's two timestamps, from its queue's pool; None where the driver does
 /// not report both, so the command buffer's GPU times stay 0.
 ///
+/// The read waits for the two values (`VK_QUERY_RESULT_WAIT_BIT`): a driver may make a timestamp
+/// available only after the submission's signal (MoltenVK 1.4.2 on an M3 Max did for most
+/// command buffers, which then had no times). Both were written by a submission that completed,
+/// so Vulkan makes them available; the caller reads only such queries.
+///
 /// Bound: the values only decide that command buffer's `GPUStartTime`, through arithmetic defined
-/// for every value that gives a time no later than its `GPUEndTime`. The read does not wait.
+/// for every value that gives a time no later than its `GPUEndTime`.
 ///
 /// # Safety
 ///
-/// `pool` is a timestamp pool of `device` with the queries `first` and `first + 1`.
+/// `pool` is a timestamp pool of `device` with the queries `first` and `first + 1`, both written
+/// by a submission that completed.
 pub(crate) unsafe fn timestamps(
     device: &ash::Device,
     pool: vk::QueryPool,
@@ -23,7 +29,12 @@ pub(crate) unsafe fn timestamps(
     let mut values = [0_u64; 2];
     // SAFETY: by the caller; `values` holds two 64-bit results.
     let read = unsafe {
-        device.get_query_pool_results(pool, first, &mut values, vk::QueryResultFlags::TYPE_64)
+        device.get_query_pool_results(
+            pool,
+            first,
+            &mut values,
+            vk::QueryResultFlags::TYPE_64 | vk::QueryResultFlags::WAIT,
+        )
     };
     read.ok().map(|()| (values[0], values[1]))
 }

@@ -321,11 +321,15 @@ impl Retiree {
         }
     }
 
-    /// A completed command buffer's two timestamps.
+    /// A completed command buffer's two timestamps, where it wrote both: the read waits for them,
+    /// and a query never written would never become available.
     fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
         match &self.item {
             Item::Command {
-                cb, error: None, ..
+                cb,
+                error: None,
+                written: 2,
+                ..
             } => cb.stamps(core),
             _ => None,
         }
