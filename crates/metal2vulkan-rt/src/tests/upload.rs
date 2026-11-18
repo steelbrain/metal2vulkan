@@ -6,7 +6,8 @@
 //!   submission, and hold nothing until one;
 //! - `replace_region` calls of twice the staging region's bytes into four textures stage every
 //!   copy in the region: no call allocates, the ring wraps, the upload goes each time its copies
-//!   take half the region, and each texture reads its last call's bytes;
+//!   take half the region, and each texture reads its last call's bytes; once the reads have
+//!   waited for every copy, the next copy's span starts at the region's start;
 //! - textures released while the upload holds them for a copy, and a block released while it
 //!   holds it for a zero fill, count against the bound, so the upload goes and frees them;
 //! - zero fills past [`UPLOAD_ENTRIES`] submit it;
@@ -154,6 +155,27 @@ mod on_device {
                 counters.gauges().blocks <= ceiling,
                 "{name}: after the reads"
             );
+            // The reads waited for every copy, so the ring is empty, and starts again at 0.
+            targets[0]
+                .replace_region(whole(side), 0, 0, &pattern(0), u64::from(side * 4), call)
+                .unwrap_or_else(|error| panic!("{name}: the copy after the reads: {error}"));
+            let spans = core.work.staging_spans();
+            assert_eq!(
+                spans
+                    .iter()
+                    .map(|&(start, end, _)| (start, end))
+                    .collect::<Vec<_>>(),
+                [(0, call)],
+                "{name}: the copy after the reads"
+            );
+            // A read of one texel sends it and waits, so the upload starts the next part empty.
+            let texel = Region {
+                origin: [0; 3],
+                size: [1, 1, 1],
+            };
+            targets[0]
+                .get_bytes(&mut [0; 4], 4, 4, texel, 0, 0)
+                .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
 
             // Textures of 4 MiB released after a copy of 64 bytes: the upload holds them alone.
             let big = 1024;

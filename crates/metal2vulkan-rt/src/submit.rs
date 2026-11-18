@@ -640,6 +640,14 @@ impl Work {
         }
     }
 
+    /// For the device tests: the staging region's live spans, oldest first; none before the
+    /// region is made.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn staging_spans(&self) -> Vec<(u64, u64, crate::staging::At)> {
+        let state = self.lock();
+        (state.region.as_ref()).map_or_else(Vec::new, |region| region.ring.live())
+    }
+
     /// Records the zero fill of `offset..end` of `block` into the upload.
     ///
     /// Err: as [`upload`](Self::upload).
