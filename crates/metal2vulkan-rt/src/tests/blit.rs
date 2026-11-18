@@ -1698,7 +1698,7 @@ pub(crate) mod on_device {
             let pool = &device.core().pool;
             pool.stocked(MemoryClass::Private) && pool.stocked(MemoryClass::Shared)
         });
-        within("the pipeline cache", || device.core().caches.is_made());
+        within("the pipeline cache", || device.core().caches.is_seeded());
     }
 
     /// `command_buffer` committed and complete with no error.

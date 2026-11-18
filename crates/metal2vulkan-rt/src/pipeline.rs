@@ -711,7 +711,7 @@ pub(crate) fn lower(
 }
 
 /// The one `VkPipeline` that `create` makes through the cache it is given: the device's one
-/// `VkPipelineCache` (`crate::cache`), which a creation before the reaper made it waits for.
+/// `VkPipelineCache` (`crate::cache`), which a creation before the reaper made it empty waits for.
 /// `call` names `create`'s Vulkan call. Counted as made.
 pub(crate) fn made_through_cache(
     core: &Core,

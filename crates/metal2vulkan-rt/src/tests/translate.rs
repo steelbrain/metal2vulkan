@@ -1295,6 +1295,7 @@ mod on_device {
             let _ = std::fs::remove_dir_all(&dir);
             let device = on_directory(name, physical, &dir);
             let caches = &device.core().caches;
+            within("the seed", || caches.is_seeded());
             let counters = device.counters();
             let a = state_and_look(name, &device, &first);
             let full = counters.gauges().pipeline_cache_bytes;
@@ -1374,13 +1375,13 @@ mod on_device {
                     std::env::temp_dir().join(format!("m2v-rt-refuse-{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&dir);
                 let device = on_directory(name, physical, &dir);
-                within("the pipeline cache", || device.core().caches.is_made());
+                within("the pipeline cache", || device.core().caches.is_seeded());
                 let blob = device.core().caches.blob().expect("a blob").to_owned();
                 drop(device);
                 assert!(!blob.exists(), "{name}: no creation, no blob");
                 std::fs::write(&blob, &bytes).expect("a blob");
                 let device = on_directory(name, physical, &dir);
-                within("the pipeline cache", || device.core().caches.is_made());
+                within("the pipeline cache", || device.core().caches.is_seeded());
                 assert!(!blob.exists(), "{name}: a blob {what} removed");
                 drop(state(name, &device, &tiled));
                 drop(device);

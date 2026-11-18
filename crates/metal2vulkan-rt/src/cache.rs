@@ -8,9 +8,12 @@
 //! named `pipelines-` and the hex of the first 16 bytes of the pipeline cache header the device's
 //! driver writes (everything in the header but the `pipelineCacheUUID`, which a driver update
 //! changes, so the update replaces the blob rather than leaving it beside a new one). The reaper
-//! makes the cache first when it starts, off the thread that makes the device; a creation that
-//! comes before it waits for it. A blob that does not check, whose data does not begin with the
-//! device's header, or that the driver refuses, is removed, and the cache starts empty.
+//! makes an empty cache first when it starts, which a creation that comes before it waits for
+//! (microseconds); then it reads the blob and makes a cache from it, merges into that what
+//! creations compiled in the empty cache meanwhile, and makes it the cache creations take. So no
+//! creation waits for the blob's read or parse. A blob that does not check, whose data does not
+//! begin with the device's header, or that the driver refuses, is removed, and the empty cache
+//! stays.
 //!
 //! The reaper writes the cache's data over the blob, a temporary file renamed over it and never
 //! appended to, once creation is quiet (no creation running and none for [`QUIET_NANOS`]) after a
@@ -614,6 +617,9 @@ pub(crate) struct Caches {
     grown: AtomicBool,
     /// [`PIPELINE_CACHE_BOUND`], lower in a test.
     bound: AtomicU64,
+    /// Whether the reaper has seeded the cache from the blob, or found none to take.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    seeded: AtomicBool,
     /// The reaper's looks at the cache.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     looks: AtomicUsize,
@@ -733,13 +739,15 @@ impl Caches {
             grown: AtomicBool::new(false),
             bound: AtomicU64::new(PIPELINE_CACHE_BOUND),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            seeded: AtomicBool::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             looks: AtomicUsize::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             writes: AtomicUsize::new(0),
         }
     }
 
-    /// The device's blob, where it has a cache directory and the reaper has made the cache.
+    /// The device's blob, where it has a cache directory and the reaper has seeded the cache.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn blob(&self) -> Option<&Path> {
         self.blob.get().map(PathBuf::as_path)
@@ -757,10 +765,10 @@ impl Caches {
         lock(&self.pipelines).retired.len()
     }
 
-    /// Whether the reaper has made the cache.
+    /// Whether the reaper has seeded the cache from the blob, or found none to take.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn is_made(&self) -> bool {
-        lock(&self.pipelines).made
+    pub(crate) fn is_seeded(&self) -> bool {
+        self.seeded.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// The current cache, held as a creation holds it, without counting as one.
@@ -818,9 +826,14 @@ impl Caches {
         self.keep_translation(key, REFUSED, counters);
     }
 
-    /// On the reaper, first: makes the device's `VkPipelineCache`, from its blob where the blob
-    /// checks, its data begins with the header the device's driver writes and the driver takes
-    /// it; else empty, removing a blob that is not taken. Creations waiting for the cache go on.
+    /// On the reaper, first: makes the device's `VkPipelineCache` empty, which creations waiting
+    /// for a cache take at once; then, where the device has a blob that checks, whose data begins
+    /// with the header the device's driver writes and that the driver takes, makes a cache from
+    /// it, merges into it what creations compiled in the empty cache meanwhile, and makes it the
+    /// cache creations take from then on. A blob that is not taken is removed. So no creation
+    /// waits for the blob's read or the driver's parse of it, which for a blob of 32 MiB take tens
+    /// of milliseconds; a creation that ends in the empty cache after the merge is not in this
+    /// run's blob.
     ///
     /// The blob is named by the hex of the header's first 16 bytes: everything in it but the
     /// `pipelineCacheUUID`, so a driver update replaces a device's blob rather than leaving it
@@ -831,12 +844,21 @@ impl Caches {
     /// `device` is the device of the caches.
     pub(crate) unsafe fn seed(&self, device: &ash::Device, counters: &Counters) {
         // SAFETY: no data.
-        let mut made = unsafe { make_cache(device, &[]) };
-        let header = made.and_then(|empty| {
+        let empty = unsafe { make_cache(device, &[]) };
+        let header = empty.and_then(|empty| {
             // SAFETY: the cache is the device's.
             let data = unsafe { device.get_pipeline_cache_data(empty) }.ok()?;
             data.first_chunk::<32>().copied()
         });
+        // SAFETY: the cache is the device's.
+        let size = empty.map_or(0, |cache| unsafe { data_size(device, cache) });
+        counters.set(Gauge::PipelineCacheBytes, size);
+        let mut pipelines = lock(&self.pipelines);
+        pipelines.current = empty.map(|cache| Arc::new(PipelineCache(cache)));
+        pipelines.written = size;
+        pipelines.made = true;
+        drop(pipelines);
+        self.made.notify_all();
         if let (Some(dir), Some(header)) = (&self.dir, header) {
             let path = dir.join(format!("{BLOB}-{}", hex(&header[..16])));
             let file = read_whole(&path, None).ok().flatten();
@@ -847,29 +869,51 @@ impl Caches {
             // whole, as its length and checksum show.
             let seeded = data.and_then(|data| unsafe { make_cache(device, data) });
             match seeded {
-                Some(seeded) => {
-                    if let Some(empty) = made.replace(seeded) {
-                        // SAFETY: the cache is the device's, and no creation has taken it.
-                        unsafe { device.destroy_pipeline_cache(empty, None) };
-                    }
-                }
+                // SAFETY: the cache is the device's, and this thread's alone.
+                Some(seeded) => unsafe { self.take_seeded(device, seeded, counters) },
                 None if file.is_some() => {
                     let _ = fs::remove_file(&path);
                 }
                 None => {}
             }
-            drop(file);
             let _ = self.blob.set(path);
         }
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.seeded
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Makes `seeded`, made from the blob, the cache creations take, once what they compiled in
+    /// the empty cache meanwhile is merged into it; the empty cache is destroyed once no creation
+    /// holds it. Its size is what the next write must grow past: the blob's, without the merge.
+    ///
+    /// # Safety
+    ///
+    /// `seeded` is the device's, and no other thread holds it.
+    unsafe fn take_seeded(
+        &self,
+        device: &ash::Device,
+        seeded: vk::PipelineCache,
+        counters: &Counters,
+    ) {
         // SAFETY: the cache is the device's.
-        let size = made.map_or(0, |cache| unsafe { data_size(device, cache) });
-        counters.set(Gauge::PipelineCacheBytes, size);
+        let written = unsafe { data_size(device, seeded) };
+        if let Some(empty) = lock(&self.pipelines).current.clone() {
+            // SAFETY: both caches are the device's; `seeded`, the destination, is this thread's
+            // alone, and the source is internally synchronized against the creations through it.
+            // Where the merge fails, `seeded` holds the blob's pipelines alone.
+            let _ = unsafe { device.merge_pipeline_caches(seeded, &[empty.0]) };
+        }
+        // SAFETY: the cache is the device's.
+        let size = unsafe { data_size(device, seeded) };
         let mut pipelines = lock(&self.pipelines);
-        pipelines.current = made.map(|cache| Arc::new(PipelineCache(cache)));
-        pipelines.written = size;
-        pipelines.made = true;
+        let empty = pipelines.current.replace(Arc::new(PipelineCache(seeded)));
+        pipelines.retired.extend(empty);
+        pipelines.written = written;
         drop(pipelines);
-        self.made.notify_all();
+        counters.set(Gauge::PipelineCacheBytes, size);
+        // SAFETY: the caller's contract.
+        unsafe { self.reap(device) };
     }
 
     /// When the reaper is to look at the cache ([`Caches::look`]), at `now` in nanoseconds of

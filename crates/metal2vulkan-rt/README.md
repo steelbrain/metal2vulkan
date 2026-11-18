@@ -947,18 +947,22 @@ the lowerings from one device to the next:
   place of lowering (`Metrics::translations_loaded`, beside `Metrics::translations`); a kernel
   variant the translator refused is kept too.
 
-**The pipeline cache.** The reaper makes the cache first when it starts, from the blob where there
-is one, so the read and the driver's parse run off the thread that made the device; a creation that
-comes before the cache is made waits for it. A blob that does not check, whose data does not begin
+**The pipeline cache.** The reaper makes an empty cache first when it starts, which a creation that
+comes before it waits for (microseconds). Then, off every guest thread, it reads the blob and makes
+a cache from it, merges into that cache what creations compiled in the empty one meanwhile
+(`vkMergePipelineCaches`), and makes it the cache creations take; the empty one is destroyed once no
+creation holds it. So no creation waits for the blob's read or the driver's parse of it, which for a
+blob near 32 MiB take tens of milliseconds; a creation that started in the empty cache and ends
+after the merge is not in this run's blob. A blob that does not check, whose data does not begin
 with the device's pipeline cache header (whole, the `pipelineCacheUUID` a new driver version changes
-included), or that the driver refuses, is removed, and the cache starts empty. Once pipeline
-creation has been quiet for 20 ms (no creation running and none ending) after a creation, the reaper
-reads the cache's size (`vkGetPipelineCacheData` with no buffer), and where it grew by more than an
-eighth since the last write, writes the cache's data over the blob: a temporary file renamed over
-it, never appended to. So it writes at most once a quiet period, a run that makes no new pipeline
-writes nothing, and a device's writes over its life come to a few times the blob's final size. The
-device's drop writes it once more where the size changed at all. A crash between writes loses only
-the pipelines made since the last; no creation waits for a size query or a write.
+included), or that the driver refuses, is removed, and the empty cache stays. Once pipeline creation
+has been quiet for 20 ms (no creation running and none ending) after a creation, the reaper reads
+the cache's size (`vkGetPipelineCacheData` with no buffer), and where it grew by more than an eighth
+since the last write, writes the cache's data over the blob: a temporary file renamed over it, never
+appended to. So it writes at most once a quiet period, a run that makes no new pipeline writes
+nothing, and a device's writes over its life come to a few times the blob's final size. The device's
+drop writes it once more where the size changed at all. A crash between writes loses only the
+pipelines made since the last; no creation waits for a size query or a write.
 
 The cache holds at most 32 MiB when the reaper looks (about five times the 6.25 MB of pipeline data
 a long recorded session made): one past it is replaced by a fresh, empty cache that creations take
