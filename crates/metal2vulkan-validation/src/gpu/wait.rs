@@ -19,10 +19,10 @@
 //! A submission that completes with a device-fault status (Vulkan `VK_ERROR_DEVICE_LOST`; Metal
 //! `MTLCommandBufferError` timeout, page fault, access revoked, or device removed) is a suspected
 //! GPU fault: it writes the tripwire too, then fails the operation normally, because nothing is
-//! in flight any more; a wait on the new runtime's command buffers ([`new_runtime`]) leaves how
-//! the command buffer ended to its caller instead. A CPU implementation (lavapipe, SwiftShader) is an ordinary killable
-//! process: its timeouts and faults follow the same exit rules but never write the host GPU
-//! tripwire.
+//! in flight any more; a wait on the new runtime's command buffers (`new_runtime`) leaves how
+//! the command buffer ended to its caller instead. A CPU implementation (lavapipe, SwiftShader)
+//! is an ordinary killable process: its timeouts and faults follow the same exit rules but never
+//! write the host GPU tripwire.
 
 use super::tripwire::{self, HangKind, HangRecord};
 use super::DeviceType;
