@@ -441,11 +441,17 @@ impl Consts {
             ConstKind::SpecOp {
                 op: SpecOp::IMul,
                 operands,
-            } => self.positive(operands[0])? && self.positive(operands[1])?,
+            } => match **operands {
+                [a, b] => self.positive(a)? && self.positive(b)?,
+                _ => false,
+            },
             ConstKind::SpecOp {
                 op: SpecOp::Select,
                 operands,
-            } => self.positive(operands[1])? && self.positive(operands[2])?,
+            } => match **operands {
+                [_, a, b] => self.positive(a)? && self.positive(b)?,
+                _ => false,
+            },
             _ => false,
         })
     }
