@@ -915,14 +915,14 @@ pub(crate) mod on_device {
     }
 
     /// A Private buffer of a whole block, for work that keeps the GPU busy. It returns once the
-    /// block-maker thread has made the next ready Private block, whose zero fill is a submission
-    /// of its own, so the submissions a test counts after it are its command buffers'.
+    /// block-maker thread has made any Private allocation the take set off, whose zero fill is a
+    /// submission of its own, so the submissions a test counts after it are its command buffers'.
     fn private(device: &Device) -> Buffer {
         let block = device
-            .take_block(MemoryClass::Private, 1)
+            .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
             .expect("a Private block");
-        within("the next ready Private block", || {
-            device.core().pool.idle(MemoryClass::Private) > 0
+        within("8 MiB of Private memory free", || {
+            device.core().pool.stocked(MemoryClass::Private)
         });
         device
             .new_buffer(block.id, 0, MemoryClass::Private.block_len(), false)
@@ -1655,20 +1655,14 @@ pub(crate) mod on_device {
     }
 
     /// A block whose last handle drops, with no `release_block`, while a held command buffer uses
-    /// it: its number names nothing at once, and the block stays live until the command buffer
-    /// completes, then is freed. It is a dedicated block, which the pool does not keep, so the
-    /// live allocations fall back to where they were.
+    /// it: its number names nothing at once, and the block stays out of the pool until the
+    /// command buffer completes, then comes back to it.
     #[test]
-    fn every_device_frees_a_dropped_block_once_its_last_command_buffer_retires() {
+    fn every_device_gives_back_a_dropped_block_once_its_last_command_buffer_retires() {
         each_device("block_drop", |name, _, device| {
-            let counters = device.counters();
             let f = shared_event(&device);
             let queue = queue(&device);
-            crate::tests::blit::on_device::settled(&device);
-            let before = counters.gauges().blocks;
-            // Longer than the class's idle bound, so it is freed once given back.
-            let len = MemoryClass::Shared.idle_bound() + 1;
-            let block = (device.take_block(MemoryClass::Shared, len)).expect("a dedicated block");
+            let block = (device.take_block(MemoryClass::Shared, 1)).expect("a Shared block");
             let id = block.id;
             let buffer = (device.new_buffer(id, 0, 4096, false)).expect("a buffer");
             let held = queue.command_buffer().expect("a command buffer");
@@ -1681,50 +1675,42 @@ pub(crate) mod on_device {
                 "{name}: the dropped block's number"
             );
             thread::sleep(Duration::from_millis(50));
-            assert_eq!(
-                counters.gauges().blocks,
-                before + 1,
-                "{name}: live while in use"
-            );
+            let pool = &device.core().pool;
+            assert!(!pool.holds(id), "{name}: back while in use");
             f.set_signaled_value(1);
             finished(name, &held);
-            within("the dropped block freed", || {
-                counters.gauges().blocks == before
-            });
+            within("the dropped block's return", || pool.holds(id));
             drop((f, queue, device));
         });
     }
 
     /// Clones of a block's handle share one claim: dropping one of two gives nothing back, and
-    /// the block's number still names it; releasing the other frees it. A handle that outlives
-    /// its device finds its block freed by the teardown, every gauge zero, and its drop does
-    /// nothing.
+    /// the block's number still names it; releasing the other gives it back. A handle that
+    /// outlives its device finds its block freed by the teardown, every gauge zero, and its drop
+    /// does nothing.
     #[test]
-    fn every_device_frees_a_block_at_its_last_clone_and_at_teardown() {
+    fn every_device_gives_back_a_block_at_its_last_clone_and_frees_it_at_teardown() {
         each_device("block_clones", |name, _, device| {
             let counters = device.counters();
-            crate::tests::blit::on_device::settled(&device);
-            let before = counters.gauges().blocks;
-            // Longer than the class's idle bound, so it is freed once given back.
-            let len = MemoryClass::Shared.idle_bound() + 1;
-            let block = (device.take_block(MemoryClass::Shared, len)).expect("a dedicated block");
+            let pool = &device.core().pool;
+            let block = (device.take_block(MemoryClass::Shared, 1)).expect("a Shared block");
+            let id = block.id;
             let clone = block.clone();
             drop(block);
             thread::sleep(Duration::from_millis(50));
-            assert_eq!(
-                counters.gauges().blocks,
-                before + 1,
-                "{name}: one of two clones dropped"
+            assert!(
+                !pool.holds(id),
+                "{name}: back with one of two clones dropped"
             );
             let buffer = (device.new_buffer(clone.id, 0, 256, false))
                 .unwrap_or_else(|error| panic!("{name}: the clone's number: {error}"));
             drop(buffer);
             device.release_block(clone).expect("a release");
-            within("the block freed at its last clone", || {
-                counters.gauges().blocks == before
-            });
+            within("the block back at its last clone", || pool.holds(id));
 
-            let kept = (device.take_block(MemoryClass::Shared, len)).expect("a dedicated block");
+            let kept = (device
+                .take_block(MemoryClass::Shared, 2 * MemoryClass::Shared.block_len()))
+            .expect("a long block");
             drop(device);
             within("the teardown", || counters.gauges() == Gauges::default());
             drop(kept);
@@ -1789,7 +1775,10 @@ pub(crate) mod on_device {
             .take_block(MemoryClass::Shared, MemoryClass::Shared.block_len())
             .expect("a Shared block");
         let released: Vec<_> = (0..3)
-            .map(|_| device.take_block(MemoryClass::Shared, 1).expect("a block"))
+            .map(|_| {
+                (device.take_block(MemoryClass::Shared, MemoryClass::Shared.block_len()))
+                    .expect("a block")
+            })
             .collect();
         let address = block.contents.expect("contents").as_ptr() as usize;
         *lock(&READER) = Some(thread::spawn(move || {

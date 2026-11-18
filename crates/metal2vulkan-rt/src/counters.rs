@@ -17,8 +17,8 @@ pub(crate) enum Metric {
     PipelinesCreated,
     /// [`Metrics::blocks_made`].
     BlocksMade,
-    /// [`Metrics::dedicated_blocks_reused`].
-    DedicatedBlocksReused,
+    /// [`Metrics::blocks_reused`].
+    BlocksReused,
     /// [`Metrics::dispatches_without_effects`].
     DispatchesWithoutEffects,
     /// [`Metrics::translations`].
@@ -101,8 +101,13 @@ struct Atomics {
     first_use_wait_nanos: AtomicU64,
     first_use_wait_max_nanos: AtomicU64,
     blocks_made: AtomicU64,
+    block_bytes_made: AtomicU64,
+    consumer_allocations: AtomicU64,
+    consumer_allocation_nanos: AtomicU64,
+    consumer_allocation_max_nanos: AtomicU64,
+    maker_allocation_nanos: AtomicU64,
     dispatches_without_effects: AtomicU64,
-    dedicated_blocks_reused: AtomicU64,
+    blocks_reused: AtomicU64,
     translations: AtomicU64,
     translations_loaded: AtomicU64,
     ring_writes: AtomicU64,
@@ -155,7 +160,7 @@ impl Counters {
             Metric::Barriers => &a.barriers,
             Metric::PipelinesCreated => &a.pipelines_created,
             Metric::BlocksMade => &a.blocks_made,
-            Metric::DedicatedBlocksReused => &a.dedicated_blocks_reused,
+            Metric::BlocksReused => &a.blocks_reused,
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
@@ -190,6 +195,24 @@ impl Counters {
     /// A submission of `infos` submit infos ([`Metrics::submit_infos`]).
     pub(crate) fn submitted_infos(&self, infos: u64) {
         self.atomics.submit_infos.fetch_add(infos, Relaxed);
+    }
+
+    /// An allocation of `bytes` made for blocks ([`Metrics::block_bytes_made`]).
+    pub(crate) fn allocated(&self, bytes: u64) {
+        self.atomics.block_bytes_made.fetch_add(bytes, Relaxed);
+    }
+
+    /// A `vkAllocateMemory` that took `nanos` nanoseconds, on the block-maker thread where
+    /// `maker`, else on a thread of the consumer's ([`Metrics::consumer_allocation_nanos`]).
+    pub(crate) fn allocation_time(&self, nanos: u64, maker: bool) {
+        let a = &self.atomics;
+        if maker {
+            a.maker_allocation_nanos.fetch_add(nanos, Relaxed);
+        } else {
+            a.consumer_allocations.fetch_add(1, Relaxed);
+            a.consumer_allocation_nanos.fetch_add(nanos, Relaxed);
+            a.consumer_allocation_max_nanos.fetch_max(nanos, Relaxed);
+        }
     }
 
     /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
@@ -290,7 +313,12 @@ impl Counters {
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
             first_use_wait_max_nanos: a.first_use_wait_max_nanos.load(Relaxed),
             blocks_made: a.blocks_made.load(Relaxed),
-            dedicated_blocks_reused: a.dedicated_blocks_reused.load(Relaxed),
+            block_bytes_made: a.block_bytes_made.load(Relaxed),
+            consumer_allocations: a.consumer_allocations.load(Relaxed),
+            consumer_allocation_nanos: a.consumer_allocation_nanos.load(Relaxed),
+            consumer_allocation_max_nanos: a.consumer_allocation_max_nanos.load(Relaxed),
+            maker_allocation_nanos: a.maker_allocation_nanos.load(Relaxed),
+            blocks_reused: a.blocks_reused.load(Relaxed),
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
@@ -367,13 +395,30 @@ pub struct Metrics {
     /// The longest first-use wait, in nanoseconds; a maximum since the device was made, so the
     /// difference of two reads does not apply to it.
     pub first_use_wait_max_nanos: u64,
-    /// `VkDeviceMemory` allocations made: pooled blocks (the texture blocks among them) and
-    /// dedicated ones, the zero source and the parameter ring's blocks.
+    /// `VkDeviceMemory` allocations made: the allocations blocks are ranges of (the texture
+    /// blocks among them), the zero source and the parameter ring's blocks.
     pub blocks_made: u64,
-    /// Dedicated blocks taken again: a request past its class's pooled length that took a
-    /// dedicated block given back and kept idle, which it fits and fills at least half of,
-    /// instead of a new allocation.
-    pub dedicated_blocks_reused: u64,
+    /// Bytes of the allocations blocks are ranges of, made: what the device allocated for
+    /// blocks, by the block-maker thread or in a take. The difference of two reads is what a
+    /// frame allocated.
+    pub block_bytes_made: u64,
+    /// `vkAllocateMemory` calls made on the consumer's threads, inside its calls: the device's
+    /// making, takes that no free range fits, textures' allocations of their own, the staging
+    /// region and the parameter ring's blocks. A driver may hold the device's other calls for an
+    /// allocation's whole length.
+    pub consumer_allocations: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) those calls took, in total.
+    pub consumer_allocation_nanos: u64,
+    /// The longest of those calls, in nanoseconds; a maximum since the device was made, so the
+    /// difference of two reads does not apply to it.
+    pub consumer_allocation_max_nanos: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) the block-maker thread's
+    /// `vkAllocateMemory` calls took, in total: allocations made ahead of need, off the
+    /// consumer's threads.
+    pub maker_allocation_nanos: u64,
+    /// Blocks taken again: a take of the length of a block given back and kept, which took that
+    /// block with its number, address and mapping, and no new range or allocation.
+    pub blocks_reused: u64,
     /// Dispatches of a kernel that writes no memory (`PipelineInterface::writes_memory`),
     /// direct and indirect: each was checked as Metal checks it, and nothing was recorded, bound
     /// or read for it, as it has no effect a program can observe.
@@ -458,8 +503,8 @@ pub struct Gauges {
     /// Occupied indices of set 1's arrays: one for each texture made at an index and each sampler
     /// state.
     pub descriptor_slots: u64,
-    /// Live `VkDeviceMemory` allocations: blocks the consumer holds, blocks ready or idle in the
-    /// pool, and the runtime's own.
+    /// Live `VkDeviceMemory` allocations: those blocks are ranges of, the idle ones among them,
+    /// and the runtime's own.
     pub blocks: u64,
     /// Events and shared events (timeline semaphores).
     pub events: u64,
@@ -471,10 +516,12 @@ pub struct Gauges {
     /// was out of memory: blocks whose [`BlockInfo::device_local`](crate::BlockInfo) is false and
     /// textures' allocations of their own.
     pub spilled_bytes: u64,
-    /// Bytes of idle Shared blocks the pool keeps, pooled and dedicated, zeroed, that no one
-    /// holds: the ready block and at most the class's bound of 256 MiB beside it.
+    /// Bytes of idle Shared allocations, which hold no block anyone holds: those the idle rule
+    /// keeps (at most the most bytes of Shared allocations in use over the last 10 seconds less
+    /// those in use now, and an eighth of the heap), and the reserve that keeps the free bytes at
+    /// 8 MiB or more.
     pub shared_idle_bytes: u64,
-    /// Bytes of idle Private blocks the pool keeps, pooled and dedicated, zeroed, that no one
-    /// holds: the ready block and at most the class's bound of 128 MiB beside it.
+    /// Bytes of idle Private allocations, as [`shared_idle_bytes`](Self::shared_idle_bytes) for
+    /// Shared ones.
     pub private_idle_bytes: u64,
 }

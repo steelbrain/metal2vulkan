@@ -31,11 +31,10 @@ mod on_device {
         each_device("heap", |name, _, device| {
             let core = device.core();
             let counters = device.counters();
-            let block = (device.take_block(MemoryClass::Private, 1))
+            let block = (device.take_block(MemoryClass::Private, MemoryClass::Private.block_len()))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            wait_until("a ready block of each class", || {
-                core.pool.idle(MemoryClass::Private) == 1
-                    && core.pool.idle(MemoryClass::Shared) == 1
+            wait_until("8 MiB free in each class", || {
+                core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
             });
             let blocks = counters.gauges().blocks;
             let heap = HeapRange {

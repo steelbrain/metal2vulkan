@@ -28,12 +28,12 @@ mod on_device {
         each_device("spill", |name, _, device| {
             let core = device.core();
             let counters = device.counters();
-            wait_until("a ready block of each class", || {
-                core.pool.idle(MemoryClass::Private) == 1
-                    && core.pool.idle(MemoryClass::Shared) == 1
+            wait_until("8 MiB free in each class", || {
+                core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
             });
 
-            // A dedicated Private block, made in the call, whose device-local allocation fails.
+            // A Private block longer than an allocation, which makes its own in the call, whose
+            // device-local allocation fails.
             core.fail_private.store(1, Relaxed);
             let spilled =
                 device.take_block(MemoryClass::Private, MemoryClass::Private.block_len() + 1);
@@ -60,14 +60,15 @@ mod on_device {
                 return;
             }
 
-            // Every Private-type allocation fails from here: the ready block, made before, is
-            // device-local; the pool's next one spills.
+            // Every Private-type allocation fails from here: the first allocation, made before, is
+            // device-local; the next, which the block-maker thread makes once a block takes the
+            // first whole, spills.
             core.fail_private.store(u32::MAX, Relaxed);
-            let plain = (device.take_block(MemoryClass::Private, 1))
+            let plain = (device.take_block(MemoryClass::Private, MemoryClass::Private.block_len()))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            assert!(plain.device_local, "{name}: the ready block");
-            wait_until("the pool's spilled block", || {
-                core.pool.idle(MemoryClass::Private) == 1
+            assert!(plain.device_local, "{name}: the first allocation");
+            wait_until("the pool's spilled allocation", || {
+                core.pool.stocked(MemoryClass::Private)
                     && counters.gauges().spilled_bytes >= MemoryClass::Private.block_len()
             });
 

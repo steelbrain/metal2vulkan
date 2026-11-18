@@ -476,7 +476,7 @@ their times and memory compare. `command-replay dump --stream FILE` prints the c
 
   The counts are among its executed counters. A play with any of them above zero is no gate
   result: `report.txt` says so on a `skipped` line. It places buffers of their own in the
-  runtime's pooled blocks (16 MiB Shared, 64 MiB Private; a longer one in a block of its own), a
+  runtime's blocks of 16 MiB of either class (a longer one in a block of its own), a
   range freed for reuse once every command buffer committed before its release completed, gives
   the runtime back a block or heap of the stream at its release (`release_block`), and gives
   textures and sampler states indices from the whole of each index class. Its readback serves

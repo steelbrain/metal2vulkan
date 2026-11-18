@@ -702,6 +702,7 @@ impl Device {
             Source::Heap(block, heap, offset) => {
                 let bind = Bind::Heap {
                     memory: block.memory.device_memory(),
+                    base: block.memory.base(),
                     block_len: block.memory.len,
                     heap,
                     offset,
@@ -722,6 +723,7 @@ impl Device {
                 };
                 let bind = Bind::InPlace {
                     memory: memory.device_memory(),
+                    base: memory.base(),
                     memory_type: core.memory_type(class),
                     block_len: memory.len,
                     at: at + offset,
@@ -1377,19 +1379,22 @@ enum Source<'a> {
 enum Bind {
     /// A place in a texture block, or memory of its own.
     Pooled,
-    /// A linear image, made preinitialized, at `at` in a block whose memory is `memory`, of type
-    /// `memory_type` and of `block_len` bytes, where the device lays its rows `bytes_per_row`
-    /// apart from there.
+    /// A linear image, made preinitialized, at `at` in a block at `base` in the allocation
+    /// `memory`, of type `memory_type` and of `block_len` bytes, where the device lays its rows
+    /// `bytes_per_row` apart from there.
     InPlace {
         memory: vk::DeviceMemory,
+        base: u64,
         memory_type: u32,
         block_len: u64,
         at: u64,
         bytes_per_row: u64,
     },
-    /// `offset` in `heap`, whose block's memory is `memory`, of `block_len` bytes.
+    /// `offset` in `heap`, whose block of `block_len` bytes lies at `base` in the allocation
+    /// `memory`.
     Heap {
         memory: vk::DeviceMemory,
+        base: u64,
         block_len: u64,
         heap: HeapRange,
         offset: u64,
@@ -1482,9 +1487,9 @@ impl Made {
         let requirements = needs.memory_requirements;
         let bits = requirements.memory_type_bits;
         // A place in a texture block where the image takes the blocks' memory type and the device
-        // does not require an allocation of its own for it (preferring one is no reason).
+        // does not require an allocation of its own for it (preferring one is no reason): one of
+        // its own length where it is longer than a block.
         let placed = dedicated.requires_dedicated_allocation == vk::FALSE
-            && requirements.size <= MemoryClass::Private.block_len()
             && bits & (1 << core.memory_type(MemoryClass::Private)) != 0;
         // Where the device-local memory has no texture block left, memory of its own.
         let pooled = match placed && matches!(bind, Bind::Pooled) {
@@ -1497,6 +1502,7 @@ impl Made {
         };
         let (backing, memory, offset) = if let Bind::InPlace {
             memory,
+            base,
             memory_type,
             block_len,
             at,
@@ -1514,7 +1520,7 @@ impl Made {
                 && layout.row_pitch == bytes_per_row
                 && dedicated.requires_dedicated_allocation == vk::FALSE
                 && bits & (1 << memory_type) != 0
-                && at.is_multiple_of(requirements.alignment)
+                && (base + at).is_multiple_of(requirements.alignment)
                 && at
                     .checked_add(requirements.size)
                     .is_some_and(|end| end <= block_len);
@@ -1523,9 +1529,10 @@ impl Made {
                     pixel_format: d.pixel_format,
                 }));
             }
-            (Backing::InBlock, memory, at)
+            (Backing::InBlock, memory, base + at)
         } else if let Bind::Heap {
             memory,
+            base,
             block_len,
             heap,
             offset,
@@ -1543,13 +1550,17 @@ impl Made {
             let end = offset.checked_add(fit.size);
             let fits = heap_end.is_some_and(|heap_end| heap_end <= block_len)
                 && end.is_some_and(|end| end <= heap.len)
-                && at.is_some_and(|at| at.is_multiple_of(fit.align));
+                && at.is_some_and(|at| (base + at).is_multiple_of(fit.align));
             match (fits, at) {
-                (true, Some(at)) => (Backing::InBlock, memory, at),
+                (true, Some(at)) => (Backing::InBlock, memory, base + at),
                 _ => return Err(refused),
             }
         } else if let Some((place, block)) = pooled {
-            (Backing::Placed(place), block.device_memory(), place.offset)
+            (
+                Backing::Placed(place),
+                block.device_memory(),
+                block.base() + place.offset,
+            )
         } else {
             // Vulkan gives every image of no external handle type a device-local type.
             let local = bits & core.device_local;

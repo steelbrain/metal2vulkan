@@ -61,23 +61,22 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let core = device.core();
             let counters = device.counters();
-            // The pool's ready blocks, which the block-maker thread makes after the device.
-            wait_until("a ready block of each class", || {
-                core.pool.idle(MemoryClass::Private) == 1
-                    && core.pool.idle(MemoryClass::Shared) == 1
+            // The pool's first allocations, which the device's making makes.
+            wait_until("8 MiB free in each class", || {
+                core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
             });
             device
                 .grant_indices(IndexClass::Texture, 4096, 8)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let submissions = || counters.metrics().submissions;
-            // The first texture takes the ready Private block as its texture block, which the pool
-            // makes again, zeroing it in a submission of its own.
+            // The first texture's texture block takes the first Private allocation whole, and the
+            // block-maker thread makes the next, zeroing it in a submission of its own.
             drop(
                 (device.new_texture(&square(256), Some(4096)))
                     .unwrap_or_else(|error| panic!("{name}: {error}")),
             );
-            wait_until("the pool's block made again", || {
-                core.pool.idle(MemoryClass::Private) == 1 && counters.gauges().textures == 0
+            wait_until("the next Private allocation", || {
+                core.pool.stocked(MemoryClass::Private) && counters.gauges().textures == 0
             });
             let base = counters.gauges().blocks;
 

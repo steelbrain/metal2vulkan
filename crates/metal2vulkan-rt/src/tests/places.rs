@@ -3,8 +3,9 @@
 //! blocks of the pool with no allocation of their own: a block's worth of 1 MiB textures takes
 //! one block and then a second, releasing them gives one back to the pool and keeps the other,
 //! textures made and released in that block allocate nothing, and every gauge reads zero after
-//! teardown; pooled blocks are 16 MiB Shared and 64 MiB Private, and a texture of 32 MiB takes a
-//! place in one.
+//! teardown; the pool's allocations are 16 MiB of either class, a take is a range of one rounded
+//! up to 64 KiB, a longer take an allocation of its own, and a texture of 32 MiB takes a texture
+//! block of its own length.
 
 use crate::places::Ranges;
 
@@ -115,9 +116,8 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let core = device.core();
             let counters = device.counters();
-            wait_until("a ready block of each class", || {
-                core.pool.idle(MemoryClass::Private) == 1
-                    && core.pool.idle(MemoryClass::Shared) == 1
+            wait_until("8 MiB free in each class", || {
+                core.pool.stocked(MemoryClass::Private) && core.pool.stocked(MemoryClass::Shared)
             });
             let base = counters.gauges().blocks;
             let made = counters.metrics().blocks_made;
@@ -147,19 +147,19 @@ mod on_device {
                 in_first > MemoryClass::Private.block_len() / MIB / 2,
                 "{name}: the first block held {in_first} textures of 1 MiB"
             );
-            // Each block the pool's ready one, which the pool made again.
-            wait_until("the pool's two blocks made again", || {
+            // Each block an allocation whole, after which the block-maker thread made the next.
+            wait_until("the pool's next two allocations", || {
                 counters.metrics().blocks_made == made + 2
             });
             assert_eq!(counters.gauges().blocks, base + 2, "{name}: two blocks");
 
-            // Released: one block back to the pool, which keeps it idle; one kept for textures.
+            // Released: one block back to the pool, which keeps it; one kept for textures.
             drop(textures);
             wait_until("the textures freed", || {
                 counters.gauges().textures == 0 && core.places.blocks() == 1
             });
             wait_until("the block back in the pool", || {
-                core.pool.idle(MemoryClass::Private) == 2
+                core.pool.kept(MemoryClass::Private) == 1
             });
             assert_eq!(counters.gauges().blocks, base + 2, "{name}: after release");
 
@@ -198,11 +198,12 @@ mod on_device {
         }
     }
 
-    /// Pooled blocks are 16 MiB of Shared memory and 64 MiB of Private, on every device: a take
-    /// up to its class's length is a pooled block of that length, one past it a dedicated block,
-    /// and a texture of 32 MiB is placed in a texture block, with no allocation of its own.
+    /// The pool's allocations are 16 MiB of either class, on every device: a take of a byte is a
+    /// range of one rounded up to 64 KiB (to `bufferImageGranularity` where that is larger) and
+    /// allocates nothing; a take longer than an allocation makes one of its own length, rounded
+    /// up the same way; and a texture of 32 MiB is placed in a texture block of its own length.
     #[test]
-    fn every_device_pools_16_mib_shared_and_64_mib_private_blocks() {
+    fn every_device_takes_blocks_from_16_mib_allocations() {
         const MIB: u64 = 1 << 20;
         let instance = Instance::new(&[]).expect("an instance at the floor");
         let devices = devices_of_the_cfgs_kind(&instance);
@@ -212,22 +213,29 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let core = device.core();
             let counters = device.counters();
-            for (class, len) in [
-                (MemoryClass::Shared, 16 * MIB),
-                (MemoryClass::Private, 64 * MIB),
-            ] {
-                assert_eq!(class.block_len(), len, "{name}: {class:?}");
-                let pooled = (device.take_block(class, len))
-                    .unwrap_or_else(|error| panic!("{name}: a pooled {class:?} block: {error}"));
-                assert_eq!(pooled.len, len, "{name}: a pooled {class:?} block");
-                let dedicated = (device.take_block(class, len + 1))
-                    .unwrap_or_else(|error| panic!("{name}: a dedicated {class:?} block: {error}"));
-                assert_eq!(
-                    dedicated.len,
-                    len + (64 << 10),
-                    "{name}: a dedicated {class:?} block"
+            for class in [MemoryClass::Shared, MemoryClass::Private] {
+                assert_eq!(class.block_len(), 16 * MIB, "{name}: {class:?}");
+                let made = counters.metrics().blocks_made;
+                let small = (device.take_block(class, 1))
+                    .unwrap_or_else(|error| panic!("{name}: a small {class:?} block: {error}"));
+                assert!(
+                    small.len.is_multiple_of(64 << 10) && small.len < MIB,
+                    "{name}: a small {class:?} block of {} bytes",
+                    small.len
                 );
-                for block in [pooled, dedicated] {
+                let long = (device.take_block(class, 16 * MIB + 1))
+                    .unwrap_or_else(|error| panic!("{name}: a long {class:?} block: {error}"));
+                assert!(
+                    long.len > 16 * MIB && long.len.is_multiple_of(64 << 10),
+                    "{name}: a long {class:?} block of {} bytes",
+                    long.len
+                );
+                assert_eq!(
+                    counters.metrics().blocks_made,
+                    made + 1,
+                    "{name}: the long {class:?} block's allocation alone"
+                );
+                for block in [small, long] {
                     (device.release_block(block))
                         .unwrap_or_else(|error| panic!("{name}: a release: {error}"));
                 }

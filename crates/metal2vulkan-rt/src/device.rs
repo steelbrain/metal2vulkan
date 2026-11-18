@@ -271,9 +271,9 @@ impl Device {
     /// of the consumer's extensions ([`DeviceOptions::extensions`]) the device offers with the
     /// features the consumer needs, and chooses its memory types on it. It takes one queue of the floor's queue
     /// family for the runtime and, where that family has a second queue, a queue for presenting;
-    /// where it has one, presenting shares the runtime's queue and its lock. It makes one block of
-    /// each memory class ready, then starts the block-maker thread, which keeps one of each ready
-    /// after that, the submit thread and the completion thread.
+    /// where it has one, presenting shares the runtime's queue and its lock. It makes one
+    /// allocation of each memory class for blocks, then starts the block-maker thread, which makes
+    /// another while a class's free bytes run low, the submit thread and the completion thread.
     ///
     /// Err: [`Error::BelowFloor`] with every item the device lacks; [`Error::Vulkan`] where a
     /// Vulkan call fails; [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) at a
@@ -429,7 +429,13 @@ impl Device {
             .fold(0, |bits, (index, _)| bits | 1 << index);
 
         let work = Work::new(counters.clone());
-        let pool = Pool::new(options.block_mappings, counters.clone());
+        let heap = |memory_type: u32| {
+            let memory = &capabilities.memory;
+            let heap = memory.memory_types_as_slice()[memory_type as usize].heap_index;
+            memory.memory_heaps_as_slice()[heap as usize].size
+        };
+        let heaps = [heap(memory_types.private), heap(memory_types.shared)];
+        let pool = Pool::new(options.block_mappings, counters.clone(), heaps, granularity);
         let core = Arc::new(Core {
             instance,
             physical: raw,
@@ -551,21 +557,27 @@ impl Device {
         self.shared.core.counters.clone()
     }
 
-    /// No Metal counterpart: takes a block of `class` memory at least `len` bytes long, for the
-    /// consumer to place buffers in: a handle ([`Block`]) whose last drop gives it back.
+    /// No Metal counterpart: takes a block of `class` memory of `len` bytes rounded up to 64 KiB
+    /// (to the device's `bufferImageGranularity` where that is larger), for the consumer to place
+    /// buffers in: a handle ([`Block`]) whose last drop gives it back. A block is a range of one
+    /// of the device's allocations, with a `VkBuffer` of its own.
     ///
-    /// For `len` up to the class's [`MemoryClass::block_len`] (16 MiB Shared, 64 MiB Private) it
-    /// is a pooled block of that length. The device's making makes one of each class, and the
-    /// block-maker thread makes the next ones ahead of need, off every caller's path, so this
-    /// call waits only when no block of the class is ready. Past it, it is a dedicated block of
-    /// `len` rounded up to 64 KiB: one given back earlier and kept idle that it fits and fills at
-    /// least half of ([`Metrics::dedicated_blocks_reused`](crate::Metrics::dedicated_blocks_reused)),
-    /// with that block's number, address and mapping, or else one made in this call.
+    /// It is, in order: a block of that length given back earlier and kept, with its number,
+    /// address and mapping ([`Metrics::blocks_reused`](crate::Metrics::blocks_reused)); a free
+    /// range of the class's allocations, the first that fits; else the start of an allocation
+    /// made in this call, of [`MemoryClass::block_len`] (16 MiB) or the block's length where that
+    /// is longer, whose rest later blocks share. The block-maker thread makes a class's next
+    /// allocation of 16 MiB off every caller's path while the class's free bytes are fewer than 8
+    /// MiB, so a take that leaves more free sets nothing off beside the consumer's next calls.
+    /// Where a take finds no free range and the class keeps blocks of other lengths, the
+    /// block-maker thread then gives their bytes back to their allocations, after
+    /// [`BlockMappings::unmap`]; the take waits for that only where its own allocation fails, and
+    /// then takes a range of those bytes where one fits.
     ///
-    /// Every block reads zero, as Metal's new buffers do, whether new or taken again: a Shared
-    /// block is zeroed through its mapping, which also makes each page resident before the block
-    /// is handed out, and a Private block by a GPU fill. A pooled block released and taken again
-    /// keeps its number, address and mapping.
+    /// Every block reads zero, as Metal's new buffers do, whether new or taken again: an
+    /// allocation is zeroed as it is made, a block's bytes as it is given back, a Shared one
+    /// through the mapping (which also makes each page resident before the block is handed out)
+    /// and a Private one by a GPU fill.
     ///
     /// Err: [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's largest allocation or
     /// buffer; [`Limit::BlockIds`](crate::Limit::BlockIds);
@@ -622,12 +634,15 @@ impl Device {
     /// handle, made explicit ([`Block`]).
     ///
     /// It takes effect once no [`Buffer`](crate::Buffer) of the block remains and every command
-    /// buffer that used it has retired. The block-maker thread then zeroes it and keeps it idle,
-    /// pooled or dedicated, with the same number, address and mapping, freeing the class's oldest
-    /// kept blocks past its bound (256 MiB Shared, 128 MiB Private, beside the ready block) after
-    /// [`BlockMappings::unmap`], and at once a block longer than the bound. A kept dedicated
-    /// block serves a later [`take_block`](Device::take_block) past the pooled length that it
-    /// fits and that fills at least half of it.
+    /// buffer that used it has retired. The block-maker thread then zeroes it and keeps it, with
+    /// the same number, address and mapping, for a later [`take_block`](Device::take_block) of its
+    /// length. An allocation none of whose blocks is held is idle, and one that holds a block is
+    /// in use: the device keeps a class's idle allocations while their bytes and those of its
+    /// allocations in use stay at or under the most bytes it had in use over the last 10 seconds,
+    /// and within an eighth of its memory type's heap, and frees the oldest past that, after
+    /// [`BlockMappings::unmap`] of each block kept in it.
+    /// The rule runs as blocks are taken and given back, never on a timer: a program that goes
+    /// quiet keeps its idle allocations until its next take or release.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's block, whose handle is dropped all the
     /// same.
@@ -1028,21 +1043,12 @@ impl Core {
         self.device_local & (1 << self.memory_types.shared) != 0
     }
 
-    /// A block of `class` for `len` bytes: a pooled one up to the class's block length, else a
-    /// dedicated one of `len` rounded up to 64 KiB: an idle one the pool kept that [`memory::fits`]
-    /// it, or one made in the call.
+    /// A block of `class` for `len` bytes ([`Pool::take`]).
     ///
-    /// Err: what [`Pool::take`] and [`memory::make`] return;
-    /// [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's longest block.
+    /// Err: what [`Pool::take`] returns; [`Limit::BlockLen`](crate::Limit::BlockLen) past the
+    /// device's longest allocation or buffer.
     pub(crate) fn take_memory(&self, class: MemoryClass, len: u64) -> Result<Memory, Error> {
-        if len <= class.block_len() {
-            return self.pool.take(class);
-        }
-        let len = memory::dedicated_len(len, self.max_block_len)?;
-        match self.pool.take_held(class, len) {
-            Some(memory) => Ok(memory),
-            None => memory::make(self, class, len, self.pool.number()?, false),
-        }
+        self.pool.take(self, class, len, self.max_block_len)
     }
 
     /// Quiesced or torn down.
@@ -1119,13 +1125,8 @@ impl Drop for Core {
             unsafe { region.free(self) };
         }
         let placed = (self.places.remaining().into_iter()).chain(self.copies.remaining());
-        for memory in placed
-            .collect::<Vec<_>>()
-            .into_iter()
-            .chain(self.pool.remaining())
-        {
-            memory::free(self, memory);
-        }
+        let placed = placed.collect();
+        memory::free_all(self, placed);
         let pools = std::mem::take(
             self.query_pools
                 .get_mut()

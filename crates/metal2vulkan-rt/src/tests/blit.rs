@@ -1690,13 +1690,13 @@ pub(crate) mod on_device {
         });
     }
 
-    /// Returns once the pool holds a ready block of each class again: the block-maker thread
-    /// makes one after a block is taken, a Private one zeroed in a submission of its own, which a
+    /// Returns once the block-maker thread has nothing to make: it makes an allocation of a
+    /// class whose free bytes run low, a Private one zeroed in a submission of its own, which a
     /// count of a test's own work must not take in.
     pub(crate) fn settled(device: &Device) {
-        within("a ready block of each class", || {
+        within("8 MiB free in each class", || {
             let pool = &device.core().pool;
-            pool.idle(MemoryClass::Private) > 0 && pool.idle(MemoryClass::Shared) > 0
+            pool.stocked(MemoryClass::Private) && pool.stocked(MemoryClass::Shared)
         });
     }
 

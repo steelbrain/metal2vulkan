@@ -86,24 +86,29 @@ in its memory.
   the block's `BlockInfo` (its number, class, length, device address and, for Shared, its host
   address). One `VkBuffer` spans each block, with every buffer usage and a device address.
   Nothing in a block is exportable.
-- Up to its class's `MemoryClass::block_len`, 16 MiB of Shared memory and 64 MiB of Private on
-  every device, a block is pooled. `Device::new` makes one block of each class before it returns,
-  and the block-maker thread keeps one of each class ready after that, made off every caller's
-  path, so a take waits only when none is ready. No block is so made beside the consumer's first
-  calls: on an RTX 3090 (NVIDIA's Linux driver), a pipeline state's creation right after
-  `Device::new` waited 47 to 61 ms behind the allocation of a first 256 MiB Shared block's memory.
-  A driver may hold the device's other calls for the whole of a block's allocation, longer for
-  more bytes, so the lengths are short: there a creation beside a Shared block's making took 6 to
-  8 ms at 16 MiB (40 to 45 ms at 256 MiB), and 3.4 to 4.6 ms beside a 64 MiB Private block's. 16
-  MiB is the largest piece a guest's allocator takes for its buffers; at 64 MiB a texture or a
-  Managed buffer's device copy of 32 MiB takes a pooled Private block. Past its class's length a
-  block is dedicated: the length rounded up to 64 KiB, made in the call, up to the device's
-  `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
+- A block is a range of one of the device's allocations of its class, with a `VkBuffer` of its
+  own bound there: the length asked rounded up to 64 KiB (to `bufferImageGranularity` where that is
+  larger), at an offset that is a multiple of that length rounded up to a power of two, up to 2
+  MiB. A take is, in order: a kept block of its length (below), a free range of the class's
+  allocations, the first that fits, else the start of an allocation made in the call, of
+  `MemoryClass::block_len` (16 MiB of either class) or the block's length where that is longer, up
+  to the device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them). Its
+  rest serves later takes.
+- `Device::new` makes one allocation of each class before it returns. After that the block-maker
+  thread makes a class's next allocation of 16 MiB, off every caller's path, while the class's free
+  bytes are fewer than 8 MiB, and at no other time: a take that leaves more free sets nothing off
+  beside the consumer's next calls. A driver may hold the device's other calls for the whole of an
+  allocation, longer for more bytes: on an RTX 3090 (NVIDIA's Linux driver) a pipeline state's
+  creation beside a Shared allocation's making took 6 to 8 ms at 16 MiB and 40 to 45 ms at 256
+  MiB; on an RTX 2080 a compute pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared
+  allocation made beside it. `Metrics::consumer_allocation_nanos` and
+  `consumer_allocation_max_nanos` count the time of allocations made on the consumer's threads,
+  and `maker_allocation_nanos` those of the block-maker thread.
 - A Private allocation takes the device-local Private type. Where that allocation itself fails
   out of device memory (never a budget poll), it takes the next memory type the resource allows,
   in the device's order: `BlockInfo::device_local` is false for such a block, and
-  `Gauges::spilled_bytes` counts the bytes until they are freed. A spilled pooled block is freed
-  when given back, so the pool's next block tries device-local memory again. Textures are not
+  `Gauges::spilled_bytes` counts the bytes until they are freed. A spilled allocation is freed
+  once its last block is given back, so the next tries device-local memory again. Textures are not
   placed in a spilled block: a texture then takes an allocation of its own, which spills in the
   same way where the image allows another type. A Managed buffer whose device copy finds no
   device-local room is its Shared range, as on a unified device, for its life.
@@ -120,16 +125,20 @@ in its memory.
 - Dropping a block's last handle gives the block back; `Device::release_block` consumes a handle,
   that drop made explicit. Clones of a handle share one claim, so dropping one of two gives nothing
   back. It takes effect once no buffer, command buffer or upload using the block remains. The
-  block-maker thread then zeroes it and keeps it idle, pooled or dedicated, with the same number,
-  address and mapping, as its class's latest idle block. Each class keeps at most a bound of idle
-  bytes, 256 MiB of Shared memory and 128 MiB of Private, beside its ready block, which is a
-  reserve outside the bound: past it the oldest kept block is freed (after
-  `BlockMappings::unmap`), and a block longer than the bound is freed at once. A take past the
-  pooled length takes a kept dedicated block that it fits and fills at least half of
-  (`Metrics::dedicated_blocks_reused`) before it allocates, so a program that makes and releases
-  large buffers frame after frame pays the allocation, and the driver's hold on the device's other
-  calls that comes with it, once. `Gauges::shared_idle_bytes` and `Gauges::private_idle_bytes`
-  count what is kept. Once the last handle is gone the block's number names nothing
+  block-maker thread then zeroes it and keeps it, with the same number, address and mapping, for a
+  later take of its length (`Metrics::blocks_reused`). A take that no free range fits while the
+  class keeps blocks of other lengths makes its allocation at once, and the block-maker thread then
+  gives those blocks' bytes back to their allocations, after `BlockMappings::unmap` of each; only
+  where the take's allocation fails does it wait for those bytes and take a range of them. An
+  allocation that holds no block anyone holds is idle. The device keeps a class's idle allocations
+  while their bytes and those of its allocations in use stay at or under the most bytes it had in
+  use over the last 10 seconds, and within an eighth of the heap of the class's memory type; past
+  that it frees the oldest, after `BlockMappings::unmap` of each block kept in them, except those
+  the class's free bytes need to stay at 8 MiB or more. The rule runs as blocks are taken and given
+  back, never on a timer: a program that goes quiet keeps its idle allocations until its next take
+  or release, or until the device is torn down. `Gauges::shared_idle_bytes` and
+  `Gauges::private_idle_bytes` count the idle bytes. Once the last handle is gone the block's
+  number names nothing
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's
   teardown frees every block still claimed, after the consumer's `BlockMappings::unmap` returned
   for it; a handle dropped after that does nothing.
@@ -152,7 +161,8 @@ in its memory.
   which `contents` answers. The device's memory-type query picks its form. Where the Shared type
   is device-local, the buffer is its bytes, as a Shared buffer is, and `did_modify_range` does
   nothing. Elsewhere shaders reach a device copy at `gpu_address`: a place in a copy block, a
-  Private block of the pool (a dedicated one past 64 MiB) that holds device copies alone. Its
+  Private block of the pool of 16 MiB (of the copy's own length past that) that holds device
+  copies alone. Its
   first `copied` bytes are copied from the consumer's and the rest zeroed, in the upload.
   `Buffer::did_modify_range(start, length)` marks a range changed (`Refusal::ModifiedRange` past
   the buffer): the upload copies it into the device copy as it goes, ahead of every command buffer

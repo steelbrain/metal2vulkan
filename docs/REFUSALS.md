@@ -665,7 +665,7 @@ Columns:
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
-| `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 1: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)` | `-` |
+| `BlockLen` | A block longer than one allocation and one buffer hold on the device (`Device::take_block` past `maxMemoryAllocationSize` or `maxBufferSize`) | at the device's limit | `device`: the device's `maxMemoryAllocationSize` and `maxBufferSize` | 1: `crates/metal2vulkan-rt/src/memory.rs (round)` | `-` |
 | `BlockIds` | A block after every block number has been used (`Device::take_block`) | every device (a public call's own check of its arguments) | `ours`: block numbers are 32 bits | 1: `crates/metal2vulkan-rt/src/memory.rs (number)` | `-` |
 | `ThreadgroupShape` | A threadgroup longer on an axis than the device's `maxComputeWorkGroupSize` (the floor holds 1,024 by 1,024 by 64), where the threadgroup is the... | at the device's limit | `device`: the device's `maxComputeWorkGroupSize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
 | `ThreadgroupMemory` | A dispatch whose threadgroup memory, the kernel's own and the lengths set (each rounded up to 16 bytes), is past the device's... | at the device's limit | `device`: the device's `maxComputeSharedMemorySize` | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
@@ -1235,7 +1235,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::AttachmentUsage`: `crates/metal2vulkan-rt/src/texture.rs (attachment)`
 - `rt:Refusal::AttachmentPlace`: `crates/metal2vulkan-rt/src/texture.rs (attachment)`
 - `rt:Refusal::AttachmentFormat`: `crates/metal2vulkan-rt/src/pass.rs (check, 2 sites)`
-- `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (dedicated_len)`
+- `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (round)`
 - `rt:Limit::BlockIds`: `crates/metal2vulkan-rt/src/memory.rs (number)`
 - `rt:Limit::ThreadgroupShape`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
 - `rt:Limit::ThreadgroupMemory`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`

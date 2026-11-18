@@ -73,15 +73,14 @@ mod on_device {
             .collect()
     }
 
-    /// The device's live allocations once the block-maker thread holds a ready block of each
-    /// class, refilling off this thread any a take used, and the texture blocks among them.
+    /// The device's live allocations once the block-maker thread has nothing to make (8 MiB free
+    /// in each class), and the texture blocks among them.
     fn settled(name: &str, core: &Core) -> (u64, usize) {
         let deadline = Instant::now() + Duration::from_secs(120);
-        while core.pool.idle(MemoryClass::Private) == 0 || core.pool.idle(MemoryClass::Shared) == 0
-        {
+        while !core.pool.stocked(MemoryClass::Private) || !core.pool.stocked(MemoryClass::Shared) {
             assert!(
                 Instant::now() < deadline,
-                "{name}: a ready block of each class"
+                "{name}: 8 MiB free in each class"
             );
             thread::sleep(Duration::from_millis(1));
         }
@@ -128,7 +127,7 @@ mod on_device {
 
             let counters = device.counters();
             let core = device.core();
-            let cpu = (device.take_block(MemoryClass::Shared, 1))
+            let cpu = (device.take_block(MemoryClass::Shared, AT + LEN))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = (device.new_buffer(cpu.id, AT, LEN, true))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));

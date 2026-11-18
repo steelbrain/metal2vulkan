@@ -4,11 +4,12 @@
 //! buffer lies beside an optimal image in one allocation.
 //!
 //! A place is a resource's bytes at a multiple of its alignment: the first that fits, in the
-//! blocks in the order they were taken; where none fits, the next block comes from the pool, or,
-//! for a place longer than a pooled block, a dedicated block of its own. A place is free again once
-//! its resource is freed, after every command buffer and upload that used it retired. One empty
-//! pooled block of a set is kept for the next place; another that empties, and a dedicated block
-//! once empty, goes back to the pool, which zeroes and keeps a pooled block or frees it.
+//! blocks in the order they were taken; where none fits, the next block comes from the pool: of
+//! the class's block length ([`MemoryClass::block_len`]), or of the place's own length where that
+//! is longer. A place is free again once its resource is freed, after every command buffer and
+//! upload that used it retired. One empty block of the block length is kept for the next place;
+//! another block that empties goes back to the pool, which zeroes and keeps it for a take of its
+//! length.
 //!
 //! An image in a texture block is optimal. The block's own `VkBuffer`, which spans it, aliases the
 //! images (Vulkan's memory aliasing), and only the pool uses it: to zero the block before it is
@@ -19,6 +20,9 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::memory::{BlockId, Memory, MemoryClass};
 use std::sync::{Mutex, PoisonError};
+
+/// The length of the blocks a set takes for places no longer than it.
+const BLOCK_LEN: u64 = MemoryClass::Private.block_len();
 
 /// One set of blocks.
 pub(crate) struct Places {
@@ -48,8 +52,8 @@ impl Places {
     }
 
     /// A place of `len` bytes at a multiple of `align`, a power of two, and its block. Where no
-    /// block has room, a Private block is taken, without the lock: from the pool, or a dedicated
-    /// one for a place longer than a pooled block.
+    /// block has room, a Private block is taken from the pool, without the lock: of the block
+    /// length, or of `len` where that is longer.
     ///
     /// Err: what [`Core::take_memory`] returns.
     pub(crate) fn place(
@@ -61,7 +65,8 @@ impl Places {
         let mut blocks = lock(&self.blocks);
         loop {
             for block in blocks.iter_mut() {
-                if let Some(offset) = block.free.take(len, align) {
+                // The image's alignment holds in the allocation the block is a range of.
+                if let Some(offset) = block.free.take_from(len, align, block.memory.base()) {
                     block.live += 1;
                     let place = Place {
                         block: block.memory.id,
@@ -72,7 +77,7 @@ impl Places {
                 }
             }
             drop(blocks);
-            let memory = core.take_memory(MemoryClass::Private, len)?;
+            let memory = core.take_memory(MemoryClass::Private, len.max(BLOCK_LEN))?;
             // A block that spilled out of device-local memory holds no place: textures then take
             // memory of their own, and a Managed buffer its Shared range.
             if memory.spilled() {
@@ -88,8 +93,8 @@ impl Places {
         }
     }
 
-    /// Frees `place`. Where its block empties and is dedicated, or another pooled block of the
-    /// set is empty, the block goes back to the pool.
+    /// Frees `place`. Where its block empties and is longer than the block length, or another
+    /// block of the set of that length is empty, the block goes back to the pool.
     pub(crate) fn release(&self, core: &Core, place: Place) {
         let mut blocks = lock(&self.blocks);
         let Some(index) = (blocks.iter()).position(|block| block.memory.id == place.block) else {
@@ -98,9 +103,9 @@ impl Places {
         let block = &mut blocks[index];
         block.free.give(place.offset, place.len);
         block.live -= 1;
-        let empty = |block: &PlaceBlock| block.live == 0 && block.memory.pooled();
-        let surplus =
-            !block.memory.pooled() || blocks.iter().filter(|block| empty(block)).count() > 1;
+        let standard = |block: &PlaceBlock| block.memory.len == BLOCK_LEN;
+        let empty = |block: &PlaceBlock| block.live == 0 && standard(block);
+        let surplus = !standard(block) || blocks.iter().filter(|block| empty(block)).count() > 1;
         if blocks[index].live == 0 && surplus {
             let emptied = blocks.remove(index);
             drop(blocks);
@@ -140,8 +145,16 @@ impl Ranges {
     /// Takes `len` bytes, more than 0, at the first offset that is a multiple of `align`, a power
     /// of two, with the bytes free from it; `None` where there is none.
     pub(crate) fn take(&mut self, len: u64, align: u64) -> Option<u64> {
+        self.take_from(len, align, 0)
+    }
+
+    /// Takes `len` bytes, more than 0, at the first offset that lies `base` bytes past a multiple
+    /// of `align`, a power of two, less `base`, with the bytes free from it: the first offset
+    /// aligned where the ranges start `base` bytes into something larger. `None` where there is
+    /// none.
+    pub(crate) fn take_from(&mut self, len: u64, align: u64, base: u64) -> Option<u64> {
         let (index, at) = (self.free.iter().enumerate()).find_map(|(index, &(start, end))| {
-            let at = start.checked_next_multiple_of(align)?;
+            let at = start.checked_add(base)?.checked_next_multiple_of(align)? - base;
             (at.checked_add(len)? <= end).then_some((index, at))
         })?;
         let (start, end) = self.free[index];
@@ -175,6 +188,11 @@ impl Ranges {
             (false, true) => self.free[index].0 = offset,
             (false, false) => self.free.insert(index, (offset, end)),
         }
+    }
+
+    /// The bytes free.
+    pub(crate) fn bytes(&self) -> u64 {
+        self.free.iter().map(|&(start, end)| end - start).sum()
     }
 
     /// For the tests: the free ranges.

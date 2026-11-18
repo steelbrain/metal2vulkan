@@ -1490,7 +1490,14 @@ impl Backend for NewRuntime {
             ("first_use_waits", metrics.first_use_waits),
             ("first_use_wait_nanos", metrics.first_use_wait_nanos),
             ("blocks_made", metrics.blocks_made),
-            ("dedicated_blocks_reused", metrics.dedicated_blocks_reused),
+            ("block_bytes_made", metrics.block_bytes_made),
+            ("blocks_reused", metrics.blocks_reused),
+            ("consumer_allocations", metrics.consumer_allocations),
+            (
+                "consumer_allocation_nanos",
+                metrics.consumer_allocation_nanos,
+            ),
+            ("maker_allocation_nanos", metrics.maker_allocation_nanos),
             (
                 "dispatches_without_effects",
                 metrics.dispatches_without_effects,

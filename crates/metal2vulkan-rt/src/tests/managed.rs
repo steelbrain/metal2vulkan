@@ -96,7 +96,7 @@ mod on_device {
             let core = device.core();
             let copied = !core.shared_is_device_local();
             let counters = device.counters();
-            let cpu = (device.take_block(MemoryClass::Shared, 1))
+            let cpu = (device.take_block(MemoryClass::Shared, 2 * LEN))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let into = (device.new_buffer(cpu.id, LEN, LEN, true))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
