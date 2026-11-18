@@ -275,7 +275,8 @@ fn the_five_buffer_frame_is_the_frame_five_times_over_with_its_handlers() {
     let (frame, five) = (plan("frame"), plan("frame_5cb"));
     assert_eq!((frame.command_buffers(), five.command_buffers()), (1, 5));
     assert_eq!(five.dispatches.len(), 5 * frame.dispatches.len());
-    assert!(five.commit_to_complete && !frame.commit_to_complete);
+    // Both time their command buffers' commit to completion, which the matrix judges them by.
+    assert!(five.commit_to_complete && frame.commit_to_complete);
 }
 
 #[test]
