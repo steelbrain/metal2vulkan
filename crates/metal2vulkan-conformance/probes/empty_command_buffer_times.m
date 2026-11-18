@@ -23,7 +23,23 @@
 //   ./empty_command_buffer_times
 //   MTL_DEBUG_LAYER=1 ./empty_command_buffer_times
 //
-// WHAT IT MEASURED: see the commit that records the run.
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1, job m3-max-43955, five runs of each case, plain
+// and under MTL_DEBUG_LAYER=1 alike; the busy command buffer ran about 29 ms):
+//   Every command buffer: status Completed (4), error nil. No GPU time is ever 0.
+//   empty alone: GPUStartTime and GPUEndTime real and equal to within 1 us, 0.01 to 0.11 ms
+//     after the commit; the handler 5 to 15 us after them.
+//   empty after-busy: start and end equal to within 1 us, 0.08 to 0.11 ms after the busy one's
+//     GPUEndTime; its handler always after the busy one's (order 1), 5 to 12 us later.
+//   fence alone: real times about 0.11 ms apart (start 0.035 to 0.18 ms after the commit).
+//   fence after-busy: start and end equal to within 1 us, about 0.09 ms after the busy one's
+//     end; its handler always after the busy one's.
+//   empty-kernel alone: real times about 2 us apart, 0.1 to 0.18 ms after the commit.
+//   empty-kernel after-busy: its GPU times lie INSIDE the busy one's (about 4 us after the busy
+//     one's start, 2 us long): the GPU ran it beside the busy dispatch. Its handler still ran
+//     after the busy one's (order 1, 4 to 8 us later), in every run.
+// So a command buffer's completed handler follows the one committed before it on its queue
+// whatever its GPU times say, and a command buffer with no dispatch, empty or fence-only, reports
+// real, equal start and end times just after the previous command buffer's end.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
