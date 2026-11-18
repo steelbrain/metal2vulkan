@@ -120,6 +120,11 @@ pub(crate) struct Memory {
 }
 
 impl Memory {
+    /// The allocation.
+    pub(crate) fn device_memory(&self) -> vk::DeviceMemory {
+        self.memory
+    }
+
     pub(crate) fn info(&self) -> BlockInfo {
         BlockInfo {
             id: self.id,
@@ -294,7 +299,9 @@ impl Pool {
         }
     }
 
-    fn give_back(&self, memory: Memory) {
+    /// Takes back a block taken with [`take`](Self::take), for the block-maker thread to zero and
+    /// keep, or free.
+    pub(crate) fn give_back(&self, memory: Memory) {
         self.lock().returned.push(memory);
         self.changed.notify_all();
     }

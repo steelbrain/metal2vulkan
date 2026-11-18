@@ -25,6 +25,7 @@ mod hazard;
 mod instance;
 mod memory;
 mod pipeline;
+mod places;
 mod queue;
 mod readback;
 mod reaper;

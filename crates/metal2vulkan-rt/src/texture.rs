@@ -1,5 +1,7 @@
-//! Textures: optimal images in memory of their own, each written into set 1's texture arrays at
-//! the index the consumer names, in one home layout for its life.
+//! Textures: optimal images placed in the device's texture blocks ([`crate::places`]), each
+//! written into set 1's texture arrays at the index the consumer names, in one home layout for its
+//! life. An image the device requires an allocation of its own for, or one larger than a block, or
+//! one the blocks' memory type does not serve, has memory of its own.
 //!
 //! A texture's image has the descriptor's usage plus transfer source and destination, since Metal
 //! lets the CPU and blits reach any texture. Its home layout is the one its descriptors name, and
@@ -18,7 +20,8 @@ use crate::arrays::{IndexClass, ResourceId};
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal};
-use crate::memory;
+use crate::memory::{self, MemoryClass, BLOCK_LEN};
+use crate::places::Place;
 use crate::reaper::{Free, Job};
 use crate::staging::Stage;
 use crate::submit::Held;
@@ -111,8 +114,11 @@ pub struct Region {
     pub size: [u32; 3],
 }
 
-/// `MTLTexture`: an optimal-tiling `VkImage` in device-local memory of its own, its views, and the
-/// elements of set 1 at its index.
+/// `MTLTexture`: an optimal-tiling `VkImage` in device-local memory, its views, and the elements of
+/// set 1 at its index. The image is placed in a Private block the device takes from its pool; it
+/// has an allocation of its own only where the device requires one for it
+/// (`requiresDedicatedAllocation`), where it is larger than a block, or where the blocks' memory
+/// type does not serve it.
 ///
 /// A cheap handle: clones share one texture. The texture holds the device. Once its last handle
 /// is gone, and with it the last command buffer that used it, its elements of set 1 read null
@@ -141,8 +147,8 @@ struct TextureInner {
 pub(crate) struct Image {
     core: Arc<Core>,
     image: vk::Image,
-    memory: vk::DeviceMemory,
-    /// The allocation's bytes.
+    backing: Backing,
+    /// The memory's bytes.
     bytes: u64,
     /// The view of the sampled-texture array's element, where shaders read the texture.
     sampled: Option<vk::ImageView>,
@@ -185,9 +191,18 @@ impl Drop for Image {
         self.core.reaper.give(Job::Free(Free::Texture {
             views: [self.sampled, self.storage],
             image: self.image,
-            memory: self.memory,
+            backing: self.backing,
         }));
     }
+}
+
+/// The memory an image is bound to.
+#[derive(Clone, Copy)]
+pub(crate) enum Backing {
+    /// A place in a texture block.
+    Placed(Place),
+    /// An allocation of its own.
+    Own(vk::DeviceMemory),
 }
 
 /// The unit of a copy between an image and bytes: the aspect, an element's bytes and the texels
@@ -240,13 +255,13 @@ impl Drop for TextureInner {
 
 impl Device {
     /// `newTextureWithDescriptor:`, at `index`: an optimal image of the descriptor in device-local
-    /// memory of its own, its contents undefined, as Metal's are. `index` is given exactly where
-    /// shaders reach the texture (shader-read or shader-write usage), and is then an index of a
-    /// live grant of the class the usage picks: [`IndexClass::StorageTexture`] with shader-write
-    /// usage, else [`IndexClass::Texture`]. The texture's elements of set 1 are written before
-    /// the call returns, and its image moved to its home layout ahead of every command buffer
-    /// committed after it. Until the next submission nothing else holds the texture: released
-    /// first, it is freed at once.
+    /// memory, placed in a texture block ([`Texture`]), its contents undefined, as Metal's are.
+    /// `index` is given exactly where shaders reach the texture (shader-read or shader-write
+    /// usage), and is then an index of a live grant of the class the usage picks:
+    /// [`IndexClass::StorageTexture`] with shader-write usage, else [`IndexClass::Texture`]. The
+    /// texture's elements of set 1 are written before the call returns, and its image moved to its
+    /// home layout ahead of every command buffer committed after it. Until the next submission
+    /// nothing else holds the texture: released first, it is freed at once.
     ///
     /// A swizzle composes with the view's own component mapping. Shader-write usage writes the
     /// storage element where the device stores the format through a storage image without a
@@ -306,7 +321,7 @@ impl Device {
         };
         // SAFETY: the device is live, and `plan` was checked against its image format query.
         let made = unsafe { make(core, &d, &shape, &plan) };
-        let (image, memory, bytes, sampled, storage) = match made {
+        let (image, backing, bytes, sampled, storage) = match made {
             Ok(made) => made,
             Err(error) => {
                 if let Some((class, index)) = index {
@@ -320,7 +335,7 @@ impl Device {
         let image = Arc::new(Image {
             core: Arc::clone(core),
             image,
-            memory,
+            backing,
             bytes,
             sampled,
             storage,
@@ -641,13 +656,14 @@ fn whole(aspects: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
 /// view.
 type Objects = (
     vk::Image,
-    vk::DeviceMemory,
+    Backing,
     u64,
     Option<vk::ImageView>,
     Option<vk::ImageView>,
 );
 
-/// Makes the image, binds it to memory of its own, and makes its views.
+/// Makes the image, binds it to a place in a texture block or to memory of its own, and makes its
+/// views.
 ///
 /// # Safety
 ///
@@ -672,7 +688,7 @@ unsafe fn make(
 #[derive(Default)]
 struct Made {
     image: Option<vk::Image>,
-    memory: Option<vk::DeviceMemory>,
+    backing: Option<Backing>,
     views: Vec<vk::ImageView>,
 }
 
@@ -709,26 +725,44 @@ impl Made {
         let image =
             unsafe { device.create_image(&info, None) }.map_err(Error::vulkan("vkCreateImage"))?;
         self.image = Some(image);
+        let mut dedicated = vk::MemoryDedicatedRequirements::default();
+        let mut needs = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+        let of = vk::ImageMemoryRequirementsInfo2::default().image(image);
         // SAFETY: the image is the device's.
-        let requirements = unsafe { device.get_image_memory_requirements(image) };
+        unsafe { device.get_image_memory_requirements2(&of, &mut needs) };
+        let requirements = needs.memory_requirements;
         let bits = requirements.memory_type_bits;
-        // Vulkan gives every image of no external handle type a device-local type.
-        let local = bits & core.device_local;
-        let memory_type = match local {
-            0 => bits.trailing_zeros(),
-            _ => local.trailing_zeros(),
+        // A place in a texture block where the image takes the blocks' memory type and the device
+        // does not require an allocation of its own for it (preferring one is no reason).
+        let placed = dedicated.requires_dedicated_allocation == vk::FALSE
+            && requirements.size <= BLOCK_LEN
+            && bits & (1 << core.memory_type(MemoryClass::Private)) != 0;
+        let (backing, memory, offset) = if placed {
+            let (place, memory) =
+                (core.places).place(&core.pool, requirements.size, requirements.alignment)?;
+            (Backing::Placed(place), memory, place.offset)
+        } else {
+            // Vulkan gives every image of no external handle type a device-local type.
+            let local = bits & core.device_local;
+            let memory_type = match local {
+                0 => bits.trailing_zeros(),
+                _ => local.trailing_zeros(),
+            };
+            let mut own = vk::MemoryDedicatedAllocateInfo::default().image(image);
+            let allocate = vk::MemoryAllocateInfo::default()
+                .allocation_size(requirements.size)
+                .memory_type_index(memory_type)
+                .push_next(&mut own);
+            // SAFETY: the type is one the image's requirements allow, and the allocation its own.
+            let memory = unsafe {
+                memory::allocate(device, &core.counters, core.max_allocations, &allocate)
+            }?;
+            (Backing::Own(memory), memory, 0)
         };
-        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().image(image);
-        let allocate = vk::MemoryAllocateInfo::default()
-            .allocation_size(requirements.size)
-            .memory_type_index(memory_type)
-            .push_next(&mut dedicated);
-        // SAFETY: the type is one the image's requirements allow, and the allocation its own.
-        let memory =
-            unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) }?;
-        self.memory = Some(memory);
-        // SAFETY: the allocation is the image's size, of a type its requirements allow.
-        unsafe { device.bind_image_memory(image, memory, 0) }
+        self.backing = Some(backing);
+        // SAFETY: the place or allocation holds the image's size at its alignment, in memory of a
+        // type its requirements allow.
+        unsafe { device.bind_image_memory(image, memory, offset) }
             .map_err(Error::vulkan("vkBindImageMemory"))?;
         let mut view = |components, aspect| {
             let info = vk::ImageViewCreateInfo::default()
@@ -754,7 +788,7 @@ impl Made {
             )?),
             false => None,
         };
-        Ok((image, memory, requirements.size, sampled, storage))
+        Ok((image, backing, requirements.size, sampled, storage))
     }
 
     /// Destroys what was made, the allocation's gauge falling with it.
@@ -772,9 +806,13 @@ impl Made {
             if let Some(image) = self.image {
                 device.destroy_image(image, None);
             }
-            if let Some(memory) = self.memory {
-                device.free_memory(memory, None);
-                core.counters.fall(Gauge::Blocks);
+            match self.backing {
+                Some(Backing::Own(memory)) => {
+                    device.free_memory(memory, None);
+                    core.counters.fall(Gauge::Blocks);
+                }
+                Some(Backing::Placed(place)) => core.places.release(&core.pool, place),
+                None => {}
             }
         }
     }

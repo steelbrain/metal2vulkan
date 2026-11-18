@@ -7,6 +7,7 @@
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
 use crate::pipeline::PipelineInner;
+use crate::texture::Backing;
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
@@ -48,11 +49,12 @@ pub(crate) enum Free {
     Pipeline(vk::Pipeline),
     /// The shader module of a dropped pipeline state.
     ShaderModule(vk::ShaderModule),
-    /// A dropped texture's views, image and memory; the textures and blocks gauges fall with it.
+    /// A dropped texture's views, image and memory: its place is freed, or its allocation of its
+    /// own with the blocks gauge. The textures gauge falls with it.
     Texture {
         views: [Option<vk::ImageView>; 2],
         image: vk::Image,
-        memory: vk::DeviceMemory,
+        backing: Backing,
     },
     /// A device sampler no sampler state holds; the device samplers gauge falls with it.
     Sampler(vk::Sampler),
@@ -164,7 +166,7 @@ fn free(core: &Core, object: Free) {
         Free::Texture {
             views,
             image,
-            memory,
+            backing,
         } => {
             // SAFETY: no pending work uses them: every command buffer and upload that used the
             // texture held it until it retired, and its elements of set 1 are null.
@@ -173,10 +175,16 @@ fn free(core: &Core, object: Free) {
                     device.destroy_image_view(view, None);
                 }
                 device.destroy_image(image, None);
-                device.free_memory(memory, None);
+            }
+            match backing {
+                Backing::Own(memory) => {
+                    // SAFETY: the image bound to it is destroyed.
+                    unsafe { device.free_memory(memory, None) };
+                    core.counters.fall(Gauge::Blocks);
+                }
+                Backing::Placed(place) => core.places.release(&core.pool, place),
             }
             core.counters.fall(Gauge::Textures);
-            core.counters.fall(Gauge::Blocks);
         }
         Free::Sampler(sampler) => {
             // SAFETY: no element of set 1 holds it, and every command buffer that used a state

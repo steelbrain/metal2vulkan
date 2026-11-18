@@ -13,6 +13,7 @@ use crate::hazard::Ids;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, MemoryClass, Pool, BLOCK_LEN};
 use crate::pipeline::PUSH_BYTES;
+use crate::places::Places;
 use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
 use crate::ring::Ring;
@@ -152,6 +153,8 @@ pub(crate) struct Core {
     /// ([`memory::allocate`]).
     pub(crate) max_allocations: u32,
     pub(crate) pool: Pool,
+    /// The blocks textures are placed in.
+    pub(crate) places: Places,
     pub(crate) filler: Filler,
     pub(crate) recorders: Recorders,
     pub(crate) work: Work,
@@ -429,6 +432,7 @@ impl Device {
             max_block_len,
             max_allocations,
             pool: Pool::new(options.block_mappings),
+            places: Places::new(),
             filler,
             recorders: Recorders::new(family),
             work: Work::new(),
@@ -1015,17 +1019,18 @@ impl Drop for Core {
         // The runtime's threads have ended: the core is dropped only once none holds it, and with
         // it every command buffer and upload, each of which held what it used. The teardown ran
         // the consumer's unmap hook, so freeing runs none.
+        self.recorders.destroy_all(&self.device);
+        // The reaper has ended; what it was given since is freed here (a texture's place among
+        // it, which may give a texture block back to the pool), and then the pools of the queues
+        // still alive.
+        self.reaper.drain(self);
         if let Some(region) = self.work.take_region() {
             // SAFETY: every upload that copied through it retired, and no call reads it.
             unsafe { region.free(self) };
         }
-        for memory in self.pool.remaining() {
+        for memory in (self.places.remaining().into_iter()).chain(self.pool.remaining()) {
             memory::free(self, memory);
         }
-        self.recorders.destroy_all(&self.device);
-        // The reaper has ended; what it was given since is freed here, and then the pools of the
-        // queues still alive.
-        self.reaper.drain(self);
         let pools = std::mem::take(
             self.query_pools
                 .get_mut()

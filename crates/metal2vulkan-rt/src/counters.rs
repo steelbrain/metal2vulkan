@@ -252,8 +252,8 @@ pub struct Metrics {
     /// The longest first-use wait, in nanoseconds; a maximum since the device was made, so the
     /// difference of two reads does not apply to it.
     pub first_use_wait_max_nanos: u64,
-    /// `VkDeviceMemory` allocations made: pooled and dedicated blocks, the zero source and the
-    /// parameter ring's blocks, and later image blocks.
+    /// `VkDeviceMemory` allocations made: pooled blocks (the texture blocks among them) and
+    /// dedicated ones, the zero source and the parameter ring's blocks.
     pub blocks_made: u64,
     /// Kernels the translator lowered, each a pipeline state's module: one for a kernel that does
     /// not observe its threadgroup partition, two for one that does.

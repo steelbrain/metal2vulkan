@@ -70,7 +70,8 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let submissions = || counters.metrics().submissions;
 
-            // Textures made and released: nothing holds them, and nothing is submitted.
+            // Textures made and released: nothing holds them, and nothing is submitted. The first
+            // takes the ready Private block as its texture block, which the pool makes again.
             let before = submissions();
             for _ in 0..4 * HOMES_PRUNE {
                 let texture = device
@@ -85,13 +86,13 @@ mod on_device {
             }
             wait_until("the released textures freed", || {
                 let gauges = counters.gauges();
-                (gauges.textures, gauges.blocks) == (0, base)
+                (gauges.textures, gauges.blocks) == (0, base + 1)
             });
             assert_eq!(submissions(), before, "{name}: textures made and released");
 
             // Whole-texture copies of 4,000,000 bytes, twice the staging region's length, into four
-            // textures in turn: the region and the textures are the only allocations, and the
-            // upload goes each time its copies take half the region.
+            // textures in turn: the region is the only allocation, the textures being placed in
+            // the texture block, and the upload goes each time its copies take half the region.
             let side = 1000;
             let call = u64::from(side * side * 4);
             let calls = 2 * REGION_LEN / call + 3;
@@ -103,7 +104,7 @@ mod on_device {
                         .unwrap_or_else(|error| panic!("{name}: {error}"))
                 })
                 .collect();
-            let ceiling = base + targets.len() as u64 + 1;
+            let ceiling = base + 2;
             let pattern = |seed: u64| -> Vec<u8> {
                 (0..call)
                     .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed as u8))

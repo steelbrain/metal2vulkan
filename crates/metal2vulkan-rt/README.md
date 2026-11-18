@@ -88,13 +88,13 @@ in its memory.
   class ready, made off every caller's path, so a take waits only when none is ready. Past
   `BLOCK_LEN` a block is dedicated: the length rounded up to 64 KiB, made in the call, up to the
   device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
-- Every `VkDeviceMemory` the runtime holds counts against the device's
-  `maxMemoryAllocationCount`: each block, each texture's own allocation, the staging region (from
-  the first texture copy on), the staging buffer of a copy larger than the region while it runs,
-  the parameter ring's blocks and the zero source. One more past it is `Limit::MemoryAllocations`,
-  refused before the driver is called; `Gauges::blocks` counts those live. The limit is about 4.29 billion on RADV,
-  NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD Graphics 630, and
-  4,096 at Vulkan's minimum.
+- Every `VkDeviceMemory` the runtime holds counts against the device's `maxMemoryAllocationCount`:
+  each block (texture blocks among them), each texture's own allocation, the staging region (from
+  the first texture copy on), the staging buffer of a copy larger than the region while it runs, the
+  parameter ring's blocks and the zero source. One more past it is `Limit::MemoryAllocations`,
+  refused before the driver is called; `Gauges::blocks` counts those live. The limit is about 4.29
+  billion on RADV, NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD
+  Graphics 630, and 4,096 at Vulkan's minimum.
 - Every block reads zero when it is handed out, new or taken again, as Metal's new buffers do. A
   Shared block is zeroed through its mapping, which also makes every page resident before anyone
   holds it; a Private block by a GPU fill.
@@ -164,12 +164,17 @@ made, with no lock, and never rewritten for layouts.
 ## Textures
 
 - `Device::new_texture(descriptor, index)` is `newTextureWithDescriptor:` at `index`: an
-  optimal-tiling image of the descriptor in device-local memory of its own (a dedicated
-  allocation), its contents undefined, as Metal's are. `index` is given exactly where shaders
-  reach the texture, shader-read or shader-write usage (`Refusal::TextureIndex` otherwise), from
-  a live grant of the class the usage picks: `IndexClass::StorageTexture` with shader-write
-  usage, else `IndexClass::Texture`. `TextureUsage` with no bits is Metal's unknown usage: shader
-  read and write, render target and pixel-format view.
+  optimal-tiling image of the descriptor in device-local memory, its contents undefined, as Metal's
+  are. The image is placed in a texture block: a Private block the device takes from its pool, at
+  the first place with room at the image's alignment, so a texture makes no allocation. It has an
+  allocation of its own only where the device requires one for it (`requiresDedicatedAllocation`;
+  preferring one is no reason), where it is larger than a block, or where the blocks' memory type
+  does not serve it. A place is free again once the image is freed; one empty texture block is kept,
+  and another that empties goes back to the pool. `index` is given exactly where shaders reach the
+  texture, shader-read or shader-write usage (`Refusal::TextureIndex` otherwise), from a live grant
+  of the class the usage picks: `IndexClass::StorageTexture` with shader-write usage, else
+  `IndexClass::Texture`. `TextureUsage` with no bits is Metal's unknown usage: shader read and
+  write, render target and pixel-format view.
 - The image's usage is the descriptor's plus transfer source and destination. Its home layout is
   general where it has a storage element, shader-read-only where shaders only read it, and the
   attachment layout where only render passes use it. Its elements of set 1 are written before the
