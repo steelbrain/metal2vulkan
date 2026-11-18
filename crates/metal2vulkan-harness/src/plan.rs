@@ -41,6 +41,17 @@ pub struct Plan {
     ///
     /// [`Report::commit_us`]: crate::run::Report::commit_us
     pub commit_to_complete: bool,
+    /// Whether its runs are a program's frames, timed as a program sees them (with
+    /// [`commit_to_complete`](Self::commit_to_complete)): their throughput, two runs in flight,
+    /// from one run's last completed handler to the next's ([`Report::throughput_us`]), is its
+    /// matrix time ([`run::matrix_time`]), and their latency from idle, one run in flight, from
+    /// its first `commit` to its last completed handler ([`Report::from_idle_us`]), is a row of
+    /// its own.
+    ///
+    /// [`Report::throughput_us`]: crate::run::Report::throughput_us
+    /// [`Report::from_idle_us`]: crate::run::Report::from_idle_us
+    /// [`run::matrix_time`]: crate::run::matrix_time
+    pub frames: bool,
     /// Where set, the device decides the plan's size: this plan is the workload at its base size,
     /// which the harness times first on the first runtime that runs it, then runs on every
     /// runtime at the size [`Scaled`] chooses from that time ([`run::run_each`]).
@@ -840,9 +851,13 @@ impl Plan {
         !self.expect_textures.is_empty() || self.textures.iter().any(|t| t.texels.is_some())
     }
 
-    /// `Ok` where every index it names exists and every length is whole and agrees.
+    /// `Ok` where every index it names exists and every length is whole and agrees, and where
+    /// its runs are frames only with their commit-to-complete times timed.
     pub fn validate(&self) -> Result<()> {
         let name = &self.name;
+        if self.frames && !self.commit_to_complete {
+            return Err(format!("{name}: its runs are frames, timed by their completed handlers, but its command buffers take none").into());
+        }
         for (i, buffer) in self.buffers.iter().enumerate() {
             if buffer.length == 0 || buffer.length % 16 != 0 {
                 return Err(format!(

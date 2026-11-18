@@ -364,6 +364,7 @@ fn draws(name: &str, side: u32, count: usize) -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -402,6 +403,7 @@ fn bandwidth() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -433,6 +435,7 @@ fn long_4cb() -> Plan {
 fn long_4cb_at(rounds: u32) -> Plan {
     Plan {
         commit_to_complete: true,
+        frames: false,
         ..fma_chains("long_4cb", rounds, 4)
     }
 }
@@ -479,6 +482,7 @@ fn fma_chains(name: &str, rounds: u32, command_buffers: usize) -> Plan {
         per_command_buffer: (command_buffers > 1).then_some(1),
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -518,6 +522,7 @@ fn threadgroup_scan() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -580,6 +585,7 @@ fn simd_reduce() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -640,6 +646,7 @@ fn image_filter() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -698,6 +705,7 @@ fn row_cells() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -747,6 +755,7 @@ fn dispatch_chain() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -789,6 +798,7 @@ fn unset(length: u64) -> BufferPlan {
 fn frame() -> Plan {
     Plan {
         commit_to_complete: true,
+        frames: true,
         ..lcg_frame("frame", 1, 4, None, Storage::Managed)
     }
 }
@@ -800,6 +810,7 @@ fn frame() -> Plan {
 fn frame_5cb() -> Plan {
     Plan {
         commit_to_complete: true,
+        frames: true,
         ..lcg_frame("frame_5cb", 5, 4, None, Storage::Managed)
     }
 }
@@ -884,6 +895,7 @@ fn lcg_frame(
         per_command_buffer: Some(per),
         per_encoder,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -930,6 +942,7 @@ fn wide_bindings() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -972,6 +985,7 @@ fn waves() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -1022,6 +1036,7 @@ fn vote_loop() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -1090,6 +1105,7 @@ fn constant_reads(name: &str, storage: Storage, modified: Option<Range<u64>>) ->
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -1137,6 +1153,7 @@ fn narrow_ints() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -1196,6 +1213,7 @@ fn zero_products() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -1290,6 +1308,7 @@ fn sampling_plan(
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -1523,6 +1542,7 @@ fn texture_read() -> Plan {
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }

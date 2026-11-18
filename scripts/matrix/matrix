@@ -355,7 +355,8 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     processes. Then the rows over their limits (results.RETIME_SELECT, at most
     results.RETIME_ROWS, the furthest over first) are each re-timed alone in results.RETIME_PAIRS
     pairs, old then new, then new then old, their times and GPU times kept (results.RETIME_KEEP)
-    for results.harness_budget. A row whose size follows the device is sized by the first
+    for results.harness_budget; a frames workload's latency from idle row (results.FROM_IDLE)
+    by its workload's runs. A row whose size follows the device is sized by the first
     runtime's pass, which the process gives the other, and every later run, warm and re-timed ones
     included, is given that size (`--size`), so each runtime times the same work. The process has
     a fresh empty store for its pipelines (`--store`, each runtime's apart in it), so its first
@@ -411,7 +412,7 @@ def harness_runs(manifest_dir, command, leg, windows=False):
       for pair in $(seq {results.RETIME_PAIRS}); do
         case $pair in 2) order="new old" ;; *) order="old new" ;; esac
         for timed in $order; do
-          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "$row" 2>&1 | sed -n "{results.RETIME_KEEP}"
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "${{row%{results.FROM_IDLE}}}" 2>&1 | sed -n "{results.RETIME_KEEP}"
         done
       done
     done

@@ -34,8 +34,8 @@
 use metal2vulkan_harness::authored::{Create, Makes};
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
-    count_instructions, matrix_time, percentile, run_each, steady, CreateReport, Harness, Report,
-    Runs, Session, Warmup,
+    commit_to_complete, count_instructions, matrix_time, percentile, run_each, steady,
+    CreateReport, Harness, Report, Runs, Session, Warmup, FROM_IDLE,
 };
 use metal2vulkan_harness::{authored, description, old, rt, Error, Failed, Result, Waits};
 use std::path::{Path, PathBuf};
@@ -612,7 +612,9 @@ fn print(runtime: &str, name: &str, report: &Report) {
             places.join(", ")
         );
     }
-    let judged = if report.commit_us.is_empty() {
+    let judged = if !report.throughput_us.is_empty() {
+        "the frames' throughput, from one's last completed handler to the next's, two in flight"
+    } else if report.commit_us.is_empty() {
         "the host wall time a run adds"
     } else {
         "a run's last command buffer's commit-to-complete time"
@@ -648,6 +650,23 @@ fn print(runtime: &str, name: &str, report: &Report) {
             );
             println!("M2V-MATRIX size harness-{runtime}/{name} {}", scaled.size);
             matrix(runtime, name, time.map(|us| us * at_base), &report.gauges);
+        }
+    }
+    if !report.throughput_us.is_empty() {
+        // The frames' latency from idle, a row of its own, and their commit-to-complete time,
+        // shown beside the throughput that is their row's time.
+        let (idle, c2c) = (steady(&report.from_idle_us), commit_to_complete(report));
+        let show = |us: Option<f64>| us.map_or("-".to_owned(), |us| format!("{us:.1}"));
+        println!(
+            "{name:<17} {runtime:<8} latency from idle {} us, one run in flight; commit-to-complete {} us",
+            show(idle),
+            show(c2c),
+        );
+        if let Some(us) = idle {
+            println!("M2V-MATRIX time harness-{runtime}/{name}{FROM_IDLE} {us:.3}");
+        }
+        if let Some(us) = c2c {
+            println!("M2V-MATRIX time harness-{runtime}/{name}/commit_to_complete {us:.3}");
         }
     }
     for (count, value) in &report.counts {

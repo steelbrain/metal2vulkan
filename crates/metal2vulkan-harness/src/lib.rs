@@ -96,10 +96,16 @@
 //!
 //! where a plan workload's time is what a program waits on, timed on the host
 //! ([`run::matrix_time`]): the steady time ([`run::steady`]: the lowest mean of the timed runs'
-//! consecutive windows of 10, with at least 5 timed runs) of each run's last command buffer's
+//! consecutive windows of 10, with at least 5 timed runs) of its frames' throughput where its runs
+//! are frames ([`plan::Plan::frames`]: `frame` and `frame_5cb`), two runs in flight, from one
+//! run's last completed handler to the next's; else of each run's last command buffer's
 //! commit-to-complete time where the workload times its command buffers'
 //! ([`plan::Plan::commit_to_complete`]), the lateness of the others a column that decides nothing, else
-//! of the host wall time each run adds. The GPU time (the table's `steady` column, and the
+//! of the host wall time each run adds. A frames workload prints two more rows: its latency from
+//! idle, `<workload>_from_idle` ([`run::FROM_IDLE`]), the steady time of as many runs again, one
+//! in flight, each from just before its first `commit` to its last completed handler; and its
+//! last command buffer's commit-to-complete time, `<workload>/commit_to_complete`, which the matrix
+//! shows and does not judge. The GPU time (the table's `steady` column, and the
 //! `harness-gpu-` record: a run's GPU time at the 50th percentile, on the matrix time's scale,
 //! for a plan workload whose runs wrote one) is a diagnostic and decides no row. A creation workload's time is the steady time of its creation
 //! calls. A workload the device sizes ([`plan::Scaled`]) prints the size it ran at on a line of

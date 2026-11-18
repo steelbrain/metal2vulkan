@@ -551,24 +551,42 @@ HARNESS_FLOORS = read_floors((Path(__file__).resolve().parent / "floors.tsv").re
 HARNESS_GPU_FLOORS = read_floors((Path(__file__).resolve().parent / "gpu-floors.tsv").read_text())
 
 
+#: The end of the name of a frames workload's row of its latency from idle, after the workload's
+#: name (the harness's `FROM_IDLE`): `frame_from_idle` beside `frame`, whose time is the frames'
+#: throughput. Each of the two takes the ceiling and the floor its workload's row has (listed_row).
+FROM_IDLE = "_from_idle"
+#: Rows shown with the ratio of their times and never judged, by the end of their names, each for
+#: its reason (harness_budget, over_rows).
+SHOWN_ROWS = {
+    "/commit_to_complete": "a frames workload's last command buffer's commit-to-complete time, beside "
+                           "its throughput",
+}
+
+
+def listed_row(row):
+    """The row whose ceiling and floor ROW takes: a frames workload's row for its latency from idle
+    (FROM_IDLE), else ROW."""
+    return row[:-len(FROM_IDLE)] if row.endswith(FROM_IDLE) else row
+
+
 def row_floor(leg_id, row, gpu=False):
     """ROW's floor on LEG_ID: of its GPU time where GPU, else of its host time; 1 where none is
-    listed."""
-    return (HARNESS_GPU_FLOORS if gpu else HARNESS_FLOORS).get(card_of(leg_id), {}).get(row, 1.0)
+    listed (for listed_row)."""
+    return (HARNESS_GPU_FLOORS if gpu else HARNESS_FLOORS).get(card_of(leg_id), {}).get(listed_row(row), 1.0)
 
 
 def row_limit(leg_id, row, gpu=False):
     """ROW's limit on LEG_ID, new over old: HARNESS_BUDGET times the greater of its ceiling
     (HARNESS_CEILINGS) and its floor (row_floor, of its GPU time where GPU), each 1 where none is
-    listed."""
-    return HARNESS_BUDGET * max(HARNESS_CEILINGS.get(card_of(leg_id), {}).get(row, 1.0),
+    listed (for listed_row)."""
+    return HARNESS_BUDGET * max(HARNESS_CEILINGS.get(card_of(leg_id), {}).get(listed_row(row), 1.0),
                                 row_floor(leg_id, row, gpu))
 
 
 def past_limit(leg_id, row, gpu=False):
     """How a line names ROW's limit on LEG_ID once past it: the budget, or its ceiling or floor
     (its GPU floor where GPU), whichever sets it, with the allowance."""
-    ceiling = HARNESS_CEILINGS.get(card_of(leg_id), {}).get(row, 1.0)
+    ceiling = HARNESS_CEILINGS.get(card_of(leg_id), {}).get(listed_row(row), 1.0)
     floor = row_floor(leg_id, row, gpu)
     if max(ceiling, floor) <= 1.0:
         return f"past {HARNESS_BUDGET}"
@@ -648,7 +666,8 @@ RETIME_KEEP = (r"s#^M2V-MATRIX time harness-$timed/$row #M2V-MATRIX time harness
 #: timed on both whose ratio, new over old, is over its limit, as `ratio row`: of its GPU times
 #: where it has them on both and does not match WALLRE (gpu_judged), against GPULIMITS', else of
 #: its times, against LIMITS' (`row=limit ...`, harness_limits), or BUDGET where a row has no
-#: limit listed: harness_budget's comparison, of the same decimals.
+#: limit listed, a latency from idle row (FROM_IDLE) against its workload's row's (listed_row):
+#: harness_budget's comparison, of the same decimals.
 RETIME_SELECT = r"""function read(text, into,   n, i, l, p) { n = split(text, l, " "); for (i = 1; i <= n; i++) { split(l[i], p, "="); into[p[1]] = p[2] } }
 BEGIN { read(limits, limit); read(gpulimits, glimit) }
 $1 == "M2V-MATRIX" && $2 == "time" && $3 ~ /^harness-(old|new)\/[^\/]+$/ {
@@ -662,8 +681,9 @@ END {
     old = t["harness-old/" row]; new = t["harness-new/" row]
     if (old == "" || new == "" || old + 0 <= 0) continue
     gold = g["harness-gpu-old/" row] + 0; gnew = g["harness-gpu-new/" row] + 0
-    if (row !~ wallre && gold > 0 && gnew > 0) { r = gnew / gold; m = (row in glimit) ? glimit[row] + 0 : budget + 0 }
-    else { r = new / old; m = (row in limit) ? limit[row] + 0 : budget + 0 }
+    lr = row; sub(/_from_idle$/, "", lr)
+    if (row !~ wallre && gold > 0 && gnew > 0) { r = gnew / gold; m = (lr in glimit) ? glimit[lr] + 0 : budget + 0 }
+    else { r = new / old; m = (lr in limit) ? limit[lr] + 0 : budget + 0 }
     if (r > m) printf "%.6f %s\n", r, row
   }
 }"""
@@ -800,6 +820,11 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
             problems.append(f"harness budget {row}: new ran at size {new_size}, old at {old_size}, so its "
                             "times measure different work")
             continue
+        why = next((why for end, why in SHOWN_ROWS.items() if row.endswith(end)), None)
+        if why:
+            parked.append(f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is {new / old:.3f}: "
+                          f"shown, not judged: {why}")
+            continue
         limit = row_limit(leg_id, row)
         gated, named = instruction_gate(leg_id, row, records)
         problems += gated
@@ -831,8 +856,8 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
                     f"{old:.1f} us is {new / old:.3f}")
             if new / old > limit:
                 problems.append(f"{line}, {past_limit(leg_id, row)}")
-            elif row in ceilings:
-                parked.append(f"{line}, its ceiling {ceilings[row]}")
+            elif listed_row(row) in ceilings:
+                parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
             continue
         gpu = gpu_judged(times, row)
         if gpu:
@@ -862,12 +887,12 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
                 problems.append(past)
         elif variance and ratio > HARNESS_BUDGET:
             parked.append(f"{line}, within its limit: the card's own variance ({variance})")
-        elif row not in ceilings:
+        elif listed_row(row) not in ceilings:
             continue
         elif ratio > HARNESS_BUDGET:
-            parked.append(f"{line}, its ceiling {ceilings[row]}")
+            parked.append(f"{line}, its ceiling {ceilings[listed_row(row)]}")
         else:
-            parked.append(f"{line}, within {HARNESS_BUDGET}: its ceiling {ceilings[row]} leaves the list")
+            parked.append(f"{line}, within {HARNESS_BUDGET}: its ceiling {ceilings[listed_row(row)]} leaves the list")
     return problems, parked
 
 
@@ -878,7 +903,7 @@ def over_rows(leg_id, records):
     (EXACT against the stored count, LENIENT against the old runtime's whole count), the ratio
     new over old (the median of the re-timed pairs where the row was re-timed, of the FIRST_RUNS
     processes' medians for a creation row's first sample). A row its re-timed pairs bring within
-    is not over; a shown first sample (SHOWN_FIRST) is never judged, so never over."""
+    is not over; a shown row (SHOWN_FIRST, SHOWN_ROWS) is never judged, so never over."""
     times, counted = records["time"], records["instructions"]
     out = []
     for key in sorted(times):
@@ -893,7 +918,8 @@ def over_rows(leg_id, records):
                 out.append((row, "count", own / stored, HARNESS_BUDGET))
             if own > old_i:
                 out.append((row, "count", own / old_i, 1.0))
-        if first_row(row) and any(row.endswith(end) for end in SHOWN_FIRST):
+        if (first_row(row) and any(row.endswith(end) for end in SHOWN_FIRST)) or any(
+                row.endswith(end) for end in SHOWN_ROWS):
             continue
         if first_row(row):
             samples = first_samples(times, row)

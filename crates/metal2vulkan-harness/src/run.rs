@@ -92,17 +92,29 @@ pub fn steady(times: &[f64]) -> Option<f64> {
 }
 
 /// The time the matrix judges a plan's row by, in microseconds: what a program waits on, timed
-/// on the host. Where the plan times each command buffer's commit to its completed handler
-/// ([`Plan::commit_to_complete`]), the [`steady`] time of each run's last command buffer's
-/// commit-to-complete time: a program that waits for its run waits for its last command buffer,
-/// and the earlier ones' lateness ([`Report::late_us`]) is a column of its own. Else the
-/// [`steady`] time of the runs' wall times ([`Report::wall_us`]). A run's GPU time
-/// ([`Report::gpu_us`]) decides no row.
+/// on the host. Where the plan's runs are frames ([`Plan::frames`]), the [`steady`] time of
+/// their throughput ([`Report::throughput_us`]), the time each frame adds with two in flight;
+/// their latency from idle ([`Report::from_idle_us`]) is a row of its own. Else, where the plan
+/// times each command buffer's commit to its completed handler ([`Plan::commit_to_complete`]),
+/// the [`steady`] time of each run's last command buffer's commit-to-complete time
+/// ([`commit_to_complete`]). Else the [`steady`] time of the runs' wall times
+/// ([`Report::wall_us`]). A run's GPU time ([`Report::gpu_us`]) decides no row.
 pub fn matrix_time(report: &Report) -> Option<f64> {
+    if !report.throughput_us.is_empty() {
+        return steady(&report.throughput_us);
+    }
     match report.commit_us.last() {
         None => steady(&report.wall_us),
-        Some(last) => steady(last),
+        Some(_) => commit_to_complete(report),
     }
+}
+
+/// The [`steady`] time of each run's last command buffer's commit-to-complete time, where the
+/// plan times it ([`Plan::commit_to_complete`]): a program that waits for its run waits for its
+/// last command buffer, and the earlier ones' lateness ([`Report::late_us`]) is a column of its
+/// own.
+pub fn commit_to_complete(report: &Report) -> Option<f64> {
+    report.commit_us.last().and_then(|last| steady(last))
 }
 
 /// The untimed runs before a workload's timed ones.
@@ -206,6 +218,16 @@ pub struct Report {
     /// both on the runtime's host clock, in microseconds. A command buffer reported complete only
     /// with a later one is late by the time between their ends.
     pub late_us: Vec<Vec<f64>>,
+    /// Where the plan's runs are frames ([`Plan::frames`]): each pair of consecutive timed runs'
+    /// time from the earlier's last completed handler to the later's, two runs in flight, in
+    /// microseconds: the time each frame adds. The pairs around the waits that read the gauges
+    /// ([`GAUGE_RUNS`]) are left out. Empty for another plan.
+    pub throughput_us: Vec<f64>,
+    /// Where the plan's runs are frames: as many runs again after the timed ones, one in flight,
+    /// each committed once the one before it completed, each one's time from just before its
+    /// first `commit` until its last completed handler ran, in microseconds: a frame's latency
+    /// from an idle device. Empty for another plan.
+    pub from_idle_us: Vec<f64>,
     /// Where the plan is [`Scaled`], the size it ran at and the time that size came from
     /// ([`run_each`]).
     pub scaled_to: Option<ScaledTo>,
@@ -221,33 +243,112 @@ pub struct Report {
 /// Microseconds of each timed run, one list per command buffer's place in its run.
 type ByPlace = Vec<Vec<f64>>;
 
-/// The commit-to-complete times and lateness that the completed handlers of a plan's timed
-/// command buffers report ([`Plan::commit_to_complete`]).
-#[derive(Default)]
+/// The timed runs after which the harness waits for the device to go idle and reads its gauges
+/// ([`Report::gauges`]).
+pub const GAUGE_RUNS: [u32; 2] = [100, 200];
+
+/// The end of the name of a frames workload's row of its latency from idle
+/// ([`Report::from_idle_us`]), after the workload's name: the matrix's `results.FROM_IDLE`.
+pub const FROM_IDLE: &str = "_from_idle";
+
+/// What the completed handlers of a plan's timed command buffers report
+/// ([`Plan::commit_to_complete`]).
 struct Completions {
-    /// The times reported, each with its command buffer's place in its run, in microseconds, in
-    /// the order the handlers ran: its commit-to-complete time and its lateness.
-    times: Mutex<Vec<(usize, f64, f64)>>,
+    /// Where the times reported count from.
+    origin: Instant,
+    /// The reports, in the order the handlers ran.
+    times: Mutex<Vec<Ran>>,
     /// Signalled at each report.
     reported: Condvar,
+}
+
+/// One completed handler's report: its command buffer's place in its run, the time just before
+/// its `commit` and the time the handler ran, in microseconds from [`Completions::origin`], and
+/// its lateness, in microseconds.
+#[derive(Clone, Copy)]
+struct Ran {
+    place: usize,
+    committed_us: f64,
+    handled_us: f64,
+    late_us: f64,
+}
+
+/// The reports of a plan's timed runs, by command buffer's place in its run, each place's in run
+/// order ([`Completions::wait`]).
+pub(crate) struct Handled {
+    /// Each time just before a `commit`, in microseconds from [`Completions::origin`].
+    pub(crate) committed: ByPlace,
+    /// Each time a completed handler ran, on the same scale.
+    pub(crate) handled: ByPlace,
+    /// Each lateness ([`Report::late_us`]).
+    pub(crate) late: ByPlace,
+}
+
+impl Handled {
+    /// Each command buffer's commit-to-complete time ([`Report::commit_us`]).
+    pub(crate) fn commit_us(&self) -> ByPlace {
+        (self.committed.iter().zip(&self.handled))
+            .map(|(committed, handled)| {
+                (committed.iter().zip(handled))
+                    .map(|(committed, handled)| handled - committed)
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The time from each run's last completed handler to the next's, the pairs around the
+    /// gauges' waits left out ([`Report::throughput_us`]).
+    pub(crate) fn throughput_us(&self) -> Vec<f64> {
+        let last = self.handled.last().map_or(&[][..], Vec::as_slice);
+        (last.windows(2).enumerate())
+            .filter(|(pair, _)| !GAUGE_RUNS.contains(&(*pair as u32 + 1)))
+            .map(|(_, ends)| ends[1] - ends[0])
+            .collect()
+    }
+
+    /// Each run's time from its first `commit` to its last completed handler
+    /// ([`Report::from_idle_us`]).
+    pub(crate) fn from_idle_us(&self) -> Vec<f64> {
+        let (Some(first), Some(last)) = (self.committed.first(), self.handled.last()) else {
+            return Vec::new();
+        };
+        (first.iter().zip(last))
+            .map(|(committed, handled)| handled - committed)
+            .collect()
+    }
 }
 
 /// How long [`Completions::wait`] waits for the handlers of command buffers already complete.
 const HANDLERS_RUN: Duration = Duration::from_secs(10);
 
 impl Completions {
-    /// Reports the commit-to-complete time and the lateness, in microseconds, of the command
-    /// buffer at `place` in its run.
-    fn ran(&self, place: usize, time: Duration, late_us: f64) {
+    fn new() -> Completions {
+        Completions {
+            origin: Instant::now(),
+            times: Mutex::new(Vec::new()),
+            reported: Condvar::new(),
+        }
+    }
+
+    /// Reports, as its completed handler runs, the command buffer at `place` in its run,
+    /// `committed` just before its `commit`, and its lateness in microseconds.
+    fn ran(&self, place: usize, committed: Instant, late_us: f64) {
+        let handled = Instant::now();
+        let us = |at: Instant| at.saturating_duration_since(self.origin).as_secs_f64() * 1e6;
         let mut times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
-        times.push((place, time.as_secs_f64() * 1e6, late_us));
+        times.push(Ran {
+            place,
+            committed_us: us(committed),
+            handled_us: us(handled),
+            late_us,
+        });
         self.reported.notify_all();
     }
 
-    /// The commit-to-complete times and the lateness of `runs` runs of `places` command buffers
-    /// each, by place, once their handlers have run: a completed handler may run after the wait
-    /// for its command buffer returns. An error where fewer have run within [`HANDLERS_RUN`].
-    fn wait(&self, runs: usize, places: usize) -> Result<(ByPlace, ByPlace)> {
+    /// The reports of `runs` runs of `places` command buffers each, by place, once their
+    /// handlers have run: a completed handler may run after the wait for its command buffer
+    /// returns. An error where fewer have run within [`HANDLERS_RUN`].
+    fn wait(&self, runs: usize, places: usize) -> Result<Handled> {
         let count = runs * places;
         let times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
         let (times, _) = (self.reported)
@@ -256,13 +357,18 @@ impl Completions {
         if times.len() < count {
             return Err(format!("{} of {count} completed handlers ran", times.len()).into());
         }
-        let mut by_place = vec![Vec::with_capacity(runs); places];
-        let mut late = vec![Vec::with_capacity(runs); places];
-        for &(place, us, late_us) in times.iter() {
-            by_place[place].push(us);
-            late[place].push(late_us);
+        let by_place = || vec![Vec::with_capacity(runs); places];
+        let mut handled = Handled {
+            committed: by_place(),
+            handled: by_place(),
+            late: by_place(),
+        };
+        for ran in times.iter() {
+            handled.committed[ran.place].push(ran.committed_us);
+            handled.handled[ran.place].push(ran.handled_us);
+            handled.late[ran.place].push(ran.late_us);
         }
-        Ok((by_place, late))
+        Ok(handled)
     }
 }
 
@@ -389,6 +495,7 @@ fn run_scaled(
             let as_one = Plan {
                 per_command_buffer: None,
                 commit_to_complete: false,
+                frames: false,
                 ..plan.clone()
             };
             let at_base = session.run(&as_one, timing)?;
@@ -674,7 +781,7 @@ impl<D: ComputeDevice> Harness<D> {
                     Some(completions) => {
                         let (completions, committed) = (Arc::clone(completions), Instant::now());
                         command_buffer.add_completed_handler(Box::new(move |late_us| {
-                            completions.ran(place, committed.elapsed(), late_us);
+                            completions.ran(place, committed, late_us);
                         }))?;
                     }
                     None => command_buffer.add_completed_handler(Box::new(|_| {}))?,
@@ -1043,7 +1150,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
             warmup,
             ..Report::default()
         };
-        let completions = (plan.commit_to_complete).then(|| Arc::new(Completions::default()));
+        let completions = (plan.commit_to_complete).then(|| Arc::new(Completions::new()));
         let (submitted, infos) = (self.device.submissions(), self.device.submit_infos());
         let own = self.own_threads();
         let own_count = || own.as_ref().and_then(|own| own.read().ok());
@@ -1065,7 +1172,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
             }
             report.encode_ns.push(encoded.as_nanos() as f64);
             report.gpu_us.push(gpu_us);
-            if run == 100 || run == 200 {
+            if GAUGE_RUNS.contains(&run) {
                 // With the device idle, so the gauges count what the runs left behind, not the
                 // work in flight at that moment, which moves with completion timing.
                 wait_run::<D>(&in_flight)?;
@@ -1084,8 +1191,22 @@ impl<D: ComputeDevice> Session for Harness<D> {
         report.timed_submit_infos = (infos.zip(self.device.submit_infos()))
             .map(|(before, after)| (after - before) as f64 / timed);
         if let Some(completions) = completions {
-            (report.commit_us, report.late_us) =
-                completions.wait(runs.timed as usize, plan.command_buffers())?;
+            let handled = completions.wait(runs.timed as usize, plan.command_buffers())?;
+            report.commit_us = handled.commit_us();
+            if plan.frames {
+                report.throughput_us = handled.throughput_us();
+            }
+            report.late_us = handled.late;
+        }
+        if plan.frames {
+            // One run in flight: each committed once the one before it completed, so each starts
+            // on an idle device, as a program's frame does after a pause.
+            let idle = Arc::new(Completions::new());
+            for _ in 0..runs.timed {
+                wait_run::<D>(&self.commit_run(plan, &made, Some(&idle))?)?;
+            }
+            report.from_idle_us =
+                (idle.wait(runs.timed as usize, plan.command_buffers())?).from_idle_us();
         }
         let (before, submissions) = (self.device.counts(), self.device.submissions());
         wait_run::<D>(&self.commit_run(plan, &made, None)?)?;

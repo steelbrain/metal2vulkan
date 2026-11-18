@@ -9,7 +9,7 @@ use crate::plan::{
 use crate::rt::{self, Ranges};
 use crate::run::{
     compare_outputs, copy_dispatches, create, matrix_time, parts, percentile, run_each, settled,
-    steady, warm_up, zeroed, CreateReport, Report, Runs, Session,
+    steady, warm_up, zeroed, CreateReport, Handled, Report, Runs, Session,
 };
 use crate::{Buffer, Device, Failed, GaugeReader, Refused, Result, Storage, Waits};
 use metal2vulkan::metal::TextureUsage;
@@ -116,6 +116,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
         per_command_buffer: None,
         per_encoder: None,
         commit_to_complete: false,
+        frames: false,
         scaled: None,
     }
 }
@@ -278,8 +279,49 @@ fn the_five_buffer_frame_is_the_frame_five_times_over_with_its_handlers() {
     let (frame, five) = (plan("frame"), plan("frame_5cb"));
     assert_eq!((frame.command_buffers(), five.command_buffers()), (1, 5));
     assert_eq!(five.dispatches.len(), 5 * frame.dispatches.len());
-    // Both time their command buffers' commit to completion, which the matrix judges them by.
+    // Both are frames, timed by their command buffers' completed handlers: their throughput is
+    // the row the matrix judges, their latency from idle a row of its own.
     assert!(five.commit_to_complete && frame.commit_to_complete);
+    assert!(five.frames && frame.frames);
+    let frames_alone = Plan {
+        commit_to_complete: false,
+        ..frame.clone()
+    };
+    assert!(
+        frames_alone.validate().is_err(),
+        "frames need their completed handlers"
+    );
+}
+
+/// A frames workload's throughput is the time from each run's last completed handler to the
+/// next's, the pairs around the gauges' waits left out; its latency from idle is each run's time
+/// from its first commit to its last completed handler.
+#[test]
+fn frames_take_their_throughput_handler_to_handler_and_their_latency_from_the_first_commit() {
+    let runs = 201;
+    // Two command buffers a run: the last one's handler 1000 us after the run before's, past the
+    // 5 ms waits after runs 100 and 200 (GAUGE_RUNS); each run's first commit 700 us before it.
+    let last: Vec<f64> = (0..runs)
+        .map(|run| {
+            let waits = [100, 200].iter().filter(|&&after| run >= after).count();
+            1000.0 * run as f64 + 900.0 + 5000.0 * waits as f64
+        })
+        .collect();
+    let first: Vec<f64> = last.iter().map(|end| end - 700.0).collect();
+    let handled = Handled {
+        committed: vec![first.clone(), first],
+        handled: vec![vec![0.0; runs], last.clone()],
+        late: vec![Vec::new(); 2],
+    };
+    let throughput = handled.throughput_us();
+    assert_eq!(
+        throughput.len(),
+        runs - 1 - 2,
+        "every pair but the two around a gauge wait"
+    );
+    assert!(throughput.iter().all(|&us| us == 1000.0), "{throughput:?}");
+    assert!(handled.from_idle_us().iter().all(|&us| us == 700.0));
+    assert_eq!(handled.commit_us()[1], vec![700.0; runs]);
 }
 
 #[test]
@@ -1056,6 +1098,10 @@ fn a_row_is_judged_by_host_time_never_its_gpu_time() {
         Some(300.0),
         "the steady time of the last place"
     );
+    // A frames workload's row is its throughput, however its command buffers' times read.
+    report.throughput_us = vec![250.0; 20];
+    assert_eq!(matrix_time(&report), Some(250.0), "the frames' throughput");
+    report.throughput_us.clear();
     report.wall_us.clear();
     report.commit_us.clear();
     assert_eq!(matrix_time(&report), None, "no host time, no matrix time");
