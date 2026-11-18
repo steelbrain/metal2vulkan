@@ -558,6 +558,9 @@ fn costs_of_a_write_back_spliced_or_not() {
         println!("{TEST}: {name} lists no dma-buf route: not run");
         return;
     }
+    if refuses_shared_dma_bufs(TEST, &device) {
+        return;
+    }
     let queue = device.new_command_queue().unwrap();
     let state = drawing(&device, PixelFormat::RGBA16Float);
     let checks = &device.shared().in_place;
