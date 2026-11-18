@@ -1016,8 +1016,9 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
   tile in all three dimensions and is tested against the grid in all three. On an RX 550 (RADV,
   Mesa 26.2.6), a kernel of 2^20 threads in a line, each reading 16 bytes 64 times from a 64 KiB
   `constant` table and storing 4 bytes, took 1.18 times the old runtime's time (the median of
-  three pairs of runs; 2,380.8 against 2,018.3 µs in the first), and the matrix's ceiling for the
-  row on that GPU is 1.20. In workgroups of the kernel's 256x1 threadgroup it took 0.90 of its
+  three pairs of runs; 2,380.8 against 2,018.3 µs in the first), and 1.18 again with the table
+  `Managed` and its first 256 bytes written before each run; the matrix's ceiling for both rows on
+  that GPU is 1.20. In workgroups of the kernel's 256x1 threadgroup it took 0.90 of its
   time in tiles, through storage-buffer descriptors 0.89, and with both 0.89; the runtime makes
   neither. Its reads take their 64-bit addresses from two adds with a carry each, as the RX 550's
   loads through an address need, where the old runtime's reads through a descriptor take a 32-bit

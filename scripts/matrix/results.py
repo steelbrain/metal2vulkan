@@ -299,10 +299,10 @@ HARNESS_OLD = "harness-old/"
 #: to the ratio the row then reaches, and a row within HARNESS_BUDGET leaves the list. A row over
 #: HARNESS_BUDGET with no ceiling fails its leg.
 HARNESS_CEILINGS = {
-    # Ruled by the planner on the row's measured median, 1.20: a kernel over a grid one row high
+    # Ruled by the planner on the rows' measured medians, 1.20: a kernel over a grid one row high
     # and one deep pays for running in tiles and for the RX 550's 64-bit address per read (the rt
-    # README's known gaps of pipeline states).
-    "1002:699f": {"constant_private": 1.20},
+    # README's known gaps of pipeline states), from a Private table and from a Managed one alike.
+    "1002:699f": {"constant_managed": 1.20, "constant_private": 1.20},
 }
 
 
