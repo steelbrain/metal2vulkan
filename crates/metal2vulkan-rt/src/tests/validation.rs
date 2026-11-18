@@ -15,6 +15,11 @@
 //! is one file per process: a test process opens one instance at a time. nextest runs each test
 //! in a process of its own; libtest's runner runs them one at a time with `--test-threads=1`.
 //!
+//! Where the job names a driver library in `M2V_DIRECT_DRIVER` (the Mesa Mac driver on the M3),
+//! [`instance`] loads it itself and gives it to the loader alone, through
+//! [`Instance::with_drivers`], as a consumer that ships its driver does; elsewhere the loader finds
+//! the drivers the job's `VK_DRIVER_FILES` names.
+//!
 //! Also here: a deliberately invalid call, which its log holds exactly.
 
 use crate::tests::devices_of_the_cfgs_kind;
@@ -74,8 +79,12 @@ pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
         !OPEN.swap(true, Ordering::AcqRel),
         "{test}: a second instance in the process: its layer's log is one file per process"
     );
-    let instance = Instance::new(extensions)
-        .unwrap_or_else(|error| panic!("{test}: an instance at the floor: {error}"));
+    let made = match direct_driver() {
+        // SAFETY: the driver's library stays loaded for the process (`direct_driver`).
+        Some(driver) => unsafe { Instance::with_drivers(extensions, &[driver]) },
+        None => Instance::new(extensions),
+    };
+    let instance = made.unwrap_or_else(|error| panic!("{test}: an instance at the floor: {error}"));
     let watch = Watch {
         instance: std::sync::Arc::downgrade(&instance.shared),
         test: test.clone(),
@@ -96,6 +105,47 @@ pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
     }
     drop(devices);
     validated
+}
+
+/// The driver `M2V_DIRECT_DRIVER` names, loaded once for the process and never unloaded: its
+/// `vk_icdGetInstanceProcAddr` (a driver built for the loader exports it), else its
+/// `vkGetInstanceProcAddr`. None where the variable is unset. A library that does not load, or
+/// exports neither, fails the test.
+fn direct_driver() -> Option<ash::vk::PFN_vkGetInstanceProcAddr> {
+    static DRIVER: std::sync::OnceLock<Option<ash::vk::PFN_vkGetInstanceProcAddr>> =
+        std::sync::OnceLock::new();
+    *DRIVER.get_or_init(|| {
+        let path = std::env::var_os("M2V_DIRECT_DRIVER")?;
+        Some(load_driver(&PathBuf::from(path)))
+    })
+}
+
+#[cfg(unix)]
+fn load_driver(path: &std::path::Path) -> ash::vk::PFN_vkGetInstanceProcAddr {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("a path without a NUL");
+    // SAFETY: a path; the library's initialisers are the driver's own.
+    let library = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+    assert!(!library.is_null(), "{} does not load", path.display());
+    let symbol = [c"vk_icdGetInstanceProcAddr", c"vkGetInstanceProcAddr"]
+        .into_iter()
+        // SAFETY: the library is loaded, and is never unloaded.
+        .map(|name| unsafe { libc::dlsym(library, name.as_ptr()) })
+        .find(|symbol| !symbol.is_null())
+        .unwrap_or_else(|| panic!("{} exports no vkGetInstanceProcAddr", path.display()));
+    println!("direct driver {}", path.display());
+    // SAFETY: the symbol is the driver's vkGetInstanceProcAddr, of that signature.
+    unsafe {
+        std::mem::transmute::<*mut std::ffi::c_void, ash::vk::PFN_vkGetInstanceProcAddr>(symbol)
+    }
+}
+
+#[cfg(not(unix))]
+fn load_driver(path: &std::path::Path) -> ash::vk::PFN_vkGetInstanceProcAddr {
+    panic!(
+        "M2V_DIRECT_DRIVER ({}) is loaded on unix hosts alone",
+        path.display()
+    )
 }
 
 /// The active validation tool `physical` (the device `name`) lists, by its name and version.

@@ -140,6 +140,49 @@ fn holds(features: &Features, feature: &crate::floor::Feature) -> bool {
     *(feature.field)(&mut features) == vk::TRUE
 }
 
+/// The instance enables the floor's extensions; an optional one or the consumer's where the loader
+/// or one of the consumer's drivers lists it, once each; and direct driver loading only where the
+/// consumer gives drivers, which a loader that does not offer it refuses by type.
+#[test]
+fn an_instance_enables_what_the_loader_or_the_drivers_offer_and_direct_loading_with_drivers_alone()
+{
+    use crate::instance::enabled;
+    use crate::Error;
+    use std::ffi::{CStr, CString};
+    let (surface, metal) = (ash::khr::surface::NAME, ash::ext::metal_surface::NAME);
+    let (direct, portability) = (
+        ash::lunarg::direct_driver_loading::NAME,
+        ash::khr::portability_enumeration::NAME,
+    );
+    let owned = |names: &[&CStr]| {
+        names
+            .iter()
+            .map(|&name| name.to_owned())
+            .collect::<Vec<CString>>()
+    };
+    let (loader, drivers) = (owned(&[direct, portability]), owned(&[surface, metal]));
+    let names = |enabled: Result<Vec<CString>, Error>| enabled.expect("the extensions");
+    // No driver: the consumer's extension the loader does not list is left out, and direct
+    // loading too, though the loader offers it.
+    assert_eq!(
+        names(enabled(&loader, &[], &[metal], false)),
+        owned(&[surface, portability])
+    );
+    // Drivers: what they list counts, each name once, direct loading among them.
+    assert_eq!(
+        names(enabled(&loader, &drivers, &[metal, metal, direct], true)),
+        owned(&[surface, portability, metal, direct])
+    );
+    assert_eq!(
+        names(enabled(&loader, &drivers, &[], true)),
+        owned(&[surface, portability, direct])
+    );
+    assert!(matches!(
+        enabled(&owned(&[portability]), &drivers, &[], true),
+        Err(Error::NoDirectDriverLoading)
+    ));
+}
+
 /// The translator's description is restricted to what device creation enables: a feature or an
 /// extension the device reports beyond the floor is outside the enable set, so the translator's
 /// profile never relies on it, and the floor's `robustImageAccess`, `robustImageAccess2`,

@@ -17,6 +17,10 @@ pub enum Error {
     /// [`Instance::new`](crate::Instance::new) found no Vulkan loader to load. Metal has no
     /// counterpart: Metal is part of the system.
     Loader(ash::LoadingError),
+    /// [`Instance::with_drivers`](crate::Instance::with_drivers): the consumer gave its own
+    /// drivers, and the Vulkan loader does not offer `VK_LUNARG_direct_driver_loading`, by which
+    /// it would load them. Metal has no counterpart: Metal is part of the system.
+    NoDirectDriverLoading,
     /// [`Device::new`](crate::Device::new): the device is below the runtime's floor, with every
     /// item it lacks. Metal has no counterpart: every Metal device runs every program its family
     /// supports.
@@ -1163,6 +1167,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Loader(error) => write!(f, "no Vulkan loader: {error}"),
+            Error::NoDirectDriverLoading => f.write_str(
+                "the Vulkan loader does not offer VK_LUNARG_direct_driver_loading, so it takes no driver of the consumer's",
+            ),
             Error::BelowFloor(below) => write!(f, "{below}"),
             Error::Vulkan { call, result } => write!(f, "{call} failed: {result}"),
             Error::Refused(refusal) => write!(f, "{refusal}"),
@@ -1571,7 +1578,8 @@ impl std::error::Error for Error {
             Error::Vulkan { result, .. } => Some(result),
             Error::Thread(error) => Some(error),
             Error::Translation(error) => Some(error),
-            Error::Refused(_)
+            Error::NoDirectDriverLoading
+            | Error::Refused(_)
             | Error::Limit(_)
             | Error::NoSuchBlock(_)
             | Error::Quiesced

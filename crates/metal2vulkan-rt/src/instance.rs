@@ -32,28 +32,56 @@ impl Instance {
     /// portability listing where the loader offers it, and each of `extensions` the loader offers: the window system's (such as `VK_KHR_xlib_surface`
     /// or `VK_KHR_win32_surface`) and any other the consumer uses. A name the floor already lists,
     /// or listed twice, is enabled once. [`Instance::extensions`] says which were enabled; the
-    /// consumer names an extension's dependencies too.
+    /// consumer names an extension's dependencies too. The loader loads the drivers the system
+    /// installed; [`Instance::with_drivers`] gives it the consumer's own instead.
     ///
     /// Err: [`Error::Loader`] where no loader loads; [`Error::Vulkan`] where the instance is not
     /// made, the floor's extensions missing among the causes (`VK_ERROR_EXTENSION_NOT_PRESENT`).
     pub fn new(extensions: &[&CStr]) -> Result<Instance, Error> {
+        // SAFETY: no driver is given.
+        unsafe { Instance::with_drivers(extensions, &[]) }
+    }
+
+    /// No Metal counterpart (Metal is part of the system): [`Instance::new`], with `drivers` the
+    /// only Vulkan drivers the loader loads, where any is given. Each is a driver the consumer
+    /// loaded itself, from its own distribution, given by its `vkGetInstanceProcAddr`: for a
+    /// driver built for the Vulkan loader, the `vk_icdGetInstanceProcAddr` it exports. The
+    /// instance then enables `VK_LUNARG_direct_driver_loading` and gives the loader the list in
+    /// its exclusive mode (`VK_DIRECT_DRIVER_LOADING_MODE_EXCLUSIVE_LUNARG`): no driver the system
+    /// installed, or that the loader's variables name, is loaded. An instance extension is offered
+    /// where the loader or one of the drivers lists it, as the loader does not ask such drivers
+    /// for theirs. With no driver, it is [`Instance::new`].
+    ///
+    /// Err: as [`Instance::new`]; [`Error::NoDirectDriverLoading`] where a driver is given and the
+    /// loader does not offer `VK_LUNARG_direct_driver_loading`.
+    ///
+    /// # Safety
+    ///
+    /// Each of `drivers` is a Vulkan driver's `vkGetInstanceProcAddr`, whose library stays loaded
+    /// while the instance, or anything made from it, lives.
+    pub unsafe fn with_drivers(
+        extensions: &[&CStr],
+        drivers: &[vk::PFN_vkGetInstanceProcAddr],
+    ) -> Result<Instance, Error> {
         // SAFETY: loading the loader runs its initialisation and nothing else.
         let entry = unsafe { ash::Entry::load() }.map_err(Error::Loader)?;
         // SAFETY: the loader is loaded.
-        let offered = unsafe { entry.enumerate_instance_extension_properties(None) }
-            .map_err(Error::vulkan("vkEnumerateInstanceExtensionProperties"))?;
-        let mut names: Vec<CString> = floor::INSTANCE_EXTENSIONS
-            .iter()
-            .map(|&name| name.to_owned())
-            .collect();
-        for &name in floor::OPTIONAL_INSTANCE_EXTENSIONS.iter().chain(extensions) {
-            let listed = offered
-                .iter()
-                .any(|properties| properties.extension_name_as_c_str() == Ok(name));
-            if listed && !names.iter().any(|enabled| enabled.as_c_str() == name) {
-                names.push(name.to_owned());
-            }
+        let loader = names(unsafe { entry.enumerate_instance_extension_properties(None) })?;
+        let mut offered = Vec::new();
+        for &driver in drivers {
+            // SAFETY: by the caller, a driver's `vkGetInstanceProcAddr`, which answers the global
+            // commands for no instance.
+            let own = unsafe {
+                ash::Entry::from_static_fn(ash::StaticFn {
+                    get_instance_proc_addr: driver,
+                })
+            };
+            // SAFETY: the driver is loaded, by the caller.
+            offered.extend(names(unsafe {
+                own.enumerate_instance_extension_properties(None)
+            })?);
         }
+        let names = enabled(&loader, &offered, extensions, !drivers.is_empty())?;
         let pointers: Vec<*const c_char> = names.iter().map(|name| name.as_ptr()).collect();
         let application = vk::ApplicationInfo::default().api_version(floor::VERSION);
         // Where the loader offers the listing of portability devices, they are listed too.
@@ -62,11 +90,24 @@ impl Instance {
             true => vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
             false => vk::InstanceCreateFlags::empty(),
         };
-        let info = vk::InstanceCreateInfo::default()
+        let infos: Vec<vk::DirectDriverLoadingInfoLUNARG> = (drivers.iter())
+            .map(|&driver| {
+                vk::DirectDriverLoadingInfoLUNARG::default()
+                    .pfn_get_instance_proc_addr(Some(driver))
+            })
+            .collect();
+        let mut list = vk::DirectDriverLoadingListLUNARG::default()
+            .mode(vk::DirectDriverLoadingModeLUNARG::EXCLUSIVE)
+            .drivers(&infos);
+        let mut info = vk::InstanceCreateInfo::default()
             .flags(flags)
             .application_info(&application)
             .enabled_extension_names(&pointers);
-        // SAFETY: `info` and everything it points to live through the call.
+        if !drivers.is_empty() {
+            info = info.push_next(&mut list);
+        }
+        // SAFETY: `info` and everything it points to live through the call; each driver is
+        // loaded, by the caller.
         let instance = unsafe { entry.create_instance(&info, None) }
             .map_err(Error::vulkan("vkCreateInstance"))?;
         Ok(Instance {
@@ -108,6 +149,52 @@ impl Instance {
     pub(crate) fn vk(&self) -> &ash::Instance {
         &self.shared.instance
     }
+}
+
+/// The names of the instance extensions `listed` holds.
+fn names(listed: Result<Vec<vk::ExtensionProperties>, vk::Result>) -> Result<Vec<CString>, Error> {
+    let listed = listed.map_err(Error::vulkan("vkEnumerateInstanceExtensionProperties"))?;
+    Ok((listed.iter())
+        .filter_map(|properties| properties.extension_name_as_c_str().ok())
+        .map(CStr::to_owned)
+        .collect())
+}
+
+/// The instance extensions instance creation enables: the floor's, then each of the optional
+/// ones' and of `extensions` that the `loader` or the consumer's drivers (`drivers`) list,
+/// once each, and where the consumer gives drivers (`direct`), direct driver loading, which only
+/// the loader offers. Err: [`Error::NoDirectDriverLoading`] where `direct` and the loader does
+/// not list it.
+pub(crate) fn enabled(
+    loader: &[CString],
+    drivers: &[CString],
+    extensions: &[&CStr],
+    direct: bool,
+) -> Result<Vec<CString>, Error> {
+    let mut names: Vec<CString> = (floor::INSTANCE_EXTENSIONS.iter())
+        .map(|&name| name.to_owned())
+        .collect();
+    let listed = |name: &CStr| {
+        loader
+            .iter()
+            .chain(drivers)
+            .any(|offered| offered.as_c_str() == name)
+    };
+    for &name in floor::OPTIONAL_INSTANCE_EXTENSIONS.iter().chain(extensions) {
+        if listed(name) && !names.iter().any(|enabled| enabled.as_c_str() == name) {
+            names.push(name.to_owned());
+        }
+    }
+    if direct {
+        let direct = ash::lunarg::direct_driver_loading::NAME;
+        if !loader.iter().any(|offered| offered.as_c_str() == direct) {
+            return Err(Error::NoDirectDriverLoading);
+        }
+        if !names.iter().any(|enabled| enabled.as_c_str() == direct) {
+            names.push(direct.to_owned());
+        }
+    }
+    Ok(names)
 }
 
 impl Drop for Shared {
