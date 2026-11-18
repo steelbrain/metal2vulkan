@@ -88,6 +88,7 @@ pub mod render;
 pub mod render_descriptors;
 pub mod replay;
 pub mod report;
+pub mod rt_side;
 pub mod run;
 pub mod runtime_side;
 pub mod runtime_work;

@@ -16,6 +16,8 @@ readme = "README.md"
 # rather than once per feature set.
 metal2vulkan = { path = "../metal2vulkan", features = ["serde", "ash", "cli"] }
 metal2vulkan-runtime = { path = "../metal2vulkan-runtime" }
+# The new runtime, which the suite replays through its public API alone (`src/rt_side.rs`).
+metal2vulkan-rt = { path = "../metal2vulkan-rt" }
 # Fixture paths, `llvm_assemble` and the scratch root: the suite's shaders are the owned public
 # fixtures.
 metal2vulkan-devtools = { path = "../metal2vulkan-devtools" }

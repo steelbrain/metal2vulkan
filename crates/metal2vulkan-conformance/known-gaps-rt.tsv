@@ -1,0 +1,7 @@
+# Known gaps of the new runtime's side (`conformance replay --rt`): the rows `known-gaps.tsv` holds
+# for the old runtime's, in its format and under its rules, held to a replay of the new runtime
+# (`metal2vulkan-rt`) in both directions, per venue. A call the side does not answer yet is a
+# refusal of `Unavailable` naming the call ([`rt_side`](src/rt_side.rs)), and a row here until the
+# side answers it. The old runtime's rows stay in `known-gaps.tsv` and are not held to this side.
+#
+# case	venue	expects	site	our answer	waiting on

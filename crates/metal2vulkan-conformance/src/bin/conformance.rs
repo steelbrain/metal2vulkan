@@ -4,6 +4,7 @@
 //! ```text
 //! conformance record [case ...]
 //! conformance replay [--cpu] [--default-policy] [--runs N] [case ...]
+//! conformance replay --rt [--cpu] [--runs N] [case ...]
 //! conformance cost [--cpu] [--default-policy] [--runs N] [--write] [--show] [--alone] [--check] [case ...]
 //! conformance times [--cpu] [--default-policy] [--runs N] [--leg metal|ours] [--write] [--show]
 //!                    [--call NAME]... [--cold-shaders] [case ...]
@@ -20,6 +21,10 @@
 //! the contract under either policy); `--default-policy` replays under the runtime's own defaults,
 //! the fast form of every speed-for-accuracy choice, which is what a consumer runs. Comparing a case
 //! under both is how the suite says whether a difference is the policy's or the implementation's.
+//!
+//! `replay --rt` replays through the new runtime (`metal2vulkan-rt`) instead, on its public API
+//! ([`metal2vulkan_conformance::rt_side`]), held to its own ledger, `known-gaps-rt.tsv`. It has no
+//! policy and no cost half.
 //!
 //! The command's exit status is 0 only where the selection holds no surprise: no unrecorded case,
 //! no stale recording, and exactly the gaps `known-gaps.tsv` expects — a refusal or a divergence
@@ -68,6 +73,7 @@ use metal2vulkan_conformance::run;
 const USAGE: &str = "\
 conformance record [case ...]
 conformance replay [--cpu] [--default-policy] [--runs N] [case ...]
+conformance replay --rt [--cpu] [--runs N] [case ...]
 conformance cost [--cpu] [--default-policy] [--runs N] [--write] [--show] [--alone] [--check] [case ...]
 conformance times [--cpu] [--default-policy] [--runs N] [--leg metal|ours] [--write] [--show]
                    [--call NAME]... [--cold-shaders] [case ...]
@@ -115,10 +121,13 @@ fn command() -> Result<bool, String> {
     let mut legs = Legs::Both;
     let mut calls = Vec::new();
     let mut shaders = run::Shaders::Warm;
+    // Whether `replay` runs the new runtime's side rather than the old runtime's.
+    let mut rt = false;
     let mut words = words.peekable();
     while let Some(word) = words.next() {
         match word.as_str() {
             "--cpu" => venues = Venues::Cpu,
+            "--rt" => rt = true,
             "--gpu" => venues = Venues::Gpu,
             "--default-policy" => policy = Policy::Default,
             "--exact-policy" => policy = Policy::Exact,
@@ -183,14 +192,26 @@ fn command() -> Result<bool, String> {
             // replay is one honest pass over a venue, and a venue is shared. More than one pass
             // is asked for, and what it buys is the run-to-run comparison below.
             let passes = if asked_runs { runs } else { 1 };
-            let (report, stability) = run::replay_on_under(venues, policy, &cases, passes)?;
+            let (report, stability) = match rt {
+                true => run::replay_rt_on_under(venues, &cases, passes)?,
+                false => run::replay_on_under(venues, policy, &cases, passes)?,
+            };
             print!("{}", report.render());
             print!("{}", stability.render());
             // The known-gaps ledger decides the exit status and nothing else: each of its rows
             // is still printed above as a `Refused` or `Divergent` row and still counted there.
             // It is held in both directions and per venue, so a new gap fails the run and a row
             // the run no longer holds fails it too.
-            let ledger = metal2vulkan_conformance::known_gaps::ledger()?;
+            let (ledger, file) = match rt {
+                true => (
+                    metal2vulkan_conformance::known_gaps::rt_ledger()?,
+                    "known-gaps-rt.tsv",
+                ),
+                false => (
+                    metal2vulkan_conformance::known_gaps::ledger()?,
+                    "known-gaps.tsv",
+                ),
+            };
             let unexpected = report.unexpected(&ledger);
             // The cost half is a gate of its own, so it has its own line in the exit status: a
             // count going over its bound is never a conformance difference, and a conformance
@@ -226,16 +247,15 @@ fn command() -> Result<bool, String> {
                     .count();
                 if expected > 0 {
                     println!(
-                        "\nthe {expected} row(s) above are exactly the open gaps \
-                         known-gaps.tsv expects on this venue, each one a bug with a todo behind \
-                         it"
+                        "\nthe {expected} row(s) above are exactly the open gaps {file} \
+                         expects on this venue, each one a bug with a todo behind it"
                     );
                 }
                 return Ok(true);
             }
             println!();
             for why in &unexpected {
-                println!("not what known-gaps.tsv expects: {why}");
+                println!("not what {file} expects: {why}");
             }
             // The rows to add, in the ledger's own format, each on one line and all of them under
             // one unambiguous heading. The report above is prose for a person; this is for
@@ -244,7 +264,7 @@ fn command() -> Result<bool, String> {
             let rows: Vec<String> = unexpected.iter().filter_map(Expectation::row).collect();
             if !rows.is_empty() {
                 println!(
-                    "\nknown-gaps.tsv rows for the {} gap(s) above, one per line, tab-separated. \
+                    "\n{file} rows for the {} gap(s) above, one per line, tab-separated. \
                      Replace the last field with the open bug, and narrow the venue field to a \
                      stable part of this venue's name (an LLVM or driver version in it will move) \
                      or widen it to * if the gap is every venue's:",

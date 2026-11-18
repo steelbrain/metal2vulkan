@@ -56,6 +56,9 @@ use std::collections::BTreeSet;
 /// inside a container reads the same rows as one on this Mac.
 const LEDGER: &str = include_str!("../known-gaps.tsv");
 
+/// The new runtime's side's ledger ([`crate::rt_side`]), compiled in as [`LEDGER`] is.
+const RT_LEDGER: &str = include_str!("../known-gaps-rt.tsv");
+
 /// The venue field of a row that applies to every venue.
 pub const EVERY_VENUE: &str = "*";
 
@@ -244,6 +247,12 @@ impl Expectation {
 /// The committed ledger's rows.
 pub fn ledger() -> Result<Vec<KnownGap>, String> {
     parse(LEDGER)
+}
+
+/// The rows of the new runtime's side's ledger, `known-gaps-rt.tsv`: what a replay of that side
+/// is held to, as [`ledger`]'s rows hold the old runtime's.
+pub fn rt_ledger() -> Result<Vec<KnownGap>, String> {
+    parse(RT_LEDGER)
 }
 
 /// `text`'s rows: tab-separated, with blank lines and lines from `#` ignored.

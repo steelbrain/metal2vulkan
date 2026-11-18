@@ -17,7 +17,7 @@
 use crate::allowance::Allowance;
 use crate::recording::ShaderRef;
 use crate::transcript::{Node, NodeName, Observed, Sites, Transcript, Value};
-use crate::verdict::device_gap;
+use crate::verdict::{device_gap, device_gap_of};
 use metal2vulkan::metal::state::DepthStencilDescriptor;
 use metal2vulkan::metal::{
     AttributeFormat, BindingAccess, CompareFunction, IndexType, PixelFormat, RenderStages,
@@ -483,6 +483,43 @@ impl Failure {
         }
     }
 
+    /// The failure a typed error of the new runtime (`metal2vulkan-rt`) is. A translator refusal
+    /// that names a capability the device could enable is the venue's gap, as in [`Failure::of`].
+    pub fn of_rt(error: &metal2vulkan_rt::Error) -> Self {
+        let lacks = match error {
+            metal2vulkan_rt::Error::Translation(metal2vulkan::error::Error::Unsupported(
+                unsupported,
+            )) => device_gap_of(unsupported),
+            _ => None,
+        };
+        Self {
+            error: Value::Variant {
+                name: error_variant(error),
+                payload: Box::new(Value::Lines(vec![error.to_string()])),
+            },
+            lacks,
+            refusal: Some(error.to_string()),
+        }
+    }
+
+    /// The failure a translator error is, where the new runtime's side calls the translator's
+    /// library itself: recorded as the runtime's `Error::Translation` of it, the form the runtime
+    /// gives it in.
+    pub fn of_translation(error: &metal2vulkan::error::Error) -> Self {
+        let lacks = match error {
+            metal2vulkan::error::Error::Unsupported(unsupported) => device_gap_of(unsupported),
+            _ => None,
+        };
+        Self {
+            error: Value::Variant {
+                name: "Error::Translation".to_owned(),
+                payload: Box::new(Value::Lines(vec![error.to_string()])),
+            },
+            lacks,
+            refusal: Some(error.to_string()),
+        }
+    }
+
     /// The failure a side with no public call for `call` answers. It is neither a divergence nor a
     /// refusal: it says the side cannot be asked, and a case whose Metal side answers it carries
     /// its Metal answer instead.
@@ -608,7 +645,7 @@ pub fn lacks_recorded(value: &Value) -> Option<&str> {
 
 /// The variant path a typed runtime error records as: the error's outermost variant, which is what
 /// a consumer matches on.
-fn error_variant(error: &metal2vulkan_runtime::Error) -> String {
+fn error_variant(error: &dyn std::fmt::Debug) -> String {
     let debug = format!("{error:?}");
     let head = debug
         .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')

@@ -60,6 +60,32 @@ pub fn replay_on_under(
     Ok((report, stability))
 }
 
+/// Replay `cases` on the new runtime (`metal2vulkan-rt`), on the device `venues` names, as a
+/// report, and say whether the same selection read the same thing in each of `runs` passes, as
+/// [`replay_on_under`] does for the old runtime. The runtime has no policy and moves none of the
+/// old runtime's counts, so the report holds no cost rows.
+pub fn replay_rt_on_under(
+    venues: Venues,
+    cases: &[Box<dyn Case>],
+    runs: u32,
+) -> Result<(Report, Stability), String> {
+    let device = crate::rt_side::RtDevice::open(venues)?;
+    let pass = || {
+        let mut report = Report::new();
+        for case in cases {
+            let mut side = crate::rt_side::RtSide::new(&device);
+            report.add_result(replay(case.as_ref(), &mut side));
+        }
+        report
+    };
+    let report = pass();
+    let mut stability = Stability::new(runs);
+    for at in 2..=runs {
+        stability.observe(at, &report, &pass());
+    }
+    Ok((report, stability))
+}
+
 /// One pass of `cases` over `device`: the report that pass came to.
 fn one_replay_pass(
     device: &metal2vulkan_runtime::Device,
