@@ -1124,7 +1124,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             }
         };
         // SAFETY: as above, and `capabilities` is `physical`'s.
-        let memory = match unsafe { memory_on_a_device(&instance, physical, &capabilities) } {
+        let memory = match unsafe { memory_on_a_device(instance, physical, &capabilities) } {
             Ok(memory) => memory,
             Err(refusal) => {
                 below.push(format!("{name} ({version}, {info}): {refusal}"));
