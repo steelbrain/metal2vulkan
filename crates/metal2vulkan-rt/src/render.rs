@@ -309,6 +309,11 @@ fn draws(
                 aligned.push((table(stage)?, index, u64::from(align) - 1))
             }
             RuntimeFact::DeviceAddresses { .. } => {}
+            // The draw's base vertex and base instance: under the floor's `shaderDrawParameters`
+            // the `BaseVertex` and `BaseInstance` built-ins, which are the draw's own Vulkan
+            // parameters. The push field the translator places without the feature is a push
+            // field the encoder does not fill, refused below.
+            RuntimeFact::BaseVertexInstance => {}
             // A colour moved into a storage form, which the runtime never moves.
             RuntimeFact::MovableStorageWrites { .. } => {}
             // `RuntimeFact` is non-exhaustive: a fact this match does not name is one a draw does

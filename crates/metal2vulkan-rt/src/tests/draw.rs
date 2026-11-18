@@ -22,6 +22,9 @@
 //!     keeps a later draw to those pixels.
 //!   - a fragment function samples a texture through its constexpr sampler at the index the
 //!     consumer gave it: each pixel reads its own texel.
+//!   - a vertex function that reads `[[base_instance]]` (the owned fixture
+//!     `engine/icb_merged_draws.ll`'s `icb_merged_vertex`) draws, and every pixel it covers reads
+//!     the draw's base instance and its instance ID from it.
 //!   - a vertex function's `[[stage_in]]` attributes come from a vertex buffer, and from
 //!     `set_vertex_bytes`' copy, fetched in fixed function; an unnormalized signed-integer
 //!     attribute (the owned fixture `engine/icb_merged_attributes.ll`'s `short` mark) is
@@ -827,6 +830,74 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             let want = texels(|_, _| [0.0, 1.0, 0.0, 0.0]);
             assert_eq!(read(&color, 4), want, "{name}: the texels");
             println!("{name}: the removed texture's read took zero in every pixel");
+        });
+    }
+
+    /// A vertex function's `[[base_instance]]` is the draw's: `icb_merged_vertex` passes its
+    /// buffer 0 word, vertex ID, instance ID and base instance flat to `icb_merged_fragment`,
+    /// which writes them into an `RGBA32Uint` target. One triangle over the whole target, drawn
+    /// once from base instance 3, writes the word, 3 and 3 at every pixel; the vertex ID is the
+    /// provoking vertex's, which this test does not ask.
+    #[test]
+    fn every_device_reads_a_draws_base_instance_in_its_vertex_function() {
+        let Some(library) = library(&engine_dir().join("icb_merged_draws.ll")) else {
+            return;
+        };
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let mut d = RenderPipelineDescriptor::new(function("icb_merged_vertex"));
+        d.fragment = Some(function("icb_merged_fragment"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+        each_device("draw_base_instance", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let mark = buffers.of(&device, &7u32.to_le_bytes());
+            let side = SIDE as f32;
+            // The target's width and height, and no row between instances.
+            let frame = buffers.of(&device, &floats(&[side, side, 0.0, 0.0]));
+            // Pixel positions of a triangle past every corner of the target.
+            let xy = buffers.of(
+                &device,
+                &floats(&[0.0, 0.0, 2.0 * side, 0.0, 0.0, 2.0 * side]),
+            );
+            let color = target(
+                &device,
+                PixelFormat::RGBA32Uint,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&mark), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&frame), 0, 1));
+            draw(encoder.set_vertex_buffer(Some(&xy), 0, 2));
+            encoder.set_cull_mode(CullMode::None);
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 3));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let texels = read(&color, 16);
+            let words: Vec<[u32; 4]> = (texels.chunks_exact(16))
+                .map(|t| {
+                    std::array::from_fn(|c| u32::from_le_bytes(t[4 * c..][..4].try_into().unwrap()))
+                })
+                .collect();
+            for (at, word) in words.iter().enumerate() {
+                assert_eq!(
+                    [word[0], word[2], word[3]],
+                    [7, 3, 3],
+                    "{name}: the mark, instance ID and base instance at texel {at}"
+                );
+            }
+            println!(
+                "{name}: a draw from base instance 3 reads 3 at all {} texels",
+                words.len()
+            );
         });
     }
 
