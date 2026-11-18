@@ -388,8 +388,8 @@ counted from 0), completes the work committed so far, reports as at the stream's
   buffer; and the commit of a dispatch that binds it, which may write it. A dispatch that writes
   such a buffer before it reads it is counted too, and a texture over a buffer is not followed.
   The line counts; it stops nothing.
-- **Writes into Managed textures** (any backend that tells a texture's storage mode; the new
-  runtime's does): the report's `texture_writes` line counts the CPU's writes into Managed textures
+- **Writes into Managed textures** (both runtimes' backends tell a texture's storage mode): the
+  report's `texture_writes` line counts the CPU's writes into Managed textures
   (`replaceRegion:...` and any other call on a texture that carries bytes), their bytes and
   textures, and of them those made while a command buffer that used the texture (an encoder of it
   named the texture or a view of it, or it was made with a descriptor that names one) was committed

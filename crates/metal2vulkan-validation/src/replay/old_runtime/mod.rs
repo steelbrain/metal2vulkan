@@ -954,4 +954,11 @@ impl Backend for OldRuntime {
     fn snapshots(&self) -> bool {
         true
     }
+
+    fn managed_texture(&self, texture: u64) -> Option<bool> {
+        match self.objects.get(&texture) {
+            Some(Object::Texture(texture)) => Some(texture.storage_mode() == StorageMode::Managed),
+            _ => None,
+        }
+    }
 }
