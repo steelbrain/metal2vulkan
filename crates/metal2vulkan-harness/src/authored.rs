@@ -150,7 +150,7 @@ pub enum Makes {
 pub const STATE_CREATIONS: u32 = 1000;
 
 /// The creation workloads.
-pub const CREATES: [Create; 4] = [
+pub const CREATES: [Create; 5] = [
     Create {
         name: "create_4KiB",
         makes: Makes::Buffers { length: 4 << 10 },

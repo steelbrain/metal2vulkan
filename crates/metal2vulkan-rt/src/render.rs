@@ -156,7 +156,7 @@ impl crate::Device {
             .render_variant_key(descriptor, &VariantKey::new(), &budget, &entries)
             .map_err(Error::Translation)?;
         let key = KernelKey {
-            pipeline: keys.pipeline.clone(),
+            pipeline: keys.pipeline,
             required: None,
         };
         let compiled = match core.kernels.find_render(&key) {
