@@ -13,6 +13,7 @@ use crate::memory::Block;
 use crate::over::{self, Overs};
 use crate::pipeline::ComputePipelineState;
 use crate::queue::QueueInner;
+use crate::readback;
 use crate::record::{self, Reach, Recorder};
 use crate::render::RenderPipelineState;
 use crate::ring::{Placed, Writes};
@@ -108,6 +109,8 @@ struct CbState {
     times: Times,
     /// An encoder holds `building`.
     encoding: bool,
+    /// From its commit until it retires: its pair of timestamp queries, where it took one.
+    stamps: Option<Pair>,
 }
 
 impl CbState {
@@ -130,6 +133,9 @@ pub(crate) struct Building {
     /// Whether the first command buffer began: the pair was taken, and where one was, the start
     /// timestamp recorded.
     started: bool,
+    /// Its pair of timestamp queries, from its first record; None before it and where it runs
+    /// untimed.
+    stamps: Option<Pair>,
     /// A barrier owed before the next command: an encoder that wrote ended, a memory barrier was
     /// asked for, a dispatch wrote through an address outside its resources, or a render pass
     /// ended. The segment's own end barrier pays it too.
@@ -203,9 +209,6 @@ pub(crate) struct Gpu {
     /// The images of released textures whose copies back the commands make, kept until the
     /// command buffer retires.
     pub(crate) images: Vec<Arc<Image>>,
-    /// Its pair of timestamp queries, from its first record; None before it and where it runs
-    /// untimed.
-    pub(crate) stamps: Option<Pair>,
 }
 
 impl Gpu {
@@ -255,6 +258,8 @@ pub(crate) struct Pending {
     pub(crate) value: u64,
     pub(crate) gpu: Gpu,
     pub(crate) handlers: Handlers,
+    /// It took a pair of timestamp queries.
+    pub(crate) timed: bool,
 }
 
 impl Pending {
@@ -267,7 +272,7 @@ impl Pending {
     /// completion thread's read, which waits and which it makes only for a command buffer that
     /// completed with both counted, waits only on queries a submission it saw complete wrote.
     pub(crate) fn stamps_written(&self) -> u32 {
-        if self.gpu.stamps.is_none() {
+        if !self.timed {
             return 0;
         }
         let segments = &self.gpu.segments;
@@ -301,13 +306,13 @@ impl CommandBuffer {
                             ring: Writes::default(),
                             managed: false,
                             images: Vec::new(),
-                            stamps: None,
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
                             completed: Vec::new(),
                         },
                         started: false,
+                        stamps: None,
                         owed: false,
                         owed_pass: false,
                         args_unordered: false,
@@ -321,6 +326,7 @@ impl CommandBuffer {
                     ended: None,
                     times: Times::default(),
                     encoding: false,
+                    stamps: None,
                 }),
                 changed: Condvar::new(),
             }),
@@ -487,16 +493,19 @@ impl CommandBuffer {
             device,
             mut gpu,
             handlers,
+            stamps,
             ..
         } = building;
         gpu.segments[0].copy_ins = copy_ins;
         state.times.kernel_start = times::host_time();
+        state.stamps = stamps;
         let pending = Pending {
             seq: work.seq(),
             next: 0,
             value: 0,
             gpu,
             handlers,
+            timed: stamps.is_some(),
         };
         state.status = CommandBufferStatus::Committed;
         self.inner.changed.notify_all();
@@ -669,10 +678,10 @@ impl Building {
         let last = self.last().command;
         let command = match last {
             Some(command) => command,
-            None if self.started && self.gpu.stamps.is_none() => return self.close(),
+            None if self.started && self.stamps.is_none() => return self.close(),
             None => self.begin()?,
         };
-        if let Some(pair) = self.gpu.stamps {
+        if let Some(pair) = self.stamps {
             times::write_end(&self.device.core().device, command, pair.pool, pair.first);
         }
         self.close()
@@ -691,8 +700,8 @@ impl Building {
         let command = recorder.next(&core.device)?;
         if !self.started {
             self.started = true;
-            self.gpu.stamps = core.stamps.take(&core.device, &core.counters);
-            match self.gpu.stamps {
+            self.stamps = core.stamps.take(&core.device, &core.counters);
+            match self.stamps {
                 Some(pair) => times::write_start(&core.device, command, pair.pool, pair.first),
                 None => self.tally.count(Metric::UntimedCommandBuffers),
             }
@@ -1171,6 +1180,13 @@ impl CbInner {
     pub(crate) fn end_uncommitted(&self, error: CommandBufferError) {
         lock(&self.state).ended = Some(error);
     }
+
+    /// Its start and end timestamps, once it completed having written both.
+    pub(crate) fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
+        let pair = lock(&self.state).stamps?;
+        // SAFETY: the pair's pool holds its two queries, which a submission that completed wrote.
+        unsafe { readback::timestamps(&core.device, pair.pool, pair.first) }
+    }
 }
 
 /// On the completion thread: runs the scheduled handlers of a command buffer just submitted.
@@ -1194,7 +1210,7 @@ pub(crate) fn retire(
     gpu_times: Option<(u64, u64)>,
     written: u32,
 ) {
-    {
+    let stamps = {
         let mut state = lock(&inner.state);
         // One with nothing for the GPU, as Metal reports it: its start and end equal, at its
         // queue's previous command buffer's end or its own commit, whichever is later.
@@ -1215,7 +1231,8 @@ pub(crate) fn retire(
         };
         state.error = error;
         inner.changed.notify_all();
-    }
+        state.stamps.take()
+    };
     let Gpu {
         recorder,
         segments,
@@ -1224,7 +1241,6 @@ pub(crate) fn retire(
         ring,
         managed: _,
         images,
-        stamps,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
@@ -1255,13 +1271,18 @@ impl Drop for CbInner {
         // A command buffer never committed gives back its recorder, its pair of timestamp
         // queries, which no submission wrote, so they stay reset, and its place in the queue; a
         // committed one did so when it retired.
-        if let Some(Building { device, gpu, .. }) = state.building.take() {
+        if let Some(Building {
+            device,
+            gpu,
+            stamps,
+            ..
+        }) = state.building.take()
+        {
             let core = device.core();
             let Gpu {
                 recorder,
                 mut kept,
                 ring,
-                stamps,
                 ..
             } = gpu;
             if let Some(recorder) = recorder {

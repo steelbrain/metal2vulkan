@@ -6,7 +6,6 @@ use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Handlers, 
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
-use crate::readback;
 use crate::submit::{Ended, Finished, Joined, Upload};
 use crate::times::{self, Calibration};
 use ash::vk;
@@ -327,17 +326,11 @@ impl Retiree {
     fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
         match &self.item {
             Item::Command {
-                gpu: Gpu {
-                    stamps: Some(pair), ..
-                },
+                cb,
                 error: None,
                 written: 2,
                 ..
-            } => {
-                // SAFETY: the pair's pool holds its two queries, which a submission that
-                // completed wrote.
-                unsafe { readback::timestamps(&core.device, pair.pool, pair.first) }
-            }
+            } => cb.stamps(core),
             _ => None,
         }
     }
