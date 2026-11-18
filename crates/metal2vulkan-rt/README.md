@@ -792,8 +792,9 @@ that touch blocks first.
     thread's position is the tile's origin plus its index masked and shifted by the tile's sides,
     with no division;
   - a grid more than one deep of either in tiles on a `VkPipeline` that folds the tile, so the
-    driver folds the masks and shifts when it specializes it: one per tile, made at the kernel's
-    first dispatch at that tile, which waits for it, and kept with the kernel's other pipelines.
+    driver folds the masks and shifts when it specializes it: one per tile (of the 45 a rule's tile
+    can be), made at the kernel's first dispatch at that tile, which waits for it, and kept with
+    the kernel's other pipelines.
 
   The translator's `pipeline::grid_tile` picks the tile from the grid's extents alone:
   power-of-two sides whose product is 256, launching the fewest threads past the grid, then with
