@@ -22,11 +22,11 @@
 //! which Vulkan 1.3 bakes, are their defaults: the render encoder does not set them yet.
 //!
 //! A descriptor names no topology class unless it sets `inputPrimitiveTopology`, and the replay
-//! streams' never do, while nearly every content draws only triangles (1,631 of 1,641 contents
-//! over gb and b2). So the triangle class's `VkPipeline` is made with the state, where Metal
+//! streams' never do, while nearly every content draws only triangles (527 of the 537 contents
+//! gb and b2 draw). So the triangle class's `VkPipeline` is made with the state, where Metal
 //! compiles; a point or line class's comes with the draws, made by the first draw of that class.
 //! The cost: a content drawn only as lines or points makes a triangle `VkPipeline` it never uses
-//! (8 contents of the 1,641).
+//! (8 contents of the 537).
 
 use crate::cache::{module_digest, pipeline_key};
 use crate::counters::Gauge;

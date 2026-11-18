@@ -921,9 +921,9 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   constants and vertex buffer strides. It renders dynamically into its attachments' formats, with
   no render pass.
 - The triangle class's `VkPipeline` is made with the state, through its file in the cache
-  directory where there is one; a point or line class's comes with the draws. Over the two replay
-  streams' 1,641 render contents, 1,631 draw only triangles; a content drawn only as points or
-  lines (8 of them) makes a triangle `VkPipeline` it never uses.
+  directory where there is one; a point or line class's comes with the draws. Of the two replay
+  streams' 537 render contents drawn, 527 draw only triangles and 2 lines and triangles; a content
+  drawn only as points or lines (8 of them) makes a triangle `VkPipeline` it never uses.
 
 ### Known gaps of render pipeline states
 
