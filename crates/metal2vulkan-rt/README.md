@@ -183,11 +183,19 @@ in its memory.
   bytes are taken at the commit; Metal takes them shortly after, before the command buffer is
   scheduled. A write or a `did_modify_range` made while a command buffer runs does not reach it.
   Commits take turns while they copy, so command buffers keep the order of their captures. A
-  commit that finds the ring full waits for its oldest copy's submission to complete; where that
-  copy belongs to a command buffer not yet submitted, the held groups go at once and the rest is
-  read as below (Known gaps). `Metrics::managed_bytes_captured`, `managed_bytes_live` and
-  `capture_waits` count them. A command buffer keeps each device copy it uses until it retires;
-  the copy's place is free then.
+  commit that finds the ring full waits for its oldest copy's submission to complete. Where that
+  copy is not yet submitted, the held groups go at once; once every command buffer committed
+  before is submitted, the commit's own ring-full goes in a copy submission of its own, which the
+  commit waits for before it reuses the ring, so the ring is all the staging a commit holds,
+  whatever it names, and the wait runs at the GPU's copy speed. Where a command buffer committed
+  before waits on the host instead (an event wait the host has not met, or a command buffer
+  enqueued ahead of it and not committed), nothing can go before the host acts: the rest of the
+  commit's bytes go into Shared staging blocks of its own from the pool (at most 256 MiB each),
+  which its command buffer gives back as it retires, the pool's idle rule then deciding when their
+  memory is freed. Every byte is still the commit's. `Metrics::managed_bytes_captured`,
+  `capture_waits`, `capture_streams`, `capture_overflows` and `capture_overflow_bytes` count them,
+  and `Gauges::capture_bytes` counts the ring and the staging blocks alive. A command buffer
+  keeps each device copy it uses until it retires; the copy's place is free then.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
 the buffer there before has completed. A command buffer keeps each block it uses until it retires,
@@ -651,13 +659,6 @@ that touch blocks first.
   and Metal leaves a resource ID that names no live resource of the access undefined; here it can
   fault as a bad address does, with the same consequences. An index within an array that no live
   object owns reads its null descriptor or default sampler, with no fault.
-- A commit that finds the Managed capture ring (64 MiB) full of copies of command buffers not yet
-  submitted, its own among them, does not wait for them: such a command buffer may wait on an
-  event the host signals later. The rest of its ranges are copied into the device copies from the
-  consumer's bytes as the copy runs, so a write the host makes between that commit and the copy
-  reaches the command buffer, where Metal's command buffer reads the bytes of its commit.
-  `Metrics::managed_bytes_live` counts those bytes. A frame that names more than the ring holds
-  takes this path for the rest.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 - A fence orders the encoders of one queue: an encoder of another queue that updates or waits on
   it is refused (`Gap::FenceOtherQueue`), as Metal's fence orders one queue and `MTLEvent` orders

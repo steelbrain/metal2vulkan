@@ -422,6 +422,11 @@ fn meets(a: (u64, u64), b: (u64, u64)) -> bool {
     a.0 < b.1 && b.0 < a.1
 }
 
+/// Whether `range` meets one of `ranges`.
+fn meets_any(ranges: &[(u64, u64)], range: (u64, u64)) -> bool {
+    ranges.iter().any(|&other| meets(other, range))
+}
+
 impl ManagedOvers {
     /// Whether the buffer has an entry.
     pub(crate) fn any(&self) -> bool {
@@ -516,27 +521,19 @@ impl ManagedOvers {
         self.count.store(entries.len(), Relaxed);
     }
 
-    /// A capture copies `ranges` of the consumer's bytes into the device copy (`crate::capture`):
-    /// each live texture whose range meets one of them takes its copy in after those copies, in the
-    /// same command buffer, and owes none for the events before it, its copy and image going to
-    /// `into`. Before the copies, the copies back owed by submitted writes of textures whose ranges
-    /// meet one of `ranges` or of those textures' are taken into `backs`, so the consumer's bytes
-    /// land over them.
-    pub(crate) fn captured(
-        &self,
-        ranges: &[(u64, u64)],
-        backs: &mut Vec<Back>,
-        into: &mut Vec<(OverCopy, Arc<Image>)>,
-    ) {
+    /// A capture is to copy `ranges` of the consumer's bytes into the device copy
+    /// (`crate::capture`): the copies back owed by submitted writes of textures whose ranges meet
+    /// one of `ranges`, or meet a live texture's that does, taken into `backs`, to go ahead of the
+    /// capture's copies, so the consumer's bytes land over them.
+    pub(crate) fn backs_before(&self, ranges: &[(u64, u64)], backs: &mut Vec<Back>) {
         let mut entries = lock(&self.entries);
-        let meets_any = |ranges: &[(u64, u64)], range| ranges.iter().any(|&r| meets(r, range));
+        if !entries.iter().any(|entry| entry.back) {
+            return;
+        }
         let targets: Vec<(u64, u64)> = (entries.iter())
             .filter(|entry| !entry.released && meets_any(ranges, entry.range))
             .map(|entry| entry.range)
             .collect();
-        if targets.is_empty() && !entries.iter().any(|entry| entry.back) {
-            return;
-        }
         for entry in entries.iter_mut() {
             if entry.back && (meets_any(ranges, entry.range) || meets_any(&targets, entry.range)) {
                 backs.push((entry.texture, entry.copy, Arc::clone(&entry.image)));
@@ -544,13 +541,22 @@ impl ManagedOvers {
                 // A write not yet submitted stays fresh for the readers recorded after it.
                 entry.fresh &= entry.pending > 0;
             }
+        }
+        entries.retain(|entry| !entry.released || entry.back || entry.pending > 0);
+        self.count.store(entries.len(), Relaxed);
+    }
+
+    /// A capture copied `ranges` of the consumer's bytes into the device copy (`crate::capture`):
+    /// each live texture whose range meets one of them takes its copy in after those copies, in
+    /// the same command buffer, and owes none for the events before it, its copy and image going
+    /// to `into`.
+    pub(crate) fn into_after(&self, ranges: &[(u64, u64)], into: &mut Vec<(OverCopy, Arc<Image>)>) {
+        for entry in lock(&self.entries).iter_mut() {
             if !entry.released && meets_any(ranges, entry.range) {
                 entry.into = false;
                 into.push((entry.copy, Arc::clone(&entry.image)));
             }
         }
-        entries.retain(|entry| !entry.released || entry.back || entry.pending > 0);
-        self.count.store(entries.len(), Relaxed);
     }
 
     /// The copy in texture `texture` owes, taken, for the upload that leads a submission: after

@@ -1117,6 +1117,8 @@ impl Drop for Core {
         // still alive.
         self.reaper.drain(self);
         if let Some(region) = self.work.take_capture_region() {
+            self.counters
+                .fall_by(Gauge::CaptureBytes, crate::capture::CAPTURE_LEN);
             // SAFETY: every command buffer whose copy-in read it retired, and no commit runs.
             unsafe { region.free(self) };
         }

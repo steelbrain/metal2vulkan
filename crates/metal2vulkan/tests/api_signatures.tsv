@@ -2282,6 +2282,7 @@ field	metal2vulkan-rt::FunctionDescriptor.specialized	pub specialized: bool
 field	metal2vulkan-rt::Gauges.attachment_views	pub attachment_views: u64
 field	metal2vulkan-rt::Gauges.blocks	pub blocks: u64
 field	metal2vulkan-rt::Gauges.buffers	pub buffers: u64
+field	metal2vulkan-rt::Gauges.capture_bytes	pub capture_bytes: u64
 field	metal2vulkan-rt::Gauges.command_buffers	pub command_buffers: u64
 field	metal2vulkan-rt::Gauges.descriptor_slots	pub descriptor_slots: u64
 field	metal2vulkan-rt::Gauges.device_samplers	pub device_samplers: u64
@@ -2309,6 +2310,10 @@ field	metal2vulkan-rt::Metrics.blocks_reused	pub blocks_reused: u64
 field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
 field	metal2vulkan-rt::Metrics.bytes_zeroed	pub bytes_zeroed: u64
 field	metal2vulkan-rt::Metrics.cache_bytes_written	pub cache_bytes_written: u64
+field	metal2vulkan-rt::Metrics.capture_overflow_bytes	pub capture_overflow_bytes: u64
+field	metal2vulkan-rt::Metrics.capture_overflows	pub capture_overflows: u64
+field	metal2vulkan-rt::Metrics.capture_streams	pub capture_streams: u64
+field	metal2vulkan-rt::Metrics.capture_waits	pub capture_waits: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_max_nanos	pub commit_lock_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_nanos	pub commit_lock_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.consumer_allocation_max_nanos	pub consumer_allocation_max_nanos: u64
@@ -2322,6 +2327,7 @@ field	metal2vulkan-rt::Metrics.forced_flushes_across_queues	pub forced_flushes_a
 field	metal2vulkan-rt::Metrics.groups_beside_another_queue	pub groups_beside_another_queue: u64
 field	metal2vulkan-rt::Metrics.lone_submissions_across_queues	pub lone_submissions_across_queues: u64
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
+field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64
 field	metal2vulkan-rt::Metrics.over_copies	pub over_copies: u64
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64

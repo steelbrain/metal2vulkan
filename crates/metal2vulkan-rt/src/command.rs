@@ -1061,17 +1061,8 @@ pub(crate) fn retire(
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
-    for segment in segments {
-        for CopyIn {
-            recorder,
-            modified,
-            images,
-            ..
-        } in segment.copy_ins
-        {
-            core.recorders.give_back(core, recorder);
-            drop((modified, images));
-        }
+    for copy_in in segments.into_iter().flat_map(|segment| segment.copy_ins) {
+        copy_in.retire(core);
     }
     ring.give_back(core);
     drop((blocks, copies, pipelines, textures, samplers, images));

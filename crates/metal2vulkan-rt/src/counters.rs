@@ -45,6 +45,10 @@ pub(crate) enum Metric {
     SubmissionsDuringFrees,
     /// [`Metrics::capture_waits`].
     CaptureWaits,
+    /// [`Metrics::capture_streams`].
+    CaptureStreams,
+    /// [`Metrics::capture_overflows`].
+    CaptureOverflows,
 }
 
 /// A gauge the runtime moves.
@@ -82,6 +86,8 @@ pub(crate) enum Gauge {
     SharedIdleBytes,
     /// [`Gauges::private_idle_bytes`].
     PrivateIdleBytes,
+    /// [`Gauges::capture_bytes`].
+    CaptureBytes,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -129,8 +135,10 @@ struct Atomics {
     allocations_freed: AtomicU64,
     submissions_during_frees: AtomicU64,
     managed_bytes_captured: AtomicU64,
-    managed_bytes_live: AtomicU64,
     capture_waits: AtomicU64,
+    capture_streams: AtomicU64,
+    capture_overflows: AtomicU64,
+    capture_overflow_bytes: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -147,6 +155,7 @@ struct Atomics {
     spilled_bytes: AtomicU64,
     shared_idle_bytes: AtomicU64,
     private_idle_bytes: AtomicU64,
+    capture_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -186,6 +195,8 @@ impl Counters {
             Metric::AllocationsFreed => &a.allocations_freed,
             Metric::SubmissionsDuringFrees => &a.submissions_during_frees,
             Metric::CaptureWaits => &a.capture_waits,
+            Metric::CaptureStreams => &a.capture_streams,
+            Metric::CaptureOverflows => &a.capture_overflows,
         };
         atomic.fetch_add(1, Relaxed);
     }
@@ -240,13 +251,19 @@ impl Counters {
         self.atomics.bytes_zeroed.fetch_add(bytes, Relaxed);
     }
 
-    /// A commit's capture: `captured` bytes copied into the capture ring, and `live` bytes left to
-    /// be copied from the consumer's bytes ([`Metrics::managed_bytes_captured`],
-    /// [`Metrics::managed_bytes_live`]).
-    pub(crate) fn captured(&self, captured: u64, live: u64) {
-        let a = &self.atomics;
-        a.managed_bytes_captured.fetch_add(captured, Relaxed);
-        a.managed_bytes_live.fetch_add(live, Relaxed);
+    /// `bytes` more of Managed buffers' bytes a commit copied ([`Metrics::managed_bytes_captured`]).
+    pub(crate) fn captured(&self, bytes: u64) {
+        self.atomics
+            .managed_bytes_captured
+            .fetch_add(bytes, Relaxed);
+    }
+
+    /// `bytes` more of them copied into staging blocks of an overflow's own
+    /// ([`Metrics::capture_overflow_bytes`]).
+    pub(crate) fn overflowed(&self, bytes: u64) {
+        self.atomics
+            .capture_overflow_bytes
+            .fetch_add(bytes, Relaxed);
     }
 
     /// `bytes` more written to the cache directory ([`Metrics::cache_bytes_written`]).
@@ -325,6 +342,7 @@ impl Counters {
             Gauge::SpilledBytes => &a.spilled_bytes,
             Gauge::SharedIdleBytes => &a.shared_idle_bytes,
             Gauge::PrivateIdleBytes => &a.private_idle_bytes,
+            Gauge::CaptureBytes => &a.capture_bytes,
         }
     }
 
@@ -365,8 +383,10 @@ impl Counters {
             allocations_freed: a.allocations_freed.load(Relaxed),
             submissions_during_frees: a.submissions_during_frees.load(Relaxed),
             managed_bytes_captured: a.managed_bytes_captured.load(Relaxed),
-            managed_bytes_live: a.managed_bytes_live.load(Relaxed),
             capture_waits: a.capture_waits.load(Relaxed),
+            capture_streams: a.capture_streams.load(Relaxed),
+            capture_overflows: a.capture_overflows.load(Relaxed),
+            capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
         }
     }
 
@@ -390,6 +410,7 @@ impl Counters {
             spilled_bytes: a.spilled_bytes.load(Relaxed),
             shared_idle_bytes: a.shared_idle_bytes.load(Relaxed),
             private_idle_bytes: a.private_idle_bytes.load(Relaxed),
+            capture_bytes: a.capture_bytes.load(Relaxed),
         }
     }
 }
@@ -517,13 +538,17 @@ pub struct Metrics {
     /// `didModifyRange:` named since the last capture, once, on a device whose Managed buffers have
     /// device copies ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
     pub managed_bytes_captured: u64,
-    /// Bytes of such ranges a commit found no room for in staging memory, behind copies of command
-    /// buffers not yet submitted: their copy into the device copy reads the consumer's bytes as it
-    /// runs.
-    pub managed_bytes_live: u64,
-    /// Commits that waited for a submission to complete for room in staging memory for such
-    /// ranges.
+    /// Waits of commits for a submission to complete for room in the capture ring: an earlier
+    /// command buffer's copy, or the commit's own ring-full sent ahead.
     pub capture_waits: u64,
+    /// Ring-fulls of a commit's own bytes sent as copy submissions of their own, which the commit
+    /// waited for before it used the ring again.
+    pub capture_streams: u64,
+    /// Commits whose capture took staging blocks of its own, as a command buffer committed before
+    /// was held on the host.
+    pub capture_overflows: u64,
+    /// The bytes those commits copied into such blocks.
+    pub capture_overflow_bytes: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the
@@ -581,4 +606,7 @@ pub struct Gauges {
     /// Bytes of idle Private allocations, as [`shared_idle_bytes`](Self::shared_idle_bytes) for
     /// Shared ones.
     pub private_idle_bytes: u64,
+    /// Bytes of staging for Managed buffers' captures: the capture ring, once a commit made it, and
+    /// the staging blocks of overflows that command buffers not yet retired hold.
+    pub capture_bytes: u64,
 }

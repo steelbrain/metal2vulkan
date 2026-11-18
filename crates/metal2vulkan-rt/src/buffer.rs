@@ -305,10 +305,10 @@ impl Buffer {
     /// of their own, go ahead of that command buffer's commands. So the command buffers committed
     /// after this call read the bytes as they were at that commit; Metal takes them shortly after
     /// the commit, before the command buffer is scheduled. A write or a didModifyRange made while
-    /// a command buffer runs does not reach it. Where the staging memory is full of copies not yet
-    /// submitted, the rest is read from the consumer's bytes when the copy runs, as
-    /// [`Metrics::managed_bytes_live`](crate::Metrics::managed_bytes_live) counts. Of any other
-    /// buffer it does nothing, as the GPU reads the consumer's bytes.
+    /// a command buffer runs does not reach it. A commit naming more than the staging ring holds
+    /// sends its ring-fulls ahead and waits for them, or, behind a command buffer held on the
+    /// host, takes staging of its own for the rest (the crate's README, Memory blocks and
+    /// buffers). Of any other buffer it does nothing, as the GPU reads the consumer's bytes.
     ///
     /// Err: [`Refusal::ModifiedRange`] for a range that leaves the buffer; for a copy,
     /// [`Error::Quiesced`].
@@ -324,12 +324,14 @@ impl Buffer {
         let Some(copy) = &inner.copy else {
             return Ok(());
         };
-        if length == 0 {
+        // A Managed buffer's block is mapped (Refusal::ManagedBlockNotShared otherwise).
+        let Some(contents) = inner.contents.filter(|_| length > 0) else {
             return Ok(());
-        }
+        };
         let named = Named {
             copy,
             cpu: &inner.block,
+            contents,
             offset: inner.offset,
             overs: &inner.overs,
         };

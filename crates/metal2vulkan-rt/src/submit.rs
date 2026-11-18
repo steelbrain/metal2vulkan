@@ -26,10 +26,10 @@
 //! segment's waits, in the same submission.
 
 use crate::buffer::{Buffer, DeviceCopy};
-use crate::capture::{Changes, CopyIn, Modified, Named, CAPTURE_LEN};
+use crate::capture::{self, Changes, Chunk, CopyIn, Modified, Named, CAPTURE_LEN};
 use crate::command::{CbInner, CommandBufferError, Handler, Pending, Segment};
 use crate::complete;
-use crate::counters::{Counters, Metric};
+use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
@@ -82,6 +82,9 @@ pub(crate) struct Work {
     changed: Condvar,
     /// The commits' turn ([`Work::turn`]).
     turn: Mutex<()>,
+    /// The submit thread ended a pass, or the device closed or was lost: a capture waiting for
+    /// the command buffers committed before it to go looks again ([`Work::capture`]).
+    passed: Condvar,
     /// A queue holds a group: the completion thread wakes the thread as submissions complete.
     keeping: AtomicBool,
     /// Bytes of textures and blocks released while an upload held them, since the pending upload
@@ -163,6 +166,18 @@ pub(crate) struct Upload {
     /// The staging region's spans its copies use, and their bytes.
     spans: Vec<u64>,
     span_bytes: u64,
+    /// Ring-fulls of commits' captures sent ahead ([`WorkState::stream`]): each goes after its
+    /// command buffer in the submission, in order, and is kept until the upload retires.
+    copy_ins: Vec<CopyIn>,
+}
+
+/// What a capture that finds the ring held by copies not yet submitted can do, once the held
+/// groups went ([`Work::capture`]).
+enum Ahead {
+    /// Every command buffer committed is submitted: the capture's own ring-full can go next.
+    Sent,
+    /// A command buffer committed waits on the host: nothing goes before the host acts.
+    Held,
 }
 
 /// What an upload keeps until it retires.
@@ -205,6 +220,7 @@ impl Upload {
                 staging: 0,
                 spans: Vec::new(),
                 span_bytes: 0,
+                copy_ins: Vec::new(),
             }),
             Err(error) => {
                 core.recorders.give_back(core, recorder);
@@ -354,6 +370,7 @@ impl Work {
             }),
             changed: Condvar::new(),
             turn: Mutex::new(()),
+            passed: Condvar::new(),
             keeping: AtomicBool::new(false),
             released: AtomicU64::new(0),
         }
@@ -492,17 +509,20 @@ impl Work {
     /// ([`turn`](Self::turn)), on the committing thread, under the work lock `state` (released
     /// while it copies and while it waits): captures every Managed buffer's range named since the
     /// last capture (`crate::capture`). Each range's consumer's bytes are copied into spans of
-    /// the capture ring, made at the first capture. Into a command buffer of its own go, after a
-    /// barrier that puts every earlier command first: the copies back owed to textures over the
-    /// ranges in images of their own, the copies from the ring into the device copies, and the
-    /// copies in those textures take, with a barrier that makes the copies visible to every later
-    /// command. Where the ring has no room, it waits for the oldest span's submission; where the
-    /// oldest span is of a command buffer not yet submitted, the held groups go at once and the
-    /// rest of the ranges are copied from the consumer's bytes as the copy runs. Returns the
+    /// the capture ring, made at the first capture, and the copies from them into the device
+    /// copies are recorded into copy-ins, command buffers of their own: the first after the copies
+    /// back owed to textures over the ranges in images of their own, the last before the copies
+    /// in those textures take.
+    ///
+    /// Where the ring has no room, it waits for the oldest span's submission. Where the oldest
+    /// span is of a copy not yet submitted, the held groups go at once; once every command buffer
+    /// committed before is submitted, the capture's own ring-full goes in a submission of its own
+    /// ([`stream`](WorkState::stream)), which the commit waits for. Where one is held on the host
+    /// instead, the rest takes staging blocks of its own (`crate::capture::overflow`). Returns the
     /// copy-ins the committing command buffer takes: a commit that failed after its capture left
     /// its own first.
     ///
-    /// Err: [`Error::Quiesced`]; what making the ring or a recorder can return;
+    /// Err: [`Error::Quiesced`]; what making the ring, a recorder or a staging block can return;
     /// [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` where the device is lost while it waits.
     pub(crate) fn capture<'a>(
         &'a self,
@@ -517,187 +537,235 @@ impl Work {
             // Only a capture makes the ring, in its turn.
             drop(state);
             let made = Region::new(core, CAPTURE_LEN)?;
+            core.counters.rise_by(Gauge::CaptureBytes, CAPTURE_LEN);
             state = self.lock();
             state.changes.region = Some(made);
             if state.closed {
                 return Err(Error::Quiesced);
             }
         }
-        let device = &core.device;
-        let mut recorder = core.recorders.take(device)?;
-        let command = match recorder.next(device) {
-            Ok(command) => command,
-            Err(error) => {
-                core.recorders.give_back(core, recorder);
-                return Err(error);
-            }
-        };
         let named = state.changes.take();
-        let mut spans = Vec::new();
-        // Each buffer's copies: from the ring, and from the consumer's bytes.
-        let mut copies = Vec::with_capacity(named.len());
-        let (mut captured, mut live) = (0, 0);
-        // The ring has no room for what is left: it is copied from the consumer's bytes.
-        let mut full = false;
-        let mut completed = core.done.completed();
-        for modified in &named {
-            let (mut staged, mut direct) = (Vec::new(), Vec::new());
-            for &(start, end) in &modified.ranges {
-                let mut at = start;
-                while at < end {
-                    let cpu = modified.cpu.memory.mapping.filter(|_| !full);
-                    let (Some(cpu), Some(region)) = (cpu, &mut state.changes.region) else {
-                        direct.push(vk::BufferCopy {
-                            src_offset: modified.offset + at,
-                            dst_offset: modified.copy.offset() + at,
-                            size: end - at,
-                        });
-                        live += end - at;
-                        break;
-                    };
-                    let len = (end - at).min(CAPTURE_LEN);
-                    region.ring.reclaim(completed.max(core.done.completed()));
-                    let Some((number, offset)) = region.ring.take(len, false) else {
-                        match region.ring.oldest() {
-                            Some(Oldest::Submitted(value)) => {
-                                drop(state);
-                                core.counters.count(Metric::CaptureWaits);
-                                let waited = core.done.wait(core, value);
-                                state = self.lock();
-                                if let Err(error) = waited {
-                                    let error =
-                                        self.unwind(core, state, recorder, &spans, &named, error);
-                                    return Err(error);
-                                }
-                                completed = completed.max(value);
-                            }
-                            // Of a command buffer not yet submitted, which may wait for the host
-                            // (the ring's spans are never read by the host, nor taken outside a
-                            // capture, which is in its turn).
-                            Some(Oldest::Pending | Oldest::Busy) | None => {
-                                state.send_all();
-                                self.wake();
-                                full = true;
-                            }
-                        }
-                        if state.closed {
-                            let error = Error::Quiesced;
-                            let error = self.unwind(core, state, recorder, &spans, &named, error);
-                            return Err(error);
-                        }
-                        continue;
-                    };
-                    let host = region.host(offset);
+        let mut chunk = match Chunk::begin(core, capture::backs(&named)) {
+            Ok(chunk) => chunk,
+            Err(error) => return Err(self.unwind(state, Vec::new(), &named, error)),
+        };
+        // Every range, by its buffer's index in `named`.
+        let pieces: Vec<(usize, u64, u64)> = (named.iter().enumerate())
+            .flat_map(|(index, modified)| {
+                (modified.ranges.iter()).map(move |&(start, end)| (index, start, end))
+            })
+            .collect();
+        let mut captured = 0;
+        let mut piece = 0;
+        let mut at = pieces.first().map_or(0, |&(_, start, _)| start);
+        while let Some(&(index, _, end)) = pieces.get(piece) {
+            if at == end {
+                piece += 1;
+                at = pieces.get(piece).map_or(0, |&(_, start, _)| start);
+                continue;
+            }
+            let modified = &named[index];
+            let len = (end - at).min(CAPTURE_LEN);
+            let Some(region) = state.changes.region.as_mut() else {
+                unreachable!("the ring is made above, and freed only at the device's end");
+            };
+            region.ring.reclaim(core.done.completed());
+            if let Some((number, offset)) = region.ring.take(len, false) {
+                let (host, ring) = (region.host(offset), region.buffer);
+                drop(state);
+                // SAFETY: the span is this capture's alone until it is set recorded, and the
+                // consumer's buffer is mapped and holds `at..at + len`; the two do not overlap.
+                unsafe {
+                    (modified.contents.at(at).as_ptr())
+                        .copy_to_nonoverlapping(host.get().as_ptr(), len as usize)
+                };
+                state = self.lock();
+                if let Some(region) = &mut state.changes.region {
+                    region.ring.set(number, At::Recorded);
+                }
+                chunk.spans.push(number);
+                let copy = vk::BufferCopy {
+                    src_offset: offset,
+                    dst_offset: modified.copy.offset() + at,
+                    size: len,
+                };
+                chunk.copy(ring, index, copy);
+                captured += len;
+                at += len;
+                continue;
+            }
+            let oldest = region.ring.oldest();
+            let ahead = match oldest {
+                Some(Oldest::Submitted(value)) => {
                     drop(state);
-                    // SAFETY: the span is this capture's alone until it is set recorded, and the
-                    // consumer's block is mapped and holds `at..at + len` of the buffer at
-                    // `offset`; the two do not overlap.
-                    unsafe {
-                        cpu.at(modified.offset + at)
-                            .as_ptr()
-                            .copy_to_nonoverlapping(host.get().as_ptr(), len as usize)
-                    };
+                    core.counters.count(Metric::CaptureWaits);
+                    let waited = core.done.wait(core, value);
                     state = self.lock();
-                    if let Some(region) = &mut state.changes.region {
-                        region.ring.set(number, At::Recorded);
+                    match waited.and(if state.closed {
+                        Err(Error::Quiesced)
+                    } else {
+                        Ok(())
+                    }) {
+                        Ok(()) => continue,
+                        Err(error) => {
+                            let spans = chunk.give_up(core);
+                            return Err(self.unwind(state, spans, &named, error));
+                        }
                     }
-                    spans.push(number);
-                    staged.push(vk::BufferCopy {
-                        src_offset: offset,
-                        dst_offset: modified.copy.offset() + at,
-                        size: len,
-                    });
-                    captured += len;
-                    at += len;
+                }
+                // Of a copy not yet submitted: this capture's own, or a held command buffer's.
+                _ => {
+                    let ahead;
+                    (state, ahead) = self.send_ahead(state);
+                    ahead
+                }
+            };
+            let streams = match ahead {
+                Ok(Ahead::Sent) => {
+                    let oldest = (state.changes.region.as_ref()).and_then(|r| r.ring.oldest());
+                    if matches!(oldest, Some(Oldest::Submitted(_))) {
+                        continue;
+                    }
+                    // What holds the ring now is this capture's own, unless a failed commit's
+                    // capture carried for this one's command buffer does.
+                    chunk.rings()
+                }
+                Ok(Ahead::Held) => false,
+                Err(error) => {
+                    let spans = chunk.give_up(core);
+                    return Err(self.unwind(state, spans, &named, error));
+                }
+            };
+            if streams {
+                // This capture's ring-full goes in a submission of its own, after every command
+                // buffer committed before, and the commit waits for it.
+                let next = match Chunk::begin(core, Vec::new()) {
+                    Ok(next) => next,
+                    Err(error) => {
+                        let spans = chunk.give_up(core);
+                        return Err(self.unwind(state, spans, &named, error));
+                    }
+                };
+                let full = match std::mem::replace(&mut chunk, next).end(
+                    core,
+                    named.clone(),
+                    Vec::new(),
+                ) {
+                    Ok(full) => full,
+                    Err((recorder, spans, error)) => {
+                        core.recorders.give_back(core, recorder);
+                        let more = chunk.give_up(core);
+                        let spans = spans.into_iter().chain(more).collect();
+                        return Err(self.unwind(state, spans, &named, error));
+                    }
+                };
+                let value = match state.stream(core, full) {
+                    Ok(value) => value,
+                    Err((full, error)) => {
+                        let spans = full.spans.clone();
+                        full.retire(core);
+                        let spans = spans.into_iter().chain(chunk.give_up(core)).collect();
+                        return Err(self.unwind(state, spans, &named, error));
+                    }
+                };
+                drop(state);
+                self.wake();
+                core.counters.count(Metric::CaptureStreams);
+                core.counters.count(Metric::CaptureWaits);
+                let waited = core.done.wait(core, value);
+                state = self.lock();
+                if let Err(error) = waited.and(if state.closed {
+                    Err(Error::Quiesced)
+                } else {
+                    Ok(())
+                }) {
+                    let spans = chunk.give_up(core);
+                    return Err(self.unwind(state, spans, &named, error));
+                }
+                continue;
+            }
+            // A command buffer committed before is held on the host: the rest takes staging of
+            // its own.
+            let rest: Vec<(usize, u64, u64)> = std::iter::once((index, at, end))
+                .chain(pieces[piece + 1..].iter().copied())
+                .collect();
+            drop(state);
+            let overflowed = capture::overflow(core, &named, &rest, &mut chunk);
+            state = self.lock();
+            match overflowed {
+                Ok(bytes) => captured += bytes,
+                Err(error) => {
+                    let spans = chunk.give_up(core);
+                    return Err(self.unwind(state, spans, &named, error));
                 }
             }
-            copies.push((staged, direct));
+            break;
         }
         if state.closed {
-            let error = Error::Quiesced;
-            return Err(self.unwind(core, state, recorder, &spans, &named, error));
+            let spans = chunk.give_up(core);
+            return Err(self.unwind(state, spans, &named, Error::Quiesced));
         }
-        // The textures over the ranges in images of their own: the copies back owed to them go
-        // first, so the consumer's bytes land over them, and their copies in last.
-        let (mut backs, mut into) = (Vec::new(), Vec::new());
-        for modified in &named {
-            if modified.overs.any() {
-                (modified.overs).captured(&modified.ranges, &mut backs, &mut into);
+        let into = capture::into(&named);
+        let last = match chunk.end(core, named.clone(), into) {
+            Ok(last) => last,
+            Err((recorder, spans, error)) => {
+                core.recorders.give_back(core, recorder);
+                return Err(self.unwind(state, spans, &named, error));
             }
-        }
-        let back_copies: Vec<OverCopy> = backs.iter().map(|(_, copy, _)| *copy).collect();
-        let into_copies: Vec<OverCopy> = into.iter().map(|(copy, _)| *copy).collect();
-        // SAFETY: the command buffer is recording, and only this thread has it; each texture's
-        // image is in its home layout between commands, and the copy-in holds it; the ring's, the
-        // blocks' and the device copies' buffers have transfer usage, each region lies in them,
-        // the command buffer that takes the copy-in keeps each block and copy until it retires,
-        // and the ring lives as long as the device.
-        unsafe {
-            match back_copies.is_empty() {
-                true => {
-                    record::barrier(device, command, Reach::Commands);
-                    core.counters.count(Metric::Barriers);
-                }
-                false => over::record_side(device, command, &back_copies, false, &core.counters),
-            }
-            let ring = state.changes.region.as_ref().map(|region| region.buffer);
-            for (modified, (staged, direct)) in named.iter().zip(&copies) {
-                let sources = [(ring, staged), (Some(modified.cpu.memory.buffer), direct)];
-                for (source, regions) in sources {
-                    if let Some(source) = source.filter(|_| !regions.is_empty()) {
-                        device.cmd_copy_buffer(command, source, modified.copy.buffer(), regions);
-                    }
-                }
-            }
-            match into_copies.is_empty() {
-                true => {
-                    record::barrier(device, command, Reach::Commands);
-                    core.counters.count(Metric::Barriers);
-                }
-                false => over::record_side(device, command, &into_copies, true, &core.counters),
-            }
-        }
-        core.counters.captured(captured, live);
-        // SAFETY: the command buffer is recording, and only this thread has it.
-        if let Err(result) = unsafe { device.end_command_buffer(command) } {
-            let error = Error::Vulkan {
-                call: "vkEndCommandBuffer",
-                result,
-            };
-            return Err(self.unwind(core, state, recorder, &spans, &named, error));
-        }
-        let images = (backs.into_iter().map(|(_, _, image)| image))
-            .chain(into.into_iter().map(|(_, image)| image))
-            .collect();
+        };
+        core.counters.captured(captured);
         // Taken last, so a capture that failed before left them carried.
         let mut copy_ins = std::mem::take(&mut state.changes.carried);
-        copy_ins.push(CopyIn {
-            recorder,
-            command,
-            spans,
-            modified: named,
-            images,
-        });
+        copy_ins.push(last);
         Ok((state, copy_ins))
     }
 
-    /// A capture that cannot finish: its spans are given up, its ranges named again for the next
-    /// commit, its recorder given back, and `error` is the commit's.
+    /// A capture that cannot finish: `spans`, the ring's spans its copy-ins not submitted read,
+    /// are given up, its ranges `named` named again for the next commit (none once the device is
+    /// closed: its submit thread forgot the ranges at its end), and `error` is the commit's.
     fn unwind(
         &self,
-        core: &Core,
         mut state: MutexGuard<'_, WorkState>,
-        recorder: Recorder,
-        spans: &[u64],
-        modified: &[Modified],
+        spans: Vec<u64>,
+        named: &[Modified],
         error: Error,
     ) -> Error {
-        // A closed device names nothing more: its submit thread forgot the ranges at its end.
-        let again = if state.closed { &[] } else { modified };
-        state.changes.give_up(spans, again);
-        drop(state);
-        core.recorders.give_back(core, recorder);
+        let again = if state.closed { &[] } else { named };
+        state.changes.give_up(&spans, again);
         error
+    }
+
+    /// For a capture that finds the ring held by copies not yet submitted, in its turn: has every
+    /// queue's held group go at once, and waits, without the lock, while the submit thread can
+    /// still submit a command buffer committed before. [`Ahead::Sent`] once every committed
+    /// command buffer is submitted; [`Ahead::Held`] where one waits on the host (an event wait the
+    /// host has not met, or a command buffer enqueued ahead of it and not committed).
+    ///
+    /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` at a loss.
+    fn send_ahead<'a>(
+        &'a self,
+        mut state: MutexGuard<'a, WorkState>,
+    ) -> (MutexGuard<'a, WorkState>, Result<Ahead, Error>) {
+        state.send_all();
+        self.wake();
+        loop {
+            if state.closed {
+                return (state, Err(Error::Quiesced));
+            }
+            if state.lost {
+                let error = Error::Vulkan {
+                    call: "vkQueueSubmit2",
+                    result: vk::Result::ERROR_DEVICE_LOST,
+                };
+                return (state, Err(error));
+            }
+            match state.unsent() {
+                Some(ahead) => return (state, Ok(ahead)),
+                None => {
+                    state = (self.passed.wait(state)).unwrap_or_else(PoisonError::into_inner);
+                }
+            }
+        }
     }
 
     /// At teardown: the capture ring, for the core to free.
@@ -1002,6 +1070,7 @@ impl Work {
         state.stop = true;
         state.dirty = true;
         self.wake();
+        self.passed.notify_all();
     }
 
     /// At a loss: the submit thread ends everything it holds.
@@ -1010,6 +1079,7 @@ impl Work {
         state.lost = true;
         state.dirty = true;
         self.wake();
+        self.passed.notify_all();
     }
 
     /// The progress value of the last submission.
@@ -1037,6 +1107,39 @@ impl WorkState {
     /// captured first.
     pub(crate) fn carry(&mut self, copy_ins: Vec<CopyIn>) {
         self.changes.carried.extend(copy_ins);
+    }
+
+    /// A capture's ring-full, `full`, goes in the next submission, after the upload's commands and
+    /// the copy-ins carried from a failed commit, and the upload is submitted at once: the
+    /// progress value at which it completes. The caller wakes the thread.
+    ///
+    /// Err: [`Error::Vulkan`] where the upload's command buffer cannot be made, with `full`.
+    fn stream(&mut self, core: &Core, full: CopyIn) -> Result<u64, (CopyIn, Error)> {
+        let upload = match self.upload.take() {
+            Some(upload) => upload,
+            None => match Upload::begin(core) {
+                Ok(upload) => upload,
+                Err(error) => return Err((full, error)),
+            },
+        };
+        let upload = self.upload.insert(upload);
+        upload
+            .copy_ins
+            .extend(std::mem::take(&mut self.changes.carried));
+        upload.copy_ins.push(full);
+        upload.entries += 1;
+        Ok(self.flush())
+    }
+
+    /// What a capture behind copies not yet submitted can do: `None` while a held group or a
+    /// ready command buffer can still go.
+    fn unsent(&self) -> Option<Ahead> {
+        if self.fifos.iter().any(|fifo| fifo.group.is_some()) || self.next_ready().is_some() {
+            return None;
+        }
+        let committed = (self.fifos.iter())
+            .any(|fifo| fifo.entries.iter().any(|entry| entry.pending.is_some()));
+        Some(if committed { Ahead::Held } else { Ahead::Sent })
     }
 
     /// Every command buffer committed so far goes at once: each queue's held group, and each
@@ -1079,6 +1182,11 @@ impl WorkState {
                 region.ring.set(number, At::Submitted(value));
             }
         }
+        if let Some(region) = &mut self.changes.region {
+            for &number in upload.copy_ins.iter().flat_map(|copy_in| &copy_in.spans) {
+                region.ring.set(number, At::Submitted(value));
+            }
+        }
         self.prune_at = HOMES_PRUNE;
         let mut moves = Vec::new();
         for image in self.homes.drain(..).filter_map(|home| home.upgrade()) {
@@ -1102,6 +1210,11 @@ impl WorkState {
         let upload = self.upload.take()?;
         if let Some(region) = &mut self.region {
             for &number in &upload.spans {
+                region.ring.set(number, At::Done);
+            }
+        }
+        if let Some(region) = &mut self.changes.region {
+            for &number in upload.copy_ins.iter().flat_map(|copy_in| &copy_in.spans) {
                 region.ring.set(number, At::Done);
             }
         }
@@ -1584,6 +1697,7 @@ pub(crate) fn run(core: Arc<Core>) {
         } else {
             state = pass(&core, state);
         }
+        work.passed.notify_all();
         if state.stop {
             let ended: Vec<Ended> = (state.fifos.drain(..))
                 .flat_map(|fifo| end(fifo.entries, |_| CommandBufferError::NotRun))
@@ -1597,7 +1711,7 @@ pub(crate) fn run(core: Arc<Core>) {
             }
             drop(named);
             for copy_in in carried {
-                core.recorders.give_back(&core, copy_in.recorder);
+                copy_in.retire(&core);
             }
             core.done.end_all(&core, ended);
             return;
@@ -1736,15 +1850,17 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         unsafe { device.end_command_buffer(upload.command) }.is_ok()
     });
     if let Some(upload) = &upload {
-        segments.insert(
-            0,
-            Staged {
-                command: Some(
-                    vk::CommandBufferSubmitInfo::default().command_buffer(upload.command),
-                ),
-                ..Staged::default()
-            },
-        );
+        let commands = std::iter::once(upload.command)
+            .chain(upload.copy_ins.iter().map(|copy_in| copy_in.command));
+        for (at, command) in commands.enumerate() {
+            segments.insert(
+                at,
+                Staged {
+                    command: Some(vk::CommandBufferSubmitInfo::default().command_buffer(command)),
+                    ..Staged::default()
+                },
+            );
+        }
     }
     segments.retain(|staged| {
         staged.command.is_some() || !staged.waits.is_empty() || !staged.signals.is_empty()
@@ -1807,5 +1923,8 @@ impl Upload {
     /// or where it never went.
     pub(crate) fn retire(self, core: &Core) {
         core.recorders.give_back(core, self.recorder);
+        for copy_in in self.copy_ins {
+            copy_in.retire(core);
+        }
     }
 }
