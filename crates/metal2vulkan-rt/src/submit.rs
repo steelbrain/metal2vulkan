@@ -1885,13 +1885,15 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         if core.pool.freeing() {
             core.counters.count(Metric::SubmissionsDuringFrees);
         }
+        // Counted before the call: the work can complete, and a thread waiting on it go on to
+        // read the metrics, before the call returns here.
+        core.counters.count(Metric::Submissions);
+        core.counters.submitted_infos(infos.len() as u64);
         // SAFETY: every command buffer is executable and in no other pending submission; every
         // wait is on a signal submitted earlier, and every signal raises its semaphore; the queue
         // is held.
         ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
         drop(queue);
-        core.counters.count(Metric::Submissions);
-        core.counters.submitted_infos(infos.len() as u64);
     }
     if !ok {
         complete::lose(core);
