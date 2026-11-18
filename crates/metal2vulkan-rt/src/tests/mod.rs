@@ -27,6 +27,7 @@ mod narrow;
 mod null_descriptor;
 mod one_path;
 mod over;
+mod over_aliases;
 mod pass;
 mod places;
 mod push_window;
