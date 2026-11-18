@@ -489,7 +489,8 @@ mod on_device {
             let sampler = linear(name, &device, 1);
             let down = down_state(name, &device, &library);
             let queue = device.new_command_queue(4).expect("a queue");
-            let pass = |textures| sample_down(name, &queue, (&down, &sampler), textures);
+            let pass =
+                |textures: [&Texture; 2]| sample_down(name, &queue, (&down, &sampler), textures);
             let pattern: Vec<f32> = (0..SIDE)
                 .flat_map(|y| (0..SIDE).flat_map(move |x| texel(x, y)))
                 .collect();
