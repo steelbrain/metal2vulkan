@@ -266,6 +266,10 @@ mod on_device {
                 TextureUsage::RENDER_TARGET,
             );
             let queue = device.new_command_queue(4).expect("a queue");
+            // The upload that moves the new target to its home layout, in a submission apart.
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            run(name, &first);
             let counters = device.counters();
             settled(&device);
             let before = counters.metrics();
