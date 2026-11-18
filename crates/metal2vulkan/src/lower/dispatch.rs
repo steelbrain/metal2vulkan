@@ -133,14 +133,15 @@
 //! [`GRID_TILE_THREADS`] is one tile, whose power-of-two sides the region's nominal size gives
 //! ([`grid_tile`] picks them from the grid's extents): the invocation's position is the tile's
 //! origin `(base + WorkgroupId) << s` plus `LocalInvocationIndex` masked and shifted by the sides,
-//! `s` the bits of `L − 1` per axis, all of them uniform values, so nothing divides. Where the
-//! region is flagged [`NONUNIFORM`] (the tile does not divide the grid) an invocation whose
-//! position is past the region's grid on some axis returns before the body, behind a branch on
-//! the flag, so a whole grid tests no lane. Under `MultiRegion` 0 it runs at its pipeline's size, its position `(base + WorkgroupId) · (sx, sy, sz)` plus its position in the
-//! workgroup: an indirect dispatch, every invocation live, or a direct one in workgroups of a size
-//! its runtime picks, whose invocations past the grid return before the body where the region is
-//! flagged [`NONUNIFORM`], as a tile's do. `Device::new`'s profile answers Metal's partial
-//! threadgroup as above.
+//! `s` the bits of `L − 1` per axis, all of them uniform values, so nothing divides. An invocation
+//! whose position is past the region's grid on some axis returns before the body, whatever the
+//! region's flags: every invocation compares its position with the grid's last thread
+//! (`region[1].xyz − 1`, wrapping), a test with no branch on a uniform value before it. Under
+//! `MultiRegion` 0 it runs at its pipeline's size, its position `(base + WorkgroupId) · (sx, sy,
+//! sz)` plus its position in the workgroup: an indirect dispatch, whose region's grid 0 wraps to
+//! `u32::MAX`, so every invocation is live, or a direct one in workgroups of a size its runtime
+//! picks, whose invocations past the grid return before the body as a tile's do. `Device::new`'s
+//! profile answers Metal's partial threadgroup as above.
 //!
 //! **Flat grids**. A flat variant (`LoweringInputs::flat_grid`, of a device replay or not) of a
 //! kernel that does not observe its threadgroup partition runs any grid in threadgroups of its own
@@ -532,9 +533,9 @@ pub struct DispatchPlan {
     /// Of `partial_groups`, a kernel that does not observe its threadgroup partition, on a profile
     /// whose [`ObliviousEdge`] is `Grid` under the identity domains: under `MultiRegion` 1 its
     /// workgroup is one tile of the grid whose power-of-two sides the region's nominal size gives
-    /// ([`grid_tile`]), and where the region is flagged [`NONUNIFORM`] an invocation past the
-    /// region's grid returns before the body; under `MultiRegion` 0 it runs at its pipeline's size
-    /// (the module docs' grid tiles).
+    /// ([`grid_tile`]), and an invocation past the region's grid returns before the body, whatever
+    /// the region's flags; under `MultiRegion` 0 it runs at its pipeline's size (the module docs'
+    /// grid tiles).
     pub grid_edge: bool,
     /// Under the identity domains a kernel tells a region from an indirect dispatch by the
     /// region's grid, and reads its base and `L` as the profile's form says
@@ -837,24 +838,21 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
         let mut region =
             |fb: &mut FunctionBuilder<'_>| cx.push_field(fb, PushField::DispatchRegion);
         if plan.grid_edge {
-            // A grid tile's invocation past the grid returns where its region is flagged ragged
-            // (under either `MultiRegion`): a test of uniform values first, so a region inside the
-            // grid tests no lane.
+            // A grid tile's invocation past the grid returns (under either `MultiRegion`),
+            // whatever the region's flags: every invocation compares its position with the
+            // region's last thread, so a whole grid's all pass, and an indirect dispatch's, whose
+            // region states no grid, pass too.
             let pos = decl.edge_position(fb, &mut region)?;
-            let (ragged, grid) = decl.edge_ragged(fb, &mut region)?;
+            let last = decl.edge_last(fb, &mut region)?;
             tested_position = Some(pos);
-            let test: ArmFn<'_, ()> = Box::new(move |fb, _| {
-                let below = fb.binary(BinOp::ULessThan, pos, grid)?;
-                let inside = fb.unary(UnOp::All, below)?;
-                let past = fb.unary(UnOp::LogicalNot, inside)?;
-                let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
-                    fb.ret(None)?;
-                    Ok(ArmEnd::Exits)
-                });
-                fb.if_(&mut (), past, leave, None)?;
-                Ok(ArmEnd::FallThrough(Vec::new()))
+            let below = fb.binary(BinOp::ULessThanEqual, pos, last)?;
+            let inside = fb.unary(UnOp::All, below)?;
+            let past = fb.unary(UnOp::LogicalNot, inside)?;
+            let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
+                fb.ret(None)?;
+                Ok(ArmEnd::Exits)
             });
-            fb.if_(&mut (), ragged, test, None)?;
+            fb.if_(&mut (), past, leave, None)?;
         } else if let Some(live) = decl.live(fb, &mut region)? {
             let walked = cx
                 .plan
@@ -1697,26 +1695,24 @@ impl KernelDecl {
         fb.select(sized, tiled, uniform)
     }
 
-    /// Of [`DispatchPlan::grid_edge`], whether the region may hold invocations past the grid (a
-    /// workgroup-uniform `bool`: the region flagged [`NONUNIFORM`], under either `MultiRegion`),
-    /// and the grid, `region[1].xyz`.
-    pub fn edge_ragged(
+    /// Of [`DispatchPlan::grid_edge`], the position of the grid's last thread: the region's grid
+    /// `region[1].xyz` less one on each axis, wrapping, so an indirect dispatch's region, whose
+    /// grid is 0, gives `u32::MAX` on each axis, which every position is within (a
+    /// workgroup-uniform `uvec3`).
+    pub fn edge_last(
         &self,
         fb: &mut FunctionBuilder<'_>,
         region: &mut RegionFn<'_>,
-    ) -> BResult<(SValue, SValue)> {
+    ) -> BResult<SValue> {
         let Some(RegionSelect::Sized(_)) = self.multi_region else {
             return Err(dangling_value());
         };
         let r = region(fb)?;
         let r1 = fb.composite_extract(r, &[1])?;
         let grid = fb.vector_shuffle(r1, r1, &[0, 1, 2])?;
-        let flags = fb.composite_extract(r1, &[3])?;
-        let bit = Self::k(fb, NONUNIFORM)?;
-        let flag = fb.binary(BinOp::BitwiseAnd, flags, bit)?;
-        let zero = Self::k(fb, 0)?;
-        let flagged = fb.binary(BinOp::INotEqual, flag, zero)?;
-        Ok((flagged, grid))
+        let one = Self::k(fb, 1)?;
+        let ones = fb.composite_construct(self.uvec3, &[one, one, one])?;
+        fb.binary(BinOp::ISub, grid, ones)
     }
 
     /// A `bool` constant.

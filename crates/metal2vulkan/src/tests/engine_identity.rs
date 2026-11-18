@@ -1825,10 +1825,10 @@ fn edge_words(grid: [u32; 3], len: usize) -> Vec<u8> {
 /// On `Device::from_queries`' profile the partial-threadgroups variant of a kernel that does not
 /// observe its threadgroup partition runs its grid in tiles (`RuntimeFact::GridTiles`): over
 /// grids ragged along every axis, along one, and whole, each in `grid_tile`'s tile, one workgroup
-/// of `GRID_TILE_THREADS` with the tile as the region's nominal size at `MultiRegion` 1, flagged
-/// `NONUNIFORM` where the tile does not divide the grid, each of the grid's threads stores
-/// Metal's position once and no invocation past the grid stores anything; an indirect dispatch at
-/// `MultiRegion` 0 runs at its own size. Its module divides by no value the driver does not know
+/// of `GRID_TILE_THREADS` with the tile as the region's nominal size at `MultiRegion` 1, the
+/// region unflagged, each of the grid's threads stores Metal's position once and no invocation
+/// past the grid stores anything; an indirect dispatch at `MultiRegion` 0, its region stating no
+/// grid, runs at its own size, every invocation storing. Its module divides by no value the driver does not know
 /// when it specializes it. On `Device::new`'s profile the same variant keeps Metal's partial
 /// threadgroups, whose positions divide `lin` by the threads left.
 #[test]
@@ -1874,14 +1874,10 @@ fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
         for grid in [[7, 5, 3], [24, 24, 8], [8, 8, 22], [300, 1, 1], [1, 1, 300]] {
             let tile = grid_tile(grid);
             let groups: [u32; 3] = std::array::from_fn(|i| grid[i].div_ceil(tile[i]));
-            let ragged = (0..3).any(|i| !grid[i].is_multiple_of(tile[i]));
             // Every word a launched invocation could store at, so a store past the grid shows.
             let len = ((groups[2] * tile[2] * grid[1] + groups[1] * tile[1]) * grid[0]
                 + groups[0] * tile[0]) as usize;
-            let mut region = region_bytes([0; 3], grid, tile).expect("packs");
-            if ragged {
-                region[28..32].copy_from_slice(&NONUNIFORM.to_le_bytes());
-            }
+            let region = region_bytes([0; 3], grid, tile).expect("packs");
             let mut spec = local_size3([GRID_TILE_THREADS, 1, 1]);
             spec.insert(SpecKey::MultiRegion, 1);
             let res = Resources {
@@ -1973,9 +1969,9 @@ fn the_partition_query_answers_what_the_compile_does() {
 
 /// On `Device::from_queries`' profile the module of a kernel's grid tiles runs a direct dispatch
 /// at a size its runtime picks, at `MultiRegion` 0: over grids ragged along every axis, along
-/// one, and whole, in workgroups of 16x16x1 and of the grid's tile, the region flagged
-/// `NONUNIFORM` where they do not divide the grid, each of the grid's threads stores Metal's
-/// position once and no invocation past the grid stores anything.
+/// one, and whole, in workgroups of 16x16x1 and of the grid's tile, the region unflagged, each of
+/// the grid's threads stores Metal's position once and no invocation past the grid stores
+/// anything.
 #[test]
 fn an_oblivious_kernel_runs_at_a_chosen_size() {
     use crate::lower::dispatch::grid_tile;
@@ -1999,14 +1995,10 @@ fn an_oblivious_kernel_runs_at_a_chosen_size() {
         ] {
             for tile in [[16, 16, 1], grid_tile(grid)] {
                 let groups: [u32; 3] = std::array::from_fn(|i| grid[i].div_ceil(tile[i]));
-                let ragged = (0..3).any(|i| !grid[i].is_multiple_of(tile[i]));
                 // Every word a launched invocation could store at, so a store past the grid shows.
                 let len = ((groups[2] * tile[2] * grid[1] + groups[1] * tile[1]) * grid[0]
                     + groups[0] * tile[0]) as usize;
-                let mut region = region_bytes([0; 3], grid, tile).expect("packs");
-                if ragged {
-                    region[28..32].copy_from_slice(&NONUNIFORM.to_le_bytes());
-                }
+                let region = region_bytes([0; 3], grid, tile).expect("packs");
                 let res = Resources {
                     buffers: vec![Buffer {
                         slot: None,
