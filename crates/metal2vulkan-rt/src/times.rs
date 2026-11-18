@@ -2,20 +2,23 @@
 //! `GPUEndTime`, all in nanoseconds of one host clock, [`host_time`].
 //!
 //! Each command buffer owns two timestamp queries in its queue's pool. Its first command buffer
-//! resets them and writes the first where its commands begin; its last segment writes the second
-//! where it ends. The GPU end time is the host time at which the completion thread saw the command
-//! buffer complete, and the GPU start time is that less the exact GPU duration between the two
-//! timestamps, so ends never decrease in completion order. The kernel times are the host time at
-//! commit and when the submit call that passed the last segment returned.
+//! writes the first where its commands begin; its last segment writes the second where it ends.
+//! The GPU times are the two timestamps placed on the host clock by the device's last calibration
+//! (`VK_EXT_calibrated_timestamps`, one reading of the GPU's clock and the host's together): one
+//! as the device starts, then one at a completion once [`CALIBRATION_PERIOD`] has passed since
+//! the last. The kernel times are the host time at commit and when the submit call that passed the
+//! last segment returned.
 
 use crate::device::{lock, Core};
 use crate::error::Error;
 use ash::vk;
 
-/// No Metal counterpart: the host clock every time of a command buffer counts, in nanoseconds:
-/// `CLOCK_UPTIME_RAW` on macOS, which `mach_absolute_time` and so Metal's times count,
-/// `CLOCK_MONOTONIC_RAW` elsewhere on Unix, and the performance counter (`QueryPerformanceCounter`)
-/// on Windows. 0 where the clock cannot be read.
+/// No Metal counterpart: the host clock every time of a command buffer counts, its GPU times
+/// included, in nanoseconds: `CLOCK_MONOTONIC` on Linux and other Unix systems,
+/// `CLOCK_MONOTONIC_RAW` on macOS, and the performance counter (`QueryPerformanceCounter`) on
+/// Windows, each the host time domain the device calibrates its GPU clock against
+/// ([`HOST_DOMAIN`]). On macOS it counts while the system sleeps, where Metal's times
+/// (`mach_absolute_time`) do not. 0 where the clock cannot be read.
 pub fn host_time() -> u64 {
     #[cfg(unix)]
     {
@@ -31,9 +34,9 @@ pub fn host_time() -> u64 {
 #[cfg(unix)]
 fn read_clock() -> Option<u64> {
     #[cfg(target_os = "macos")]
-    const CLOCK: libc::clockid_t = libc::CLOCK_UPTIME_RAW;
-    #[cfg(not(target_os = "macos"))]
     const CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC_RAW;
+    #[cfg(not(target_os = "macos"))]
+    const CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;
     let mut now = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -50,27 +53,55 @@ fn read_clock() -> Option<u64> {
 /// The performance counter now, in nanoseconds of its frequency, which is fixed at boot.
 #[cfg(windows)]
 fn read_counter() -> Option<u64> {
-    use std::sync::OnceLock;
-    use windows_sys::Win32::System::Performance::{
-        QueryPerformanceCounter, QueryPerformanceFrequency,
-    };
-    static FREQUENCY: OnceLock<Option<u64>> = OnceLock::new();
-    let frequency = FREQUENCY.get_or_init(|| {
-        let mut frequency = 0_i64;
-        // SAFETY: `frequency` is a valid value for the call to fill.
-        let read = unsafe { QueryPerformanceFrequency(&mut frequency) };
-        (read != 0)
-            .then(|| u64::try_from(frequency).ok())
-            .flatten()
-            .filter(|&frequency| frequency > 0)
-    });
+    use windows_sys::Win32::System::Performance::QueryPerformanceCounter;
     let mut ticks = 0_i64;
     // SAFETY: `ticks` is a valid value for the call to fill.
     let read = unsafe { QueryPerformanceCounter(&mut ticks) };
-    let ticks = (read != 0).then(|| u64::try_from(ticks).ok()).flatten()?;
-    let nanos = u128::from(ticks) * 1_000_000_000 / u128::from((*frequency)?);
-    u64::try_from(nanos).ok()
+    host_nanos((read != 0).then(|| u64::try_from(ticks).ok()).flatten()?)
 }
+
+/// A value of [`HOST_DOMAIN`] in nanoseconds: the clock's own on Unix, the performance counter's
+/// ticks at its frequency, fixed at boot, on Windows.
+fn host_nanos(value: u64) -> Option<u64> {
+    #[cfg(windows)]
+    {
+        use std::sync::OnceLock;
+        use windows_sys::Win32::System::Performance::QueryPerformanceFrequency;
+        static FREQUENCY: OnceLock<Option<u64>> = OnceLock::new();
+        let frequency = FREQUENCY.get_or_init(|| {
+            let mut frequency = 0_i64;
+            // SAFETY: `frequency` is a valid value for the call to fill.
+            let read = unsafe { QueryPerformanceFrequency(&mut frequency) };
+            (read != 0)
+                .then(|| u64::try_from(frequency).ok())
+                .flatten()
+                .filter(|&frequency| frequency > 0)
+        });
+        let nanos = u128::from(value) * 1_000_000_000 / u128::from((*frequency)?);
+        u64::try_from(nanos).ok()
+    }
+    #[cfg(not(windows))]
+    {
+        Some(value)
+    }
+}
+
+/// The host time domain of [`host_time`]'s clock, which the floor requires the device to
+/// calibrate with its own (`VK_TIME_DOMAIN_DEVICE_EXT`).
+#[cfg(all(unix, not(target_os = "macos")))]
+pub const HOST_DOMAIN: vk::TimeDomainKHR = vk::TimeDomainKHR::CLOCK_MONOTONIC;
+/// The host time domain of [`host_time`]'s clock, which the floor requires the device to
+/// calibrate with its own (`VK_TIME_DOMAIN_DEVICE_EXT`).
+#[cfg(target_os = "macos")]
+pub const HOST_DOMAIN: vk::TimeDomainKHR = vk::TimeDomainKHR::CLOCK_MONOTONIC_RAW;
+/// The host time domain of [`host_time`]'s clock, which the floor requires the device to
+/// calibrate with its own (`VK_TIME_DOMAIN_DEVICE_EXT`).
+#[cfg(windows)]
+pub const HOST_DOMAIN: vk::TimeDomainKHR = vk::TimeDomainKHR::QUERY_PERFORMANCE_COUNTER;
+
+/// How long the completion thread places GPU times by one calibration: once this much has passed
+/// since the last, the next completion calibrates again before it places them.
+pub(crate) const CALIBRATION_PERIOD: u64 = 100_000_000;
 
 /// A command buffer's times in nanoseconds of [`host_time`], each 0 until known.
 #[derive(Clone, Copy, Default)]
@@ -98,79 +129,54 @@ impl Ticks {
         }
     }
 
-    /// Nanoseconds from timestamp `from` to the later `to`, within the valid bits, which stays
-    /// exact across the counter's wrap.
+    /// Nanoseconds from timestamp `from` to `to`, negative where `to` is the earlier, within the
+    /// valid bits: exact across the counter's wrap for two timestamps less than half its range
+    /// apart.
     fn nanos(&self, from: u64, to: u64) -> f64 {
-        (to.wrapping_sub(from) & self.mask) as f64 * self.period
-    }
-
-    /// Nanoseconds the valid bits count before they wrap.
-    fn range(&self) -> f64 {
-        (self.mask as f64 + 1.0) * self.period
-    }
-}
-
-/// Passes of the completion thread after which the anchor moves later by the least lateness it
-/// saw in them, so it follows a GPU clock that runs slow against the host's.
-const WINDOW: u32 = 64;
-
-/// The GPU's clock placed on the host's, for the completion thread: the host time of one end
-/// timestamp, taken from when the thread saw that command buffer complete, which is late by
-/// however long the thread took. It moves earlier at once when a later completion is seen sooner
-/// than it predicts, so no end is placed after it was seen; it moves later only by the least
-/// lateness of [`WINDOW`] passes, so ends placed against it keep their order.
-#[derive(Default)]
-pub(crate) struct Anchor {
-    /// The host nanoseconds of `tick`, with their fraction; None until the first completion.
-    at: Option<(f64, u64)>,
-    /// The least lateness of the passes since the anchor last moved later.
-    least: f64,
-    passes: u32,
-}
-
-impl Anchor {
-    /// A pass of the thread saw command buffers complete at host time `seen`, the last of which
-    /// wrote the end timestamp `last`: the anchor moves to it.
-    pub(crate) fn see(&mut self, ticks: &Ticks, seen: u64, last: u64) {
-        let seen = seen as f64;
-        let predicted = self
-            .at
-            // Past half the counter's range, its ticks no longer tell the time between.
-            .filter(|&(host, _)| seen - host < ticks.range() / 2.0)
-            .map(|(host, tick)| host + ticks.nanos(tick, last))
-            .filter(|&predicted| predicted <= seen);
-        let Some(predicted) = predicted else {
-            *self = Anchor {
-                at: Some((seen, last)),
-                least: f64::INFINITY,
-                passes: 0,
-            };
-            return;
-        };
-        self.least = self.least.min(seen - predicted);
-        self.passes += 1;
-        let mut host = predicted;
-        if self.passes == WINDOW {
-            host += self.least;
-            self.least = f64::INFINITY;
-            self.passes = 0;
+        let ahead = to.wrapping_sub(from) & self.mask;
+        if ahead <= self.mask / 2 {
+            ahead as f64 * self.period
+        } else {
+            -((from.wrapping_sub(to) & self.mask) as f64 * self.period)
         }
-        self.at = Some((host, last));
+    }
+}
+
+/// One reading of the GPU's clock and the host's together (`vkGetCalibratedTimestampsEXT`): the
+/// device's tick and the host nanoseconds of the same moment.
+#[derive(Clone, Copy)]
+pub(crate) struct Calibration {
+    tick: u64,
+    host: u64,
+}
+
+impl Calibration {
+    /// Reads the two clocks in one call, or None where the call fails.
+    pub(crate) fn read(core: &Core) -> Option<Calibration> {
+        let infos = [
+            vk::CalibratedTimestampInfoKHR::default().time_domain(vk::TimeDomainKHR::DEVICE),
+            vk::CalibratedTimestampInfoKHR::default().time_domain(HOST_DOMAIN),
+        ];
+        // SAFETY: the device enables the extension (the floor's), and calibrates both domains.
+        let (values, _) = unsafe { core.calibrated.get_calibrated_timestamps(&infos) }.ok()?;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        core.counters.calibrated();
+        Some(Calibration {
+            tick: values[0],
+            host: host_nanos(values[1])?,
+        })
     }
 
-    /// The GPU times of a command buffer seen in the last pass, from its two timestamps: the end
-    /// the ticks from its end to the pass's last before the anchor, the start its own duration
-    /// before that. 0 and 0 before any pass.
+    /// The host time it read.
+    pub(crate) fn host(&self) -> u64 {
+        self.host
+    }
+
+    /// The host times of a command buffer's two timestamps. A float-to-integer cast saturates at
+    /// 0.
     pub(crate) fn place(&self, ticks: &Ticks, start: u64, end: u64) -> (u64, u64) {
-        let Some((host, tick)) = self.at else {
-            return (0, 0);
-        };
-        // A float-to-integer cast saturates at 0.
-        let end_time = (host - ticks.nanos(end, tick)) as u64;
-        (
-            end_time.saturating_sub(ticks.nanos(start, end) as u64),
-            end_time,
-        )
+        let at = |tick: u64| (self.host as f64 + ticks.nanos(self.tick, tick)) as u64;
+        (at(start), at(end))
     }
 }
 

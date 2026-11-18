@@ -306,20 +306,19 @@ made, with no lock, and never rewritten for layouts.
   command buffers of 29 ms each in one submission on an RX 550 (the harness row `long_4cb`), the
   first seen complete 87 ms after it ended. A command buffer ended while its queue holds a group
   joins it, and retires in its place.
-- A command buffer's times are nanoseconds of one host clock, `host_time()`: `CLOCK_UPTIME_RAW`
-  on macOS (the clock of `mach_absolute_time`), `CLOCK_MONOTONIC_RAW` elsewhere on Unix, and the
-  performance counter on Windows. Metal gives seconds. `kernel_start_time` is the commit and
-  `kernel_end_time` the time it was scheduled. `gpu_end_time` is the command buffer's end
-  timestamp placed on the host clock by the device's one anchor: the host time the completion
-  thread saw a command buffer complete, with that one's end timestamp. Each command buffer of a
-  submission so has its own end, back to back with its neighbours. The anchor is late by the
-  thread's reaction; it moves earlier at once where a completion is seen sooner than it predicts,
-  so no end comes after the thread saw it, and later only by the least lateness of 64 passes,
-  which follows the GPU clock's drift against the host's. End times keep their completion order
-  but where the anchor moves earlier, by as much. `gpu_start_time` is the end less the GPU's own
-  duration of the command buffer, exact from two timestamp queries: one written where its first
-  commands begin, one where its last segment ends, read once it completes, with no wait. Each
-  queue has a pool of two queries per command buffer it may have made at once, all reset on the
+- A command buffer's times, its GPU times included, are nanoseconds of one host clock,
+  `host_time()`: `CLOCK_MONOTONIC` on Linux and other Unix systems, `CLOCK_MONOTONIC_RAW` on
+  macOS and the performance counter on Windows, each the host time domain the device calibrates
+  its own clock against (`HOST_DOMAIN`). On macOS that clock counts while the system sleeps, where
+  Metal's (`mach_absolute_time`) does not. Metal gives seconds. `kernel_start_time` is the commit
+  and `kernel_end_time` the time it was scheduled. `gpu_start_time` and `gpu_end_time` are two
+  timestamp queries, one written where its first commands begin and one where its last segment
+  ends, read once it completes with no wait, and placed on the host clock by the device's last
+  calibration: one `vkGetCalibratedTimestampsEXT` call reading the GPU's clock and the host's
+  together, made as the device starts and again at a completion once 100 ms have passed since
+  the last, never for each command buffer. A command buffer's GPU times so fall between
+  `host_time()` before its commit and after its completion, within the calibration's deviation
+  and the clocks' drift over 100 ms. Each queue has a pool of two queries per command buffer it may have made at once, all reset on the
   host as it is made (`hostQueryReset`); a command buffer's pair is reset on the host as it
   retires, those of the two its submissions wrote, so no command buffer the GPU runs resets a
   query. A command buffer with no commands, or whose last segment has none, records a
@@ -601,8 +600,9 @@ The runtime requires Vulkan 1.3 and every extension, feature, limit, queue famil
 below, of the instance and of every device. `PhysicalDevice::check` decides for one physical
 device, with no unsafe call: it returns what the device offers above the floor
 (`floor::Capabilities`), or `floor::BelowFloor`, a typed refusal that names every item the device
-lacks (`floor::Missing`: the version, an extension, a feature, a limit, the queue family or a
-memory type). `Device::new` makes the last choice, of memory types, on the created device.
+lacks (`floor::Missing`: the version, an extension, a feature, a limit, the queue family, a
+memory type or a time domain). `Device::new` makes the last choice, of memory types, on the
+created device.
 
 ### Extensions
 
@@ -614,6 +614,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_swapchain` | device | presenting |
 | `VK_KHR_workgroup_memory_explicit_layout` | device | threadgroup memory laid out as Metal lays it |
 | `VK_EXT_robustness2` | device | null descriptors |
+| `VK_EXT_calibrated_timestamps` | device | GPU times on the host clock: the device calibrates its own clock (`VK_TIME_DOMAIN_DEVICE_EXT`) with the host's (`floor::TIME_DOMAINS`) |
 | `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
 | `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |

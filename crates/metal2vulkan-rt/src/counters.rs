@@ -87,6 +87,9 @@ struct Atomics {
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
+    /// Calibrations of the GPU's clock against the host's, for the tests.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    calibrations: AtomicU64,
 }
 
 impl Counters {
@@ -138,6 +141,18 @@ impl Counters {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn host_reaches(&self) -> u64 {
         self.atomics.host_reaches.load(Relaxed)
+    }
+
+    /// One more calibration of the GPU's clock against the host's.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn calibrated(&self) {
+        self.atomics.calibrations.fetch_add(1, Relaxed);
+    }
+
+    /// The calibrations made.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn calibrations(&self) -> u64 {
+        self.atomics.calibrations.load(Relaxed)
     }
 
     /// One more live resource of `gauge`'s kind.

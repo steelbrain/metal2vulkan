@@ -6,7 +6,7 @@ use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
     Queried, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL,
     OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY, PRIVATE_MEMORY, REQUIRED,
-    RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, VERSION,
+    RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -107,6 +107,7 @@ fn at_the_floor() -> Queried {
             ..Default::default()
         }],
         memory: memory(&[DEVICE_LOCAL, SHARED_MEMORY, RING_MEMORY]),
+        time_domains: TIME_DOMAINS.to_vec(),
     }
 }
 
@@ -1167,4 +1168,31 @@ fn every_device_the_loader_lists_is_above_the_floor() {
     unsafe { instance.destroy_instance(None) };
     assert!(checked > 0, "the loader lists no device of this cfg's kind");
     assert!(below.is_empty(), "below the floor: {below:#?}");
+}
+
+/// A device that does not calibrate the host clock's time domain with its own is below the floor,
+/// named for the domain; one that calibrates neither is named for both, its own first.
+#[test]
+fn a_device_that_does_not_calibrate_the_host_clock_is_below_the_floor() {
+    let mut device = at_the_floor();
+    device.time_domains = vec![vk::TimeDomainKHR::DEVICE];
+    let host = crate::floor::time_domain_name(crate::HOST_DOMAIN);
+    let missing = only_missing(&device);
+    assert_eq!(missing, Missing::TimeDomain(host));
+    assert_eq!(
+        missing.to_string(),
+        format!("the calibrateable time domain {host}")
+    );
+    device.time_domains.clear();
+    let Err(below) = decide(&device) else {
+        panic!("the device is above the floor");
+    };
+    assert_eq!(
+        below.missing,
+        [
+            Missing::TimeDomain("VK_TIME_DOMAIN_DEVICE_EXT"),
+            Missing::TimeDomain(host)
+        ]
+    );
+    assert_eq!(TIME_DOMAINS[1], crate::HOST_DOMAIN);
 }

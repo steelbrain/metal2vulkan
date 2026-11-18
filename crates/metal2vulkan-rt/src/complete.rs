@@ -7,7 +7,7 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
 use crate::submit::{Ended, Finished, Joined, Upload};
-use crate::times;
+use crate::times::{self, Calibration};
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -343,8 +343,9 @@ impl Retiree {
 pub(crate) fn run(core: Arc<Core>) {
     let done = &core.done;
     let device = &core.device;
-    // The GPU clock on the host's.
-    let mut anchor = times::Anchor::default();
+    // The GPU clock on the host's: read as the device starts, and again at a completion once the
+    // period has passed since the last reading.
+    let mut calibration = Calibration::read(&core);
     let mut state = done.lock();
     loop {
         let scheduled = std::mem::take(&mut state.scheduled);
@@ -352,8 +353,6 @@ pub(crate) fn run(core: Arc<Core>) {
         let fired = std::mem::take(&mut state.fire);
         let mut fire: Vec<(Listener, u64)> = Vec::new();
         let mut newly_lost = false;
-        // The host time the completions retired in this pass were seen.
-        let mut seen = 0;
         if state.lost {
             // The signals pending never come: the host waits for them end first.
             for event in state.watched.drain(..) {
@@ -372,7 +371,6 @@ pub(crate) fn run(core: Arc<Core>) {
                 // SAFETY: the progress semaphore is the device's.
                 match unsafe { device.get_semaphore_counter_value(done.progress) } {
                     Ok(reached) => {
-                        seen = times::host_time();
                         // Before the submit thread's mark is read (`Work::completed`).
                         done.completed.fetch_max(reached, Ordering::SeqCst);
                         while state
@@ -416,17 +414,21 @@ pub(crate) fn run(core: Arc<Core>) {
             for (cb, handlers) in scheduled {
                 command::run_scheduled(cb, handlers);
             }
-            // Each completed command buffer's end is placed against the anchor by the ticks
-            // between its end timestamp and that of the last one seen complete in this pass,
-            // which ended last: every segment's end barrier orders the commands after it on the
-            // one queue. The pass moves the anchor first.
+            // Each completed command buffer's timestamps are placed on the host clock by the
+            // last calibration, read again first where the period has passed since it.
             let stamps: Vec<Option<(u64, u64)>> =
                 retire.iter().map(|retiree| retiree.stamps(&core)).collect();
-            if let Some(&(_, last)) = stamps.iter().rev().flatten().next() {
-                anchor.see(&core.ticks, seen, last);
+            if stamps.iter().any(Option::is_some)
+                && calibration.is_none_or(|last| {
+                    times::host_time().saturating_sub(last.host()) >= times::CALIBRATION_PERIOD
+                })
+            {
+                calibration = Calibration::read(&core).or(calibration);
             }
             for (retiree, stamps) in retire.into_iter().zip(stamps) {
-                let times = stamps.map(|(start, end)| anchor.place(&core.ticks, start, end));
+                let times = stamps
+                    .zip(calibration)
+                    .map(|((start, end), calibration)| calibration.place(&core.ticks, start, end));
                 retiree.retire(&core, times);
             }
             for (listener, value) in fire {

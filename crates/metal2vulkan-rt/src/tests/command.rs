@@ -498,10 +498,10 @@ pub(crate) mod on_device {
     }
 
     /// Times, on the host clock: the kernel start at commit precedes the kernel end at scheduling;
-    /// each GPU start precedes its end, which falls after the first commit and no later than its
-    /// completed handler runs, through slots its command buffers reuse, with or without commands.
-    /// (Each command buffer of one submission starting no earlier than the one before ends is the
-    /// group test's.)
+    /// each GPU start and end fall between `host_time` read before its commit and the host time
+    /// its completed handler reads, through slots its command buffers reuse, with or without
+    /// commands. (Each command buffer of one submission starting no earlier than the one before
+    /// ends is the group test's.)
     #[test]
     fn every_device_times_command_buffers_on_the_host_clock() {
         each_device("command_times", |name, _, device| {
@@ -515,6 +515,7 @@ pub(crate) mod on_device {
             let ends: Ends = Arc::default();
             let first = host_time();
             let mut committed = Vec::new();
+            let mut before = Vec::new();
             for index in 0..24 {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 // Every third has no commands.
@@ -528,6 +529,7 @@ pub(crate) mod on_device {
                         lock(&ends).push((index, cb.gpu_start_time(), cb.gpu_end_time(), at))
                     })
                     .expect("a completed handler");
+                before.push(host_time());
                 command_buffer.commit().expect("a commit");
                 committed.push(command_buffer);
             }
@@ -541,7 +543,9 @@ pub(crate) mod on_device {
                 (0..24).collect::<Vec<_>>(),
                 "{name}: completion order"
             );
-            for ((_, start, end, handled), command_buffer) in ends.iter().zip(&committed) {
+            for (((_, start, end, handled), command_buffer), before) in
+                ends.iter().zip(&committed).zip(&before)
+            {
                 let (kernel_start, kernel_end) = (
                     command_buffer.kernel_start_time(),
                     command_buffer.kernel_end_time(),
@@ -550,8 +554,10 @@ pub(crate) mod on_device {
                     first <= kernel_start && kernel_start <= kernel_end,
                     "{name}"
                 );
-                assert!(0 < *start && start <= end && end <= handled, "{name}");
-                assert!(first <= *end, "{name}");
+                assert!(
+                    before <= start && start <= end && end <= handled,
+                    "{name}: {before} {start} {end} {handled}"
+                );
                 assert_eq!(
                     (
                         command_buffer.gpu_start_time(),
@@ -561,6 +567,49 @@ pub(crate) mod on_device {
                     "{name}"
                 );
             }
+        });
+    }
+
+    /// The GPU's clock is calibrated against the host's as the device starts, then at a
+    /// completion once 100 ms have passed since the last calibration, never for each command
+    /// buffer: none while the device idles, and for a burst of 32 command buffers one at its first
+    /// completion and at most one more for each 100 ms it ran.
+    #[test]
+    fn every_device_calibrates_its_clock_once_a_period_at_a_completion() {
+        each_device("command_calibration", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let counters = &device.core().counters;
+            within(name, || counters.calibrations() >= 1);
+            let at_start = counters.calibrations();
+            thread::sleep(Duration::from_millis(150));
+            assert_eq!(
+                counters.calibrations(),
+                at_start,
+                "{name}: no calibration without a completion"
+            );
+            let started = Instant::now();
+            let burst: Vec<CommandBuffer> = (0..32)
+                .map(|index| {
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    fill(&command_buffer, &buffer, index);
+                    command_buffer.commit().expect("a commit");
+                    command_buffer
+                })
+                .collect();
+            for command_buffer in &burst {
+                finished(name, command_buffer);
+            }
+            let elapsed = started.elapsed();
+            let added = counters.calibrations() - at_start;
+            let periods = elapsed.as_millis() as u64 / 100 + 1;
+            assert!(
+                (1..=periods).contains(&added),
+                "{name}: {added} calibrations for 32 command buffers in {elapsed:?}"
+            );
+            assert_eq!(word(&buffer), 31, "{name}");
+            drop((burst, buffer, arena, queue, device));
         });
     }
 

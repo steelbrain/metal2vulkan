@@ -73,4 +73,4 @@ pub use pipeline::ComputePipelineState;
 pub use queue::CommandQueue;
 pub use sampler::SamplerState;
 pub use texture::{Region, StorageMode, Texture, TextureDescriptor};
-pub use times::host_time;
+pub use times::{host_time, HOST_DOMAIN};

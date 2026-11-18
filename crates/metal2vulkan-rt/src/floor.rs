@@ -24,12 +24,19 @@ pub const INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::surface::NAME];
 pub const OPTIONAL_INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::portability_enumeration::NAME];
 
 /// The device extensions the runtime requires and device creation enables: presenting,
-/// threadgroup memory laid out as Metal lays it, and null descriptors.
+/// threadgroup memory laid out as Metal lays it, null descriptors, and the GPU's clock read with
+/// the host's, for GPU times on the host clock ([`host_time`](crate::host_time)).
 pub const DEVICE_EXTENSIONS: &[&CStr] = &[
     ash::khr::swapchain::NAME,
     ash::khr::workgroup_memory_explicit_layout::NAME,
     ash::ext::robustness2::NAME,
+    ash::ext::calibrated_timestamps::NAME,
 ];
+
+/// The time domains the floor requires the device to calibrate together: its own clock, and the
+/// host clock of [`host_time`](crate::host_time) ([`HOST_DOMAIN`](crate::HOST_DOMAIN)).
+pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
+    [vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN];
 
 /// The device extensions device creation enables where the device lists them: the SIMD groups'
 /// reconvergence modes, each for the optional features of its own, and the portability subset,
@@ -346,6 +353,9 @@ pub(crate) struct Queried {
     pub(crate) extensions: Vec<CString>,
     pub(crate) families: Vec<vk::QueueFamilyProperties>,
     pub(crate) memory: vk::PhysicalDeviceMemoryProperties,
+    /// The time domains the device calibrates together, read where it lists
+    /// `VK_EXT_calibrated_timestamps`.
+    pub(crate) time_domains: Vec<vk::TimeDomainKHR>,
 }
 
 /// One item of the floor that a device lacks.
@@ -382,6 +392,9 @@ pub enum Missing {
         /// The flags, joined by ` | `.
         flags: String,
     },
+    /// A time domain of [`TIME_DOMAINS`] the device does not calibrate
+    /// (`vkGetPhysicalDeviceCalibrateableTimeDomainsEXT`), as Vulkan names it.
+    TimeDomain(&'static str),
 }
 
 impl fmt::Display for Missing {
@@ -403,6 +416,7 @@ impl fmt::Display for Missing {
             } => write!(f, "{name} {device}, below {needed}"),
             Missing::QueueFamily => f.write_str("a queue family with graphics and compute"),
             Missing::MemoryType { flags } => write!(f, "a memory type with {flags} for buffers"),
+            Missing::TimeDomain(name) => write!(f, "the calibrateable time domain {name}"),
         }
     }
 }
@@ -414,7 +428,7 @@ impl fmt::Display for Missing {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BelowFloor {
     /// Each item the device lacks, in the floor's order: the version, extensions, features,
-    /// limits, the queue family, then memory types.
+    /// limits, the queue family, memory types, then time domains.
     pub missing: Vec<Missing>,
 }
 
@@ -497,11 +511,12 @@ pub struct MemoryTypes {
 /// `physical` is a physical device `instance` enumerated, and `instance` was created with an
 /// `apiVersion` of [`VERSION`] or later.
 pub(crate) unsafe fn check(
+    entry: &ash::Entry,
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
 ) -> Result<Capabilities, BelowFloor> {
     // SAFETY: the caller's contract.
-    decide(&unsafe { query(instance, physical) })
+    decide(&unsafe { query(entry, instance, physical) })
 }
 
 /// Reads what [`decide`] needs. A device below Vulkan 1.3 gets its version read alone.
@@ -509,7 +524,11 @@ pub(crate) unsafe fn check(
 /// # Safety
 ///
 /// As [`check`].
-unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queried {
+unsafe fn query(
+    entry: &ash::Entry,
+    instance: &ash::Instance,
+    physical: vk::PhysicalDevice,
+) -> Queried {
     // SAFETY: the caller's contract; each structure below is one Vulkan 1.3 defines, read only
     // from a device of Vulkan 1.3 or later, or one of an extension the device lists.
     unsafe {
@@ -524,6 +543,7 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
             extensions: Vec::new(),
             families: Vec::new(),
             memory: vk::PhysicalDeviceMemoryProperties::default(),
+            time_domains: Vec::new(),
         };
         if version < VERSION {
             return queried;
@@ -600,6 +620,12 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
+        // A device whose time domains cannot be listed calibrates none.
+        if listed(ash::ext::calibrated_timestamps::NAME) {
+            queried.time_domains = ash::ext::calibrated_timestamps::Instance::new(entry, instance)
+                .get_physical_device_calibrateable_time_domains(physical)
+                .unwrap_or_default();
+        }
         queried
     }
 }
@@ -666,6 +692,11 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     // Every memory type counts as one a buffer can use until the device answers.
     if let Err(lacking) = choose(&device.memory, u32::MAX) {
         missing.extend(lacking);
+    }
+    for domain in TIME_DOMAINS {
+        if !device.time_domains.contains(&domain) {
+            missing.push(Missing::TimeDomain(time_domain_name(domain)));
+        }
     }
     let Some((queue_family, _)) = family.filter(|_| missing.is_empty()) else {
         return Err(BelowFloor { missing });
@@ -883,4 +914,17 @@ pub(crate) fn vulkan_name(member: &str) -> String {
         }
     }
     name
+}
+
+/// The Vulkan name of a time domain of [`TIME_DOMAINS`].
+pub(crate) fn time_domain_name(domain: vk::TimeDomainKHR) -> &'static str {
+    match domain {
+        vk::TimeDomainKHR::DEVICE => "VK_TIME_DOMAIN_DEVICE_EXT",
+        vk::TimeDomainKHR::CLOCK_MONOTONIC => "VK_TIME_DOMAIN_CLOCK_MONOTONIC_EXT",
+        vk::TimeDomainKHR::CLOCK_MONOTONIC_RAW => "VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_EXT",
+        vk::TimeDomainKHR::QUERY_PERFORMANCE_COUNTER => {
+            "VK_TIME_DOMAIN_QUERY_PERFORMANCE_COUNTER_EXT"
+        }
+        _ => "an unnamed time domain",
+    }
 }

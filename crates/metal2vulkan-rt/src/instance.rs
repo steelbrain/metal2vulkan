@@ -139,8 +139,9 @@ impl PhysicalDevice {
     /// item of the floor it lacks; for memory it checks only that a type with each set of flags
     /// exists, and [`Device::new`](crate::Device::new) finishes the check on the created device.
     pub fn check(&self) -> Result<floor::Capabilities, floor::BelowFloor> {
+        let (entry, instance) = self.instance.raw();
         // SAFETY: the instance listed the device, and was created at the floor's version.
-        unsafe { floor::check(self.instance.vk(), self.raw) }
+        unsafe { floor::check(entry, instance, self.raw) }
     }
 
     /// The instance that listed it.

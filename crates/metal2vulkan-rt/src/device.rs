@@ -143,6 +143,8 @@ pub(crate) struct Core {
     pub(crate) counters: Counters,
     /// What the device's timestamps count.
     pub(crate) ticks: Ticks,
+    /// `VK_EXT_calibrated_timestamps`, the floor's: the GPU's clock read with the host's.
+    pub(crate) calibrated: ash::ext::calibrated_timestamps::Device,
     /// The longest block: the device's `maxMemoryAllocationSize` or `maxBufferSize`, whichever is
     /// less.
     max_block_len: u64,
@@ -390,6 +392,7 @@ impl Device {
             properties.properties.limits.timestamp_period,
             families[family as usize].timestamp_valid_bits,
         );
+        let calibrated = ash::ext::calibrated_timestamps::Device::new(vk_instance, &device);
         let limits = &properties.properties.limits;
         // The sampler arrays' two defaults count against the device's samplers too.
         let sampler_cap = limits.max_sampler_allocation_count.saturating_sub(2);
@@ -422,6 +425,7 @@ impl Device {
             unified_memory,
             counters,
             ticks,
+            calibrated,
             max_block_len,
             max_allocations,
             pool: Pool::new(options.block_mappings),

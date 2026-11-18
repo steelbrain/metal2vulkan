@@ -485,21 +485,19 @@ impl CommandBuffer {
     }
 
     /// `GPUStartTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives
-    /// seconds: [`gpu_end_time`](Self::gpu_end_time) less the GPU's duration of the command
-    /// buffer, exact from two timestamps written where its first commands began and where its
-    /// last segment ended. 0 until it completes, and for one that ended with an error.
+    /// seconds: the timestamp written where its first commands began, placed on the host clock by
+    /// the device's last calibration of its clock against the host's
+    /// (`vkGetCalibratedTimestampsEXT`, read as the device starts and again at a completion once
+    /// 100 ms have passed since the last). 0 until it completes, and for one that ended with an
+    /// error.
     pub fn gpu_start_time(&self) -> u64 {
         self.state().times.gpu_start
     }
 
     /// `GPUEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives seconds:
-    /// its end timestamp placed on the host clock by the device's one anchor, the host time the
-    /// completion thread saw a command buffer complete and that one's end timestamp, so each
-    /// command buffer of a submission has its own end, back to back. The anchor moves earlier at
-    /// once where a completion is seen sooner than it predicts, so no end comes after the
-    /// completion thread saw it; it moves later only by the least lateness of 64 passes, which
-    /// follows the GPU clock's drift. End times keep their completion order but where the anchor
-    /// moves earlier, by as much. 0 until it completes, and for one that ended with an error.
+    /// the timestamp written where its last segment ended, placed on the host clock as
+    /// [`gpu_start_time`](Self::gpu_start_time) is. 0 until it completes, and for one that ended
+    /// with an error.
     pub fn gpu_end_time(&self) -> u64 {
         self.state().times.gpu_end
     }
