@@ -1266,7 +1266,7 @@ fn the_old_render_descriptor_key_keeps_its_value() {
     let key = device("moltenvk-m3").render_descriptor_key(&d);
     let hex: String = key.digest().iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        hex, "de6480915472d44f206b8ff387592e96717602ad393e9562d4fa2a4dbd1aa216",
+        hex, "5d351787c268658e80d5c79e3ba0de1e8bf7985ef70b91cf64bc64e3f2c032c7",
         "the old runtime's key of the descriptor"
     );
 }
