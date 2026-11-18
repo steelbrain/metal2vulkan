@@ -243,8 +243,9 @@ pub(crate) struct Choice {
 /// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
 ///   partial-threadgroups variant.
 ///
-/// A size deeper than `DEEP_THREADGROUP` runs as one row of its threads ([`Constant::Deep`]),
-/// so every workgroup is within the floor's `maxComputeWorkGroupSize`.
+/// A size deeper than `DEEP_THREADGROUP` runs as one row of its threads
+/// ([`Constant::Deep`](crate::pipeline::Constant::Deep)), so every workgroup is within the
+/// floor's `maxComputeWorkGroupSize`.
 pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3]) -> Choice {
     let Some(direct) = direct else {
         return Choice {
