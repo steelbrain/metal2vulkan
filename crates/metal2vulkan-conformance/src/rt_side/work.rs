@@ -216,6 +216,19 @@ pub(super) fn buffer_of(
 
 /// A placement heap of `size` bytes in `storage`.
 fn heap(on: &RtDevice, size: u64, storage: Storage) -> Answer<Made> {
+    let (block, range) = heap_of(on, size, storage)?;
+    Ok(Made::Heap {
+        _block: block,
+        range,
+    })
+}
+
+/// The block a heap of `size` bytes in `storage` is, and the range of it the heap is.
+pub(super) fn heap_of(
+    on: &RtDevice,
+    size: u64,
+    storage: Storage,
+) -> Answer<(rt::Block, rt::HeapRange)> {
     let class = match storage {
         Storage::Shared => rt::MemoryClass::Shared,
         Storage::Private => rt::MemoryClass::Private,
@@ -231,10 +244,7 @@ fn heap(on: &RtDevice, size: u64, storage: Storage) -> Answer<Made> {
         offset: 0,
         len: size.max(1),
     };
-    Ok(Made::Heap {
-        _block: block,
-        range,
-    })
+    Ok((block, range))
 }
 
 /// Make one resource, of the ones `made` already holds.

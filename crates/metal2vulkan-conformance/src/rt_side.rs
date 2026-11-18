@@ -294,6 +294,26 @@ fn venue(instance: &rt::Instance, physical: &rt::PhysicalDevice) -> Venue {
     }
 }
 
+/// A heap as the runtime's consumer makes one: a block of the heap's size and storage, and the
+/// range of it the heap is. The runtime keeps no heap object; what Metal's `MTLHeap` answers of
+/// itself is the consumer's ([`heap_is_the_consumers`]).
+struct RtHeap {
+    block: rt::Block,
+    range: rt::HeapRange,
+    /// Whether the heap is a placement heap, whose buffers its calls place at an offset.
+    placement: bool,
+}
+
+/// The consumer's own, for `MTLHeap`'s calls and getters and an automatic heap's suballocation:
+/// the runtime keeps no heap object, and its README names the heap as the consumer's.
+fn heap_is_the_consumers() -> Failure {
+    Failure::named(
+        "TheConsumers",
+        "metal2vulkan-rt keeps no heap object: its consumer places resources in the blocks it takes \
+         and implements MTLHeap's calls and getters",
+    )
+}
+
 /// The new runtime's side of one case.
 pub struct RtSide<'a> {
     on: &'a RtDevice,
@@ -307,6 +327,8 @@ pub struct RtSide<'a> {
     samplers: Vec<rt::SamplerState>,
     render_pipelines: Vec<rt::RenderPipelineState>,
     depth_stencils: Vec<rt::DepthStencilState>,
+    /// Each heap the case made, as its consumer makes one ([`Side::heap`]).
+    heaps: Vec<RtHeap>,
     /// The pipelines the case dispatched, whose precision notes [`Side::announced`] answers.
     dispatched: BTreeSet<usize>,
     /// The render pipeline states a pass the case encoded set, whose precision notes
@@ -328,6 +350,7 @@ impl<'a> RtSide<'a> {
             samplers: Vec::new(),
             render_pipelines: Vec::new(),
             depth_stencils: Vec::new(),
+            heaps: Vec::new(),
             dispatched: BTreeSet::new(),
             drawn: BTreeSet::new(),
         }
@@ -347,6 +370,11 @@ impl<'a> RtSide<'a> {
         (self.buffers.get(handle.0 as usize))
             .map(|(buffer, _)| buffer)
             .ok_or_else(|| Failure::named("NoSuchHandle", format!("buffer {}", handle.0)))
+    }
+
+    fn held_heap(&self, handle: Handle) -> Answer<&RtHeap> {
+        (self.heaps.get(handle.0 as usize))
+            .ok_or_else(|| Failure::named("NoSuchHandle", format!("heap {}", handle.0)))
     }
 
     fn held_texture(&self, handle: Handle) -> Answer<&rt::Texture> {
@@ -662,6 +690,67 @@ impl Side for RtSide<'_> {
         (self.on.device.new_texture(&descriptor, index))
             .map(|_| true)
             .map_err(|error| Failure::of_rt(&error))
+    }
+
+    /// `newHeapWithDescriptor:` as the runtime's consumer makes a heap: a block of the heap's size
+    /// and storage. The descriptor's CPU cache and hazard tracking modes are the consumer's own,
+    /// which the runtime's blocks state neither of.
+    fn heap(&mut self, spec: &crate::heap_query::HeapSpec) -> Answer<Handle> {
+        if let Some(why) = spec.is_well_formed() {
+            return Err(Failure::named("WouldEndMetalsProcess", why));
+        }
+        let (block, range) = work::heap_of(self.on, spec.size, spec.storage)?;
+        let placement = matches!(spec.heap_type, metal2vulkan_runtime::HeapType::Placement);
+        Ok(keep(
+            &mut self.heaps,
+            RtHeap {
+                block,
+                range,
+                placement,
+            },
+        ))
+    }
+
+    /// A placement heap's `newBufferWithLength:options:offset:`: the device's buffer at that
+    /// offset of the heap's block, its bytes not zeroed, as a heap's are not. An automatic heap's
+    /// suballocation, and a call without an offset, are the consumer's own.
+    fn heap_buffer(
+        &mut self,
+        heap: Handle,
+        spec: &crate::heap_query::HeapBufferSpec,
+    ) -> Answer<Handle> {
+        let held = self.held_heap(heap)?;
+        let Some(offset) = spec.offset.filter(|_| held.placement) else {
+            return Err(heap_is_the_consumers());
+        };
+        let at = held.range.offset + offset;
+        let buffer = (self
+            .on
+            .device
+            .new_buffer(held.range.block, at, spec.length, None))
+        .map_err(|error| Failure::of_rt(&error))?;
+        let block = held.block.clone();
+        Ok(keep(&mut self.buffers, (buffer, block)))
+    }
+
+    fn heap_own_facts(&mut self, _heap: Handle) -> Answer<crate::heap_query::HeapOwnFacts> {
+        Err(heap_is_the_consumers())
+    }
+
+    fn heap_max_available_size(&mut self, _heap: Handle, _alignment: u64) -> Answer<u64> {
+        Err(heap_is_the_consumers())
+    }
+
+    fn set_heap_label(&mut self, _heap: Handle, _label: &str) -> Answer<()> {
+        Err(heap_is_the_consumers())
+    }
+
+    fn heap_purgeable_state(
+        &mut self,
+        _heap: Handle,
+        _state: metal2vulkan_runtime::PurgeableState,
+    ) -> Answer<u64> {
+        Err(heap_is_the_consumers())
     }
 
     /// The consumer's own: the runtime's `RenderPassDescriptor` is a value its consumer fills, so
