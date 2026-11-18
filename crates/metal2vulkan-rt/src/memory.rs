@@ -14,9 +14,6 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 /// ready after it.
 const READY: usize = 1;
 
-/// The most idle blocks of a class the pool keeps. A block released past them is freed.
-const IDLE_MAX: usize = 2;
-
 /// A dedicated block's length is the length asked for, rounded up to this.
 const DEDICATED_GRANULE: u64 = 64 << 10;
 
@@ -52,6 +49,29 @@ impl MemoryClass {
         match self {
             MemoryClass::Private => 64 << 20,
             MemoryClass::Shared => 16 << 20,
+        }
+    }
+
+    /// The most bytes of the class's kept idle blocks, pooled and dedicated together: 256 MiB of
+    /// Shared memory, 128 MiB of Private. The class's ready block, its latest idle pooled one, is
+    /// a reserve outside the bound. A block given back is zeroed and kept as the class's latest
+    /// idle block; while the kept blocks pass the bound, the oldest is freed. A dedicated block so
+    /// kept serves a later request it fits and that fills at least half of it
+    /// ([`Pool::take_held`]), with no allocation: a program that makes and releases large buffers
+    /// frame after frame pays the driver's allocation, and the hold on the device's other calls
+    /// that comes with it, once.
+    pub(crate) fn idle_bound(self) -> u64 {
+        match self {
+            MemoryClass::Private => 128 << 20,
+            MemoryClass::Shared => 256 << 20,
+        }
+    }
+
+    /// The gauge of the class's idle bytes.
+    fn idle_gauge(self) -> Gauge {
+        match self {
+            MemoryClass::Private => Gauge::PrivateIdleBytes,
+            MemoryClass::Shared => Gauge::SharedIdleBytes,
         }
     }
 
@@ -232,10 +252,20 @@ pub(crate) struct Pool {
     /// on it.
     changed: Condvar,
     mappings: Option<Arc<dyn BlockMappings>>,
+    /// The device's counters: the idle bytes and the dedicated blocks taken again.
+    counters: Counters,
+}
+
+/// Whether a dedicated block of `held` bytes serves a dedicated request of `want`: it fits, and
+/// the request fills at least half of it.
+pub(crate) fn fits(held: u64, want: u64) -> bool {
+    held >= want && want.saturating_mul(2) >= held
 }
 
 struct State {
-    /// Per class, zeroed blocks no one holds, the latest last.
+    /// Per class, zeroed blocks no one holds, pooled and dedicated, the oldest first: the ready
+    /// block (the latest pooled one) and at most the class's [`MemoryClass::idle_bound`] bytes
+    /// beside it.
     idle: [Vec<Memory>; 2],
     /// Blocks given back, for the block-maker thread.
     returned: Vec<Memory>,
@@ -251,7 +281,7 @@ struct State {
 }
 
 impl Pool {
-    pub(crate) fn new(mappings: Option<Arc<dyn BlockMappings>>) -> Pool {
+    pub(crate) fn new(mappings: Option<Arc<dyn BlockMappings>>, counters: Counters) -> Pool {
         Pool {
             state: Mutex::new(State {
                 idle: [Vec::new(), Vec::new()],
@@ -264,6 +294,7 @@ impl Pool {
             }),
             changed: Condvar::new(),
             mappings,
+            counters,
         }
     }
 
@@ -298,7 +329,9 @@ impl Pool {
             if state.stop {
                 return Err(Error::Quiesced);
             }
-            if let Some(memory) = state.idle[index].pop() {
+            if let Some(at) = state.idle[index].iter().rposition(Memory::pooled) {
+                let memory = state.idle[index].remove(at);
+                self.counters.fall_by(class.idle_gauge(), memory.len);
                 self.changed.notify_all();
                 return Ok(memory);
             }
@@ -307,6 +340,43 @@ impl Pool {
                 return Err(error);
             }
             state = self.wait(state);
+        }
+    }
+
+    /// An idle dedicated block of `class` for a dedicated request of `len` bytes: the shortest
+    /// that [`fits`] it, which reads zero and keeps its number, address and mapping. None where
+    /// no idle block does, for the caller to make one.
+    pub(crate) fn take_held(&self, class: MemoryClass, len: u64) -> Option<Memory> {
+        let mut state = self.lock();
+        let idle = &mut state.idle[class.index()];
+        let at = (0..idle.len())
+            .filter(|&at| !idle[at].pooled && fits(idle[at].len, len))
+            .min_by_key(|&at| idle[at].len)?;
+        let memory = idle.remove(at);
+        self.counters.fall_by(class.idle_gauge(), memory.len);
+        self.counters.count(Metric::DedicatedBlocksReused);
+        Some(memory)
+    }
+
+    /// Keeps `memory`, zeroed, as its class's latest idle block, and returns the oldest kept
+    /// blocks of the class that then pass its bound, the ready block aside, for the caller to free
+    /// without the lock. `memory` is at most the bound, so it stays.
+    fn keep(&self, state: &mut State, memory: Memory) -> Vec<Memory> {
+        let class = memory.class;
+        let idle = &mut state.idle[class.index()];
+        idle.push(memory);
+        self.counters.rise_by(class.idle_gauge(), memory.len);
+        let mut gone = Vec::new();
+        loop {
+            let ready = idle.iter().rposition(Memory::pooled);
+            let mut kept = (0..idle.len()).filter(|&at| Some(at) != ready);
+            let total: u64 = kept.clone().map(|at| idle[at].len).sum();
+            let Some(oldest) = kept.next().filter(|_| total > class.idle_bound()) else {
+                return gone;
+            };
+            let oldest = idle.remove(oldest);
+            self.counters.fall_by(class.idle_gauge(), oldest.len);
+            gone.push(oldest);
         }
     }
 
@@ -351,8 +421,14 @@ impl Pool {
     /// At teardown, after the block-maker thread is joined: every block the pool still has.
     pub(crate) fn remaining(&mut self) -> Vec<Memory> {
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
-        let mut remaining: Vec<Memory> = state.idle.iter().flatten().copied().collect();
-        remaining.extend(state.returned.iter().copied());
+        let mut remaining = Vec::new();
+        for class in MemoryClass::ALL {
+            for memory in state.idle[class.index()].drain(..) {
+                self.counters.fall_by(class.idle_gauge(), memory.len);
+                remaining.push(memory);
+            }
+        }
+        remaining.append(&mut state.returned);
         remaining
     }
 
@@ -388,21 +464,26 @@ pub(crate) fn stock(core: &Core) {
             let made =
                 (core.pool.number()).and_then(|id| make(core, class, class.block_len(), id, true));
             let mut state = core.pool.lock();
-            match made {
-                Ok(memory) => state.idle[class.index()].push(memory),
+            let gone = match made {
+                Ok(memory) => core.pool.keep(&mut state, memory),
                 Err(error) => {
                     state.failed[class.index()] = Some(error);
                     break;
                 }
+            };
+            drop(state);
+            for memory in gone {
+                free(core, memory);
             }
         }
     }
 }
 
 /// The block-maker thread, until the device's teardown stops it. Off every caller's path, it
-/// zeroes each pooled block given back and keeps it while its class has fewer than [`IDLE_MAX`]
-/// idle, and frees the rest through the hook; then it makes blocks until each class has
-/// [`READY`] idle.
+/// zeroes each block given back, pooled or dedicated, and keeps it as its class's latest idle
+/// block, freeing through the hook the oldest kept blocks past the class's
+/// [`MemoryClass::idle_bound`], the ready block aside (and at once a block longer than the bound,
+/// or spilled); then it makes pooled blocks until each class has [`READY`] idle.
 pub(crate) fn run(core: Arc<Core>) {
     let pool = &core.pool;
     let mut state = pool.lock();
@@ -412,21 +493,22 @@ pub(crate) fn run(core: Arc<Core>) {
         }
         if let Some(memory) = state.returned.pop() {
             // A spilled block is freed, so the pool's next block tries device-local memory again.
-            let room = memory.pooled
-                && !memory.spilled
-                && state.idle[memory.class.index()].len() < IDLE_MAX;
+            let room = !memory.spilled && memory.len <= memory.class.idle_bound();
             drop(state);
-            // Only this thread adds idle blocks, so the room is still there once it is zeroed. A
-            // block that cannot be zeroed is freed.
-            let kept = room && zero(&core, &memory, 0, memory.len).is_ok();
-            if !kept {
+            // A block that cannot be zeroed is freed.
+            let zeroed = room && zero(&core, &memory, 0, memory.len).is_ok();
+            let gone = match zeroed {
+                true => {
+                    let gone = pool.keep(&mut pool.lock(), memory);
+                    pool.changed.notify_all();
+                    gone
+                }
+                false => vec![memory],
+            };
+            for memory in gone {
                 free(&core, memory);
             }
             state = pool.lock();
-            if kept {
-                state.idle[memory.class.index()].push(memory);
-                pool.changed.notify_all();
-            }
             continue;
         }
         let wanted = MemoryClass::ALL.into_iter().find(|class| {
@@ -437,11 +519,21 @@ pub(crate) fn run(core: Arc<Core>) {
             drop(state);
             let made = id.and_then(|id| make(&core, class, class.block_len(), id, true));
             state = pool.lock();
-            match made {
-                Ok(memory) => state.idle[class.index()].push(memory),
-                Err(error) => state.failed[class.index()] = Some(error),
-            }
+            let gone = match made {
+                Ok(memory) => pool.keep(&mut state, memory),
+                Err(error) => {
+                    state.failed[class.index()] = Some(error);
+                    Vec::new()
+                }
+            };
             pool.changed.notify_all();
+            if !gone.is_empty() {
+                drop(state);
+                for memory in gone {
+                    free(&core, memory);
+                }
+                state = pool.lock();
+            }
             continue;
         }
         state = pool.wait(state);

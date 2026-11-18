@@ -117,9 +117,16 @@ in its memory.
   Shared block is zeroed through its mapping, which also makes every page resident before anyone
   holds it; a Private block by a GPU fill.
 - `Device::release_block` gives a block back. It takes effect once no buffer of the block remains.
-  A pooled block is then zeroed and kept, with the same number, address and mapping, while its
-  class has fewer than two idle blocks; the block-maker thread frees the rest. A dedicated block is
-  always freed. Block numbers are never reused during the device's life.
+  The block-maker thread then zeroes it and keeps it idle, pooled or dedicated, with the same
+  number, address and mapping, as its class's latest idle block. Each class keeps at most a bound
+  of idle bytes, 256 MiB of Shared memory and 128 MiB of Private, beside its ready block, which is
+  a reserve outside the bound: past it the oldest kept block is freed (after
+  `BlockMappings::unmap`), and a block longer than the bound is freed at once. A take
+  past the pooled length takes a kept dedicated block that it fits and fills at least half of
+  (`Metrics::dedicated_blocks_reused`) before it allocates, so a program that makes and releases
+  large buffers frame after frame pays the allocation, and the driver's hold on the device's other
+  calls that comes with it, once. `Gauges::shared_idle_bytes` and `Gauges::private_idle_bytes`
+  count what is kept. Block numbers are never reused during the device's life.
 - `Device::new_buffer(block, offset, length, zeroed)` makes a `Buffer`: a view of the range, with
   no Vulkan object of its own. Its `gpu_address` is the block's address plus the offset, and its
   `contents` the block's mapping plus the offset, or `None` in a Private block. `zeroed` zeroes the

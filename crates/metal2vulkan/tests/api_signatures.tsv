@@ -2269,7 +2269,9 @@ field	metal2vulkan-rt::Gauges.events	pub events: u64
 field	metal2vulkan-rt::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
+field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
+field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::HeapRange.block	pub block: BlockId
@@ -2284,6 +2286,7 @@ field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
 field	metal2vulkan-rt::Metrics.cache_bytes_written	pub cache_bytes_written: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_max_nanos	pub commit_lock_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_nanos	pub commit_lock_wait_nanos: u64
+field	metal2vulkan-rt::Metrics.dedicated_blocks_reused	pub dedicated_blocks_reused: u64
 field	metal2vulkan-rt::Metrics.dispatches_without_effects	pub dispatches_without_effects: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u64

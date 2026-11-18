@@ -1,12 +1,13 @@
-//! Memory blocks and buffers: the plan of a zero fill and a dedicated block's length; and, under a
-//! device cfg, on every device of the cfg's kind, that the device holds a block of each class as it
-//! is made, that blocks are handed out zeroed and buffers
-//! view them, that a block is freed through the consumer's hook only once nothing uses it, that
-//! the pool keeps two idle blocks of a class and frees the rest, and that teardown frees every
-//! block with the gauges at zero.
+//! Memory blocks and buffers: the plan of a zero fill, a dedicated block's length and which kept
+//! dedicated block serves a request; and, under a device cfg, on every device of the cfg's kind,
+//! that the device holds a block of each class as it is made, that blocks are handed out zeroed and
+//! buffers view them, that a block is freed through the consumer's hook only once nothing uses it,
+//! that the pool keeps a class's idle blocks, pooled and dedicated, up to its bound and frees the
+//! oldest past it, that a kept dedicated block serves a request it fits and fills at least half
+//! of, and that teardown frees every block with the gauges at zero.
 
 use crate::fill::{plan, Plan};
-use crate::memory::dedicated_len;
+use crate::memory::{dedicated_len, fits};
 use crate::{Error, Limit};
 
 #[test]
@@ -61,6 +62,21 @@ fn a_dedicated_block_is_the_length_rounded_up_to_64_kib_within_the_device() {
             }
             other => panic!("{len} bytes: {other:?}"),
         }
+    }
+}
+/// A kept dedicated block serves a request it fits and that fills at least half of it.
+#[test]
+fn a_kept_dedicated_block_serves_a_request_it_fits_and_that_fills_half_of_it() {
+    const MIB: u64 = 1 << 20;
+    for (held, want, serves) in [
+        (100 * MIB, 100 * MIB, true),
+        (100 * MIB, 60 * MIB, true),
+        (100 * MIB, 50 * MIB, true),
+        (100 * MIB, 50 * MIB - 1, false),
+        (100 * MIB, 101 * MIB, false),
+        (u64::MAX, u64::MAX / 2 + 1, true),
+    ] {
+        assert_eq!(fits(held, want), serves, "{held} for {want}");
     }
 }
 
@@ -531,11 +547,13 @@ mod on_device {
                 Err(Error::Limit(Limit::BlockLen { len: u64::MAX, .. }))
             ));
 
-            // A dedicated block: past the class's block length, rounded up to 64 KiB, zeroed.
+            // A dedicated block: past the class's block length, rounded up to 64 KiB, zeroed. It
+            // is longer than the class's idle bound, so it is freed once given back.
+            let past = MemoryClass::Shared.idle_bound();
             let dedicated = device
-                .take_block(MemoryClass::Shared, shared_len + 1)
+                .take_block(MemoryClass::Shared, past + 1)
                 .expect("a dedicated block");
-            assert_eq!(dedicated.len, shared_len + (64 << 10));
+            assert_eq!(dedicated.len, past + (64 << 10));
             let dedicated_host = bytes(dedicated);
             assert!(
                 dedicated_host.iter().all(|&byte| byte == 0),
@@ -547,8 +565,8 @@ mod on_device {
                 .new_buffer(dedicated.id, 0, 16, false)
                 .expect("a buffer of the dedicated block");
 
-            // Released, it lives while its buffer does, then is freed through the hook on the
-            // block-maker thread, still mapped.
+            // Released, it lives while its buffer does, then, longer than the bound, is freed
+            // through the hook on the block-maker thread, still mapped.
             device.release_block(dedicated.id).expect("a release");
             assert!(matches!(
                 device.release_block(dedicated.id),
@@ -632,11 +650,15 @@ mod on_device {
         }
     }
 
-    /// Past two idle blocks of a class, the pool frees what is given back through the hook; a
-    /// block it keeps is zeroed and handed out again with its number, address and mapping, with no
-    /// block made; and a Private block taken again reads zero too.
+    /// The pool keeps a class's idle blocks up to its bound in bytes beside the ready block, a
+    /// reserve outside the bound, and frees the oldest past it through the hook: of two more Shared
+    /// blocks than the bound holds, taken and given back, the bound's worth are kept beside the
+    /// latest, now the ready block, and the oldest freed (the ready block made while they were
+    /// taken among them, freed without the hook); a block it keeps is zeroed and handed out again
+    /// with its number, address and mapping, with no block made; and a Private block taken again
+    /// reads zero too.
     #[test]
-    fn every_device_keeps_two_idle_blocks_per_class_and_frees_the_rest() {
+    fn every_device_keeps_idle_blocks_up_to_the_bound_and_frees_the_oldest() {
         let instance = Instance::new(&[]).expect("an instance at the floor");
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
@@ -649,10 +671,12 @@ mod on_device {
             let counters = device.counters();
             let mut handed = Vec::new();
 
-            let taken: Vec<BlockInfo> = (0..3)
+            let shared_len = MemoryClass::Shared.block_len();
+            let room = MemoryClass::Shared.idle_bound() / shared_len;
+            let taken: Vec<BlockInfo> = (0..room + 2)
                 .map(|_| {
                     device
-                        .take_block(MemoryClass::Shared, MemoryClass::Shared.block_len())
+                        .take_block(MemoryClass::Shared, shared_len)
                         .expect("a block")
                 })
                 .collect();
@@ -663,40 +687,51 @@ mod on_device {
                 host[host.len() - 1] = 0x5A;
                 hook.record(block);
             }
-            // The three, one ready block of each class, and the zero source.
+            // The blocks taken, one ready block of each class, and the zero source.
             wait_until("a ready block of each class", || {
-                counters.gauges().blocks == ZERO_SOURCE + 2 + 3
+                counters.gauges().blocks == ZERO_SOURCE + 2 + room + 2
             });
             for block in &taken {
                 device.release_block(block.id).expect("a release");
             }
-            wait_until("two blocks freed", || hook.unmapped().len() == 2);
+            // The bound's worth of Shared blocks kept beside the ready one, the ready Private
+            // block, the zero source.
             wait_until("the pool settled", || {
-                counters.gauges().blocks == ZERO_SOURCE + 1 + 2
+                counters.gauges().blocks == ZERO_SOURCE + 1 + room + 1
             });
             let unmapped = hook.unmapped();
+            assert_eq!(unmapped.len(), 1, "{name}: {unmapped:?}");
             for unmapped in &unmapped {
                 assert_eq!(unmapped.thread.as_deref(), Some("m2v-blocks"));
+                // Kept and zeroed first, then freed as the oldest past the bound.
                 assert_eq!(
                     unmapped.first,
-                    Some(0x5A),
+                    Some(0),
                     "{name}: unmapped while still mapped"
                 );
             }
+            assert_eq!(
+                counters.gauges().shared_idle_bytes,
+                MemoryClass::Shared.idle_bound() + shared_len,
+                "{name}: the bound's worth kept beside the ready block"
+            );
             let kept: Vec<&BlockInfo> = taken
                 .iter()
                 .filter(|block| unmapped.iter().all(|u| u.block != block.id.get()))
                 .collect();
-            assert_eq!(kept.len(), 1, "{name}: {unmapped:?}");
+            assert_eq!(kept.len() as u64, room + 1, "{name}: {unmapped:?}");
 
-            // The kept block comes back first, zeroed, as it was, with nothing made.
+            // A kept block comes back, zeroed, as it was, with nothing made.
             let made = counters.metrics().blocks_made;
             let again = device
                 .take_block(MemoryClass::Shared, 1)
                 .expect("a block again");
-            assert_eq!(again.id, kept[0].id, "{name}: the latest idle block first");
-            assert_eq!(again.gpu_address, kept[0].gpu_address);
-            assert_eq!(again.contents, kept[0].contents);
+            let was = kept
+                .iter()
+                .find(|block| block.id == again.id)
+                .unwrap_or_else(|| panic!("{name}: a kept block"));
+            assert_eq!(again.gpu_address, was.gpu_address);
+            assert_eq!(again.contents, was.contents);
             let host = bytes(again);
             assert!(
                 host.iter().all(|&byte| byte == 0),
@@ -747,13 +782,131 @@ mod on_device {
             handed.dedup();
             assert_each_unmapped_once(name, &hook, &handed);
             println!(
-                "memory: {name}: the pool kept {} and freed 2; metrics {:?}",
-                kept[0].id.get(),
+                "memory: {name}: the pool kept {room} Shared blocks beside the ready one; metrics {:?}",
                 counters.metrics()
             );
         }
     }
 
+    /// Released dedicated blocks are kept idle with the class's pooled ones, up to its bound in
+    /// bytes beside the ready block, a reserve outside the bound, the oldest freed past it through
+    /// the hook: of three 100 MiB Shared blocks given back, two are kept beside the ready block, and
+    /// a Private block past the pooled length is kept beside the Private ready block. A later
+    /// request past the pooled length takes a kept block it fits and fills at least half of,
+    /// zeroed, with its number, address and mapping and nothing made; a request that fills less
+    /// than half of every kept block, or that none fits, makes its own. Every gauge reads zero
+    /// after teardown.
+    #[test]
+    fn every_device_keeps_given_back_dedicated_blocks_for_requests_they_fit() {
+        const MIB: u64 = 1 << 20;
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let counters = device.counters();
+            let shared_len = MemoryClass::Shared.block_len();
+            let taken: Vec<BlockInfo> = (0..3)
+                .map(|_| {
+                    (device.take_block(MemoryClass::Shared, 100 * MIB))
+                        .unwrap_or_else(|error| panic!("{name}: a dedicated block: {error}"))
+                })
+                .collect();
+            let mut handed: Vec<BlockId> = taken.iter().map(|block| block.id).collect();
+            for block in &taken {
+                assert_eq!(block.len, 100 * MIB, "{name}: a dedicated block");
+                let host = bytes(*block);
+                host[0] = 0x5A;
+                host[host.len() - 1] = 0x5A;
+                hook.record(block);
+            }
+            assert_eq!(counters.metrics().dedicated_blocks_reused, 0, "{name}");
+            for block in &taken {
+                device.release_block(block.id).expect("a release");
+            }
+            // Two kept beside the ready block; the oldest freed.
+            wait_until("one dedicated block freed", || hook.unmapped().len() == 1);
+            wait_until("two kept beside the ready block", || {
+                counters.gauges().shared_idle_bytes == 200 * MIB + shared_len
+            });
+            let unmapped = hook.unmapped();
+            assert_eq!(unmapped[0].thread.as_deref(), Some("m2v-blocks"), "{name}");
+            let kept: Vec<&BlockInfo> = taken
+                .iter()
+                .filter(|block| block.id.get() != unmapped[0].block)
+                .collect();
+            assert_eq!(kept.len(), 2, "{name}: {unmapped:?}");
+
+            // A request that fills more than half of a kept block takes it.
+            let made = counters.metrics().blocks_made;
+            let again = (device.take_block(MemoryClass::Shared, 60 * MIB))
+                .unwrap_or_else(|error| panic!("{name}: a block again: {error}"));
+            let was = kept
+                .iter()
+                .find(|block| block.id == again.id)
+                .unwrap_or_else(|| panic!("{name}: a kept block, not {:?}", again.id));
+            assert_eq!(
+                (again.len, again.gpu_address, again.contents),
+                (was.len, was.gpu_address, was.contents),
+                "{name}: the kept block as it was"
+            );
+            assert!(
+                bytes(again).iter().all(|&byte| byte == 0),
+                "{name}: a kept block taken again"
+            );
+            assert_eq!(counters.metrics().blocks_made, made, "{name}: a block made");
+            assert_eq!(counters.metrics().dedicated_blocks_reused, 1, "{name}");
+            assert_eq!(
+                counters.gauges().shared_idle_bytes,
+                100 * MIB + shared_len,
+                "{name}: one kept block left"
+            );
+
+            // A request that fills less than half of it, and one it does not fit, make their own.
+            for len in [40 * MIB, 101 * MIB] {
+                let own = (device.take_block(MemoryClass::Shared, len))
+                    .unwrap_or_else(|error| panic!("{name}: {len}: {error}"));
+                assert_eq!(own.len, len, "{name}: a block of its own");
+                handed.push(own.id);
+            }
+            assert_eq!(counters.metrics().blocks_made, made + 2, "{name}");
+            assert_eq!(counters.metrics().dedicated_blocks_reused, 1, "{name}");
+
+            // A dedicated Private block is kept beside the Private ready block, and taken again.
+            let private_len = MemoryClass::Private.block_len();
+            let private = (device.take_block(MemoryClass::Private, private_len + 1))
+                .unwrap_or_else(|error| panic!("{name}: a dedicated Private block: {error}"));
+            handed.push(private.id);
+            device.release_block(private.id).expect("a release");
+            wait_until("the Private block kept", || {
+                counters.gauges().private_idle_bytes == private_len + private.len
+            });
+            let made = counters.metrics().blocks_made;
+            let again = (device.take_block(MemoryClass::Private, private_len + 1))
+                .unwrap_or_else(|error| panic!("{name}: a Private block again: {error}"));
+            assert_eq!(
+                (again.id, again.gpu_address),
+                (private.id, private.gpu_address),
+                "{name}: the kept Private block"
+            );
+            assert_eq!(counters.metrics().blocks_made, made, "{name}: a block made");
+            assert_eq!(counters.metrics().dedicated_blocks_reused, 2, "{name}");
+
+            drop(device);
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: gauges after teardown"
+            );
+            handed.sort_unstable();
+            assert_each_unmapped_once(name, &hook, &handed);
+            println!(
+                "memory: {name}: two dedicated blocks kept, one taken again; metrics {:?}",
+                counters.metrics()
+            );
+        }
+    }
     /// With the device's `maxMemoryAllocationCount` answered as the zero source's, the two ready
     /// blocks' and one more (`Device::open`), the count is reached once a texture takes the ready
     /// Private block and the pool makes it again. Past it, a texture larger than a block, which has

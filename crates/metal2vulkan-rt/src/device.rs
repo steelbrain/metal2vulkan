@@ -426,6 +426,7 @@ impl Device {
             .fold(0, |bits, (index, _)| bits | 1 << index);
 
         let work = Work::new(counters.clone());
+        let pool = Pool::new(options.block_mappings, counters.clone());
         let core = Arc::new(Core {
             instance,
             physical: raw,
@@ -445,7 +446,7 @@ impl Device {
             granularity,
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             fail_private: std::sync::atomic::AtomicU32::new(0),
-            pool: Pool::new(options.block_mappings),
+            pool,
             places: Places::new(),
             copies: Places::new(),
             filler,
@@ -553,8 +554,10 @@ impl Device {
     /// For `len` up to the class's [`MemoryClass::block_len`] (16 MiB Shared, 64 MiB Private) it
     /// is a pooled block of that length. The device's making makes one of each class, and the
     /// block-maker thread makes the next ones ahead of need, off every caller's path, so this
-    /// call waits only when no block of the class is ready. Past it, it is a dedicated block,
-    /// made in this call.
+    /// call waits only when no block of the class is ready. Past it, it is a dedicated block of
+    /// `len` rounded up to 64 KiB: one given back earlier and kept idle that it fits and fills at
+    /// least half of ([`Metrics::dedicated_blocks_reused`](crate::Metrics::dedicated_blocks_reused)),
+    /// with that block's number, address and mapping, or else one made in this call.
     ///
     /// Every block reads zero, as Metal's new buffers do, whether new or taken again: a Shared
     /// block is zeroed through its mapping, which also makes each page resident before the block
@@ -615,9 +618,12 @@ impl Device {
     /// No Metal counterpart: gives a block back.
     ///
     /// It takes effect once no [`Buffer`](crate::Buffer) of the block remains and every command
-    /// buffer that used it has retired. A pooled block is then zeroed and kept ready, with the same number, address and mapping, while its class has
-    /// fewer than two idle; otherwise the block-maker thread frees it, after
-    /// [`BlockMappings::unmap`]. A dedicated block is always freed that way.
+    /// buffer that used it has retired. The block-maker thread then zeroes it and keeps it idle,
+    /// pooled or dedicated, with the same number, address and mapping, freeing the class's oldest
+    /// kept blocks past its bound (256 MiB Shared, 128 MiB Private, beside the ready block) after
+    /// [`BlockMappings::unmap`], and at once a block longer than the bound. A kept dedicated
+    /// block serves a later [`take_block`](Device::take_block) past the pooled length that it
+    /// fits and that fills at least half of it.
     ///
     /// Err: [`Error::NoSuchBlock`] for a block the consumer does not hold.
     pub fn release_block(&self, block: BlockId) -> Result<(), Error> {
@@ -1016,17 +1022,20 @@ impl Core {
         self.device_local & (1 << self.memory_types.shared) != 0
     }
 
-    /// A block of `class` for `len` bytes: a pooled one up to the class's block length, else a dedicated one
-    /// of `len` rounded up to 64 KiB, made in the call.
+    /// A block of `class` for `len` bytes: a pooled one up to the class's block length, else a
+    /// dedicated one of `len` rounded up to 64 KiB: an idle one the pool kept that [`memory::fits`]
+    /// it, or one made in the call.
     ///
     /// Err: what [`Pool::take`] and [`memory::make`] return;
     /// [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's longest block.
     pub(crate) fn take_memory(&self, class: MemoryClass, len: u64) -> Result<Memory, Error> {
         if len <= class.block_len() {
-            self.pool.take(class)
-        } else {
-            let len = memory::dedicated_len(len, self.max_block_len)?;
-            memory::make(self, class, len, self.pool.number()?, false)
+            return self.pool.take(class);
+        }
+        let len = memory::dedicated_len(len, self.max_block_len)?;
+        match self.pool.take_held(class, len) {
+            Some(memory) => Ok(memory),
+            None => memory::make(self, class, len, self.pool.number()?, false),
         }
     }
 

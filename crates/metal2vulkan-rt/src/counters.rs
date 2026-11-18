@@ -17,6 +17,8 @@ pub(crate) enum Metric {
     PipelinesCreated,
     /// [`Metrics::blocks_made`].
     BlocksMade,
+    /// [`Metrics::dedicated_blocks_reused`].
+    DedicatedBlocksReused,
     /// [`Metrics::dispatches_without_effects`].
     DispatchesWithoutEffects,
     /// [`Metrics::translations`].
@@ -66,6 +68,10 @@ pub(crate) enum Gauge {
     DeviceSamplers,
     /// [`Gauges::spilled_bytes`].
     SpilledBytes,
+    /// [`Gauges::shared_idle_bytes`].
+    SharedIdleBytes,
+    /// [`Gauges::private_idle_bytes`].
+    PrivateIdleBytes,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -91,6 +97,7 @@ struct Atomics {
     first_use_wait_max_nanos: AtomicU64,
     blocks_made: AtomicU64,
     dispatches_without_effects: AtomicU64,
+    dedicated_blocks_reused: AtomicU64,
     translations: AtomicU64,
     translations_loaded: AtomicU64,
     ring_writes: AtomicU64,
@@ -114,6 +121,8 @@ struct Atomics {
     events: AtomicU64,
     device_samplers: AtomicU64,
     spilled_bytes: AtomicU64,
+    shared_idle_bytes: AtomicU64,
+    private_idle_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -139,6 +148,7 @@ impl Counters {
             Metric::Barriers => &a.barriers,
             Metric::PipelinesCreated => &a.pipelines_created,
             Metric::BlocksMade => &a.blocks_made,
+            Metric::DedicatedBlocksReused => &a.dedicated_blocks_reused,
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
@@ -222,7 +232,7 @@ impl Counters {
         self.gauge(gauge).fetch_sub(1, Relaxed);
     }
 
-    /// `amount` more of `gauge`'s kind: bytes, for [`Gauge::SpilledBytes`].
+    /// `amount` more of `gauge`'s kind: bytes, for [`Gauge::SpilledBytes`] and the idle bytes.
     pub(crate) fn rise_by(&self, gauge: Gauge, amount: u64) {
         self.gauge(gauge).fetch_add(amount, Relaxed);
     }
@@ -247,6 +257,8 @@ impl Counters {
             Gauge::Events => &a.events,
             Gauge::DeviceSamplers => &a.device_samplers,
             Gauge::SpilledBytes => &a.spilled_bytes,
+            Gauge::SharedIdleBytes => &a.shared_idle_bytes,
+            Gauge::PrivateIdleBytes => &a.private_idle_bytes,
         }
     }
 
@@ -263,6 +275,7 @@ impl Counters {
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
             first_use_wait_max_nanos: a.first_use_wait_max_nanos.load(Relaxed),
             blocks_made: a.blocks_made.load(Relaxed),
+            dedicated_blocks_reused: a.dedicated_blocks_reused.load(Relaxed),
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
@@ -295,6 +308,8 @@ impl Counters {
             events: a.events.load(Relaxed),
             device_samplers: a.device_samplers.load(Relaxed),
             spilled_bytes: a.spilled_bytes.load(Relaxed),
+            shared_idle_bytes: a.shared_idle_bytes.load(Relaxed),
+            private_idle_bytes: a.private_idle_bytes.load(Relaxed),
         }
     }
 }
@@ -333,6 +348,10 @@ pub struct Metrics {
     /// `VkDeviceMemory` allocations made: pooled blocks (the texture blocks among them) and
     /// dedicated ones, the zero source and the parameter ring's blocks.
     pub blocks_made: u64,
+    /// Dedicated blocks taken again: a request past its class's pooled length that took a
+    /// dedicated block given back and kept idle, which it fits and fills at least half of,
+    /// instead of a new allocation.
+    pub dedicated_blocks_reused: u64,
     /// Dispatches of a kernel that writes no memory (`PipelineInterface::writes_memory`),
     /// direct and indirect: each was checked as Metal checks it, and nothing was recorded, bound
     /// or read for it, as it has no effect a program can observe.
@@ -422,4 +441,10 @@ pub struct Gauges {
     /// was out of memory: blocks whose [`BlockInfo::device_local`](crate::BlockInfo) is false and
     /// textures' allocations of their own.
     pub spilled_bytes: u64,
+    /// Bytes of idle Shared blocks the pool keeps, pooled and dedicated, zeroed, that no one
+    /// holds: the ready block and at most the class's bound of 256 MiB beside it.
+    pub shared_idle_bytes: u64,
+    /// Bytes of idle Private blocks the pool keeps, pooled and dedicated, zeroed, that no one
+    /// holds: the ready block and at most the class's bound of 128 MiB beside it.
+    pub private_idle_bytes: u64,
 }
