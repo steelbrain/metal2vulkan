@@ -346,14 +346,17 @@ fn gpu_times(command_buffer: &rt::CommandBuffer) -> [f64; 2] {
 }
 
 /// The status word once `command_buffer`'s wait returned, or `None` where it did not within
-/// `bound`. The runtime's wait has no bound, so it runs on a thread of its own, which a wait that
-/// never returns leaves behind.
+/// `bound`; the refusal's text where the runtime refused the wait. The runtime's wait has no
+/// bound, so it runs on a thread of its own, which a wait that never returns leaves behind.
 fn waited_for(command_buffer: &rt::CommandBuffer, bound: Duration) -> Option<String> {
     let (sent, received) = mpsc::channel();
     let waiting = command_buffer.clone();
     std::thread::spawn(move || {
-        waiting.wait_until_completed();
-        let _ = sent.send(format!("{:?}", waiting.status()));
+        let word = match waiting.wait_until_completed() {
+            Ok(()) => format!("{:?}", waiting.status()),
+            Err(error) => error.to_string(),
+        };
+        let _ = sent.send(word);
     });
     received.recv_timeout(bound).ok()
 }
