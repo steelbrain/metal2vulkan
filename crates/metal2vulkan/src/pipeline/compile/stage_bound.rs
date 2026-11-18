@@ -143,9 +143,7 @@ pub(super) fn emit(
     let mut widest = WidestPin::Weighed;
     loop {
         let before = m.ledger();
-        let (plan, kernel) = m.weighted(crate::pipeline::compile::weights::SELECT, |m| {
-            analyzed.select(p, widest, m)
-        })?;
+        let (plan, kernel) = analyzed.select(p, widest, m)?;
         plan.estimate.check(word_cap)?;
         let mut emitted = m.weighted(crate::pipeline::compile::weights::EMIT, |m| {
             crate::lower::emit::emit_module(&analyzed.spec, &plan, m)

@@ -1199,11 +1199,7 @@ impl StageEntries {
                 (&fd.linked, &fd.libraries),
                 InputsFrom::Given(&inputs),
                 Shared::Decode(self),
-                |r| {
-                    m.weighted(crate::pipeline::compile::weights::SPECIALIZE, |m| {
-                        specialize_one(r, m)
-                    })
-                },
+                |r| specialize_one(r, m),
             )
         })?;
         let specialized = Arc::new(specialized);
@@ -2753,8 +2749,14 @@ struct Specialized {
 }
 
 /// Decode, cross-check a metallib function's container tags, and specialize: the AIR hash, the
-/// entry name, the specialized entry, and what its code read before.
+/// entry name, the specialized entry, and what its code read before. Its work weighs
+/// [`weights::SPECIALIZE`] whoever asks.
 fn specialize_one(r: &Request<'_>, m: &mut Meter) -> Result<Specialized, Error> {
+    m.weighted(weights::SPECIALIZE, |m| specialize_unweighed(r, m))
+}
+
+/// [`specialize_one`]'s work.
+fn specialize_unweighed(r: &Request<'_>, m: &mut Meter) -> Result<Specialized, Error> {
     #[cfg(test)]
     tests::inject::panic_if_armed();
     // The creation's entry of this stage: the same request's, made by a check or key of the
@@ -2819,9 +2821,7 @@ fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Sp
         entry,
         spec,
         before,
-    } = m.weighted(crate::pipeline::compile::weights::SPECIALIZE, |m| {
-        specialize_one(r, m)
-    })?;
+    } = specialize_one(r, m)?;
     let spec = m.weighted(crate::pipeline::compile::weights::LOCKSTEP, |m| {
         crate::lower::simd::lockstep::order(spec, p, r.inputs.one_row(), m)
     })?;
@@ -2888,7 +2888,9 @@ impl Analyzed {
         m: &mut Meter,
     ) -> Result<(Plan, KernelFacts), Error> {
         let (spec, memory, observed) = (&self.spec, &self.memory, self.observed);
-        let plan = crate::lower::select::select(spec, memory, p, (&self.inputs, widest), m)?;
+        let plan = m.weighted(weights::SELECT, |m| {
+            crate::lower::select::select(spec, memory, p, (&self.inputs, widest), m)
+        })?;
         let kernel = KernelFacts {
             max_total_threads: spec.ep.stage.max_total_threads(),
             work_group_size: spec.ep.stage.work_group_size(),
