@@ -228,7 +228,14 @@ impl Case for DepthTexelReads {
         // nothing else (replay-nvidia.log). On MoltenVK, where
         // the chip's GPU shares the CPU's memory, it cannot fire at all, which is why no
         // recording of this suite declares it.
-        vec![crate::replay::shared_memory_notice()]
+        //
+        // Its samples are through a runtime sampler slot, which the new runtime's pipelines note
+        // as scaled (`crate::replay::pixel_sampler_scaling_notice` holds why, and the run it
+        // rests on).
+        vec![
+            crate::replay::shared_memory_notice(),
+            crate::replay::pixel_sampler_scaling_notice(),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

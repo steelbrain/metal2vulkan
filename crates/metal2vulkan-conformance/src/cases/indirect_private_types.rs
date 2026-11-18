@@ -191,13 +191,15 @@ impl Case for IndirectPrivateTypes {
                             read.recorded_primitive_type,
                         ));
                     }
+                    // The refusal under the type's node, at the site the abort names: pushed
+                    // beside the node, it sat at a site Metal never observed and read as a
+                    // divergence rather than a refusal.
                     Err(failure) => {
                         let at = format!("type/{primitive_type}/{}", form(indexed));
-                        sites.push(node);
-                        sites.push(Node::leaf(
+                        sites.push(node.with(Node::leaf(
                             form(indexed),
                             Observed::value(failure.recorded()),
-                        ));
+                        )));
                         return Err(Abort { at, failure });
                     }
                 }

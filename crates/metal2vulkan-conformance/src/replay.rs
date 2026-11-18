@@ -364,6 +364,23 @@ pub fn shared_memory_notice() -> crate::allowance::Allowance {
     notice_allowance(metal2vulkan_runtime::Degradation::SharedInSystemMemory.code())
 }
 
+/// The declaration a case that samples through a runtime sampler slot needs on the new runtime:
+/// `pixel-sampler-scaling` ([`metal2vulkan_runtime::Degradation::PixelSamplerScaling`]), the
+/// static note of a sample whose sampler may state pixel coordinates, which the translator then
+/// divides by the texture's size for the device's normalized sampler. The function does not know
+/// the bound state, and under the identity domains of `metal2vulkan-rt` no binder specializes the
+/// slot by it, so the note is recorded for every such sample, nearest ones included; the old
+/// runtime specializes a slot bound with a nearest pixel sampler and records it for none of
+/// them.
+///
+/// A declaration, like every [`notice_allowance`]: it loosens the notices site alone, and every
+/// value still compares exactly. Measured on lavapipe (Mesa 26.2.4) through the rt side: it fired
+/// for depth16-texel-reads, nearest-sample-positions and the six half-read-nans cases, each
+/// divergent at the notices site and at no value the old runtime's ledger does not list.
+pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
+    notice_allowance(metal2vulkan_runtime::Degradation::PixelSamplerScaling.code())
+}
+
 /// The declaration a case needs for the second notice a **venue's memory model** provokes:
 /// `staged-indirect-records`, which the runtime announces on a device without unified memory that
 /// places an indirect command buffer's records by their first use, where a GPU write was the first
