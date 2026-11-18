@@ -470,10 +470,10 @@ that touch blocks first.
 - `copy_from_texture` is `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:`
   `toTexture:destinationSlice:destinationLevel:destinationOrigin:`, a `TexturePlace` holding each
   side's slice, level and origin. It records one `vkCmdCopyImage` between the two images, at once,
-  with nothing staged and no byte copied beyond the region. The bytes move as they are: formats
-  whose units have the same bytes copy into each other, as Metal copies them; a compressed
-  region is whole blocks or reaches the level's edge on both sides; a 3D texture's image copies
-  into or out of a 2D slice. A size of 0 on an axis a texture lacks copies one texel there; on
+  with nothing staged and no byte copied beyond the region. Both textures have one pixel format
+  and one sample count, as Metal's validation requires; a compressed region is whole blocks or
+  reaches the level's edge on both sides; a 3D texture's image copies into or out of a 2D
+  slice. A size of 0 on an axis a texture lacks copies one texel there; on
   another axis the copy copies nothing.
 - A copy records two barriers. The first moves each texture's level and slice from its home
   layout to the transfer layout after every earlier command, and makes every earlier write visible
@@ -481,13 +481,12 @@ that touch blocks first.
   second moves them home once the copy has run, its writes visible to every later command. A copy
   so needs no hazard tracking and leaves none: a command buffer of one copy has three barriers,
   the segment's end among them. The encoder owes nothing at its end.
-- Refused: what Metal leaves undefined, formats whose units differ in bytes and textures of
-  different sample counts (`Refusal::TextureCopyMismatch`), and a region outside either texture
-  or off its block grid (`Refusal::TextureRegion`). Not built (`Gap::TextureCopy`): what one
-  `vkCmdCopyImage` in the floor does not make (a multisample texture, a format of depth and stencil
-  both, depth or stencil with another format, a compressed format with another block extent,
-  `A8_UNORM` with another format, a 1D texture with another type), and one level and slice of a
-  texture into itself. The slice-and-level and whole-texture forms of `copyFromTexture`, and the
+- Refused: what Metal's validation refuses, textures of two pixel formats or two sample counts
+  (`Refusal::TextureCopyMismatch`), and a region outside either texture or off its block grid
+  (`Refusal::TextureRegion`). Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the
+  floor does not make (a multisample texture, a format of depth and stencil both, one pixel format
+  held in two Vulkan formats by the textures' usages, a 1D texture with another type), and one
+  level and slice of a texture into itself. The slice-and-level and whole-texture forms of `copyFromTexture`, and the
   other blit commands, are not built yet.
 
 ## Compute pipeline states

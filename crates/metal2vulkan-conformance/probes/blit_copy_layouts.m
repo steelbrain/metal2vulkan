@@ -6,7 +6,7 @@
 // Every texture is Shared, written and read with replaceRegion and getBytes, rows tightly packed.
 //
 //   t2t-array   RGBA8Unorm 13x7 (3 levels), level 1 (pattern 1) region (1,0) 4x3 into slice 2
-//               (pattern 4) of an R32Uint 8x8 2D array of 3 at (2,4)
+//               (pattern 4) of an RGBA8Unorm 8x8 2D array of 3 at (2,4)
 //   t2t-volume  face 4 of an R8Unorm 4x4 cube (pattern 2) into an R8Unorm 4x4x3 3D texture
 //               (pattern 5) at (0,0,1)
 //   t2t-plane   that 3D texture's (1,1,1) 2x2x1 into an R8Unorm 4x4 2D texture (pattern 6) at (2,0)
@@ -14,7 +14,7 @@
 //   t2t-bc1     BC1RGBA 8x8 (pattern 8) (4,0) 4x4 into another (pattern 9) at (0,4)
 //
 // Build, and run plain and under Metal's validation layer, which stops the process at a copy it
-// does not take (RGBA8Unorm into R32Uint above is one unit's bytes in two formats):
+// does not take (`blit_copy_format_pairs.m` asks which):
 //
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation \
 //       -o blit_copy_layouts blit_copy_layouts.m
@@ -140,7 +140,7 @@ int main(void) {
                NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String);
         id<MTLCommandQueue> queue = [device newCommandQueue];
         id<MTLTexture> rgba = texture(device, MTLTextureType2D, MTLPixelFormatRGBA8Unorm, 13, 7, 1, 3, 1);
-        id<MTLTexture> words = texture(device, MTLTextureType2DArray, MTLPixelFormatR32Uint, 8, 8, 1, 1, 3);
+        id<MTLTexture> words = texture(device, MTLTextureType2DArray, MTLPixelFormatRGBA8Unorm, 8, 8, 1, 1, 3);
         id<MTLTexture> cube = texture(device, MTLTextureTypeCube, MTLPixelFormatR8Unorm, 4, 4, 1, 1, 1);
         id<MTLTexture> volume = texture(device, MTLTextureType3D, MTLPixelFormatR8Unorm, 4, 4, 3, 1, 1);
         id<MTLTexture> plane = texture(device, MTLTextureType2D, MTLPixelFormatR8Unorm, 4, 4, 1, 1, 1);

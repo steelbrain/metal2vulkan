@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 7 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 9 | 8 | 1 | 0 | 15 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 10 | 8 | 0 | 0 | 15 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 11 | 0 | 0 | 0 |
 
@@ -645,7 +645,7 @@ Columns:
 | `TextureBytesPrivate` | `Texture::replace_region` or `Texture::get_bytes` of a Private or Memoryless texture | every device (a public call's own check of its arguments) | `metal-documented`: Apple's documentation of `MTLStorageModePrivate`: "The resource is accessible only to the GPU." | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
 | `TextureRegion` | `Texture::replace_region`, `Texture::get_bytes` or a blit copy (`BlitCommandEncoder::copy_from_texture`) of a level or slice past the texture's,... | every device (a public call's own check of its arguments) | `ours`: no texel of the texture is there to copy | 1: `crates/metal2vulkan-rt/src/texture.rs (place)` | `-` |
 | `TextureBytesLayout` | `Texture::replace_region` or `Texture::get_bytes` with rows closer than a row of the region, images closer than an image of it, or bytes too few... | every device (a public call's own check of its arguments) | `ours`: the call would read or write past the bytes it is given, or one texel's bytes over another's | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
-| `TextureCopyMismatch` | `BlitCommandEncoder::copy_from_texture` between formats whose copy units differ in bytes, or between textures of different sample counts | every device (a public call's own check of its arguments) | `metal-takes`: an M4 and an Apple M3 Max, macOS 27.0.1: plain Metal completes the copy with no error; between formats of different units the bytes follow the GPU's own texel layout, and between sample counts its own twiddled or compressed sample layout, so there is no defined answer to put in its place | 1: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)` | `-` |
+| `TextureCopyMismatch` | `BlitCommandEncoder::copy_from_texture` between textures of two pixel formats, or of two sample counts | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probes `blit_copy_format_pairs.m` in the conformance crate: Metal's validation layer stops every pair of two formats it was given, sRGB, integer, float, channel order, depth and compressed pairs among them, with "[sourceTexture pixelFormat] must equal [destinationTexture pixelFormat]" | 1: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)` | `-` |
 
 ## 12. The new runtime's `Limit` (`Error::Limit(Limit)`)
 

@@ -1,13 +1,14 @@
 //! Blit copies between textures.
 //!
-//! - The rules: formats whose units have the same bytes copy into each other; units of other
-//!   bytes, and other sample counts, are `Refusal::TextureCopyMismatch`; what one copy command in
-//!   the floor does not make is `Gap::TextureCopy`; a level, slice or region outside a texture or
+//! - The rules: a texture copies into one of its own pixel format and sample count; two formats
+//!   or two sample counts are `Refusal::TextureCopyMismatch`, as Metal's validation refuses them;
+//!   what one copy command in the floor does not make, one pixel format held in two Vulkan formats
+//!   among it, is `Gap::TextureCopy`; a level, slice or region outside a texture or
 //!   off its block grid is `Refusal::TextureRegion`; a size of 0 on an axis a texture lacks copies
 //!   one texel there, and on another copies nothing; a 3D texture's image copies to and from a 2D
 //!   slice.
 //! - Under a device cfg, on every device of the cfg's kind: the bytes of a level of a 2D texture
-//!   land in a slice of a 2D array of another format of one unit's bytes, a cube's face in an
+//!   land in a slice of a 2D array, a cube's face in an
 //!   image of a 3D texture, an image of a 3D texture in a 2D texture, a slice of an array in
 //!   another slice of it, and a block-compressed region in another texture where the device makes
 //!   one, everything around each region kept. One copy alone is one submission, two barriers and
@@ -90,13 +91,13 @@ fn gap(result: Result<Option<ImageCopy>, Error>) -> Gap {
 }
 
 #[test]
-fn a_copy_takes_formats_of_one_units_bytes_and_places_both_regions() {
+fn a_copy_places_both_regions() {
     let mut rgba = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [13, 7, 1]);
     rgba.mipmap_level_count = 3;
-    let mut words = descriptor(TextureType::Type2DArray, PixelFormat::R32Uint, [8, 8, 1]);
-    words.array_length = 3;
+    let mut array = descriptor(TextureType::Type2DArray, PixelFormat::RGBA8Unorm, [8, 8, 1]);
+    array.array_length = 3;
     let source = side(&rgba, vk::Format::R8G8B8A8_UNORM, color(4));
-    let destination = side(&words, vk::Format::R32_UINT, color(4));
+    let destination = side(&array, vk::Format::R8G8B8A8_UNORM, color(4));
     let copy = copied(texture_copy(
         &source,
         at(0, 1, [1, 0, 0]),
@@ -223,9 +224,11 @@ fn a_3d_image_copies_to_and_from_a_2d_slice_and_a_cube_face_is_its_slice() {
 }
 
 #[test]
-fn what_metal_leaves_undefined_is_refused_and_what_one_command_does_not_make_is_a_gap() {
+fn what_metal_refuses_is_refused_and_what_one_command_does_not_make_is_a_gap() {
     let d = |format, extent| descriptor(TextureType::Type2D, format, extent);
     let rgba = d(PixelFormat::RGBA8Unorm, [8, 8, 1]);
+    let srgb = d(PixelFormat::RGBA8UnormSRGB, [8, 8, 1]);
+    let word = d(PixelFormat::R32Uint, [8, 8, 1]);
     let rg = d(PixelFormat::RG8Unorm, [8, 8, 1]);
     let bc1 = d(PixelFormat::BC1RGBA, [8, 8, 1]);
     let rg32 = d(PixelFormat::RG32Uint, [8, 8, 1]);
@@ -277,9 +280,21 @@ fn what_metal_leaves_undefined_is_refused_and_what_one_command_does_not_make_is_
         source,
         destination,
     };
+    // Two formats, of one unit's bytes or not, as Metal's validation layer refuses them.
     assert_eq!(
         refused(whole(&rgba, &side(&rg, vk::Format::R8G8_UNORM, color(2)))),
         mismatch(PixelFormat::RGBA8Unorm, PixelFormat::RG8Unorm)
+    );
+    assert_eq!(
+        refused(whole(&rgba, &side(&word, vk::Format::R32_UINT, color(4)))),
+        mismatch(PixelFormat::RGBA8Unorm, PixelFormat::R32Uint)
+    );
+    assert_eq!(
+        refused(whole(
+            &rgba,
+            &side(&srgb, vk::Format::R8G8B8A8_SRGB, color(4))
+        )),
+        mismatch(PixelFormat::RGBA8Unorm, PixelFormat::RGBA8UnormSRGB)
     );
     assert_eq!(
         refused(whole(&side(&msaa, vk::Format::R8G8B8A8_UNORM, None), &rgba)),
@@ -291,27 +306,26 @@ fn what_metal_leaves_undefined_is_refused_and_what_one_command_does_not_make_is_
         not_built(PixelFormat::RGBA8Unorm, PixelFormat::RGBA8Unorm)
     );
     assert_eq!(
-        gap(whole(&bc1, &side(&rg32, vk::Format::R32G32_UINT, color(8)))),
-        not_built(PixelFormat::BC1RGBA, PixelFormat::RG32Uint)
+        refused(whole(&bc1, &side(&rg32, vk::Format::R32G32_UINT, color(8)))),
+        mismatch(PixelFormat::BC1RGBA, PixelFormat::RG32Uint)
     );
     assert_eq!(
-        gap(whole(&depth, &side(&r32, vk::Format::R32_SFLOAT, color(4)))),
-        not_built(PixelFormat::Depth32Float, PixelFormat::R32Float)
+        refused(whole(&depth, &side(&r32, vk::Format::R32_SFLOAT, color(4)))),
+        mismatch(PixelFormat::Depth32Float, PixelFormat::R32Float)
+    );
+    assert!(whole(&depth, &depth).expect("a copy").is_some());
+    // `A8Unorm` held in `A8_UNORM` by one texture's usage and in `R8_UNORM` by the other's.
+    let (alpha, alpha_in_red) = (
+        side(&alpha, vk::Format::A8_UNORM_KHR, color(1)),
+        side(&alpha, vk::Format::R8_UNORM, color(1)),
     );
     assert_eq!(
-        gap(whole(
-            &side(&alpha, vk::Format::A8_UNORM_KHR, color(1)),
-            &side(&r8, vk::Format::R8_UNORM, color(1))
-        )),
-        not_built(PixelFormat::A8Unorm, PixelFormat::R8Unorm)
+        gap(whole(&alpha, &alpha_in_red)),
+        not_built(PixelFormat::A8Unorm, PixelFormat::A8Unorm)
     );
-    // `A8Unorm` held in `R8_UNORM` copies as its byte.
-    assert!(whole(
-        &side(&alpha, vk::Format::R8_UNORM, color(1)),
-        &side(&r8, vk::Format::R8_UNORM, color(1))
-    )
-    .expect("a copy")
-    .is_some());
+    assert!(whole(&alpha_in_red, &alpha_in_red)
+        .expect("a copy")
+        .is_some());
     assert_eq!(
         gap(whole(
             &side(&line, vk::Format::R8_UNORM, color(1)),
@@ -550,7 +564,7 @@ mod on_device {
             );
             let words = make(
                 TextureType::Type2DArray,
-                PixelFormat::R32Uint,
+                PixelFormat::RGBA8Unorm,
                 [8, 8, 1],
                 write,
                 1,
@@ -600,7 +614,7 @@ mod on_device {
             first.commit().expect("a commit");
             finished(name, &first);
 
-            // A level of a 2D texture into a slice of an array of another format.
+            // A level of a 2D texture into a slice of an array.
             let into_array = Expect {
                 from: &rgba1,
                 source: &sources[0],
@@ -753,7 +767,7 @@ mod on_device {
                 origin: [0; 3],
             };
             assert!(matches!(
-                encoder.copy_from_texture(&words, past, [1, 1, 1], &plane, TexturePlace::default()),
+                encoder.copy_from_texture(&words, past, [1, 1, 1], &rgba, TexturePlace::default()),
                 Err(Error::Refused(Refusal::TextureRegion {
                     level: 0,
                     slice: 3

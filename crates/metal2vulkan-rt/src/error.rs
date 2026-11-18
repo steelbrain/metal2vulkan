@@ -343,14 +343,12 @@ pub enum Refusal {
         len: u64,
     },
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
-    /// between formats whose copy units differ in bytes, or between textures of different
-    /// sample counts. Plain Metal completes such a copy, storing its GPU's own layout of the
-    /// texels or samples, which neither Metal nor Vulkan defines.
+    /// between textures of two pixel formats, or of two sample counts.
     ///
-    /// Basis: metal-takes (an M4 and an Apple M3 Max, macOS 27.0.1: plain Metal completes the copy
-    /// with no error; between formats of different units the bytes follow the GPU's own texel
-    /// layout, and between sample counts its own twiddled or compressed sample layout, so there is
-    /// no defined answer to put in its place).
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probes `blit_copy_format_pairs.m` in
+    /// the conformance crate: Metal's validation layer stops every pair of two formats it was
+    /// given, sRGB, integer, float, channel order, depth and compressed pairs among them, with
+    /// "[sourceTexture pixelFormat] must equal [destinationTexture pixelFormat]").
     TextureCopyMismatch {
         /// The source texture's pixel format.
         source: PixelFormat,
@@ -460,10 +458,9 @@ pub enum Gap {
     },
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// that no single `vkCmdCopyImage` in the floor makes: a multisample texture; a format of
-    /// depth and stencil both; a depth or stencil aspect with a color format or with another
-    /// format; a compressed format with a format of another block extent; an alpha-only image
-    /// (`A8Unorm` held as `A8_UNORM`) with another format; a 1D texture with one of another
-    /// type; or a region of one texture's level and slice into the same level and slice.
+    /// depth and stencil both; one pixel format held in two Vulkan formats, which the two
+    /// textures' usages chose; a 1D texture with one of another type; or a region of one
+    /// texture's level and slice into the same level and slice.
     ///
     /// Basis: ours (Vulkan 1.3 copies none of these with one command; each is built when a replay
     /// stream makes one).
@@ -733,7 +730,7 @@ impl fmt::Display for Refusal {
                 destination,
             } => write!(
                 f,
-                "a copy from {source:?} to {destination:?} moves units of different bytes or samples, which Metal leaves undefined"
+                "a copy from {source:?} to {destination:?} is between two formats or two sample counts, which Metal refuses"
             ),
         }
     }

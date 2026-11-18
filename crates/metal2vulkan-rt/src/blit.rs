@@ -68,10 +68,10 @@ impl BlitCommandEncoder {
 
     /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:`
     /// `destinationSlice:destinationLevel:destinationOrigin:`: `size` texels from `from` in
-    /// `source` to `to` in `destination`, one `vkCmdCopyImage`. The bytes move as they are, so
-    /// formats whose units have the same bytes copy into each other (`RGBA8Unorm` into
-    /// `R32Uint`), as Metal copies them; a compressed format's region is whole blocks or reaches
-    /// the level's edge on both sides. A 3D texture's region one image deep copies into or out of
+    /// `source` to `to` in `destination`, one `vkCmdCopyImage`. Both textures have one pixel
+    /// format and one sample count, as Metal's validation requires; a compressed format's region
+    /// is whole blocks or reaches the level's edge on both sides. A 3D texture's region one image
+    /// deep copies into or out of
     /// a 2D slice. A size of 0 on an axis one of the textures lacks (depth on any but a 3D
     /// texture, height on a 1D one) copies one texel there, and a size of 0 on another axis copies
     /// nothing, as plain Metal does where its validation stops the call. The command buffer keeps
@@ -220,26 +220,15 @@ pub(crate) fn texture_copy(
             destination: formats.1,
         })
     };
-    if s.sample_count != d.sample_count {
+    if formats.0 != formats.1 || s.sample_count != d.sample_count {
         return Err(mismatch());
     }
-    // No unit: a multisample texture, or a format of depth and stencil both.
-    let (Some(unit), Some(other)) = (source.unit, destination.unit) else {
+    // No unit: a multisample texture, or a format of depth and stencil both. One pixel format in
+    // two Vulkan formats (chosen by the textures' usages) holds its texels in two layouts.
+    let Some(unit) = source.unit else {
         return Err(gap());
     };
-    if unit.bytes != other.bytes {
-        return Err(mismatch());
-    }
-    // Vulkan copies between color formats of one texel block's bytes and extent, an alpha format
-    // only with an alpha format, and a depth or stencil aspect only into the same aspect of the
-    // same format.
-    let alpha = |format| format == vk::Format::A8_UNORM_KHR;
-    let color = unit.aspect == vk::ImageAspectFlags::COLOR;
-    if unit.block != other.block
-        || unit.aspect != other.aspect
-        || (!color && source.format != destination.format)
-        || alpha(source.format) != alpha(destination.format)
-    {
+    if source.format != destination.format {
         return Err(gap());
     }
     let one_d = |d: &TextureDescriptor| {
@@ -254,7 +243,7 @@ pub(crate) fn texture_copy(
         return Err(gap());
     }
     let mut size = size;
-    if size[1] == 0 && (one_d(s) || one_d(d)) {
+    if size[1] == 0 && one_d(s) {
         size[1] = 1;
     }
     if size[2] == 0 && !(three_d(s) && three_d(d)) {
@@ -266,7 +255,7 @@ pub(crate) fn texture_copy(
     };
     let placed = (
         place(s, unit.block, region(from), from.level, from.slice)?,
-        place(d, other.block, region(to), to.level, to.slice)?,
+        place(d, unit.block, region(to), to.level, to.slice)?,
     );
     let (Some(from), Some(to)) = placed else {
         return Ok(None);
