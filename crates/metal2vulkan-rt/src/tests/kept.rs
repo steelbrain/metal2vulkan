@@ -1,7 +1,8 @@
 //! What a recording keeps (`crate::kept`): each object once, its first use the one reference
-//! taken; a later use and every borrow of it change no count; clearing releases every object.
+//! taken; a later use and every borrow of it change no count; clearing releases every object, and
+//! frees a list grown past the bound.
 
-use crate::kept::{Handle, Kept};
+use crate::kept::{Handle, Kept, KEPT_BOUND};
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
@@ -74,4 +75,37 @@ fn a_recording_keeps_an_object_once_and_its_borrows_change_no_count() {
     assert!(kept.as_slice().is_empty());
     assert!(kept.hold(&a), "a cleared list keeps the object again");
     assert_eq!(Arc::strong_count(&a.inner), 2);
+}
+
+/// A recording of the bound's objects keeps its list's room for the next; one of a single object
+/// more grows it past the bound, and its clear frees it, releasing every object, so the next
+/// recording starts with no room.
+#[test]
+fn a_list_grown_past_the_bound_is_freed_at_its_clear() {
+    let probes: Vec<Probe> = (0..=KEPT_BOUND)
+        .map(|index| Probe {
+            inner: Arc::new(index as u32),
+        })
+        .collect();
+    let mut kept = Kept::default();
+    for probe in &probes[..KEPT_BOUND] {
+        assert!(kept.hold(probe));
+    }
+    assert_eq!(kept.capacity(), KEPT_BOUND, "room for the bound's objects");
+    kept.clear();
+    assert_eq!(kept.capacity(), KEPT_BOUND, "kept within the bound");
+    for probe in &probes {
+        assert!(kept.hold(probe));
+    }
+    assert!(kept.capacity() > KEPT_BOUND, "grown past the bound");
+    kept.clear();
+    assert_eq!(kept.capacity(), 0, "freed past the bound");
+    assert!(
+        probes
+            .iter()
+            .all(|probe| Arc::strong_count(&probe.inner) == 1),
+        "the freed list released every object"
+    );
+    assert!(kept.hold(&probes[0]), "the next recording keeps an object");
+    assert!(kept.capacity() < KEPT_BOUND, "from no room");
 }

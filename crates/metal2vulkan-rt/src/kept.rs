@@ -3,10 +3,10 @@
 //! command buffer retires. The first use of an object in a recording takes its one reference;
 //! every later use, and every binding slot an encoder fills with it, borrows the kept one
 //! ([`Lent`]) and changes no count. The lists and their address sets keep their capacity from
-//! one recording of a queue to the next, so a recording past the first allocates for its objects
-//! only where it uses more than any before it did. They live in one allocation that moves whole
-//! between the queue and its command buffers ([`Objects`]), so a command buffer allocates and frees
-//! none of it.
+//! one recording of a queue to the next, up to [`KEPT_BOUND`] objects each, so a recording past
+//! the first allocates for its objects only where it uses more than any before it did, or more
+//! than the bound. They live in one allocation that moves whole between the queue and its command
+//! buffers ([`Objects`]), so a command buffer allocates and frees none of it.
 
 use crate::buffer::Buffer;
 use crate::pipeline::ComputePipelineState;
@@ -93,6 +93,18 @@ impl<T> Deref for Uncounted<T> {
     }
 }
 
+/// The most objects a list of one kind keeps room for past its recording: at the command
+/// buffer's retirement a list that grew past it is freed, with its address set, so a rare large
+/// recording costs its allocations once and leaves no memory kept. One bound for every kind: past
+/// the 99th percentile of the distinct objects of each kind per command buffer in two recorded
+/// game streams (at most 128, of textures), and a cap on memory, not a fit to them: a smaller
+/// bound for one kind would make every recording that used one more object of it allocate again.
+///
+/// At most, then, a queue keeps for each command buffer it holds at once ([`Objects`]) five lists
+/// at the bound, each 128 handles (1 KiB) and an address set of 256 buckets (2.3 KiB): 16.3 KiB,
+/// so 1.0 MiB for a queue of 64 command buffers.
+pub(crate) const KEPT_BOUND: usize = 128;
+
 /// The objects of one kind a recording keeps, each once, in the order first used.
 pub(crate) struct Kept<T: Handle> {
     list: Vec<T>,
@@ -142,10 +154,20 @@ impl<T: Handle> Kept<T> {
         &self.list
     }
 
-    /// Releases every object, keeping the list's and the set's capacity.
+    /// The objects the list has room for.
+    pub(crate) fn capacity(&self) -> usize {
+        self.list.capacity()
+    }
+
+    /// Releases every object. A list with room for more than [`KEPT_BOUND`] is freed, with its
+    /// address set; one within it keeps its room and its set's for the next recording.
     pub(crate) fn clear(&mut self) {
-        self.list.clear();
-        self.addresses.clear();
+        if self.capacity() > KEPT_BOUND {
+            *self = Kept::default();
+        } else {
+            self.list.clear();
+            self.addresses.clear();
+        }
     }
 }
 
@@ -182,7 +204,8 @@ pub(crate) struct ByKind {
 }
 
 impl ByKind {
-    /// Releases every object, keeping each list's capacity for the next recording.
+    /// Releases every object, keeping each list's capacity, within [`KEPT_BOUND`], for the next
+    /// recording.
     pub(crate) fn clear(&mut self) {
         self.buffers.clear();
         self.textures.clear();
