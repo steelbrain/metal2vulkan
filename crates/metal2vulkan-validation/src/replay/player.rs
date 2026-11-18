@@ -477,7 +477,20 @@ fn covered(intervals: &mut [(u64, u64)]) -> u64 {
     total
 }
 
+/// The process's resident memory in bytes: on macOS its physical footprint (`proc_pid_rusage`),
+/// which on Apple's GPUs holds the process's GPU memory too.
+#[cfg(target_os = "macos")]
+fn resident_bytes() -> Option<u64> {
+    // SAFETY: `info` is a valid rusage_info_v4 for the call to fill, the flavour it names.
+    let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+    let buffer = (&mut info as *mut libc::rusage_info_v4).cast::<libc::rusage_info_t>();
+    // SAFETY: as above; the process's own pid.
+    let read = unsafe { libc::proc_pid_rusage(libc::getpid(), libc::RUSAGE_INFO_V4, buffer) };
+    (read == 0).then_some(info.ri_phys_footprint)
+}
+
 /// The process's resident memory in bytes: `VmRSS` of `/proc/self/status`, where there is one.
+#[cfg(not(target_os = "macos"))]
 fn resident_bytes() -> Option<u64> {
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     let line = status.lines().find(|line| line.starts_with("VmRSS:"))?;

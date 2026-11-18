@@ -2025,6 +2025,8 @@ impl Backend for NewRuntime {
             ("pipelines", gauges.pipelines),
             ("kernels", gauges.kernels),
             ("command_buffers", gauges.command_buffers),
+            ("events", gauges.events),
+            ("timestamp_pools", gauges.timestamp_pools),
             ("spilled_bytes", gauges.spilled_bytes),
             ("managed_spilled_bytes", gauges.managed_spilled_bytes),
             ("shared_idle_bytes", gauges.shared_idle_bytes),
