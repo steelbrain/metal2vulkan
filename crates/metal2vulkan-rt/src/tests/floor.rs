@@ -238,6 +238,7 @@ fn a_device_at_the_floor_is_above_it() {
     assert_eq!(enabled.core.independent_blend, vk::TRUE);
     assert_eq!(enabled.core.fragment_stores_and_atomics, vk::TRUE);
     assert_eq!(enabled.vulkan11.multiview, vk::TRUE);
+    assert_eq!(enabled.vulkan11.shader_draw_parameters, vk::TRUE);
     assert_eq!(enabled.vulkan12.shader_subgroup_extended_types, vk::TRUE);
     assert_eq!(
         enabled.vulkan13.shader_demote_to_helper_invocation,
@@ -258,7 +259,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 37] = [
+    let cases: [(Clear, Missing); 38] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -376,6 +377,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan11.multiview = vk::FALSE,
             feature(V11, "multiview"),
+        ),
+        (
+            |f| f.vulkan11.shader_draw_parameters = vk::FALSE,
+            feature(V11, "shaderDrawParameters"),
         ),
         (
             |f| f.vulkan12.shader_subgroup_extended_types = vk::FALSE,

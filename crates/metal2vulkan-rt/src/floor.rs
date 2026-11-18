@@ -320,6 +320,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // are enabled: multiview, subgroup operations on 8-, 16- and 64-bit values, a fragment's
     // demotion to a helper and its termination, and workgroup memory zeroed at its declaration.
     feature!(vulkan11.multiview => Multiview),
+    // A vertex function's `[[base_vertex]]` and `[[base_instance]]` are SPIR-V's `BaseVertex` and
+    // `BaseInstance`, the draw's own, so no draw pushes its bases. Vulkan 1.1 requires it of a
+    // device that lists `VK_KHR_shader_draw_parameters`, and Roadmap 2024 of every device.
+    feature!(vulkan11.shader_draw_parameters => ShaderDrawParameters),
     feature!(vulkan12.shader_subgroup_extended_types => ShaderSubgroupExtendedTypes),
     feature!(vulkan13.shader_demote_to_helper_invocation => ShaderDemoteToHelperInvocation),
     feature!(vulkan13.shader_terminate_invocation => ShaderTerminateInvocation),
