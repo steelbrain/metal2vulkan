@@ -258,9 +258,10 @@ after a quiesce.
 
 Shaders reach textures and samplers by index (`docs/RESOURCE-ID.md`). Every pipeline takes set 1,
 one descriptor set the device makes at creation, of five arrays whose element `i` is the object
-whose `gpuResourceID` holds index `i`: 65,536 sampled textures (binding 0), 4,096
-storage-capable textures (binding 1), and 4,000 samplers of each use, plain, depth comparison and
-integer texture (bindings 2, 3 and 4). Every binding is partially bound, updated after bind and
+whose `gpuResourceID` holds index `i`: 65,536 sampled textures (binding 0), 65,536 storage
+textures (binding 1), and 4,000 samplers of each use, plain, depth comparison and integer texture
+(bindings 2, 3 and 4). A texture's index is the same element of both texture arrays: one with a
+storage view takes both, any other the sampled one alone, and its storage element stays null. Every binding is partially bound, updated after bind and
 updated while unused elements are pending, so an object's element is written once, as it is
 made, with no lock, and never rewritten for layouts.
 
@@ -276,10 +277,10 @@ made, with no lock, and never rewritten for layouts.
   default compare function does. Vulkan has no null sampler. The device writes every element so
   at creation and holds two `VkSampler`s for the defaults (`Gauges::device_samplers`).
 - `Device::grant_indices(class, first, count)` grants the consumer the range it names, so the IDs
-  it chooses from it on the guest's side reproduce in replay. The three classes are disjoint
-  (`IndexClass::range`): storage-capable textures (shader-write or unknown usage) take 1 to 4,095,
-  one index valid in both texture arrays; other textures 4,096 to 65,535; samplers 1 to 3,999.
-  Index 0 is nil and never granted. A range that is empty or leaves its class's is
+  it chooses from it on the guest's side reproduce in replay. There are two classes
+  (`IndexClass::range`): textures of every usage take 1 to 65,535, one index valid in both
+  texture arrays, so a texture of any usage can be made at any index of a texture grant; samplers
+  take 1 to 3,999. Index 0 is nil and never granted. A range that is empty or leaves its class's is
   `Limit::IndexRange`, and one holding an index granted already `Refusal::IndicesGranted`.
   `Device::release_indices` returns a grant; one not granted is `Refusal::IndicesNotGranted`, and
   one where an object still lives `Refusal::IndicesInUse`.
@@ -299,8 +300,8 @@ made, with no lock, and never rewritten for layouts.
   blocks' memory type does not serve it. A place is free again once the image is freed; one empty
   texture block is kept, and another that empties goes back to the pool. `index` is given exactly
   where shaders reach the texture, shader-read or shader-write usage (`Refusal::TextureIndex`
-  otherwise), from a live grant of the class the usage picks: `IndexClass::StorageTexture` with
-  shader-write usage, else `IndexClass::Texture`. `TextureUsage` with no bits is Metal's unknown
+  otherwise), from a live `IndexClass::Texture` grant, whatever the usage. `TextureUsage` with no
+  bits is Metal's unknown
   usage: shader read and write, render target and pixel-format view.
 - The image's usage is the descriptor's plus transfer source and destination. Its home layout is
   general where it has a storage element, shader-read-only where shaders only read it, and the
@@ -692,10 +693,9 @@ that touch blocks first.
   GPU's work for every guest process under the new runtime on NVIDIA and RADV: the consequence of
   one device and direct addresses, which the owner accepted.
 - An index past a set 1 array's length is a fault of the same kind. A kernel indexes the arrays
-  with a resource ID's index as the guest gave it, with no clamp: an index of 4,096 or more used
-  through the storage-image array of 4,096 elements (a texture of the `Texture` class written or
-  read as a storage image), 65,536 or more through the sampled-image array, or 4,000 or more
-  through a sampler array, reads a descriptor from past the array. Vulkan leaves that undefined,
+  with a resource ID's index as the guest gave it, with no clamp: an index of 65,536 or more used
+  through a texture array, or 4,000 or more through a sampler array, reads a descriptor from past
+  the array. Vulkan leaves that undefined,
   and Metal leaves a resource ID that names no live resource of the access undefined; here it can
   fault as a bad address does, with the same consequences. An index within an array that no live
   object owns reads its null descriptor or default sampler, with no fault.
@@ -1534,9 +1534,10 @@ changes.
 
 ### Limits
 
-The descriptor limits are what the runtime's fixed arrays need: 65,536 sampled textures, 4,096
-read-write textures and three arrays of 4,000 samplers, one per use (plain, depth comparison,
-integer texture). 4,000 is Vulkan's minimum `maxSamplerAllocationCount`. The compute limits let a threadgroup take
+The descriptor limits are what the runtime's fixed arrays need: 65,536 sampled textures, 65,536
+storage textures and three arrays of 4,000 samplers, one per use (plain, depth comparison,
+integer texture). Vulkan requires at least 500,000 of each texture limit and of the two resource
+totals on a device that supports `descriptorIndexing`, as every lab device does. 4,000 is Vulkan's minimum `maxSamplerAllocationCount`. The compute limits let a threadgroup take
 Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's minimum is 1,
 `VK_TRUE`; `timestampValidBits` is the queue family's.
 
@@ -1544,13 +1545,13 @@ Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's
 |---|---|---|
 | `maxPerStageDescriptorUpdateAfterBindSampledImages` | `65536` | the sampled-texture array |
 | `maxDescriptorSetUpdateAfterBindSampledImages` | `65536` | the sampled-texture array |
-| `maxPerStageDescriptorUpdateAfterBindStorageImages` | `4096` | the read-write texture array |
-| `maxDescriptorSetUpdateAfterBindStorageImages` | `4096` | the read-write texture array |
+| `maxPerStageDescriptorUpdateAfterBindStorageImages` | `65536` | the storage-texture array |
+| `maxDescriptorSetUpdateAfterBindStorageImages` | `65536` | the storage-texture array |
 | `maxPerStageDescriptorUpdateAfterBindSamplers` | `12000` | the three sampler arrays |
 | `maxDescriptorSetUpdateAfterBindSamplers` | `12000` | the three sampler arrays |
 | `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
-| `maxPerStageUpdateAfterBindResources` | `69632` | both texture arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
-| `maxUpdateAfterBindDescriptorsInAllPools` | `81632` | all five arrays |
+| `maxPerStageUpdateAfterBindResources` | `131072` | both texture arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
+| `maxUpdateAfterBindDescriptorsInAllPools` | `143072` | all five arrays |
 | `maxPushConstantsSize` | `256` | per-command values: a compute kernel's dispatch region and 28 buffer addresses, anything larger in a block whose address is pushed; a render pipeline's vertex and fragment functions' values in the same 256 bytes, dense by link, a pair that does not fit refused |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |

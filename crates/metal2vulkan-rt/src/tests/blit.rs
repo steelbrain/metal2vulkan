@@ -1045,7 +1045,7 @@ pub(crate) mod on_device {
                 .grant_indices(IndexClass::Texture, 4096, 16)
                 .expect("a grant");
             device
-                .grant_indices(IndexClass::StorageTexture, 1, 16)
+                .grant_indices(IndexClass::Texture, 1, 16)
                 .expect("a grant");
             let read = TextureUsage::SHADER_READ;
             let write = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
@@ -1342,7 +1342,7 @@ pub(crate) mod on_device {
                 .grant_indices(IndexClass::Texture, 4096, 16)
                 .expect("a grant");
             device
-                .grant_indices(IndexClass::StorageTexture, 1, 16)
+                .grant_indices(IndexClass::Texture, 1, 16)
                 .expect("a grant");
             let read_usage = TextureUsage::SHADER_READ;
             let make = |texture_type, format, extent, index| {

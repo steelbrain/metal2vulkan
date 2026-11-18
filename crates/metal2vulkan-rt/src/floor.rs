@@ -82,11 +82,10 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
     }
 }
 
-/// Slots in the sampled-texture array: the most sampled textures alive at once.
-pub(crate) const SAMPLED_IMAGES: u32 = 65_536;
-
-/// Slots in the read-write texture array.
-pub(crate) const STORAGE_IMAGES: u32 = 4096;
+/// Slots in each texture array, the sampled and the storage: the most textures alive at once,
+/// each at its index in both. Vulkan's least update-after-bind sampled and storage images, per
+/// stage and per set, is 500,000 on a device that supports `descriptorIndexing`.
+pub(crate) const TEXTURES: u32 = 65_536;
 
 /// Slots in each sampler array. 4000 is Vulkan's minimum `maxSamplerAllocationCount`, so every
 /// device can hold a sampler in every slot.
@@ -927,13 +926,13 @@ pub(crate) fn flag_names(flags: vk::MemoryPropertyFlags) -> String {
 fn feedback_room(device: &Queried) -> bool {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
-    let sampled = 2 * SAMPLED_IMAGES;
+    let sampled = 2 * TEXTURES;
     descriptors.max_per_stage_descriptor_update_after_bind_sampled_images >= sampled
         && descriptors.max_descriptor_set_update_after_bind_sampled_images >= sampled
         && descriptors.max_per_stage_update_after_bind_resources
-            >= sampled + STORAGE_IMAGES + limits.max_color_attachments
+            >= sampled + TEXTURES + limits.max_color_attachments
         && descriptors.max_update_after_bind_descriptors_in_all_pools
-            >= sampled + STORAGE_IMAGES + SAMPLER_ARRAYS * SAMPLERS
+            >= sampled + TEXTURES + SAMPLER_ARRAYS * SAMPLERS
 }
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
@@ -945,22 +944,22 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 15] {
         (
             "maxPerStageDescriptorUpdateAfterBindSampledImages",
             descriptors.max_per_stage_descriptor_update_after_bind_sampled_images,
-            SAMPLED_IMAGES,
+            TEXTURES,
         ),
         (
             "maxDescriptorSetUpdateAfterBindSampledImages",
             descriptors.max_descriptor_set_update_after_bind_sampled_images,
-            SAMPLED_IMAGES,
+            TEXTURES,
         ),
         (
             "maxPerStageDescriptorUpdateAfterBindStorageImages",
             descriptors.max_per_stage_descriptor_update_after_bind_storage_images,
-            STORAGE_IMAGES,
+            TEXTURES,
         ),
         (
             "maxDescriptorSetUpdateAfterBindStorageImages",
             descriptors.max_descriptor_set_update_after_bind_storage_images,
-            STORAGE_IMAGES,
+            TEXTURES,
         ),
         (
             "maxPerStageDescriptorUpdateAfterBindSamplers",
@@ -981,12 +980,12 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 15] {
         (
             "maxPerStageUpdateAfterBindResources",
             descriptors.max_per_stage_update_after_bind_resources,
-            SAMPLED_IMAGES + STORAGE_IMAGES + limits.max_color_attachments,
+            2 * TEXTURES + limits.max_color_attachments,
         ),
         (
             "maxUpdateAfterBindDescriptorsInAllPools",
             descriptors.max_update_after_bind_descriptors_in_all_pools,
-            SAMPLED_IMAGES + STORAGE_IMAGES + SAMPLER_ARRAYS * SAMPLERS,
+            2 * TEXTURES + SAMPLER_ARRAYS * SAMPLERS,
         ),
         (
             "maxPushConstantsSize",

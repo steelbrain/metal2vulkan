@@ -3,6 +3,9 @@
 //! sampler at the index the consumer gives it, chained in one serial encoder so the second samples
 //! what the first wrote. Each answer is checked against the linear filter's, and the constexpr
 //! sampler's index is shared between the states that number it there and freed with the last.
+//! A texture of any usage is made at any index of a texture grant: `sample_down` samples a texture
+//! of shader-read usage alone at an index below 4,096 and writes one of shader-write usage above
+//! it, in one dispatch.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
@@ -112,6 +115,40 @@ mod on_device {
         })
     }
 
+    /// Texel `(x, y)` of the source: its channels, in sixteenths a half holds exactly.
+    fn texel(x: u32, y: u32) -> [f32; 4] {
+        [x, y, x + y, 16].map(|k| k as f32 / 16.0)
+    }
+
+    /// Writes every texel of `source`, `SIDE` a side, [`texel`].
+    fn fill(name: &str, source: &Texture) {
+        let bytes: Vec<u8> = (0..SIDE)
+            .flat_map(|y| (0..SIDE).flat_map(move |x| texel(x, y)))
+            .flat_map(|v| half(v).to_le_bytes())
+            .collect();
+        let whole = Region {
+            origin: [0; 3],
+            size: [SIDE, SIDE, 1],
+        };
+        let (row, image) = (u64::from(SIDE * 8), u64::from(SIDE * SIDE * 8));
+        (source.replace_region(whole, 0, 0, &bytes, row, image))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+
+    /// What `sample_down` writes of the source: each texel of a texture half its side the mean of
+    /// its four source texels.
+    fn means() -> Vec<f32> {
+        let half_side = SIDE / 2;
+        let at = |x: u32, y: u32, c: usize| texel(x, y)[c];
+        (0..half_side)
+            .flat_map(|y| (0..half_side).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
+            .map(|(x, y, c)| {
+                let (x, y) = (2 * x, 2 * y);
+                (at(x, y, c) + at(x + 1, y, c) + at(x, y + 1, c) + at(x + 1, y + 1, c)) / 4.0
+            })
+            .collect()
+    }
+
     /// Whether `got` is the linear filter's `want`, within what a device's filter weights round.
     fn near(got: &[f32], want: &[f32]) -> bool {
         got.len() == want.len()
@@ -130,7 +167,7 @@ mod on_device {
             let counters = device.counters();
             let grants = [
                 (IndexClass::Texture, 4096),
-                (IndexClass::StorageTexture, 1),
+                (IndexClass::Texture, 1),
                 (IndexClass::Sampler, 1),
             ]
             .map(|(class, first)| {
@@ -142,29 +179,7 @@ mod on_device {
             let source = texture(&device, SIDE, read, 4096);
             let middle = texture(&device, SIDE / 2, read | TextureUsage::SHADER_WRITE, 1);
             let output = texture(&device, SIDE, read | TextureUsage::SHADER_WRITE, 2);
-            // Each texel's channels, in sixteenths a half holds exactly.
-            let texel = |x: u32, y: u32| [x, y, x + y, 16].map(|k| k as f32 / 16.0);
-            let written: Vec<f32> = (0..SIDE)
-                .flat_map(|y| (0..SIDE).flat_map(move |x| texel(x, y)))
-                .collect();
-            let bytes: Vec<u8> = written
-                .iter()
-                .flat_map(|&v| half(v).to_le_bytes())
-                .collect();
-            let whole = Region {
-                origin: [0; 3],
-                size: [SIDE, SIDE, 1],
-            };
-            source
-                .replace_region(
-                    whole,
-                    0,
-                    0,
-                    &bytes,
-                    u64::from(SIDE * 8),
-                    u64::from(SIDE * SIDE * 8),
-                )
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            fill(name, &source);
             let mut linear = SamplerDescriptor::new();
             linear.min_filter = SamplerMinMagFilter::Linear;
             linear.mag_filter = SamplerMinMagFilter::Linear;
@@ -255,15 +270,7 @@ mod on_device {
             finished(name, &command_buffer);
             assert!(command_buffer.error().is_none(), "{name}");
 
-            // Down: each texel the mean of its four source texels.
-            let at = |x: u32, y: u32, c: usize| texel(x, y)[c];
-            let mean: Vec<f32> = (0..half_side)
-                .flat_map(|y| (0..half_side).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
-                .map(|(x, y, c)| {
-                    let (x, y) = (2 * x, 2 * y);
-                    (at(x, y, c) + at(x + 1, y, c) + at(x, y + 1, c) + at(x + 1, y + 1, c)) / 4.0
-                })
-                .collect();
+            let mean = means();
             let got = texels(&middle, half_side);
             assert!(near(&got, &mean), "{name}: sample_down {got:?} {mean:?}");
             // Up: each texel a quarter of a middle texel from a middle texel's center, clamped to
@@ -297,6 +304,77 @@ mod on_device {
                 device
                     .release_indices(grant)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    /// One texture class, one range: with the whole range granted, a texture of shader-read usage
+    /// alone is made at index 2, below 4,096, and one of shader-write usage at 5,000, above it;
+    /// one dispatch of `sample_down` samples the first and writes the second, and the second holds
+    /// the linear filter's mean of the first.
+    #[test]
+    fn every_device_makes_a_texture_of_any_usage_at_any_index() {
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("sampling", |name, _, device| {
+            let range = IndexClass::Texture.range();
+            let grants = [
+                (IndexClass::Texture, range.start, range.end - range.start),
+                (IndexClass::Sampler, 1, 1),
+            ]
+            .map(|(class, first, count)| {
+                (device.grant_indices(class, first, count))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let read = TextureUsage::SHADER_READ;
+            let source = texture(&device, SIDE, read, 2);
+            let written = texture(&device, SIDE / 2, read | TextureUsage::SHADER_WRITE, 5000);
+            assert_eq!(
+                [
+                    source.gpu_resource_id().index,
+                    written.gpu_resource_id().index
+                ],
+                [2, 5000],
+                "{name}"
+            );
+            fill(name, &source);
+            let mut linear = SamplerDescriptor::new();
+            linear.min_filter = SamplerMinMagFilter::Linear;
+            linear.mag_filter = SamplerMinMagFilter::Linear;
+            let sampler = (device.new_sampler_state(&linear, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let down = state(
+                &device,
+                &library,
+                "sample_down",
+                |s| matches!(s, [NumberedSampler::Write]),
+                vec![0],
+            )
+            .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&down).expect("down");
+            encoder.set_texture(Some(&source), 0).expect("source");
+            encoder.set_texture(Some(&written), 1).expect("written");
+            encoder
+                .set_sampler_state(Some(&sampler), 0)
+                .expect("sampler");
+            encoder
+                .dispatch_threads([SIDE / 2, SIDE / 2, 1], [4, 4, 1])
+                .unwrap_or_else(|error| panic!("{name}: sample_down: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert!(command_buffer.error().is_none(), "{name}");
+            let (got, want) = (texels(&written, SIDE / 2), means());
+            assert!(near(&got, &want), "{name}: {got:?} {want:?}");
+            drop((command_buffer, queue, down, sampler, source, written));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
             }
         });
     }
@@ -360,7 +438,7 @@ mod on_device {
             let counters = device.counters();
             for (class, first) in [
                 (IndexClass::Texture, 4096),
-                (IndexClass::StorageTexture, 1),
+                (IndexClass::Texture, 1),
                 (IndexClass::Sampler, 1),
             ] {
                 device

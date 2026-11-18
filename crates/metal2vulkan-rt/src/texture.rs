@@ -182,8 +182,8 @@ struct TextureInner {
     /// How bytes move between the image and the CPU or another image; `None` where no copy is
     /// built.
     unit: Option<CopyUnit>,
-    /// Its class and index; `None` for a texture no shader reaches.
-    index: Option<(IndexClass, u32)>,
+    /// Its index of the [`IndexClass::Texture`] class; `None` for a texture no shader reaches.
+    index: Option<u32>,
     word: u32,
     /// Its resource id in the encoders' hazard sets.
     id: u32,
@@ -288,7 +288,7 @@ pub(crate) struct Image {
     /// The image has the feedback usage (a shader-read colour render target of no storage view,
     /// its home shader-read-only, on a device that reads attachments so): each texture over it
     /// has a second element of the sampled-texture array, at its index plus
-    /// [`SAMPLED_IMAGES`](crate::floor::SAMPLED_IMAGES), naming the feedback layout, which a pass
+    /// [`TEXTURES`](crate::floor::TEXTURES), naming the feedback layout, which a pass
     /// moves the whole image to for a draw that reads an attachment of the pass through it.
     feedback: bool,
     /// Every aspect of the image's format, which a change of layout names.
@@ -419,21 +419,20 @@ impl Drop for TextureInner {
                 core.work.released(self.image.bytes);
             }
         }
-        if let Some((class, index)) = self.index {
+        if let Some(index) = self.index {
             // SAFETY: the texture owns its elements until it vacates the index below, and no
             // work that reads them is pending: each command buffer that used the texture held it
-            // until it retired.
+            // until it retired. A null view writes the storage element null too.
             unsafe {
-                core.arrays.write_texture(
+                (core.arrays).write_texture(
                     &core.device,
-                    class,
                     index,
                     None,
-                    None,
+                    Some(vk::ImageView::null()),
                     self.image.feedback,
                 )
             };
-            lock(&core.arrays.grants).vacate(class, index);
+            lock(&core.arrays.grants).vacate(IndexClass::Texture, index);
             core.counters.fall(Gauge::DescriptorSlots);
         }
     }
@@ -443,8 +442,7 @@ impl Device {
     /// `newTextureWithDescriptor:`, at `index`: an optimal image of the descriptor in device-local
     /// memory, placed in a texture block ([`Texture`]), its contents undefined, as Metal's are.
     /// `index` is given exactly where shaders reach the texture (shader-read or shader-write
-    /// usage), and is then an index of a live grant of the class the usage picks:
-    /// [`IndexClass::StorageTexture`] with shader-write usage, else [`IndexClass::Texture`]. The
+    /// usage), and is then an index of a live [`IndexClass::Texture`] grant, whatever the usage. The
     /// texture's elements of set 1 are written before the call returns, and its image moved to its
     /// home layout ahead of every command buffer committed after it. Until the next submission
     /// nothing else holds the texture: released first, it is freed at once.
@@ -668,10 +666,6 @@ impl Device {
         if reached != index.is_some() {
             return Err(Error::Refused(Refusal::TextureIndex { index }));
         }
-        let class = match usage.contains(TextureUsage::SHADER_WRITE) {
-            true => IndexClass::StorageTexture,
-            false => IndexClass::Texture,
-        };
         let core = self.core();
         let (named, first, home) = match &source {
             Source::Plain | Source::Heap(..) => (None, vk::ImageLayout::UNDEFINED, plan.home),
@@ -705,9 +699,9 @@ impl Device {
         let (mut named, mut first, mut home) = (named, first, home);
         let index = match index {
             Some(index) => {
-                lock(&core.arrays.grants).occupy(class, index)?;
+                lock(&core.arrays.grants).occupy(IndexClass::Texture, index)?;
                 core.counters.rise(Gauge::DescriptorSlots);
-                Some((class, index))
+                Some(index)
             }
             None => None,
         };
@@ -766,8 +760,8 @@ impl Device {
         let (image, backing, bytes, sampled, storage) = match made {
             Ok(made) => made,
             Err(error) => {
-                if let Some((class, index)) = index {
-                    lock(&core.arrays.grants).vacate(class, index);
+                if let Some(index) = index {
+                    lock(&core.arrays.grants).vacate(IndexClass::Texture, index);
                     core.counters.fall(Gauge::DescriptorSlots);
                 }
                 return Err(error);
@@ -808,14 +802,13 @@ impl Device {
         if copied.is_some_and(|named| named.buffer.held().1.is_none()) {
             core.copied_overs.fetch_add(1, Ordering::Relaxed);
         }
-        if let Some((class, index)) = index {
+        if let Some(index) = index {
             // SAFETY: the index is occupied for the texture, whose views are live; its image is
             // in its home layout whenever work uses it, the upload of the next submission going
             // first.
             unsafe {
                 core.arrays.write_texture(
                     &core.device,
-                    class,
                     index,
                     sampled.map(|view| (view, home)),
                     storage,
@@ -2192,10 +2185,6 @@ impl Texture {
         if reached != index.is_some() {
             return Err(Error::Refused(Refusal::TextureIndex { index }));
         }
-        let class = match usage.contains(TextureUsage::SHADER_WRITE) {
-            true => IndexClass::StorageTexture,
-            false => IndexClass::Texture,
-        };
         let core = inner.device.core();
         let [level, layer] = inner.base();
         let base = [level + levels.start, layer + slices.start];
@@ -2207,10 +2196,9 @@ impl Texture {
             layer_count: shape.layers,
         };
         if let Some(index) = index {
-            lock(&core.arrays.grants).occupy(class, index)?;
+            lock(&core.arrays.grants).occupy(IndexClass::Texture, index)?;
             core.counters.rise(Gauge::DescriptorSlots);
         }
-        let index = index.map(|index| (class, index));
         let image = inner.image.image;
         let make = |(components, aspect)| {
             let (view_type, format) = (shape.view_type, plan.format);
@@ -2279,13 +2267,12 @@ impl Texture {
         };
         // A failed view drops here: its index is vacated and its views freed.
         made?;
-        if let Some((class, index)) = index {
+        if let Some(index) = index {
             // SAFETY: the index is occupied for the view, whose image views are live; the image
             // is in its home layout whenever work uses it.
             unsafe {
                 core.arrays.write_texture(
                     &core.device,
-                    class,
                     index,
                     sampled.map(|view| (view, inner.image.home)),
                     storage,
@@ -2324,12 +2311,12 @@ impl Texture {
     }
 
     /// Its resource id while its image is in the feedback layout: its second element's, at its
-    /// index plus [`SAMPLED_IMAGES`](crate::floor::SAMPLED_IMAGES), with its own word. Nil for a
+    /// index plus [`TEXTURES`](crate::floor::TEXTURES), with its own word. Nil for a
     /// texture no shader reaches.
     pub(crate) fn feedback_resource_id(&self) -> ResourceId {
         match self.inner.index {
-            Some((_, index)) => ResourceId {
-                index: index + crate::floor::SAMPLED_IMAGES,
+            Some(index) => ResourceId {
+                index: index + crate::floor::TEXTURES,
                 word: self.inner.word,
             },
             None => ResourceId::default(),
@@ -2481,7 +2468,7 @@ impl Texture {
     /// `TextureWord` of its pixel format and swizzle.
     pub fn gpu_resource_id(&self) -> ResourceId {
         ResourceId {
-            index: self.inner.index.map_or(0, |(_, index)| index),
+            index: self.inner.index.unwrap_or(0),
             word: self.inner.word,
         }
     }

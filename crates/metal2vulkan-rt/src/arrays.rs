@@ -3,11 +3,12 @@
 //! chooses those indices from.
 //!
 //! One descriptor set of the translator's identity domains' five arrays, made at device creation
-//! and never rewritten for layouts: binding 0 the sampled textures (65,536), binding 1 the
-//! storage-capable textures (4,096), and bindings 2, 3 and 4 the samplers of each use, plain,
-//! depth comparison and integer texture (4,000 each). Every binding is partially bound and
-//! updated after bind, also while work that uses the set is pending, so writing one element needs
-//! no lock: each element has one owner, which writes it alone.
+//! and never rewritten for layouts: binding 0 the sampled textures and binding 1 the storage
+//! textures (65,536 each, element `i` of both the texture at index `i`), and bindings 2, 3 and 4
+//! the samplers of each use, plain, depth comparison and integer texture (4,000 each). Every
+//! binding is partially bound and updated after bind, also while work that uses the set is
+//! pending, so writing one element needs no lock: each element has one owner, which writes it
+//! alone.
 //!
 //! Every element no live object owns holds a defined value, so a nil, stale or forged index reads
 //! zeros or samples plainly on every device, where an element never written would be undefined
@@ -25,14 +26,14 @@
 //! it; a draw pushes it in place of the texture's own while its image is in that layout.
 //!
 //! The consumer names each range of indices it takes ([`Device::grant_indices`]), so resource IDs
-//! are chosen on the guest's side and reproduce in replay. Three classes, disjoint: storage-capable
-//! textures take 1 to 4,095, one index valid in both texture arrays; other textures 4,096 to
-//! 65,535; samplers 1 to 3,999. Index 0 is nil and never granted.
+//! are chosen on the guest's side and reproduce in replay. Two classes: textures of every usage
+//! take 1 to 65,535, an index valid in both texture arrays; samplers 1 to 3,999. Index 0 is nil
+//! and never granted.
 
 use crate::counters::{Counters, Gauge};
 use crate::device::lock;
 use crate::error::{Error, Limit, Refusal};
-use crate::floor::{BelowFloor, Missing, SAMPLED_IMAGES, SAMPLERS, SAMPLER_ARRAYS, STORAGE_IMAGES};
+use crate::floor::{BelowFloor, Missing, SAMPLERS, SAMPLER_ARRAYS, TEXTURES};
 use crate::Device;
 use ash::vk;
 use std::ops::Range;
@@ -40,7 +41,7 @@ use std::sync::Mutex;
 
 /// The binding of the sampled-texture array.
 pub(crate) const SAMPLED_BINDING: u32 = 0;
-/// The binding of the storage-capable texture array.
+/// The binding of the storage-texture array.
 pub(crate) const STORAGE_BINDING: u32 = 1;
 /// The binding of the first sampler array; the plain, comparison and integer-texture arrays
 /// follow in that order.
@@ -49,16 +50,8 @@ pub(crate) const FIRST_SAMPLER_BINDING: u32 = 2;
 /// Set 1's bindings, each its binding, descriptor type and count: the arrays a kernel's layout
 /// names under the identity domains, which every pipeline's layout takes from this set.
 pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 5] = [
-    (
-        SAMPLED_BINDING,
-        vk::DescriptorType::SAMPLED_IMAGE,
-        SAMPLED_IMAGES,
-    ),
-    (
-        STORAGE_BINDING,
-        vk::DescriptorType::STORAGE_IMAGE,
-        STORAGE_IMAGES,
-    ),
+    (SAMPLED_BINDING, vk::DescriptorType::SAMPLED_IMAGE, TEXTURES),
+    (STORAGE_BINDING, vk::DescriptorType::STORAGE_IMAGE, TEXTURES),
     (FIRST_SAMPLER_BINDING, vk::DescriptorType::SAMPLER, SAMPLERS),
     (
         FIRST_SAMPLER_BINDING + 1,
@@ -77,11 +70,11 @@ pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 5] = [
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IndexClass {
-    /// A texture without shader-write usage: 4,096 to 65,535 of the sampled-texture array.
+    /// A texture of any usage shaders reach: 1 to 65,535, one index valid in both the
+    /// sampled-texture and the storage-texture array. A texture shaders write through a storage
+    /// view takes the element of both at its index; any other takes the sampled-texture array's
+    /// alone, and its storage element stays null.
     Texture,
-    /// A texture with shader-write or unknown usage: 1 to 4,095, one index valid in both the
-    /// sampled-texture and the storage-texture array.
-    StorageTexture,
     /// A sampler: 1 to 3,999 of each sampler array. A Metal sampler state takes one, and so does
     /// each constexpr sampler a pipeline state numbers.
     Sampler,
@@ -91,8 +84,7 @@ impl IndexClass {
     /// The indices the class's grants are taken from.
     pub fn range(self) -> Range<u32> {
         match self {
-            IndexClass::Texture => STORAGE_IMAGES..SAMPLED_IMAGES,
-            IndexClass::StorageTexture => 1..STORAGE_IMAGES,
+            IndexClass::Texture => 1..TEXTURES,
             IndexClass::Sampler => 1..SAMPLERS,
         }
     }
@@ -100,8 +92,7 @@ impl IndexClass {
     fn slot(self) -> usize {
         match self {
             IndexClass::Texture => 0,
-            IndexClass::StorageTexture => 1,
-            IndexClass::Sampler => 2,
+            IndexClass::Sampler => 1,
         }
     }
 }
@@ -166,19 +157,13 @@ impl Bits {
 /// The indices granted, and of those the indices an object lives at, one bit per index of each
 /// class's array.
 pub(crate) struct Grants {
-    granted: [Bits; 3],
-    occupied: [Bits; 3],
+    granted: [Bits; 2],
+    occupied: [Bits; 2],
 }
 
 impl Grants {
     pub(crate) fn new() -> Grants {
-        let bits = || {
-            [
-                Bits::new(SAMPLED_IMAGES),
-                Bits::new(STORAGE_IMAGES),
-                Bits::new(SAMPLERS),
-            ]
-        };
+        let bits = || [Bits::new(TEXTURES), Bits::new(SAMPLERS)];
         Grants {
             granted: bits(),
             occupied: bits(),
@@ -321,11 +306,12 @@ impl Arrays {
         [self.empty, self.layout]
     }
 
-    /// Writes a texture's elements at `index` of `class`: the sampled-texture array's with
-    /// `sampled` and its layout, and for a storage-capable texture the storage-texture array's
-    /// with `storage`; a null descriptor where a view is `None`. With `feedback`, also the
-    /// sampled-texture array's element at `index` plus [`SAMPLED_IMAGES`], with the sampled view
-    /// in the attachment feedback layout.
+    /// Writes a texture's elements at `index`: the sampled-texture array's with `sampled` and its
+    /// layout, a null descriptor where it is `None`, and the storage-texture array's with
+    /// `storage` where it is `Some`, a null descriptor where that view is null. A texture without
+    /// a storage view leaves its storage element null, as every element starts; one that goes
+    /// writes both null. With `feedback`, also the sampled-texture array's element at `index`
+    /// plus [`TEXTURES`], with the sampled view in the attachment feedback layout.
     ///
     /// # Safety
     ///
@@ -335,7 +321,6 @@ impl Arrays {
     pub(crate) unsafe fn write_texture(
         &self,
         device: &ash::Device,
-        class: IndexClass,
         index: u32,
         sampled: Option<(vk::ImageView, vk::ImageLayout)>,
         storage: Option<vk::ImageView>,
@@ -351,6 +336,7 @@ impl Arrays {
         let sampled = [vk::DescriptorImageInfo::default()
             .image_view(view)
             .image_layout(layout)];
+        let count = 1 + usize::from(storage.is_some());
         let storage = [vk::DescriptorImageInfo::default()
             .image_view(storage.unwrap_or_default())
             .image_layout(vk::ImageLayout::GENERAL)];
@@ -361,7 +347,7 @@ impl Arrays {
                 vk::DescriptorType::SAMPLED_IMAGE,
                 &looped,
             )
-            .dst_array_element(index + SAMPLED_IMAGES);
+            .dst_array_element(index + TEXTURES);
             // SAFETY: as below; the element is the texture's alone.
             unsafe { device.update_descriptor_sets(&[write], &[]) };
         }
@@ -381,10 +367,6 @@ impl Arrays {
             )
             .dst_array_element(index),
         ];
-        let count = match class {
-            IndexClass::StorageTexture => 2,
-            _ => 1,
-        };
         // SAFETY: the caller's contract; the bindings are update-after-bind and
         // update-unused-while-pending, so elements of other owners may be written meanwhile, and
         // a null image view is a null descriptor under `nullDescriptor`.
@@ -497,7 +479,7 @@ impl Made {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_IMAGE,
-                descriptor_count: STORAGE_IMAGES,
+                descriptor_count: TEXTURES,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLER,
@@ -620,12 +602,12 @@ pub(crate) unsafe fn supported(
     }
 }
 
-/// The elements of the sampled-texture array: [`SAMPLED_IMAGES`], twice that with the feedback
+/// The elements of the sampled-texture array: [`TEXTURES`], twice that with the feedback
 /// elements.
 pub(crate) fn sampled_images(feedback: bool) -> u32 {
     match feedback {
-        true => 2 * SAMPLED_IMAGES,
-        false => SAMPLED_IMAGES,
+        true => 2 * TEXTURES,
+        false => TEXTURES,
     }
 }
 
@@ -651,7 +633,7 @@ unsafe fn fill(
     ];
     let storage = vec![
         vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL);
-        STORAGE_IMAGES as usize
+        TEXTURES as usize
     ];
     let samplers =
         |sampler| vec![vk::DescriptorImageInfo::default().sampler(sampler); SAMPLERS as usize];

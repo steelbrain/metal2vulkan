@@ -152,7 +152,7 @@ mod on_device {
             }
             let pitch = ROW.next_multiple_of(align);
             // Read and written by shaders, at indices of a grant.
-            (device.grant_indices(IndexClass::StorageTexture, 1, 4)).expect("a grant");
+            (device.grant_indices(IndexClass::Texture, 2, 4)).expect("a grant");
             let mut d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
             d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;

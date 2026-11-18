@@ -92,12 +92,12 @@ fn at_the_floor() -> Queried {
         vulkan12: vk::PhysicalDeviceVulkan12Properties::default()
             .max_per_stage_descriptor_update_after_bind_sampled_images(65_536)
             .max_descriptor_set_update_after_bind_sampled_images(65_536)
-            .max_per_stage_descriptor_update_after_bind_storage_images(4096)
-            .max_descriptor_set_update_after_bind_storage_images(4096)
+            .max_per_stage_descriptor_update_after_bind_storage_images(65_536)
+            .max_descriptor_set_update_after_bind_storage_images(65_536)
             .max_per_stage_descriptor_update_after_bind_samplers(3 * 4000)
             .max_descriptor_set_update_after_bind_samplers(3 * 4000)
-            .max_per_stage_update_after_bind_resources(65_536 + 4096 + 8)
-            .max_update_after_bind_descriptors_in_all_pools(65_536 + 4096 + 3 * 4000),
+            .max_per_stage_update_after_bind_resources(2 * 65_536 + 8)
+            .max_update_after_bind_descriptors_in_all_pools(2 * 65_536 + 3 * 4000),
         features,
         extensions: DEVICE_EXTENSIONS
             .iter()
@@ -445,18 +445,18 @@ fn each_low_limit_is_named() {
         (
             |d| {
                 d.vulkan12
-                    .max_per_stage_descriptor_update_after_bind_storage_images = 4095
+                    .max_per_stage_descriptor_update_after_bind_storage_images = 65_535
             },
             "maxPerStageDescriptorUpdateAfterBindStorageImages",
-            4096,
+            65_536,
         ),
         (
             |d| {
                 d.vulkan12
-                    .max_descriptor_set_update_after_bind_storage_images = 4095
+                    .max_descriptor_set_update_after_bind_storage_images = 65_535
             },
             "maxDescriptorSetUpdateAfterBindStorageImages",
-            4096,
+            65_536,
         ),
         (
             |d| {
@@ -477,14 +477,14 @@ fn each_low_limit_is_named() {
             4000,
         ),
         (
-            |d| d.vulkan12.max_per_stage_update_after_bind_resources = 65_536 + 4096 + 7,
+            |d| d.vulkan12.max_per_stage_update_after_bind_resources = 2 * 65_536 + 7,
             "maxPerStageUpdateAfterBindResources",
-            65_536 + 4096 + 8,
+            2 * 65_536 + 8,
         ),
         (
-            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 65_536 + 4096 + 11_999,
+            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 2 * 65_536 + 11_999,
             "maxUpdateAfterBindDescriptorsInAllPools",
-            65_536 + 4096 + 12_000,
+            2 * 65_536 + 12_000,
         ),
         (
             |d| d.limits.max_push_constants_size = 255,

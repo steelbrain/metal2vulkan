@@ -472,23 +472,14 @@ fn whole_slices(d: &rt::TextureDescriptor) -> Range<u32> {
 }
 
 fn texture_class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
-    if usage.is_empty() || usage.contains(rt::TextureUsage::SHADER_WRITE) {
-        Some(rt::IndexClass::StorageTexture)
-    } else if usage.contains(rt::TextureUsage::SHADER_READ) {
-        Some(rt::IndexClass::Texture)
-    } else {
-        None
-    }
+    let reached = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
+    (usage.is_empty() || usage.intersects(reached)).then_some(rt::IndexClass::Texture)
 }
 
 impl NewRuntime {
     /// The backend on `device`: every texture and sampler index granted to it.
     pub fn new(device: rt::Device) -> Result<Self, rt::Error> {
-        for class in [
-            rt::IndexClass::Texture,
-            rt::IndexClass::StorageTexture,
-            rt::IndexClass::Sampler,
-        ] {
+        for class in [rt::IndexClass::Texture, rt::IndexClass::Sampler] {
             let range = class.range();
             device.grant_indices(class, range.start, range.end - range.start)?;
         }
@@ -1216,21 +1207,17 @@ impl NewRuntime {
                 unaddressed(Object::TextureDescriptor(Box::new(descriptor)))
             }
             // Every index is the backend's already.
-            // Metal's one space of texture IDs is two classes here, by usage: an index is
-            // reserved in the class whose range holds it.
             "reserveResourceIndicesForResourceType:indices:indexCount:" => {
-                let classes: &[rt::IndexClass] = match uint(call, 0)? {
-                    0 => &[rt::IndexClass::StorageTexture, rt::IndexClass::Texture],
-                    1 => &[rt::IndexClass::Sampler],
+                let class = match uint(call, 0)? {
+                    0 => rt::IndexClass::Texture,
+                    1 => rt::IndexClass::Sampler,
                     other => return Err(refuse(call, format!("resource type {other}"))),
                 };
                 for index in super::args::list(call, 1)? {
                     let index = index.as_uint().and_then(|i| u32::try_from(i).ok());
                     let index =
                         index.ok_or_else(|| refuse(call, "argument 1 is no list of indices"))?;
-                    for &class in classes {
-                        self.indices.reserve(class, index);
-                    }
+                    self.indices.reserve(class, index);
                 }
                 Ok(None)
             }

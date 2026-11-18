@@ -1260,13 +1260,10 @@ fn heap_set(
     }))
 }
 
-/// The sampled-image array of the identity domains' set 1: binding 0, one element per index a
-/// texture's resource ID may hold (`docs/RESOURCE-ID.md`).
-const IDENTITY_SAMPLED_IMAGES: u32 = 65_536;
-
-/// The storage-image array of the identity domains' set 1: binding 1, one element per index of a
-/// storage-capable texture.
-const IDENTITY_STORAGE_IMAGES: u32 = 4_096;
+/// Each image array of the identity domains' set 1, the sampled-image array (binding 0) and the
+/// storage-image array (binding 1): one element per index a texture's resource ID may hold, the
+/// same index in both (`docs/RESOURCE-ID.md`).
+const IDENTITY_TEXTURES: u32 = 65_536;
 
 /// Each sampler array of the identity domains' set 1: bindings 2, 3 and 4, one element per index a
 /// sampler's resource ID may hold (`docs/RESOURCE-ID.md`).
@@ -1333,16 +1330,8 @@ fn identity_set(
     Ok(DescriptorSetLayout {
         set: 1,
         bindings: vec![
-            array(
-                0,
-                vk::DescriptorType::SAMPLED_IMAGE,
-                IDENTITY_SAMPLED_IMAGES,
-            ),
-            array(
-                1,
-                vk::DescriptorType::STORAGE_IMAGE,
-                IDENTITY_STORAGE_IMAGES,
-            ),
+            array(0, vk::DescriptorType::SAMPLED_IMAGE, IDENTITY_TEXTURES),
+            array(1, vk::DescriptorType::STORAGE_IMAGE, IDENTITY_TEXTURES),
             array(2, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),
             array(3, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),
             array(4, vk::DescriptorType::SAMPLER, IDENTITY_SAMPLERS),

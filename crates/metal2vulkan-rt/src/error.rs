@@ -260,10 +260,15 @@ pub enum Refusal {
         /// The first index of the range that is granted already.
         index: u32,
     },
-    /// A release of an index that is not granted
+    /// A texture, a sampler state or a pipeline state's constexpr sampler at an index no live
+    /// grant of its class holds ([`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state),
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state)), or a
+    /// release of an index that is not granted
     /// ([`Device::release_indices`](crate::Device::release_indices)). Metal has no counterpart.
     ///
-    /// Basis: ours (a grant is returned once).
+    /// Basis: ours (an object takes an index the consumer was granted, and a grant is returned
+    /// once).
     IndicesNotGranted {
         /// The class of the index.
         class: IndexClass,
@@ -1026,8 +1031,8 @@ pub enum Limit {
     /// ([`Device::grant_indices`](crate::Device::grant_indices), [`IndexClass::range`]). Metal
     /// has no counterpart.
     ///
-    /// Basis: ours (the descriptor arrays are 65,536 sampled textures, 4,096 storage textures and
-    /// 4,000 samplers of each use, and index 0 is nil).
+    /// Basis: ours (the descriptor arrays are 65,536 sampled and 65,536 storage textures, one
+    /// index of both a texture's, and 4,000 samplers of each use, and index 0 is nil).
     IndexRange {
         /// The class asked for.
         class: IndexClass,

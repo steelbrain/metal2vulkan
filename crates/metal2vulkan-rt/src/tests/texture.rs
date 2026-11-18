@@ -130,9 +130,9 @@ fn an_index_holds_one_object_at_a_time() {
         }
     );
     assert_eq!(
-        refused(grants.occupy(IndexClass::StorageTexture, 4097)),
+        refused(grants.occupy(IndexClass::Sampler, 4097)),
         Refusal::IndicesNotGranted {
-            class: IndexClass::StorageTexture,
+            class: IndexClass::Sampler,
             index: 4097
         }
     );
@@ -302,7 +302,7 @@ mod on_device {
                 .grant_indices(IndexClass::Texture, 4096, 16)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let storage = device
-                .grant_indices(IndexClass::StorageTexture, 1, 16)
+                .grant_indices(IndexClass::Texture, 1, 16)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let make = |d: &TextureDescriptor, index| {
                 device

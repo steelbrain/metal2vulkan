@@ -13598,7 +13598,6 @@ variant	metal2vulkan-rt::Gap::TextureFormat	TextureFormat { pixel_format: PixelF
 variant	metal2vulkan-rt::Gap::TextureOverBuffer	TextureOverBuffer { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureView	TextureView { kind: TextureViewKind }
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
-variant	metal2vulkan-rt::IndexClass::StorageTexture	StorageTexture
 variant	metal2vulkan-rt::IndexClass::Texture	Texture
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }

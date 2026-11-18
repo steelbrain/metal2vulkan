@@ -16,20 +16,23 @@ the same IDs on every run, and a replay reproduces them.
 
 ## Index classes
 
-| Index | Object | Arrays it is valid in |
-|---|---|---|
-| 0 | nil (the ID 0) | none |
-| 1 to 4,095 | a storage-capable texture: usage with `MTLTextureUsageShaderWrite`, or `MTLTextureUsageUnknown` | the sampled-image array and the storage-image array |
-| 4,096 to 65,535 | any other texture | the sampled-image array |
-| 1 to 3,999 | a sampler | the sampler array |
+| Class | Index | Object | Arrays it is valid in |
+|---|---|---|---|
+| nil | 0 | nil (the ID 0) | none |
+| texture | 1 to 65,535 | a texture of any usage a shader reaches: `MTLTextureUsageShaderRead`, `MTLTextureUsageShaderWrite`, or `MTLTextureUsageUnknown` | the sampled-image array and the storage-image array |
+| sampler | 1 to 3,999 | a sampler | the sampler arrays |
 
-A texture view takes its own index, in the class of its own usage. A texture buffer has no index:
-it is a typed refusal under these domains.
+A texture of any usage may be placed at any index of the texture class. A texture with a storage
+element (shader-write or unknown usage, of a format the device stores through a storage image
+declared without a format) writes the element of both image arrays at its index; any other
+texture writes its sampled-image element and leaves its storage-image element null. A texture no
+shader reaches has no index. A texture view takes its own index of the texture class. A texture
+buffer has no index: it is a typed refusal under these domains.
 
 ## The arrays
 
 Under the identity domains set 1 has one layout for every pipeline: binding 0 is the sampled-image
-array of 65,536 elements, binding 1 the storage-image array of 4,096, and bindings 2, 3 and 4 the
+array of 65,536 elements, binding 1 the storage-image array of 65,536, and bindings 2, 3 and 4 the
 sampler arrays of 4,000 elements each, every one partially bound, updated after binding and while
 unused elements are pending, and seen by every stage. Element `i` of each image array is the
 texture whose ID holds index `i`, so the consumer writes an element once, as it makes the texture,

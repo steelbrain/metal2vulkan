@@ -582,7 +582,7 @@ fn an_integer_write_saturates_to_the_pushed_channel_widths() {
 fn identity_arrays() -> Vec<(u32, vk::DescriptorType, u32)> {
     vec![
         (0, vk::DescriptorType::SAMPLED_IMAGE, 65_536),
-        (1, vk::DescriptorType::STORAGE_IMAGE, 4_096),
+        (1, vk::DescriptorType::STORAGE_IMAGE, 65_536),
         (2, vk::DescriptorType::SAMPLER, 4_000),
         (3, vk::DescriptorType::SAMPLER, 4_000),
         (4, vk::DescriptorType::SAMPLER, 4_000),

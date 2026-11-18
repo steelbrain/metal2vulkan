@@ -7,22 +7,21 @@
 use metal2vulkan_rt as rt;
 use std::collections::{BTreeSet, HashMap};
 
-/// The slot of `class`: textures, storage-capable textures, samplers (and any class the runtime
-/// adds, which the backend asks for no index of).
+/// The slot of `class`: textures, samplers (and any class the runtime adds, which the backend
+/// asks for no index of).
 fn slot(class: rt::IndexClass) -> usize {
     match class {
         rt::IndexClass::Texture => 0,
-        rt::IndexClass::StorageTexture => 1,
-        _ => 2,
+        _ => 1,
     }
 }
 
 #[derive(Default)]
 pub(in crate::replay) struct Indices {
     /// The indices of each class an object of the play holds, a constexpr sampler's for good.
-    held: [BTreeSet<u32>; 3],
+    held: [BTreeSet<u32>; 2],
     /// The indices of each class the program reserved.
-    reserved: [BTreeSet<u32>; 3],
+    reserved: [BTreeSet<u32>; 2],
     /// The class slot and index each live object holds.
     objects: HashMap<u64, (usize, u32)>,
     /// The objects placed at the index the stream named.

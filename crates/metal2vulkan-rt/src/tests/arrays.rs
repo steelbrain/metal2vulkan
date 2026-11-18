@@ -1,7 +1,7 @@
 //! Set 1's index grants, and on devices its fill.
 //!
-//! - A grant takes a range inside its class's (storage-capable textures 1 to 4,095, other textures
-//!   4,096 to 65,535, samplers 1 to 3,999); index 0, an empty range and one past the class's are
+//! - A grant takes a range inside its class's (textures 1 to 65,535, samplers 1 to 3,999); index
+//!   0, an empty range and one past the class's are
 //!   `Limit::IndexRange`. An index granted already is `Refusal::IndicesGranted`, of any range that
 //!   holds it; a release of an index not granted is `Refusal::IndicesNotGranted`. A released range
 //!   is granted again.
@@ -10,10 +10,11 @@
 //!   device; `Device::new`, and making and destroying a second set 1, are timed and reported,
 //!   and the second set's two samplers are gone after it; every device supports both of the
 //!   runtime's set layouts, which `Device::new` asks before it makes them; and the arrays fill
-//!   past their capacity through one grant of each class, the samplers' and the storage-capable
-//!   textures': every index of the class takes an object, and objects dropped one at a time give
-//!   their index to the next, more than 4,000 sampler states and 4,096 storage-capable textures
-//!   in all, none refused as in use, the descriptor-slot gauge back to zero after them.
+//!   past their capacity: every index of each class takes an object, the samplers' through one
+//!   grant and the textures' through one for a texture of shader-write usage and one for views
+//!   of it at every other index, and objects dropped one at a time give their index to the next,
+//!   more than 4,000 sampler states and 65,536 textures in all, none refused as in use, the
+//!   descriptor-slot gauge back to zero after them.
 
 use crate::arrays::Grants;
 use crate::error::{Error, Limit, Refusal};
@@ -39,8 +40,7 @@ fn limit<T: std::fmt::Debug>(result: Result<T, Error>) -> Limit {
 #[test]
 fn a_grant_takes_a_range_inside_its_class() {
     for (class, first, end) in [
-        (IndexClass::StorageTexture, 1, 4096),
-        (IndexClass::Texture, 4096, 65_536),
+        (IndexClass::Texture, 1, 65_536),
         (IndexClass::Sampler, 1, 4000),
     ] {
         assert_eq!(class.range(), first..end, "{class:?}");
@@ -90,7 +90,7 @@ fn an_index_has_one_grant_at_a_time() {
     }
     // The same numbers of another class are free.
     grants
-        .grant(IndexClass::StorageTexture, 10, 5)
+        .grant(IndexClass::Texture, 10, 5)
         .expect("another class's grant");
     let next = grants.grant(class, 15, 1).expect("the next index");
     grants.release(held).expect("the release");
@@ -126,22 +126,23 @@ mod on_device {
     /// class's capacity.
     const AGAIN: u32 = 128;
 
-    /// One object `make` makes at every index of `class`, through one grant of the class's
-    /// whole range, then [`AGAIN`] of them each dropped and made again at the index it left, as a
-    /// consumer reuses an index: the descriptor-slot gauge counts the class's capacity while the
-    /// arrays are full, and is zero once the objects are gone and the grant is released.
+    /// One object `make` makes at every index of `indices` of `class`, through one grant of
+    /// them, then [`AGAIN`] of them each dropped and made again at the index it left, as a
+    /// consumer reuses an index: the descriptor-slot gauge counts them on top of what it counted
+    /// before while they live, and is back to that once they are gone and the grant is released.
     fn fill_past_capacity<T>(
         name: &str,
         device: &Device,
-        class: IndexClass,
+        (class, indices): (IndexClass, Range<u32>),
         make: impl Fn(u32) -> T,
     ) {
         let counters = device.counters();
-        let Range { start, end } = class.range();
+        let before = counters.gauges().descriptor_slots;
+        let Range { start, end } = indices;
         let grant = (device.grant_indices(class, start, end - start))
             .unwrap_or_else(|error| panic!("{name}: {class:?}: {error}"));
         let mut live: Vec<Option<T>> = (start..end).map(|index| Some(make(index))).collect();
-        let full = u64::from(end - start);
+        let full = before + u64::from(end - start);
         assert_eq!(
             counters.gauges().descriptor_slots,
             full,
@@ -157,12 +158,17 @@ mod on_device {
             "{name}: {class:?}"
         );
         drop(live);
-        assert_eq!(counters.gauges().descriptor_slots, 0, "{name}: {class:?}");
+        assert_eq!(
+            counters.gauges().descriptor_slots,
+            before,
+            "{name}: {class:?}"
+        );
         (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 
-    /// Set 1's arrays filled past their capacity: 3,999 sampler states and 128 more, 4,095
-    /// storage-capable textures and 128 more, through one grant of each class. Every make is
+    /// Set 1's arrays filled past their capacity: 3,999 sampler states and 128 more, through one
+    /// grant; a texture of shader-write usage at the first texture index and 65,534 views of it
+    /// at every other, both elements written at each, and 128 views more. Every make is
     /// unwrapped, so an index refused as in use (`Refusal::IndexInUse`) fails the test.
     #[test]
     fn every_device_fills_set_1_past_its_capacity() {
@@ -177,17 +183,26 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
             let sampler = SamplerDescriptor::new();
-            fill_past_capacity(&name, &device, IndexClass::Sampler, |index| {
+            let class = IndexClass::Sampler;
+            fill_past_capacity(&name, &device, (class, class.range()), |index| {
                 (device.new_sampler_state(&sampler, index))
                     .unwrap_or_else(|error| panic!("{name}: sampler {index}: {error}"))
             });
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 1, 1);
             d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
             d.storage_mode = StorageMode::Private;
-            fill_past_capacity(&name, &device, IndexClass::StorageTexture, |index| {
-                (device.new_texture(&d, Some(index)))
-                    .unwrap_or_else(|error| panic!("{name}: texture {index}: {error}"))
+            let Range { start, end } = IndexClass::Texture.range();
+            let first = (device.grant_indices(IndexClass::Texture, start, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let texture = (device.new_texture(&d, Some(start)))
+                .unwrap_or_else(|error| panic!("{name}: texture {start}: {error}"));
+            let rest = (IndexClass::Texture, start + 1..end);
+            fill_past_capacity(&name, &device, rest, |index| {
+                (texture.new_texture_view(d.pixel_format, d.texture_type, 0..1, 0..1, Some(index)))
+                    .unwrap_or_else(|error| panic!("{name}: view {index}: {error}"))
             });
+            drop(texture);
+            (device.release_indices(first)).unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             let gauges = counters.gauges();
             assert_eq!(

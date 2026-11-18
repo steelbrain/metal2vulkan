@@ -20,10 +20,9 @@
 //!
 //! The runtime places a texture or a sampler state at the index its consumer gives, from the
 //! consumer's grants, and asks it for the index of each sampler a pipeline state numbers. The
-//! harness grants itself every texture index of both classes and every sampler index once the
-//! device is made (`Indices`): each texture a shader reaches takes the next index of its class
-//! (a storage texture's with `ShaderWrite` usage, a sampled texture's without), each sampler
-//! state the next sampler index, passing over one an earlier object still holds, and a constexpr
+//! harness grants itself every texture index and every sampler index once the device is made
+//! (`Indices`): each texture a shader reaches takes the next texture index, each sampler state
+//! the next sampler index, passing over one an earlier object still holds, and a constexpr
 //! sampler the index the first state that numbered its state words took, as Metal gives an equal
 //! one the same ID. A texture read's or write's numbered sampler takes nothing at its index: 0.
 //!
@@ -101,11 +100,7 @@ pub fn system_default(store: Option<&Path>) -> Result<Device> {
         options.pipeline_cache_dir = store.map(Path::to_path_buf);
         match rt::Device::new(&physical, options) {
             Ok(device) => {
-                for class in [
-                    rt::IndexClass::Texture,
-                    rt::IndexClass::StorageTexture,
-                    rt::IndexClass::Sampler,
-                ] {
+                for class in [rt::IndexClass::Texture, rt::IndexClass::Sampler] {
                     let range = class.range();
                     device.grant_indices(class, range.start, range.end - range.start)?;
                 }
@@ -137,7 +132,6 @@ pub struct Device {
 /// each class taken, and each constexpr sampler's index by its state words.
 #[derive(Default)]
 struct Indices {
-    sampled: u32,
     texture: u32,
     sampler: u32,
     constexprs: HashMap<[u64; 2], u32>,
@@ -148,8 +142,7 @@ impl Indices {
     fn last(&mut self, class: rt::IndexClass) -> &mut u32 {
         match class {
             rt::IndexClass::Sampler => &mut self.sampler,
-            rt::IndexClass::StorageTexture => &mut self.texture,
-            _ => &mut self.sampled,
+            _ => &mut self.texture,
         }
     }
 
@@ -609,14 +602,8 @@ impl crate::ComputeDevice for Device {
 /// The index class of a texture of `usage`, where shaders reach it: unknown usage is every
 /// usage, as the runtime takes it; a texture no shader reaches takes no index.
 fn class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
-    let usage = match usage.is_empty() {
-        true => rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE,
-        false => usage,
-    };
-    match usage.contains(rt::TextureUsage::SHADER_WRITE) {
-        true => Some(rt::IndexClass::StorageTexture),
-        false => (usage.contains(rt::TextureUsage::SHADER_READ)).then_some(rt::IndexClass::Texture),
-    }
+    let reached = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
+    (usage.is_empty() || usage.intersects(reached)).then_some(rt::IndexClass::Texture)
 }
 
 impl crate::Texture for rt::Texture {
