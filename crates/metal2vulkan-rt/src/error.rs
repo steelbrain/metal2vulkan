@@ -348,7 +348,9 @@ pub enum Refusal {
     /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probes `blit_copy_format_pairs.m` in
     /// the conformance crate: Metal's validation layer stops every pair of two formats it was
     /// given, sRGB, integer, float, channel order, depth and compressed pairs among them, with
-    /// "[sourceTexture pixelFormat] must equal [destinationTexture pixelFormat]").
+    /// "[sourceTexture pixelFormat] must equal [destinationTexture pixelFormat]", and a source of
+    /// four samples into one of one with "[sourceTexture sampleCount](4) must equal
+    /// [destinationTexture sampleCount](1)").
     TextureCopyMismatch {
         /// The source texture's pixel format.
         source: PixelFormat,

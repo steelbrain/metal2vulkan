@@ -21,7 +21,14 @@
 //   ./blit_copy_layouts
 //   MTL_DEBUG_LAYER=1 ./blit_copy_layouts
 //
-// WHAT IT MEASURED: see the hashes in the tests (`tests::blit`), with the run they came from.
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1, job m3-max-43464; plain and under the
+// validation layer alike):
+//
+//   t2t-array len 256 fnv fbcf35387a974105
+//   t2t-volume len 48 fnv f8143509403cef55
+//   t2t-plane len 16 fnv 52ff18149f17740d
+//   t2t-slices len 256 fnv 3735fdb19af01a15
+//   t2t-bc1 len 32 fnv c00d3bc22f3d14c5
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>

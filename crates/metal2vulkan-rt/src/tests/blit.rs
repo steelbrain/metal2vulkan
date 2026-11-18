@@ -13,7 +13,10 @@
 //!   another slice of it, and a block-compressed region in another texture where the device makes
 //!   one, everything around each region kept. One copy alone is one submission, two barriers and
 //!   the segment's end, and copies no byte of the runtime's own; a barrier an encoder owed is paid
-//!   by the copy's first. Every gauge comes back to zero with the device.
+//!   by the copy's first. Every gauge comes back to zero with the device. The bytes each copy
+//!   must leave are plain Metal's: their FNV-1a 64 hashes are those of probe `blit_copy_layouts.m`
+//!   in the conformance crate (an Apple M3 Max, macOS 27.0.1, job m3-max-43464, plain and under
+//!   the validation layer).
 
 use crate::blit::{texture_copy, ImageCopy, Side, TexturePlace};
 use crate::error::{Error, Gap, Refusal};
@@ -396,6 +399,19 @@ mod on_device {
             .collect()
     }
 
+    /// FNV-1a 64 of `bytes`.
+    fn fnv(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+
+    /// `bytes`, which are plain Metal's answer: their FNV-1a 64 is `hash`, the probe's.
+    fn metal(bytes: Vec<u8>, hash: u64) -> Vec<u8> {
+        assert_eq!(fnv(&bytes), hash, "plain Metal's bytes");
+        bytes
+    }
+
     /// One level and slice of a texture, whole, in elements of `unit` bytes covering `block`
     /// texels square.
     struct Level<'a> {
@@ -642,7 +658,11 @@ mod on_device {
                 (1, 3, 0, 1),
                 "{name}: submissions, barriers, bytes copied, passes"
             );
-            assert_eq!(words2.read(), into_array.after(), "{name}: into the array");
+            assert_eq!(
+                words2.read(),
+                metal(into_array.after(), 0xfbcf_3538_7a97_4105),
+                "{name}: into the array"
+            );
 
             // A cube's face into a 3D image, a 3D image into a 2D texture, and a slice of an
             // array into another of it, in one encoder; then a barrier an encoder owed, paid by
@@ -656,7 +676,7 @@ mod on_device {
                 to_at: [0, 0, 1],
                 size: [4, 4, 1],
             };
-            let volume_after = into_volume.after();
+            let volume_after = metal(into_volume.after(), 0xf814_3509_403c_ef55);
             let into_plane = Expect {
                 from: &image,
                 source: &volume_after,
@@ -683,8 +703,16 @@ mod on_device {
             finished(name, &command_buffer);
             assert_eq!(command_buffer.error(), None, "{name}");
             assert_eq!(image.read(), volume_after, "{name}: into the volume");
-            assert_eq!(flat.read(), into_plane.after(), "{name}: into the plane");
-            assert_eq!(words1.read(), across.after(), "{name}: across slices");
+            assert_eq!(
+                flat.read(),
+                metal(into_plane.after(), 0x52ff_1814_9f17_740d),
+                "{name}: into the plane"
+            );
+            assert_eq!(
+                words1.read(),
+                metal(across.after(), 0x3735_fdb1_9af0_1a15),
+                "{name}: across slices"
+            );
 
             let before = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -750,7 +778,11 @@ mod on_device {
                     blocks.record(name, &command_buffer);
                     command_buffer.commit().expect("a commit");
                     finished(name, &command_buffer);
-                    assert_eq!(to.read(), blocks.after(), "{name}: BC1 blocks");
+                    assert_eq!(
+                        to.read(),
+                        metal(blocks.after(), 0xc00d_3bc2_2f3d_14c5),
+                        "{name}: BC1 blocks"
+                    );
                 }
                 (Err(Error::Unsupported(Gap::TextureFormat { .. })), _) => {
                     println!("{name}: no BC1 texture on this device")

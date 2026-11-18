@@ -21,9 +21,10 @@
 //   for c in same srgb uint word float order depth block samples; do
 //       MTL_DEBUG_LAYER=1 ./blit_copy_format_pairs $c; done
 //
-// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1, job m3-max-43433, before `samples` was added):
-// `same` taken; every pair of two formats stopped by the validation layer with "[sourceTexture
-// pixelFormat] must equal [destinationTexture pixelFormat]".
+// WHAT IT MEASURED (Apple M3 Max, macOS 27.0.1, job m3-max-43465): `same` taken; every pair of
+// two formats stopped by the validation layer with "[sourceTexture pixelFormat] must equal
+// [destinationTexture pixelFormat]", and `samples` with "[sourceTexture sampleCount](4) must
+// equal [destinationTexture sampleCount](1)".
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
