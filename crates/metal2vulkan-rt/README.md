@@ -85,8 +85,11 @@ in its memory.
   block's life) memory, as a `BlockInfo`: its number, class, length, device address and, for
   Shared, its host address. One `VkBuffer` spans each block, with every buffer usage and a device
   address. Nothing in a block is exportable.
-- Up to `BLOCK_LEN` (256 MiB) a block is pooled. The block-maker thread keeps one block of each
-  class ready, made off every caller's path, so a take waits only when none is ready. Past
+- Up to `BLOCK_LEN` (256 MiB) a block is pooled. `Device::new` makes one block of each class
+  before it returns, and the block-maker thread keeps one of each class ready after that, made off
+  every caller's path, so a take waits only when none is ready. No block is so made beside the
+  consumer's first calls: on an RTX 3090 (NVIDIA's Linux driver), a pipeline state's creation right
+  after `Device::new` waited 47 to 61 ms behind the allocation of the first Shared block's memory. Past
   `BLOCK_LEN` a block is dedicated: the length rounded up to 64 KiB, made in the call, up to the
   device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
 - A Private allocation takes the device-local Private type. Where that allocation itself fails

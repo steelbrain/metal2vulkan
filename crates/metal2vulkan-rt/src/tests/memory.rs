@@ -1,5 +1,6 @@
 //! Memory blocks and buffers: the plan of a zero fill and a dedicated block's length; and, under a
-//! device cfg, on every device of the cfg's kind, that blocks are handed out zeroed and buffers
+//! device cfg, on every device of the cfg's kind, that the device holds a block of each class as it
+//! is made, that blocks are handed out zeroed and buffers
 //! view them, that a block is freed through the consumer's hook only once nothing uses it, that
 //! the pool keeps two idle blocks of a class and frees the rest, and that teardown frees every
 //! block with the gauges at zero.
@@ -573,6 +574,42 @@ mod on_device {
             println!(
                 "memory: {name}: blocks and buffers; metrics {:?}",
                 counters.metrics()
+            );
+        }
+    }
+
+    /// The device's making makes one block of each class before it returns: each class holds a
+    /// ready block as `Device::new` returns, made before the block-maker thread started, which
+    /// then makes none, each class having its ready block.
+    #[test]
+    fn every_device_holds_a_block_of_each_class_when_it_is_made() {
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            let made = counters.metrics().blocks_made;
+            assert_eq!(
+                (
+                    core.pool.idle(MemoryClass::Private),
+                    core.pool.idle(MemoryClass::Shared)
+                ),
+                (1, 1),
+                "{name}: the ready blocks as the device returns"
+            );
+            assert_eq!(
+                counters.gauges().blocks,
+                ZERO_SOURCE + 2,
+                "{name}: the zero source and the two ready blocks"
+            );
+            thread::sleep(Duration::from_millis(200));
+            assert_eq!(
+                counters.metrics().blocks_made,
+                made,
+                "{name}: the block-maker thread made a block"
             );
         }
     }

@@ -16,7 +16,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 /// this, and a dedicated one past it.
 pub const BLOCK_LEN: u64 = 256 << 20;
 
-/// Blocks of each class the block-maker thread keeps ready.
+/// Blocks of each class the device's making makes ([`stock`]) and the block-maker thread keeps
+/// ready after it.
 const READY: usize = 1;
 
 /// The most idle blocks of a class the pool keeps. A block released past them is freed.
@@ -357,6 +358,29 @@ fn number(state: &mut State) -> Result<BlockId, Error> {
     let id = state.next_id;
     state.next_id = id.checked_add(1).ok_or(Error::Limit(Limit::BlockIds))?;
     Ok(BlockId(id))
+}
+
+/// In the device's making, before the block-maker thread starts: makes [`READY`] blocks of each
+/// class, so the consumer's first block of each class is ready as the device is, and no block is
+/// made beside the consumer's first calls. A driver may hold the device's other calls while it
+/// allocates a block's memory: on an RTX 3090 (NVIDIA's Linux driver), a pipeline state's creation
+/// right after the device's making waited 47 to 61 ms behind the block-maker thread's first Shared
+/// block, against 2.4 to 3.1 ms once the block was made here. A class whose block cannot be made
+/// keeps why for its next taker, as the block-maker thread does.
+pub(crate) fn stock(core: &Core) {
+    for class in MemoryClass::ALL {
+        for _ in 0..READY {
+            let made = (core.pool.number()).and_then(|id| make(core, class, BLOCK_LEN, id, true));
+            let mut state = core.pool.lock();
+            match made {
+                Ok(memory) => state.idle[class.index()].push(memory),
+                Err(error) => {
+                    state.failed[class.index()] = Some(error);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 /// The block-maker thread, until the device's teardown stops it. Off every caller's path, it

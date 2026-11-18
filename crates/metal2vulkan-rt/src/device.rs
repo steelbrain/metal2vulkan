@@ -267,9 +267,9 @@ impl Device {
     /// of the consumer's extensions ([`DeviceOptions::extensions`]) the device offers with the
     /// features the consumer needs, and chooses its memory types on it. It takes one queue of the floor's queue
     /// family for the runtime and, where that family has a second queue, a queue for presenting;
-    /// where it has one, presenting shares the runtime's queue and its lock. It starts the
-    /// block-maker thread, which makes one block of each memory class ready, the submit thread and
-    /// the completion thread.
+    /// where it has one, presenting shares the runtime's queue and its lock. It makes one block of
+    /// each memory class ready, then starts the block-maker thread, which keeps one of each ready
+    /// after that, the submit thread and the completion thread.
     ///
     /// Err: [`Error::BelowFloor`] with every item the device lacks; [`Error::Vulkan`] where a
     /// Vulkan call fails; [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) at a
@@ -476,6 +476,7 @@ impl Device {
         };
         // A thread that does not start drops the device, which stops those that did.
         let core = &device.shared.core;
+        memory::stock(core);
         let reaper = spawn("m2v-reaper", core, Role::Reaper, reaper::run)?;
         lock(&device.shared.threads).reaper = Some(reaper);
         let blocks = spawn("m2v-blocks", core, Role::Blocks, memory::run)?;
@@ -547,9 +548,9 @@ impl Device {
     /// No Metal counterpart: takes a block of `class` memory at least `len` bytes long, for the
     /// consumer to place buffers in.
     ///
-    /// For `len` up to [`BLOCK_LEN`] it is a pooled block. The block-maker thread makes pooled
-    /// blocks ahead of need, off every caller's path, so this call waits only when no block of
-    /// the class is ready. Past [`BLOCK_LEN`] it is a dedicated block, made in this call.
+    /// For `len` up to [`BLOCK_LEN`] it is a pooled block. The device's making makes one of each
+    /// class, and the block-maker thread makes the next ones ahead of need, off every caller's
+    /// path, so this call waits only when no block of the class is ready. Past [`BLOCK_LEN`] it is a dedicated block, made in this call.
     ///
     /// Every block reads zero, as Metal's new buffers do, whether new or taken again: a Shared
     /// block is zeroed through its mapping, which also makes each page resident before the block
