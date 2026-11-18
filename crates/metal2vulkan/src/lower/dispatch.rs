@@ -15,8 +15,9 @@
 //! **Builtins** ([`KernelBuiltin`]). Every Metal kernel builtin derives from a handful of Vulkan
 //! ones and the linear local index `lin`:
 //!
-//! - `lin` is `LocalInvocationIndex`, or, flattened, `SubgroupId · SubgroupSize +
-//!   SubgroupLocalInvocationId`, so every Metal identity (`tid = sg · 32 + lane`) holds whatever
+//! - `lin` is `LocalInvocationIndex`, or, flattened, `SubgroupId · S + SubgroupLocalInvocationId`
+//!   with `S` the subgroup size the pipeline pins, a constant (the `SubgroupSize` builtin only
+//!   where the stage pins none), so every Metal identity (`tid = sg · 32 + lane`) holds whatever
 //!   order the driver gives subgroups;
 //! - the position in the threadgroup is `LocalInvocationId`, or, flattened, `lin` unflattened over
 //!   `(sx, sy, sz)`;
@@ -527,6 +528,11 @@ pub struct DispatchPlan {
     /// region's grid, and reads its base and `L` as the profile's form says
     /// ([`RegionSelect::Grid`], [`RegionSelect::Sized`]). `None` outside them.
     pub identity_region: Option<IdentityRegion>,
+    /// The subgroup size the pipeline pins in a flattened tier
+    /// (`SubgroupRequirement::size`): `lin` multiplies the subgroup index by it as a constant and
+    /// never reads `SubgroupSize`. `None` outside the flattened tiers and where the stage pins no
+    /// size, where `lin` reads the builtin.
+    pub pinned_subgroup_size: Option<u32>,
 }
 
 /// The words a flat grid adds: its thread's index, position, and early return, derived once for the
@@ -671,8 +677,10 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
     cx.facts.insert(RuntimeFact::ThreadsPerThreadgroup);
     cx.facts.insert(RuntimeFact::LocalSizeLimits);
     cx.facts.insert(RuntimeFact::IndirectGroupCount);
+    let mut pinned_subgroup_size = None;
     if local_size == LocalSizeForm::Flat {
         let req = subgroup::requirement(tier, cx.stage, &cx.profile.fields().subgroup);
+        pinned_subgroup_size = req.size;
         cx.facts.insert(RuntimeFact::LocalSizeConstraint {
             multiple: req.local_size_multiple,
         });
@@ -734,6 +742,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         grid_edge,
         identity_region: crate::lower::access::identity(cx.profile)
             .then(|| cx.profile.identity_region()),
+        pinned_subgroup_size,
     })
 }
 
@@ -974,8 +983,11 @@ pub struct KernelDecl {
     workgroup_id: Option<GlobalId>,
     num_workgroups: Option<GlobalId>,
     subgroup_id: Option<GlobalId>,
+    /// `SubgroupSize`, declared only where the stage pins no size ([`Self::pinned_subgroup_size`]).
     subgroup_size: Option<GlobalId>,
     subgroup_local: Option<GlobalId>,
+    /// The subgroup size the pipeline pins ([`DispatchPlan::pinned_subgroup_size`]).
+    pinned_subgroup_size: Option<u32>,
     /// The words the entry wrapper stores the threadgroup's position and grid into
     /// ([`DispatchPlan::wrapper_groups`]), with the dispatch's own builtins it reads.
     wrapper: Option<WrapperGroups>,
@@ -1317,8 +1329,13 @@ impl KernelDecl {
             workgroup_id,
             num_workgroups,
             subgroup_id: var(subgroups, B::SubgroupId, u32_)?,
-            subgroup_size: var(subgroups, B::SubgroupSize, u32_)?,
+            subgroup_size: var(
+                subgroups && dp.pinned_subgroup_size.is_none(),
+                B::SubgroupSize,
+                u32_,
+            )?,
             subgroup_local: var(subgroups, B::SubgroupLocalInvocationId, u32_)?,
+            pinned_subgroup_size: dp.pinned_subgroup_size,
             wrapper,
             object_grid: dp.object_grid,
             partial_groups: dp.partial_groups,
@@ -1437,7 +1454,12 @@ impl KernelDecl {
             LocalSizeForm::Spec => self.load(fb, self.local_index),
             LocalSizeForm::Flat => {
                 let sg = self.load(fb, self.subgroup_id)?;
-                let size = self.load(fb, self.subgroup_size)?;
+                // The size the pipeline pins, a constant: where a size is pinned the module never
+                // reads `SubgroupSize`.
+                let size = match self.pinned_subgroup_size {
+                    Some(size) => Self::k(fb, size)?,
+                    None => self.load(fb, self.subgroup_size)?,
+                };
                 let lane = self.load(fb, self.subgroup_local)?;
                 let base = fb.binary(BinOp::IMul, sg, size)?;
                 fb.binary(BinOp::IAdd, base, lane)

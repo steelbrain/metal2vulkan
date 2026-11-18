@@ -40,6 +40,7 @@ fn plan(form: LocalSizeForm, multi_region: bool) -> DispatchPlan {
         partial_groups: false,
         grid_edge: false,
         identity_region: None,
+        pinned_subgroup_size: None,
     }
 }
 
@@ -394,6 +395,54 @@ fn single_region_builtins_match_metal() {
                     let threads = std::array::from_fn(|i| l[i] * groups[i]);
                     check_dispatch(&m, form, &[r], threads, l, sg);
                 }
+            }
+        }
+    }
+}
+
+/// A flattened kernel whose pipeline pins its subgroup size reads no `SubgroupSize` builtin: its
+/// module declares none, and its `lin` takes the pinned size as a constant, so every builtin keeps
+/// Metal's value at either modelled width with and without regions. Unpinned, it declares and
+/// reads the builtin.
+#[test]
+fn a_pinned_subgroup_size_reads_no_subgroup_size_builtin() {
+    let declares_subgroup_size = |m: TypedModule| {
+        let words = crate::spirv::serialize::serialize(m)
+            .expect("serialize")
+            .words;
+        let mut at = 5;
+        let mut found = false;
+        while let Some(&first) = words.get(at) {
+            let (count, op) = ((first >> 16) as usize, first & 0xffff);
+            found |= op == crate::spv::Op::Decorate as u32
+                && words.get(at + 2) == Some(&(crate::spv::Decoration::BuiltIn as u32))
+                && words.get(at + 3) == Some(&(crate::spv::BuiltIn::SubgroupSize as u32));
+            at += count.max(1);
+        }
+        found
+    };
+    for mr in [false, true] {
+        let dp = plan(LocalSizeForm::Flat, mr);
+        assert!(
+            declares_subgroup_size(module(&dp)),
+            "unpinned, MultiRegion {mr}"
+        );
+        for (size, sg) in [(32, SubgroupSize::W32), (64, SubgroupSize::W64)] {
+            let mut dp = plan(LocalSizeForm::Flat, mr);
+            dp.pinned_subgroup_size = Some(size);
+            assert!(
+                !declares_subgroup_size(module(&dp)),
+                "pinned {size}, MultiRegion {mr}"
+            );
+            let m = module(&dp);
+            for (l, groups) in [([8, 4, 2], [3, 2, 1]), ([64, 1, 1], [2, 1, 2])] {
+                let threads = std::array::from_fn(|i| l[i] * groups[i]);
+                let r = Region {
+                    local: l,
+                    groups,
+                    multi: None,
+                };
+                check_dispatch(&m, LocalSizeForm::Flat, &[r], threads, l, sg);
             }
         }
     }
