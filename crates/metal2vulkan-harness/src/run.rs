@@ -651,8 +651,9 @@ impl<D: ComputeDevice> Harness<D> {
     }
 
     /// A run of `plan`, committed: its command buffers in order, `per_command_buffer`
-    /// dispatches each (or all in one), with no wait between. Where `completions` is given, each
-    /// takes a completed handler that reports its commit-to-complete time there, with its place.
+    /// dispatches each (or all in one), with no wait between. Each takes a scheduled handler and
+    /// a completed handler, as the consumer's command buffers do. Where `completions` is given,
+    /// the completed handler reports its commit-to-complete time there, with its place.
     fn commit_run(
         &self,
         plan: &Plan,
@@ -668,11 +669,15 @@ impl<D: ComputeDevice> Harness<D> {
             .enumerate()
             .map(|(place, range)| {
                 let command_buffer = self.encode(plan, made, range)?;
-                if let Some(completions) = completions {
-                    let (completions, committed) = (Arc::clone(completions), Instant::now());
-                    command_buffer.add_completed_handler(Box::new(move |late_us| {
-                        completions.ran(place, committed.elapsed(), late_us);
-                    }))?;
+                command_buffer.add_scheduled_handler(Box::new(|| {}))?;
+                match completions {
+                    Some(completions) => {
+                        let (completions, committed) = (Arc::clone(completions), Instant::now());
+                        command_buffer.add_completed_handler(Box::new(move |late_us| {
+                            completions.ran(place, committed.elapsed(), late_us);
+                        }))?;
+                    }
+                    None => command_buffer.add_completed_handler(Box::new(|_| {}))?,
                 }
                 command_buffer.commit()?;
                 Ok(command_buffer)

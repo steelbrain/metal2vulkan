@@ -681,6 +681,10 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
         })
         .map_err(error)
     }
+
+    fn add_scheduled_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()> {
+        rt::CommandBuffer::add_scheduled_handler(self, move |_| handler()).map_err(error)
+    }
 }
 
 /// A copy between a buffer and a texture as the runtime takes it: the buffer's layout, the

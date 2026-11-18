@@ -21,6 +21,9 @@
 //! each cover a 512 by 512 target, and 2,000 that each cover a 16 by 16 one; `bind_2000` is
 //! `draw_2000` with a vertex buffer and a fragment texture set before each draw, each alternating
 //! between two objects.
+//! Every command buffer of a workload's runs carries a scheduled handler (on the old runtime, its
+//! submission handler) and a completed handler, as the consumer's command buffers do, so the times
+//! hold what the runtimes do to run them.
 //! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
 //! workloads ([`authored`]) are MSL kernels committed as public fixtures
 //! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
@@ -400,6 +403,10 @@ pub trait CommandBuffer<D: ComputeDevice> {
     /// `addCompletedHandler:`, with a handler given how late it runs: from the command buffer's
     /// `GPUEndTime` to the handler's start, both on the runtime's host clock, in microseconds.
     fn add_completed_handler(&self, handler: Box<dyn FnOnce(f64) + Send>) -> Result<()>;
+
+    /// `addScheduledHandler:`; on the old runtime its submission handler, the point its consumer
+    /// takes as a command buffer is scheduled.
+    fn add_scheduled_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()>;
 }
 
 /// `MTLBlitCommandEncoder`.

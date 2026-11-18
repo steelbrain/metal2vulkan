@@ -348,6 +348,13 @@ impl crate::CommandBuffer<runtime::Device> for runtime::CommandBuffer {
             }),
         )?)
     }
+
+    fn add_scheduled_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()> {
+        Ok(runtime::CommandBuffer::add_submission_handler(
+            self,
+            Box::new(move |_| handler()),
+        )?)
+    }
 }
 
 impl crate::BlitCommandEncoder<runtime::Device> for runtime::BlitCommandEncoder {
