@@ -3673,7 +3673,10 @@ bound.
   minimum code (-128, or -32768 for 16 bits) as the code above it (-127, -32767) in each tile a draw
   reaches: a texel whose bytes no Metal write left (uploaded or copied bytes) keeps a code Metal's
   pass would change. Not on a driver whose pass stores the codes as Metal's
-  (`DriverFact::TileStoreIsMetals`: MoltenVK on Apple's GPUs, whose pass is a Metal pass).
+  (`DriverFact::TileStoreIsMetals`: MoltenVK on Apple's GPUs, whose pass is a Metal pass). On a
+  device `Device::from_queries` made (`metal2vulkan-rt`'s) it is the static note
+  `PrecisionNote::SnormMinimumKept` of every render pipeline that draws into such an attachment,
+  whatever its passes load, on its fragment stage (its vertex stage where it has none).
 - `metal2vulkan-degrade-shared-exponent-kept` (precision). `SharedExponentKept`: A draw in a render
   pass that loads a single-sampled `RGB9E5Float` color attachment and does not discard it at the
   store; and, once per device, a GPU blit into, out of or between textures of which one is an

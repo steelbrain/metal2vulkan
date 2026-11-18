@@ -2414,6 +2414,22 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DeviceReconvergence,
+    /// The render pipeline draws into a single-sampled color attachment of a signed normalized
+    /// format (`R8Snorm`, `RG8Snorm`, `RGBA8Snorm`, `R16Snorm`, `RG16Snorm`, `RGBA16Snorm`).
+    /// Metal's pass, once it draws, writes each 32 by 32 tile a draw reaches back through its
+    /// channels' values, so a channel's minimum code (-128, or -32768), which reads as -1.0 as the
+    /// code above it does, is stored as that code (-127, or -32767), in the texels no fragment
+    /// writes too (measured on an Apple M3 Max under macOS 27.0.1: every such code of each tile a
+    /// draw reaches, none in other tiles, none in a pass that draws nothing). The device's pass
+    /// keeps the bytes its draws do not write. Static per pipeline: recorded on the fragment stage
+    /// (the vertex stage where the pipeline has none) of every such pipeline on a device
+    /// `Device::from_queries` made, whatever its passes load. A device `Device::new` made records
+    /// none: `metal2vulkan-runtime` announces `snorm-minimum-kept` at each draw in a pass that loads
+    /// such an attachment, which only its encoder knows.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    SnormMinimumKept,
 }
 
 /// The math mode of an entry's module, which decides, on a device whose `float` functions are

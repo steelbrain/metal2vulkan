@@ -21,6 +21,9 @@
 //! - The sample coverage is Metal's masks by the window pixel's place in its quad, ANDed with the
 //!   sample mask: alike at every place the Vulkan mask, else applied by the fragment function from
 //!   its pixel.
+//! - A single-sampled attachment of a signed normalized format notes the minimum code Metal's
+//!   pass rewrites (`PrecisionNote::SnormMinimumKept`) on the fragment stage through
+//!   `Device::from_queries`, and nowhere through `Device::new`.
 //! - Each property not built refuses a value other than Metal's default `NotImplemented`, naming
 //!   it (the coverage at 8 samples, where Metal was not measured). A compute pipeline's `needs_custom_border_color_samplers`, which changes nothing, keeps
 //!   its key.
@@ -513,6 +516,58 @@ fn each_property_not_built_refuses_a_value_other_than_metals_default() {
         match dev.compile_render_pipeline(&d, &Budget::standard()) {
             Err(Error::InvalidDescriptor(_)) => {}
             other => panic!("{stem}: vertexAmplificationMode 2: {other:?}"),
+        }
+    }
+}
+
+/// A pipeline that draws single-sampled into an attachment of each signed normalized format
+/// records `PrecisionNote::SnormMinimumKept` on its fragment stage alone through
+/// `Device::from_queries`; through `Device::new`, whose note `metal2vulkan-runtime` announces at
+/// the draw, at four samples, and into an unsigned or float attachment, no stage records it.
+#[test]
+fn a_snorm_attachment_notes_the_minimum_code_metal_s_pass_rewrites() {
+    use crate::pipeline::artifact::PrecisionNote;
+    use crate::vk::ShaderStage;
+    let Some(lib) = fixture("rt6_render_state") else {
+        return;
+    };
+    let with = |pf: PixelFormat, samples: u32| {
+        let mut d = render(&lib, samples);
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(pf));
+        d
+    };
+    let noted = |p: &RenderPipeline, stage: ShaderStage| {
+        p.stages.iter().any(|s| {
+            s.stage == stage && s.precision_notes.contains(&PrecisionNote::SnormMinimumKept)
+        })
+    };
+    for stem in STEMS {
+        let new = device(stem);
+        let desc = crate::pipeline::testing::description(stem).expect("description");
+        let queries = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        for pf in [
+            PixelFormat::R8Snorm,
+            PixelFormat::RG8Snorm,
+            PixelFormat::RGBA8Snorm,
+            PixelFormat::R16Snorm,
+            PixelFormat::RG16Snorm,
+            PixelFormat::RGBA16Snorm,
+        ] {
+            let what = format!("{stem} {pf:?}");
+            let p = compile(&queries, &with(pf, 1), &what);
+            assert!(noted(&p, ShaderStage::FRAGMENT), "{what}");
+            assert!(!noted(&p, ShaderStage::VERTEX), "{what}");
+            let p = compile(&new, &with(pf, 1), &what);
+            assert!(
+                !noted(&p, ShaderStage::FRAGMENT),
+                "{what} through Device::new"
+            );
+        }
+        let p = compile(&queries, &with(PixelFormat::RGBA8Snorm, 4), stem);
+        assert!(!noted(&p, ShaderStage::FRAGMENT), "{stem} at four samples");
+        for pf in [PixelFormat::RGBA8Unorm, PixelFormat::RGBA16Float] {
+            let p = compile(&queries, &with(pf, 1), stem);
+            assert!(!noted(&p, ShaderStage::FRAGMENT), "{stem} {pf:?}");
         }
     }
 }

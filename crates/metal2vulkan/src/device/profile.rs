@@ -106,6 +106,12 @@ impl DeviceProfile {
         self.facts.reconvergence_note
     }
 
+    /// Whether a render pipeline that draws into a signed normalized attachment records Metal's
+    /// tile store of its minimum code as a note.
+    pub(crate) fn snorm_minimum_note(&self) -> SnormMinimumNote {
+        self.facts.snorm_minimum_note
+    }
+
     /// Which narrow integer results clear the bits above their width.
     pub(crate) fn narrow_wrap(&self) -> NarrowWrap {
         self.facts.narrow_wrap
@@ -586,6 +592,9 @@ pub(crate) struct ProfileFacts {
     pub(crate) half_pair_note: HalfPairNote,
     /// Whether a stage of implementation-defined reconvergence records it as a note.
     pub(crate) reconvergence_note: ReconvergenceNote,
+    /// Whether a render pipeline that draws into a signed normalized attachment records Metal's
+    /// tile store of its minimum code as a note.
+    pub(crate) snorm_minimum_note: SnormMinimumNote,
     /// Which narrow integer results clear the bits above their width.
     pub(crate) narrow_wrap: NarrowWrap,
     /// Whether a `half` color output may be declared with 16-bit `float` lanes.
@@ -617,6 +626,7 @@ impl ProfileFacts {
         stage_bound: StageBound::Defects,
         half_pair_note: HalfPairNote::Fused,
         reconvergence_note: ReconvergenceNote::Field,
+        snorm_minimum_note: SnormMinimumNote::Announced,
         narrow_wrap: NarrowWrap::Every,
         half_outputs: HalfOutputs::Sixteen,
         push_window: PushWindow::Guaranteed,
@@ -633,6 +643,7 @@ impl ProfileFacts {
         stage_bound: StageBound::Every,
         half_pair_note: HalfPairNote::Every,
         reconvergence_note: ReconvergenceNote::Noted,
+        snorm_minimum_note: SnormMinimumNote::Noted,
         narrow_wrap: NarrowWrap::Read,
         half_outputs: HalfOutputs::Widened,
         push_window: PushWindow::Floor,
@@ -792,6 +803,19 @@ pub(crate) enum ReconvergenceNote {
     /// announces as `ImplementationDefinedReconvergence`: `Device::new`'s profile.
     Field,
     /// The note, beside the field, a static note of the stage: `Device::from_queries`' profile.
+    Noted,
+}
+
+/// Whether a render pipeline that draws into a single-sampled color attachment of a signed
+/// normalized format records `PrecisionNote::SnormMinimumKept`: Metal's pass stores such an
+/// attachment's minimum code as the code above it in each tile a draw reaches, and the device's
+/// pass keeps it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SnormMinimumNote {
+    /// No note: `metal2vulkan-runtime` announces it at a draw in a pass that loads such an
+    /// attachment, which only its encoder knows: `Device::new`'s profile.
+    Announced,
+    /// The note, a static note of the pipeline: `Device::from_queries`' profile.
     Noted,
 }
 

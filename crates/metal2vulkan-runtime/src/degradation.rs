@@ -241,11 +241,14 @@ macro_rules! degradations {
                 }
             }
 
-            /// The kind announcing `note`.
+            /// The kind announcing `note`. [`PrecisionNote::SnormMinimumKept`], which only a
+            /// profile of `Device::from_queries` records, announces this runtime's kind for the
+            /// same codes, [`Degradation::SnormMinimumKept`].
             pub const fn from_precision_note(note: PrecisionNote) -> Degradation {
                 match note {
                     $(PrecisionNote::$note => Degradation::$note,)*
                     PrecisionNote::CappedLodBias => Degradation::CappedLodBias,
+                    PrecisionNote::SnormMinimumKept => Degradation::SnormMinimumKept,
                     PrecisionNote::DeviceReconvergence => {
                         Degradation::ImplementationDefinedReconvergence
                     }
