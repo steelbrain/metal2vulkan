@@ -584,6 +584,19 @@ that touch blocks first.
   read and overwrote another's Shared buffer, Private buffer and texture through addresses and
   resource IDs it made up, with no fault. The consumer treats every byte on the device as
   guest-writable and keeps nothing there that it parses or trusts.
+- On NVIDIA, a GPU fault in a guest's kernel hangs that command buffer's completion, where Metal
+  ends it with an error. A fault (an access to an address nothing maps) loses the device on
+  NVIDIA's driver and on RADV, and one device serves every guest process, so every guest's later
+  work ends `DeviceLost`; a second Vulkan device, such as another process's, keeps running.
+  NVIDIA's driver (620.70.06; an RTX 2080 and an RTX 3090) tells only a later submission or
+  `vkDeviceWaitIdle`: the faulting submission's semaphore never signals, and an unbounded wait for
+  it had not returned after 60 s. Until some queue's next submission meets the loss, the faulting
+  command buffer, and every host wait for it, stay as they are; that submission's failure then
+  ends everything as a loss. RADV (a 780M and an RX 7900 XTX) signals the semaphore within about
+  2 s and refuses the next submission; Intel's Windows driver (a UHD 630) does so at once; ANV (an
+  Iris Xe) takes the store with no fault. The old runtime took a store through a pointer to an
+  address nothing maps, and one 64 TiB past a buffer, without a fault on all six GPUs; the new
+  runtime refuses the first kernel and took the second without a fault.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 - A fence orders the encoders of one queue: an encoder of another queue that updates or waits on
   it is refused (`Gap::FenceOtherQueue`), as Metal's fence orders one queue and `MTLEvent` orders
