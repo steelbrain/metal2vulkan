@@ -35,7 +35,8 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \
-//!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
+//!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--size NAME=N]... \
+//!     [--workloads DIRECTORY --description FILE]
 //! ```
 //!
 //! After a workload's first run, two of its runs are in flight: each run is committed while the
@@ -75,8 +76,11 @@
 //! of the host wall time each run adds. The GPU time (the table's `steady` column) is a
 //! diagnostic and decides no row. A creation workload's time is the steady time of its creation
 //! calls. A workload the device sizes ([`plan::Scaled`]) prints the size it ran at on a line of
-//! its own, and its matrix time is that time scaled to its base size, so its row keeps one scale
-//! whatever size it ran at. After
+//! its own and as its `M2V-MATRIX size harness-<runtime>/<workload> <size>` record, and its matrix
+//! time is that time scaled to its base size, so its row keeps one scale whatever size it ran at.
+//! The first runtime that runs it sizes it, and the others in the process run it at that size;
+//! `--size NAME=N` gives the size instead, timing no base, so a runtime timed in another process
+//! runs the same work (the matrix passes the first runtime's sizes to the later runs). After
 //! the plan
 //! workloads, per runtime and set (`authored` or `described`), it prints how many `VkPipeline`s
 //! they created and how many workloads it refused, and where the runtime counts them, its

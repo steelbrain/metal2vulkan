@@ -199,7 +199,7 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
     let mut texels = None;
     for workload in &described {
         let plan = workload.plan().unwrap();
-        let each = (run_each(&plan, &mut sessions, runs))
+        let each = (run_each(&plan, &mut sessions, runs, None))
             .unwrap_or_else(|why| panic!("{}: {why}", plan.name));
         let first = (each[0].as_ref())
             .unwrap_or_else(|refused| panic!("{}: the old runtime refused: {refused}", plan.name));

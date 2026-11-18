@@ -3,8 +3,12 @@
 //!
 //! ```text
 //! harness --runtime old|new[,old|new...] [--runs N] [--warmup N] [--no-settle]
-//!     [--only NAME,NAME...] [--workloads DIRECTORY --description FILE]
+//!     [--only NAME,NAME...] [--size NAME=N]... [--workloads DIRECTORY --description FILE]
 //! ```
+//!
+//! A workload whose size follows the device runs at the size `--size` gives it, timing no base;
+//! without one, the first runtime sizes it. Each such workload's size prints as its row's `size`
+//! record, so runtimes timed in different processes can be checked for the same work.
 //!
 //! Each workload runs on each runtime in turn, in the order named; a runtime named twice runs it
 //! twice. A workload's rows print once its first run matched its CPU reference on every runtime
@@ -29,12 +33,14 @@ struct Args {
     runtimes: Vec<String>,
     runs: Runs,
     only: Option<Vec<String>>,
+    /// The sizes `--size` gives, by workload.
+    sizes: Vec<(String, u32)>,
     workloads: Option<PathBuf>,
     description: Option<PathBuf>,
 }
 
 const USAGE: &str = "usage: harness --runtime old|new[,old|new...] [--runs N] [--warmup N] \
-                     [--no-settle] [--only NAME,NAME...] \
+                     [--no-settle] [--only NAME,NAME...] [--size NAME=N]... \
                      [--workloads DIRECTORY --description FILE]";
 
 fn main() -> ExitCode {
@@ -57,6 +63,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
             timed: 200,
         },
         only: None,
+        sizes: Vec::new(),
         workloads: None,
         description: None,
     };
@@ -71,6 +78,12 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
             "--warmup" => parsed.runs.warmup = value()?.parse()?,
             "--no-settle" => parsed.runs.settle = false,
             "--only" => parsed.only = Some(value()?.split(',').map(str::to_owned).collect()),
+            "--size" => {
+                let given = value()?;
+                let (name, size) = (given.split_once('='))
+                    .ok_or_else(|| format!("--size takes NAME=N, not {given}; {USAGE}"))?;
+                parsed.sizes.push((name.to_owned(), size.parse()?));
+            }
             "--workloads" => parsed.workloads = Some(value()?.into()),
             "--description" => parsed.description = Some(value()?.into()),
             _ => return Err(format!("unknown argument {flag}; {USAGE}").into()),
@@ -123,12 +136,20 @@ fn workloads(args: &Args) -> Result<(Vec<Workload>, Vec<Create>)> {
         }
     };
     let Some(only) = &args.only else {
+        if let Some((name, _)) =
+            (args.sizes.iter()).find(|(name, _)| !all.iter().any(|(known, _)| known == name))
+        {
+            return Err(format!("no workload {name} to size").into());
+        }
         return Ok((all, creates));
     };
     let known: Vec<&str> = (all.iter().map(|(known, _)| known.as_str()))
         .chain(creates.iter().map(|create| create.name))
         .collect();
-    if let Some(name) = only.iter().find(|name| !known.contains(&name.as_str())) {
+    if let Some(name) = (only.iter())
+        .chain(args.sizes.iter().map(|(name, _)| name))
+        .find(|name| !known.contains(&name.as_str()))
+    {
         return Err(format!(
             "no workload {name}; the workloads are: {}",
             known.join(", ")
@@ -195,7 +216,10 @@ fn run_all(args: &Args) -> Result<bool> {
     let mut refused = vec![0u64; sessions.len()];
     let mut matched = true;
     for (name, plan) in &workloads {
-        match plan().and_then(|plan| run_each(&plan, &mut sessions, args.runs)) {
+        let size = (args.sizes.iter().rev())
+            .find(|(sized, _)| sized == name)
+            .map(|&(_, size)| size);
+        match plan().and_then(|plan| run_each(&plan, &mut sessions, args.runs, size)) {
             Ok(runs) => {
                 for (at, ((runtime, _), run)) in sessions.iter().zip(&runs).enumerate() {
                     match run {
@@ -433,10 +457,15 @@ fn print(runtime: &str, name: &str, report: &Report) {
     match report.scaled_to {
         None => matrix(runtime, name, time, &report.gauges),
         Some(scaled) => {
-            println!(
-                "{name:<17} {runtime:<8} sized to {} from {} at {:.1} us a command buffer; its matrix time is a run's at {}",
-                scaled.size, scaled.base, scaled.base_us, scaled.base
+            let from = scaled.base_us.map_or_else(
+                || "as given".to_owned(),
+                |us| format!("from {} at {us:.1} us a command buffer", scaled.base),
             );
+            println!(
+                "{name:<17} {runtime:<8} sized to {} {from}; its matrix time is a run's at {}",
+                scaled.size, scaled.base
+            );
+            println!("M2V-MATRIX size harness-{runtime}/{name} {}", scaled.size);
             let at_base = f64::from(scaled.base) / f64::from(scaled.size);
             matrix(runtime, name, time.map(|us| us * at_base), &report.gauges);
         }

@@ -293,6 +293,24 @@ class HarnessBudgetTests(unittest.TestCase):
             leg = results.parse_job(job(("10de:1e87", "harness", 0, once)))["10de:1e87"]
             self.assertEqual(results.harness_budget("10de:1e87", leg), ([], []))
 
+    def test_a_sized_row_is_judged_only_where_both_runtimes_ran_it_at_one_size(self):
+        times = {"harness-old/long_4cb": 10000.0, "harness-new/long_4cb": 10100.0}
+        out = ("    M2V-MATRIX size harness-old/long_4cb 4096\n    M2V-MATRIX time harness-old/long_4cb 10000\n"
+               "    M2V-MATRIX size harness-new/long_4cb {}\n    M2V-MATRIX time harness-new/long_4cb 10100")
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            leg = results.parse_job(job(("1002:699f", "harness", 0, out.format(4096))))["1002:699f"]
+            self.assertEqual(results.leg_records(leg)[0]["size"],
+                             {"harness-old/long_4cb": 4096, "harness-new/long_4cb": 4096})
+            self.assertEqual(results.harness_budget("1002:699f", leg), ([], []))
+            leg = results.parse_job(job(("1002:699f", "harness", 0, out.format(2048))))["1002:699f"]
+            self.assertEqual(results.harness_budget("1002:699f", leg), ([
+                "harness budget long_4cb: new ran at size 2048, old at 4096, so its times measure different "
+                "work"], []))
+            # One runtime's size alone is not the same work either.
+            self.assertEqual(len(self.budget("a", times)[0]), 0)
+            leg = leg_of(recs(time=times, size={"harness-new/long_4cb": 4096}))
+            self.assertEqual(len(results.harness_budget("a", leg)[0]), 1)
+
     def test_a_row_over_its_budget_is_judged_by_the_median_of_its_re_timed_pairs(self):
         one = {"harness-old/vote_loop": 419.3, "harness-new/vote_loop": 470.8}
         past = "harness budget vote_loop: new 470.8 us over old 419.3 us is 1.123, past 1.03"

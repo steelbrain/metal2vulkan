@@ -10,7 +10,8 @@ microseconds, decimals allowed.
 import re
 import statistics
 
-KINDS = ("metric", "instructions", "gauge", "time")
+#: `size` is the size a harness row whose size follows the device ran at (harness_budget).
+KINDS = ("metric", "instructions", "gauge", "time", "size")
 #: A gauge's key ends in the point it was read at.
 GAUGE_POINTS = ("100", "200", "drop")
 #: `instructions` may grow by this fraction over the base before it fails.
@@ -356,13 +357,16 @@ def harness_budget(leg_id, leg):
     times HARNESS_BUDGET, the noise allowance parity gets, and is named with its ceiling; one within
     the budget is named as leaving the list. A row whose run failed on the old runtime
     (`M2V-FAILED harness-old/<row>`) is named as not compared and fails nothing here (PARKED_RECORDS);
-    one that failed on the new runtime fails its suite (leg_problems)."""
+    one that failed on the new runtime fails its suite (leg_problems). A row whose size follows the
+    device (`size` records) is compared only where both runtimes ran it at one size: at two, the
+    row is a problem, its times measuring different work."""
     problems, parked = [], []
     suites = leg["suites"].values()
     for row in sorted({test[len(HARNESS_OLD):] for suite in suites for test in suite["failed"]
                        if test.startswith(HARNESS_OLD)}):
         parked.append(f"harness budget {row}: old failed, not compared")
-    times = leg_records(leg)[0]["time"]
+    records = leg_records(leg)[0]
+    times, sizes = records["time"], records["size"]
     keys = [key for suite in suites for key in suite["records"]["time"]]
     twice = ({key for key in keys if keys.count(key) > 1}
              | {key for suite in suites for kind, key in suite.get("duplicated", ()) if kind == "time"})
@@ -375,6 +379,11 @@ def harness_budget(leg_id, leg):
         if {key, HARNESS_OLD + row} & twice:
             problems.append(f"harness budget {row}: its time is recorded more than once, so it has no one "
                             "time to judge")
+            continue
+        new_size, old_size = sizes.get(key), sizes.get(HARNESS_OLD + row)
+        if new_size != old_size:
+            problems.append(f"harness budget {row}: new ran at size {new_size}, old at {old_size}, so its "
+                            "times measure different work")
             continue
         ratio = new / old
         line = f"harness budget {row}: new {new:.1f} us over old {old:.1f} us is {ratio:.3f}"

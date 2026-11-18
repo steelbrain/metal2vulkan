@@ -265,24 +265,35 @@ pub struct ScaledTo {
     pub base: u32,
     /// The GPU time of a command buffer at `base` on the first runtime that ran it, in
     /// microseconds: the median run's over its command buffers, its dispatches timed in one
-    /// command buffer.
-    pub base_us: f64,
+    /// command buffer. `None` where the caller gave the size ([`run_each`]).
+    pub base_us: Option<f64>,
     /// The size it ran at ([`Scaled::size`]).
     pub size: u32,
 }
 
 /// `plan` on each session in turn: its report, or its runtime's typed refusal. An error where a
 /// session failed ([`Failed`], naming its runtime), or where the outputs of the sessions that ran
-/// it differ. A [`Scaled`] plan is timed at its base size on the first session that runs it, and
-/// every session runs it at the size that time gives ([`Report::scaled_to`]), so the runtimes
-/// time the same work.
+/// it differ. A [`Scaled`] plan runs at `size` where it is given, so that a runtime timed in
+/// another process times the same work as the one that sized it there; else it is timed at its
+/// base size on the first session that runs it, and every session runs it at the size that time
+/// gives ([`Report::scaled_to`]), so the runtimes time the same work. An error where `size` is
+/// given for a plan that is not [`Scaled`].
 pub fn run_each(
     plan: &Plan,
     sessions: &mut [(&str, Box<dyn Session>)],
     runs: Runs,
+    size: Option<u32>,
 ) -> Result<Vec<std::result::Result<Report, Box<Refused>>>> {
+    let mut sized = match (plan.scaled, size) {
+        (_, None) => None,
+        (Some(scaled), Some(size)) => Some(ScaledTo {
+            base: scaled.base,
+            base_us: None,
+            size,
+        }),
+        (None, Some(_)) => return Err("a size is given for a workload of one size".into()),
+    };
     let mut each = Vec::with_capacity(sessions.len());
-    let mut sized = None;
     for (runtime, session) in sessions.iter_mut() {
         let ran = match plan.scaled {
             None => session.run(plan, runs),
@@ -338,7 +349,7 @@ fn run_scaled(
                 percentile(&at_base.gpu_us, 50).unwrap_or(0.0) / plan.command_buffers() as f64;
             *sized.insert(ScaledTo {
                 base: scaled.base,
-                base_us,
+                base_us: Some(base_us),
                 size: scaled.size(base_us),
             })
         }

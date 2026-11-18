@@ -1034,18 +1034,57 @@ fn a_scaled_workload_runs_at_the_size_its_base_time_gives() {
         ("b", answers(None)),
         ("c", answers(None)),
     ];
-    let each = run_each(&plan, &mut sessions, runs).unwrap();
+    let each = run_each(&plan, &mut sessions, runs, None).unwrap();
     assert!(each[0].is_err());
     for report in &each[1..] {
         let report = report.as_ref().unwrap();
         let scaled = report.scaled_to.unwrap();
         assert_eq!(
             (scaled.base, scaled.base_us, scaled.size),
-            (1024, 102.4, 1024 << 7)
+            (1024, Some(102.4), 1024 << 7)
         );
         // The report is the run at that size.
         assert_eq!(report.gpu_us, [13_107.2]);
     }
+}
+
+/// A scaled workload given its size runs at that size on every runtime, timing no base, so a
+/// runtime timed in another process runs the work the first one sized; a size given for a
+/// workload of one size is an error.
+#[test]
+fn a_scaled_workload_given_its_size_runs_at_it_and_times_no_base() {
+    let runs = Runs {
+        warmup: 0,
+        settle: false,
+        timed: 1,
+    };
+    let build = |size| one_buffer_plan(u64::from(size), None, 0);
+    let mut plan = build(1024);
+    plan.scaled = Some(Scaled {
+        build,
+        base: 1024,
+        target_us: 10_000.0,
+    });
+    let answers = || -> Box<dyn Session> {
+        Box::new(Answers {
+            outputs: Vec::new(),
+            error: None,
+        })
+    };
+    let mut sessions = vec![("a", answers()), ("b", answers())];
+    // Its base time would size it to 2^7 times the base; the size given is 2^3 times.
+    let each = run_each(&plan, &mut sessions, runs, Some(1024 << 3)).unwrap();
+    for report in &each {
+        let report = report.as_ref().unwrap();
+        let scaled = report.scaled_to.unwrap();
+        assert_eq!(
+            (scaled.base, scaled.base_us, scaled.size),
+            (1024, None, 1024 << 3)
+        );
+        assert_eq!(report.gpu_us, [819.2]);
+    }
+    let one_size = one_buffer_plan(16, None, 0);
+    assert!(run_each(&one_size, &mut sessions, runs, Some(1024)).is_err());
 }
 
 /// A runtime's refusal leaves the others' outputs compared among themselves; a failure, or
@@ -1075,16 +1114,16 @@ fn a_refusal_is_reported_beside_the_runs_and_a_failure_is_not() {
         ("b", answers(&[], Some(refuse))),
         ("c", answers(&[1, 2, 3, 4], None)),
     ];
-    let each = run_each(&plan, &mut sessions, runs).unwrap();
+    let each = run_each(&plan, &mut sessions, runs, None).unwrap();
     assert!(each[0].is_ok() && each[2].is_ok());
     assert_eq!(each[1].as_ref().unwrap_err().to_string(), "a known gap");
     sessions[2].1 = answers(&[1, 2, 3, 5], None);
-    assert!(run_each(&plan, &mut sessions, runs).is_err());
+    assert!(run_each(&plan, &mut sessions, runs, None).is_err());
     // Outputs that differ name no runtime.
-    let differ = run_each(&plan, &mut sessions, runs).unwrap_err();
+    let differ = run_each(&plan, &mut sessions, runs, None).unwrap_err();
     assert!(differ.downcast_ref::<Failed>().is_none());
     sessions[2].1 = answers(&[], Some(fail));
-    let failed = run_each(&plan, &mut sessions, runs).unwrap_err();
+    let failed = run_each(&plan, &mut sessions, runs, None).unwrap_err();
     let failed = failed.downcast_ref::<Failed>().unwrap();
     assert_eq!(
         (failed.runtime.as_str(), failed.why.to_string().as_str()),

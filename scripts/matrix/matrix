@@ -279,7 +279,9 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     driver's cache warm. After the last runtime's run, before its suite's line, the rows over their
     budget (results.RETIME_SELECT, at most results.RETIME_ROWS, the furthest over first) are each
     re-timed alone in results.RETIME_PAIRS pairs, old then new, the second pair new then old, their
-    times kept as harness-retime/<row>/<pair>/<runtime> (results.harness_budget)."""
+    times kept as harness-retime/<row>/<pair>/<runtime> (results.harness_budget). A row whose size
+    follows the device is sized by the first runtime's run, and every later run, warm and re-timed
+    ones included, is given that size (`--size`), so each runtime times the same work."""
     warm = " ".join(HARNESS_WARM)
     profile = unprofile = ""
     if windows:
@@ -293,16 +295,19 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     outputs = " ".join(f'"$out/{runtime}"' for runtime in HARNESS_RUNTIMES)
     limits = "\n".join(f"        {leg_id}) limits='{results.harness_limits(leg_id)}' ;;"
                         for leg_id in sorted(results.HARNESS_CEILINGS))
+    sized = r"s#^\([a-z0-9_]*\)  *[a-z]*  *sized to \([0-9][0-9]*\) .*#--size \1=\2#p"
     return f"""rc=0
     out=$(mktemp -d) || exit 3
+    sizes=
     for runtime in {" ".join(HARNESS_RUNTIMES)}; do
       cache=$(mktemp -d) || exit 3
       export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
-{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime 2>&1 | tee "$out/$runtime"
+{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes 2>&1 | tee "$out/$runtime"
       r=${{PIPESTATUS[0]}}
+      [ -n "$sizes" ] || sizes=$(sed -n "{sized}" "$out/$runtime" | tr '\\n' ' ')
       case " {warm} " in
         *" $runtime "*)
-          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --runs 5 --warmup 1 --no-settle 2>&1 |
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --runs 5 --warmup 1 --no-settle 2>&1 |
             sed -n "{rename}" ;;
       esac
       if [ "$runtime" = {HARNESS_RUNTIMES[-1]} ]; then
@@ -316,7 +321,7 @@ def harness_runs(manifest_dir, command, leg, windows=False):
           for pair in $(seq {results.RETIME_PAIRS}); do
             case $pair in 2) order="new old" ;; *) order="old new" ;; esac
             for timed in $order; do
-              CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed --only "$row" 2>&1 | sed -n "{retime}"
+              CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "$row" 2>&1 | sed -n "{retime}"
             done
           done
         done
