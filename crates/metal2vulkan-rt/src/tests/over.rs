@@ -116,13 +116,14 @@ mod on_device {
             let mut now: Vec<u8> = (0..LEN).map(|i| (i % 253) as u8).collect();
             write(&buffer, &now);
             // At each width tried, the row rounded up to the answer is the device's own pitch.
+            (device.grant_indices(IndexClass::Texture, 1, 1)).expect("a grant");
             for width in [1, 3, 17, 64, 65, 100] {
                 let row = u64::from(width) * 4;
                 let mut w = d;
                 w.width = width;
                 let memory = (device.linear_memory_alignment(&w)).expect("a linear image");
                 let at = align.next_multiple_of(memory);
-                let texture = (buffer.new_texture(&w, None, at, row.next_multiple_of(align)))
+                let texture = (buffer.new_texture(&w, Some(1), at, row.next_multiple_of(align)))
                     .unwrap_or_else(|error| panic!("{name}: width {width}: {error}"));
                 assert!(
                     texture.copied_over().is_none(),
