@@ -1011,7 +1011,8 @@ fn vulkan_names_follow_the_registry() {
     assert_eq!(vulkan_name("synchronization2"), "synchronization2");
 }
 
-/// Every device of the cfg's kind the machine's Vulkan loader lists is above the floor: CPU devices
+/// Every device of the cfg's kind the machine's Vulkan loader lists to the runtime's instance
+/// (portability devices too, where the loader offers their listing) is above the floor: CPU devices
 /// under `m2v_cpu_icd`, the others under `m2v_gpu`. Each is created with the features and
 /// extensions the floor returns, and its memory types are chosen on it. The device legs pick one
 /// device per run with `VK_DRIVER_FILES` and, for Mesa, `MESA_VK_DEVICE_SELECT`.
@@ -1082,19 +1083,8 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         memory.map_err(|below| below.to_string())
     }
 
-    // SAFETY: loading the Vulkan loader runs its initialisation, which the test process allows.
-    let entry = unsafe { ash::Entry::load() }.expect("the Vulkan loader");
-    let extensions: Vec<*const c_char> = INSTANCE_EXTENSIONS
-        .iter()
-        .map(|name| name.as_ptr())
-        .collect();
-    let application = vk::ApplicationInfo::default().api_version(VERSION);
-    let info = vk::InstanceCreateInfo::default()
-        .application_info(&application)
-        .enabled_extension_names(&extensions);
-    // SAFETY: `info` and what it points to live through the call.
-    let instance = unsafe { entry.create_instance(&info, None) }
-        .expect("an instance with the floor's version and instance extensions");
+    let runtime = crate::Instance::new(&[]).expect("the runtime's instance");
+    let (_, instance) = runtime.raw();
     // SAFETY: `instance` is live.
     let physicals = unsafe { instance.enumerate_physical_devices() }.expect("the physical devices");
     let mut checked = 0;
@@ -1150,7 +1140,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             "floor: {name} ({version}, {info}) is above the floor; float16 {}, storage reads \
              without format {}, 64-bit atomics on buffers {} and threadgroup memory {}, float64 \
              {}; queue family {}; Private memory type {} (flags {:#x}), Shared memory type {} \
-             (flags {:#x}), ring memory type {} (flags {:#x})",
+             (flags {:#x}), ring memory type {} (flags {:#x}); extensions enabled {:?}; \
+             portability features enabled: imageViewFormatSwizzle {}, \
+             mutableComparisonSamplers {}, multisampleArrayImage {}",
             capabilities.float16,
             capabilities.storage_read_without_format,
             capabilities.buffer_int64_atomics,
@@ -1162,11 +1154,17 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             memory.shared,
             flags(memory.shared),
             memory.ring,
-            flags(memory.ring)
+            flags(memory.ring),
+            capabilities.extensions,
+            capabilities.features.portability.image_view_format_swizzle,
+            capabilities
+                .features
+                .portability
+                .mutable_comparison_samplers,
+            capabilities.features.portability.multisample_array_image
         );
     }
-    // SAFETY: nothing made from `instance` is alive.
-    unsafe { instance.destroy_instance(None) };
+    drop(runtime);
     assert!(checked > 0, "the loader lists no device of this cfg's kind");
     assert!(below.is_empty(), "below the floor: {below:#?}");
 }
