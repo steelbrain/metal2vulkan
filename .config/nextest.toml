@@ -128,6 +128,16 @@ platform = 'cfg(target_os = "linux")'
 filter = 'package(metal2vulkan-runtime) & test(/^tests::video_interop::/)'
 threads-required = 'num-test-threads'
 
+# The new runtime's device test of accesses up to 2 GiB runs alone. Its buffer is one Shared block
+# of `MAX_BUFFER_LENGTH` (2 GiB), host memory where the Shared memory type is the host's (an RTX
+# 2080, NVIDIA 620.70.06). Beside the runtime's compute encoder tests and three other translate
+# tests there, the run's host memory peaked at 4.7 GiB; in a job holding 4 GiB it reached the 4 GiB
+# and another test's Shared block failed with `ERROR_OUT_OF_DEVICE_MEMORY` (one run of two). The
+# same tests without it peaked at 2.4 GiB, and it beside one other test at 2.8 GiB.
+[[profile.default.overrides]]
+filter = 'package(metal2vulkan-rt) & test(/::an_access_up_to_2_gib_lands_at_its_own_word$/)'
+threads-required = 'num-test-threads'
+
 # A GPU whose driver has few channels runs its device tests three at a time
 # (`cargo nextest run --profile few-channels`). On NVIDIA's driver each `VkQueue` is a channel,
 # and a device of the runtime's queue plan takes 18 (14 for the round robin, 2 presenting, the

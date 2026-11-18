@@ -1250,7 +1250,9 @@ mod on_device {
     /// `ob1_storage_buffer` loads `src[idx[t]]` into `out[t]` and stores `0xA0000000 | t` to
     /// `out[idx[8 + t]]`, with `src` and `out` one Shared buffer of [`MAX_BUFFER_LENGTH`] (2 GiB)
     /// bound at its start and the indices near it and up to its last word. Each access lands at
-    /// its own word. A device whose largest block or memory is smaller skips visibly.
+    /// its own word. A device whose largest block or memory is smaller skips visibly. It runs alone
+    /// (`.config/nextest.toml`): its 2 GiB is host memory on a device whose Shared memory type is
+    /// the host's.
     #[test]
     fn an_access_up_to_2_gib_lands_at_its_own_word() {
         let Some(descriptor) = descriptor("ob1_storage_buffer") else {
