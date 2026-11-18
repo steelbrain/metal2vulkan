@@ -1038,6 +1038,17 @@ or does not check is rebuilt from the generations' names, with young counted ful
   first 217 frames of one recorded stream on a Radeon 780M (release build), 23 of its 59 kernel
   contents observed their partition, and their creations' 46 lowerings took 231 ms, 5.0 ms a
   lowering. None of the 23 dispatched its partial-threadgroups module.
+- On Intel's Windows driver (101.2145) for the UHD 630, the driver's compile of a tiling kernel's
+  `VkPipeline`, made with the state, took 1.44 to 1.51 times the old runtime's for the harness's
+  `create_state` kernel: medians of 6,680 to 6,853 µs against 4,473 to 4,761 µs, in three
+  processes of 40 compiles each with no driver cache hit. The workgroup accounts for 1.1 to 1.3 ms
+  of it: the runtime makes the pipeline at 256 threads, the tile it runs every grid of such a
+  kernel in, where the old runtime made it at the dispatch's threadgroup, here one thread. The
+  decode of the pushed tile accounts for 0.4 to 0.55 ms, and the module's device addresses, where
+  the old runtime bound storage-buffer descriptors, for 0.37 to 0.47 ms. The runtime's pipeline
+  layout and its pipeline cache cost nothing measurable there. The cost is paid once per driver
+  cache: the driver keeps compiled pipelines across processes, and the same modules compiled again
+  in a new process took 45 to 48 µs.
 - A kernel that reads anything the encoder does not supply yet, a function table, a
   `[[stage_in]]` fetch, constant data, or a sampler or texture state the translator would take
   from the bound object rather than from its resource ID, is refused (`Gap::KernelInput`). So is
