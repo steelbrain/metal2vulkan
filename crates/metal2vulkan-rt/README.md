@@ -950,6 +950,23 @@ only for a created device, so `PhysicalDevice::check` finds a type with each set
 Whether the Shared type also has `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` decides a Managed buffer's
 form: without it, shaders reach a device copy in Private memory (Memory blocks and buffers).
 
+On a discrete GPU the Shared type is system memory, as Metal keeps a shared resource on a discrete
+Mac's GPU: shaders read a Shared buffer across the host link, and Private and Managed storage put
+the GPU's bytes in device-local memory. A kernel reading 64 MiB of a buffer once, in order, took
+this GPU time (median of 20 runs):
+
+| GPU | Shared | Private |
+|---|---|---|
+| RTX 3090 | 33,720 µs (2.0 GB/s) | 160 µs |
+| RTX 2080 | 33,783 µs (2.0 GB/s) | 340 µs |
+| RX 550 | 23,117 µs (2.9 GB/s) | 1,654 µs |
+| RX 7900 XTX | 9,320 µs (7.2 GB/s) | 162 to 249 µs |
+
+Scattered reads widen the gap (RTX 3090: 2.9 s against 5.1 ms for the same 64 MiB). The
+device-local host-visible type is no alternative: the host reads it at 18 MB/s (RX 7900 XTX) and
+37 MB/s (RX 550), against about 5,500 MB/s from the Shared type, and where resizable BAR is off it
+is a 246 MiB heap (both NVIDIA boards above).
+
 ### Chosen by a query
 
 Five features choose between two forms by the device's answer, and no other feature does: 16-bit
