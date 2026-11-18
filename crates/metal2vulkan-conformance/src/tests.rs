@@ -7940,7 +7940,7 @@ fn a_refusal_of_what_the_device_offers_is_the_runtime_s() {
     )]])));
     // One alternative offered whole is enough; one offered in part is not.
     assert!(offers(&any(vec![
-        vec![Capability::Extension(VkExtension::KhrShaderDrawParameters)],
+        vec![Capability::Extension(VkExtension::ExtShaderStencilExport)],
         vec![feature(VkFeature::SampleRateShading)],
     ])));
     assert!(!offers(&any(vec![vec![
@@ -7948,7 +7948,7 @@ fn a_refusal_of_what_the_device_offers_is_the_runtime_s() {
         feature(VkFeature::ShaderDrawParameters),
     ]])));
     assert!(!offers(&any(vec![vec![Capability::Extension(
-        VkExtension::KhrShaderDrawParameters
+        VkExtension::ExtShaderStencilExport
     )]])));
     assert!(!offers(&Unsupported::not_implemented(
         Feature::SampleRateShading

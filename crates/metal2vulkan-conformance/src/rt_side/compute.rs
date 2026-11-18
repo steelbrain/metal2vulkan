@@ -57,18 +57,17 @@ impl RtSide<'_> {
         })
     }
 
-    fn held_sampler(&self, handle: Handle) -> Answer<&rt::SamplerState> {
-        (self.samplers.get(handle.0 as usize))
-            .ok_or_else(|| Failure::named("NoSuchHandle", format!("sampler {}", handle.0)))
-    }
-
     fn held_pipeline(&self, handle: Handle) -> Answer<&rt::ComputePipelineState> {
         (self.pipelines.get(handle.0 as usize))
             .ok_or_else(|| Failure::named("NoSuchHandle", format!("compute pipeline {}", handle.0)))
     }
 
     /// One step encoded into `encoder`.
-    fn step(&self, encoder: &mut rt::ComputeCommandEncoder, step: &ComputeStep) -> Answer<()> {
+    fn compute_step(
+        &self,
+        encoder: &mut rt::ComputeCommandEncoder,
+        step: &ComputeStep,
+    ) -> Answer<()> {
         match step {
             ComputeStep::Pipeline(state) => {
                 (encoder.set_compute_pipeline_state(self.held_pipeline(*state)?)).map_err(of_rt)
@@ -176,7 +175,7 @@ impl RtSide<'_> {
         let mut refused = Vec::with_capacity(pass.steps.len());
         let mut set = Vec::new();
         for step in pass.steps {
-            let answered = self.step(&mut encoder, step);
+            let answered = self.compute_step(&mut encoder, step);
             if let (Ok(()), ComputeStep::Pipeline(state)) = (&answered, step) {
                 set.push(state.0 as usize);
             }

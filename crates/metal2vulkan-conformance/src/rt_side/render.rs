@@ -81,7 +81,7 @@ fn step_name(step: &RenderStep) -> String {
 }
 
 impl RtSide<'_> {
-    fn held_sampler(&self, handle: Handle) -> Answer<&rt::SamplerState> {
+    pub(super) fn held_sampler(&self, handle: Handle) -> Answer<&rt::SamplerState> {
         (self.samplers.get(handle.0 as usize))
             .ok_or_else(|| Failure::named("NoSuchHandle", format!("sampler {}", handle.0)))
     }
