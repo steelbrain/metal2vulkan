@@ -124,12 +124,18 @@ const _: () = {
 #[derive(Default)]
 pub(crate) struct Tally {
     counts: [u64; METRICS],
+    /// The metrics counted since the tally was last added, a bit each at its index.
+    counted: u32,
 }
+
+// Each metric has its bit in a tally's `counted`.
+const _: () = assert!(METRICS <= u32::BITS as usize);
 
 impl Tally {
     /// Counts one more of `metric`.
     pub(crate) fn count(&mut self, metric: Metric) {
         self.counts[metric as usize] += 1;
+        self.counted |= 1 << metric as usize;
     }
 }
 
@@ -307,13 +313,15 @@ impl Counters {
         self.metric(metric).fetch_add(1, Relaxed);
     }
 
-    /// Adds what `tally` counted, and leaves it at zero.
+    /// Adds what `tally` counted, and leaves it at zero: one atomic add for each metric it
+    /// counted, and none where it counted nothing.
     pub(crate) fn add(&self, tally: &mut Tally) {
-        for (metric, count) in METRIC_ORDER.iter().zip(&mut tally.counts) {
-            if *count > 0 {
-                self.metric(*metric).fetch_add(*count, Relaxed);
-                *count = 0;
-            }
+        while tally.counted != 0 {
+            let at = tally.counted.trailing_zeros() as usize;
+            tally.counted &= tally.counted - 1;
+            let count = tally.counts[at];
+            tally.counts[at] = 0;
+            self.metric(METRIC_ORDER[at]).fetch_add(count, Relaxed);
         }
     }
 
