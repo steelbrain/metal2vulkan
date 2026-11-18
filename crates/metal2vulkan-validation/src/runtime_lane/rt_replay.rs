@@ -329,7 +329,7 @@ fn a_two_copy_stream_s_managed_buffer_keeps_both_copies() {
         check(w, 3, [0; 4])?;
         // An announcement with no write: the next commit puts the CPU's zeros back, which a copy
         // into #5 reads. Then a fill of 9s and a synchronize: the CPU's copy takes the GPU's bytes.
-        w.call("didModifyRange:", 3, 0, &[range.clone()], &[])?;
+        w.call("didModifyRange:", 3, 0, std::slice::from_ref(&range), &[])?;
         let buffer = Value::Map(vec![("Buffer".into(), Value::Object(3))]);
         let second = [
             (copy_from, copy(5)),
