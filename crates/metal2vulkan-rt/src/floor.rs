@@ -269,6 +269,11 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // An image access out of range: a write or an atomic is dropped and a read answers zero, as
     // Metal's, with no guard in the shader. Vulkan 1.3's.
     feature!(vulkan13.robust_image_access => RobustImageAccess),
+    // A render pipeline's color attachments blend each by its own state, as Metal's do, and a
+    // fragment function writes and atomically updates device memory, as Metal's may. Vulkan 1.4
+    // requires both of every graphics device.
+    feature!(core.independent_blend => IndependentBlend),
+    feature!(core.fragment_stores_and_atomics => FragmentStoresAndAtomics),
     // Submission, barriers and render passes.
     feature!(vulkan12.timeline_semaphore),
     // GPU times: a command buffer's two timestamp queries reset on the host as it retires, so no

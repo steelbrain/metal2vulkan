@@ -66,6 +66,8 @@ fn at_the_floor() -> Queried {
     features.vulkan13.subgroup_size_control = vk::TRUE;
     features.vulkan13.compute_full_subgroups = vk::TRUE;
     features.vulkan13.robust_image_access = vk::TRUE;
+    features.core.independent_blend = vk::TRUE;
+    features.core.fragment_stores_and_atomics = vk::TRUE;
     features.vulkan12.timeline_semaphore = vk::TRUE;
     features.vulkan12.host_query_reset = vk::TRUE;
     features.vulkan13.synchronization2 = vk::TRUE;
@@ -132,8 +134,9 @@ fn holds(features: &Features, feature: &crate::floor::Feature) -> bool {
 
 /// The translator's description is restricted to what device creation enables: a feature or an
 /// extension the device reports beyond the floor is outside the enable set, so the translator's
-/// profile never relies on it, and the floor's `robustImageAccess` and `nullDescriptor` are in it.
-/// `VK_EXT_robustness2`'s robust buffer and image access stay off where the device reports them.
+/// profile never relies on it, and the floor's `robustImageAccess`, `independentBlend`,
+/// `fragmentStoresAndAtomics` and `nullDescriptor` are in it. `VK_EXT_robustness2`'s robust buffer
+/// and image access stay off where the device reports them.
 #[test]
 fn the_translator_sees_only_what_device_creation_enables() {
     use crate::floor::shader_enables;
@@ -155,6 +158,10 @@ fn the_translator_sees_only_what_device_creation_enables() {
     );
     let enables = shader_enables(&capabilities);
     assert!(enables.features.contains(&VkFeature::RobustImageAccess));
+    assert!(enables.features.contains(&VkFeature::IndependentBlend));
+    assert!(enables
+        .features
+        .contains(&VkFeature::FragmentStoresAndAtomics));
     assert!(enables.features.contains(&VkFeature::NullDescriptor));
     for reported in [
         VkFeature::GeometryShader,
@@ -209,6 +216,8 @@ fn a_device_at_the_floor_is_above_it() {
     assert_eq!(enabled.vulkan11.storage_input_output16, vk::FALSE);
     assert_eq!(enabled.vulkan12.sampler_mirror_clamp_to_edge, vk::FALSE);
     assert_eq!(enabled.vulkan13.robust_image_access, vk::TRUE);
+    assert_eq!(enabled.core.independent_blend, vk::TRUE);
+    assert_eq!(enabled.core.fragment_stores_and_atomics, vk::TRUE);
 }
 
 #[test]
@@ -219,7 +228,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 29] = [
+    let cases: [(Clear, Missing); 31] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -325,6 +334,14 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan13.robust_image_access = vk::FALSE,
             feature(V13, "robustImageAccess"),
+        ),
+        (
+            |f| f.core.independent_blend = vk::FALSE,
+            feature(CORE, "independentBlend"),
+        ),
+        (
+            |f| f.core.fragment_stores_and_atomics = vk::FALSE,
+            feature(CORE, "fragmentStoresAndAtomics"),
         ),
         (
             |f| f.vulkan13.synchronization2 = vk::FALSE,
