@@ -232,7 +232,7 @@ impl Pool {
 
     /// The zeroed blocks of `class` no one holds: the tests wait for the block-maker thread to
     /// have made its ready ones, and with them its fills' submissions.
-    #[cfg(test)]
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn idle(&self, class: MemoryClass) -> usize {
         self.lock().idle[class.index()].len()
     }

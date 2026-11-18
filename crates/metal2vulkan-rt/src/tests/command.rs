@@ -800,8 +800,14 @@ pub(crate) mod on_device {
             let buffer = arena.buffer();
             let queue = queue(&device);
             behind_two(name, &device, &queue, |running, _| {
+                within(name, || {
+                    (running.iter()).all(|command_buffer| {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    })
+                });
                 drop(queue.command_buffer().expect("a command buffer"));
                 let again = queue.command_buffer().expect("a command buffer");
+                // Both were submitted and neither had completed when the slot was taken again.
                 let checked = running.iter().all(|command_buffer| {
                     command_buffer.status() == CommandBufferStatus::Scheduled
                 });
