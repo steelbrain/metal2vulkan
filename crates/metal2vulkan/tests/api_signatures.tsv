@@ -1090,7 +1090,6 @@ const	metal2vulkan-air::tensor_ops::DESCRIPTOR_BYTES	pub const DESCRIPTOR_BYTES:
 const	metal2vulkan-air::tensor_ops::PREFIX	pub const PREFIX: &[u8]
 const	metal2vulkan-air::tensor_ops::RESERVED_INDEX	pub const RESERVED_INDEX: u16
 const	metal2vulkan-air::tensor_ops::SECTION	pub const SECTION: &[u8]
-const	metal2vulkan-rt::BLOCK_LEN	pub const BLOCK_LEN: u64
 const	metal2vulkan-rt::HOST_DOMAIN	#[cfg(all(unix, not(target_os = "macos")))] pub const HOST_DOMAIN: vk::TimeDomainKHR
 const	metal2vulkan-rt::HOST_DOMAIN	#[cfg(target_os = "macos")] pub const HOST_DOMAIN: vk::TimeDomainKHR
 const	metal2vulkan-rt::HOST_DOMAIN	#[cfg(windows)] pub const HOST_DOMAIN: vk::TimeDomainKHR
@@ -1194,7 +1193,6 @@ const-value	metal2vulkan-air::tensor_ops::DESCRIPTOR_BYTES	20
 const-value	metal2vulkan-air::tensor_ops::PREFIX	b"__tensorops_impl_matmul2d_op_"
 const-value	metal2vulkan-air::tensor_ops::RESERVED_INDEX	u16::MAX
 const-value	metal2vulkan-air::tensor_ops::SECTION	b"air.externally_defined"
-const-value	metal2vulkan-rt::BLOCK_LEN	256 <<20
 const-value	metal2vulkan-rt::HOST_DOMAIN	vk::TimeDomainKHR::CLOCK_MONOTONIC
 const-value	metal2vulkan-rt::HOST_DOMAIN	vk::TimeDomainKHR::CLOCK_MONOTONIC_RAW
 const-value	metal2vulkan-rt::HOST_DOMAIN	vk::TimeDomainKHR::QUERY_PERFORMANCE_COUNTER
@@ -9362,6 +9360,7 @@ method	metal2vulkan-rt::Library::is_empty	pub fn is_empty(&self) -> bool
 method	metal2vulkan-rt::Library::len	pub fn len(&self) -> u32
 method	metal2vulkan-rt::Library::library_type	pub fn library_type(&self) -> LibraryType
 method	metal2vulkan-rt::Library::parse	pub fn parse(bytes: &[u8]) -> Result<Library, Error>
+method	metal2vulkan-rt::MemoryClass::block_len	pub const fn block_len(self) -> u64
 method	metal2vulkan-rt::PhysicalDevice::check	pub fn check(&self) -> Result<floor::Capabilities, floor::BelowFloor>
 method	metal2vulkan-rt::PhysicalDevice::raw	pub fn raw(&self) -> vk::PhysicalDevice
 method	metal2vulkan-rt::PrecisionNote::of_float_operator	pub fn of_float_operator(op: AirBin, width: FloatWidth, fmf: FastMath, p: &DeviceProfile, math: EntryMath) -> Option<BTreeSet<PrecisionNote>>

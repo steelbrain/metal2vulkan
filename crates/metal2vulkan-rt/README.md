@@ -85,13 +85,19 @@ in its memory.
   block's life) memory, as a `BlockInfo`: its number, class, length, device address and, for
   Shared, its host address. One `VkBuffer` spans each block, with every buffer usage and a device
   address. Nothing in a block is exportable.
-- Up to `BLOCK_LEN` (256 MiB) a block is pooled. `Device::new` makes one block of each class
-  before it returns, and the block-maker thread keeps one of each class ready after that, made off
-  every caller's path, so a take waits only when none is ready. No block is so made beside the
-  consumer's first calls: on an RTX 3090 (NVIDIA's Linux driver), a pipeline state's creation right
-  after `Device::new` waited 47 to 61 ms behind the allocation of the first Shared block's memory. Past
-  `BLOCK_LEN` a block is dedicated: the length rounded up to 64 KiB, made in the call, up to the
-  device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
+- Up to its class's `MemoryClass::block_len`, 16 MiB of Shared memory and 64 MiB of Private on
+  every device, a block is pooled. `Device::new` makes one block of each class before it returns,
+  and the block-maker thread keeps one of each class ready after that, made off every caller's
+  path, so a take waits only when none is ready. No block is so made beside the consumer's first
+  calls: on an RTX 3090 (NVIDIA's Linux driver), a pipeline state's creation right after
+  `Device::new` waited 47 to 61 ms behind the allocation of a first 256 MiB Shared block's memory.
+  A driver may hold the device's other calls for the whole of a block's allocation, longer for
+  more bytes, so the lengths are short: there a creation beside a Shared block's making took 6 to
+  8 ms at 16 MiB (40 to 45 ms at 256 MiB), and 3.4 to 4.6 ms beside a 64 MiB Private block's. 16
+  MiB is the largest piece a guest's allocator takes for its buffers; at 64 MiB a texture or a
+  Managed buffer's device copy of 32 MiB takes a pooled Private block. Past its class's length a
+  block is dedicated: the length rounded up to 64 KiB, made in the call, up to the device's
+  `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
 - A Private allocation takes the device-local Private type. Where that allocation itself fails
   out of device memory (never a budget poll), it takes the next memory type the resource allows,
   in the device's order: `BlockInfo::device_local` is false for such a block, and
@@ -133,7 +139,7 @@ in its memory.
   which `contents` answers. The device's memory-type query picks its form. Where the Shared type
   is device-local, the buffer is its bytes, as a Shared buffer is, and `did_modify_range` does
   nothing. Elsewhere shaders reach a device copy at `gpu_address`: a place in a copy block, a
-  Private block of the pool (a dedicated one past `BLOCK_LEN`) that holds device copies alone. Its
+  Private block of the pool (a dedicated one past 64 MiB) that holds device copies alone. Its
   first `copied` bytes are copied from the consumer's and the rest zeroed, in the upload.
   `Buffer::did_modify_range(start, length)` marks a range changed (`Refusal::ModifiedRange` past
   the buffer): the upload copies it into the device copy as it goes, ahead of every command buffer
@@ -193,13 +199,13 @@ made, with no lock, and never rewritten for layouts.
   are. The image is placed in a texture block: a Private block the device takes from its pool, at
   the first place with room at the image's alignment, so a texture makes no allocation. It has an
   allocation of its own only where the device requires one for it (`requiresDedicatedAllocation`;
-  preferring one is no reason), where it is larger than a block, or where the blocks' memory type
-  does not serve it. A place is free again once the image is freed; one empty texture block is kept,
-  and another that empties goes back to the pool. `index` is given exactly where shaders reach the
-  texture, shader-read or shader-write usage (`Refusal::TextureIndex` otherwise), from a live grant
-  of the class the usage picks: `IndexClass::StorageTexture` with shader-write usage, else
-  `IndexClass::Texture`. `TextureUsage` with no bits is Metal's unknown usage: shader read and
-  write, render target and pixel-format view.
+  preferring one is no reason), where it is larger than a Private block (64 MiB), or where the
+  blocks' memory type does not serve it. A place is free again once the image is freed; one empty
+  texture block is kept, and another that empties goes back to the pool. `index` is given exactly
+  where shaders reach the texture, shader-read or shader-write usage (`Refusal::TextureIndex`
+  otherwise), from a live grant of the class the usage picks: `IndexClass::StorageTexture` with
+  shader-write usage, else `IndexClass::Texture`. `TextureUsage` with no bits is Metal's unknown
+  usage: shader read and write, render target and pixel-format view.
 - The image's usage is the descriptor's plus transfer source and destination. Its home layout is
   general where it has a storage element, shader-read-only where shaders only read it, and the
   attachment layout where only render passes use it. Its elements of set 1 are written before the

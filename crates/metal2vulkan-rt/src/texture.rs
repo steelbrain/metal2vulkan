@@ -26,7 +26,7 @@ use crate::buffer::Buffer;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, TextureViewKind};
-use crate::memory::{self, Block, BlockId, MemoryClass, BLOCK_LEN};
+use crate::memory::{self, Block, BlockId, MemoryClass};
 use crate::places::Place;
 use crate::reaper::{Free, Job};
 use crate::staging::Stage;
@@ -1434,7 +1434,7 @@ impl Made {
         // A place in a texture block where the image takes the blocks' memory type and the device
         // does not require an allocation of its own for it (preferring one is no reason).
         let placed = dedicated.requires_dedicated_allocation == vk::FALSE
-            && requirements.size <= BLOCK_LEN
+            && requirements.size <= MemoryClass::Private.block_len()
             && bits & (1 << core.memory_type(MemoryClass::Private)) != 0;
         // Where the device-local memory has no texture block left, memory of its own.
         let pooled = match placed && matches!(bind, Bind::Pooled) {

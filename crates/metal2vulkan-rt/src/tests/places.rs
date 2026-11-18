@@ -3,7 +3,8 @@
 //! blocks of the pool with no allocation of their own: a block's worth of 1 MiB textures takes
 //! one block and then a second, releasing them gives one back to the pool and keeps the other,
 //! textures made and released in that block allocate nothing, and every gauge reads zero after
-//! teardown.
+//! teardown; pooled blocks are 16 MiB Shared and 64 MiB Private, and a texture of 32 MiB takes a
+//! place in one.
 
 use crate::places::Ranges;
 
@@ -90,7 +91,7 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Device, DeviceOptions, Gauges, IndexClass, Instance, MemoryClass, PixelFormat,
-        TextureDescriptor, TextureType, BLOCK_LEN,
+        TextureDescriptor, TextureType,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -120,7 +121,7 @@ mod on_device {
             });
             let base = counters.gauges().blocks;
             let made = counters.metrics().blocks_made;
-            let most = 2 * BLOCK_LEN / MIB;
+            let most = 2 * MemoryClass::Private.block_len() / MIB;
             let grant = device
                 .grant_indices(IndexClass::Texture, 4096, most as u32)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -143,7 +144,7 @@ mod on_device {
             }
             let in_first = textures.len() as u64 - 1;
             assert!(
-                in_first > BLOCK_LEN / MIB / 2,
+                in_first > MemoryClass::Private.block_len() / MIB / 2,
                 "{name}: the first block held {in_first} textures of 1 MiB"
             );
             // Each block the pool's ready one, which the pool made again.
@@ -194,6 +195,60 @@ mod on_device {
                 "places: {name}: {in_first} textures of 1 MiB in the first block; metrics {:?}",
                 counters.metrics()
             );
+        }
+    }
+
+    /// Pooled blocks are 16 MiB of Shared memory and 64 MiB of Private, on every device: a take
+    /// up to its class's length is a pooled block of that length, one past it a dedicated block,
+    /// and a texture of 32 MiB is placed in a texture block, with no allocation of its own.
+    #[test]
+    fn every_device_pools_16_mib_shared_and_64_mib_private_blocks() {
+        const MIB: u64 = 1 << 20;
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            for (class, len) in [
+                (MemoryClass::Shared, 16 * MIB),
+                (MemoryClass::Private, 64 * MIB),
+            ] {
+                assert_eq!(class.block_len(), len, "{name}: {class:?}");
+                let pooled = (device.take_block(class, len))
+                    .unwrap_or_else(|error| panic!("{name}: a pooled {class:?} block: {error}"));
+                assert_eq!(pooled.len, len, "{name}: a pooled {class:?} block");
+                let dedicated = (device.take_block(class, len + 1))
+                    .unwrap_or_else(|error| panic!("{name}: a dedicated {class:?} block: {error}"));
+                assert_eq!(
+                    dedicated.len,
+                    len + (64 << 10),
+                    "{name}: a dedicated {class:?} block"
+                );
+                for block in [pooled, dedicated] {
+                    (device.release_block(block.id))
+                        .unwrap_or_else(|error| panic!("{name}: a release: {error}"));
+                }
+            }
+            let grant = device
+                .grant_indices(IndexClass::Texture, 4096, 1)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4096, 2048);
+            let texture = (device.new_texture(&d, Some(4096)))
+                .unwrap_or_else(|error| panic!("{name}: a texture of 32 MiB: {error}"));
+            assert_eq!(
+                core.places.blocks(),
+                1,
+                "{name}: a texture of 32 MiB in a texture block"
+            );
+            drop(texture);
+            wait_until("the texture freed", || counters.gauges().textures == 0);
+            device
+                .release_indices(grant)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
         }
     }
 }

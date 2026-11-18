@@ -1,6 +1,6 @@
 //! The places of the stream's own buffers in the blocks the backend takes: each memory class's
-//! blocks of `BLOCK_LEN`, first fit at Metal's 256-byte buffer alignment, and a block of its own
-//! for a buffer past `BLOCK_LEN`. A buffer's place is free again only once every command buffer
+//! pooled blocks (`MemoryClass::block_len`), first fit at Metal's 256-byte buffer alignment, and
+//! a block of its own for a buffer past the class's block length. A buffer's place is free again only once every command buffer
 //! committed before the buffer was released has completed, as Metal keeps a released buffer for
 //! the work that names it.
 
@@ -49,7 +49,7 @@ impl Places {
         completed: u64,
     ) -> Result<Place, rt::Error> {
         self.free_completed(completed)?;
-        if len > rt::BLOCK_LEN {
+        if len > class.block_len() {
             let info = self.device.take_block(class, len)?;
             return Ok(Place {
                 block: info.id,
@@ -71,7 +71,7 @@ impl Places {
                 });
             }
         }
-        let info = self.device.take_block(class, rt::BLOCK_LEN)?;
+        let info = self.device.take_block(class, class.block_len())?;
         let mut free = Vec::new();
         free.push(0..info.len);
         let range = take_from(&mut free, span).expect("a new block holds any pooled place");

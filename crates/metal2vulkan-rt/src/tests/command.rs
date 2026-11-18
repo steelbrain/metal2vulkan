@@ -11,7 +11,7 @@ pub(crate) mod on_device {
     use crate::{
         host_time, BlockId, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
         CommandBufferStatus, CommandQueue, Device, DeviceOptions, DispatchType, Error, Gauges,
-        Instance, MemoryClass, Refusal, SharedEvent, BLOCK_LEN,
+        Instance, MemoryClass, Refusal, SharedEvent,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -674,7 +674,7 @@ pub(crate) mod on_device {
             device.core().pool.idle(MemoryClass::Private) > 0
         });
         device
-            .new_buffer(block.id, 0, BLOCK_LEN, false)
+            .new_buffer(block.id, 0, MemoryClass::Private.block_len(), false)
             .expect("a buffer")
     }
 
@@ -863,7 +863,15 @@ pub(crate) mod on_device {
                 command_buffer
                     .record_for_test(&[&work], |device, command| {
                         // SAFETY: as `busy`'s.
-                        unsafe { device.cmd_fill_buffer(command, target, 0, BLOCK_LEN, word) };
+                        unsafe {
+                            device.cmd_fill_buffer(
+                                command,
+                                target,
+                                0,
+                                MemoryClass::Private.block_len(),
+                                word,
+                            )
+                        };
                     })
                     .expect("a fill");
                 log.handlers(label, &command_buffer);
@@ -1402,7 +1410,7 @@ pub(crate) mod on_device {
         // Blocks stay taken; a reader thread reads one; the block-maker zeroes released ones; a
         // command buffer is held.
         let block = device
-            .take_block(MemoryClass::Shared, BLOCK_LEN)
+            .take_block(MemoryClass::Shared, MemoryClass::Shared.block_len())
             .expect("a Shared block");
         let released: Vec<_> = (0..3)
             .map(|_| device.take_block(MemoryClass::Shared, 1).expect("a block"))
@@ -1410,7 +1418,7 @@ pub(crate) mod on_device {
         let address = block.contents.expect("contents").as_ptr() as usize;
         *lock(&READER) = Some(thread::spawn(move || {
             while READING.load(Ordering::Acquire) {
-                for offset in (0..BLOCK_LEN as usize).step_by(4096) {
+                for offset in (0..MemoryClass::Shared.block_len() as usize).step_by(4096) {
                     // SAFETY: the block stays taken and mapped until the process ends.
                     unsafe { ((address + offset) as *const u8).read_volatile() };
                 }

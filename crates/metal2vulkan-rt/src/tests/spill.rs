@@ -10,9 +10,7 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::each_device;
-    use crate::{
-        MemoryClass, PixelFormat, TextureDescriptor, TextureType, TextureUsage, BLOCK_LEN,
-    };
+    use crate::{MemoryClass, PixelFormat, TextureDescriptor, TextureType, TextureUsage};
     use std::sync::atomic::Ordering::Relaxed;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -37,7 +35,8 @@ mod on_device {
 
             // A dedicated Private block, made in the call, whose device-local allocation fails.
             core.fail_private.store(1, Relaxed);
-            let spilled = device.take_block(MemoryClass::Private, BLOCK_LEN + 1);
+            let spilled =
+                device.take_block(MemoryClass::Private, MemoryClass::Private.block_len() + 1);
             assert_eq!(
                 core.fail_private.load(Relaxed),
                 0,
@@ -70,7 +69,7 @@ mod on_device {
             assert!(plain.device_local, "{name}: the ready block");
             wait_until("the pool's spilled block", || {
                 core.pool.idle(MemoryClass::Private) == 1
-                    && counters.gauges().spilled_bytes >= BLOCK_LEN
+                    && counters.gauges().spilled_bytes >= MemoryClass::Private.block_len()
             });
 
             // A texture takes no texture block in it.

@@ -10,12 +10,6 @@ use std::collections::HashSet;
 use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
-/// No Metal counterpart: a pooled block's length, 256 MiB.
-///
-/// [`Device::take_block`](crate::Device::take_block) gives a pooled block for any length up to
-/// this, and a dedicated one past it.
-pub const BLOCK_LEN: u64 = 256 << 20;
-
 /// Blocks of each class the device's making makes ([`stock`]) and the block-maker thread keeps
 /// ready after it.
 const READY: usize = 1;
@@ -39,6 +33,27 @@ pub enum MemoryClass {
 
 impl MemoryClass {
     const ALL: [MemoryClass; 2] = [MemoryClass::Private, MemoryClass::Shared];
+
+    /// No Metal counterpart: the length of the class's pooled block, on every device: 16 MiB of
+    /// Shared memory, 64 MiB of Private.
+    ///
+    /// [`Device::take_block`](crate::Device::take_block) gives a pooled block for any length up
+    /// to it, and a dedicated one past it.
+    ///
+    /// A driver may hold the device's other calls (pipeline creation, submissions, other
+    /// allocations) for the whole of a block's `vkAllocateMemory`, and the hold grows with the
+    /// bytes, so the length sets how long one hold lasts. On an RTX 3090 (NVIDIA's Linux
+    /// driver) a pipeline state's creation beside a Shared block's making took 40 to 45 ms at
+    /// 256 MiB and 6 to 8 ms at 16 MiB, against 3 to 4 ms settled. Shared blocks are 16 MiB, the
+    /// largest piece a guest's allocator takes for its buffers. Private memory holds less: 3.4 to
+    /// 4.6 ms beside a 64 MiB block, at most 1 ms more than beside a 32 MiB one, and at 64 MiB a
+    /// texture or a Managed buffer's device copy of 32 MiB takes a pooled block.
+    pub const fn block_len(self) -> u64 {
+        match self {
+            MemoryClass::Private => 64 << 20,
+            MemoryClass::Shared => 16 << 20,
+        }
+    }
 
     fn index(self) -> usize {
         match self {
@@ -73,8 +88,8 @@ pub struct BlockInfo {
     pub id: BlockId,
     /// Its storage mode.
     pub class: MemoryClass,
-    /// [`BLOCK_LEN`] for a pooled block; for a dedicated one, the length asked for rounded up to
-    /// 64 KiB.
+    /// [`MemoryClass::block_len`] for a pooled block; for a dedicated one, the length asked for
+    /// rounded up to 64 KiB.
     pub len: u64,
     /// `gpuAddress` of the block's first byte: its `VkBuffer`'s device address.
     pub gpu_address: u64,
@@ -364,13 +379,14 @@ fn number(state: &mut State) -> Result<BlockId, Error> {
 /// class, so the consumer's first block of each class is ready as the device is, and no block is
 /// made beside the consumer's first calls. A driver may hold the device's other calls while it
 /// allocates a block's memory: on an RTX 3090 (NVIDIA's Linux driver), a pipeline state's creation
-/// right after the device's making waited 47 to 61 ms behind the block-maker thread's first Shared
-/// block, against 2.4 to 3.1 ms once the block was made here. A class whose block cannot be made
+/// right after the device's making waited 47 to 61 ms behind the block-maker thread's first 256 MiB
+/// Shared block, against 2.4 to 3.1 ms once the block was made here. A class whose block cannot be made
 /// keeps why for its next taker, as the block-maker thread does.
 pub(crate) fn stock(core: &Core) {
     for class in MemoryClass::ALL {
         for _ in 0..READY {
-            let made = (core.pool.number()).and_then(|id| make(core, class, BLOCK_LEN, id, true));
+            let made =
+                (core.pool.number()).and_then(|id| make(core, class, class.block_len(), id, true));
             let mut state = core.pool.lock();
             match made {
                 Ok(memory) => state.idle[class.index()].push(memory),
@@ -419,7 +435,7 @@ pub(crate) fn run(core: Arc<Core>) {
         if let Some(class) = wanted {
             let id = number(&mut state);
             drop(state);
-            let made = id.and_then(|id| make(&core, class, BLOCK_LEN, id, true));
+            let made = id.and_then(|id| make(&core, class, class.block_len(), id, true));
             state = pool.lock();
             match made {
                 Ok(memory) => state.idle[class.index()].push(memory),

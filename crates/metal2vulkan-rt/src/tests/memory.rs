@@ -70,7 +70,7 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus, Device, DeviceOptions,
-        Error, Gauges, Instance, Limit, MemoryClass, Refusal, BLOCK_LEN, MAX_BUFFER_LENGTH,
+        Error, Gauges, Instance, Limit, MemoryClass, Refusal, MAX_BUFFER_LENGTH,
     };
     use ash::vk;
     use std::collections::HashMap;
@@ -239,16 +239,33 @@ mod on_device {
             });
         }
 
+        /// Copies `size` bytes of `from` at `offset` to the start of `to`.
         fn copy(&self, from: vk::Buffer, to: vk::Buffer, offset: u64, size: u64) {
             let region = [vk::BufferCopy {
                 src_offset: offset,
-                dst_offset: offset,
+                dst_offset: 0,
                 size,
             }];
             // SAFETY: recorded in `run`; the range is in both buffers.
             self.run(|device, command| unsafe {
                 device.cmd_copy_buffer(command, from, to, &region)
             });
+        }
+    }
+
+    impl Gpu {
+        /// Whether every byte of the Private block `private` reads zero, copied a Shared block's
+        /// length at a time to the start of the pooled Shared block `shared`, whose bytes are
+        /// `host`.
+        fn reads_zero(&self, private: vk::Buffer, shared: vk::Buffer, host: &mut [u8]) -> bool {
+            let step = MemoryClass::Shared.block_len();
+            (0..MemoryClass::Private.block_len())
+                .step_by(step as usize)
+                .all(|offset| {
+                    host.fill(0xFF);
+                    self.copy(private, shared, offset, step);
+                    host.iter().all(|&byte| byte == 0)
+                })
         }
     }
 
@@ -372,7 +389,10 @@ mod on_device {
             let shared = device
                 .take_block(MemoryClass::Shared, 1)
                 .expect("a Shared block");
-            assert_eq!((shared.class, shared.len), (MemoryClass::Shared, BLOCK_LEN));
+            assert_eq!(
+                (shared.class, shared.len),
+                (MemoryClass::Shared, MemoryClass::Shared.block_len())
+            );
             assert_ne!(shared.gpu_address, 0, "{name}: a Shared block's address");
             let host = bytes(shared);
             assert!(
@@ -382,23 +402,20 @@ mod on_device {
 
             // A new Private block reads zero, copied into the Shared block.
             let private = device
-                .take_block(MemoryClass::Private, BLOCK_LEN)
+                .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
                 .expect("a Private block");
             assert_eq!(
                 (private.class, private.len, private.contents),
-                (MemoryClass::Private, BLOCK_LEN, None)
+                (MemoryClass::Private, MemoryClass::Private.block_len(), None)
             );
             assert_ne!(private.gpu_address, 0, "{name}: a Private block's address");
             assert_ne!(private.id, shared.id);
-            host.fill(0xFF);
-            gpu.copy(
-                vk_buffer(&device, private.id),
-                vk_buffer(&device, shared.id),
-                0,
-                BLOCK_LEN,
-            );
             assert!(
-                host.iter().all(|&byte| byte == 0),
+                gpu.reads_zero(
+                    vk_buffer(&device, private.id),
+                    vk_buffer(&device, shared.id),
+                    host
+                ),
                 "{name}: a new Private block"
             );
 
@@ -417,7 +434,7 @@ mod on_device {
                 (shared.id, 4096, 256)
             );
             let whole = device
-                .new_buffer(private.id, 0, BLOCK_LEN, false)
+                .new_buffer(private.id, 0, MemoryClass::Private.block_len(), false)
                 .expect("a Private buffer");
             assert_eq!(
                 (whole.gpu_address(), whole.contents()),
@@ -498,13 +515,14 @@ mod on_device {
                     other => panic!("{name}: a buffer of {length}: {:?}", other.err()),
                 }
             }
-            for (offset, length) in [(BLOCK_LEN - 4, 8), (u64::MAX, 2), (BLOCK_LEN, 1)] {
+            let shared_len = MemoryClass::Shared.block_len();
+            for (offset, length) in [(shared_len - 4, 8), (u64::MAX, 2), (shared_len, 1)] {
                 match device.new_buffer(shared.id, offset, length, false) {
                     Err(Error::Refused(Refusal::BufferPastBlock {
                         offset: o,
                         length: l,
                         block_len,
-                    })) => assert_eq!((o, l, block_len), (offset, length, BLOCK_LEN)),
+                    })) => assert_eq!((o, l, block_len), (offset, length, shared_len)),
                     other => panic!("{name}: {offset}+{length}: {:?}", other.err()),
                 }
             }
@@ -513,11 +531,11 @@ mod on_device {
                 Err(Error::Limit(Limit::BlockLen { len: u64::MAX, .. }))
             ));
 
-            // A dedicated block: past BLOCK_LEN, rounded up to 64 KiB, zeroed.
+            // A dedicated block: past the class's block length, rounded up to 64 KiB, zeroed.
             let dedicated = device
-                .take_block(MemoryClass::Shared, BLOCK_LEN + 1)
+                .take_block(MemoryClass::Shared, shared_len + 1)
                 .expect("a dedicated block");
-            assert_eq!(dedicated.len, BLOCK_LEN + (64 << 10));
+            assert_eq!(dedicated.len, shared_len + (64 << 10));
             let dedicated_host = bytes(dedicated);
             assert!(
                 dedicated_host.iter().all(|&byte| byte == 0),
@@ -634,7 +652,7 @@ mod on_device {
             let taken: Vec<BlockInfo> = (0..3)
                 .map(|_| {
                     device
-                        .take_block(MemoryClass::Shared, BLOCK_LEN)
+                        .take_block(MemoryClass::Shared, MemoryClass::Shared.block_len())
                         .expect("a block")
                 })
                 .collect();
@@ -692,7 +710,12 @@ mod on_device {
                 .take_block(MemoryClass::Private, 1)
                 .expect("a Private block");
             handed.push(private.id);
-            gpu.fill(vk_buffer(&device, private.id), 0, BLOCK_LEN, u32::MAX);
+            gpu.fill(
+                vk_buffer(&device, private.id),
+                0,
+                MemoryClass::Private.block_len(),
+                u32::MAX,
+            );
             device.release_block(private.id).expect("a release");
             // The pool zeroes and keeps it before it makes anything, so it is one of the next two.
             let next: Vec<BlockInfo> = (0..2)
@@ -704,15 +727,12 @@ mod on_device {
                 .find(|block| block.id == private.id)
                 .expect("the released Private block among the next two");
             assert_eq!(back.gpu_address, private.gpu_address);
-            host.fill(0xFF);
-            gpu.copy(
-                vk_buffer(&device, private.id),
-                vk_buffer(&device, again.id),
-                0,
-                BLOCK_LEN,
-            );
             assert!(
-                host.iter().all(|&byte| byte == 0),
+                gpu.reads_zero(
+                    vk_buffer(&device, private.id),
+                    vk_buffer(&device, again.id),
+                    host
+                ),
                 "{name}: a Private block taken again"
             );
 

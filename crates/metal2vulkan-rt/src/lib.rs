@@ -55,7 +55,7 @@ pub use event::{Event, SharedEvent};
 pub use extension::{ConsumerFeature, DeviceExtension};
 pub use fence::Fence;
 pub use instance::{Instance, PhysicalDevice};
-pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass, BLOCK_LEN};
+pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass};
 /// `MTLLibrary`: the translator's, read from AIR or a metallib.
 /// `MTLSamplerDescriptor`: the translator's.
 pub use metal2vulkan::bind::SamplerDescriptor;

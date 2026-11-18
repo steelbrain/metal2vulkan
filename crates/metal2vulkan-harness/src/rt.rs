@@ -222,7 +222,7 @@ struct Placed {
 impl Heap {
     /// A place for a buffer of `length` bytes in `class` memory.
     fn place(&mut self, class: rt::MemoryClass, length: u64) -> Result<Placed> {
-        if length > rt::BLOCK_LEN {
+        if length > class.block_len() {
             let block = self.device.take_block(class, length).map_err(error)?.id;
             return Ok(Placed { block, range: None });
         }

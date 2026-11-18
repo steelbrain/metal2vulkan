@@ -21,7 +21,7 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Device, DeviceOptions, Gauges, IndexClass, Instance, MemoryClass, PixelFormat, Region,
-        StorageMode, TextureDescriptor, TextureType, BLOCK_LEN,
+        StorageMode, TextureDescriptor, TextureType,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -209,7 +209,7 @@ mod on_device {
             // A Private block released after a zero fill: the next fill sends the upload, and the
             // block comes back to the pool.
             let released = device
-                .take_block(MemoryClass::Private, BLOCK_LEN)
+                .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = device
                 .new_buffer(released.id, 0, 256, true)
@@ -219,9 +219,12 @@ mod on_device {
                 .release_block(released.id)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let (_, bytes, _) = core.work.pending();
-            assert!(bytes >= BLOCK_LEN, "{name}: the released block is counted");
+            assert!(
+                bytes >= MemoryClass::Private.block_len(),
+                "{name}: the released block is counted"
+            );
             let fills = device
-                .take_block(MemoryClass::Private, BLOCK_LEN)
+                .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = device
                 .new_buffer(fills.id, 0, 256, true)

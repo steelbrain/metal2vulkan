@@ -12,9 +12,7 @@ use crate::floor;
 use crate::hazard::Ids;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::kernel_map::KernelMap;
-use crate::memory::{
-    self, Block, BlockId, BlockInfo, BlockMappings, Memory, MemoryClass, Pool, BLOCK_LEN,
-};
+use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, Memory, MemoryClass, Pool};
 use crate::pipeline::PUSH_BYTES;
 use crate::places::Places;
 use crate::reaper::{self, Job, Reaper};
@@ -552,9 +550,11 @@ impl Device {
     /// No Metal counterpart: takes a block of `class` memory at least `len` bytes long, for the
     /// consumer to place buffers in.
     ///
-    /// For `len` up to [`BLOCK_LEN`] it is a pooled block. The device's making makes one of each
-    /// class, and the block-maker thread makes the next ones ahead of need, off every caller's
-    /// path, so this call waits only when no block of the class is ready. Past [`BLOCK_LEN`] it is a dedicated block, made in this call.
+    /// For `len` up to the class's [`MemoryClass::block_len`] (16 MiB Shared, 64 MiB Private) it
+    /// is a pooled block of that length. The device's making makes one of each class, and the
+    /// block-maker thread makes the next ones ahead of need, off every caller's path, so this
+    /// call waits only when no block of the class is ready. Past it, it is a dedicated block,
+    /// made in this call.
     ///
     /// Every block reads zero, as Metal's new buffers do, whether new or taken again: a Shared
     /// block is zeroed through its mapping, which also makes each page resident before the block
@@ -1016,13 +1016,13 @@ impl Core {
         self.device_local & (1 << self.memory_types.shared) != 0
     }
 
-    /// A block of `class` for `len` bytes: a pooled one up to [`BLOCK_LEN`], else a dedicated one
+    /// A block of `class` for `len` bytes: a pooled one up to the class's block length, else a dedicated one
     /// of `len` rounded up to 64 KiB, made in the call.
     ///
     /// Err: what [`Pool::take`] and [`memory::make`] return;
     /// [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's longest block.
     pub(crate) fn take_memory(&self, class: MemoryClass, len: u64) -> Result<Memory, Error> {
-        if len <= BLOCK_LEN {
+        if len <= class.block_len() {
             self.pool.take(class)
         } else {
             let len = memory::dedicated_len(len, self.max_block_len)?;
