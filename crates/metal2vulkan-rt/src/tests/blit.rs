@@ -1681,6 +1681,7 @@ pub(crate) mod on_device {
             encoder.end_encoding();
             run(name, &command_buffer);
             let landed = read(&managed);
+            println!("{name}: a copy into a Managed buffer: device copy {copied}");
             assert_eq!(
                 landed[8..40],
                 read(&destination)[0..32],
