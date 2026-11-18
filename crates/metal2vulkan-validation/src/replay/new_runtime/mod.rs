@@ -1181,8 +1181,8 @@ impl NewRuntime {
                     .device
                     .take_block(class, length)
                     .map_err(failed(call))?;
-                // The runtime zeroes none of a block's bytes yet.
-                self.zero_block(&block, 0, length).map_err(failed(call))?;
+                // The bytes past the take's zero mark are the player's to zero.
+                (self.zero_block(&block, block.zeroed, length)).map_err(failed(call))?;
                 self.block_bytes[class_index(class)] += length;
                 let made = Made {
                     address: Some(block.gpu_address),

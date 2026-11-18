@@ -629,7 +629,10 @@ fn a_buffer_placed_in_a_block_taken_again_reads_zero() {
     });
     let (report, _) = play("zero-once", &path);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
-    let zeroed = report.total.executed["bytes_zeroed"];
+    // Each block reads zero at its making: inside its take's zero mark, as the runtime found it,
+    // and past the mark, as the player's buffers zeroed it.
+    let executed = &report.total.executed;
+    let zeroed = executed["bytes_zeroed"] + executed["zeroed_bytes_taken"];
     assert!(
         zeroed >= 2 * length,
         "each block zeroed at its making: {zeroed}"
