@@ -68,7 +68,7 @@ static NSUInteger levelBytes(Level l) {
     return rowBytes(l) * rows(l) * extent(l).depth;
 }
 
-static void write(Level l, uint8_t seed) {
+static void fillLevel(Level l, uint8_t seed) {
     MTLSize e = extent(l);
     NSData *bytes = pattern(levelBytes(l), seed);
     [l.texture replaceRegion:MTLRegionMake3D(0, 0, 0, e.width, e.height, e.depth)
@@ -79,7 +79,7 @@ static void write(Level l, uint8_t seed) {
                bytesPerImage:rowBytes(l) * rows(l)];
 }
 
-static void print(const char *name, Level l) {
+static void report(const char *name, Level l) {
     MTLSize e = extent(l);
     NSMutableData *bytes = [NSMutableData dataWithLength:levelBytes(l)];
     [l.texture getBytes:bytes.mutableBytes
@@ -147,19 +147,19 @@ int main(void) {
         Level rgba1 = {rgba, 0, 1, 4, 1}, words2 = {words, 2, 0, 4, 1};
         Level words0 = {words, 0, 0, 4, 1}, words1 = {words, 1, 0, 4, 1};
         Level face = {cube, 4, 0, 1, 1}, image = {volume, 0, 0, 1, 1}, flat = {plane, 0, 0, 1, 1};
-        write(rgba1, 1);
-        write(face, 2);
-        write(words0, 3);
-        write(words2, 4);
-        write(image, 5);
-        write(flat, 6);
-        write(words1, 7);
+        fillLevel(rgba1, 1);
+        fillLevel(face, 2);
+        fillLevel(words0, 3);
+        fillLevel(words2, 4);
+        fillLevel(image, 5);
+        fillLevel(flat, 6);
+        fillLevel(words1, 7);
 
         run(queue, ^(id<MTLBlitCommandEncoder> blit) {
             copy(blit, rgba1, MTLOriginMake(1, 0, 0), MTLSizeMake(4, 3, 1), words2,
                  MTLOriginMake(2, 4, 0));
         });
-        print("t2t-array", words2);
+        report("t2t-array", words2);
 
         run(queue, ^(id<MTLBlitCommandEncoder> blit) {
             copy(blit, face, MTLOriginMake(0, 0, 0), MTLSizeMake(4, 4, 1), image,
@@ -169,21 +169,21 @@ int main(void) {
             copy(blit, words0, MTLOriginMake(0, 0, 0), MTLSizeMake(5, 5, 1), words1,
                  MTLOriginMake(3, 3, 0));
         });
-        print("t2t-volume", image);
-        print("t2t-plane", flat);
-        print("t2t-slices", words1);
+        report("t2t-volume", image);
+        report("t2t-plane", flat);
+        report("t2t-slices", words1);
 
         id<MTLTexture> bcA = texture(device, MTLTextureType2D, MTLPixelFormatBC1_RGBA, 8, 8, 1, 1, 1);
         id<MTLTexture> bcB = texture(device, MTLTextureType2D, MTLPixelFormatBC1_RGBA, 8, 8, 1, 1, 1);
         if (bcA && bcB) {
             Level a = {bcA, 0, 0, 8, 4}, b = {bcB, 0, 0, 8, 4};
-            write(a, 8);
-            write(b, 9);
+            fillLevel(a, 8);
+            fillLevel(b, 9);
             run(queue, ^(id<MTLBlitCommandEncoder> blit) {
                 copy(blit, a, MTLOriginMake(4, 0, 0), MTLSizeMake(4, 4, 1), b,
                      MTLOriginMake(0, 4, 0));
             });
-            print("t2t-bc1", b);
+            report("t2t-bc1", b);
         } else {
             printf("t2t-bc1 no BC1 texture\n");
         }
