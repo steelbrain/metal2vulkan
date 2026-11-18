@@ -230,8 +230,11 @@ mod on_device {
                 MemoryClass::Private.block_len(),
                 "{name}: the released block is counted"
             );
-            // At the bound and not past it, a fill keeps the upload pending.
-            let before = submissions();
+            // At the bound and not past it, a fill keeps the upload pending: the released block
+            // still counts, where a send would have started the count again. The upload's own
+            // count, not the device's submissions: the block-maker thread's zero fills of the
+            // blocks it makes and is given back submit beside it, when they come (on llvmpipe,
+            // one came inside this step).
             let fills = device
                 .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -239,7 +242,12 @@ mod on_device {
                 .new_buffer(fills.id, 0, 256, true)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
-            assert_eq!(submissions(), before, "{name}: a fill at the bound");
+            let (_, bytes, _) = core.work.pending();
+            assert_eq!(
+                bytes,
+                MemoryClass::Private.block_len(),
+                "{name}: a fill at the bound"
+            );
             assert!(!core.pool.holds(released_id), "{name}: the block held");
             // A texture released after a copy takes it past the bound: the next fill sends the
             // upload, and the block comes back to the pool.
@@ -254,7 +262,11 @@ mod on_device {
                 .new_buffer(fills.id, 256, 256, true)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
-            assert!(submissions() > before, "{name}: a fill past the bound");
+            let (_, bytes, _) = core.work.pending();
+            assert!(
+                bytes < MemoryClass::Private.block_len(),
+                "{name}: a fill past the bound keeps {bytes} bytes pending"
+            );
             wait_until("the released block back in the pool", || {
                 core.pool.holds(released_id)
             });
