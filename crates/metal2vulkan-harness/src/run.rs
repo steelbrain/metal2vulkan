@@ -7,7 +7,8 @@ use crate::plan::{
 };
 use crate::{
     clocks, BlitCommandEncoder, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder,
-    ComputeDevice, Device, Failed, Library, Refused, Result, Storage, Texture, Waits,
+    ComputeDevice, Device, Failed, Library, Refused, RenderCommandEncoder, Result, Storage,
+    Texture, Waits,
 };
 use std::collections::HashMap;
 use std::ops::Range;
