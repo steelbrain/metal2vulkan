@@ -72,7 +72,7 @@ fn from_queries_lowers_a_vertex_function_over_its_pushed_buffer_addresses() {
         let desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
         let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
         let p = (device.compile_render_pipeline(&d, &Budget::standard()))
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
         let stages: Vec<Stage> = p.interface.push.iter().map(|s| s.stage).collect();
         assert_eq!(stages, [Stage::Vertex, Stage::Fragment], "{stem}");
         let vertex = &p.interface.push[0];

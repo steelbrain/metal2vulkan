@@ -1988,7 +1988,7 @@ fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
         && textures
         && sampling
         && !plan.facts.iter().any(identity_unsourced)
-        && plan.descriptors == DescriptorCounts::default()
+        && plan.descriptors.descriptors() == 0
     {
         return Ok(());
     }
