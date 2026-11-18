@@ -596,6 +596,7 @@ impl Device {
         let held = lock(&self.shared.claims)
             .remove(&block)
             .ok_or(Error::NoSuchBlock(block))?;
+        self.shared.core.work.release_block(&held);
         drop(held);
         Ok(())
     }

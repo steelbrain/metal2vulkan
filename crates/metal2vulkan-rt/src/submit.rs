@@ -10,6 +10,11 @@
 //! signals an event ends its group, which goes at once; one that waits on a semaphore leads a new
 //! group, the one held going first. A group is one submission with one signal of the progress
 //! semaphore, which the completion thread follows in commit order.
+//!
+//! The upload is bounded: a call that finds it holding [`UPLOAD_ENTRIES`] calls, or
+//! [`UPLOAD_BYTES`] of memory it alone keeps, has it submitted and waits for it to complete before
+//! it records. A new texture's move to its home layout holds nothing until the next submission,
+//! whose upload records it where the texture still lives.
 
 use crate::command::{CbInner, CommandBufferError, Handler, Pending, Segment};
 use crate::complete;
@@ -25,8 +30,8 @@ use crate::texture::{Image, Staging};
 use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 
 /// The command buffers one submission ends at most.
 const GROUP: usize = 4;
@@ -35,12 +40,27 @@ const GROUP: usize = 4;
 /// group.
 const IN_FLIGHT: usize = 2;
 
+/// The calls the pending upload records at most: a call past them waits for it to complete.
+pub(crate) const UPLOAD_ENTRIES: usize = 4096;
+
+/// The memory the pending upload alone keeps, at most: its staging buffers, and the textures and
+/// blocks released while it held them. A call past it waits for the upload to complete; one call
+/// larger than it goes alone.
+pub(crate) const UPLOAD_BYTES: u64 = 64 << 20;
+
+/// The new textures awaiting their home layout at which the dead among them are first dropped.
+pub(crate) const HOMES_PRUNE: usize = 64;
+
 /// The submit side: the FIFOs and the upload, and the submit thread's wake-up.
 pub(crate) struct Work {
     state: Mutex<WorkState>,
     changed: Condvar,
     /// A queue holds a group: the completion thread wakes the thread as submissions complete.
     keeping: AtomicBool,
+    /// Bytes of textures and blocks released while an upload held them, since the pending upload
+    /// began: they count against [`UPLOAD_BYTES`]. A texture's release adds without the work lock,
+    /// which its drop may run under.
+    released: AtomicU64,
 }
 
 pub(crate) struct WorkState {
@@ -52,8 +72,13 @@ pub(crate) struct WorkState {
     next_place: u64,
     /// The progress value of the last submission.
     progress: u64,
-    /// Zero fills recorded and not yet submitted.
+    /// Zero fills, copies and moves to a home layout recorded and not yet submitted.
     upload: Option<Upload>,
+    /// Textures made since the last submission, not held: the next submission's upload moves
+    /// each that still lives to its home layout. While there are any, there is an upload.
+    homes: Vec<Weak<Image>>,
+    /// The length of `homes` at which the dead are dropped from it.
+    prune_at: usize,
     /// Something changed that may let a held segment or group go.
     dirty: bool,
     /// The upload is to go at once, alone where no group goes ([`Work::flush`]).
@@ -92,12 +117,16 @@ struct Entry {
 }
 
 /// Commands recorded into one command buffer apart from any command buffer of the guest's (zero
-/// fills, and later transfers), submitted ahead of everything in the next submission, which keeps
-/// what they use until it retires.
+/// fills, texture copies, and new textures' moves to their home layouts), submitted ahead of
+/// everything in the next submission, which keeps what they use until it retires.
 pub(crate) struct Upload {
     pub(crate) recorder: Recorder,
     command: vk::CommandBuffer,
     held: Vec<Held>,
+    /// The calls recorded, and one for the home layouts recorded as it is submitted.
+    entries: usize,
+    /// The bytes of the staging buffers it holds.
+    staging: u64,
 }
 
 /// What an upload keeps until it retires.
@@ -118,6 +147,54 @@ impl Held {
             (Held::Staging(a), Held::Staging(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
+    }
+}
+
+impl Upload {
+    /// A new upload, its command buffer recording.
+    ///
+    /// Err: [`Error::Vulkan`] where a command pool or buffer cannot be made.
+    fn begin(core: &Core) -> Result<Upload, Error> {
+        let device = &core.device;
+        let mut recorder = core.recorders.take(device)?;
+        match recorder.next(device) {
+            Ok(command) => Ok(Upload {
+                recorder,
+                command,
+                held: Vec::new(),
+                entries: 0,
+                staging: 0,
+            }),
+            Err(error) => {
+                core.recorders.give_back(core, recorder);
+                Err(error)
+            }
+        }
+    }
+
+    /// Whether a call of `staging` bytes waits for it: it holds a call, and it is at
+    /// [`UPLOAD_ENTRIES`], or the call would take what it alone keeps (with `released`) past
+    /// [`UPLOAD_BYTES`].
+    fn full(&self, staging: u64, released: u64) -> bool {
+        self.entries > 0
+            && (self.entries >= UPLOAD_ENTRIES
+                || self
+                    .staging
+                    .saturating_add(released)
+                    .saturating_add(staging)
+                    > UPLOAD_BYTES)
+    }
+
+    /// Records `moves`, images' moves from undefined to their home layouts
+    /// ([`Image::homing`]), in one barrier; the upload holds each image.
+    fn home(&self, device: &ash::Device, moves: &[vk::ImageMemoryBarrier2<'_>]) {
+        if moves.is_empty() {
+            return;
+        }
+        let dependency = vk::DependencyInfo::default().image_memory_barriers(moves);
+        // SAFETY: the upload's command buffer is recording, under the work lock; each image is
+        // the device's and held by the upload.
+        unsafe { device.cmd_pipeline_barrier2(self.command, &dependency) };
     }
 }
 
@@ -173,6 +250,8 @@ impl Work {
                 next_place: 0,
                 progress: 0,
                 upload: None,
+                homes: Vec::new(),
+                prune_at: HOMES_PRUNE,
                 dirty: false,
                 flush: false,
                 stop: false,
@@ -181,6 +260,7 @@ impl Work {
             }),
             changed: Condvar::new(),
             keeping: AtomicBool::new(false),
+            released: AtomicU64::new(0),
         }
     }
 
@@ -238,45 +318,111 @@ impl Work {
 
     /// Records into the pending upload with `record`, which is given the device and the upload's
     /// command buffer, recording, under the work lock: commands that go ahead of every later
-    /// commit, on every queue. The upload keeps each of `held` until it retires.
+    /// commit, on every queue. The upload keeps each of `held` until it retires; `staging` is the
+    /// bytes of the staging buffer among them. A texture of `held` not yet in its home layout is
+    /// moved there first.
     ///
-    /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made.
-    pub(crate) fn upload(
+    /// Where the upload is full ([`UPLOAD_ENTRIES`], [`UPLOAD_BYTES`]), it is submitted and the
+    /// call waits for it to complete first, without the lock.
+    ///
+    /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made,
+    /// and with `VK_ERROR_DEVICE_LOST` where the device is lost while the call waits.
+    pub(crate) fn upload<const N: usize>(
         &self,
         core: &Core,
-        held: impl IntoIterator<Item = Held>,
+        staging: u64,
+        held: [Held; N],
         record: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<(), Error> {
         let mut state = self.lock();
-        if state.closed {
-            return Err(Error::Quiesced);
+        loop {
+            if state.closed {
+                return Err(Error::Quiesced);
+            }
+            let released = self.released.load(Ordering::Relaxed);
+            if !(state.upload.as_ref()).is_some_and(|upload| upload.full(staging, released)) {
+                break;
+            }
+            let value = state.flush();
+            drop(state);
+            self.wake();
+            core.done.wait(core, value)?;
+            state = self.lock();
         }
         let device = &core.device;
         let upload = match state.upload.take() {
             Some(upload) => upload,
-            None => {
-                let mut recorder = core.recorders.take(device)?;
-                match recorder.next(device) {
-                    Ok(command) => Upload {
-                        recorder,
-                        command,
-                        held: Vec::new(),
-                    },
-                    Err(error) => {
-                        core.recorders.give_back(core, recorder);
-                        return Err(error);
-                    }
-                }
-            }
+            None => Upload::begin(core)?,
         };
         let upload = state.upload.insert(upload);
+        let moves: Vec<vk::ImageMemoryBarrier2<'static>> = (held.iter())
+            .filter_map(|item| match item {
+                Held::Texture(image) => image.homing(),
+                _ => None,
+            })
+            .collect();
+        upload.home(device, &moves);
         record(device, upload.command);
+        upload.entries += 1;
+        upload.staging += staging;
         for item in held {
             if !upload.held.iter().any(|kept| kept.is(&item)) {
                 upload.held.push(item);
             }
         }
         Ok(())
+    }
+
+    /// A new texture's `image`: the next submission's upload moves it to its home layout where it
+    /// still lives, holding it from then; until then nothing holds it. An upload is begun now if
+    /// none is pending, so that the submission has one to record into.
+    ///
+    /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made.
+    pub(crate) fn home(&self, core: &Core, image: &Arc<Image>) -> Result<(), Error> {
+        let mut state = self.lock();
+        if state.closed {
+            return Err(Error::Quiesced);
+        }
+        if state.upload.is_none() {
+            state.upload = Some(Upload::begin(core)?);
+        }
+        if state.homes.len() >= state.prune_at {
+            state.homes.retain(|home| home.strong_count() > 0);
+            state.prune_at = (state.homes.len() * 2).max(HOMES_PRUNE);
+        }
+        state.homes.push(Arc::downgrade(image));
+        Ok(())
+    }
+
+    /// A texture whose image an upload holds is released: its `bytes` count against the pending
+    /// upload's [`UPLOAD_BYTES`]. An upload already submitted frees it soon; counting it anyway
+    /// can only submit the pending one sooner.
+    pub(crate) fn released(&self, bytes: u64) {
+        self.released.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// The consumer released `block`: where the pending upload holds it, its length counts
+    /// against the upload's [`UPLOAD_BYTES`].
+    pub(crate) fn release_block(&self, block: &Arc<Block>) {
+        let holds = (self.lock().upload.as_ref()).is_some_and(|upload| {
+            (upload.held.iter())
+                .any(|kept| matches!(kept, Held::Block(kept) if Arc::ptr_eq(kept, block)))
+        });
+        if holds {
+            self.released(block.memory.len);
+        }
+    }
+
+    /// For the device tests: the pending upload's calls, the bytes it alone keeps, and the new
+    /// textures awaiting their home layout.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn pending(&self) -> (usize, u64, usize) {
+        let state = self.lock();
+        let released = self.released.load(Ordering::Relaxed);
+        match &state.upload {
+            Some(upload) => (upload.entries, upload.staging + released, state.homes.len()),
+            None => (0, released, state.homes.len()),
+        }
     }
 
     /// Records the zero fill of `offset..end` of `block` into the upload.
@@ -289,36 +435,32 @@ impl Work {
         offset: u64,
         end: u64,
     ) -> Result<(), Error> {
-        self.upload(core, [Held::Block(Arc::clone(block))], |device, command| {
-            // SAFETY: the upload's command buffer is recording, under the lock; the block's
-            // buffer has every usage, and `offset..end` lies in it.
-            unsafe {
-                fill::record(
-                    device,
-                    command,
-                    core.filler.zeros(),
-                    block.memory.buffer,
-                    offset,
-                    end,
-                )
-            }
-        })
+        self.upload(
+            core,
+            0,
+            [Held::Block(Arc::clone(block))],
+            |device, command| {
+                // SAFETY: the upload's command buffer is recording, under the lock; the block's
+                // buffer has every usage, and `offset..end` lies in it.
+                unsafe {
+                    fill::record(
+                        device,
+                        command,
+                        core.filler.zeros(),
+                        block.memory.buffer,
+                        offset,
+                        end,
+                    )
+                }
+            },
+        )
     }
 
     /// Has the upload submitted at once, alone where no group goes: the progress value at which
     /// everything recorded into uploads so far has completed and is visible to the host, for
     /// [`Done::wait`](crate::complete::Done::wait).
     pub(crate) fn flush(&self) -> u64 {
-        let mut state = self.lock();
-        if state.upload.is_none() {
-            // Every upload so far went in a submission already made.
-            return state.progress;
-        }
-        state.flush = true;
-        state.dirty = true;
-        // The next submission takes the upload.
-        let value = state.progress + 1;
-        drop(state);
+        let value = self.lock().flush();
         self.wake();
         value
     }
@@ -379,6 +521,41 @@ impl WorkState {
     pub(crate) fn seq(&mut self) -> u64 {
         self.next_seq += 1;
         self.next_seq
+    }
+
+    /// Has the upload submitted at once, alone where no group goes: the progress value at which
+    /// everything recorded into uploads so far has completed. The caller wakes the thread.
+    fn flush(&mut self) -> u64 {
+        if self.upload.is_none() {
+            // Every upload so far went in a submission already made.
+            return self.progress;
+        }
+        self.flush = true;
+        self.dirty = true;
+        // The next submission takes the upload.
+        self.progress + 1
+    }
+
+    /// Takes the pending upload for a submission, with the moves to their home layouts of the
+    /// textures made since the last that still live, which it holds from then. `released` starts
+    /// again for the next upload.
+    fn take_upload(&mut self, device: &ash::Device, released: &AtomicU64) -> Option<Upload> {
+        let mut upload = self.upload.take()?;
+        released.store(0, Ordering::Relaxed);
+        self.prune_at = HOMES_PRUNE;
+        let mut moves = Vec::new();
+        for image in self.homes.drain(..).filter_map(|home| home.upgrade()) {
+            // One the upload copied to or from was moved before its copy, and is held.
+            if let Some(barrier) = image.homing() {
+                moves.push(barrier);
+                upload.held.push(Held::Texture(image));
+            }
+        }
+        if !moves.is_empty() {
+            upload.home(device, &moves);
+            upload.entries += 1;
+        }
+        Some(upload)
     }
 
     fn fifo(&mut self, queue: &Arc<QueueInner>) -> &mut Fifo {
@@ -549,9 +726,14 @@ impl WorkState {
         }
     }
 
-    /// The FIFO at `index`'s group, given the next progress value and the upload: the submission
-    /// it makes.
-    fn close(&mut self, index: usize) -> Option<(u64, Option<Upload>, Batch)> {
+    /// The FIFO at `index`'s group, given the next progress value and the upload
+    /// ([`take_upload`](Self::take_upload)): the submission it makes.
+    fn close(
+        &mut self,
+        index: usize,
+        device: &ash::Device,
+        released: &AtomicU64,
+    ) -> Option<(u64, Option<Upload>, Batch)> {
         let fifo = &mut self.fifos[index];
         let mut batch = fifo.group.take()?;
         self.progress += 1;
@@ -570,7 +752,7 @@ impl WorkState {
             pending.value = value;
         }
         self.flush = false;
-        Some((value, self.upload.take(), batch))
+        Some((value, self.take_upload(device, released), batch))
     }
 
     /// The first FIFO whose group goes at the end of a pass: unless its queue has [`IN_FLIGHT`]
@@ -708,7 +890,9 @@ pub(crate) fn run(core: Arc<Core>) {
                 }
                 ended.extend(end(fifo.entries, error));
             }
+            // Nothing more runs: the textures awaiting their home layout need none.
             let upload = state.upload.take();
+            state.homes.clear();
             drop(state);
             if let Some(upload) = upload {
                 upload.retire(&core);
@@ -760,7 +944,7 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
             Step::Staged => continue,
             Step::Goes(index) => index,
         };
-        let Some((value, upload, batch)) = state.close(index) else {
+        let Some((value, upload, batch)) = state.close(index, &core.device, &work.released) else {
             continue;
         };
         drop(state);
@@ -772,7 +956,7 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
         state = work.lock();
     }
     if state.flush && !sent {
-        if let Some(upload) = state.upload.take() {
+        if let Some(upload) = state.take_upload(&core.device, &work.released) {
             state.flush = false;
             state.progress += 1;
             let value = state.progress;
@@ -818,6 +1002,14 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         ..
     } = batch;
     let device = &core.device;
+    // An upload begun for textures gone before their move records nothing.
+    let upload = match upload {
+        Some(upload) if upload.entries == 0 => {
+            upload.retire(core);
+            None
+        }
+        upload => upload,
+    };
     // What the upload wrote is visible to every command after it, and to the host once the
     // submission completes.
     let mut ok = upload.as_ref().is_none_or(|upload| {

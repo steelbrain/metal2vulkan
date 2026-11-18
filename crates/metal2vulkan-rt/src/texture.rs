@@ -4,9 +4,10 @@
 //! A texture's image has the descriptor's usage plus transfer source and destination, since Metal
 //! lets the CPU and blits reach any texture. Its home layout is the one its descriptors name, and
 //! the image leaves it only inside a copy: general where a shader may write it, shader-read-only
-//! where shaders only read it, the attachment layout where only render passes use it. The upload
-//! moves a new image from undefined to home ahead of every command buffer committed after
-//! [`Device::new_texture`] returns.
+//! where shaders only read it, the attachment layout where only render passes use it. A new image
+//! moves from undefined to home in the upload of the next submission, ahead of every command
+//! buffer committed after [`Device::new_texture`] returns, or ahead of its first copy; nothing
+//! holds it until then, so a texture released first is freed at once.
 //!
 //! Shaders under the translator's identity domains read a texture through its view alone, so a
 //! texture is made only where its view gives Metal's values: its format directly, or through the
@@ -27,6 +28,7 @@ use metal2vulkan::metal::resource_word::TextureWord;
 use metal2vulkan::metal::{
     PixelFormat, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// `MTLStorageMode` of a texture. Shared, Managed and Private textures are all device images;
@@ -124,10 +126,6 @@ struct TextureInner {
     device: Device,
     descriptor: TextureDescriptor,
     image: Arc<Image>,
-    /// The layout the image is in outside a copy, which its elements name.
-    home: vk::ImageLayout,
-    /// Every aspect of the image's format, which a change of layout names.
-    aspects: vk::ImageAspectFlags,
     /// How bytes move between the image and the CPU; `None` where no copy is built.
     unit: Option<CopyUnit>,
     /// Its class and index; `None` for a texture no shader reaches.
@@ -143,11 +141,42 @@ pub(crate) struct Image {
     core: Arc<Core>,
     image: vk::Image,
     memory: vk::DeviceMemory,
+    /// The allocation's bytes.
+    bytes: u64,
     /// The view of the sampled-texture array's element, where shaders read the texture.
     sampled: Option<vk::ImageView>,
     /// The view of the storage-texture array's element, where shaders write it and the device
     /// stores its format through a storage image without a format.
     storage: Option<vk::ImageView>,
+    /// The layout the image is in outside a copy, which its elements name.
+    home: vk::ImageLayout,
+    /// Every aspect of the image's format, which a change of layout names.
+    aspects: vk::ImageAspectFlags,
+    /// An upload recorded its move from undefined to `home`. Read and set under the work lock.
+    homed: AtomicBool,
+}
+
+impl Image {
+    /// The image's move from undefined to its home layout, where no upload has recorded it yet:
+    /// recorded once, by the upload that is to hold the image. Under the work lock.
+    pub(crate) fn homing(&self) -> Option<vk::ImageMemoryBarrier2<'static>> {
+        if self.homed.swap(true, Ordering::Relaxed) {
+            return None;
+        }
+        Some(
+            vk::ImageMemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(self.home)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(self.image)
+                .subresource_range(whole(self.aspects)),
+        )
+    }
 }
 
 impl Drop for Image {
@@ -190,6 +219,10 @@ impl Drop for TextureInner {
     fn drop(&mut self) {
         let core = self.device.core();
         core.ids.give_back(self.id);
+        // An upload holds the image past the texture: the pending one's bound counts it.
+        if Arc::strong_count(&self.image) > 1 {
+            core.work.released(self.image.bytes);
+        }
         if let Some((class, index)) = self.index {
             // SAFETY: the texture owns its elements until it vacates the index below, and no
             // work that reads them is pending: each command buffer that used the texture held it
@@ -211,7 +244,8 @@ impl Device {
     /// live grant of the class the usage picks: [`IndexClass::StorageTexture`] with shader-write
     /// usage, else [`IndexClass::Texture`]. The texture's elements of set 1 are written before
     /// the call returns, and its image moved to its home layout ahead of every command buffer
-    /// committed after it.
+    /// committed after it. Until the next submission nothing else holds the texture: released
+    /// first, it is freed at once.
     ///
     /// A swizzle composes with the view's own component mapping. Shader-write usage writes the
     /// storage element where the device stores the format through a storage image without a
@@ -271,7 +305,7 @@ impl Device {
         };
         // SAFETY: the device is live, and `plan` was checked against its image format query.
         let made = unsafe { make(core, &d, &shape, &plan) };
-        let (image, memory, sampled, storage) = match made {
+        let (image, memory, bytes, sampled, storage) = match made {
             Ok(made) => made,
             Err(error) => {
                 if let Some((class, index)) = index {
@@ -282,19 +316,21 @@ impl Device {
             }
         };
         core.counters.rise(Gauge::Textures);
-        let objects = Arc::new(Image {
+        let image = Arc::new(Image {
             core: Arc::clone(core),
             image,
             memory,
+            bytes,
             sampled,
             storage,
+            home: plan.home,
+            aspects: plan.aspects,
+            homed: AtomicBool::new(false),
         });
         let inner = TextureInner {
             device: self.clone(),
             descriptor: d,
-            image: Arc::clone(&objects),
-            home: plan.home,
-            aspects: plan.aspects,
+            image,
             unit: plan.unit,
             index,
             word: plan.word,
@@ -302,7 +338,8 @@ impl Device {
         };
         if let Some((class, index)) = index {
             // SAFETY: the index is occupied for the texture, whose views are live; its image is
-            // in its home layout whenever work uses it, the upload below going first.
+            // in its home layout whenever work uses it, the upload of the next submission going
+            // first.
             unsafe {
                 core.arrays.write_texture(
                     &core.device,
@@ -313,29 +350,11 @@ impl Device {
                 )
             };
         }
-        let range = whole(plan.aspects);
-        core.work
-            .upload(core, [Held::Texture(objects)], |device, command| {
-                let barrier = vk::ImageMemoryBarrier2::default()
-                    .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                    .src_access_mask(vk::AccessFlags2::NONE)
-                    .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                    .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
-                    .old_layout(vk::ImageLayout::UNDEFINED)
-                    .new_layout(plan.home)
-                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                    .image(image)
-                    .subresource_range(range);
-                let barriers = [barrier];
-                let dependency = vk::DependencyInfo::default().image_memory_barriers(&barriers);
-                // SAFETY: the upload's command buffer is recording, under the work lock; the image
-                // is the device's and held by the upload.
-                unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
-            })?;
-        Ok(Texture {
+        let texture = Texture {
             inner: Arc::new(inner),
-        })
+        };
+        core.work.home(core, &texture.inner.image)?;
+        Ok(texture)
     }
 }
 
@@ -617,10 +636,12 @@ fn whole(aspects: vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
     }
 }
 
-/// The image, its memory and its views: the sampled view and the storage view.
+/// The image, its memory and the memory's bytes, and its views: the sampled view and the storage
+/// view.
 type Objects = (
     vk::Image,
     vk::DeviceMemory,
+    u64,
     Option<vk::ImageView>,
     Option<vk::ImageView>,
 );
@@ -732,7 +753,7 @@ impl Made {
             )?),
             false => None,
         };
-        Ok((image, memory, sampled, storage))
+        Ok((image, memory, requirements.size, sampled, storage))
     }
 
     /// Destroys what was made, the allocation's gauge falling with it.
@@ -931,7 +952,7 @@ impl TextureInner {
             false => (vk::ImageLayout::TRANSFER_SRC_OPTIMAL, Access::TRANSFER_READ),
         };
         let range = vk::ImageSubresourceRange {
-            aspect_mask: self.aspects,
+            aspect_mask: self.image.aspects,
             base_mip_level: copy.level,
             level_count: 1,
             base_array_layer: copy.layer,
@@ -955,7 +976,7 @@ impl TextureInner {
             Access::MEMORY_READ | Access::MEMORY_WRITE,
         );
         let away = [barrier(
-            self.home,
+            self.image.home,
             layout,
             (Stage::ALL_COMMANDS, Access::MEMORY_WRITE),
             (Stage::COPY, access),
@@ -964,7 +985,12 @@ impl TextureInner {
             true => Access::TRANSFER_WRITE,
             false => Access::NONE,
         };
-        let home = [barrier(layout, self.home, (Stage::COPY, written), anything)];
+        let home = [barrier(
+            layout,
+            self.image.home,
+            (Stage::COPY, written),
+            anything,
+        )];
         let host = [vk::MemoryBarrier2::default()
             .src_stage_mask(Stage::COPY)
             .src_access_mask(Access::TRANSFER_WRITE)
@@ -1081,6 +1107,7 @@ impl Texture {
         let buffer = staging.buffer;
         core.work.upload(
             core,
+            copy.len(),
             [
                 Held::Texture(Arc::clone(&inner.image)),
                 Held::Staging(staging),
@@ -1121,6 +1148,7 @@ impl Texture {
         let buffer = staging.buffer;
         core.work.upload(
             core,
+            copy.len(),
             [
                 Held::Texture(Arc::clone(&inner.image)),
                 Held::Staging(Arc::clone(&staging)),

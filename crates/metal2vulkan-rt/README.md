@@ -171,8 +171,10 @@ made, with no lock, and never rewritten for layouts.
 - The image's usage is the descriptor's plus transfer source and destination. Its home layout is
   general where it has a storage element, shader-read-only where shaders only read it, and the
   attachment layout where only render passes use it. Its elements of set 1 are written before the
-  call returns, with that layout, and never rewritten; the upload moves the image from undefined
-  to home ahead of every command buffer committed after the call.
+  call returns, with that layout, and never rewritten. The image moves from undefined to home in
+  the upload of the next submission, ahead of every command buffer committed after the call, or
+  ahead of its first copy; until then nothing holds it, so a texture released first is freed at
+  once, with nothing submitted.
 - The sampled element's view is the format's, through its component mapping with the
   descriptor's swizzle composed over it; a depth or stencil format's view takes its depth, else
   its stencil. The storage element is written where the usage has shader write and the device
@@ -265,8 +267,11 @@ made, with no lock, and never rewritten for layouts.
   thread and returns. A committed command buffer holds no device handle.
 - The submit thread passes what is ready to `vkQueueSubmit2` in the device's commit order, each
   queue's command buffers in groups: a submission holds at most four command buffers of one
-  queue, ahead of them the upload of zero fills, and only its last submit info signals the
-  progress semaphore. While fewer than two of a queue's submissions are not yet seen complete,
+  queue, ahead of them the upload (zero fills, texture copies and new textures' moves to their
+  home layouts), and only its last submit info signals the progress semaphore. The upload records
+  at most 4,096 calls and keeps at most 64 MiB on its own account: its staging buffers, and the
+  textures and blocks released while it held them. A call that finds it past either submits it
+  and waits for it to complete before recording, so nothing grows without a commit. While fewer than two of a queue's submissions are not yet seen complete,
   each of its command buffers goes at once, alone. While two are, the ones committed meanwhile
   are held in one group, each scheduled as it joins, and the group goes when it holds four, when
   a completion leaves fewer than two in flight (the completion thread wakes the submit thread as
