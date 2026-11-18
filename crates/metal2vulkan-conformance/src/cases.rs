@@ -54,6 +54,7 @@ pub mod blend_sweeps;
 pub mod blit_encoder_commands;
 pub mod blit_indirect_commands;
 pub mod border_swizzles;
+pub mod buffer_bind_off_alignment;
 pub mod buffer_blits;
 pub mod buffer_depth_samples;
 pub mod buffer_tails;
@@ -605,6 +606,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in vector_word_phases::all() {
         cases.push(Box::new(case));
     }
+    cases.push(Box::new(buffer_bind_off_alignment::BufferBindOffAlignment));
     cases
 }
 
