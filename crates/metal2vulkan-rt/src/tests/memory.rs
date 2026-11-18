@@ -1050,16 +1050,11 @@ mod on_device {
         }
     }
 
-    /// Idle allocations follow the window's peak down: four Shared blocks of 16 MiB taken beside
-    /// a small one, each with an allocation of its own, and given back are kept, their
-    /// allocations idle, while the most bytes in use over the last 10 seconds hold them, through a
-    /// Private take and give-back and the small block's give-back 5 seconds on. Once the clock has
-    /// moved 11 seconds, the small block's allocation is the reserve that keeps 8 MiB free, and the
-    /// window holds one allocation more than the bytes in use: the three oldest idle allocations
-    /// are freed, one at a time, after the hook of the block kept in each, on the block-maker
-    /// thread. Five seconds later, with no take or give-back, the window's peak falls to nothing
-    /// and the fourth is freed; the reserve stays. Nothing commits, so the device is quiet
-    /// throughout.
+    /// A long block given back is taken again at once by the next take of its length: a Shared
+    /// block of 64 MiB, which takes an allocation of its own, is taken, given a zeroed buffer, and
+    /// given back 20 times in a row, each take straight after the give-back before. Whether the
+    /// block-maker thread has kept the block yet or not (it may be inside a driver's allocation or
+    /// free), the take finds it: only the first take allocates, and nothing is freed.
     #[test]
     fn every_device_takes_a_long_block_given_back_again_at_once() {
         const LEN: u64 = 64 << 20;
@@ -1070,35 +1065,45 @@ mod on_device {
             let hook = Arc::new(Hook::default());
             let device = device_with(&hook, physical, name);
             let counters = device.counters();
+            let before = counters.metrics();
             let mut made = Vec::new();
             for round in 0..20 {
-                let before = counters.metrics();
+                let allocations = counters.metrics().consumer_allocations;
                 let block = (device.take_block(MemoryClass::Shared, LEN))
                     .unwrap_or_else(|error| panic!("{name}: round {round}: {error}"));
                 let buffer = (device.new_buffer(block.id, 0, LEN, Some(0)))
                     .unwrap_or_else(|error| panic!("{name}: round {round}: {error}"));
                 drop(buffer);
                 device.release_block(block).expect("a release");
-                let after = counters.metrics();
-                println!(
-                    "long block: {name}: round {round}: consumer allocations +{}, made +{}, \
-                     reused +{}, freed +{}; gauges {:?}",
-                    after.consumer_allocations - before.consumer_allocations,
-                    after.blocks_made - before.blocks_made,
-                    after.blocks_reused - before.blocks_reused,
-                    after.allocations_freed - before.allocations_freed,
-                    counters.gauges()
-                );
-                made.push(after.consumer_allocations - before.consumer_allocations);
+                made.push(counters.metrics().consumer_allocations - allocations);
             }
+            let after = counters.metrics();
             assert_eq!(
-                made.iter().skip(1).sum::<u64>(),
-                0,
-                "{name}: allocations a take made, by round: {made:?}"
+                (made[0], made.iter().skip(1).sum::<u64>()),
+                (1, 0),
+                "{name}: allocations each take made: {made:?}"
+            );
+            assert_eq!(
+                (
+                    after.blocks_reused - before.blocks_reused,
+                    after.allocations_freed - before.allocations_freed
+                ),
+                (19, 0),
+                "{name}: takes of the block given back, and allocations freed"
             );
         }
     }
 
+    /// Idle allocations follow the window's peak down: four Shared blocks of 16 MiB taken beside
+    /// a small one, each with an allocation of its own, and given back are kept, their
+    /// allocations idle, while the most bytes in use over the last 10 seconds hold them, through a
+    /// Private take and give-back and the small block's give-back 5 seconds on. Once the clock has
+    /// moved 11 seconds, the small block's allocation is the reserve that keeps 8 MiB free, and the
+    /// window holds one allocation more than the bytes in use: the three oldest idle allocations
+    /// are freed, one at a time, after the hook of the block kept in each, on the block-maker
+    /// thread. Five seconds later, with no take or give-back, the window's peak falls to nothing
+    /// and the fourth is freed; the reserve stays. Nothing commits, so the device is quiet
+    /// throughout.
     #[test]
     fn every_device_frees_idle_allocations_as_the_window_s_peak_falls() {
         let instance = Instance::new(&[]).expect("an instance at the floor");

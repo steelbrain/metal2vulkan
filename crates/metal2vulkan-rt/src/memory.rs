@@ -631,8 +631,9 @@ impl Pool {
         Ok((len, base_align(len, requirements.alignment, self.granule)))
     }
 
-    /// Takes a block of `class` of at least `len` bytes for `core`: a kept block of its length,
-    /// with its number, buffer, address and mapping; else a free range, the first that fits in the
+    /// Takes a block of `class` of at least `len` bytes for `core`: a kept block of its length, or
+    /// one given back that the block-maker thread would keep and has not kept yet, with its
+    /// number, buffer, address and mapping; else a free range, the first that fits in the
     /// order the allocations were made, with a new number and buffer; else a range of an
     /// allocation made here, of [`ALLOCATION_LEN`] or the block's length where that is longer.
     /// Where the class keeps blocks of other lengths, that take also asks the block-maker thread to
@@ -666,6 +667,17 @@ impl Pool {
                 self.hold(&mut state, &memory);
                 self.settle(&mut state, class);
                 self.changed.notify_all();
+                return Ok(memory);
+            }
+            // A block given back that the block-maker thread has not kept yet, which it would
+            // keep: taken as it is, its allocation in use throughout. The thread can be inside a
+            // driver's allocation or free for milliseconds, and a take that allocated beside the
+            // block would leave its allocation idle and over the window's peak, to be freed.
+            let returned = (state.returned.iter())
+                .rposition(|memory| memory.class == class && memory.len == len && !memory.spilled);
+            if let Some(memory) = returned.and_then(|at| state.returned.remove(at)) {
+                self.counters.count(Metric::BlocksReused);
+                state.note(class, self.clock.seconds());
                 return Ok(memory);
             }
             if let Some(carve) = state.fit(class, len, align) {
@@ -1055,15 +1067,16 @@ pub(crate) fn run(core: Arc<Core>) {
             continue;
         }
         if let Some(memory) = state.returned.pop_front() {
-            drop(state);
             // A block of a spilled allocation is not kept: its bytes go back to its allocation,
             // and a spilled allocation that empties is the idle rule's next to free, so the next
-            // tries device-local memory again.
+            // tries device-local memory again. A kept block stays under the lock from the queue to
+            // the kept blocks, so a take finds it in one or the other.
             let kept = !memory.spilled;
             if !kept {
+                drop(state);
                 retire(&core, &memory);
+                state = pool.lock();
             }
-            state = pool.lock();
             let class = memory.class;
             // The block's allocation was in use until now, however long ago it was taken.
             state.note(class, pool.clock.seconds());
