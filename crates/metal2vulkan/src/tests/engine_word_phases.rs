@@ -96,7 +96,7 @@ fn proven(bc: &[u8], name: &str, p: &DeviceProfile) -> BTreeSet<u64> {
 
 /// The `Aligned` operand of every load and store of serialized module `words` through a
 /// `PhysicalStorageBuffer` pointer (0 for one without it).
-fn device_alignments(words: &[u32]) -> Vec<u32> {
+pub(super) fn device_alignments(words: &[u32]) -> Vec<u32> {
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     let module = parse_bytes(&bytes).expect("parse");
     let physical = StorageClass::PhysicalStorageBuffer as u32;

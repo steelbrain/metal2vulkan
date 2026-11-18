@@ -118,9 +118,11 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   buffer longer than 2 GiB (`MAX_BUFFER_LENGTH`), and an access of 8 or 16 bytes at an offset
   proven a multiple of its size is one `uvec2` or `uvec4`. The function states
   `RuntimeFact::AddressAlignment` with that alignment (at most 16), and a binder refuses a binding
-  whose address is not a multiple of it, as Metal's API validation refuses the bind offset. Any
-  other slot (an argument with no alignment or one below 4) is reached from the word below each
-  access, its offset zero-extended. Fields past a kernel's push window (128 bytes; 256 on
+  whose address is not a multiple of it, as Metal's API validation refuses the bind offset. A
+  slot whose argument states an alignment below 4, or none, is reached the same way where each of
+  its accesses is one 1- or 2-byte unit no wider than that alignment (an `i8` access of a `uchar`
+  buffer, an `i16` one of a `ushort` buffer) on a device with that width's storage access. Any
+  other slot is reached from the word below each access, its offset zero-extended. Fields past a kernel's push window (128 bytes; 256 on
   a device made by `Device::from_queries`, whose runtime's floor requires that much
   `maxPushConstantsSize`: a dispatch region and 28 buffer addresses) go to a parameter block in
   memory, read at the device address `PushField::ArgumentTableAddress`, which

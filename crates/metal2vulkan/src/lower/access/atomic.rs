@@ -708,6 +708,8 @@ pub fn select(
                 return Err(cx.invariant("an atomic through a uniform view"));
             }
             cx.push.insert(PushField::SlotBindOffset(plan.slot));
+            // An atomic reaches its word.
+            super::note_reach(cx, t.slot, 4);
             if typed {
                 // A typed atomic's slot is reached by device address (`finish_slots`).
                 cx.families.access.typed_slots.insert(t.slot);

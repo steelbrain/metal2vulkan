@@ -417,7 +417,8 @@ pub fn endpoint(
     // A source may also point into the constant blob (its `BLOB_ROOT` candidate); the blob is
     // constant, so a destination may not. The targets are placed as a load's or a store's are.
     let (mut targets, null, blob) = super::blob_roots(cx, v, write, m)?;
-    super::place_targets(cx, &mut targets, write)?;
+    // A copy's chunks take their own leaves when it is emitted, words among them.
+    super::place_targets(cx, &mut targets, write, 4)?;
     Ok(Endpoint::Buffer(Access {
         ptr: operand(cx, v)?,
         value: None,

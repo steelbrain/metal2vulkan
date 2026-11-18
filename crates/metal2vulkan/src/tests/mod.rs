@@ -112,6 +112,7 @@ mod engine_moved_writers;
 mod engine_multisample;
 mod engine_must_fallback;
 mod engine_name_independence;
+mod engine_narrow_direct;
 mod engine_narrow_wrap;
 mod engine_native_half;
 mod engine_native_maths;
