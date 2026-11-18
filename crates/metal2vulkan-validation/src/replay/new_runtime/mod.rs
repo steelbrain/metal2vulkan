@@ -1629,4 +1629,13 @@ impl Backend for NewRuntime {
     fn snapshots(&self) -> bool {
         false
     }
+
+    fn managed_texture(&self, texture: u64) -> Option<bool> {
+        match self.objects.get(&texture) {
+            Some(Object::Texture(texture)) => {
+                Some(texture.descriptor().storage_mode == rt::StorageMode::Managed)
+            }
+            _ => None,
+        }
+    }
 }

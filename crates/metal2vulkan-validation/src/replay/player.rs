@@ -7,6 +7,7 @@
 
 use super::addresses::AddressMap;
 use super::stream::{Call, StreamError, StreamReader};
+use super::texwrites::TexWrites;
 use super::value::{Hash, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -110,6 +111,12 @@ pub trait Backend {
     /// The recording device's `hasUnifiedMemory`, from the stream's `m2v.deviceIdentity` record:
     /// how it kept Managed buffers. A backend with one form of Managed buffer ignores it.
     fn recorded_unified_memory(&mut self, _unified: bool) {}
+
+    /// Whether texture `texture` (not a view) is Managed, where the backend knows
+    /// (`Report::texture_writes`).
+    fn managed_texture(&self, _texture: u64) -> Option<bool> {
+        None
+    }
 }
 
 /// Why a play stopped.
@@ -230,6 +237,56 @@ pub struct Report {
     pub total: Counts,
     /// Each frame's end, as `frames` counts them.
     pub ends: Vec<End>,
+    /// The CPU's writes into Managed textures, and those a committed user may still be using.
+    pub texture_writes: TextureWrites,
+}
+
+/// The CPU's writes into Managed textures (`replaceRegion:...` and any other call on a texture
+/// that carries bytes), into the textures the backend says are Managed: how many, their bytes and
+/// textures. Of them, those made while a command buffer that used the texture was committed and the
+/// stream records no completion of it (only the program's CPU waits record one), by the presents
+/// between that user's commit and the write (0, 1, 2, 3 or more), and the first few: position,
+/// texture, user and presents. And the writes into textures whose storage the backend does not
+/// tell.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TextureWrites {
+    pub writes: u64,
+    pub bytes: u64,
+    pub textures: u64,
+    pub pending: u64,
+    pub pending_bytes: u64,
+    pub pending_textures: u64,
+    pub by_presents: [u64; 4],
+    pub first: Vec<(u64, u64, u64, u64)>,
+    pub unknown: u64,
+}
+
+impl TextureWrites {
+    /// The report's `texture_writes` line.
+    pub fn line(&self) -> String {
+        let [now, one, two, more] = self.by_presents;
+        let first: Vec<String> = (self.first.iter())
+            .map(|(at, texture, user, presents)| {
+                format!("{at} #{texture} used by #{user} {presents} presents before")
+            })
+            .collect();
+        let first = match first.is_empty() {
+            true => String::new(),
+            false => format!("; first {}", first.join(", ")),
+        };
+        format!(
+            "texture_writes {} into Managed textures ({} bytes, {} textures); {} with a committed \
+             user not seen complete ({} bytes, {} textures), by presents since its commit 0: \
+             {now} 1: {one} 2: {two} 3+: {more}; {} into textures of untold storage{first}",
+            self.writes,
+            self.bytes,
+            self.textures,
+            self.pending,
+            self.pending_bytes,
+            self.pending_textures,
+            self.unknown,
+        )
+    }
 }
 
 /// A frame's end: how long the frame took to play, and what the process and the runtime held.
@@ -522,6 +579,7 @@ impl Report {
                 relaid.heaps, relaid.moved, relaid.grown
             ));
         }
+        lines.push(self.texture_writes.line());
         lines.push(format!("total{}", counted(&self.total)));
         lines
     }
@@ -719,6 +777,8 @@ pub struct Player<'b, B: Backend> {
     last_frame: Option<usize>,
     /// Where each frame's lines go as it ends (`with_frame_lines`).
     frame_out: Option<&'b mut dyn Write>,
+    /// The CPU's writes into Managed textures and their textures' users.
+    texwrites: TexWrites,
 }
 
 /// `now` past `base`, key by key.
@@ -917,6 +977,7 @@ impl<'b, B: Backend> Player<'b, B> {
             report: Report::default(),
             last_frame: None,
             frame_out: None,
+            texwrites: TexWrites::default(),
         }
     }
 
@@ -963,6 +1024,7 @@ impl<'b, B: Backend> Player<'b, B> {
             add(&mut stream, &group.stream);
         }
         self.report.total = Counts { stream, executed };
+        self.report.texture_writes = self.texwrites.counts();
         (self.report, ended)
     }
 
@@ -1138,6 +1200,7 @@ impl<'b, B: Backend> Player<'b, B> {
             }
             "m2v.present" => {
                 self.drain()?;
+                self.texwrites.presented();
                 self.report.frames.push(self.frame.clone());
                 self.frame = Counts::default();
                 let now = std::time::Instant::now();
@@ -1192,6 +1255,9 @@ impl<'b, B: Backend> Player<'b, B> {
             // Read ahead: it plays around the dispatch it names (`split`).
             PRIVATE_BYTES => Ok(()),
             WAIT_COMPLETED | WAIT_SCHEDULED => {
+                if &*call.selector == WAIT_COMPLETED {
+                    self.texwrites.waited(call.receiver);
+                }
                 self.drain()?;
                 match self.committed.contains(&call.receiver) {
                     true => Err(invalid(format!(
@@ -1225,6 +1291,7 @@ impl<'b, B: Backend> Player<'b, B> {
             }
             "waitUntilSignaledValue:timeoutMS:" => {
                 let value = call.args.first().and_then(Value::as_uint).unwrap_or(0);
+                self.texwrites.event_waited(call.receiver, value);
                 self.drain()?;
                 match self.events.get(&call.receiver).copied().unwrap_or(0) >= value {
                     true => Ok(()),
@@ -1234,7 +1301,10 @@ impl<'b, B: Backend> Player<'b, B> {
                     ))),
                 }
             }
-            "release" => self.release(call.receiver),
+            "release" => {
+                self.texwrites.released(call.receiver);
+                self.release(call.receiver)
+            }
             _ => self.make(stream, call),
         }
     }
@@ -1256,6 +1326,8 @@ impl<'b, B: Backend> Player<'b, B> {
         let pending = self.pending.get_mut(&command_buffer);
         let pending = pending.ok_or_else(|| invalid("a commit of no command buffer"))?;
         pending.committed = true;
+        let (queue, signals) = (pending.queue, pending.signals.clone());
+        self.texwrites.committed(command_buffer, queue, &signals);
         self.committed.push(command_buffer);
         self.run(&own_call("commit", command_buffer, 0, &[]))?;
         *self.fixed.entry(COMMITS).or_default() += 1;
@@ -1339,6 +1411,9 @@ impl<'b, B: Backend> Player<'b, B> {
         let resolved = self.uploaded(resolved)?;
         let made = self.run(&resolved)?;
         self.track(&resolved);
+        let backend = &*self.backend;
+        let managed = |texture| backend.managed_texture(texture);
+        self.texwrites.saw(&resolved, self.position, managed);
         let object = resolved.result;
         if object == 0 {
             return Ok(());

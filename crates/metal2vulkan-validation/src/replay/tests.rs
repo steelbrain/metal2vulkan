@@ -5,7 +5,7 @@ use super::addresses::AddressMap;
 use super::new_runtime::unwritten::Unwritten;
 use super::player::{
     Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
-    WAIT_COMPLETED,
+    TextureWrites, WAIT_COMPLETED,
 };
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
@@ -303,6 +303,8 @@ struct Kept {
     gpu: HashMap<u64, (u64, u64)>,
     /// The recording device's `hasUnifiedMemory` the player told it.
     unified: Option<bool>,
+    /// The textures it says are Managed; it says every other one is not.
+    managed: Vec<u64>,
 }
 
 impl Backend for Kept {
@@ -412,6 +414,10 @@ impl Backend for Kept {
 
     fn recorded_unified_memory(&mut self, unified: bool) {
         self.unified = Some(unified);
+    }
+
+    fn managed_texture(&self, texture: u64) -> Option<bool> {
+        Some(self.managed.contains(&texture))
     }
 }
 
@@ -1269,6 +1275,83 @@ fn a_dispatch_reading_a_buffer_nothing_recorded_reached_is_counted_once() {
         unwritten.line(),
         "unwritten 3: Shared buffers a dispatch read before any recorded write, upload or GPU \
          pass reached their bytes since their making; first #2 in #10, #4 in #10, #8 in #14"
+    );
+}
+
+/// A CPU write into a Managed texture counts with its user not seen complete while a committed
+/// command buffer that used it (through a view) has no recorded completion, by the presents since
+/// that commit; after the CPU waited for it, it counts without. A write into a texture that is not
+/// Managed is not counted.
+#[test]
+fn a_write_into_a_managed_texture_its_user_may_still_read_is_counted() {
+    let mut kept = Kept {
+        managed: vec![3],
+        ..Kept::default()
+    };
+    let region = map(&[
+        ("x", Value::Uint(0)),
+        ("y", Value::Uint(0)),
+        ("width", Value::Uint(2)),
+        ("height", Value::Uint(2)),
+    ]);
+    let replace = |w: &mut StreamWriter<File>, texture: u64| {
+        let args = [
+            region.clone(),
+            Value::Uint(0),
+            Value::Bytes(vec![0; 16]),
+            Value::Uint(8),
+        ];
+        w.call(
+            "replaceRegion:mipmapLevel:withBytes:bytesPerRow:",
+            texture,
+            0,
+            &args,
+            &[],
+        )
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let descriptor = [map(&[("width", Value::Uint(2))])];
+        w.call("newTextureWithDescriptor:", 1, 3, &descriptor, &[])?;
+        w.call("newTextureWithDescriptor:", 1, 4, &descriptor, &[])?;
+        w.call(
+            "newTextureViewWithPixelFormat:",
+            3,
+            5,
+            &[Value::Uint(70)],
+            &[],
+        )?;
+        w.call("commandBuffer", 2, 6, &[], &[])?;
+        w.call("computeCommandEncoder", 6, 7, &[], &[])?;
+        let bind = [Value::Object(5), Value::Uint(0)];
+        w.call("setTexture:atIndex:", 7, 0, &bind, &[])?;
+        w.call("endEncoding", 7, 0, &[], &[])?;
+        w.call("commit", 6, 0, &[], &[])?;
+        replace(w, 3)?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        replace(w, 3)?;
+        replace(w, 4)?;
+        w.call(WAIT_COMPLETED, 6, 0, &[], &[])?;
+        replace(w, 3)
+    });
+    ended.unwrap();
+    let writes = TextureWrites {
+        writes: 3,
+        bytes: 48,
+        textures: 1,
+        pending: 2,
+        pending_bytes: 32,
+        pending_textures: 1,
+        by_presents: [1, 1, 0, 0],
+        first: vec![(10, 3, 6, 0), (12, 3, 6, 1)],
+        unknown: 0,
+    };
+    assert_eq!(report.texture_writes, writes);
+    assert!(
+        (report.lines()).contains(&writes.line()),
+        "{:?}",
+        report.lines()
     );
 }
 

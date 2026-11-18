@@ -388,6 +388,18 @@ counted from 0), completes the work committed so far, reports as at the stream's
   buffer; and the commit of a dispatch that binds it, which may write it. A dispatch that writes
   such a buffer before it reads it is counted too, and a texture over a buffer is not followed.
   The line counts; it stops nothing.
+- **Writes into Managed textures** (any backend that tells a texture's storage mode; the new
+  runtime's does): the report's `texture_writes` line counts the CPU's writes into Managed textures
+  (`replaceRegion:...` and any other call on a texture that carries bytes), their bytes and
+  textures, and of them those made while a command buffer that used the texture (an encoder of it
+  named the texture or a view of it, or it was made with a descriptor that names one) was committed
+  and the stream records no completion of it. The play waits for each command buffer at its commit;
+  the stream records a completion only where the program's CPU waited: `waitUntilCompleted` of the
+  command buffer or a later one of its queue, or `waitUntilSignaledValue:timeoutMS:` reaching a
+  value that it or a later one of its queue signals. So such a write may have met a user still
+  running on the recording device. It counts them by the presents between the user's commit and the
+  write (0, 1, 2, 3 or more), names the first eight (position, texture, user, presents) and counts
+  the writes into textures whose storage the backend does not tell. It stops nothing.
 - After each commit, before each write, check and present, and where the program waited, it waits
   for every committed command buffer that can complete: one whose event waits are met by values the
   CPU set or by signals of command buffers that can complete. It never waits on a command buffer
@@ -532,7 +544,8 @@ encoders around them (`N` the encoders split, `COUNTS` the executed counts of th
 `unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
 `parted N` where a recorded range met a live one in part (`N` the older ranges ended),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
-offsets it moved in them and the bytes it added to their sizes), `total COUNTS` (its `calls` the
+offsets it moved in them and the bytes it added to their sizes), `texture_writes ...` (the
+CPU's writes into Managed textures, below), `total COUNTS` (its `calls` the
 calls played: where
 the play stopped, the stopping call is the next), the new runtime's backend's
 `pipeline I wall_nanos=N kernel=new|again` for each compute pipeline state it made, in order (the

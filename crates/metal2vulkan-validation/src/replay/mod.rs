@@ -7,6 +7,7 @@ mod new_runtime;
 mod old_runtime;
 mod player;
 mod stream;
+mod texwrites;
 mod translator;
 mod value;
 
@@ -15,7 +16,7 @@ pub use old_runtime::OldRuntime;
 pub use player::WAIT_COMPLETED;
 pub use player::{
     Backend, Check, Counters, Counts, End, IdDiffers, Made, PlayError, Player, PrivateBytes,
-    Relaid, Report,
+    Relaid, Report, TextureWrites,
 };
 pub use stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 pub use value::{Hash, Name, Value};
