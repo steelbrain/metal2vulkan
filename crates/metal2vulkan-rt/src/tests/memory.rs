@@ -1345,6 +1345,7 @@ mod on_device {
     #[test]
     fn every_device_fills_a_zeroed_private_buffer_before_a_copy_into_it_in_the_next_command_buffer()
     {
+        use crate::IndexClass;
         const LEN: u64 = 4096;
         const AT: u64 = 1024;
         const SPAN: u64 = 2 * AT + LEN;
@@ -1448,9 +1449,12 @@ mod on_device {
             }
 
             // A texture placed in a block zeroes nothing.
+            device
+                .grant_indices(IndexClass::Texture, 4096, 1)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             let before = counters.metrics().bytes_zeroed;
             let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 64, 64);
-            let texture = (device.new_texture(&d, None))
+            let texture = (device.new_texture(&d, Some(4096)))
                 .unwrap_or_else(|error| panic!("{name}: a texture: {error}"));
             assert_eq!(
                 counters.metrics().bytes_zeroed,
@@ -1459,11 +1463,7 @@ mod on_device {
             );
             drop((texture, gpu, queue, private, shared));
             drop(device);
-            assert_eq!(
-                counters.gauges(),
-                Gauges::default(),
-                "{name}: gauges after teardown"
-            );
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
             println!(
                 "memory: {name}: zeroed Private buffers filled before copies into them; metrics {:?}",
                 counters.metrics()
