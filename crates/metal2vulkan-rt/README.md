@@ -10,7 +10,7 @@ device against the floor below.
 
 ## What the consumer implements
 
-Four of Metal's objects and getters have no counterpart here by design. The consumer implements
+Five of Metal's objects and getters have no counterpart here by design. The consumer implements
 them over this crate's items:
 
 - `MTLRenderPassDescriptor`'s read-back of its own fields. `RenderPassDescriptor` is a value the
@@ -22,6 +22,12 @@ them over this crate's items:
   as its argument and keeps no getter.
 - `MTLTexture`'s `cpuCacheMode`, `hazardTrackingMode` and `allowGPUOptimizedContents`.
   `TextureDescriptor` states none of them.
+- A pipeline state's reflection (`MTLComputePipelineReflection`, `MTLRenderPipelineReflection`)
+  and the options a creation takes: `MTLPipelineOptionFailOnBinaryArchiveMiss`,
+  `MTLPipelineOptionArgumentInfo`, `MTLPipelineOptionBufferTypeInfo` and
+  `MTLPipelineOptionBindingInfo`. rt builds no pipeline reflection and acts on no
+  `MTLPipelineOption`; its consumer builds reflection from the library's AIR. An option not
+  named here is not the consumer's by this line.
 
 ## Instance and device
 
@@ -1034,6 +1040,10 @@ that touch blocks first.
   buffer argument is the guest address of the bound buffer plus its offset, and each texture and
   sampler argument the bound object's resource ID, pushed; set 1 is the only descriptor set a
   kernel reads. A refusal of the translator is `Error::Translation`.
+- rt builds no pipeline reflection and acts on no `MTLPipelineOption`; its consumer builds
+  reflection from the library's AIR. The options it leaves to the consumer are
+  `MTLPipelineOptionFailOnBinaryArchiveMiss`, `MTLPipelineOptionArgumentInfo`,
+  `MTLPipelineOptionBufferTypeInfo` and `MTLPipelineOptionBindingInfo`.
 - What a state compiles is its content, never the state: its descriptor's kernel with its
   constant values, linked functions and dynamic libraries, the descriptor's fields that change
   the compile (the translator's `Device::compute_pipeline_key`), and its
@@ -1375,6 +1385,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   vertex and fragment functions on the calling thread, which waits for them, within its 20-second
   budget per lowering, for what device creation enabled and under its identity domains, as for a
   compute state. A refusal of the translator is `Error::Translation`.
+- rt builds no pipeline reflection and acts on no `MTLPipelineOption`; its consumer builds
+  reflection from the library's AIR, as for a compute state.
 - A state numbers its functions' samplers as a compute state numbers its kernel's:
   `sampler_ids` takes the vertex function's, then the fragment function's, each in Metal's order,
   and answers the index the consumer gives each. Each constexpr sampler a function samples

@@ -206,15 +206,20 @@ pub enum ConsumerObject {
     /// `MTLTexture`'s `cpuCacheMode`, `hazardTrackingMode` and `allowGPUOptimizedContents`: the
     /// runtime's `TextureDescriptor` states none of them.
     TextureDescriptorFields,
+    /// A pipeline state's reflection and the `MTLPipelineOption` bits a creation takes, each named:
+    /// the runtime builds no reflection and acts on no option, and its consumer builds reflection
+    /// from the library's AIR. An option outside the named ones is not this object.
+    PipelineReflection,
 }
 
 impl ConsumerObject {
     /// Every object, in the order the count line names them.
-    pub const ALL: [ConsumerObject; 4] = [
+    pub const ALL: [ConsumerObject; 5] = [
         ConsumerObject::RenderPassDescriptor,
         ConsumerObject::Heap,
         ConsumerObject::DispatchType,
         ConsumerObject::TextureDescriptorFields,
+        ConsumerObject::PipelineReflection,
     ];
 
     /// The name a row states in its parentheses.
@@ -225,6 +230,11 @@ impl ConsumerObject {
             ConsumerObject::DispatchType => "dispatchType",
             ConsumerObject::TextureDescriptorFields => {
                 "cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents"
+            }
+            ConsumerObject::PipelineReflection => {
+                "MTLComputePipelineReflection, MTLRenderPipelineReflection, \
+                 MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo, \
+                 MTLPipelineOptionBufferTypeInfo, MTLPipelineOptionBindingInfo"
             }
         }
     }

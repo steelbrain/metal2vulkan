@@ -7985,6 +7985,28 @@ fn every_object_of_the_consumer_s_own_is_named_in_rt_s_readme() {
     }
 }
 
+/// A pipeline creation's reflection and options are the consumer's own only under the options the
+/// reason names: every word of the three named bits is, and a word with any other bit is the call's,
+/// unavailable, so an option the planner has not ruled on is never counted the consumer's.
+#[test]
+fn only_the_named_pipeline_options_are_the_consumer_s_own() {
+    use crate::case::Failure;
+    use crate::rt_side::reflection_is_the_consumers;
+    let call = "compute_pipeline_under_options";
+    for named in 0..8 {
+        let answer = reflection_is_the_consumers(call, named);
+        assert_ne!(answer, Failure::unavailable(call), "{named:#x}");
+        assert!(
+            format!("{answer:?}").contains("TheConsumers"),
+            "{named:#x}: {answer:?}"
+        );
+    }
+    for unnamed in [1 << 3, (1 << 3) | 1, 1 << 31, 1 << 40] {
+        let answer = reflection_is_the_consumers(call, unnamed);
+        assert_eq!(answer, Failure::unavailable(call), "{unnamed:#x}");
+    }
+}
+
 /// The ledger's three typed reasons parse from a row's waiting-on head with the lane, census run
 /// or object they name, a head without its name or with an object off the closed list is refused,
 /// and the count lines sum each by name.

@@ -314,6 +314,29 @@ fn heap_is_the_consumers() -> Failure {
     )
 }
 
+/// The `MTLPipelineOption` bits the consumer's own reason names
+/// ([`ConsumerObject::PipelineReflection`](crate::known_gaps::ConsumerObject::PipelineReflection)):
+/// `MTLPipelineOptionBindingInfo` (`MTLPipelineOptionArgumentInfo`'s bit),
+/// `MTLPipelineOptionBufferTypeInfo` and `MTLPipelineOptionFailOnBinaryArchiveMiss`.
+const NAMED_OPTIONS: u64 = (1 << 0) | (1 << 1) | (1 << 2);
+
+/// The consumer's own, for a pipeline creation under `options` that asks for reflection or takes
+/// options: the runtime builds no pipeline reflection and acts on no `MTLPipelineOption`, and its
+/// consumer builds reflection from the library's AIR, as the runtime's README says. A word with a
+/// bit outside the named options is `call`'s, unavailable, so an option the reason does not name is
+/// never taken for the consumer's.
+pub(crate) fn reflection_is_the_consumers(call: &str, options: u64) -> Failure {
+    if options & !NAMED_OPTIONS != 0 {
+        return Failure::unavailable(call);
+    }
+    Failure::named(
+        "TheConsumers",
+        "metal2vulkan-rt builds no pipeline reflection and acts on no MTLPipelineOption \
+         (FailOnBinaryArchiveMiss, ArgumentInfo, BufferTypeInfo, BindingInfo): its consumer builds \
+         reflection from the library's AIR",
+    )
+}
+
 /// The new runtime's side of one case.
 pub struct RtSide<'a> {
     on: &'a RtDevice,
@@ -765,6 +788,78 @@ impl Side for RtSide<'_> {
             "metal2vulkan-rt's RenderPassDescriptor is a value its consumer fills: what Metal's \
              MTLRenderPassDescriptor answers of its fields is the consumer's",
         ))
+    }
+
+    /// The consumer's own: a compute pipeline's bindings are its reflection's
+    /// ([`reflection_is_the_consumers`]).
+    fn compute_pipeline_bindings(
+        &mut self,
+        _library: Handle,
+        _entry: &str,
+    ) -> Answer<Vec<crate::function_bindings::BindingFacts>> {
+        Err(reflection_is_the_consumers("compute_pipeline_bindings", 0))
+    }
+
+    /// The consumer's own ([`reflection_is_the_consumers`]).
+    fn compute_pipeline_under_options(
+        &mut self,
+        _library: Handle,
+        _entry: &str,
+        options: u64,
+    ) -> Answer<crate::pipeline_options::OptionOutcome> {
+        Err(reflection_is_the_consumers(
+            "compute_pipeline_under_options",
+            options,
+        ))
+    }
+
+    /// The consumer's own ([`reflection_is_the_consumers`]).
+    fn render_pipeline_under_options(
+        &mut self,
+        _library: Handle,
+        _vertex: &str,
+        _fragment: &str,
+        _attachment: PixelFormat,
+        options: u64,
+    ) -> Answer<crate::pipeline_options::OptionOutcome> {
+        Err(reflection_is_the_consumers(
+            "render_pipeline_under_options",
+            options,
+        ))
+    }
+
+    /// The consumer's own ([`reflection_is_the_consumers`]).
+    fn compute_pipeline_reflection_under(
+        &mut self,
+        _library: Handle,
+        _entry: &str,
+        options: u64,
+    ) -> Answer<crate::pipeline_option_reflection::UnderOptions> {
+        Err(reflection_is_the_consumers(
+            "compute_pipeline_reflection_under",
+            options,
+        ))
+    }
+
+    /// The consumer's own for a compute pipeline's two creation paths, which compare the
+    /// reflection each delivers under its options ([`reflection_is_the_consumers`]); a render,
+    /// tile or mesh pipeline's are unavailable.
+    fn pipeline_both_paths(
+        &mut self,
+        _library: Handle,
+        form: &crate::pipeline_handlers::Form<'_>,
+    ) -> Answer<crate::pipeline_handlers::BothPaths> {
+        use crate::pipeline_handlers::Form;
+        const CALL: &str = "pipeline_both_paths";
+        Err(match *form {
+            Form::ComputeFunction { options, .. } => {
+                reflection_is_the_consumers(CALL, options.unwrap_or(0))
+            }
+            Form::ComputeDescriptor { options, .. } => reflection_is_the_consumers(CALL, options),
+            Form::Render { .. } | Form::Tile { .. } | Form::Mesh { .. } => {
+                Failure::unavailable(CALL)
+            }
+        })
     }
 
     fn minimum_linear_texture_alignment(&mut self, format: PixelFormat) -> Answer<u64> {
