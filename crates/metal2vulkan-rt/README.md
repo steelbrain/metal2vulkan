@@ -1462,14 +1462,18 @@ or does not check is rebuilt from the generations' names, with young counted ful
   and where a draw reads what the shadow does not hold, the rendering ended and begun again
   around the copies and their two barriers. Its cost, measured on the UHD 630 in the harness
   (release; GPU time a pass, the median over four rounds of each round's median) by a pass that
-  ends for a copy of its whole `BGRA8Unorm` target and begins again, against the same pass
-  without the copy: 39.0 µs a MiB at 1920 × 1080 and 53.5 µs a MiB at 3648 × 2038, and about 3
-  to 8 µs a copy beyond its bytes. Two replay streams, counted as this form copies them, make
-  68.7 copies and 298.0 MiB a frame (r3) and 65.5 copies and 93.4 MiB a frame (b3): about 12 to
-  16.5 ms a frame on the UHD 630 for r3 and 4 to 5.5 ms for b3. In the same runs the old runtime
-  reads the same target more slowly at 3648 × 2038: 5,431.1 µs after a barrier, against
-  4,766.4 µs for the pass with the copy, and 4,181.9 µs at the pass's first read, against
-  3,889.6 µs.
+  loads its `BGRA8Unorm` target, ends for a copy of all of it and begins again, against the same
+  pass without the copy: 39.0 µs a MiB at 1920 × 1080 and 53.5 µs a MiB at 3648 × 2038, and
+  about 3 to 8 µs a copy beyond its bytes. Two replay streams, counted as this form copies them,
+  make 68.7 copies and 298.0 MiB a frame (r3) and 65.5 copies and 93.4 MiB a frame (b3): about 12 to
+  16.5 ms a frame on the UHD 630 for r3 and 4 to 5.5 ms for b3, where no copied target was
+  cleared by its pass. A copy of a target its pass cleared costs more: a pass that clears its
+  target and reads it at its first draw takes 1,118.8 µs at 1920 × 1080 and 4,635.1 µs at
+  3648 × 2038, against 668.5 µs and 2,341.0 µs for the same pass reading another texture, about
+  57 and 81 µs a MiB. Against the old runtime at 3648 × 2038, this form reads the target faster
+  after a barrier (4,652.6 µs against 5,438.8 µs) and at the first read of a pass that loads it
+  (3,750.9 µs against 4,247.8 µs), and more slowly at the first read of a pass that clears it
+  (4,635.1 µs against 4,195.7 µs; at 1920 × 1080, 1,118.8 µs against 1,099.2 µs).
 
 ## One path for every device
 
