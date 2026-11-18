@@ -184,6 +184,61 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
     drop(device);
 }
 
+/// A device torn down while its cache directory's removal thread runs waits for it: opened on a
+/// directory with two dead generations, its removal paused 200 ms (the test seam
+/// `cache::REMOVAL_PAUSE`), and dropped at once, the device's every gauge reads zero,
+/// `Gauges::threads` among them, and the dead generations are gone.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[test]
+fn every_device_joins_its_cache_directory_s_removal_at_teardown() {
+    use crate::cache::{Store, REMOVAL_PAUSE};
+    use std::sync::atomic::Ordering::Relaxed;
+
+    REMOVAL_PAUSE.store(200, Relaxed);
+    use crate::tests::devices_of_the_cfgs_kind;
+
+    let instance = Instance::new(&[]).expect("an instance at the floor");
+    let devices = devices_of_the_cfgs_kind(&instance);
+    assert!(!devices.is_empty(), "no device of this cfg's kind");
+    for (name, physical) in &devices {
+        let dir = std::env::temp_dir().join(format!("m2v-rt-removal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Generations 1 to 4 made through a store of its own, 4 young; then 1 and 2, dead, refilled
+        // as a run cut short in their removal leaves them.
+        let store = Store::open(dir.clone(), 1000, Counters::new());
+        for n in 0..16_u32 {
+            assert!(store.put(&format!("translations/{n:064x}"), &[1; 100]));
+        }
+        store.settle();
+        drop(store);
+        for number in [1, 2] {
+            let generation = dir.join(format!("g{number}"));
+            std::fs::create_dir_all(&generation).expect("the generation");
+            for n in 0..100 {
+                std::fs::write(generation.join(format!("dead{n:04}")), [0; 10]).expect("a file");
+            }
+        }
+        let options = DeviceOptions {
+            pipeline_cache_dir: Some(dir.clone()),
+            ..DeviceOptions::default()
+        };
+        let device =
+            Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let counters = device.counters();
+        drop(device);
+        assert_eq!(
+            counters.gauges(),
+            Gauges::default(),
+            "{name}: gauges after teardown"
+        );
+        assert!(
+            !dir.join("g1").exists() && !dir.join("g2").exists(),
+            "{name}: the dead generations removed by the teardown's end"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// The consumer's extensions: the instance and every device of the cfg's kind enable each one they
 /// offer, once, after the floor's (and the instance's after the portability listing, where the
 /// loader offers it), and pass over the rest. `VK_EXT_swapchain_maintenance1` goes

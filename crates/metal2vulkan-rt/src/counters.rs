@@ -688,8 +688,7 @@ fn os_thread_id() -> u64 {
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the
-/// device is torn down, [`threads`](Self::threads) once its cache directory's removal thread,
-/// which no teardown waits for, has ended too.
+/// device is torn down.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Gauges {

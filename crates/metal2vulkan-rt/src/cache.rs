@@ -139,6 +139,8 @@ pub(crate) struct Store {
     young: AtomicU64,
     /// The device's counters, whose thread gauge holds the removal thread while it runs.
     counters: Counters,
+    /// The removal thread last started, joined by the next start or at the device's teardown.
+    removal: Mutex<Option<std::thread::JoinHandle<()>>>,
     /// The times the store listed the cache directory.
     #[cfg(test)]
     pub(crate) listings: AtomicUsize,
@@ -172,6 +174,7 @@ impl Store {
             removing: AtomicBool::new(false),
             young: AtomicU64::new(0),
             counters,
+            removal: Mutex::new(None),
             #[cfg(test)]
             listings: AtomicUsize::new(0),
             #[cfg(test)]
@@ -417,10 +420,25 @@ impl Store {
             return;
         }
         let store = Arc::clone(self);
-        let started =
-            crate::device::start("m2v-store-remove", &self.counters, move || store.remove());
-        if started.is_err() {
-            self.removing.store(false, SeqCst);
+        match crate::device::start("m2v-store-remove", &self.counters, move || store.remove()) {
+            // The thread before it has ended its pass, since `removing` was clear: joined here,
+            // where it at most finishes looking for a dead generation.
+            Ok(started) => {
+                let ended = lock(&self.removal).replace(started);
+                if let Some(ended) = ended {
+                    let _ = ended.join();
+                }
+            }
+            Err(_) => self.removing.store(false, SeqCst),
+        }
+    }
+
+    /// At the device's teardown: waits for the removal thread, which removes a finite set of
+    /// directories, so no thread of the device outlives it.
+    pub(crate) fn join_removal(&self) {
+        let removal = lock(&self.removal).take();
+        if let Some(removal) = removal {
+            let _ = removal.join();
         }
     }
 
@@ -428,6 +446,8 @@ impl Store {
     /// earlier version's pipeline data, until a pass finds none it did not try.
     fn remove(&self) {
         loop {
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            std::thread::sleep(Duration::from_millis(REMOVAL_PAUSE.load(Relaxed)));
             if let Some(file) = &self.state {
                 let _ = file.sync_all();
             }
@@ -459,6 +479,11 @@ impl Store {
         dead
     }
 }
+
+/// A pause at the start of each removal pass, in milliseconds, for a test that tears a device
+/// down during one.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub(crate) static REMOVAL_PAUSE: AtomicU64 = AtomicU64::new(0);
 
 /// Makes directory `dir` where it is missing; not its parent.
 fn make_dir(dir: &Path) -> io::Result<()> {
@@ -1186,6 +1211,13 @@ impl Caches {
     /// # Safety
     ///
     /// `device` is the device of the caches, and no creation runs.
+    /// At the device's teardown, once nothing writes to the store: waits for its removal thread.
+    pub(crate) fn join_removal(&self) {
+        if let Some(store) = &self.store {
+            store.join_removal();
+        }
+    }
+
     pub(crate) unsafe fn close(&self, device: &ash::Device, counters: &Counters) {
         let (current, written) = {
             let mut pipelines = lock(&self.pipelines);

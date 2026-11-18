@@ -1159,6 +1159,9 @@ impl Drop for Core {
         self.reaper.drain(self);
         // SAFETY: the caches are the device's, and no creation runs: every handle is gone.
         unsafe { self.caches.close(&self.device, &self.counters) };
+        // The store's removal thread, the one thread no stop ends, is waited for here, so every
+        // gauge, `Gauges::threads` among them, reads zero once the core is gone.
+        self.caches.join_removal();
         if let Some(region) = self.work.take_capture_region() {
             self.counters
                 .fall_by(Gauge::CaptureBytes, crate::capture::CAPTURE_LEN);
