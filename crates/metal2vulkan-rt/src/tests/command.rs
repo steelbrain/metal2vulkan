@@ -1031,6 +1031,7 @@ pub(crate) mod on_device {
             let (first, second) = (queue(&device), queue(&device));
             let checked = FILLS.into_iter().any(|fills| {
                 let before = device.counters().metrics();
+                let seen = device.core().done.completed();
                 let running: Vec<CommandBuffer> = [&first, &second]
                     .into_iter()
                     .flat_map(|queue| {
@@ -1048,9 +1049,10 @@ pub(crate) mod on_device {
                 }
                 let held_now = device.counters().metrics();
                 // Every busy one ran past that read: no retirement sent anything counted in it.
-                let ran = running.iter().all(|command_buffer| {
-                    command_buffer.status() != CommandBufferStatus::Completed
-                });
+                // The completion thread's progress decides, not the busy ones' status: the submit
+                // thread counts a queue's submissions in flight by that progress, which moves
+                // before a command buffer's status turns `Completed`.
+                let ran = device.core().done.completed() == seen;
                 for command_buffer in running.iter().chain(&held) {
                     finished(name, command_buffer);
                 }
@@ -2051,8 +2053,8 @@ pub(crate) mod on_device {
     /// time. The groups pass two submit infos for the mix's four command buffers with commands:
     /// one for the fills up to the signal, which ends the group, and one the wait leads. One at a
     /// time passes one each. The groups are counted only where the completion thread had seen no
-    /// busy one complete when the mix's last commit returned: a completion seen sooner sends the
-    /// held group with what the mix had committed by then, which splits it where the completion
+    /// busy one complete once the submit thread had staged the whole mix: a completion seen sooner
+    /// sends the held group with what it had staged by then, which splits it where the completion
     /// happened to arrive.
     #[test]
     fn every_device_shares_submit_infos_within_a_group_and_records_what_it_records_alone() {
@@ -2124,9 +2126,17 @@ pub(crate) mod on_device {
                     command_buffer.commit().expect("a commit")
                 });
                 // The held group goes once the completion thread has seen a busy one complete,
-                // which then sends what the mix had committed so far: the split turns on when the
-                // completion arrives. Its progress moves before the group may go, and a command
-                // buffer's status turns `Completed` only after that, so the progress decides.
+                // which then sends what the submit thread had staged of the mix so far: the split
+                // turns on when the completion arrives. Its progress moves before the group may go,
+                // and a command buffer's status turns `Completed` only after that, so the progress
+                // decides, read once every one of the mix is staged (no longer `Committed`): a
+                // commit returns before the submit thread stages it, and one it stages after a
+                // completion goes with fewer than three in flight.
+                for command_buffer in &grouped {
+                    within(name, || {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    });
+                }
                 let ran = device.core().done.completed() == seen;
                 for command_buffer in running.iter().chain(&grouped) {
                     finished(name, command_buffer);
