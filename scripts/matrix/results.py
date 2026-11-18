@@ -555,6 +555,11 @@ HARNESS_CEILINGS = {
     # and one deep pays for running in tiles and for the RX 550's 64-bit address per read (the rt
     # README's known gaps of pipeline states), from a Private table and from a Managed one alike.
     "1002:699f": {"constant_managed": 1.20, "constant_private": 1.20},
+    # Ruled by the planner, 1.05, on the rows' medians of 1.040 and 1.032 (e632e01478): a second
+    # Shared buffer of 64 MiB on the 780M is rt's memset of the memory the first gave back
+    # against old's import of fresh pages, the same zeroing by another hand.
+    "1002:15bf": {"create_64MiB/next_take": 1.05},
+    "1002:1900": {"create_64MiB/next_take": 1.05},
     # Ruled by the planner on the rows' measured medians, 1.876 and 2.252: old imports fresh
     # anonymous pages for a Shared buffer of 64 MiB, a form chosen by a run-time check; rt
     # allocates and zeroes (on the 2080, a 10.0 ms vkAllocateMemory and a 2.5 ms memset against
