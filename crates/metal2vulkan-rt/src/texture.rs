@@ -15,8 +15,14 @@
 //! texture is made only where its view gives Metal's values: its format directly, or through the
 //! view's component mapping. A storage element is written only where the device stores the format
 //! through a storage image declared without a format.
+//!
+//! A Managed texture's bytes, where the consumer names them ([`Device::new_managed_texture`]), lie
+//! in its Shared buffer as it lays them out; [`Texture::upload_region`] copies a region of them
+//! into the image by the device, and [`Texture::replace_region`] and [`Texture::get_bytes`] write
+//! and read them there.
 
 use crate::arrays::{IndexClass, ResourceId};
+use crate::buffer::Buffer;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal};
@@ -37,7 +43,8 @@ use std::sync::Arc;
 
 /// `MTLStorageMode` of a texture. Shared, Managed and Private textures are all device images;
 /// Shared and Managed differ from Private only in that [`Texture::replace_region`] and
-/// [`Texture::get_bytes`] take them.
+/// [`Texture::get_bytes`] take them. A Managed texture made by [`Device::new_managed_texture`]
+/// also has the consumer's bytes of it, which those two calls reach.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StorageMode {
     /// `MTLStorageModeShared`.
@@ -105,6 +112,20 @@ impl TextureDescriptor {
     }
 }
 
+/// No Metal counterpart: where one level and slice of a Managed texture's bytes lie in the
+/// consumer's buffer ([`Device::new_managed_texture`]): the offset of its first texel, and its rows
+/// and images apart, a compressed format's rows being rows of blocks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct BytesPlace {
+    /// The level and slice's first byte in the buffer.
+    pub offset: u64,
+    /// The bytes from one row's start to the next's.
+    pub bytes_per_row: u64,
+    /// The bytes from one image's start to the next's: a 3D level's slices. Read only where the
+    /// level has more than one image.
+    pub bytes_per_image: u64,
+}
+
 /// `MTLRegion`: an origin and a size in texels, `[x, y, z]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Region {
@@ -143,6 +164,9 @@ struct TextureInner {
     word: u32,
     /// Its resource id in the encoders' hazard sets.
     id: u32,
+    /// A Managed texture's bytes the consumer names: the buffer, and a place for each level and
+    /// slice in order.
+    managed: Option<(Buffer, Vec<BytesPlace>)>,
 }
 
 /// A texture's Vulkan objects: its image, its memory and its views. The texture and each upload
@@ -223,6 +247,15 @@ impl CopyUnit {
     fn float_depth(&self) -> bool {
         self.aspect == vk::ImageAspectFlags::DEPTH && self.bytes == 4
     }
+
+    /// What a copy's offset in a buffer is a multiple of: the element's bytes, and 4 for a depth
+    /// or stencil aspect.
+    fn offset_align(&self) -> u64 {
+        match self.aspect == vk::ImageAspectFlags::COLOR {
+            true => u64::from(self.bytes),
+            false => u64::from(self.bytes).max(4),
+        }
+    }
 }
 
 /// The texture's shape, from its descriptor.
@@ -285,6 +318,46 @@ impl Device {
         descriptor: &TextureDescriptor,
         index: Option<u32>,
     ) -> Result<Texture, Error> {
+        self.texture(descriptor, index, None)
+    }
+
+    /// `newTextureWithDescriptor:` with `MTLStorageModeManaged`, at `index`: as
+    /// [`Device::new_texture`] (the descriptor's storage mode is taken as Managed), with the
+    /// consumer's bytes of the texture named in `bytes`, a buffer the host reaches, at `places`:
+    /// one for each level and, within it, each slice in order (a cube's six faces each a slice, a
+    /// 3D level one slice of several images). The consumer writes them; [`Texture::upload_region`]
+    /// copies a region of them into the image. The texture keeps the buffer.
+    ///
+    /// Metal keeps a Managed texture's bytes beside its image itself; here the consumer lays them
+    /// out, and the device copies straight from them, so each place's rows are a whole number of
+    /// texel blocks apart, its images a whole number of rows apart, and its offset a multiple of
+    /// the texel block's bytes, of 4 for a depth or stencil format.
+    ///
+    /// Err: as [`Device::new_texture`]; [`Refusal::OtherDevice`] for another device's buffer;
+    /// [`Refusal::ManagedTextureBytes`] for places that do not lie so, or a buffer the host does
+    /// not reach; [`Gap::TextureBytes`] for a format the runtime copies no bytes of.
+    pub fn new_managed_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        index: Option<u32>,
+        bytes: &Buffer,
+        places: &[BytesPlace],
+    ) -> Result<Texture, Error> {
+        if !bytes.is_of(self.core()) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        let mut d = *descriptor;
+        d.storage_mode = StorageMode::Managed;
+        self.texture(&d, index, Some((bytes, places)))
+    }
+
+    /// [`Device::new_texture`], and [`Device::new_managed_texture`] with its bytes.
+    fn texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        index: Option<u32>,
+        managed: Option<(&Buffer, &[BytesPlace])>,
+    ) -> Result<Texture, Error> {
         let d = *descriptor;
         let shape = shape(&d)?;
         if d.storage_mode == StorageMode::Memoryless {
@@ -314,6 +387,9 @@ impl Device {
         };
         let core = self.core();
         let plan = plan(core, &d, usage, &shape)?;
+        if let Some((bytes, places)) = managed {
+            check_places(&d, plan.unit, bytes, places)?;
+        }
         let index = match index {
             Some(index) => {
                 lock(&core.arrays.grants).occupy(class, index)?;
@@ -355,6 +431,7 @@ impl Device {
             index,
             word: plan.word,
             id: core.ids.take(),
+            managed: managed.map(|(bytes, places)| (bytes.clone(), places.to_vec())),
         };
         if let Some((class, index)) = index {
             // SAFETY: the index is occupied for the texture, whose views are live; its image is
@@ -391,6 +468,64 @@ struct Plan {
     aspects: vk::ImageAspectFlags,
     unit: Option<CopyUnit>,
     word: u32,
+}
+
+/// The slices of each level of a texture of descriptor `d`: a cube's six faces each a slice, and
+/// one for a 3D texture.
+fn slices(d: &TextureDescriptor) -> u32 {
+    match d.texture_type {
+        TextureType::Cube | TextureType::CubeArray => d.array_length * 6,
+        TextureType::Type3D => 1,
+        _ => d.array_length,
+    }
+}
+
+/// Checks a Managed texture's places: one for each level and slice, each laid out as a
+/// buffer-to-image copy reads it and holding its level's bytes in `bytes`.
+fn check_places(
+    d: &TextureDescriptor,
+    unit: Option<CopyUnit>,
+    bytes: &Buffer,
+    places: &[BytesPlace],
+) -> Result<(), Error> {
+    let unit = unit.ok_or(Error::Unsupported(Gap::TextureBytes {
+        pixel_format: d.pixel_format,
+    }))?;
+    let slices = slices(d);
+    let refused = |level, slice| Error::Refused(Refusal::ManagedTextureBytes { level, slice });
+    if places.len() as u64 != u64::from(d.mipmap_level_count) * u64::from(slices) {
+        return Err(refused(d.mipmap_level_count, 0));
+    }
+    if !bytes.is_shared() {
+        return Err(refused(0, 0));
+    }
+    let block_bytes = u64::from(unit.bytes);
+    let align = unit.offset_align();
+    let base = bytes.device_range().1;
+    let [bw, bh] = unit.block;
+    for (at, place) in places.iter().enumerate() {
+        let (level, slice) = (at as u32 / slices, at as u32 % slices);
+        let [width, height, depth] = [d.width, d.height, d.depth].map(|e| (e >> level).max(1));
+        let row = u64::from(width.div_ceil(bw)) * block_bytes;
+        let rows = u64::from(height.div_ceil(bh));
+        let images = u64::from(depth);
+        let bpr = place.bytes_per_row;
+        let bpi = place.bytes_per_image;
+        let span = (images - 1)
+            .checked_mul(bpi)
+            .and_then(|span| span.checked_add((rows - 1).checked_mul(bpr)?))
+            .and_then(|span| span.checked_add(row))
+            .and_then(|span| span.checked_add(place.offset));
+        let laid = bpr.is_multiple_of(align)
+            && bpr >= row
+            && (base + place.offset).is_multiple_of(align)
+            && (images == 1 || (bpr > 0 && bpi.is_multiple_of(bpr) && bpi >= rows * bpr))
+            && span.is_some_and(|end| end <= bytes.length());
+        if !laid {
+            return Err(refused(level, slice));
+        }
+    }
+    Ok(())
 }
 
 /// Checks a descriptor's shape as Metal does.
@@ -934,28 +1069,45 @@ impl Transfer {
     /// region's rows packed: each run's offset in the caller's bytes, its offset in the staging
     /// buffer and its length. One run where the caller's rows lie packed too, else one a row.
     fn runs(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        self.runs_to(self.row, self.row * self.rows)
+    }
+
+    /// The runs of bytes between the caller's bytes and bytes that hold the region's rows
+    /// `to_row` and its images `to_image` apart: each run's offset in the caller's bytes, its
+    /// offset in the others and its length. One run where both lie packed, else one a row.
+    fn runs_to(&self, to_row: u64, to_image: u64) -> impl Iterator<Item = (usize, usize, usize)> {
+        let image = self.row * self.rows;
         let packed = self.bytes_per_row == self.row
-            && (self.images == 1 || self.bytes_per_image == self.row * self.rows);
+            && to_row == self.row
+            && (self.images == 1 || (self.bytes_per_image == image && to_image == image));
         let (images, rows, len) = match packed {
             true => (1, 1, self.len()),
             false => (self.images, self.rows, self.row),
         };
+        let (from_row, from_image) = (self.bytes_per_row, self.bytes_per_image);
         (0..images).flat_map(move |image| {
             (0..rows).map(move |row| {
                 (
-                    (image * self.bytes_per_image + row * self.bytes_per_row) as usize,
-                    ((image * self.rows + row) * self.row) as usize,
+                    (image * from_image + row * from_row) as usize,
+                    (image * to_image + row * to_row) as usize,
                     len as usize,
                 )
             })
         })
     }
 
-    fn buffer_image_copy(&self, offset: u64) -> vk::BufferImageCopy {
+    /// The copy of the region at `offset` in a buffer, its rows `row_length` and its images
+    /// `image_height` texels apart there (0 for packed).
+    fn buffer_image_copy(
+        &self,
+        offset: u64,
+        row_length: u32,
+        image_height: u32,
+    ) -> vk::BufferImageCopy {
         vk::BufferImageCopy {
             buffer_offset: offset,
-            buffer_row_length: 0,
-            buffer_image_height: 0,
+            buffer_row_length: row_length,
+            buffer_image_height: image_height,
             image_subresource: self.placed.layers(self.unit.aspect),
             image_offset: self.placed.offset(),
             image_extent: self.placed.extent(),
@@ -1078,19 +1230,73 @@ impl TextureInner {
             })
     }
 
-    /// Records `copy` between its staging and the image, `to_image` for a replace: the
+    /// A Managed texture's named bytes of `region` of `level` and `slice`: the copy as they lie,
+    /// the buffer, the place, and the region's first element's offset in the buffer. `None` for
+    /// an empty region.
+    fn named(
+        &self,
+        region: Region,
+        level: u32,
+        slice: u32,
+    ) -> Result<Option<(Transfer, &Buffer, BytesPlace, u64)>, Error> {
+        let refused = || Error::Refused(Refusal::ManagedTextureBytes { level, slice });
+        let (bytes, places) = self.managed.as_ref().ok_or_else(refused)?;
+        let d = &self.descriptor;
+        let slices = slices(d);
+        let place = match level < d.mipmap_level_count && slice < slices {
+            true => places[(level * slices + slice) as usize],
+            false => BytesPlace::default(),
+        };
+        let len = bytes.length().saturating_sub(place.offset);
+        let pitches = (place.bytes_per_row, place.bytes_per_image);
+        let Some(copy) = self.copy(region, level, slice, len, pitches.0, pitches.1)? else {
+            return Ok(None);
+        };
+        let [x, y, z] = region.origin.map(u64::from);
+        let [bw, bh] = copy.unit.block.map(u64::from);
+        let start = place.offset
+            + z * place.bytes_per_image
+            + y / bh * place.bytes_per_row
+            + x / bw * u64::from(copy.unit.bytes);
+        if !(bytes.device_range().1 + start).is_multiple_of(copy.unit.offset_align()) {
+            return Err(refused());
+        }
+        Ok(Some((copy, bytes, place, start)))
+    }
+
+    /// Where the host reaches a Managed texture's named bytes of a non-empty `region` of `level`
+    /// and `slice`: the region's first element and its place. `None` for a texture without named
+    /// bytes.
+    fn named_host(
+        &self,
+        region: Region,
+        level: u32,
+        slice: u32,
+    ) -> Result<Option<(*mut u8, BytesPlace)>, Error> {
+        if self.managed.is_none() {
+            return Ok(None);
+        }
+        let refused = || Error::Refused(Refusal::ManagedTextureBytes { level, slice });
+        let (_, bytes, place, start) = self.named(region, level, slice)?.ok_or_else(refused)?;
+        let host = bytes.contents().ok_or_else(refused)?;
+        // SAFETY: the texture's creation checked that its places lie in the buffer.
+        Ok(Some((unsafe { host.as_ptr().add(start as usize) }, place)))
+    }
+
+    /// Records `copy` between `region` of `buffer` and the image, `to_image` for a replace: the
     /// subresource leaves home for the transfer layout and comes back, and a read's bytes are
     /// made visible to the host.
     ///
     /// # Safety
     ///
-    /// `command` is recording under the work lock, and the upload holds the image and `stage`.
+    /// `command` is recording under the work lock, and the upload holds the image and the
+    /// buffer's memory.
     unsafe fn record(
         &self,
         device: &ash::Device,
         command: vk::CommandBuffer,
         copy: &Transfer,
-        stage: &Stage,
+        (buffer, region): (vk::Buffer, vk::BufferImageCopy),
         to_image: bool,
     ) {
         use vk::AccessFlags2 as Access;
@@ -1114,7 +1320,7 @@ impl TextureInner {
             true => back,
             false => back.memory_barriers(&host),
         };
-        let regions = [copy.buffer_image_copy(stage.offset())];
+        let regions = [region];
         // SAFETY: the caller's contract; the subresource is in `layout` between the barriers.
         unsafe {
             device.cmd_pipeline_barrier2(
@@ -1124,7 +1330,7 @@ impl TextureInner {
             match to_image {
                 true => device.cmd_copy_buffer_to_image(
                     command,
-                    stage.buffer(),
+                    buffer,
                     self.image.image,
                     layout,
                     &regions,
@@ -1133,7 +1339,7 @@ impl TextureInner {
                     command,
                     self.image.image,
                     layout,
-                    stage.buffer(),
+                    buffer,
                     &regions,
                 ),
             }
@@ -1212,6 +1418,10 @@ impl Texture {
     /// write is. Where the region has no room, the call first waits for the oldest copy in it to
     /// complete. Counted in [`Metrics::bytes_copied`]. An empty region copies nothing.
     ///
+    /// A Managed texture with named bytes ([`Device::new_managed_texture`]) takes them there
+    /// instead, as Metal writes a Managed texture's CPU copy, and then
+    /// [`Texture::upload_region`] copies them into the image; nothing is staged or counted.
+    ///
     /// Err: [`Refusal::TextureBytesPrivate`]; [`Refusal::TextureRegion`] for a level, slice or
     /// region outside the texture or off its format's block grid;
     /// [`Refusal::TextureBytesLayout`]; [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`] for a
@@ -1241,6 +1451,19 @@ impl Texture {
                 pixel_format: inner.descriptor.pixel_format,
             }));
         }
+        if let Some((host, place)) = inner.named_host(region, level, slice)? {
+            // SAFETY: `copy` checked that each row lies in `bytes`, and the texture's creation
+            // that each row of its place lies in the named buffer.
+            unsafe {
+                for (from, to, len) in copy.runs_to(place.bytes_per_row, place.bytes_per_image) {
+                    bytes
+                        .as_ptr()
+                        .add(from)
+                        .copy_to_nonoverlapping(host.add(to), len)
+                }
+            }
+            return self.upload_region(region, level, slice);
+        }
         let core = inner.device.core();
         let stage = core.work.stage(core, copy.len(), false)?;
         let host = stage.host().as_ptr();
@@ -1260,7 +1483,62 @@ impl Texture {
             Some(&stage),
             [Held::Texture(Arc::clone(&inner.image))],
             // SAFETY: recording under the work lock, the upload holding the image and the stage.
-            |device, command| unsafe { inner.record(device, command, &copy, &stage, true) },
+            |device, command| unsafe {
+                let region = copy.buffer_image_copy(stage.offset(), 0, 0);
+                inner.record(device, command, &copy, (stage.buffer(), region), true)
+            },
+        )
+    }
+
+    /// No Metal counterpart: the copy into a Managed texture's image of its named bytes
+    /// ([`Device::new_managed_texture`]) of `region` of `level` and `slice`, a 3D texture's slice
+    /// being 0, which the consumer has written: what Metal does for a Managed texture's CPU write.
+    /// The upload copies them from the named buffer straight into the image, with no CPU copy,
+    /// ahead of every command buffer committed after this call on every queue, as
+    /// [`Buffer::did_modify_range`] copies a Managed buffer's bytes; the copy reads the bytes when
+    /// the GPU reaches it. [`Texture::replace_region`] on such a texture writes the named bytes,
+    /// then calls this. An empty region copies nothing.
+    ///
+    /// Err: [`Refusal::ManagedTextureBytes`] for a texture without named bytes, or a depth or
+    /// stencil region whose first byte is not a multiple of 4 in the buffer;
+    /// [`Refusal::TextureRegion`] for a level, slice or region outside the texture or off its
+    /// format's block grid; [`Gap::FloatDepthUpload`] for a 32-bit float depth;
+    /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be
+    /// made.
+    pub fn upload_region(&self, region: Region, level: u32, slice: u32) -> Result<(), Error> {
+        let inner = &self.inner;
+        let Some((copy, bytes, place, start)) = inner.named(region, level, slice)? else {
+            return Ok(());
+        };
+        if copy.unit.float_depth() {
+            return Err(Error::Unsupported(Gap::FloatDepthUpload {
+                pixel_format: inner.descriptor.pixel_format,
+            }));
+        }
+        let [bw, bh] = copy.unit.block.map(u64::from);
+        let row_length = place.bytes_per_row / u64::from(copy.unit.bytes) * bw;
+        let image_height = match copy.images > 1 {
+            true => place.bytes_per_image / place.bytes_per_row * bh,
+            false => 0,
+        };
+        let refused = || Error::Refused(Refusal::ManagedTextureBytes { level, slice });
+        let row_length = u32::try_from(row_length).map_err(|_| refused())?;
+        let image_height = u32::try_from(image_height).map_err(|_| refused())?;
+        let (buffer, at) = bytes.device_range();
+        let region = copy.buffer_image_copy(at + start, row_length, image_height);
+        let core = inner.device.core();
+        core.work.upload(
+            core,
+            None,
+            [
+                Held::Texture(Arc::clone(&inner.image)),
+                Held::Block(Arc::clone(bytes.held().0)),
+            ],
+            // SAFETY: recording under the work lock, the upload holding the image and the
+            // named buffer's block.
+            |device, command| unsafe {
+                inner.record(device, command, &copy, (buffer, region), true)
+            },
         )
     }
 
@@ -1269,6 +1547,10 @@ impl Texture {
     /// them. The upload copies them to the device's staging region, the call submits it at once
     /// and waits for it, and copies them out. Metal's contract holds: the program has waited for
     /// the work that writes the texture. Counted in [`Metrics::bytes_copied`].
+    ///
+    /// A Managed texture with named bytes ([`Device::new_managed_texture`]) reads them there, as
+    /// Metal reads a Managed texture's CPU copy, with no submission or wait; the GPU's writes reach
+    /// them only by a synchronize.
     ///
     /// Err: as [`Texture::replace_region`]; [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` where
     /// the device is lost first.
@@ -1289,6 +1571,38 @@ impl Texture {
         else {
             return Ok(());
         };
+        if let Some((host, place)) = inner.named_host(region, level, slice)? {
+            let runs = copy.runs_to(place.bytes_per_row, place.bytes_per_image);
+            // SAFETY: `copy` checked that each row lies in `bytes`, and the texture's creation
+            // that each row of its place lies in the named buffer.
+            unsafe { crate::readback::texels(host, bytes, runs) };
+            return Ok(());
+        }
+        self.read_image(bytes, &copy)
+    }
+
+    /// The image's bytes of `region` of `level` and `slice`, as [`Texture::get_bytes`] reads them
+    /// from a texture without named bytes: for the tests of one with them.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn image_bytes(
+        &self,
+        bytes: &mut [u8],
+        bytes_per_row: u64,
+        region: Region,
+        level: u32,
+        slice: u32,
+    ) -> Result<(), Error> {
+        let len = bytes.len() as u64;
+        match (self.inner).copy(region, level, slice, len, bytes_per_row, len)? {
+            Some(copy) => self.read_image(bytes, &copy),
+            None => Ok(()),
+        }
+    }
+
+    /// Reads `copy` of the image into `bytes` through the staging region, submitting the upload
+    /// and waiting for it.
+    fn read_image(&self, bytes: &mut [u8], copy: &Transfer) -> Result<(), Error> {
+        let inner = &self.inner;
         let core = inner.device.core();
         let stage = core.work.stage(core, copy.len(), true)?;
         core.work.upload(
@@ -1296,7 +1610,10 @@ impl Texture {
             Some(&stage),
             [Held::Texture(Arc::clone(&inner.image))],
             // SAFETY: as in `replace_region`.
-            |device, command| unsafe { inner.record(device, command, &copy, &stage, false) },
+            |device, command| unsafe {
+                let region = copy.buffer_image_copy(stage.offset(), 0, 0);
+                inner.record(device, command, copy, (stage.buffer(), region), false)
+            },
         )?;
         let value = core.work.flush();
         let waited = core.done.wait(core, value);

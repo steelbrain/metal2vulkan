@@ -2233,6 +2233,9 @@ field	metal2vulkan-rt::BlockInfo.contents	pub contents: Option<NonNull<u8>>
 field	metal2vulkan-rt::BlockInfo.gpu_address	pub gpu_address: u64
 field	metal2vulkan-rt::BlockInfo.id	pub id: BlockId
 field	metal2vulkan-rt::BlockInfo.len	pub len: u64
+field	metal2vulkan-rt::BytesPlace.bytes_per_image	pub bytes_per_image: u64
+field	metal2vulkan-rt::BytesPlace.bytes_per_row	pub bytes_per_row: u64
+field	metal2vulkan-rt::BytesPlace.offset	pub offset: u64
 field	metal2vulkan-rt::ComputePipelineDescriptor.buffers	pub buffers: BTreeMap<u32, metal::Mutability>
 field	metal2vulkan-rt::ComputePipelineDescriptor.kernel	pub kernel: StageSource
 field	metal2vulkan-rt::ComputePipelineDescriptor.max_call_stack_depth	pub max_call_stack_depth: u32
@@ -9285,6 +9288,7 @@ method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: Block
 method	metal2vulkan-rt::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
 method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
 method	metal2vulkan-rt::Device::new_managed_buffer	pub fn new_managed_buffer(&self, block: BlockId, offset: u64, length: u64, copied: u64) -> Result<Buffer, Error>
+method	metal2vulkan-rt::Device::new_managed_texture	pub fn new_managed_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, bytes: &Buffer, places: &[BytesPlace]) -> Result<Texture, Error>
 method	metal2vulkan-rt::Device::new_sampler_state	pub fn new_sampler_state(&self, descriptor: &SamplerDescriptor, index: u32) -> Result<SamplerState, Error>
 method	metal2vulkan-rt::Device::new_shared_event	pub fn new_shared_event(&self) -> Result<SharedEvent, Error>
 method	metal2vulkan-rt::Device::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>) -> Result<Texture, Error>
@@ -9340,6 +9344,7 @@ method	metal2vulkan-rt::Texture::descriptor	pub fn descriptor(&self) -> &Texture
 method	metal2vulkan-rt::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u32, slice: u32) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
 method	metal2vulkan-rt::Texture::replace_region	pub fn replace_region(&self, region: Region, level: u32, slice: u32, bytes: &[u8], bytes_per_row: u64, bytes_per_image: u64) -> Result<(), Error>
+method	metal2vulkan-rt::Texture::upload_region	pub fn upload_region(&self, region: Region, level: u32, slice: u32) -> Result<(), Error>
 method	metal2vulkan-rt::TextureDescriptor::new	pub fn new(texture_type: TextureType, pixel_format: PixelFormat, width: u32, height: u32) -> TextureDescriptor
 method	metal2vulkan-rt::TextureSwizzleChannels::compose	pub fn compose(self, format: crate::vk::ComponentMapping) -> crate::vk::ComponentMapping
 method	metal2vulkan-rt::TextureSwizzleChannels::is_default	pub fn is_default(self) -> bool
@@ -11364,6 +11369,7 @@ struct	metal2vulkan-rt::BlitCommandEncoder	pub struct BlitCommandEncoder
 struct	metal2vulkan-rt::BlockId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub struct BlockId(u32)
 struct	metal2vulkan-rt::BlockInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct BlockInfo
 struct	metal2vulkan-rt::Buffer	#[derive(Clone)] pub struct Buffer
+struct	metal2vulkan-rt::BytesPlace	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct BytesPlace
 struct	metal2vulkan-rt::CommandBuffer	#[derive(Clone)] pub struct CommandBuffer
 struct	metal2vulkan-rt::CommandQueue	#[derive(Clone)] pub struct CommandQueue
 struct	metal2vulkan-rt::ComputeCommandEncoder	pub struct ComputeCommandEncoder
@@ -13400,6 +13406,7 @@ variant	metal2vulkan-rt::Refusal::IndicesInUse	IndicesInUse { class: IndexClass,
 variant	metal2vulkan-rt::Refusal::IndicesNotGranted	IndicesNotGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndirectOffset	IndirectOffset { offset: u64, length: u64 }
 variant	metal2vulkan-rt::Refusal::ManagedBlockNotShared	ManagedBlockNotShared { block: BlockId }
+variant	metal2vulkan-rt::Refusal::ManagedTextureBytes	ManagedTextureBytes { level: u32, slice: u32 }
 variant	metal2vulkan-rt::Refusal::ModifiedRange	ModifiedRange { start: u64, length: u64, buffer_length: u64 }
 variant	metal2vulkan-rt::Refusal::NoBufferAtIndex	NoBufferAtIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::NoCommandBuffers	NoCommandBuffers

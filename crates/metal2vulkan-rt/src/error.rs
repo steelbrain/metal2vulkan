@@ -357,6 +357,25 @@ pub enum Refusal {
         /// The destination texture's pixel format.
         destination: PixelFormat,
     },
+    /// A Managed texture's bytes the device cannot copy in place
+    /// ([`Device::new_managed_texture`](crate::Device::new_managed_texture)): a place for each
+    /// level and slice, in order, not given; a buffer the host does not reach; a place whose rows
+    /// are not a whole number of texel blocks apart, whose images are not a whole number of rows
+    /// apart, or whose first byte in the buffer's block is not a multiple of the texel block's
+    /// bytes (of 4 for a depth or stencil format, its rows too); or a place whose level's bytes
+    /// leave the buffer. Also [`Texture::upload_region`](crate::Texture::upload_region) on a
+    /// texture without named bytes, or of a depth or stencil region whose first byte is not a
+    /// multiple of 4.
+    ///
+    /// Basis: ours (a buffer-to-image copy reads a place only so laid out, and the consumer's
+    /// bytes are the place the copy reads).
+    ManagedTextureBytes {
+        /// The level of the first place refused; the texture's level count where the count of
+        /// places is wrong.
+        level: u32,
+        /// The slice of the first place refused; 0 where the count of places is wrong.
+        slice: u32,
+    },
 }
 
 /// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
@@ -733,6 +752,10 @@ impl fmt::Display for Refusal {
             } => write!(
                 f,
                 "a copy from {source:?} to {destination:?} is between two formats or two sample counts, which Metal refuses"
+            ),
+            Refusal::ManagedTextureBytes { level, slice } => write!(
+                f,
+                "a Managed texture's bytes of level {level}, slice {slice} are not where a copy reads them in place"
             ),
         }
     }

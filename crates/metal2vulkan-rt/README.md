@@ -223,6 +223,19 @@ made, with no lock, and never rewritten for layouts.
   layout and coming back, ahead of every command buffer committed after the call. `get_bytes`
   records the copy out into the upload, submits it at once, waits for it and copies the bytes
   out; as in Metal, the program has waited for the work that writes the texture.
+- `Device::new_managed_texture(descriptor, index, bytes, places)` makes a Managed texture whose
+  bytes the consumer names, on every device: an image as `new_texture` makes, and the consumer's
+  bytes in a Shared buffer, at a `BytesPlace` (offset, bytes per row, bytes per image) for each
+  level and, within it, each slice, laid out as the consumer chooses. A place whose rows are not a
+  whole number of texel blocks apart, whose images are not a whole number of rows apart, whose
+  first byte is not a multiple of the block's bytes (4 for depth or stencil), or whose level
+  leaves the buffer is refused (`Refusal::ManagedTextureBytes`), as is a buffer the host does not
+  reach. `Texture::upload_region(region, level, slice)` copies a region of the named bytes into
+  the image by the device, with no CPU copy, ahead of every command buffer committed after the
+  call on every queue, as `did_modify_range` copies a Managed buffer's; the copy reads the bytes
+  when the GPU reaches it. On such a texture `replace_region` writes the named bytes and uploads
+  them, and `get_bytes` reads the named bytes, with no submission, as Metal reads a Managed
+  texture's CPU copy.
 - The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
   copy, its pages written then, and kept for the device's life, so no copy allocates memory and
   the host writes resident pages. It is a ring: each copy takes a span at a multiple of 256 bytes,
@@ -239,8 +252,8 @@ made, with no lock, and never rewritten for layouts.
 
 ### Known gaps of textures
 
-- `replace_region` and `get_bytes` go through the staging region: a copy Metal does not make,
-  counted in `Metrics::bytes_copied`.
+- `replace_region` and `get_bytes` of a texture without named bytes go through the staging region:
+  a copy Metal does not make, counted in `Metrics::bytes_copied`.
 - A texture whose format the device does not store through a storage image without a format has
   no storage element, so a shader write through its index is dropped, as a write to a nil
   texture is.
@@ -400,7 +413,7 @@ that touch blocks first.
   resource IDs it made up, with no fault. The consumer treats every byte on the device as
   guest-writable and keeps nothing there that it parses or trusts.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
-- A Managed buffer's `synchronizeResource` comes with blit encoders. A Private allocation does not
+- A Managed buffer's and a Managed texture's `synchronizeResource` come with blit encoders. A Private allocation does not
   yet go on to another memory type when device memory runs out.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct

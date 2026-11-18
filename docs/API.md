@@ -6240,14 +6240,15 @@ each item named states the rule in full.
   (the call gives no plane height), and a face past the surface lies in the texture's tail, zero
   when made, announced (`metal2vulkan-degrade-surface-texels-tail`). One of another format, off
   16 or of several levels stays `NotImplemented(SurfacePlaneShape)`.
-- **The new runtime's Managed buffer copy reads the consumer's bytes when the GPU reaches it**
-  (`metal2vulkan-rt`'s `Buffer::did_modify_range`). On a device whose Shared memory is not
-  device-local, a changed range is one device copy from the consumer's bytes into the buffer's
-  device copy, at the head of the next submission, ahead of every command buffer committed after
-  the call on every queue. The copy reads the bytes as they are when the GPU runs it, so a write the
-  consumer makes after the call and before then may be seen. Metal leaves it undefined: an Apple
-  M3 and an Intel UHD 630 take the bytes when the GPU reads them, an AMD Radeon Pro 5300M at the
-  commit.
+- **The new runtime's Managed copies read the consumer's bytes when the GPU reaches them**
+  (`metal2vulkan-rt`'s `Buffer::did_modify_range` and `Texture::upload_region`). On a device whose
+  Shared memory is not device-local, a Managed buffer's changed range is one device copy from the
+  consumer's bytes into the buffer's device copy, and on every device a Managed texture's uploaded
+  region is one device copy from its named bytes into its image, at the head of the next
+  submission, ahead of every command buffer committed after the call on every queue. The copy
+  reads the bytes as they are when the GPU runs it, so a write the consumer makes after the call
+  and before then may be seen. Metal leaves it undefined: an Apple M3 and an Intel UHD 630 take
+  the bytes when the GPU reads them, an AMD Radeon Pro 5300M at the commit.
 
 **Function constants**
 
