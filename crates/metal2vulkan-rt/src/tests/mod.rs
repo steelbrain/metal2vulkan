@@ -39,6 +39,8 @@ mod sampling;
 mod shadow;
 mod spill;
 mod staging;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod stamps;
 mod submit_infos;
 mod texture;
 mod translate;
