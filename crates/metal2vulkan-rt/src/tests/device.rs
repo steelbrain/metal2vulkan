@@ -338,6 +338,10 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
                 .copied()
                 .filter(|&name| lists(name)),
         );
+        // The attachment reads' extensions, where device creation took them.
+        if device.core().feedback.is_some() {
+            expected.extend(floor::ATTACHMENT_READ_EXTENSIONS);
+        }
         if maintenance && offered {
             expected.push(swapchain);
         }

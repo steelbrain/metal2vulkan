@@ -498,7 +498,7 @@ mod on_device {
             let d = texture(&device, SIDE, write, AT);
             fill(name, &d);
             let a = texture(&device, SIDE, read, AT);
-            assert_eq!(counters.gauges().descriptor_slots, slots + 3, "{name}");
+            assert_eq!(counters.gauges().descriptor_slots, slots + 4, "{name}");
             pass([&source, &a]);
             assert_eq!(
                 texels(&d, SIDE),
@@ -509,7 +509,7 @@ mod on_device {
             let b = texture(&device, SIDE, write, AT);
             fill(name, &b);
             drop(a);
-            assert_eq!(counters.gauges().descriptor_slots, slots + 3, "{name}");
+            assert_eq!(counters.gauges().descriptor_slots, slots + 4, "{name}");
             pass([&b, &target]);
             let got = texels(&target, SIDE / 2);
             assert!(
@@ -533,12 +533,12 @@ mod on_device {
             );
 
             drop(b);
-            assert_eq!(counters.gauges().descriptor_slots, slots + 2, "{name}");
+            assert_eq!(counters.gauges().descriptor_slots, slots + 3, "{name}");
             pass([&d, &target]);
             let zero = vec![0.0; (half * half * 4) as usize];
             assert_eq!(texels(&target, half), zero, "{name}: sampled once B went");
             drop(d);
-            assert_eq!(counters.gauges().descriptor_slots, slots + 2, "{name}");
+            assert_eq!(counters.gauges().descriptor_slots, slots + 3, "{name}");
             drop((queue, down, sampler, source, target));
             for grant in grants {
                 (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
