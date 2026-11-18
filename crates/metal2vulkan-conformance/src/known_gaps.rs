@@ -49,11 +49,12 @@
 //!
 //! # Typed reasons
 //!
-//! Two reasons are the ledger's own vocabulary ([`Reason`]), stated at the head of a row's last
-//! field: `refused: not built yet (<lane>)`, a feature the streams use that a lane is building,
-//! and `refused: no stream uses it yet (<census run>)`, a call replay's census found no stream
-//! using. Every replay prints their counts ([`open_work`]): the rows not built yet are the
-//! cutover's remaining work.
+//! Three reasons are the ledger's own vocabulary ([`Reason`]), stated at the head of a row's last
+//! field: `refused: not built yet (<lane>)`, a feature the streams use that a lane is building;
+//! `refused: no stream uses it yet (<census run>)`, a call replay's census found no stream using;
+//! and `refused: the consumer's own (<object>)`, a Metal object or getter the runtime keeps no
+//! counterpart of by design, which its consumer implements. Every replay prints their counts
+//! apart ([`open_work`]): the rows not built yet are the cutover's remaining work.
 
 use crate::case::Venue;
 use crate::replay::Replayed;
@@ -180,6 +181,10 @@ const NOT_BUILT_YET: &str = "refused: not built yet";
 /// parentheses.
 const NO_STREAM_USES_IT: &str = "refused: no stream uses it yet";
 
+/// The head of a row of a Metal object or getter the runtime keeps no counterpart of, which its
+/// consumer implements: the object follows in parentheses.
+const THE_CONSUMERS: &str = "refused: the consumer's own";
+
 /// Why a row is open, where the ledger's vocabulary names it: the head of its waiting-on field,
 /// which the replay counts ([`open_work`]). Every other row's reason is its own words.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -192,6 +197,11 @@ pub enum Reason {
     /// streams found no stream using. The day a census finds a use, the row's reason becomes
     /// [`Reason::NotBuiltYet`] with its lane.
     NoStreamUsesIt { census: String },
+    /// `refused: the consumer's own (<object>)`: Metal's `object`, or a getter of it, of which the
+    /// runtime keeps no counterpart by design, as its `RenderPassDescriptor` is a value the
+    /// consumer fills and its memory blocks are no `MTLHeap`. The consumer implements what Metal's
+    /// object answers, so this side has nothing of the runtime's to compare.
+    TheConsumers { object: String },
     /// The row's own words: a device's own answer, what Metal does not document, and the like.
     Words,
 }
@@ -205,6 +215,9 @@ impl Reason {
         }
         if let Some(census) = named_after(waiting_on, NO_STREAM_USES_IT)? {
             return Ok(Reason::NoStreamUsesIt { census });
+        }
+        if let Some(object) = named_after(waiting_on, THE_CONSUMERS)? {
+            return Ok(Reason::TheConsumers { object });
         }
         Ok(Reason::Words)
     }
@@ -225,14 +238,17 @@ fn named_after(waiting_on: &str, head: &str) -> Result<Option<String>, String> {
 }
 
 /// What `ledger`'s typed reasons count, as one line of a replay's report: its rows not built yet
-/// by lane, which is the cutover's remaining work, and its rows no stream uses by census run.
+/// by lane, which is the cutover's remaining work, its rows no stream uses by census run, and its
+/// rows of the consumer's own by object.
 pub fn open_work(ledger: &[KnownGap], file: &str) -> String {
     let mut lanes = BTreeMap::<String, usize>::new();
     let mut censuses = BTreeMap::<String, usize>::new();
+    let mut objects = BTreeMap::<String, usize>::new();
     for row in ledger {
         match row.reason() {
             Reason::NotBuiltYet { lane } => *lanes.entry(lane).or_default() += 1,
             Reason::NoStreamUsesIt { census } => *censuses.entry(census).or_default() += 1,
+            Reason::TheConsumers { object } => *objects.entry(object).or_default() += 1,
             Reason::Words => {}
         }
     }
@@ -248,11 +264,13 @@ pub fn open_work(ledger: &[KnownGap], file: &str) -> String {
     };
     format!(
         "{file}: {} row(s) not built yet{}, the cutover's remaining work; {} row(s) no stream \
-         uses yet{}",
+         uses yet{}; {} row(s) the consumer's own{}",
         lanes.values().sum::<usize>(),
         each(&lanes),
         censuses.values().sum::<usize>(),
         each(&censuses),
+        objects.values().sum::<usize>(),
+        each(&objects),
     )
 }
 

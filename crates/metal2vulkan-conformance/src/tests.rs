@@ -7966,6 +7966,7 @@ fn the_ledger_s_typed_reasons_parse_and_count() {
         row("refused: not built yet (render)"),
         row("refused: not built yet (identity)"),
         row("refused: no stream uses it yet (census-1)"),
+        row("refused: the consumer's own (MTLHeap). The runtime keeps no heap object."),
         row("The device's own answer (rule 1)."),
     ]
     .concat();
@@ -7986,17 +7987,22 @@ fn the_ledger_s_typed_reasons_parse_and_count() {
             Reason::NoStreamUsesIt {
                 census: "census-1".to_owned()
             },
+            Reason::TheConsumers {
+                object: "MTLHeap".to_owned()
+            },
             Reason::Words,
         ]
     );
     assert_eq!(
         open_work(&ledger, "known-gaps-rt.tsv"),
         "known-gaps-rt.tsv: 3 row(s) not built yet (identity 1, render 2), the cutover's \
-         remaining work; 1 row(s) no stream uses yet (census-1 1)"
+         remaining work; 1 row(s) no stream uses yet (census-1 1); 1 row(s) the consumer's own \
+         (MTLHeap 1)"
     );
     for malformed in [
         "refused: not built yet",
         "refused: no stream uses it yet ()",
+        "refused: the consumer's own",
     ] {
         let refused = parse(&row(malformed)).expect_err(malformed);
         assert!(refused.contains("names who"), "{refused}");
