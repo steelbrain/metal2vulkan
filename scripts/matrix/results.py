@@ -298,7 +298,12 @@ HARNESS_OLD = "harness-old/"
 #: ceiling is ruled after the work on its row, never taken from a measured ratio; a fix lowers it
 #: to the ratio the row then reaches, and a row within HARNESS_BUDGET leaves the list. A row over
 #: HARNESS_BUDGET with no ceiling fails its leg.
-HARNESS_CEILINGS = {}
+HARNESS_CEILINGS = {
+    # Ruled by the planner on the row's measured median, 1.20: a kernel over a grid one row high
+    # and one deep pays for running in tiles and for the RX 550's 64-bit address per read (the rt
+    # README's known gaps of pipeline states).
+    "1002:699f": {"constant_private": 1.20},
+}
 
 
 #: A row over its budget in a leg (its ceiling times HARNESS_BUDGET, else HARNESS_BUDGET) is
