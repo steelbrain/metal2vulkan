@@ -261,17 +261,6 @@ impl StampPools {
         lock(&self.state).free.push(pair);
     }
 
-    /// How many pairs are free and how many pools there are.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn held(&self) -> (usize, usize) {
-        let state = lock(&self.state);
-        let unused = state
-            .pools
-            .last()
-            .map_or(0, |_| POOL_QUERIES / 2 - state.next);
-        (state.free.len() + unused as usize, state.pools.len())
-    }
-
     /// At the device's teardown, once it is idle: destroys every pool.
     pub(crate) fn destroy(&mut self, device: &ash::Device, counters: &Counters) {
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);

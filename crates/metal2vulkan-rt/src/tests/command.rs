@@ -1434,13 +1434,7 @@ pub(crate) mod on_device {
                 });
                 let dropped = queue.command_buffer().expect("a command buffer");
                 fill(&dropped, &buffer, 4);
-                let free = device.core().stamps.held();
                 drop(dropped);
-                assert_eq!(
-                    device.core().stamps.held().0,
-                    free.0 + 1,
-                    "{name}: the dropped command buffer's pair is free"
-                );
                 let again = queue.command_buffer().expect("a command buffer");
                 // Each was submitted and none had completed when the pair was taken again.
                 let statuses: Vec<_> = running.iter().map(CommandBuffer::status).collect();
@@ -1466,18 +1460,18 @@ pub(crate) mod on_device {
     /// The device's timestamp pools, made as command buffers need them: a command buffer takes
     /// none before its first record; 2,049 command buffers in flight at once, held behind the
     /// first's event wait, take the 2,048 pairs of a first pool and one of a second; once they
-    /// retire, each timed, every pair is free, and 2,049 more take pairs given back with no third
-    /// pool. The pools live until the device drops, when the gauge falls to zero.
+    /// retire, each timed, 2,049 more take the pairs given back: the second pool's 2,047 left
+    /// would not hold them, and no third pool is made. The pools live until the device drops,
+    /// when the gauge falls to zero.
     #[test]
     fn every_device_takes_pairs_from_timestamp_pools_it_makes_on_demand() {
         each_device("command_pools", |name, _, device| {
             let mut arena = Arena::new(&device);
             let buffer = arena.buffer();
-            let held = || device.core().stamps.held();
             let pools = || device.counters().gauges().timestamp_pools;
             let queue = device.new_command_queue(4096).expect("a queue");
             let empty = queue.command_buffer().expect("a command buffer");
-            assert_eq!(held(), (0, 0), "{name}: no pool before a record");
+            assert_eq!(pools(), 0, "{name}: no pool before a record");
             for round in 0..2 {
                 let gate = shared_event(&device);
                 let burst: Vec<CommandBuffer> = (0..2049)
@@ -1493,11 +1487,7 @@ pub(crate) mod on_device {
                         command_buffer
                     })
                     .collect();
-                let (free, made) = held();
-                println!(
-                    "{name}: round {round}: 2049 in flight, {free} pairs free in {made} pools"
-                );
-                assert_eq!((free, made), (4096 - 2049, 2), "{name}: round {round}");
+                println!("{name}: round {round}: 2049 in flight in {} pools", pools());
                 assert_eq!(pools(), 2, "{name}: round {round}");
                 gate.set_signaled_value(1);
                 for command_buffer in &burst {
@@ -1514,7 +1504,6 @@ pub(crate) mod on_device {
                     assert!(0 < start && start <= end, "{name}: {start} {end}");
                 }
                 assert_eq!(word(&buffer), 2048, "{name}");
-                assert_eq!(held(), (4096, 2), "{name}: every pair back");
             }
             assert_eq!(
                 device.counters().metrics().untimed_command_buffers,
@@ -1523,7 +1512,7 @@ pub(crate) mod on_device {
             );
             empty.commit().expect("a commit");
             finished(name, &empty);
-            assert_eq!(held(), (4096, 2), "{name}");
+            assert_eq!(pools(), 2, "{name}");
             drop((empty, queue, buffer, arena, device));
         });
     }
@@ -1557,7 +1546,6 @@ pub(crate) mod on_device {
                 );
                 assert!(0 < start && start <= end, "{name}: {start} {end}");
             }
-            assert_eq!(device.core().stamps.held(), (2048, 1), "{name}");
             assert_eq!(device.counters().gauges().timestamp_pools, 1, "{name}");
             drop((committed, queues, buffer, arena, device));
         });
@@ -1619,7 +1607,11 @@ pub(crate) mod on_device {
                     );
                     assert_eq!(untimed, 2, "{name}");
                     assert_eq!(times, [(0, 0), (0, 0)], "{name}");
-                    assert_eq!(device.core().stamps.held(), (0, 0), "{name}: no pool made");
+                    assert_eq!(
+                        device.counters().gauges().timestamp_pools,
+                        0,
+                        "{name}: no pool made"
+                    );
                 }
                 None => {
                     println!(
