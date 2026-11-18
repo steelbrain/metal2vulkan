@@ -474,8 +474,9 @@ impl BufferCopy {
         let element = u64::from(element);
         let row = u64::from(self.size[0]) * element;
         let rows = u64::from(self.size[1]);
-        if self.offset % element != 0
-            || (rows > 1 && (self.bytes_per_row % element != 0 || self.bytes_per_row < row))
+        if !self.offset.is_multiple_of(element)
+            || (rows > 1
+                && (!self.bytes_per_row.is_multiple_of(element) || self.bytes_per_row < row))
         {
             return Some(format!(
                 "an offset of {} and rows {} bytes apart are not whole rows of {row} bytes of \
