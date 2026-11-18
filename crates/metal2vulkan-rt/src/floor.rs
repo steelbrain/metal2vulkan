@@ -19,6 +19,10 @@ pub const VERSION: u32 = vk::API_VERSION_1_3;
 /// runtime's own device.
 pub const INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::surface::NAME];
 
+/// The instance extensions instance creation enables where the loader offers them: the listing of
+/// portability devices, which the floor then checks as it checks any device.
+pub const OPTIONAL_INSTANCE_EXTENSIONS: &[&CStr] = &[ash::khr::portability_enumeration::NAME];
+
 /// The device extensions the runtime requires and device creation enables: presenting,
 /// threadgroup memory laid out as Metal lays it, and null descriptors.
 pub const DEVICE_EXTENSIONS: &[&CStr] = &[
@@ -27,11 +31,14 @@ pub const DEVICE_EXTENSIONS: &[&CStr] = &[
     ash::ext::robustness2::NAME,
 ];
 
-/// The device extensions device creation enables where the device lists them, each for the
-/// optional features of its own: the SIMD groups' reconvergence modes.
+/// The device extensions device creation enables where the device lists them: the SIMD groups'
+/// reconvergence modes, each for the optional features of its own, and the portability subset,
+/// which Vulkan requires enabled where a device lists it, with the portability features the floor
+/// asks of such a device.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
+    ash::khr::portability_subset::NAME,
 ];
 
 /// The translator's name for an extension device creation enables that its shaders may use.
@@ -159,6 +166,10 @@ pub struct Features {
     /// `VkPhysicalDeviceRobustness2FeaturesEXT`, of `VK_EXT_robustness2`: only `nullDescriptor`
     /// is enabled, never the robust buffer and image access beside it.
     pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>,
+    /// `VkPhysicalDevicePortabilitySubsetFeaturesKHR`, of `VK_KHR_portability_subset`: read and
+    /// enabled only where the device lists it, and then only the portability features the floor asks
+    /// of such a device.
+    pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -194,6 +205,9 @@ macro_rules! feature {
     };
     (@structure robustness2) => {
         "VkPhysicalDeviceRobustness2FeaturesEXT"
+    };
+    (@structure portability) => {
+        "VkPhysicalDevicePortabilitySubsetFeaturesKHR"
     };
     (@translator) => {
         None
@@ -264,6 +278,18 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan12.host_query_reset),
     feature!(vulkan13.synchronization2 => Synchronization2),
     feature!(vulkan13.dynamic_rendering),
+];
+
+/// The features of the portability subset the runtime requires of a device that lists
+/// `VK_KHR_portability_subset`. A device that does not list it offers each of them by Vulkan's
+/// definition, so it is not asked.
+pub(crate) const PORTABILITY: &[Feature] = &[
+    // A texture's view maps its format's components and Metal's swizzle.
+    feature!(portability.image_view_format_swizzle),
+    // The comparison sampler array takes each sampler state's sampler as it is made.
+    feature!(portability.mutable_comparison_samplers),
+    // `MTLTextureType2DMultisampleArray`.
+    feature!(portability.multisample_array_image),
 ];
 
 /// The features the runtime uses only where the device reports them. Each answer chooses one of
@@ -529,6 +555,7 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
         let uniform_control_flow_listed =
             listed(ash::khr::shader_subgroup_uniform_control_flow::NAME);
         let robustness2_listed = listed(ash::ext::robustness2::NAME);
+        let portability_listed = listed(ash::khr::portability_subset::NAME);
 
         let Features {
             core,
@@ -539,6 +566,7 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
             maximal_reconvergence,
             subgroup_uniform_control_flow,
             robustness2,
+            portability,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -556,6 +584,9 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
         if robustness2_listed {
             features = features.push_next(&mut *robustness2);
         }
+        if portability_listed {
+            features = features.push_next(&mut *portability);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -565,6 +596,7 @@ unsafe fn query(instance: &ash::Instance, physical: vk::PhysicalDevice) -> Queri
         maximal_reconvergence.p_next = std::ptr::null_mut();
         subgroup_uniform_control_flow.p_next = std::ptr::null_mut();
         robustness2.p_next = std::ptr::null_mut();
+        portability.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -591,7 +623,12 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     }
     let mut reported = device.features;
     let mut features = Features::default();
-    for feature in REQUIRED {
+    let portability = device
+        .extensions
+        .iter()
+        .any(|name| name.as_c_str() == ash::khr::portability_subset::NAME);
+    let portability: &[Feature] = if portability { PORTABILITY } else { &[] };
+    for feature in REQUIRED.iter().chain(portability) {
         if *(feature.field)(&mut reported) == vk::TRUE {
             *(feature.field)(&mut features) = vk::TRUE;
         } else {

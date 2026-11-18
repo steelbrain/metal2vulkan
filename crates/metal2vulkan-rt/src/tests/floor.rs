@@ -5,8 +5,8 @@
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
     Queried, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL,
-    OPTIONAL_EXTENSIONS, PRIVATE_MEMORY, REQUIRED, RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS,
-    VERSION,
+    OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY, PRIVATE_MEMORY, REQUIRED,
+    RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -741,17 +741,71 @@ fn every_missing_item_is_named_at_once() {
     );
 }
 
-/// An optional extension is enabled where the device lists it, after the floor's.
+/// An optional extension is enabled where the device lists it, after the floor's; the portability
+/// subset with the portability features the floor asks of a device that lists it.
 #[test]
 fn an_optional_extension_is_enabled_where_listed() {
     for &extension in OPTIONAL_EXTENSIONS {
         let mut device = at_the_floor();
         device.extensions.push(extension.to_owned());
+        if extension == ash::khr::portability_subset::NAME {
+            for feature in PORTABILITY {
+                *(feature.field)(&mut device.features) = vk::TRUE;
+            }
+        }
         let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
         let mut expected = DEVICE_EXTENSIONS.to_vec();
         expected.push(extension);
         assert_eq!(capabilities.extensions, expected);
     }
+}
+
+/// A device that lists the portability subset is asked for the portability features, each missing
+/// one named, and is given exactly those; a device that does not list it is not asked.
+#[test]
+fn a_device_that_lists_the_portability_subset_is_asked_for_its_features() {
+    const PORTABILITY_FEATURES: &str = "VkPhysicalDevicePortabilitySubsetFeaturesKHR";
+    let subset = ash::khr::portability_subset::NAME;
+    let unlisted = decide(&at_the_floor()).unwrap_or_else(|below| panic!("{below}"));
+    assert!(!unlisted.extensions.contains(&subset));
+    assert!(PORTABILITY
+        .iter()
+        .all(|feature| !holds(&unlisted.features, feature)));
+
+    let mut device = at_the_floor();
+    device.extensions.push(subset.to_owned());
+    let below = decide(&device).err().expect("below the floor");
+    assert_eq!(
+        below.missing,
+        [
+            feature(PORTABILITY_FEATURES, "imageViewFormatSwizzle"),
+            feature(PORTABILITY_FEATURES, "mutableComparisonSamplers"),
+            feature(PORTABILITY_FEATURES, "multisampleArrayImage"),
+        ]
+    );
+
+    let mut device = at_the_floor();
+    device.extensions.push(subset.to_owned());
+    // Every member the device reports: only the floor's are enabled.
+    let reported = &mut device.features.portability;
+    reported.constant_alpha_color_blend_factors = vk::TRUE;
+    reported.events = vk::TRUE;
+    reported.image_view_format_swizzle = vk::TRUE;
+    reported.mutable_comparison_samplers = vk::TRUE;
+    reported.multisample_array_image = vk::TRUE;
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert!(capabilities.extensions.contains(&subset));
+    let enabled = capabilities.features.portability;
+    assert_eq!(
+        (
+            enabled.image_view_format_swizzle,
+            enabled.mutable_comparison_samplers,
+            enabled.multisample_array_image,
+            enabled.constant_alpha_color_blend_factors,
+            enabled.events,
+        ),
+        (vk::TRUE, vk::TRUE, vk::TRUE, vk::FALSE, vk::FALSE)
+    );
 }
 
 #[test]
@@ -877,6 +931,11 @@ fn the_readme_states_the_floor() {
     let code: BTreeSet<(String, String)> = INSTANCE_EXTENSIONS
         .iter()
         .map(|name| (name, "instance"))
+        .chain(
+            OPTIONAL_INSTANCE_EXTENSIONS
+                .iter()
+                .map(|name| (name, "instance, where offered")),
+        )
         .chain(DEVICE_EXTENSIONS.iter().map(|name| (name, "device")))
         .chain(
             OPTIONAL_EXTENSIONS
@@ -890,6 +949,10 @@ fn the_readme_states_the_floor() {
     for (header, features) in [
         (["Feature", "Structure", "Used for"], REQUIRED),
         (["Optional feature", "Structure", "Used for"], OPTIONAL),
+        (
+            ["Portability feature", "Structure", "Used for"],
+            PORTABILITY,
+        ),
     ] {
         let stated: BTreeSet<(String, String)> = table(&section, &header)
             .into_iter()
@@ -979,6 +1042,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
             mut robustness2,
+            mut portability,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -993,6 +1057,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(ash::khr::shader_subgroup_uniform_control_flow::NAME) {
             features = features.push_next(&mut subgroup_uniform_control_flow);
+        }
+        if enabled(ash::khr::portability_subset::NAME) {
+            features = features.push_next(&mut portability);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 /// No Metal counterpart: Metal has no instance. The Vulkan instance the runtime creates for its
 /// devices, at the floor's version ([`floor::VERSION`]) with the floor's instance extensions
-/// ([`floor::INSTANCE_EXTENSIONS`]) and those the consumer names that the loader offers.
+/// ([`floor::INSTANCE_EXTENSIONS`]), and those of [`floor::OPTIONAL_INSTANCE_EXTENSIONS`] and the
+/// consumer's that the loader offers. Where the loader offers `VK_KHR_portability_enumeration`, it
+/// lists portability devices too (`VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR`), each
+/// checked against the floor as any other.
 ///
 /// A cheap handle: clones share one instance, which lives until the last clone, and the last
 /// [`PhysicalDevice`] and [`Device`](crate::Device) made from it, are dropped. Whatever the
@@ -25,8 +28,8 @@ struct Shared {
 }
 
 impl Instance {
-    /// Loads the Vulkan loader and creates the instance with the floor's instance extensions, and
-    /// each of `extensions` the loader offers: the window system's (such as `VK_KHR_xlib_surface`
+    /// Loads the Vulkan loader and creates the instance with the floor's instance extensions, the
+    /// portability listing where the loader offers it, and each of `extensions` the loader offers: the window system's (such as `VK_KHR_xlib_surface`
     /// or `VK_KHR_win32_surface`) and any other the consumer uses. A name the floor already lists,
     /// or listed twice, is enabled once. [`Instance::extensions`] says which were enabled; the
     /// consumer names an extension's dependencies too.
@@ -43,7 +46,7 @@ impl Instance {
             .iter()
             .map(|&name| name.to_owned())
             .collect();
-        for &name in extensions {
+        for &name in floor::OPTIONAL_INSTANCE_EXTENSIONS.iter().chain(extensions) {
             let listed = offered
                 .iter()
                 .any(|properties| properties.extension_name_as_c_str() == Ok(name));
@@ -53,7 +56,14 @@ impl Instance {
         }
         let pointers: Vec<*const c_char> = names.iter().map(|name| name.as_ptr()).collect();
         let application = vk::ApplicationInfo::default().api_version(floor::VERSION);
+        // Where the loader offers the listing of portability devices, they are listed too.
+        let portability = ash::khr::portability_enumeration::NAME;
+        let flags = match names.iter().any(|name| name.as_c_str() == portability) {
+            true => vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
+            false => vk::InstanceCreateFlags::empty(),
+        };
         let info = vk::InstanceCreateInfo::default()
+            .flags(flags)
             .application_info(&application)
             .enabled_extension_names(&pointers);
         // SAFETY: `info` and everything it points to live through the call.

@@ -12,7 +12,9 @@ below.
 
 - `Instance::new` loads the Vulkan loader and creates the instance at the floor's version, with
   the floor's instance extensions and each extension the consumer names that the loader offers:
-  the window system's, and any other it uses. `Instance::extensions` lists those enabled.
+  the window system's, and any other it uses. Where the loader offers
+  `VK_KHR_portability_enumeration`, it is enabled and portability devices are listed too, each
+  checked against the floor as any other. `Instance::extensions` lists those enabled.
   `Instance::physical_devices` lists the physical devices in the loader's order.
 - `Device::new` checks a physical device against the floor and makes one `VkDevice`. Every
   command queue, every guest process and the compositor share it. It takes the floor's queue
@@ -614,6 +616,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_robustness2` | device | null descriptors |
 | `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
+| `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |
+| `VK_KHR_portability_subset` | device, where listed | Vulkan requires it enabled where a device lists it; the device is asked for the portability features below |
 
 ### Features
 
@@ -652,6 +656,18 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `hostQueryReset` | `VkPhysicalDeviceVulkan12Features` | a command buffer's timestamp queries reset on the host as it retires |
 | `synchronization2` | `VkPhysicalDeviceVulkan13Features` | barriers, layout changes and submission |
 | `dynamicRendering` | `VkPhysicalDeviceVulkan13Features` | render passes |
+
+### Portability features
+
+A device that lists `VK_KHR_portability_subset` may offer less than Vulkan defines. The floor asks
+such a device for these, and device creation enables them; a device that does not list the
+extension offers each of them by Vulkan's definition and is not asked.
+
+| Portability feature | Structure | Used for |
+|---|---|---|
+| `imageViewFormatSwizzle` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | a texture view's component mapping: its format's and Metal's swizzle |
+| `mutableComparisonSamplers` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | the comparison sampler array, which takes each sampler state's sampler as it is made |
+| `multisampleArrayImage` | `VkPhysicalDevicePortabilitySubsetFeaturesKHR` | `MTLTextureType2DMultisampleArray` |
 
 ### Limits
 

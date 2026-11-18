@@ -288,6 +288,7 @@ impl Device {
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
             mut robustness2,
+            mut portability,
         } = enabled_features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -303,6 +304,9 @@ impl Device {
         }
         if enabled(ash::khr::shader_subgroup_uniform_control_flow::NAME) {
             features = features.push_next(&mut subgroup_uniform_control_flow);
+        }
+        if enabled(ash::khr::portability_subset::NAME) {
+            features = features.push_next(&mut portability);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }

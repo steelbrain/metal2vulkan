@@ -1096,6 +1096,7 @@ const	metal2vulkan-rt::floor::BUFFER_USAGE	pub const BUFFER_USAGE: vk::BufferUsa
 const	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	pub const DEVICE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	pub const INSTANCE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	pub const OPTIONAL_EXTENSIONS: &[&CStr]
+const	metal2vulkan-rt::floor::OPTIONAL_INSTANCE_EXTENSIONS	pub const OPTIONAL_INSTANCE_EXTENSIONS: &[&CStr]
 const	metal2vulkan-rt::floor::VERSION	pub const VERSION: u32
 const	metal2vulkan-runtime::DEFAULT_CAPACITY	pub const DEFAULT_CAPACITY: u64
 const	metal2vulkan-runtime::DEFAULT_MEMORY_CAPACITY	pub const DEFAULT_MEMORY_CAPACITY: u64
@@ -1194,7 +1195,8 @@ const-value	metal2vulkan-rt::MAX_BUFFER_LENGTH	1 <<31
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::khr::workgroup_memory_explicit_layout::NAME, ash::ext::robustness2::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
-const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME]
+const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME]
+const-value	metal2vulkan-rt::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-rt::floor::VERSION	vk::API_VERSION_1_3
 const-value	metal2vulkan-runtime::DEFAULT_CAPACITY	25 <<30
 const-value	metal2vulkan-runtime::DEFAULT_MEMORY_CAPACITY	256 <<20
@@ -2320,6 +2322,7 @@ field	metal2vulkan-rt::floor::Capabilities.storage_read_without_format	pub stora
 field	metal2vulkan-rt::floor::Capabilities.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: bool
 field	metal2vulkan-rt::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
 field	metal2vulkan-rt::floor::Features.maximal_reconvergence	pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>
+field	metal2vulkan-rt::floor::Features.portability	pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.robustness2	pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>
 field	metal2vulkan-rt::floor::Features.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: vk::PhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.vulkan11	pub vulkan11: vk::PhysicalDeviceVulkan11Features<'static>
