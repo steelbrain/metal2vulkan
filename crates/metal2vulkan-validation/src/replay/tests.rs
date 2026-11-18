@@ -1168,7 +1168,7 @@ fn a_frame_end_reports_the_gauges_as_they_stand() {
         .filter(|line| line.starts_with("end "))
         .collect();
     assert_eq!(ends.len(), 2, "{lines:?}");
-    assert!(ends[1].ends(" live calls=3"), "{lines:?}");
+    assert!(ends[1].ends_with(" live calls=3"), "{lines:?}");
 }
 
 /// On a backend that takes no snapshots, a dispatch an `m2v.privateBytes` record names plays as it
