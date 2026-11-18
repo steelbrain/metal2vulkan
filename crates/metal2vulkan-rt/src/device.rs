@@ -640,9 +640,10 @@ impl Device {
     /// in use: the device keeps a class's idle allocations while their bytes and those of its
     /// allocations in use stay at or under the most bytes it had in use over the last 10 seconds,
     /// and within an eighth of its memory type's heap, and frees the oldest past that, after
-    /// [`BlockMappings::unmap`] of each block kept in it.
-    /// The rule runs as blocks are taken and given back, never on a timer: a program that goes
-    /// quiet keeps its idle allocations until its next take or release.
+    /// [`BlockMappings::unmap`] of each block kept in it. It frees them one at a time, on the
+    /// block-maker thread, and only once no commit or submission has come on any of the device's
+    /// queues for 20 ms: a program that goes quiet gives its idle allocations back without a call
+    /// of its own.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's block, whose handle is dropped all the
     /// same.

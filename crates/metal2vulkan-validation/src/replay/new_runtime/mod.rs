@@ -1519,6 +1519,8 @@ impl Backend for NewRuntime {
                 metrics.consumer_allocation_nanos,
             ),
             ("maker_allocation_nanos", metrics.maker_allocation_nanos),
+            ("allocations_freed", metrics.allocations_freed),
+            ("submissions_during_frees", metrics.submissions_during_frees),
             (
                 "dispatches_without_effects",
                 metrics.dispatches_without_effects,

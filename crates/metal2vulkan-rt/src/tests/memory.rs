@@ -1053,11 +1053,13 @@ mod on_device {
     /// Idle allocations follow the window's peak down: four Shared blocks of 16 MiB taken beside
     /// a small one, each with an allocation of its own, and given back are kept, their
     /// allocations idle, while the most bytes in use over the last 10 seconds hold them, through a
-    /// Private take and give-back 5 seconds on. Once the clock has moved 11 seconds, the small
-    /// block's give-back leaves its allocation in the window, and its allocation is the reserve
-    /// that keeps 8 MiB free: the three oldest idle allocations are freed after the hook of the
-    /// block kept in each, on the block-maker thread. 11 seconds later, with the Shared class
-    /// quiet, the next Private take and give-back frees the fourth; the reserve stays.
+    /// Private take and give-back and the small block's give-back 5 seconds on. Once the clock has
+    /// moved 11 seconds, the small block's allocation is the reserve that keeps 8 MiB free, and the
+    /// window holds one allocation more than the bytes in use: the three oldest idle allocations
+    /// are freed, one at a time, after the hook of the block kept in each, on the block-maker
+    /// thread. Five seconds later, with no take or give-back, the window's peak falls to nothing
+    /// and the fourth is freed; the reserve stays. Nothing commits, so the device is quiet
+    /// throughout.
     #[test]
     fn every_device_frees_idle_allocations_as_the_window_s_peak_falls() {
         let instance = Instance::new(&[]).expect("an instance at the floor");
@@ -1079,8 +1081,7 @@ mod on_device {
                 .collect();
             let four: Vec<u32> = taken.iter().map(|block| block.id.get()).collect();
             let mut handed: Vec<BlockId> = taken.iter().map(|block| block.id).collect();
-            let small_id = small.id;
-            handed.push(small_id);
+            handed.push(small.id);
             for block in taken {
                 device.release_block(block).expect("a release");
             }
@@ -1091,29 +1092,29 @@ mod on_device {
                 "{name}: four idle allocations"
             );
 
-            // Five seconds on, a Private take and give-back runs the rule for both classes: the
+            // Five seconds on, a Private take and give-back, and the small block's give-back: the
             // window still holds the four.
             core.pool.advance_clock(Duration::from_secs(5));
             let nudge = (device.take_block(MemoryClass::Private, 1))
                 .unwrap_or_else(|error| panic!("{name}: a Private block: {error}"));
-            let nudge_id = nudge.id;
-            handed.push(nudge_id);
+            handed.push(nudge.id);
             device.release_block(nudge).expect("a release");
-            wait_until("the Private block kept", || {
+            device.release_block(small).expect("a release");
+            wait_until("the Private and small blocks kept", || {
                 core.pool.kept(MemoryClass::Private) == 1
+                    && core.pool.kept(MemoryClass::Shared) == 5
             });
             assert_eq!(
                 (counters.gauges().shared_idle_bytes, hook.unmapped().len()),
-                (4 * len, 0),
-                "{name}: the four within the window"
+                (5 * len, 0),
+                "{name}: the four and the small block's within the window"
             );
 
-            // Eleven seconds on: the small block's give-back frees the three oldest. The gauge of
-            // allocations falls after each one's free, which follows its kept block's hook and
-            // the idle gauge's fall: once it reads the zero source, the reserve, the fourth and
-            // the Private allocation, the three hooks and the idle gauge are final.
+            // Eleven seconds on: the three oldest are freed. The gauge of allocations falls after
+            // each one's free, which follows its kept block's hook and the idle gauge's fall: once
+            // it reads the zero source, the reserve, the fourth and the Private allocation, the
+            // three hooks and the idle gauge are final.
             core.pool.advance_clock(Duration::from_secs(6));
-            device.release_block(small).expect("a release");
             wait_until("three idle Shared allocations freed", || {
                 counters.gauges().blocks == ZERO_SOURCE + 3
             });
@@ -1128,23 +1129,24 @@ mod on_device {
                 assert_eq!(unmapped.first, None, "{name}: no block recorded");
             }
 
-            // Eleven seconds later, the Shared class quiet: a Private take of the kept block's
-            // length and its give-back free the fourth.
-            core.pool.advance_clock(Duration::from_secs(11));
-            let again = (device.take_block(MemoryClass::Private, 1))
-                .unwrap_or_else(|error| panic!("{name}: a Private block: {error}"));
-            assert_eq!(again.id, nudge_id, "{name}: the kept Private block");
-            device.release_block(again).expect("a release");
-            wait_until("the fourth freed", || hook.unmapped().len() == 4);
-            wait_until("the idle gauge", || {
-                counters.gauges().shared_idle_bytes == len
+            // Five seconds later, with no take or give-back: the window's peak is gone, and the
+            // fourth is freed.
+            core.pool.advance_clock(Duration::from_secs(5));
+            wait_until("the fourth freed", || {
+                counters.gauges().blocks == ZERO_SOURCE + 2
             });
+            assert_eq!(
+                (hook.unmapped().len(), counters.gauges().shared_idle_bytes),
+                (4, len),
+                "{name}: the fourth unmapped, the reserve idle"
+            );
             assert_eq!(hook.unmapped()[3].block, four[3], "{name}: the fourth");
             assert_eq!(
                 core.pool.kept(MemoryClass::Shared),
                 1,
                 "{name}: the small block, kept in the reserve"
             );
+            assert_eq!(counters.metrics().allocations_freed, 4, "{name}: the frees");
             drop(device);
             assert_eq!(
                 counters.gauges(),
@@ -1154,6 +1156,129 @@ mod on_device {
             assert_each_unmapped_once(name, &hook, &handed);
             println!(
                 "memory: {name}: idle allocations freed as the peak fell; metrics {:?}",
+                counters.metrics()
+            );
+        }
+    }
+
+    /// Idle allocations are freed only in quiet gaps, and a submission during a free is counted.
+    /// Four Shared blocks of 16 MiB are given back while command buffers are committed every
+    /// 2 ms; the clock moves past the window, so the idle rule frees all four but the reserve, yet
+    /// every free begins at least 20 ms after the last commit before it, whatever the test
+    /// thread's own gaps were. Once the commits stop, the idle allocations are freed. Then the
+    /// free of one of two more idle allocations is held open: a command buffer committed with a
+    /// fill during it is counted as a submission during a free, and one committed once both are
+    /// freed is not.
+    #[test]
+    fn every_device_frees_idle_allocations_in_quiet_gaps() {
+        const QUIET: u64 = 20_000_000;
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let core = device.core();
+            let counters = device.counters();
+            let queue = device.new_command_queue(1).expect("a queue");
+            let len = MemoryClass::Shared.block_len();
+            let commit = || {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let before = crate::host_time();
+                command_buffer.commit().expect("a commit");
+                (before, crate::host_time())
+            };
+            let give_back = |count: usize| {
+                let taken: Vec<Block> = (0..count)
+                    .map(|_| {
+                        (device.take_block(MemoryClass::Shared, len))
+                            .unwrap_or_else(|error| panic!("{name}: a block: {error}"))
+                    })
+                    .collect();
+                for block in taken {
+                    device.release_block(block).expect("a release");
+                }
+                wait_until("the blocks kept", || {
+                    core.pool.kept(MemoryClass::Shared) == count
+                });
+            };
+            give_back(4);
+            let mut commits = vec![commit()];
+
+            // Commits every 2 ms, the four idle allocations past the window from the third on.
+            for step in 0..150 {
+                if step == 2 {
+                    core.pool.advance_clock(Duration::from_secs(11));
+                }
+                thread::sleep(Duration::from_millis(2));
+                commits.push(commit());
+            }
+            let busy_frees = counters.metrics().allocations_freed;
+            // The count rises once each free has returned.
+            wait_until("the idle allocations freed once quiet", || {
+                counters.metrics().allocations_freed == 4 && !core.pool.freeing()
+            });
+            let quiet_frees = core.pool.quiet_frees();
+            for (index, &quiet) in quiet_frees.iter().enumerate() {
+                for &(before, after) in &commits {
+                    assert!(
+                        after > quiet || before + QUIET <= quiet,
+                        "{name}: free {index} began {} us after a commit",
+                        quiet.saturating_sub(before) / 1000
+                    );
+                }
+            }
+            let gaps = (commits.windows(2))
+                .filter(|pair| pair[1].0 - pair[0].1 >= QUIET)
+                .count();
+            println!(
+                "memory: {name}: {} frees in quiet gaps, {busy_frees} of them while the test \
+                 committed, with {gaps} gaps of 20 ms or more between its commits",
+                quiet_frees.len()
+            );
+
+            // A free held open: a submission during it is counted, one after it is not.
+            let target = (device.take_block(MemoryClass::Shared, 4096))
+                .unwrap_or_else(|error| panic!("{name}: a block: {error}"));
+            let buffer = (device.new_buffer(target.id, 0, 256, None)).expect("a buffer");
+            let fill = |buffer: &crate::Buffer| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let to = vk_buffer(&device, target.id);
+                command_buffer
+                    .record_for_test(&[buffer], |device, command| {
+                        // SAFETY: the command buffer is recording; the block is held.
+                        unsafe { device.cmd_fill_buffer(command, to, 0, 256, 7) };
+                    })
+                    .expect("a fill");
+                command_buffer.commit().expect("a commit");
+                command_buffer.wait_until_completed();
+            };
+            let freed = counters.metrics().allocations_freed;
+            core.pool.hold_frees(true);
+            give_back(2);
+            core.pool.advance_clock(Duration::from_secs(11));
+            wait_until("a free held open", || core.pool.freeing());
+            fill(&buffer);
+            assert_eq!(
+                counters.metrics().submissions_during_frees,
+                1,
+                "{name}: the submission during the free"
+            );
+            core.pool.hold_frees(false);
+            wait_until("both freed", || {
+                counters.metrics().allocations_freed == freed + 2 && !core.pool.freeing()
+            });
+            fill(&buffer);
+            assert_eq!(
+                counters.metrics().submissions_during_frees,
+                1,
+                "{name}: the submission after the free"
+            );
+            drop((buffer, target, queue));
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
+            println!(
+                "memory: {name}: frees only in quiet gaps; metrics {:?}",
                 counters.metrics()
             );
         }

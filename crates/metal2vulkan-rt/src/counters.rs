@@ -39,6 +39,10 @@ pub(crate) enum Metric {
     ForcedFlushesAcrossQueues,
     /// [`Metrics::over_copies`].
     OverCopies,
+    /// [`Metrics::allocations_freed`].
+    AllocationsFreed,
+    /// [`Metrics::submissions_during_frees`].
+    SubmissionsDuringFrees,
 }
 
 /// A gauge the runtime moves.
@@ -120,6 +124,8 @@ struct Atomics {
     lone_submissions_across_queues: AtomicU64,
     forced_flushes_across_queues: AtomicU64,
     over_copies: AtomicU64,
+    allocations_freed: AtomicU64,
+    submissions_during_frees: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -172,6 +178,8 @@ impl Counters {
             Metric::LoneSubmissionsAcrossQueues => &a.lone_submissions_across_queues,
             Metric::ForcedFlushesAcrossQueues => &a.forced_flushes_across_queues,
             Metric::OverCopies => &a.over_copies,
+            Metric::AllocationsFreed => &a.allocations_freed,
+            Metric::SubmissionsDuringFrees => &a.submissions_during_frees,
         };
         atomic.fetch_add(1, Relaxed);
     }
@@ -339,6 +347,8 @@ impl Counters {
             lone_submissions_across_queues: a.lone_submissions_across_queues.load(Relaxed),
             forced_flushes_across_queues: a.forced_flushes_across_queues.load(Relaxed),
             over_copies: a.over_copies.load(Relaxed),
+            allocations_freed: a.allocations_freed.load(Relaxed),
+            submissions_during_frees: a.submissions_during_frees.load(Relaxed),
         }
     }
 
@@ -478,6 +488,13 @@ pub struct Metrics {
     /// buffer's bytes into the image, in the upload that leads a submission or after a command
     /// wrote the buffer, and the image back into the buffer after a command wrote the texture.
     pub over_copies: u64,
+    /// Idle allocations the block-maker thread freed: one at a time, each once no commit or
+    /// submission had come on any of the device's queues for 20 ms.
+    pub allocations_freed: u64,
+    /// Submissions made while the block-maker thread was inside an idle allocation's
+    /// `vkFreeMemory`. A driver may hold such a submission until the free returns: on the NVIDIA
+    /// cards measured in Thunderbolt enclosures, about 1.1 ms per MiB of host-visible memory.
+    pub submissions_during_frees: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the

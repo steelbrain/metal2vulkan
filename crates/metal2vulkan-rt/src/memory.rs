@@ -12,6 +12,7 @@ use crate::places::Ranges;
 use ash::vk;
 use std::collections::{HashSet, VecDeque};
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,12 @@ impl Peaks {
     /// The most bytes in use recorded in the window.
     pub(crate) fn most(&self) -> u64 {
         self.0.iter().map(|&(_, bytes)| bytes).max().unwrap_or(0)
+    }
+
+    /// The second the oldest second recorded leaves the window, where one is recorded: until
+    /// then, [`most`](Self::most) does not fall.
+    pub(crate) fn falls(&self) -> Option<u64> {
+        (self.0.front()).map(|&(second, _)| second + WINDOW_SECS)
     }
 }
 
@@ -88,6 +95,16 @@ const BASE_ALIGN: u64 = 2 << 20;
 /// allocations, not the blocks' bytes, keeps an allocation that serves the same blocks each frame,
 /// whatever room they leave in it.
 const WINDOW_SECS: u64 = 10;
+
+/// How long the device stays quiet, with no commit and no submission on any of its queues, before
+/// the block-maker thread frees an idle allocation, in nanoseconds of
+/// [`host_time`](crate::host_time): 20 ms. A driver may hold the process's submissions for the
+/// whole of a `vkFreeMemory`: on the NVIDIA cards measured in Thunderbolt enclosures, freeing
+/// host-visible memory takes about 1.1 ms per MiB and holds any submission for its length, where
+/// an internal NVIDIA card frees 16 MiB in about 0.5 ms. So the thread frees one allocation at a
+/// time, only in such a gap, and looks again after each; a submission that arrives during a free
+/// waits for the rest of it.
+const QUIET_NANOS: u64 = 20_000_000;
 
 /// The share of the heap of a class's memory type its idle allocations stay within, whatever the
 /// window holds: an eighth.
@@ -315,6 +332,10 @@ struct Allocation {
     /// When its last live block came back, in the pool's give-backs: the oldest idle allocation
     /// is freed first.
     emptied: u64,
+    /// A spilled allocation whose last block came back: no take lands in it, its bytes are not
+    /// the class's free bytes, and the idle rule frees it next, so the next allocation tries
+    /// device-local memory again.
+    retiring: bool,
 }
 
 /// The pool: every allocation of each class, and the blocks given back and kept for a take of
@@ -331,9 +352,10 @@ struct Allocation {
 /// The idle rule never frees an allocation that the class's free bytes need to stay at or above
 /// [`MAKE_BELOW`], so it does not free what the block-maker thread would make again.
 ///
-/// The idle rule runs as a block is taken or given back, never on a timer: a program that goes
-/// quiet keeps its idle allocations until its next take or release, or until the device is torn
-/// down.
+/// The idle rule runs on the block-maker thread as a block is taken or given back, and again when
+/// the window's peak can fall or the device has been quiet for [`QUIET_NANOS`]: an idle
+/// allocation it takes out is freed in a quiet gap, one at a time, so a program that goes quiet
+/// gives its idle allocations back without a call of its own.
 pub(crate) struct Pool {
     state: Mutex<State>,
     /// Signalled whenever the state changes, for the block-maker thread and for takers waiting
@@ -349,6 +371,19 @@ pub(crate) struct Pool {
     granule: u64,
     /// The idle rule's clock: seconds since the pool was made.
     clock: Clock,
+    /// The [`host_time`](crate::host_time) of the last commit or submission on any of the
+    /// device's queues ([`Pool::worked`]).
+    worked: AtomicU64,
+    /// Whether the block-maker thread is in an idle allocation's `vkFreeMemory`.
+    freeing: AtomicBool,
+    /// For the device tests: while set, the block-maker thread waits inside each idle
+    /// allocation's free, with [`freeing`](Self::freeing) set, before it calls `vkFreeMemory`.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    hold_frees: Mutex<bool>,
+    /// For the device tests: the [`host_time`](crate::host_time) at which the block-maker thread
+    /// found the device quiet, for each idle allocation it freed.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    quiet_frees: Mutex<Vec<u64>>,
 }
 
 /// The idle rule's clock, which the device tests move on.
@@ -367,12 +402,33 @@ impl Clock {
         }
     }
 
-    fn seconds(&self) -> u64 {
+    fn elapsed(&self) -> Duration {
         let elapsed: Duration = self.origin.elapsed();
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         let elapsed = elapsed + *lock(&self.skew);
-        elapsed.as_secs()
+        elapsed
     }
+
+    fn seconds(&self) -> u64 {
+        self.elapsed().as_secs()
+    }
+
+    /// How long until the clock reads `second`.
+    fn until(&self, second: u64) -> Duration {
+        Duration::from_secs(second).saturating_sub(self.elapsed())
+    }
+}
+
+/// What the idle rule asks of a class.
+enum Rule {
+    /// No idle allocation that the rule weighs.
+    Keep,
+    /// Idle allocations that the window's peak holds, until the pool's clock reads this second
+    /// at the latest.
+    KeepUntil(u64),
+    /// The allocation to free next: a retiring one, else the oldest idle one past the
+    /// window's peak or the class's cap.
+    Free(vk::DeviceMemory),
 }
 
 struct State {
@@ -451,6 +507,12 @@ impl Pool {
             caps: heaps.map(|heap| heap / IDLE_SHARE),
             granule: GRANULE.max(granularity.next_power_of_two()),
             clock: Clock::new(),
+            worked: AtomicU64::new(0),
+            freeing: AtomicBool::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            hold_frees: Mutex::new(false),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            quiet_frees: Mutex::new(Vec::new()),
         }
     }
 
@@ -462,6 +524,38 @@ impl Pool {
         self.changed
             .wait(state)
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn wait_for<'a>(
+        &self,
+        state: MutexGuard<'a, State>,
+        timeout: Duration,
+    ) -> MutexGuard<'a, State> {
+        match self.changed.wait_timeout(state, timeout) {
+            Ok((state, _)) => state,
+            Err(poisoned) => poisoned.into_inner().0,
+        }
+    }
+
+    /// A commit or submission at `now` ([`host_time`](crate::host_time)) on one of the device's
+    /// queues: the block-maker thread frees no idle allocation until [`QUIET_NANOS`] after it.
+    pub(crate) fn worked(&self, now: u64) {
+        self.worked.fetch_max(now, Relaxed);
+    }
+
+    /// How long until the device has been quiet for [`QUIET_NANOS`] at `now`
+    /// ([`host_time`](crate::host_time)): zero once it has.
+    fn quiet_in(&self, now: u64) -> Duration {
+        let quiet = self.worked.load(Relaxed).saturating_add(QUIET_NANOS);
+        Duration::from_nanos(quiet.saturating_sub(now))
+    }
+
+    /// Whether the block-maker thread is in an idle allocation's `vkFreeMemory`, which a driver
+    /// may hold a submission made now for ([`Metrics::submissions_during_frees`]).
+    ///
+    /// [`Metrics::submissions_during_frees`]: crate::Metrics::submissions_during_frees
+    pub(crate) fn freeing(&self) -> bool {
+        self.freeing.load(Relaxed)
     }
 
     /// For the device tests: whether the class's free bytes are at least [`MAKE_BELOW`], so the
@@ -478,10 +572,27 @@ impl Pool {
         self.lock().kept[class.index()].len()
     }
 
-    /// For the device tests: moves the idle rule's clock on by `by`.
+    /// For the device tests: moves the idle rule's clock on by `by`, and wakes the block-maker
+    /// thread to run the rule.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn advance_clock(&self, by: Duration) {
         *lock(&self.clock.skew) += by;
+        let _state = self.lock();
+        self.changed.notify_all();
+    }
+
+    /// For the device tests: holds each idle allocation's free, with [`freeing`](Self::freeing)
+    /// set, while `hold` is true.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn hold_frees(&self, hold: bool) {
+        *lock(&self.hold_frees) = hold;
+    }
+
+    /// For the device tests: the [`host_time`](crate::host_time) at which the block-maker thread
+    /// found the device quiet, for each idle allocation it freed so far.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn quiet_frees(&self) -> Vec<u64> {
+        lock(&self.quiet_frees).clone()
     }
 
     /// The length and alignment of a block for a take of `len` bytes: its buffer's size rounded
@@ -662,15 +773,19 @@ impl Pool {
         state.idle_bytes[index] = idle;
     }
 
-    /// The idle rule for `class`: takes out its oldest idle allocations while their bytes pass the
-    /// most bytes the class had in use over the last [`WINDOW_SECS`] seconds less its bytes in use
-    /// now, or the class's cap; each with its kept blocks, for the caller to free without the
-    /// lock. The newest idle allocations with free bytes that the class's free bytes need to reach
-    /// [`MAKE_BELOW`] are its reserve: the rule neither counts nor frees them.
-    fn trim(&self, state: &mut State, class: MemoryClass) -> Vec<(Allocation, Vec<Memory>)> {
+    /// The idle rule for `class`: its next allocation to free is a retiring one, a spilled one that
+    /// emptied, so the next allocation tries device-local memory again; else the oldest idle one
+    /// while the idle allocations' bytes pass the most bytes the class had in use over the last
+    /// [`WINDOW_SECS`] seconds less its bytes in use now, or the class's cap. The newest idle
+    /// allocations with free bytes that the class's free bytes need to reach [`MAKE_BELOW`] are
+    /// its reserve: the rule neither counts nor frees them.
+    fn rule(&self, state: &mut State, class: MemoryClass) -> Rule {
         let index = class.index();
         state.note(class, self.clock.seconds());
         let allocations = &state.allocations[index];
+        if let Some(retiring) = (allocations.iter()).find(|allocation| allocation.retiring) {
+            return Rule::Free(retiring.memory);
+        }
         let mut free: u64 = (allocations.iter())
             .filter(|allocation| allocation.live > 0)
             .map(|allocation| allocation.free.bytes())
@@ -692,13 +807,16 @@ impl Pool {
         });
         idle.reverse();
         let lens: Vec<u64> = idle.iter().map(|&(_, _, len, _)| len).collect();
-        let peak = state.peaks[index].most();
-        let surplus = surplus(&lens, peak, state.in_use(class), self.caps[index]);
-        let gone = (idle.iter().take(surplus))
-            .filter_map(|&(_, memory, ..)| state.take_out(class, memory))
-            .collect();
-        self.settle(state, class);
-        gone
+        let peaks = &state.peaks[index];
+        match idle.first() {
+            Some(&(_, memory, ..))
+                if surplus(&lens, peaks.most(), state.in_use(class), self.caps[index]) > 0 =>
+            {
+                Rule::Free(memory)
+            }
+            Some(_) => peaks.falls().map_or(Rule::Keep, Rule::KeepUntil),
+            None => Rule::Keep,
+        }
     }
 
     /// Records a block as handed to the consumer, so that its hook runs before its bytes are
@@ -766,9 +884,10 @@ impl State {
         self.unkeep[class.index()]
     }
 
-    /// The bytes of the free ranges of the class's allocations.
+    /// The bytes of the free ranges of the class's allocations, but those retiring.
     fn free(&self, class: MemoryClass) -> u64 {
         (self.allocations[class.index()].iter())
+            .filter(|allocation| !allocation.retiring)
             .map(|allocation| allocation.free.bytes())
             .sum()
     }
@@ -779,9 +898,12 @@ impl State {
     }
 
     /// Reserves `len` bytes at a multiple of `align` in the first allocation of `class` with such
-    /// a free range, counting a block live there.
+    /// a free range, counting a block live there; none in a retiring one.
     fn fit(&mut self, class: MemoryClass, len: u64, align: u64) -> Option<Carve> {
         (self.allocations[class.index()].iter_mut()).find_map(|allocation| {
+            if allocation.retiring {
+                return None;
+            }
             let base = allocation.free.take(len, align)?;
             allocation.live += 1;
             Some(allocation.carve(base))
@@ -887,9 +1009,12 @@ pub(crate) fn stock(core: &Core) {
 /// The block-maker thread, until the device's teardown stops it. Off every caller's path, in
 /// order: it gives a class's kept blocks' bytes back to their allocations where a take asked,
 /// after the consumer's hook; it keeps each block given back for a take of its length (or gives
-/// its bytes back, after the hook, where its allocation spilled), then
-/// runs the class's idle rule, freeing what it takes out after the hook of each kept block in it;
-/// and it makes an allocation of a class whose free bytes are fewer than [`MAKE_BELOW`].
+/// its bytes back, after the hook, where its allocation spilled); it makes an allocation of a
+/// class whose free bytes are fewer than [`MAKE_BELOW`]; and once the device has been quiet for
+/// [`QUIET_NANOS`], it frees the next allocation the idle rule takes out, after the hook of each
+/// kept block in it, one at a time. It sleeps until the next change, the end of the quiet time
+/// where the rule has an allocation to free, or the second the window's peak can fall where it
+/// keeps idle allocations.
 pub(crate) fn run(core: Arc<Core>) {
     ON_MAKER.set(true);
     let pool = &core.pool;
@@ -920,8 +1045,8 @@ pub(crate) fn run(core: Arc<Core>) {
         if let Some(memory) = state.returned.pop_front() {
             drop(state);
             // A block of a spilled allocation is not kept: its bytes go back to its allocation,
-            // and a spilled allocation that empties is freed, so the next tries device-local
-            // memory again.
+            // and a spilled allocation that empties is the idle rule's next to free, so the next
+            // tries device-local memory again.
             let kept = !memory.spilled;
             if !kept {
                 retire(&core, &memory);
@@ -933,7 +1058,6 @@ pub(crate) fn run(core: Arc<Core>) {
             state.give_backs += 1;
             state.failed[class.index()] = false;
             let emptied = state.give_backs;
-            let mut spilled = None;
             if let Some(allocation) = state.find(class, memory.memory) {
                 allocation.live -= 1;
                 if !kept {
@@ -941,40 +1065,14 @@ pub(crate) fn run(core: Arc<Core>) {
                 }
                 if allocation.live == 0 {
                     allocation.emptied = emptied;
-                    spilled = allocation.spilled.then_some(allocation.memory);
+                    allocation.retiring = allocation.spilled;
                 }
             }
             if kept {
                 state.kept[class.index()].push(memory);
             }
-            let mut gone = pool.trim(&mut state, class);
-            if let Some(spilled) = spilled.and_then(|memory| state.take_out(class, memory)) {
-                gone.push(spilled);
-                pool.settle(&mut state, class);
-            }
+            pool.settle(&mut state, class);
             pool.changed.notify_all();
-            drop(state);
-            for (allocation, kept) in gone {
-                for memory in &kept {
-                    retire(&core, memory);
-                }
-                free_allocation(&core, allocation);
-            }
-            state = pool.lock();
-            continue;
-        }
-        let gone: Vec<(Allocation, Vec<Memory>)> = (MemoryClass::ALL.into_iter())
-            .flat_map(|class| pool.trim(&mut state, class))
-            .collect();
-        if !gone.is_empty() {
-            drop(state);
-            for (allocation, kept) in gone {
-                for memory in &kept {
-                    retire(&core, memory);
-                }
-                free_allocation(&core, allocation);
-            }
-            state = pool.lock();
             continue;
         }
         let wanted = (MemoryClass::ALL.into_iter())
@@ -995,7 +1093,37 @@ pub(crate) fn run(core: Arc<Core>) {
             pool.changed.notify_all();
             continue;
         }
-        state = pool.wait(state);
+        // The idle rule, both classes: the next allocation to free, once the device is quiet.
+        let quiet = crate::host_time();
+        let quiet_in = pool.quiet_in(quiet);
+        let mut wake: Option<Duration> = None;
+        let mut gone = None;
+        for class in MemoryClass::ALL {
+            let due = match pool.rule(&mut state, class) {
+                Rule::Free(memory) if quiet_in.is_zero() => {
+                    gone = state.take_out(class, memory);
+                    pool.settle(&mut state, class);
+                    break;
+                }
+                Rule::Free(_) => quiet_in,
+                Rule::KeepUntil(second) => pool.clock.until(second),
+                Rule::Keep => continue,
+            };
+            wake = Some(wake.map_or(due, |wake| wake.min(due)));
+        }
+        if let Some((allocation, kept)) = gone {
+            pool.changed.notify_all();
+            drop(state);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            lock(&pool.quiet_frees).push(quiet);
+            free_idle(&core, allocation, &kept);
+            state = pool.lock();
+            continue;
+        }
+        state = match wake {
+            Some(timeout) => pool.wait_for(state, timeout),
+            None => pool.wait(state),
+        };
     }
 }
 
@@ -1120,6 +1248,7 @@ fn make_allocation(core: &Core, class: MemoryClass, len: u64) -> Result<Allocati
         free: Ranges::new(len),
         live: 0,
         emptied: 0,
+        retiring: false,
     };
     if class == MemoryClass::Shared {
         // SAFETY: the memory type is host-visible, and the memory is not mapped.
@@ -1190,6 +1319,24 @@ fn retire(core: &Core, memory: &Memory) {
     // SAFETY: no GPU work that uses the block is pending: a command buffer or upload that uses it
     // holds it until it retires. The consumer's mappings are gone.
     unsafe { core.device.destroy_buffer(memory.buffer, None) };
+}
+
+/// On the block-maker thread: frees an allocation the idle rule took out once the device was
+/// quiet, after the hook of each block kept in it. The submissions made during its
+/// `vkFreeMemory` are counted.
+fn free_idle(core: &Core, allocation: Allocation, kept: &[Memory]) {
+    for memory in kept {
+        retire(core, memory);
+    }
+    let pool = &core.pool;
+    pool.freeing.store(true, Relaxed);
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    while *lock(&pool.hold_frees) {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    free_allocation(core, allocation);
+    pool.freeing.store(false, Relaxed);
+    core.counters.count(Metric::AllocationsFreed);
 }
 
 /// Frees an allocation, whose blocks are all retired. Freeing the memory also unmaps it.

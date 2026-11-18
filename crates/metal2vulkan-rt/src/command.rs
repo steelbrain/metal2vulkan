@@ -404,6 +404,8 @@ impl CommandBuffer {
         // the reaper, never in this call.
         let core = self.building(|building| Ok(Arc::clone(building.device.core())))?;
         let began = crate::host_time();
+        // The device is not quiet: the pool frees no idle allocation for a while.
+        core.pool.worked(began);
         let mut work = core.work.lock();
         core.counters
             .commit_lock_wait(crate::host_time().saturating_sub(began));

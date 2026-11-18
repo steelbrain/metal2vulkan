@@ -137,10 +137,12 @@ in its memory.
   while their bytes and those of its allocations in use stay at or under the most bytes it had in
   use over the last 10 seconds, and within an eighth of the heap of the class's memory type; past
   that it frees the oldest, after `BlockMappings::unmap` of each block kept in them, except those
-  the class's free bytes need to stay at 8 MiB or more. The rule runs as blocks are taken and given
-  back, never on a timer: a program that goes quiet keeps its idle allocations until its next take
-  or release, or until the device is torn down. `Gauges::shared_idle_bytes` and
-  `Gauges::private_idle_bytes` count the idle bytes. Once the last handle is gone the block's
+  the class's free bytes need to stay at 8 MiB or more. The block-maker thread frees them one at a
+  time, and only once no commit or submission has come on any of the device's queues for 20 ms,
+  looking again after each free: a program that goes quiet gives its idle allocations back
+  without a call of its own, and a busy one at its next quiet gap. `Metrics::allocations_freed`
+  counts the frees. `Gauges::shared_idle_bytes` and `Gauges::private_idle_bytes` count the idle
+  bytes. Once the last handle is gone the block's
   number names nothing
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's
   teardown frees every block still claimed, after the consumer's `BlockMappings::unmap` returned
@@ -191,6 +193,14 @@ thread; in `Device::quiesce`, on the calling thread, for every block still hande
 teardown, on the thread that tears down, after the runtime's other threads are joined. It never calls
 into the runtime. Blocks the consumer never took are freed without it, and so is every block freed
 after a quiesce.
+
+### Known gaps of memory blocks
+
+- On the NVIDIA cards we measured in Thunderbolt enclosures, freeing host-visible memory takes
+  about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
+  NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one block at a time and only
+  after 20 ms with no commit. `Metrics::allocations_freed` counts the frees, and
+  `Metrics::submissions_during_frees` the submits made while one was in progress.
 
 ## Set 1 and index grants
 

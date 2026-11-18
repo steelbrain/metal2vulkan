@@ -2301,6 +2301,7 @@ field	metal2vulkan-rt::HeapRange.offset	pub offset: u64
 field	metal2vulkan-rt::IndexGrant.class	pub class: IndexClass
 field	metal2vulkan-rt::IndexGrant.count	pub count: u32
 field	metal2vulkan-rt::IndexGrant.first	pub first: u32
+field	metal2vulkan-rt::Metrics.allocations_freed	pub allocations_freed: u64
 field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
 field	metal2vulkan-rt::Metrics.block_bytes_made	pub block_bytes_made: u64
 field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
@@ -2326,6 +2327,7 @@ field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
+field	metal2vulkan-rt::Metrics.submissions_during_frees	pub submissions_during_frees: u64
 field	metal2vulkan-rt::Metrics.submit_infos	pub submit_infos: u64
 field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64

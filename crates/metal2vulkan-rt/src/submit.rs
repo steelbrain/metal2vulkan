@@ -1502,6 +1502,10 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         .collect();
     if ok {
         let queue = lock(&core.queues.runtime);
+        core.pool.worked(crate::host_time());
+        if core.pool.freeing() {
+            core.counters.count(Metric::SubmissionsDuringFrees);
+        }
         // SAFETY: every command buffer is executable and in no other pending submission; every
         // wait is on a signal submitted earlier, and every signal raises its semaphore; the queue
         // is held.
