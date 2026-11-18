@@ -1388,7 +1388,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   On RADV the cost is the move in; the rest of the difference, about 14 µs on the XTX and
   236 µs on the RX 550 at 3648 × 2038, is the draw's own, slower in the feedback layout. On the
   Iris Xe at 3648 × 2038 the pass reading another texture is the slower one, so that difference
-  is not the moves'; their timed cost there is about 9 µs.
+  is not the moves'; their timed cost there is about 9 µs. On RADV the move in costs more the
+  more the image's last rendering left compressed: at 3648 × 2038 it takes 203.3 µs on the
+  RX 550 and 5.2 µs on the XTX in a pass that loads an image the last pass moved home from the
+  feedback layout with no draw between, 370.6 and 19.6 µs after the pass's clear (the table's),
+  and 477.3 and 22.7 µs after a draw over the image in the pass.
 
 ## One path for every device
 
