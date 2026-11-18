@@ -498,6 +498,8 @@ counted from 0), completes the work committed so far, reports as at the stream's
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
     (`skipped_dispatches`), and draws whose pipeline state, or a buffer or texture bound to
     either stage, or whose index buffer is one (`skipped_draws`);
+  - render commands the runtime answers with a typed gap, a draw it does not build among them
+    (`skipped_render_commands`, and a line for each gap with its first frame and call);
   - blit commands that name a skipped object (`skipped_blits`), and by kind: the host's copies
     back to the guest's RAM, which nothing in a play reads (`skipped_guest_ram_reads`),
     `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), mipmaps (`skipped_mipmaps`), and
@@ -585,10 +587,16 @@ the play stopped, the stopping call is the next), the new runtime's backend's
 `pipeline I wall_nanos=N kernel=new|again` for each compute pipeline state it made, in order (the
 making's wall time, and whether no state of another specialization of the kernel, a library's
 function by name, was made before), its `skipped render states N, the first #ID: WHY` where it
-skipped any (`ID` the first one's object and `WHY` the runtime's answer), `cut SEGMENT OFFSET` where the last segment ends
+skipped any (`ID` the first one's object and `WHY` the runtime's answer), its
+`skipped render commands GAP N, the first at frame F, call C` for each typed gap a render command
+met, a draw the runtime does not build among them (`GAP` the gap, `N` the commands skipped, `F`
+and `C` the first one's frame and stream position), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute
 pipeline states whose `gpuResourceID` the player asked, which the new runtime does not give),
-then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
+then `ok` or `error WHAT`. Where the backend skipped anything, the `skipped` line and the last
+one end `; not a verdict past frame F, call C`: `F` and `C` the frame and stream position of the
+call at which it first skipped, past which nothing the play shows is a verdict. A dispatch is
+skipped only where it names a skipped object. `COUNTS` is `stream KEY=VALUE ... executed
 KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
 failure (a bad command line or an unreadable stream).

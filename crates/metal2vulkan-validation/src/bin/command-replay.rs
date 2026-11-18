@@ -18,7 +18,9 @@
 //! the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
-//! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`; a play
+//! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`, the skipped
+//! line and this one ending `; not a verdict past frame F, call C` where the backend skipped
+//! anything (`F` and `C` the first skip's frame and stream position); a play
 //! where an object's ID differs, the compute pipeline states' typed gap aside, is an error. The exit
 //! status is 0 for `ok`, 1 for a play that stopped and 2 for a harness failure (a bad command line, no device, an unreadable stream).
 //!
@@ -391,8 +393,13 @@ fn run<B: Backend>(
             .collect()
     };
     let skips = counted("skipped_");
+    // Past the first skip the play is no verdict: the skipped line and the verdict line say so.
+    let note = (played.verdict_note()).map_or(String::new(), |note| format!("; {note}"));
     if !skips.is_empty() {
-        report.line(&format!("skipped {}: no gate result", skips.join(" ")));
+        report.line(&format!(
+            "skipped {}: no gate result{note}",
+            skips.join(" ")
+        ));
     }
     let gaps = counted("gap_");
     if !gaps.is_empty() {
@@ -401,16 +408,16 @@ fn run<B: Backend>(
     match ended {
         Ok(()) if differing_ids > 0 => {
             report.line(&format!(
-                "error ids: {differing_ids} objects' gpuResourceID differ from the recording's"
+                "error ids: {differing_ids} objects' gpuResourceID differ from the recording's{note}"
             ));
             1
         }
         Ok(()) => {
-            report.line("ok");
+            report.line(&format!("ok{note}"));
             0
         }
         Err(error) => {
-            report.line(&format!("error {error}"));
+            report.line(&format!("error {error}{note}"));
             match error {
                 PlayError::Stream(_) => 2,
                 _ => 1,

@@ -3,9 +3,11 @@
 //! in (`places`) and every texture and sampler index, granted at the start. A block of the stream
 //! is a block of the runtime, and a heap is a block of its own. What the runtime does not build
 //! yet is skipped and counted, never stood in for (`Skips`): the render pipeline states, render
-//! encoders and draws it does not build (`render`), and the blit commands it lacks; a dispatch,
-//! draw or blit that names a skipped object is skipped too. A play with any skip is no gate
-//! result. A selector, an argument or a descriptor key this module does not name is refused.
+//! encoders, draws and other render commands it does not build (`render`), and the blit commands
+//! it lacks; a dispatch, draw or blit that names a skipped object is skipped too. A dispatch is
+//! never skipped otherwise. A play with any skip is no gate result past the first
+//! (`Report::first_skip`). A selector, an argument or a descriptor key this module does not name
+//! is refused.
 
 mod encoders;
 pub(super) mod places;
@@ -21,7 +23,7 @@ use super::value::Value;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions};
 use metal2vulkan_rt as rt;
 use places::{class_index, Place, Places};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -42,6 +44,9 @@ struct Skips {
     /// Draws whose pipeline state, or a buffer or texture bound to either stage, is a skipped
     /// object.
     draws: u64,
+    /// Render commands the runtime answers with a typed gap (a draw it does not build), by the
+    /// gap: how many, and the frame and call of the first.
+    render_commands: BTreeMap<String, (u64, u64, u64)>,
     /// Blit commands that name a skipped object.
     blits: u64,
     /// Pieces of the host's copies from the guest's RAM that the play cannot copy: a piece not of
@@ -58,6 +63,51 @@ struct Skips {
     /// The skipped objects whose `gpuResourceID` the player asked: nothing in the play reads
     /// their IDs, so none is compared.
     resource_ids: u64,
+}
+
+impl Skips {
+    /// The render commands skipped, of every gap.
+    fn render_command_count(&self) -> u64 {
+        self.render_commands
+            .values()
+            .map(|&(count, ..)| count)
+            .sum()
+    }
+
+    /// Everything skipped, in one count (`Backend::skips`).
+    fn total(&self) -> u64 {
+        let Skips {
+            encoders,
+            objects,
+            render_states,
+            first_render_state: _,
+            dispatches,
+            draws,
+            render_commands: _,
+            blits,
+            guest_ram_writes,
+            guest_ram_reads,
+            texture_syncs,
+            mipmaps,
+            calls,
+            resource_ids,
+        } = self;
+        let counted = [
+            encoders,
+            objects,
+            render_states,
+            dispatches,
+            draws,
+            blits,
+            guest_ram_writes,
+            guest_ram_reads,
+            texture_syncs,
+            mipmaps,
+            calls,
+            resource_ids,
+        ];
+        counted.into_iter().sum::<u64>() + self.render_command_count()
+    }
 }
 
 /// Textures the play made in place of what the runtime cannot make: an ordinary texture of the
@@ -161,6 +211,8 @@ pub struct NewRuntime {
     /// The commits that have completed, every earlier one with them.
     completed: u64,
     skips: Skips,
+    /// The frame and the stream position of the call being played (`Backend::locate`).
+    at: (u64, u64),
     substitutes: Substitutes,
     /// Each open encoder's command buffer.
     owners: HashMap<u64, u64>,
@@ -412,6 +464,7 @@ impl NewRuntime {
             in_flight: VecDeque::new(),
             completed: 0,
             skips: Skips::default(),
+            at: (0, 0),
             substitutes: Substitutes::default(),
             owners: HashMap::new(),
             managed: None,
@@ -1752,6 +1805,7 @@ impl Backend for NewRuntime {
             ("skipped_render_states", self.skips.render_states),
             ("skipped_dispatches", self.skips.dispatches),
             ("skipped_draws", self.skips.draws),
+            ("skipped_render_commands", self.skips.render_command_count()),
             ("skipped_blits", self.skips.blits),
             ("staged_guest_ram_bytes", self.staged_bytes),
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
@@ -1834,11 +1888,24 @@ impl Backend for NewRuntime {
                 self.skips.render_states
             ));
         }
+        for (gap, (count, frame, at)) in &self.skips.render_commands {
+            lines.push(format!(
+                "skipped render commands {gap} {count}, the first at frame {frame}, call {at}"
+            ));
+        }
         if self.managed == Some(ManagedCopies::Two) && self.device.has_unified_memory() {
             lines.push(self.seconds.line());
         }
         lines.push(self.unwritten.line());
         lines
+    }
+
+    fn skips(&self) -> u64 {
+        self.skips.total()
+    }
+
+    fn locate(&mut self, frame: u64, call: u64) {
+        self.at = (frame, call);
     }
 
     fn recorded_unified_memory(&mut self, unified: bool) {

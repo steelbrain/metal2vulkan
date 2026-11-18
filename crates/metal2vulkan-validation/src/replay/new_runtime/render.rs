@@ -4,8 +4,10 @@
 //! with a typed gap or the translator refuses (`render_states`); a render encoder whose pass the
 //! runtime's descriptor cannot hold (a resolve texture, a depth plane, store action options, a
 //! visibility result buffer, layered or tile rendering, a skipped texture) or that it answers with
-//! a typed gap (`encoders`); and a draw whose pipeline state, or a buffer or texture bound to
-//! either stage, is a skipped object (`draws`).
+//! a typed gap (`encoders`); a draw whose pipeline state, or a buffer or texture bound to either
+//! stage, is a skipped object (`draws`); and a render command the runtime answers with a typed
+//! gap, a draw it does not build among them (`render_commands`, by the gap, with the first frame
+//! and call of each).
 
 use super::super::args::{arg, data, index, list, metal, refuse, uint, Fields};
 use super::super::translator::{self, attachment_keys, LINKED_KEYS, PASS_KEYS};
@@ -604,7 +606,17 @@ impl NewRuntime {
             }
             _ => return Err(refuse(call, "not played on a render encoder")),
         };
-        result.map_err(failed(call))
+        match result {
+            // A command the runtime does not build: skipped and counted, as a render state it
+            // does not build is.
+            Err(rt::Error::Unsupported(gap)) => {
+                let (frame, at) = self.at;
+                let kind = self.skips.render_commands.entry(format!("{gap:?}"));
+                kind.or_insert((0, frame, at)).0 += 1;
+                Ok(())
+            }
+            result => result.map_err(failed(call)),
+        }
     }
 
     /// Whether the render encoder `id`'s draw is skipped, counted: its pipeline state or a bound

@@ -310,12 +310,20 @@ struct Kept {
     unified: Option<bool>,
     /// The textures it says are Managed; it says every other one is not.
     managed: Vec<u64>,
+    /// Whether it skips every draw, and the draws it skipped.
+    skips_draws: bool,
+    skipped: u64,
+    /// The frame and position of each call it was told it plays next.
+    located: Vec<(u64, u64)>,
 }
 
 impl Backend for Kept {
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         self.calls.push(call.to_string());
         self.args.push(call.args.clone());
+        if self.skips_draws && call.selector.starts_with("draw") {
+            self.skipped += 1;
+        }
         let mut made = Made::default();
         match &*call.selector {
             "m2v.newBlockWithLength:storageMode:"
@@ -423,6 +431,14 @@ impl Backend for Kept {
 
     fn managed_texture(&self, texture: u64) -> Option<bool> {
         Some(self.managed.contains(&texture))
+    }
+
+    fn skips(&self) -> u64 {
+        self.skipped
+    }
+
+    fn locate(&mut self, frame: u64, call: u64) {
+        self.located.push((frame, call));
     }
 }
 
@@ -822,6 +838,44 @@ fn frames_releases_and_splits() {
         ["#1 release", "#2 release", "#3 release", "#4 release"]
     );
     assert!(kept.calls.contains(&"#4 = #2 commandBuffer".to_string()));
+}
+
+/// A draw the backend skips is counted, and the play is no verdict past the first: the frame and
+/// stream position of the call at which the backend's skips first grew, which it was told before
+/// it played that call. A play with no skip has no such point.
+#[test]
+fn a_skipped_draw_ends_the_verdict_at_its_frame_and_call() {
+    let mut kept = Kept {
+        skips_draws: true,
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        w.call("commandBuffer", 2, 3, &[], &[])?;
+        w.call("MTLRenderPassDescriptor.new", 0, 4, &[], &[])?;
+        let pass = [Value::Object(4)];
+        w.call("renderCommandEncoderWithDescriptor:", 3, 5, &pass, &[])?;
+        // MTLPrimitiveTypeTriangle, from vertex 0, three vertices: calls 6 and 7.
+        let draw = [Value::Uint(3), Value::Uint(0), Value::Uint(3)];
+        w.call("drawPrimitives:vertexStart:vertexCount:", 5, 0, &draw, &[])?;
+        w.call("drawPrimitives:vertexStart:vertexCount:", 5, 0, &draw, &[])?;
+        w.call("endEncoding", 5, 0, &[], &[])?;
+        w.call("commit", 3, 0, &[], &[])
+    });
+    ended.unwrap();
+    assert_eq!(kept.skipped, 2);
+    assert!(kept.located.contains(&(1, 6)), "{:?}", kept.located);
+    assert_eq!(report.first_skip, Some((1, 6)));
+    let note = report.verdict_note();
+    assert_eq!(note.as_deref(), Some("not a verdict past frame 1, call 6"));
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])
+    });
+    ended.unwrap();
+    assert_eq!((report.first_skip, report.verdict_note()), (None, None));
 }
 
 /// What a stream fixes, apart from what the runtime executed: its calls played, its commits, the

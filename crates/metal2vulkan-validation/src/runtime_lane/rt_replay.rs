@@ -5,6 +5,8 @@
 //! - A draw of a render pipeline state, its vertices in buffers bound to the vertex stage, covers
 //!   a pass's target that its setter records clear to red: a blit copies the target to a buffer,
 //!   which the stream checks green, and nothing is skipped.
+//! - A draw of points after it, which the runtime does not build, is skipped and counted, and the
+//!   report says the play is no verdict past it: its gap, frame and call.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -59,17 +61,19 @@ fn written(
     path
 }
 
-/// `path` played on the new runtime's device, its report printed; the play's end unwrapped.
-fn play(test: &str, path: &Path) -> Report {
+/// `path` played on the new runtime's device, its report and the backend's lines printed; the
+/// play's end unwrapped.
+fn play(test: &str, path: &Path) -> (Report, Vec<String>) {
     let cache = ScratchCache::new().unwrap();
     let mut backend = NewRuntime::new(rt_device(cache.path())).unwrap();
     let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
     let (report, ended) = Player::new(&mut backend).play(&mut reader);
-    for line in report.lines().into_iter().chain(backend.lines()) {
+    let lines = backend.lines();
+    for line in report.lines().iter().chain(&lines) {
         eprintln!("REPLAY {test} {line}");
     }
     ended.unwrap();
-    report
+    (report, lines)
 }
 
 /// A recorder struct's map of unsigned fields.
@@ -123,12 +127,11 @@ fn render_library(dir: &ScratchDir) -> Vec<u8> {
     ])
 }
 
-#[test]
-fn a_draw_into_a_pass_plays_on_the_new_runtime() {
-    let dir = ScratchDir::new("rt-replay-draw").unwrap();
-    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
-    let path = written(&dir, |w| {
-        let library = w.blob(&render_library(&dir))?;
+/// A stream of a draw into a pass, its target copied to a buffer that the stream checks green
+/// (`green`); with `points`, a draw of points (call 19) after the draw.
+fn draw_into_a_pass(dir: &ScratchDir, green: &[u8], points: bool) -> PathBuf {
+    written(dir, |w| {
+        let library = w.blob(&render_library(dir))?;
         w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
         w.call("newCommandQueue", 1, 2, &[], &[])?;
         w.call(
@@ -200,6 +203,11 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
         // MTLPrimitiveTypeTriangle, from vertex 0, three vertices.
         let draw = [Value::Uint(3), Value::Uint(0), Value::Uint(3)];
         w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
+        if points {
+            // MTLPrimitiveTypePoint: call 19.
+            let draw = [Value::Uint(0), Value::Uint(0), Value::Uint(3)];
+            w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
+        }
         w.call("endEncoding", 13, 0, &[], &[])?;
         w.call("blitCommandEncoder", 12, 14, &[], &[])?;
         let copy = [
@@ -219,10 +227,17 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
         w.call("endEncoding", 14, 0, &[], &[])?;
         w.call("commit", 12, 0, &[], &[])?;
         w.call(WAIT_COMPLETED, 12, 0, &[], &[])?;
-        let sum = Value::List(vec![Value::Bytes(Sha256::digest(&green).to_vec())]);
+        let sum = Value::List(vec![Value::Bytes(Sha256::digest(green).to_vec())]);
         w.call("m2v.check", 0, 0, &[Value::Object(10)], &[("sha256", sum)])
-    });
-    let report = play("draw", &path);
+    })
+}
+
+#[test]
+fn a_draw_into_a_pass_plays_on_the_new_runtime() {
+    let dir = ScratchDir::new("rt-replay-draw").unwrap();
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let path = draw_into_a_pass(&dir, &green, false);
+    let (report, _) = play("draw", &path);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     let executed = &report.total.executed;
     for skipped in [
@@ -235,4 +250,21 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
         assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
     }
     assert!(executed["passes"] >= 1, "{executed:?}");
+    assert_eq!(report.first_skip, None);
+}
+
+#[test]
+fn a_draw_the_runtime_does_not_build_is_skipped_and_ends_the_verdict() {
+    let dir = ScratchDir::new("rt-replay-points").unwrap();
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let path = draw_into_a_pass(&dir, &green, true);
+    let (report, lines) = play("points", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let executed = &report.total.executed;
+    assert_eq!(executed["skipped_render_commands"], 1, "{executed:?}");
+    assert_eq!(report.first_skip, Some((0, 19)));
+    let note = report.verdict_note();
+    assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 19"));
+    let line = "skipped render commands Draw(Points) 1, the first at frame 0, call 19";
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
 }

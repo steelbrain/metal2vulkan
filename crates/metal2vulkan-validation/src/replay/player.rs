@@ -108,6 +108,17 @@ pub trait Backend {
     /// (`Report::unsnapshotted`).
     fn snapshots(&self) -> bool;
 
+    /// What the backend skipped so far, of every kind, in one count: the player notes the frame
+    /// and call where it first grows (`Report::first_skip`). A backend that skips nothing answers
+    /// 0.
+    fn skips(&self) -> u64 {
+        0
+    }
+
+    /// The frame (counted from 0) and the stream position of the call the player plays next, for
+    /// a backend that says where it skipped something.
+    fn locate(&mut self, _frame: u64, _call: u64) {}
+
     /// The recording device's `hasUnifiedMemory`, from the stream's `m2v.deviceIdentity` record:
     /// how it kept Managed buffers. A backend with one form of Managed buffer ignores it.
     fn recorded_unified_memory(&mut self, _unified: bool) {}
@@ -242,6 +253,9 @@ pub struct Report {
     /// The recorded devices other than the one the guest makes its objects on, whose identity
     /// records the play takes nothing from (`Player::guest_device`).
     pub other_devices: Vec<u64>,
+    /// The frame and the call (its position in the stream) where the backend first skipped
+    /// something (`Backend::skips`): the play is no verdict past it.
+    pub first_skip: Option<(u64, u64)>,
 }
 
 /// The CPU's writes into Managed textures (`replaceRegion:...` and any other call on a texture
@@ -482,6 +496,13 @@ fn counted(counts: &Counts) -> String {
 }
 
 impl Report {
+    /// What a verdict line adds where the backend skipped something: past the first skip, the
+    /// play is no verdict.
+    pub fn verdict_note(&self) -> Option<String> {
+        let (frame, call) = self.first_skip?;
+        Some(format!("not a verdict past frame {frame}, call {call}"))
+    }
+
     /// The report's lines (`docs/REPLAY-STREAM.md`, section 10).
     pub fn lines(&self) -> Vec<String> {
         let mut lines = self.lines_but_frames();
@@ -1056,6 +1077,8 @@ impl<'b, B: Backend> Player<'b, B> {
                 break;
             };
             let issued = self.issued(&call);
+            let (frame, skips) = (self.report.frames.len() as u64, self.backend.skips());
+            self.backend.locate(frame, self.position);
             match self.ahead.remove(&self.position) {
                 Some(ranges) if self.snapshots && self.backend.snapshots() => {
                     self.split(stream, call, ranges, left_out)?
@@ -1065,6 +1088,9 @@ impl<'b, B: Backend> Player<'b, B> {
                     self.step(stream, call, left_out)?
                 }
                 None => self.step(stream, call, left_out)?,
+            }
+            if self.report.first_skip.is_none() && self.backend.skips() > skips {
+                self.report.first_skip = Some((frame, self.position));
             }
             self.position += 1;
             for key in [Some(CALLS), issued].into_iter().flatten() {
