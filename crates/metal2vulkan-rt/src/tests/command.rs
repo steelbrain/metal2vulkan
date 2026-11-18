@@ -959,16 +959,34 @@ pub(crate) mod on_device {
         command_buffer
     }
 
+    /// [`busy`], returned once its submission is counted, so each busy one is a submission of its
+    /// own: committed after the one before it was submitted, it cannot join that one's group. A
+    /// submit thread that wakes late (a loaded host) otherwise takes two commits into one group;
+    /// the queue then has a submission fewer in flight than the test counts, holds nothing behind
+    /// them, and what the test waits for behind a held group never comes.
+    fn busy_alone(
+        name: &str,
+        device: &Device,
+        queue: &CommandQueue,
+        buffer: &Buffer,
+        fills: u32,
+    ) -> CommandBuffer {
+        let before = device.counters().metrics().submissions;
+        let command_buffer = busy(queue, buffer, fills);
+        within(name, || device.counters().metrics().submissions > before);
+        command_buffer
+    }
+
     /// The submissions a queue keeps in flight before it holds a group ([`IN_FLIGHT`]).
     const AHEAD: u64 = IN_FLIGHT as u64;
 
     /// Runs `body` with as many command buffers of busy work committed on `queue` as a queue
-    /// keeps in flight ([`IN_FLIGHT`]), so its next commit is held, each of more fills each time,
-    /// until `body` answers that it checked what it holds while they ran: that the work did not
-    /// end first. `body` takes the busy ones, the submissions counted before them, and the
-    /// progress the completion thread had seen before them (`Done::completed`): every earlier
-    /// command buffer's, so the progress stays there until it sees a busy one complete, and a held
-    /// group goes no earlier than that.
+    /// keeps in flight ([`IN_FLIGHT`]), each a submission of its own ([`busy_alone`]), so its next
+    /// commit is held, each of more fills each time, until `body` answers that it checked what it
+    /// holds while they ran: that the work did not end first. `body` takes the busy ones, the
+    /// submissions counted before them, and the progress the completion thread had seen before
+    /// them (`Done::completed`): every earlier command buffer's, so the progress stays there until
+    /// it sees a busy one complete, and a held group goes no earlier than that.
     fn behind_busy(
         name: &str,
         device: &Device,
@@ -980,7 +998,7 @@ pub(crate) mod on_device {
             let before = device.counters().metrics().submissions;
             let seen = device.core().done.completed();
             let running: Vec<CommandBuffer> = (0..IN_FLIGHT)
-                .map(|_| busy(queue, &buffer, fills))
+                .map(|_| busy_alone(name, device, queue, &buffer, fills))
                 .collect();
             let checked = body(&running, before, seen);
             for command_buffer in &running {
@@ -1010,7 +1028,9 @@ pub(crate) mod on_device {
                 let before = device.counters().metrics();
                 let running: Vec<CommandBuffer> = [&first, &second]
                     .into_iter()
-                    .flat_map(|queue| (0..IN_FLIGHT).map(|_| busy(queue, &work, fills)))
+                    .flat_map(|queue| {
+                        (0..IN_FLIGHT).map(|_| busy_alone(name, &device, queue, &work, fills))
+                    })
                     .collect();
                 let held = [
                     queue_fill(&first, &buffer, 1),
@@ -1131,7 +1151,10 @@ pub(crate) mod on_device {
             let submissions = || device.counters().metrics().submissions;
             let checked = [16, 64, 256, 1024].into_iter().any(|fills| {
                 let before = submissions();
-                let running = [busy(&queue, &work, fills), busy(&queue, &work, fills)];
+                let running = [
+                    busy_alone(name, &device, &queue, &work, fills),
+                    busy_alone(name, &device, &queue, &work, fills),
+                ];
                 let alone = queue_fill(&queue, &buffer, 1);
                 within(name, || submissions() == before + 3);
                 let held = queue_fill(&queue, &buffer, 2);
