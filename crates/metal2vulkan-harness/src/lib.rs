@@ -4,7 +4,7 @@
 //! measure against native Metal.
 //!
 //! The traits below are the Metal compute subset the workloads call, one method per Metal call,
-//! with the blit encoder's copies and fill.
+//! with the blit encoder's copies and fill and a render encoder's draws of triangles.
 //! A runtime implements them once: the old runtime in [`old`], which the cutover deletes with its
 //! file, and the new runtime in [`rt`]. A workload a runtime answers with a typed refusal (a
 //! known gap or a device limit, [`Refused`]) is reported by name as refused, not as a failure.
@@ -16,7 +16,9 @@
 //! the `burst_` workloads bursts of 160 and 2,000, and `long_4cb` four long command buffers.
 //! `constant_managed` reads a `Managed` table of constants whose first 256 bytes the CPU writes
 //! again before each run (`plan::BufferPlan::modified`), and `constant_private` the same reads
-//! from a `Private` table, its reference.
+//! from a `Private` table, its reference. `draw_full` and `draw_2000` are draws of the render
+//! library's `colored_vertex` and `colored_fragment` (`plan::Grid::Draw`) in one pass: 64 that
+//! each cover a 512 by 512 target, and 2,000 that each cover a 16 by 16 one.
 //! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
 //! workloads ([`authored`]) are MSL kernels committed as public fixtures
 //! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
@@ -283,6 +285,8 @@ pub trait ComputeDevice: Device {
     type SamplerState;
     /// `MTLRenderPipelineState`.
     type RenderPipelineState;
+    /// `MTLRenderCommandEncoder`.
+    type RenderCommandEncoder: RenderCommandEncoder<Self>;
 
     /// `newLibraryWithData:error:` of a metallib; of AIR bitcode, the translator's library.
     fn new_library(&self, code: Code<'_>) -> Result<Self::Library>;
@@ -366,6 +370,10 @@ pub trait CommandBuffer<D: ComputeDevice> {
     /// `blitCommandEncoder`.
     fn blit_command_encoder(&self) -> Result<D::BlitCommandEncoder>;
 
+    /// `renderCommandEncoderWithDescriptor:` of one colour attachment: level 0 of `target`,
+    /// cleared to zero as the pass starts and stored as it ends.
+    fn render_command_encoder(&self, target: &D::Texture) -> Result<D::RenderCommandEncoder>;
+
     /// `commit`.
     fn commit(&self) -> Result<()>;
 
@@ -426,6 +434,21 @@ pub trait BlitCommandEncoder<D: ComputeDevice> {
 
     /// `synchronizeResource:` of a buffer.
     fn synchronize_resource(&mut self, buffer: &D::Buffer) -> Result<()>;
+
+    /// `endEncoding`.
+    fn end_encoding(self) -> Result<()>;
+}
+
+/// `MTLRenderCommandEncoder`.
+pub trait RenderCommandEncoder<D: ComputeDevice> {
+    /// `setRenderPipelineState:`.
+    fn set_render_pipeline_state(&mut self, state: &D::RenderPipelineState) -> Result<()>;
+
+    /// `setVertexBuffer:offset:atIndex:`.
+    fn set_vertex_buffer(&mut self, buffer: &D::Buffer, offset: u64, index: u32) -> Result<()>;
+
+    /// `drawPrimitives:vertexStart:vertexCount:` of triangles.
+    fn draw_triangles(&mut self, vertex_start: u32, vertex_count: u32) -> Result<()>;
 
     /// `endEncoding`.
     fn end_encoding(self) -> Result<()>;

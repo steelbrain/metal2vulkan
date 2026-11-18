@@ -92,6 +92,9 @@ impl Scaled {
 pub enum Source {
     /// The authored workloads' library (`crate::authored`).
     Authored,
+    /// The render library (`crate::authored::render_library_air`): `colored_vertex` and
+    /// `colored_fragment`.
+    Render,
     /// A metallib file.
     Metallib(PathBuf),
 }
@@ -657,7 +660,7 @@ pub enum Binding {
     },
 }
 
-/// A dispatch call.
+/// A dispatch call, or a draw.
 #[derive(Clone, Copy, Debug)]
 pub enum Grid {
     /// `dispatchThreadgroups:threadsPerThreadgroup:`.
@@ -673,6 +676,20 @@ pub enum Grid {
         threads: Size,
         /// Threads per threadgroup.
         per_group: Size,
+    },
+    /// `drawPrimitives:vertexStart:vertexCount:` of triangles from vertex 0, in a render encoder
+    /// whose one colour attachment is the plan's texture `target`, cleared to zero as the pass
+    /// starts: consecutive draws into one target share one pass. The step's function is the
+    /// vertex function, its render pipeline state `fragment`'s too, drawing into `target`'s
+    /// format with Metal's defaults otherwise; its bindings are the vertex function's buffers
+    /// (`setVertexBuffer:offset:atIndex:`), and a draw binds nothing else.
+    Draw {
+        /// The fragment function's name in the plan's library.
+        fragment: &'static str,
+        /// The plan's texture it draws into, of `RenderTarget` usage.
+        target: usize,
+        /// Its vertices.
+        vertex_count: u32,
     },
 }
 
@@ -858,6 +875,26 @@ impl Plan {
         }
         let known = |buffer: usize| buffer < self.buffers.len();
         for (i, dispatch) in self.dispatches.iter().enumerate() {
+            if let Grid::Draw { target, .. } = dispatch.grid {
+                let renders = (self.textures.get(target))
+                    .is_some_and(|t| t.usage.contains(TextureUsage::RENDER_TARGET));
+                if !renders {
+                    return Err(format!(
+                        "{name}: dispatch {i} draws into texture {target}, which the plan lacks \
+                         or made without RenderTarget usage"
+                    )
+                    .into());
+                }
+                let buffers_only = (dispatch.bindings.iter())
+                    .all(|binding| matches!(binding, Binding::Buffer { .. }));
+                if !dispatch.blits.is_empty() || !buffers_only {
+                    return Err(format!(
+                        "{name}: dispatch {i} is a draw, which binds vertex buffers alone and \
+                         takes no blit"
+                    )
+                    .into());
+                }
+            }
             for blit in &dispatch.blits {
                 if let Some(problem) = blit.problem(&self.buffers, &self.textures) {
                     return Err(format!("{name}: dispatch {i}'s blit: {problem}").into());

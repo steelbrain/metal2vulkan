@@ -426,6 +426,8 @@ pub struct Harness<D: ComputeDevice> {
     /// ([`Plan::moves_texels`]), so a session that runs none makes no more pipelines than before.
     texels: Option<[D::ComputePipelineState; 2]>,
     authored: D::Library,
+    /// The render library, made for the first plan that names it.
+    render: Option<D::Library>,
     metallibs: HashMap<PathBuf, D::Library>,
     device: D,
 }
@@ -437,7 +439,10 @@ struct Made<D: ComputeDevice> {
     /// A sampler state for each descriptor the plan's bindings name.
     samplers: Vec<(SamplerPlan, D::SamplerState)>,
     states: Vec<D::ComputePipelineState>,
-    /// The index in `states` of each dispatch's.
+    /// The render pipeline state of each vertex function, fragment function and target the
+    /// plan's draws name.
+    render_states: Vec<D::RenderPipelineState>,
+    /// The index in `states` of each dispatch's, or in `render_states` of each draw's.
     state_of: Vec<usize>,
 }
 
@@ -453,6 +458,7 @@ impl<D: ComputeDevice> Harness<D> {
             copy,
             texels: None,
             authored,
+            render: None,
             metallibs: HashMap::new(),
             device,
         })
@@ -477,8 +483,13 @@ impl<D: ComputeDevice> Harness<D> {
         Ok((wait_run::<D>(&before)?, encoded))
     }
 
-    /// Makes the library `source` names, where it is a metallib no plan named before.
+    /// Makes the library `source` names, where it is the render library or a metallib no plan
+    /// named before.
     fn load(&mut self, source: &Source) -> Result<()> {
+        if *source == Source::Render && self.render.is_none() {
+            let air = crate::authored::render_library_air()?;
+            self.render = Some(self.device.new_library(Code::Air(&air))?);
+        }
         if let Source::Metallib(path) = source {
             if !self.metallibs.contains_key(path) {
                 let bytes =
@@ -494,6 +505,7 @@ impl<D: ComputeDevice> Harness<D> {
     fn library(&self, source: &Source) -> &D::Library {
         match source {
             Source::Authored => &self.authored,
+            Source::Render => (self.render.as_ref()).expect("`load` made the render library"),
             Source::Metallib(path) => &self.metallibs[path],
         }
     }
@@ -530,8 +542,32 @@ impl<D: ComputeDevice> Harness<D> {
         // Each function with its constants' values and its linked functions, made once.
         let mut functions: Vec<(&str, &[Constant], &[String])> = Vec::new();
         let mut states = Vec::new();
+        let mut renders: Vec<(&str, &str, usize)> = Vec::new();
+        let mut render_states = Vec::new();
         let mut state_of = Vec::with_capacity(plan.dispatches.len());
         for dispatch in &plan.dispatches {
+            if let Grid::Draw {
+                fragment, target, ..
+            } = dispatch.grid
+            {
+                let key = (dispatch.function.as_str(), fragment, target);
+                let at = match renders.iter().position(|known| *known == key) {
+                    Some(at) => at,
+                    None => {
+                        let vertex = library.new_function(key.0, &dispatch.constants)?;
+                        let fragment = library.new_function(fragment, &dispatch.constants)?;
+                        let format = plan.textures[target].pixel_format;
+                        render_states.push(
+                            self.device
+                                .new_render_pipeline_state(&vertex, &fragment, format)?,
+                        );
+                        renders.push(key);
+                        renders.len() - 1
+                    }
+                };
+                state_of.push(at);
+                continue;
+            }
             let key = (
                 dispatch.function.as_str(),
                 dispatch.constants.as_slice(),
@@ -562,6 +598,7 @@ impl<D: ComputeDevice> Harness<D> {
             textures,
             samplers,
             states,
+            render_states,
             state_of,
         })
     }
@@ -618,8 +655,55 @@ impl<D: ComputeDevice> Harness<D> {
     ) -> Result<()> {
         let mut open: Option<D::ComputeCommandEncoder> = None;
         let mut current = None;
+        // The open render encoder, its target and its pipeline state.
+        let mut pass: Option<(D::RenderCommandEncoder, usize, Option<usize>)> = None;
         let states = &made.state_of[range.clone()];
         for (dispatch, &state) in plan.dispatches[range].iter().zip(states) {
+            if let Grid::Draw {
+                target,
+                vertex_count,
+                ..
+            } = dispatch.grid
+            {
+                if let Some(encoder) = open.take() {
+                    encoder.end_encoding()?;
+                }
+                current = None;
+                if let Some((encoder, _, _)) = pass.take_if(|(_, into, _)| *into != target) {
+                    encoder.end_encoding()?;
+                }
+                let (encoder, _, bound) = match pass {
+                    Some(ref mut pass) => pass,
+                    None => {
+                        let texture = made.textures.get(target);
+                        let texture = texture.ok_or("a texture the plan names is unmade")?;
+                        pass.insert((
+                            command_buffer.render_command_encoder(texture)?,
+                            target,
+                            None,
+                        ))
+                    }
+                };
+                if *bound != Some(state) {
+                    encoder.set_render_pipeline_state(&made.render_states[state])?;
+                    *bound = Some(state);
+                }
+                for binding in &dispatch.bindings {
+                    if let Binding::Buffer {
+                        index,
+                        buffer,
+                        offset,
+                    } = binding
+                    {
+                        encoder.set_vertex_buffer(&made.buffers[*buffer], *offset, *index)?;
+                    }
+                }
+                encoder.draw_triangles(0, vertex_count)?;
+                continue;
+            }
+            if let Some((encoder, _, _)) = pass.take() {
+                encoder.end_encoding()?;
+            }
             if !dispatch.blits.is_empty() {
                 if let Some(encoder) = open.take() {
                     encoder.end_encoding()?;
@@ -695,7 +779,11 @@ impl<D: ComputeDevice> Harness<D> {
                 Grid::Threads { threads, per_group } => {
                     encoder.dispatch_threads(threads, per_group)?
                 }
+                Grid::Draw { .. } => unreachable!("a draw is recorded above"),
             }
+        }
+        if let Some((encoder, _, _)) = pass {
+            encoder.end_encoding()?;
         }
         match open {
             Some(encoder) => encoder.end_encoding(),

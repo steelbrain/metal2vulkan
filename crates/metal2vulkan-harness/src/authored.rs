@@ -7,7 +7,7 @@ use crate::plan::{
     SamplerPlan, Scaled, Source, TextureExpect, TexturePlan, Values,
 };
 use crate::{Result, Storage};
-use metal2vulkan::metal::PixelFormat;
+use metal2vulkan::metal::{PixelFormat, TextureUsage};
 use std::ops::Range;
 
 /// An authored workload: its name, and the builder of its plan. A plan holds its inputs and
@@ -21,7 +21,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 23] = [
+pub const WORKLOADS: [Workload; 25] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -113,6 +113,14 @@ pub const WORKLOADS: [Workload; 23] = [
     Workload {
         name: "texture_read",
         plan: texture_read,
+    },
+    Workload {
+        name: "draw_full",
+        plan: draw_full,
+    },
+    Workload {
+        name: "draw_2000",
+        plan: draw_2000,
     },
 ];
 
@@ -210,6 +218,69 @@ fn assemble(file: &str) -> Result<Vec<u8>> {
     let ll = metal2vulkan_devtools::fixtures_dir().join(file);
     metal2vulkan_devtools::llvm_assemble(&ll)
         .map_err(|why| format!("llvm-as {}: {why:?}", ll.display()).into())
+}
+
+/// Fill-bound draws: 64 in one pass, each a triangle over the whole of a 512 by 512 target.
+fn draw_full() -> Plan {
+    draws("draw_full", 512, 64)
+}
+
+/// Draw-bound draws: 2,000 in one pass, each a triangle over the whole of a 16 by 16 target, so
+/// each draw's own cost leads.
+fn draw_2000() -> Plan {
+    draws("draw_2000", 16, 2000)
+}
+
+/// `count` draws in one pass into a `side` by `side` `RGBA16Float` target, each of
+/// `colored_vertex` and `colored_fragment` of the render library over one triangle that covers
+/// the target, flat green: the target's every texel is green after the first run. The first
+/// draw binds the vertex function's positions (buffer 0) and colours (buffer 1), which stay
+/// bound for the rest, as Metal's bindings do.
+fn draws(name: &str, side: u32, count: usize) -> Plan {
+    const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+    let mut positions = vec![-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+    positions.resize(8, 0.0);
+    let colors = [GREEN; 3].concat();
+    let mut target = TexturePlan::rgba16_float(side, side, None);
+    target.usage |= TextureUsage::RENDER_TARGET;
+    let draw = |bindings| Dispatch {
+        blits: Vec::new(),
+        function: "colored_vertex".to_owned(),
+        linked: Vec::new(),
+        constants: Vec::new(),
+        bindings,
+        grid: Grid::Draw {
+            fragment: "colored_fragment",
+            target: 0,
+            vertex_count: 3,
+        },
+    };
+    let mut dispatches = vec![draw(vec![buffer(0, 0), buffer(1, 1)])];
+    dispatches.resize_with(count, || draw(Vec::new()));
+    let texels = side as usize * side as usize;
+    Plan {
+        name: name.to_owned(),
+        library: Source::Render,
+        buffers: vec![
+            private(float_bytes(&positions)),
+            private(float_bytes(&colors)),
+        ],
+        dispatches,
+        expect: Vec::new(),
+        textures: vec![target],
+        expect_textures: vec![TextureExpect {
+            texture: 0,
+            values: Values::Floats {
+                values: GREEN.repeat(texels),
+                tolerance: 0.0,
+            },
+        }],
+        outputs: Vec::new(),
+        per_command_buffer: None,
+        per_encoder: None,
+        commit_to_complete: false,
+        scaled: None,
+    }
 }
 
 /// Bandwidth-bound: 64 MiB of `float4`s read and 64 MiB written, `x * 2 + 1` each

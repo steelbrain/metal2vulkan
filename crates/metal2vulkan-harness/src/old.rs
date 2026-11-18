@@ -101,6 +101,7 @@ impl crate::ComputeDevice for runtime::Device {
     type Texture = Texture;
     type SamplerState = runtime::SamplerState;
     type RenderPipelineState = runtime::RenderPipelineState;
+    type RenderCommandEncoder = runtime::RenderCommandEncoder;
 
     fn new_library(&self, code: Code<'_>) -> Result<runtime::Library> {
         match code {
@@ -301,6 +302,16 @@ impl crate::CommandBuffer<runtime::Device> for runtime::CommandBuffer {
         Ok(runtime::CommandBuffer::blit_command_encoder(self)?)
     }
 
+    fn render_command_encoder(&self, target: &Texture) -> Result<runtime::RenderCommandEncoder> {
+        let mut d = runtime::RenderPassDescriptor::new();
+        let color = &mut d.color_attachments[0];
+        color.texture = Some(target.texture.clone());
+        color.load_action = runtime::LoadAction::Clear;
+        color.store_action = runtime::StoreAction::Store;
+        color.clear_color = runtime::ClearColor::new(0.0, 0.0, 0.0, 0.0);
+        Ok(runtime::CommandBuffer::render_command_encoder(self, &d)?)
+    }
+
     fn commit(&self) -> Result<()> {
         Ok(runtime::CommandBuffer::commit(self)?)
     }
@@ -421,6 +432,44 @@ impl crate::BlitCommandEncoder<runtime::Device> for runtime::BlitCommandEncoder 
 
     fn end_encoding(self) -> Result<()> {
         Ok(runtime::BlitCommandEncoder::end_encoding(self)?)
+    }
+}
+
+impl crate::RenderCommandEncoder<runtime::Device> for runtime::RenderCommandEncoder {
+    fn set_render_pipeline_state(&mut self, state: &runtime::RenderPipelineState) -> Result<()> {
+        Ok(runtime::RenderCommandEncoder::set_render_pipeline_state(
+            self, state,
+        )?)
+    }
+
+    fn set_vertex_buffer(
+        &mut self,
+        buffer: &runtime::Buffer,
+        offset: u64,
+        index: u32,
+    ) -> Result<()> {
+        Ok(runtime::RenderCommandEncoder::set_vertex_buffer(
+            self,
+            Some(buffer),
+            offset,
+            index,
+        )?)
+    }
+
+    fn draw_triangles(&mut self, vertex_start: u32, vertex_count: u32) -> Result<()> {
+        let triangle = metal2vulkan::metal::PrimitiveType::Triangle;
+        Ok(runtime::RenderCommandEncoder::draw_primitives(
+            self,
+            triangle,
+            vertex_start,
+            vertex_count,
+            1,
+            0,
+        )?)
+    }
+
+    fn end_encoding(self) -> Result<()> {
+        Ok(runtime::RenderCommandEncoder::end_encoding(self)?)
     }
 }
 

@@ -466,6 +466,7 @@ impl crate::ComputeDevice for Device {
     type Texture = rt::Texture;
     type SamplerState = rt::SamplerState;
     type RenderPipelineState = rt::RenderPipelineState;
+    type RenderCommandEncoder = rt::RenderCommandEncoder;
 
     fn new_library(&self, code: Code<'_>) -> Result<rt::Library> {
         Ok(match code {
@@ -624,6 +625,16 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
         rt::CommandBuffer::blit_command_encoder(self).map_err(error)
     }
 
+    fn render_command_encoder(&self, target: &rt::Texture) -> Result<rt::RenderCommandEncoder> {
+        let mut d = rt::RenderPassDescriptor::default();
+        let color = &mut d.color_attachments[0];
+        color.texture = Some(target.clone());
+        color.load_action = rt::LoadAction::Clear;
+        color.store_action = rt::StoreAction::Store;
+        color.clear_color = rt::ClearColor::new(0.0, 0.0, 0.0, 0.0);
+        rt::CommandBuffer::render_command_encoder(self, &d).map_err(error)
+    }
+
     fn commit(&self) -> Result<()> {
         rt::CommandBuffer::commit(self).map_err(error)
     }
@@ -741,6 +752,28 @@ impl crate::BlitCommandEncoder<Device> for rt::BlitCommandEncoder {
 
     fn end_encoding(self) -> Result<()> {
         rt::BlitCommandEncoder::end_encoding(self);
+        Ok(())
+    }
+}
+
+impl crate::RenderCommandEncoder<Device> for rt::RenderCommandEncoder {
+    fn set_render_pipeline_state(&mut self, state: &rt::RenderPipelineState) -> Result<()> {
+        rt::RenderCommandEncoder::set_render_pipeline_state(self, state).map_err(error)
+    }
+
+    fn set_vertex_buffer(&mut self, buffer: &Buffer, offset: u64, index: u32) -> Result<()> {
+        rt::RenderCommandEncoder::set_vertex_buffer(self, Some(&buffer.buffer), offset, index)
+            .map_err(error)
+    }
+
+    fn draw_triangles(&mut self, vertex_start: u32, vertex_count: u32) -> Result<()> {
+        let triangle = rt::PrimitiveType::Triangle;
+        rt::RenderCommandEncoder::draw_primitives(self, triangle, vertex_start, vertex_count, 1, 0)
+            .map_err(error)
+    }
+
+    fn end_encoding(self) -> Result<()> {
+        rt::RenderCommandEncoder::end_encoding(self);
         Ok(())
     }
 }

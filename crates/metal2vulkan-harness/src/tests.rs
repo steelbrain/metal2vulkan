@@ -12,6 +12,7 @@ use crate::run::{
     warm_up, zeroed, CreateReport, Report, Runs, Session,
 };
 use crate::{Buffer, Failed, Refused, Result, Storage, Waits};
+use metal2vulkan::metal::TextureUsage;
 use metal2vulkan_rt::{Error as RtError, Gap, Limit};
 use std::path::Path;
 use std::ptr::NonNull;
@@ -287,6 +288,29 @@ fn parts_cut_a_range_in_order_the_last_one_shorter() {
     assert_eq!(cut(10..20, Some(5)), [(10, 15), (15, 20)]);
     assert_eq!(cut(4..10, None), [(4, 10)]);
     assert_eq!(cut(3..4, Some(8)), [(3, 4)]);
+}
+
+/// A draw's target is a texture of the plan made with `RenderTarget` usage, and a draw binds
+/// vertex buffers alone.
+#[test]
+fn a_draw_needs_a_render_target_and_binds_buffers_alone() {
+    let plan = || {
+        (WORKLOADS
+            .iter()
+            .find(|w| w.name == "draw_2000")
+            .unwrap()
+            .plan)()
+    };
+    assert!(plan().validate().is_ok());
+    let mut plain = plan();
+    plain.textures[0].usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+    assert!(plain.validate().is_err());
+    let mut bound = plan();
+    bound.dispatches[1].bindings.push(Binding::Bytes {
+        index: 2,
+        bytes: vec![0; 16],
+    });
+    assert!(bound.validate().is_err());
 }
 
 /// Each authored plan is whole: its builder's inputs, kernels and references agree in shape.
