@@ -41,6 +41,28 @@ fragment half4 sampled_fragment(Varyings in [[stage_in]],
     return source.sample(linear, in.position.xy / 8.0);
 }
 
+// The new runtime's attachment reads: a draw that reads, through a texture, the attachment its
+// own pass renders. Each pixel the attachment's texel at the fragment's own pixel, plus the
+// draw's color.
+fragment float4 own_pixel_fragment(Varyings in [[stage_in]],
+                                   texture2d<float, access::read> target [[texture(0)]]) {
+    return target.read(uint2(in.position.xy)) + in.color;
+}
+
+// Each pixel the attachment's first texel, plus the draw's color: a read of another pixel.
+fragment float4 first_texel_fragment(Varyings in [[stage_in]],
+                                     texture2d<float, access::read> target [[texture(0)]]) {
+    return target.read(uint2(0, 0)) + in.color;
+}
+
+// Each pixel the texture's first level at the fragment's place in a 4-texel side, through a view
+// of every level while the pass renders the second.
+fragment float4 first_level_fragment(Varyings in [[stage_in]],
+                                     texture2d<float> chain [[texture(0)]]) {
+    constexpr sampler nearest(filter::nearest, mip_filter::nearest);
+    return chain.sample(nearest, in.position.xy / 4.0, level(0.0));
+}
+
 // heap_placement: each texel of `source` with its color channels inverted, into `destination`.
 kernel void invert_texels(texture2d<float, access::read> source [[texture(0)]],
                           texture2d<float, access::write> destination [[texture(1)]],
