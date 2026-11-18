@@ -127,7 +127,7 @@ mod on_device {
 
             let counters = device.counters();
             let core = device.core();
-            let cpu = (device.take_block(MemoryClass::Shared, AT + LEN))
+            let cpu = (device.take_block(MemoryClass::Shared, 2 * AT + LEN))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = (device.new_buffer(cpu.id, AT, LEN, true))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));

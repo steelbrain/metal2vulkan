@@ -383,8 +383,9 @@ struct State {
     kept: [Vec<Memory>; 2],
     /// Per class, a take asked the block-maker thread for the class's kept blocks' bytes.
     unkeep: [bool; 2],
-    /// Blocks given back, for the block-maker thread.
-    returned: Vec<Memory>,
+    /// Blocks given back, for the block-maker thread, in the order they came back: the idle rule
+    /// frees the allocation emptied first first.
+    returned: VecDeque<Memory>,
     /// Per class, the block-maker thread could not make the last allocation it tried. It tries
     /// again after the class's next take or give-back.
     failed: [bool; 2],
@@ -433,7 +434,7 @@ impl Pool {
                 allocations: [Vec::new(), Vec::new()],
                 kept: [Vec::new(), Vec::new()],
                 unkeep: [false, false],
-                returned: Vec::new(),
+                returned: VecDeque::new(),
                 failed: [false, false],
                 stop: false,
                 next_id: 1,
@@ -736,7 +737,7 @@ impl Pool {
     /// Takes back a block taken with [`take`](Self::take), for the block-maker thread to zero and
     /// keep, or give back to its allocation.
     pub(crate) fn give_back(&self, memory: Memory) {
-        self.lock().returned.push(memory);
+        self.lock().returned.push_back(memory);
         self.changed.notify_all();
     }
 
@@ -915,7 +916,7 @@ pub(crate) fn run(core: Arc<Core>) {
             pool.changed.notify_all();
             continue;
         }
-        if let Some(memory) = state.returned.pop() {
+        if let Some(memory) = state.returned.pop_front() {
             drop(state);
             // A block that cannot be zeroed, or spilled, is not kept: its bytes go back to its
             // allocation, and a spilled allocation that empties is freed, so the next tries
@@ -1258,7 +1259,7 @@ pub(crate) fn free_all(core: &mut Core, blocks: Vec<Memory>) {
             idle[index] = state.idle_bytes[index];
             state.idle_bytes[index] = 0;
         }
-        retired.append(&mut state.returned);
+        retired.extend(state.returned.drain(..));
     }
     for class in MemoryClass::ALL {
         core.counters
