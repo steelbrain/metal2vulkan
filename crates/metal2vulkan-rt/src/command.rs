@@ -18,8 +18,8 @@ use crate::sampler::SamplerState;
 use crate::texture::Texture;
 use crate::times::{self, Stamps, Times};
 use ash::vk;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 /// `MTLCommandBuffer`.
