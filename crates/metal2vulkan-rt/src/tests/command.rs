@@ -718,6 +718,100 @@ pub(crate) mod on_device {
         assert!(checked, "{name}: the busy work ended before every check");
     }
 
+    /// What a second queue adds, counted: with the first queue's two busy command buffers
+    /// running, the second queue's first two commits go alone (two lone submissions across
+    /// queues); once both queues have two running, a commit on each is held, the second opening
+    /// its group beside the first's (one group beside another queue). No group goes for a reason
+    /// that is not its own queue's.
+    #[test]
+    fn every_device_counts_what_a_second_queue_adds() {
+        each_device("command_cross_queue", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let work = private(&device);
+            let (first, second) = (queue(&device), queue(&device));
+            let checked = [16, 64, 256, 1024].into_iter().any(|fills| {
+                let before = device.counters().metrics();
+                let running = [
+                    busy(&first, &work, fills),
+                    busy(&first, &work, fills),
+                    busy(&second, &work, fills),
+                    busy(&second, &work, fills),
+                ];
+                let held = [
+                    queue_fill(&first, &buffer, 1),
+                    queue_fill(&second, &buffer, 2),
+                ];
+                for command_buffer in &held {
+                    within(name, || {
+                        command_buffer.status() != CommandBufferStatus::Committed
+                    });
+                }
+                // Every busy one ran past the held ones' staging: the counts are this test's.
+                let ran = running.iter().all(|command_buffer| {
+                    command_buffer.status() != CommandBufferStatus::Completed
+                });
+                for command_buffer in running.iter().chain(&held) {
+                    finished(name, command_buffer);
+                }
+                let after = device.counters().metrics();
+                assert_eq!(
+                    after.forced_flushes_across_queues - before.forced_flushes_across_queues,
+                    0,
+                    "{name}"
+                );
+                let counted = (
+                    after.lone_submissions_across_queues - before.lone_submissions_across_queues,
+                    after.groups_beside_another_queue - before.groups_beside_another_queue,
+                );
+                if ran {
+                    assert_eq!(counted, (2, 1), "{name}: lone submissions, groups beside");
+                }
+                ran
+            });
+            assert!(checked, "{name}: the busy work ended before every check");
+            drop((buffer, work, arena, first, second, device));
+        });
+    }
+
+    /// A commit's wait for the submission lock is counted: one made while another thread holds
+    /// the lock for 20 ms waits at least that long.
+    #[test]
+    fn every_device_counts_a_commits_wait_for_the_submission_lock() {
+        each_device("command_lock_wait", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill(&command_buffer, &buffer, 3);
+            let held = device.core().work.lock();
+            let committing = {
+                let command_buffer = command_buffer.clone();
+                thread::spawn(move || command_buffer.commit().expect("a commit"))
+            };
+            thread::sleep(Duration::from_millis(20));
+            drop(held);
+            committing.join().expect("the committing thread");
+            finished(name, &command_buffer);
+            let metrics = device.counters().metrics();
+            assert!(
+                metrics.commit_lock_wait_max_nanos >= 20_000_000,
+                "{name}: {}",
+                metrics.commit_lock_wait_max_nanos
+            );
+            assert!(metrics.commit_lock_wait_nanos >= metrics.commit_lock_wait_max_nanos);
+            drop((command_buffer, buffer, arena, queue, device));
+        });
+    }
+
+    /// Commits a command buffer of one fill of `buffer` with `word` on `queue`.
+    fn queue_fill(queue: &CommandQueue, buffer: &Buffer, word: u32) -> CommandBuffer {
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        fill(&command_buffer, buffer, word);
+        command_buffer.commit().expect("a commit");
+        command_buffer
+    }
+
     /// A group is held only while two of its queue's submissions are not seen complete, and the
     /// completion that leaves fewer sends it: a command buffer committed behind two running ones,
     /// with no later commit and no host wait, runs once the first of them completes.

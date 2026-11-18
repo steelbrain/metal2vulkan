@@ -365,7 +365,10 @@ impl CommandBuffer {
         // can complete it, so a handler that drops the consumer's last handle ends the device on
         // the reaper, never in this call.
         let core = self.building(|building| Ok(Arc::clone(building.device.core())))?;
+        let began = crate::host_time();
         let mut work = core.work.lock();
+        core.counters
+            .commit_lock_wait(crate::host_time().saturating_sub(began));
         if work.closed() {
             return Err(Error::Quiesced);
         }

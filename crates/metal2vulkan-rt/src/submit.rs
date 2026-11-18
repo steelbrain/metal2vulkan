@@ -21,7 +21,7 @@
 use crate::buffer::DeviceCopy;
 use crate::command::{CbInner, CommandBufferError, Handler, Pending, Segment};
 use crate::complete;
-use crate::counters::Metric;
+use crate::counters::{Counters, Metric};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
@@ -94,6 +94,8 @@ pub(crate) struct WorkState {
     /// Quiesced or torn down: commits and uploads are refused.
     closed: bool,
     lost: bool,
+    /// The device's counters: the groups and submissions one queue would not have made.
+    counters: Counters,
 }
 
 struct Fifo {
@@ -273,7 +275,7 @@ enum Step {
 }
 
 impl Work {
-    pub(crate) fn new() -> Work {
+    pub(crate) fn new(counters: Counters) -> Work {
         Work {
             state: Mutex::new(WorkState {
                 fifos: Vec::new(),
@@ -289,6 +291,7 @@ impl Work {
                 stop: false,
                 closed: false,
                 lost: false,
+                counters,
             }),
             changed: Condvar::new(),
             keeping: AtomicBool::new(false),
@@ -904,6 +907,8 @@ impl WorkState {
             return Step::Idle;
         };
         let stop = self.stop;
+        let others_hold = (self.fifos.iter().enumerate())
+            .any(|(other, fifo)| other != index && fifo.group.is_some());
         let fifo = &mut self.fifos[index];
         let Some(entry) = fifo.entries.front_mut() else {
             return Step::Idle;
@@ -925,6 +930,9 @@ impl WorkState {
             return Step::Goes(index);
         }
         let place = entry.place;
+        if fifo.group.is_none() && others_hold {
+            self.counters.count(Metric::GroupsBesideAnotherQueue);
+        }
         let group = fifo.group.get_or_insert_with(|| Batch {
             first: place,
             segments: Vec::new(),
@@ -981,8 +989,29 @@ impl WorkState {
         device: &ash::Device,
         released: &AtomicU64,
     ) -> Option<(u64, Option<Upload>, Batch)> {
+        let across: usize = (self.fifos.iter()).map(|fifo| fifo.in_flight.len()).sum();
         let fifo = &mut self.fifos[index];
         let mut batch = fifo.group.take()?;
+        let own = fifo.in_flight.len();
+        if own < IN_FLIGHT && across >= IN_FLIGHT {
+            self.counters.count(Metric::LoneSubmissionsAcrossQueues);
+        }
+        // Each reason `step` and `unheld` send a group for, all of its own queue's.
+        let leads = (fifo.entries.front())
+            .and_then(|entry| entry.pending.as_ref())
+            .and_then(|pending| pending.gpu.segments.get(pending.next))
+            .is_some_and(|segment| {
+                (segment.waits.iter()).any(|(event, value)| lock(&event.state).floor < *value)
+            });
+        let own_reason = self.stop
+            || own < IN_FLIGHT
+            || fifo.send_through >= batch.first
+            || batch.count >= GROUP
+            || (batch.segments.iter()).any(|segment| !segment.signals.is_empty())
+            || leads;
+        if !own_reason {
+            self.counters.count(Metric::ForcedFlushesAcrossQueues);
+        }
         self.progress += 1;
         let value = self.progress;
         fifo.in_flight.push_back(value);

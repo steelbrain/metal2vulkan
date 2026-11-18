@@ -27,6 +27,12 @@ pub(crate) enum Metric {
     UploadWaits,
     /// [`Metrics::synchronizations`].
     Synchronizations,
+    /// [`Metrics::groups_beside_another_queue`].
+    GroupsBesideAnotherQueue,
+    /// [`Metrics::lone_submissions_across_queues`].
+    LoneSubmissionsAcrossQueues,
+    /// [`Metrics::forced_flushes_across_queues`].
+    ForcedFlushesAcrossQueues,
 }
 
 /// A gauge the runtime moves.
@@ -84,6 +90,11 @@ struct Atomics {
     ring_writes: AtomicU64,
     upload_waits: AtomicU64,
     synchronizations: AtomicU64,
+    commit_lock_wait_nanos: AtomicU64,
+    commit_lock_wait_max_nanos: AtomicU64,
+    groups_beside_another_queue: AtomicU64,
+    lone_submissions_across_queues: AtomicU64,
+    forced_flushes_across_queues: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -126,6 +137,9 @@ impl Counters {
             Metric::RingWrites => &a.ring_writes,
             Metric::UploadWaits => &a.upload_waits,
             Metric::Synchronizations => &a.synchronizations,
+            Metric::GroupsBesideAnotherQueue => &a.groups_beside_another_queue,
+            Metric::LoneSubmissionsAcrossQueues => &a.lone_submissions_across_queues,
+            Metric::ForcedFlushesAcrossQueues => &a.forced_flushes_across_queues,
         };
         atomic.fetch_add(1, Relaxed);
     }
@@ -137,6 +151,14 @@ impl Counters {
         a.first_use_waits.fetch_add(1, Relaxed);
         a.first_use_wait_nanos.fetch_add(nanos, Relaxed);
         a.first_use_wait_max_nanos.fetch_max(nanos, Relaxed);
+    }
+
+    /// A commit that waited `nanos` nanoseconds to take the submission lock
+    /// ([`Metrics::commit_lock_wait_nanos`]).
+    pub(crate) fn commit_lock_wait(&self, nanos: u64) {
+        let a = &self.atomics;
+        a.commit_lock_wait_nanos.fetch_add(nanos, Relaxed);
+        a.commit_lock_wait_max_nanos.fetch_max(nanos, Relaxed);
     }
 
     /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
@@ -232,6 +254,11 @@ impl Counters {
             ring_writes: a.ring_writes.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
             synchronizations: a.synchronizations.load(Relaxed),
+            commit_lock_wait_nanos: a.commit_lock_wait_nanos.load(Relaxed),
+            commit_lock_wait_max_nanos: a.commit_lock_wait_max_nanos.load(Relaxed),
+            groups_beside_another_queue: a.groups_beside_another_queue.load(Relaxed),
+            lone_submissions_across_queues: a.lone_submissions_across_queues.load(Relaxed),
+            forced_flushes_across_queues: a.forced_flushes_across_queues.load(Relaxed),
         }
     }
 
@@ -304,6 +331,24 @@ pub struct Metrics {
     /// device copy or of a Managed texture with named bytes, and nothing for any other resource;
     /// none a submission of its own.
     pub synchronizations: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) commits waited to take the submission
+    /// lock, which every queue's commits and the submit thread take, in total.
+    pub commit_lock_wait_nanos: u64,
+    /// The longest such wait, in nanoseconds; a maximum since the device was made, so the
+    /// difference of two reads does not apply to it.
+    pub commit_lock_wait_max_nanos: u64,
+    /// Groups opened while another queue held one. Each queue groups its own command buffers,
+    /// so these are the groups one queue of the same command buffers would not have opened.
+    pub groups_beside_another_queue: u64,
+    /// Submissions sent with fewer than two of their own queue's submissions in flight while the
+    /// device had two or more in flight across its queues: the ones one queue of the same
+    /// command buffers would have held in a group.
+    pub lone_submissions_across_queues: u64,
+    /// Groups sent with no reason of their own queue's: neither full, nor ended by an event's
+    /// signal or a semaphore wait, nor below two submissions in flight, nor asked for by a host
+    /// wait or the end. No path of the submit thread sends one, so this stays 0; it is counted to
+    /// show it.
+    pub forced_flushes_across_queues: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the

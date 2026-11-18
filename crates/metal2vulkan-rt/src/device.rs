@@ -428,6 +428,7 @@ impl Device {
             })
             .fold(0, |bits, (index, _)| bits | 1 << index);
 
+        let work = Work::new(counters.clone());
         let core = Arc::new(Core {
             instance,
             physical: raw,
@@ -452,7 +453,7 @@ impl Device {
             copies: Places::new(),
             filler,
             recorders: Recorders::new(family),
-            work: Work::new(),
+            work,
             done,
             reaper: Reaper::new(),
             query_pools: Mutex::new(Vec::new()),
