@@ -4,7 +4,7 @@
 //! measure against native Metal.
 //!
 //! The traits below are the Metal compute subset the workloads call, one method per Metal call,
-//! with the blit encoder's texture copy.
+//! with the blit encoder's copies and fill.
 //! A runtime implements them once: the old runtime in [`old`], which the cutover deletes with its
 //! file, and the new runtime in [`rt`]. A workload a runtime answers with a typed refusal (a
 //! known gap or a device limit, [`Refused`]) is reported by name as refused, not as a failure.
@@ -331,6 +331,34 @@ pub trait BlitCommandEncoder<D: ComputeDevice> {
         copy: &plan::TextureCopy,
         source: &D::Texture,
         destination: &D::Texture,
+    ) -> Result<()>;
+
+    /// `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:`
+    /// `toTexture:destinationSlice:destinationLevel:destinationOrigin:` of `copy`, from `buffer`
+    /// into `texture`, the two it names.
+    fn copy_from_buffer(
+        &mut self,
+        copy: &plan::BufferCopy,
+        buffer: &D::Buffer,
+        texture: &D::Texture,
+    ) -> Result<()>;
+
+    /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:`
+    /// `destinationOffset:destinationBytesPerRow:destinationBytesPerImage:` of `copy`, from
+    /// `texture` into `buffer`, the two it names.
+    fn copy_from_texture_to_buffer(
+        &mut self,
+        copy: &plan::BufferCopy,
+        texture: &D::Texture,
+        buffer: &D::Buffer,
+    ) -> Result<()>;
+
+    /// `fillBuffer:range:value:`.
+    fn fill_buffer(
+        &mut self,
+        buffer: &D::Buffer,
+        range: std::ops::Range<u64>,
+        value: u8,
     ) -> Result<()>;
 
     /// `endEncoding`.

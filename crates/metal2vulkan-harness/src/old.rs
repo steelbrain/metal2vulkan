@@ -7,8 +7,8 @@ use crate::{Code, Result, Size, Storage};
 use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_runtime as runtime;
 use runtime::{
-    CommandBufferStatus, HeapDescriptor, HeapType, Origin, PipelineOptions, ResourceOptions,
-    TextureDescriptor,
+    BlitOption, CommandBufferStatus, HeapDescriptor, HeapType, Origin, PipelineOptions,
+    ResourceOptions, TextureDescriptor,
 };
 use std::ptr::NonNull;
 
@@ -293,6 +293,62 @@ impl crate::BlitCommandEncoder<runtime::Device> for runtime::BlitCommandEncoder 
             copy.destination_slice.into(),
             0,
             origin(copy.destination_origin),
+        )?)
+    }
+
+    fn copy_from_buffer(
+        &mut self,
+        copy: &plan::BufferCopy,
+        buffer: &runtime::Buffer,
+        texture: &Texture,
+    ) -> Result<()> {
+        let [x, y] = copy.origin;
+        let [width, height] = copy.size;
+        Ok(self.copy_from_buffer_to_texture(
+            buffer,
+            copy.offset,
+            copy.bytes_per_row,
+            copy.bytes_per_image,
+            runtime::Size::new(width.into(), height.into(), 1),
+            &texture.texture,
+            copy.slice.into(),
+            0,
+            Origin::new(x.into(), y.into(), 0),
+            BlitOption::None,
+        )?)
+    }
+
+    fn copy_from_texture_to_buffer(
+        &mut self,
+        copy: &plan::BufferCopy,
+        texture: &Texture,
+        buffer: &runtime::Buffer,
+    ) -> Result<()> {
+        let [x, y] = copy.origin;
+        let [width, height] = copy.size;
+        Ok(runtime::BlitCommandEncoder::copy_from_texture_to_buffer(
+            self,
+            &texture.texture,
+            copy.slice.into(),
+            0,
+            Origin::new(x.into(), y.into(), 0),
+            runtime::Size::new(width.into(), height.into(), 1),
+            buffer,
+            copy.offset,
+            copy.bytes_per_row,
+            copy.bytes_per_image,
+            BlitOption::None,
+        )?)
+    }
+
+    fn fill_buffer(
+        &mut self,
+        buffer: &runtime::Buffer,
+        range: std::ops::Range<u64>,
+        value: u8,
+    ) -> Result<()> {
+        Ok(runtime::BlitCommandEncoder::fill_buffer(
+            self, buffer, range, value,
         )?)
     }
 

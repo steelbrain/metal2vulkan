@@ -523,8 +523,8 @@ impl<D: ComputeDevice> Harness<D> {
     }
 
     /// The dispatches `range` of `plan` in a compute encoder of `command_buffer`, ended. A
-    /// dispatch's texture copies end the compute encoder before them and go in a blit encoder;
-    /// a new compute encoder takes the dispatch.
+    /// dispatch's blit commands end the compute encoder before them and go in a blit encoder; a
+    /// new compute encoder takes the dispatch.
     fn encode_pass(
         &self,
         command_buffer: &D::CommandBuffer,
@@ -536,23 +536,41 @@ impl<D: ComputeDevice> Harness<D> {
         let mut current = None;
         let states = &made.state_of[range.clone()];
         for (dispatch, &state) in plan.dispatches[range].iter().zip(states) {
-            if !dispatch.copies.is_empty() {
+            if !dispatch.blits.is_empty() {
                 if let Some(encoder) = open.take() {
                     encoder.end_encoding()?;
                 }
                 current = None;
-                let mut blit = command_buffer.blit_command_encoder()?;
-                for copy in &dispatch.copies {
-                    let texture = |at: usize| {
-                        (made.textures.get(at)).ok_or("a texture the plan names is unmade")
-                    };
-                    blit.copy_from_texture(
-                        copy,
-                        texture(copy.source)?,
-                        texture(copy.destination)?,
-                    )?;
+                let mut encoder = command_buffer.blit_command_encoder()?;
+                let texture =
+                    |at: usize| (made.textures.get(at)).ok_or("a texture the plan names is unmade");
+                let buffer =
+                    |at: usize| (made.buffers.get(at)).ok_or("a buffer the plan names is unmade");
+                for blit in &dispatch.blits {
+                    match blit {
+                        Blit::Texture(copy) => encoder.copy_from_texture(
+                            copy,
+                            texture(copy.source)?,
+                            texture(copy.destination)?,
+                        )?,
+                        Blit::FromBuffer(copy) => encoder.copy_from_buffer(
+                            copy,
+                            buffer(copy.buffer)?,
+                            texture(copy.texture)?,
+                        )?,
+                        Blit::ToBuffer(copy) => encoder.copy_from_texture_to_buffer(
+                            copy,
+                            texture(copy.texture)?,
+                            buffer(copy.buffer)?,
+                        )?,
+                        Blit::Fill(fill) => encoder.fill_buffer(
+                            buffer(fill.buffer)?,
+                            fill.range.clone(),
+                            fill.value,
+                        )?,
+                    }
                 }
-                blit.end_encoding()?;
+                encoder.end_encoding()?;
             }
             let encoder = match open {
                 Some(ref mut encoder) => encoder,

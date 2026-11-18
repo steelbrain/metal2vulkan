@@ -367,14 +367,158 @@ pub struct Dispatch {
     /// The functions its pipeline links as private functions (`linkedFunctions.privateFunctions`),
     /// by name in the plan's library, each made with `constants` as the kernel is.
     pub linked: Vec<String>,
-    /// The texture copies before the dispatch and its bindings, in order, in a blit encoder of
+    /// The blit commands before the dispatch and its bindings, in order, in a blit encoder of
     /// their own: the compute encoder before them ends there, so no binding before them reaches
     /// the dispatch.
-    pub copies: Vec<TextureCopy>,
+    pub blits: Vec<Blit>,
     /// The binding calls before the dispatch, in order.
     pub bindings: Vec<Binding>,
     /// The dispatch call.
     pub grid: Grid,
+}
+
+/// A blit command before a dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Blit {
+    /// `copyFromTexture:...toTexture:...`.
+    Texture(TextureCopy),
+    /// `copyFromBuffer:...toTexture:...`.
+    FromBuffer(BufferCopy),
+    /// `copyFromTexture:...toBuffer:...`.
+    ToBuffer(BufferCopy),
+    /// `fillBuffer:range:value:`.
+    Fill(Fill),
+}
+
+impl Blit {
+    /// Why the command is not one Metal takes among `buffers` and `textures`, if it is not.
+    pub fn problem(&self, buffers: &[BufferPlan], textures: &[TexturePlan]) -> Option<String> {
+        match self {
+            Blit::Texture(copy) => copy.problem(textures),
+            Blit::FromBuffer(copy) | Blit::ToBuffer(copy) => copy.problem(buffers, textures),
+            Blit::Fill(fill) => fill.problem(buffers),
+        }
+    }
+}
+
+/// Why `size` texels at `origin` of `slice` of `texture` are not inside it, if they are not: a
+/// texture the plan lacks, a slice past its array, or a region outside it.
+fn region_problem(
+    textures: &[TexturePlan],
+    texture: usize,
+    slice: u32,
+    origin: [u32; 2],
+    size: [u32; 2],
+) -> Option<String> {
+    let Some(made) = textures.get(texture) else {
+        return Some(format!("texture {texture} is not made before it"));
+    };
+    if slice >= made.array_length {
+        return Some(format!(
+            "texture {texture} has {} slices, not slice {slice}",
+            made.array_length
+        ));
+    }
+    let fits =
+        |at: u32, size: u32, extent: u32| at.checked_add(size).is_some_and(|end| end <= extent);
+    (!(fits(origin[0], size[0], made.width) && fits(origin[1], size[1], made.height)))
+        .then(|| format!("the region at {origin:?} of {size:?} is outside texture {texture}"))
+}
+
+/// `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:`
+/// `destinationSlice:destinationLevel:destinationOrigin:` or `copyFromTexture:sourceSlice:`
+/// `sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:`
+/// `destinationBytesPerImage:` between one of the plan's buffers and level 0 of one of its
+/// textures, a region one texel deep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BufferCopy {
+    /// The buffer, by index.
+    pub buffer: usize,
+    /// The region's first byte in it.
+    pub offset: u64,
+    /// From one row's first byte to the next's.
+    pub bytes_per_row: u64,
+    /// From one image's first byte to the next's, as the call passes it.
+    pub bytes_per_image: u64,
+    /// The texture, by index.
+    pub texture: usize,
+    /// Its slice.
+    pub slice: u32,
+    /// The region's origin in it, x and y.
+    pub origin: [u32; 2],
+    /// The region's width and height.
+    pub size: [u32; 2],
+}
+
+impl BufferCopy {
+    /// Why the copy is not one Metal takes between `buffers` and `textures`, if it is not: a
+    /// buffer or texture the plan lacks, a slice or region outside the texture, an empty region,
+    /// an offset or a row stride of no whole texels, rows closer than the region's, or a region
+    /// past the buffer's end, as Metal's validation stops them.
+    pub fn problem(&self, buffers: &[BufferPlan], textures: &[TexturePlan]) -> Option<String> {
+        if let Some(problem) =
+            region_problem(textures, self.texture, self.slice, self.origin, self.size)
+        {
+            return Some(problem);
+        }
+        let Some(buffer) = buffers.get(self.buffer) else {
+            return Some(format!("buffer {} is not made before it", self.buffer));
+        };
+        if self.size.contains(&0) {
+            return Some("the region is empty".to_owned());
+        }
+        let format = textures[self.texture].pixel_format;
+        let Some(element) = element_bytes(format) else {
+            return Some(format!("the harness knows no element size of {format:?}"));
+        };
+        let element = u64::from(element);
+        let row = u64::from(self.size[0]) * element;
+        let rows = u64::from(self.size[1]);
+        if self.offset % element != 0
+            || (rows > 1 && (self.bytes_per_row % element != 0 || self.bytes_per_row < row))
+        {
+            return Some(format!(
+                "an offset of {} and rows {} bytes apart are not whole rows of {row} bytes of \
+                 {format:?} texels",
+                self.offset, self.bytes_per_row
+            ));
+        }
+        let end = self.offset + (rows - 1) * self.bytes_per_row + row;
+        (end > buffer.length).then(|| {
+            format!(
+                "the region's bytes end at {end}, past buffer {}'s {}",
+                self.buffer, buffer.length
+            )
+        })
+    }
+}
+
+/// `fillBuffer:range:value:` of one of the plan's buffers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fill {
+    /// The buffer, by index.
+    pub buffer: usize,
+    /// The bytes filled.
+    pub range: Range<u64>,
+    /// The byte.
+    pub value: u8,
+}
+
+impl Fill {
+    /// Why the fill is not one Metal takes in `buffers`, if it is not: a buffer the plan lacks,
+    /// an empty range, or one past the buffer's end.
+    pub fn problem(&self, buffers: &[BufferPlan]) -> Option<String> {
+        let Some(buffer) = buffers.get(self.buffer) else {
+            return Some(format!("buffer {} is not made before it", self.buffer));
+        };
+        let Range { start, end } = self.range;
+        (start >= end || end > buffer.length).then(|| {
+            format!(
+                "a fill of {start}..{end} is empty or past buffer {}'s {} bytes",
+                self.buffer, buffer.length
+            )
+        })
+    }
 }
 
 /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:`
@@ -411,34 +555,19 @@ impl TextureCopy {
                 self.destination_origin,
             ),
         ];
-        let mut formats = Vec::new();
         for (texture, slice, origin) in sides {
-            let Some(made) = textures.get(texture) else {
-                return Some(format!("texture {texture} is not made before it"));
-            };
-            if slice >= made.array_length {
-                return Some(format!(
-                    "texture {texture} has {} slices, not slice {slice}",
-                    made.array_length
-                ));
+            if let Some(problem) = region_problem(textures, texture, slice, origin, self.size) {
+                return Some(problem);
             }
-            let fits = |at: u32, size: u32, extent: u32| {
-                at.checked_add(size).is_some_and(|end| end <= extent)
-            };
-            if !(fits(origin[0], self.size[0], made.width)
-                && fits(origin[1], self.size[1], made.height))
-            {
-                return Some(format!(
-                    "the region at {origin:?} of {:?} is outside texture {texture}",
-                    self.size
-                ));
-            }
-            formats.push(made.pixel_format);
         }
-        (formats[0] != formats[1]).then(|| {
+        let formats = (
+            textures[self.source].pixel_format,
+            textures[self.destination].pixel_format,
+        );
+        (formats.0 != formats.1).then(|| {
             format!(
                 "a copy from {:?} to {:?}: Metal copies between textures of one pixel format",
-                formats[0], formats[1]
+                formats.0, formats.1
             )
         })
     }
@@ -709,9 +838,9 @@ impl Plan {
         }
         let known = |buffer: usize| buffer < self.buffers.len();
         for (i, dispatch) in self.dispatches.iter().enumerate() {
-            for copy in &dispatch.copies {
-                if let Some(problem) = copy.problem(&self.textures) {
-                    return Err(format!("{name}: dispatch {i}'s texture copy: {problem}").into());
+            for blit in &dispatch.blits {
+                if let Some(problem) = blit.problem(&self.buffers, &self.textures) {
+                    return Err(format!("{name}: dispatch {i}'s blit: {problem}").into());
                 }
             }
             for binding in &dispatch.bindings {

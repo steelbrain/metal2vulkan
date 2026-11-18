@@ -35,6 +35,14 @@
 //!                                        blit encoder before the next dispatch: the compute
 //!                                        encoder before it ends, so the dispatch's set lines
 //!                                        come after it
+//! copy-buffer-to-texture BUFFER OFFSET ROW-BYTES IMAGE-BYTES WIDTH HEIGHT TEXTURE SLICE X Y
+//!                                        copyFromBuffer: of WIDTH by HEIGHT texels from
+//!                                        BUFFER at OFFSET, rows ROW-BYTES apart, to (X, Y) of
+//!                                        TEXTURE's SLICE, as copy-texture goes
+//! copy-texture-to-buffer TEXTURE SLICE X Y WIDTH HEIGHT BUFFER OFFSET ROW-BYTES IMAGE-BYTES
+//!                                        copyFromTexture:...toBuffer: the other way
+//! fill-buffer BUFFER OFFSET LENGTH VALUE fillBuffer:range:value: of LENGTH bytes of BUFFER at
+//!                                        OFFSET with the byte VALUE, as copy-texture goes
 //! set-sampler INDEX FILTER ADDRESS COORDS
 //!                                        setSamplerState:atIndex: before the next dispatch, of a
 //!                                        sampler state of FILTER (nearest or linear) as its min
@@ -70,6 +78,7 @@ use crate::plan::{
     seeded_words, Binding, BufferPlan, Comparison, Constant, Dispatch, Filter, Grid, Output, Plan,
     SamplerPlan, Source, TextureCopy, TexturePlan, TextureSource,
 };
+use crate::plan::{Blit, BufferCopy, Fill};
 use crate::{Result, Size, Storage};
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, TextureType, TextureUsage};
 use std::ops::Range;
@@ -147,7 +156,7 @@ impl Described {
         });
         // A dispatch at a time: the lines up to it, its bindings and constants among them.
         loop {
-            let (mut copies, mut bindings) = (Vec::new(), Vec::new());
+            let (mut blits, mut bindings) = (Vec::new(), Vec::new());
             let (mut constants, mut linked) = (Vec::new(), Vec::new());
             let dispatch = loop {
                 let Some((number, line)) = lines.next().transpose()? else {
@@ -169,18 +178,18 @@ impl Described {
                         }
                     }
                     Line::Texture(texture) => plan.textures.push(texture),
-                    Line::Copy(copy) => {
-                        if let Some(problem) = copy.problem(&plan.textures) {
+                    Line::Blit(blit) => {
+                        if let Some(problem) = blit.problem(&plan.buffers, &plan.textures) {
                             return Err(format!("line {number}: {problem}").into());
                         }
                         if !bindings.is_empty() {
                             return Err(format!(
-                                "line {number}: a texture copy ends the compute encoder, so it \
-                                 goes before the set lines of its dispatch"
+                                "line {number}: a blit ends the compute encoder, so it goes \
+                                 before the set lines of its dispatch"
                             )
                             .into());
                         }
-                        copies.push(copy);
+                        blits.push(blit);
                     }
                     Line::Binding(binding) => bindings.push(binding),
                     Line::Constant(constant) => constants.push(constant),
@@ -195,11 +204,8 @@ impl Described {
             };
             let Some((function, grid, repeat)) = dispatch else {
                 let name = &self.name;
-                if !copies.is_empty() {
-                    return Err(format!(
-                        "workload {name} copies a texture after its last dispatch"
-                    )
-                    .into());
+                if !blits.is_empty() {
+                    return Err(format!("workload {name} blits after its last dispatch").into());
                 }
                 if !(bindings.is_empty() && constants.is_empty() && linked.is_empty())
                     && !plan.dispatches.is_empty()
@@ -216,7 +222,7 @@ impl Described {
                 function: function.clone(),
                 linked: linked.clone(),
                 constants: constants.clone(),
-                copies,
+                blits,
                 bindings,
                 grid,
             });
@@ -225,7 +231,7 @@ impl Described {
                     function: function.clone(),
                     linked: linked.clone(),
                     constants: constants.clone(),
-                    copies: Vec::new(),
+                    blits: Vec::new(),
                     bindings: Vec::new(),
                     grid,
                 });
@@ -248,7 +254,7 @@ enum Line {
         range: Range<u64>,
     },
     Texture(TexturePlan),
-    Copy(TextureCopy),
+    Blit(Blit),
     Binding(Binding),
     Constant(Constant),
     Linked(Vec<String>),
@@ -323,7 +329,7 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
         }),
         ["set-texture", ..] => return Err("set-texture takes INDEX TEXTURE".to_owned()),
         ["copy-texture", from, from_slice, x, y, width, height, to, to_slice, to_x, to_y] => {
-            Line::Copy(TextureCopy {
+            Line::Blit(Blit::Texture(TextureCopy {
                 source: number(from)?,
                 source_slice: number(from_slice)?,
                 source_origin: [number(x)?, number(y)?],
@@ -331,12 +337,43 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
                 destination: number(to)?,
                 destination_slice: number(to_slice)?,
                 destination_origin: [number(to_x)?, number(to_y)?],
-            })
+            }))
         }
         ["copy-texture", ..] => {
             return Err(
                 "copy-texture takes SOURCE SLICE X Y WIDTH HEIGHT DESTINATION SLICE X Y".to_owned(),
             )
+        }
+        ["copy-buffer-to-texture", buf, off, row, img, w, h, tex, slice, x, y] => Line::Blit(
+            Blit::FromBuffer(buffer_copy([buf, off, row, img], [tex, slice, x, y, w, h])?),
+        ),
+        ["copy-buffer-to-texture", ..] => {
+            return Err(
+                "copy-buffer-to-texture takes BUFFER OFFSET ROW-BYTES IMAGE-BYTES WIDTH \
+                        HEIGHT TEXTURE SLICE X Y"
+                    .to_owned(),
+            )
+        }
+        ["copy-texture-to-buffer", tex, slice, x, y, w, h, buf, off, row, img] => Line::Blit(
+            Blit::ToBuffer(buffer_copy([buf, off, row, img], [tex, slice, x, y, w, h])?),
+        ),
+        ["copy-texture-to-buffer", ..] => {
+            return Err(
+                "copy-texture-to-buffer takes TEXTURE SLICE X Y WIDTH HEIGHT BUFFER \
+                        OFFSET ROW-BYTES IMAGE-BYTES"
+                    .to_owned(),
+            )
+        }
+        ["fill-buffer", buffer, offset, length, value] => {
+            let (offset, length): (u64, u64) = (number(offset)?, number(length)?);
+            Line::Blit(Blit::Fill(Fill {
+                buffer: number(buffer)?,
+                range: offset..offset.checked_add(length).ok_or("the range does not fit")?,
+                value: number(value)?,
+            }))
+        }
+        ["fill-buffer", ..] => {
+            return Err("fill-buffer takes BUFFER OFFSET LENGTH VALUE".to_owned())
         }
         ["set-sampler", index, filter, address, coordinates] => Line::Binding(Binding::Sampler {
             index: number(index)?,
@@ -506,6 +543,24 @@ fn texture(
         }
     };
     Ok(texture)
+}
+
+/// The copy of a `copy-buffer-to-texture` or `copy-texture-to-buffer` line: its buffer side
+/// and its texture side.
+fn buffer_copy(
+    [buffer, offset, row, image]: [&str; 4],
+    [texture, slice, x, y, width, height]: [&str; 6],
+) -> std::result::Result<BufferCopy, String> {
+    Ok(BufferCopy {
+        buffer: number(buffer)?,
+        offset: number(offset)?,
+        bytes_per_row: number(row)?,
+        bytes_per_image: number(image)?,
+        texture: number(texture)?,
+        slice: number(slice)?,
+        origin: [number(x)?, number(y)?],
+        size: [number(width)?, number(height)?],
+    })
 }
 
 /// A whole number.

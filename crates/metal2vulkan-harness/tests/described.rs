@@ -17,7 +17,8 @@ use metal2vulkan_harness::{authored, description, old, rt};
 /// The description: each fill, both storage modes, a binding at an offset, bindings that stay
 /// set for the dispatches after, both dispatch calls, `repeat`, both comparisons, a threadgroup
 /// memory length, textures of each source with their bytes written by the CPU, a sampler
-/// state, and a texture copy from a slice of an array into a 2D texture.
+/// state, a texture copy from a slice of an array into a 2D texture, and a Private texture
+/// written from a buffer and read into another around a fill.
 const DESCRIPTION: &str = "\
 # Synthetic workloads over the authored kernels.
 workload scale kernels.metallib
@@ -114,6 +115,21 @@ set-buffer 0 0
 set-bytes 1 4 hex 20000000
 dispatch texels_out threadgroups 2 1 1 16 16 1
 check 0 exact
+
+workload staged kernels.metallib
+texture 2 70 32 16 1 1 private plain undefined   # RGBA8Unorm, written by a copy alone
+buffer 4096 shared words 29
+buffer 8192 shared zero
+buffer 1024 shared words 31
+copy-buffer-to-texture 0 0 128 0 32 16 0 0 0 0
+fill-buffer 2 4 20 171
+copy-texture-to-buffer 0 0 4 2 8 6 2 256 64 0   # 8x6 texels at (4, 2), rows 64 apart
+set-texture 0 0
+set-buffer 0 1
+set-bytes 1 4 hex 20000000
+dispatch texels_out threadgroups 2 1 1 16 16 1
+check 1 exact
+check 2 exact
 ";
 
 #[test]
@@ -215,6 +231,29 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             }
             texels = Some(first.outputs[0].clone());
         }
+        if plan.name == "staged" {
+            // The texture is buffer 0's first 2048 bytes; buffer 2 its words with 4..24 filled
+            // and the region's rows at 256, 64 bytes apart.
+            let texture = &seeded_bytes(29, 1024)[..2048];
+            let got: Vec<f32> = (first.outputs[0].as_chunks::<4>().0.iter())
+                .map(|word| f32::from_le_bytes(*word))
+                .collect();
+            assert_eq!(got.len(), texture.len());
+            for (at, (&got, &byte)) in got.iter().zip(texture).enumerate() {
+                let want = f32::from(byte) / 255.0;
+                assert!(
+                    (got - want).abs() <= 1e-6,
+                    "staged: channel {at}: {got} for {want}"
+                );
+            }
+            let mut want = seeded_bytes(31, 256);
+            want[4..24].fill(171);
+            for y in 0..6 {
+                let (from, to) = (((2 + y) * 32 + 4) * 4, 256 + y * 64);
+                want[to..to + 32].copy_from_slice(&texture[from..from + 32]);
+            }
+            assert_eq!(first.outputs[1], want, "staged: buffer 2");
+        }
         if plan.name == "copied" {
             // The 2D texture's bytes, with the region of the array's slice 1 copied over them.
             let words = |seed, count| -> Vec<u8> {
@@ -256,7 +295,14 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             assert_eq!(got, want);
         }
     }
-    assert_eq!(described.len(), 10);
+    assert_eq!(described.len(), 11);
+}
+
+/// The bytes of `count` of SplitMix64's words from `seed`, as a description's `words` fill.
+fn seeded_bytes(seed: u64, count: usize) -> Vec<u8> {
+    (seeded_words(seed, count).iter())
+        .flat_map(|word| word.to_le_bytes())
+        .collect()
 }
 
 /// The fixture's LLVM text `ll` with `kernel` its only entry point: every other kernel's

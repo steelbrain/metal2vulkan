@@ -563,6 +563,26 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
     }
 }
 
+/// A copy between a buffer and a texture as the runtime takes it: the buffer's layout, the
+/// size and the texture's place.
+fn buffer_copy(copy: &plan::BufferCopy) -> (rt::BufferLayout, [u32; 3], rt::TexturePlace) {
+    let [width, height] = copy.size;
+    let [x, y] = copy.origin;
+    (
+        rt::BufferLayout {
+            offset: copy.offset,
+            bytes_per_row: copy.bytes_per_row,
+            bytes_per_image: copy.bytes_per_image,
+        },
+        [width, height, 1],
+        rt::TexturePlace {
+            slice: copy.slice,
+            level: 0,
+            origin: [x, y, 0],
+        },
+    )
+}
+
 impl crate::BlitCommandEncoder<Device> for rt::BlitCommandEncoder {
     fn copy_from_texture(
         &mut self,
@@ -585,6 +605,39 @@ impl crate::BlitCommandEncoder<Device> for rt::BlitCommandEncoder {
             place(copy.destination_slice, copy.destination_origin),
         )
         .map_err(error)
+    }
+
+    fn copy_from_buffer(
+        &mut self,
+        copy: &plan::BufferCopy,
+        buffer: &Buffer,
+        texture: &rt::Texture,
+    ) -> Result<()> {
+        let (layout, size, place) = buffer_copy(copy);
+        rt::BlitCommandEncoder::copy_from_buffer(self, &buffer.buffer, layout, size, texture, place)
+            .map_err(error)
+    }
+
+    fn copy_from_texture_to_buffer(
+        &mut self,
+        copy: &plan::BufferCopy,
+        texture: &rt::Texture,
+        buffer: &Buffer,
+    ) -> Result<()> {
+        let (layout, size, place) = buffer_copy(copy);
+        rt::BlitCommandEncoder::copy_from_texture_to_buffer(
+            self,
+            texture,
+            place,
+            size,
+            &buffer.buffer,
+            layout,
+        )
+        .map_err(error)
+    }
+
+    fn fill_buffer(&mut self, buffer: &Buffer, range: Range<u64>, value: u8) -> Result<()> {
+        rt::BlitCommandEncoder::fill_buffer(self, &buffer.buffer, range, value).map_err(error)
     }
 
     fn end_encoding(self) -> Result<()> {

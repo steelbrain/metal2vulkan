@@ -157,7 +157,7 @@ fn bandwidth() -> Plan {
         library: Source::Authored,
         buffers: vec![private(float_bytes(&input)), unset(16 * VECTORS)],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "scale_offset".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -230,7 +230,7 @@ fn fma_chains(name: &str, rounds: u32, command_buffers: usize) -> Plan {
         })
         .collect();
     let dispatch = Dispatch {
-        copies: Vec::new(),
+        blits: Vec::new(),
         function: "fma_chains".to_owned(),
         linked: Vec::new(),
         constants: Vec::new(),
@@ -277,7 +277,7 @@ fn threadgroup_scan() -> Plan {
         library: Source::Authored,
         buffers: vec![private(word_bytes(&input)), unset(4 * WORDS as u64)],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "block_scan".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -324,7 +324,7 @@ fn simd_reduce() -> Plan {
         ],
         dispatches: vec![
             Dispatch {
-                copies: Vec::new(),
+                blits: Vec::new(),
                 function: "reduce_sum".to_owned(),
                 linked: Vec::new(),
                 constants: Vec::new(),
@@ -332,7 +332,7 @@ fn simd_reduce() -> Plan {
                 grid: Grid::groups_of_256(GROUPS as u64),
             },
             Dispatch {
-                copies: Vec::new(),
+                blits: Vec::new(),
                 function: "reduce_sum".to_owned(),
                 linked: Vec::new(),
                 constants: Vec::new(),
@@ -396,7 +396,7 @@ fn image_filter() -> Plan {
         library: Source::Authored,
         buffers: vec![private(float_bytes(&input)), unset(4 * input.len() as u64)],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "binomial3x3".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -438,7 +438,7 @@ fn dispatch_chain() -> Plan {
         .map(|step| {
             let set_bytes = bytes(1, increment(step).to_le_bytes().to_vec());
             Dispatch {
-                copies: Vec::new(),
+                blits: Vec::new(),
                 function: "lcg_step".to_owned(),
                 linked: Vec::new(),
                 constants: Vec::new(),
@@ -568,7 +568,7 @@ fn lcg_frame(
         })
         .collect();
     let dispatch = Dispatch {
-        copies: Vec::new(),
+        blits: Vec::new(),
         function: "lcg_step".to_owned(),
         linked: Vec::new(),
         constants: Vec::new(),
@@ -622,7 +622,7 @@ fn wide_bindings() -> Plan {
     let mut buffers: Vec<BufferPlan> = inputs.iter().map(|w| private(word_bytes(w))).collect();
     buffers.push(unset(4 * WORDS as u64));
     let dispatch = Dispatch {
-        copies: Vec::new(),
+        blits: Vec::new(),
         function: "wide_bindings".to_owned(),
         linked: Vec::new(),
         constants: Vec::new(),
@@ -666,7 +666,7 @@ fn waves() -> Plan {
         library: Source::Authored,
         buffers: vec![unset(4 * THREADS), private(word_bytes(&[BASE, 0, 0, 0]))],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "wave_store".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -716,7 +716,7 @@ fn vote_loop() -> Plan {
         library: Source::Authored,
         buffers: vec![private(word_bytes(&steps)), unset(8 * u64::from(THREADS))],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "vote_loop".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -784,7 +784,7 @@ fn constant_reads(name: &str, storage: Storage, modified: Option<Range<u64>>) ->
             unset(4 * u64::from(THREADS)),
         ],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "constant_reads".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -834,7 +834,7 @@ fn narrow_ints() -> Plan {
         library: Source::Authored,
         buffers: vec![unset(4 * u64::from(THREADS))],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "narrow_mix".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -888,7 +888,7 @@ fn zero_products() -> Plan {
         library: Source::Authored,
         buffers: vec![unset(16 * u64::from(THREADS))],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "signed_zero_products".to_owned(),
             linked: Vec::new(),
             constants: vec![float(0, 0.0), float(1, -0.0)],
@@ -980,7 +980,7 @@ fn sampling_plan(
             TexturePlan::rgba16_float(to, to, None),
         ],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: function.to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),

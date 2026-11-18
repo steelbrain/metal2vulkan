@@ -92,7 +92,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
             modified: None,
         }],
         dispatches: vec![Dispatch {
-            copies: Vec::new(),
+            blits: Vec::new(),
             function: "copy_words".to_owned(),
             linked: Vec::new(),
             constants: Vec::new(),
@@ -546,15 +546,74 @@ fn a_faulty_description_is_refused_naming_its_line() {
         refusal(&format!(
             "{textures}set-buffer 0 0\ncopy-texture 0 0 0 0 4 4 1 1 0 0\n{dispatch}"
         )),
-        "line 7: a texture copy ends the compute encoder, so it goes before the set lines of its \
-         dispatch"
+        "line 7: a blit ends the compute encoder, so it goes before the set lines of its dispatch"
     );
     assert_eq!(
         refusal(&format!(
             "{textures}{dispatch}\ncopy-texture 0 0 0 0 4 4 1 1 0 0"
         )),
-        "workload w copies a texture after its last dispatch"
+        "workload w blits after its last dispatch"
     );
+    // Buffer 1 of 256 Shared bytes, then the blit on line 7.
+    let blit = |line: &str| {
+        refusal(&format!(
+            "{textures}buffer 256 shared zero\n{line}\n{dispatch}"
+        ))
+    };
+    let refusals = [
+        (
+            "copy-buffer-to-texture 2 0 32 0 4 4 0 0 0 0",
+            "buffer 2 is not made before it",
+        ),
+        (
+            "copy-buffer-to-texture 1 0 32 0 4 4 9 0 0 0",
+            "texture 9 is not made before it",
+        ),
+        (
+            "copy-buffer-to-texture 1 0 32 0 0 4 0 0 0 0",
+            "the region is empty",
+        ),
+        (
+            "copy-buffer-to-texture 1 2 32 0 4 4 0 0 0 0",
+            "an offset of 2 and rows 32 bytes apart are not whole rows of 16 bytes of RGBA8Unorm \
+             texels",
+        ),
+        (
+            "copy-texture-to-buffer 0 0 0 0 4 4 1 0 12 0",
+            "an offset of 0 and rows 12 bytes apart are not whole rows of 16 bytes of RGBA8Unorm \
+             texels",
+        ),
+        (
+            "copy-texture-to-buffer 0 0 0 0 4 4 1 200 32 0",
+            "the region's bytes end at 312, past buffer 1's 256",
+        ),
+        (
+            "copy-buffer-to-texture 1 0 32",
+            "copy-buffer-to-texture takes BUFFER OFFSET ROW-BYTES IMAGE-BYTES WIDTH HEIGHT TEXTURE \
+             SLICE X Y",
+        ),
+        (
+            "copy-texture-to-buffer 0 0 0 0",
+            "copy-texture-to-buffer takes TEXTURE SLICE X Y WIDTH HEIGHT BUFFER OFFSET ROW-BYTES \
+             IMAGE-BYTES",
+        ),
+        (
+            "fill-buffer 1 250 8 0",
+            "a fill of 250..258 is empty or past buffer 1's 256 bytes",
+        ),
+        (
+            "fill-buffer 1 0 0 0",
+            "a fill of 0..0 is empty or past buffer 1's 256 bytes",
+        ),
+        ("fill-buffer 1 0 4 256", "256 is not a whole number"),
+        (
+            "fill-buffer 1 0",
+            "fill-buffer takes BUFFER OFFSET LENGTH VALUE",
+        ),
+    ];
+    for (line, why) in refusals {
+        assert_eq!(blit(line), format!("line 7: {why}"), "{line}");
+    }
     assert_eq!(
         refused("buffer 16 private zero"),
         "line 1: buffer before a workload"

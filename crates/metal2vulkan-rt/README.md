@@ -323,8 +323,9 @@ made, with no lock, and never rewritten for layouts.
   segments, one `VkCommandBuffer` each where it has commands. Each ends with one global memory
   barrier: its writes are visible to every later command, and later commands run after its own,
   as Metal orders a queue's command buffers. The barrier also reaches the host where the segment
-  wrote Shared memory (a Shared buffer bound or declared for writing, or a write through an address
-  outside the dispatch's resources) or signals an event, so the host reads those writes once the
+  wrote Shared memory (a Shared buffer bound or declared for writing, a write through an address
+  outside the dispatch's resources, or a blit copy or fill into a Shared buffer) or signals an
+  event, so the host reads those writes once the
   command buffer completes or it sees the event; a segment that wrote only Private memory leaves
   the host out. No segment starts with a barrier of its own; a blit copy records its own two
   (see "Blit encoders").
