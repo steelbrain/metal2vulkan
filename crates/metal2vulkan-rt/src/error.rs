@@ -167,8 +167,8 @@ pub enum Refusal {
     /// [`CommandBuffer::commit`](crate::CommandBuffer::commit), the waits
     /// ([`CommandBuffer::wait_until_scheduled`](crate::CommandBuffer::wait_until_scheduled),
     /// [`CommandBuffer::wait_until_completed`](crate::CommandBuffer::wait_until_completed),
-    /// [`Event::wait_until_signaled_value`](crate::Event::wait_until_signaled_value)), the uploads
-    /// and readbacks ([`Texture::replace_region`](crate::Texture::replace_region),
+    /// [`SharedEvent::wait_until_signaled_value`](crate::SharedEvent::wait_until_signaled_value)),
+    /// the uploads and readbacks ([`Texture::replace_region`](crate::Texture::replace_region),
     /// [`Texture::upload_region`](crate::Texture::upload_region),
     /// [`Texture::get_bytes`](crate::Texture::get_bytes),
     /// [`Device::zero_block_range`](crate::Device::zero_block_range)), and the objects that take
