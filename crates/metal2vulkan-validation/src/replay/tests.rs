@@ -1263,6 +1263,33 @@ fn a_device_identity_record_tells_the_backend_how_managed_buffers_were_kept() {
     assert_eq!(report.total.stream["calls"], 2);
 }
 
+/// Of two recorded devices, the one the guest makes its objects on tells the Managed form, whichever
+/// identity record comes last; the other is named on the report's line.
+#[test]
+fn the_guest_s_device_tells_the_managed_form() {
+    for (guest, unified) in [(1, true), (2, false)] {
+        let mut kept = Kept::default();
+        let (report, ended) = played(&mut kept, |w| {
+            w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+            w.call("MTLCreateSystemDefaultDevice", 0, 2, &[], &[])?;
+            // One identity record per live device, in id order: device 1 unified, device 2 not.
+            for (device, unified) in [(1, true), (2, false)] {
+                let answers = [("hasUnifiedMemory", Value::Bool(unified))];
+                w.call("m2v.deviceIdentity", device, 0, &[], &answers)?;
+            }
+            for queue in [3, 4] {
+                w.call("newCommandQueue", guest, queue, &[], &[])?;
+            }
+            Ok(())
+        });
+        ended.unwrap();
+        assert_eq!(kept.unified, Some(unified), "the guest on #{guest}");
+        assert_eq!(report.other_devices, [3 - guest]);
+        let line = format!("devices apart from the guest's: #{}", 3 - guest);
+        assert!(report.lines().contains(&line), "{:?}", report.lines());
+    }
+}
+
 /// Each frame's end reports the backend's gauges as they stand then, never their growth over the
 /// frame, beside the frame's wall time.
 #[test]

@@ -105,7 +105,10 @@ and the (name id, value) answer pairs.
   in id order. Its answers are `name` (the recording runtime's device name) and
   `hasUnifiedMemory` (what the guest's `hasUnifiedMemory` answered), and later keys may join them.
   It plays as nothing; the player takes from it how the recording kept Managed buffers
-  (section 10). A stream without it says nothing of that.
+  (section 10), from the record of the device the guest makes its objects on: the one that most
+  calls making an object have as their receiver (the lowest id of a tie). Another device's record
+  (the host's own, such as the display's) says nothing of the guest's buffers, and the report names
+  such devices. A stream without it says nothing of that.
 - Everything else is made by its Metal selector: queues, command buffers, encoders of every kind,
   buffers, heaps, textures and views, samplers, depth and stencil states, events, shared events,
   fences, indirect command buffers, libraries, functions, pipeline states, argument encoders and
@@ -566,7 +569,8 @@ spilled bytes (`managed_spilled_bytes`) and idle Shared and
 Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
 `private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),
-`check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
+`devices apart from the guest's: #ID ...` where the stream recorded devices besides the one the
+guest makes its objects on (section 4), `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
 runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
 `m2v.privateBytes` range compared, `split N executed COUNTS` where the player split compute

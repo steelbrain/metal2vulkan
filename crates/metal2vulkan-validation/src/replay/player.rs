@@ -239,6 +239,9 @@ pub struct Report {
     pub ends: Vec<End>,
     /// The CPU's writes into Managed textures, and those a committed user may still be using.
     pub texture_writes: TextureWrites,
+    /// The recorded devices other than the one the guest makes its objects on, whose identity
+    /// records the play takes nothing from (`Player::guest_device`).
+    pub other_devices: Vec<u64>,
 }
 
 /// The CPU's writes into Managed textures (`replaceRegion:...` and any other call on a texture
@@ -548,6 +551,12 @@ impl Report {
                 .map_or("none".to_owned(), |played| format!("{played:#x}"));
             lines.push(format!("id #{} {:#x} {played}", id.object, id.recorded));
         }
+        if !self.other_devices.is_empty() {
+            let devices: String = (self.other_devices.iter())
+                .map(|d| format!(" #{d}"))
+                .collect();
+            lines.push(format!("devices apart from the guest's:{devices}"));
+        }
         for private in &self.private {
             let verdict = match private.differing {
                 0 => "match".to_owned(),
@@ -752,6 +761,10 @@ pub struct Player<'b, B: Backend> {
     ahead: HashMap<u64, Vec<Around>>,
     /// The placement heaps' layouts on the runtime, read ahead, by heap.
     layouts: HashMap<u64, Layout>,
+    /// The recorded device the guest makes its objects on, read ahead: the one that most calls
+    /// making an object have as their receiver (the lowest id of a tie). Only its identity record
+    /// tells the backend the Managed form; none where no call makes an object on a device.
+    guest_device: Option<u64>,
     /// The next call's position: the calls stepped so far.
     position: u64,
     /// The compute encoders open while a record names a later dispatch.
@@ -966,6 +979,7 @@ impl<'b, B: Backend> Player<'b, B> {
             outside: HashSet::new(),
             ahead: HashMap::new(),
             layouts: HashMap::new(),
+            guest_device: None,
             position: 0,
             encoders: HashMap::new(),
             done: VecDeque::new(),
@@ -1076,7 +1090,16 @@ impl<'b, B: Backend> Player<'b, B> {
         // Each placement heap's recorded size and, by offset, the most bytes and the largest
         // alignment the runtime answers for what the stream places there.
         let mut heaps: HashMap<u64, (u64, Placements)> = HashMap::new();
+        // The objects made on each recorded device.
+        let mut made_on: BTreeMap<u64, u64> = BTreeMap::new();
         while let Ok(Some(call)) = ahead.next_call() {
+            if &*call.selector == "MTLCreateSystemDefaultDevice" {
+                made_on.entry(call.result).or_default();
+            } else if call.result != 0 {
+                if let Some(made) = made_on.get_mut(&call.receiver) {
+                    *made += 1;
+                }
+            }
             match &*call.selector {
                 PRIVATE_BYTES => {
                     let (dispatch, around) = Around::of(&call)?;
@@ -1119,6 +1142,12 @@ impl<'b, B: Backend> Player<'b, B> {
             }
             position += 1;
         }
+        let most = made_on.iter().filter(|(_, &made)| made > 0);
+        let most = most.max_by_key(|&(&device, &made)| (made, std::cmp::Reverse(device)));
+        self.guest_device = most.map(|(&device, _)| device);
+        self.report.other_devices = (made_on.keys().copied())
+            .filter(|&device| self.guest_device.is_some_and(|guest| guest != device))
+            .collect();
         for (heap, (size, placed)) in heaps {
             let layout = relay(size, &placed);
             let moved = layout.offsets.iter().filter(|(was, now)| was != now);
@@ -1246,8 +1275,12 @@ impl<'b, B: Backend> Player<'b, B> {
                 let queue = self.queue_of(call.receiver)?;
                 self.part(queue, call.result)
             }
+            // The guest's device's identity: another device's (the host's own) does not say how the
+            // guest's Managed buffers were kept.
             "m2v.deviceIdentity" => {
-                if let Some(unified) = call.answer("hasUnifiedMemory").and_then(Value::as_bool) {
+                let unified = call.answer("hasUnifiedMemory").and_then(Value::as_bool);
+                let guest = self.guest_device.is_none_or(|guest| guest == call.receiver);
+                if let (Some(unified), true) = (unified, guest) {
                     self.backend.recorded_unified_memory(unified);
                 }
                 Ok(())
