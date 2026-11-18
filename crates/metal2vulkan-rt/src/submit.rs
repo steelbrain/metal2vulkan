@@ -9,7 +9,10 @@
 //! when the host is to wait for one of them ([`Work::send`]), or at teardown. A segment that
 //! signals an event ends its group, which goes at once; one that waits on a semaphore leads a new
 //! group, the one held going first. A group is one submission with one signal of the progress
-//! semaphore, which the completion thread follows in commit order.
+//! semaphore, which the completion thread follows in commit order. A command buffer that takes no
+//! submission of its own (one with nothing for the GPU, or one ended with an error) and finds a
+//! group held joins it, and the group goes at once: what it retires behind is then submitted, so
+//! its completion waits on nothing that only a later completion or wait would send.
 //!
 //! The upload is bounded: a call that finds it holding [`UPLOAD_ENTRIES`] calls, or
 //! [`UPLOAD_BYTES`] of memory it alone keeps, has it submitted and waits for it to complete before
@@ -745,20 +748,26 @@ impl Work {
     /// Ends `queue`'s command buffers not yet in a submission or a group with `NotRun`. A group
     /// it holds still goes: its command buffers are scheduled.
     pub(crate) fn abandon(&self, core: &Core, queue: &QueueInner) {
-        let ended = {
+        let (ended, held) = {
             let mut state = self.lock();
-            match state.fifos.iter_mut().find(|fifo| fifo.queue.is(queue)) {
+            let (ended, held) = match state.fifos.iter_mut().find(|fifo| fifo.queue.is(queue)) {
                 Some(fifo) => {
                     let entries: Vec<Entry> = fifo.entries.drain(..).collect();
                     let mut ended = Vec::new();
                     for entry in entries {
                         fifo.end(entry, CommandBufferError::NotRun, &mut ended);
                     }
-                    ended
+                    (ended, fifo.group.is_some())
                 }
-                None => Vec::new(),
-            }
+                None => (Vec::new(), false),
+            };
+            // The ended ones joined the group held, which goes at once.
+            state.dirty |= held;
+            (ended, held)
         };
+        if held {
+            self.wake();
+        }
         core.done.end_all(core, ended);
     }
 
@@ -1172,8 +1181,8 @@ impl Fifo {
     }
 
     /// Retires a committed command buffer with no submission of its own: behind the group held,
-    /// which it joins to retire with; else once the queue's submissions in flight and the command
-    /// buffers it ended before complete, at once where none is.
+    /// which it joins to retire with and which goes at once; else once the queue's submissions in
+    /// flight and the command buffers it ended before complete, at once where none is.
     fn behind_held(
         &mut self,
         cb: Arc<CbInner>,
@@ -1182,7 +1191,12 @@ impl Fifo {
         ended: &mut Vec<Ended>,
     ) {
         match &mut self.group {
-            Some(group) => group.finished.push((cb, pending, error)),
+            Some(group) => {
+                // Sent as a host wait for it would send it (`Work::send`): its completion then
+                // waits only on submitted work.
+                self.send_through = self.send_through.max(group.first);
+                group.finished.push((cb, pending, error));
+            }
             None => {
                 let in_flight = self.in_flight.back().copied().unwrap_or(0);
                 pending.value = pending.value.max(in_flight).max(self.behind);

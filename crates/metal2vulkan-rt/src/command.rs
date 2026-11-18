@@ -216,7 +216,12 @@ pub(crate) struct Pending {
 impl Pending {
     /// How many of its slot's two queries the segments it has passed to the GPU write, the start
     /// first: the start in the first segment with commands, the end in the last segment, which
-    /// its commit gave commands unless the command buffer has nothing for the GPU.
+    /// its commit gave commands unless the command buffer has nothing for the GPU. A segment is
+    /// passed once the submit thread stages it into its queue's group, which is always submitted:
+    /// it goes before any later one, and at a loss or a failed submission the command buffer ends
+    /// `DeviceLost`, whose timestamps are never read. So the completion thread's read, which waits
+    /// and which it makes only for a command buffer that completed with both counted, waits only
+    /// on queries a submission it saw complete wrote.
     pub(crate) fn stamps_written(&self) -> u32 {
         let segments = &self.gpu.segments;
         let start = (segments[..self.next].iter()).any(|segment| segment.command.is_some());

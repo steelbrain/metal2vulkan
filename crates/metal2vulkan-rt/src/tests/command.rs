@@ -586,6 +586,57 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A command buffer that takes no submission of its own sends the group its queue holds, so
+    /// its completion waits only on submitted work: one with nothing for the GPU committed behind
+    /// the group, and one ended `NotRun` by `abandon` while it waited behind the group on an event
+    /// the host never sets. Behind two busy submissions a fill is held (no submission of its own);
+    /// each such command buffer then has the group submitted before the first busy one ends on the
+    /// GPU, where a group left held goes only once that one completes.
+    #[test]
+    fn every_device_sends_the_held_group_a_command_buffer_without_a_submission_retires_behind() {
+        each_device("command_unheld", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let a = arena.buffer();
+            let event = shared_event(&device);
+            let queue = queue(&device);
+            let submissions = || device.counters().metrics().submissions;
+            for abandoned in [false, true] {
+                let case = if abandoned { "ended NotRun" } else { "empty" };
+                let mut kept = Vec::new();
+                behind_two(name, &device, &queue, |running, before| {
+                    let work = queue_fill(&queue, &a, 1);
+                    within(name, || work.status() != CommandBufferStatus::Committed);
+                    let held = submissions();
+                    let behind = queue.command_buffer().expect("a command buffer");
+                    if abandoned {
+                        (behind.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+                    }
+                    behind.commit().expect("a commit");
+                    if abandoned {
+                        queue.abandon();
+                    }
+                    within(name, || submissions() > held);
+                    let seen = host_time();
+                    finished(name, &running[0]);
+                    // The fill was held behind both busy ones, and its group went before the first
+                    // of them ended on the GPU.
+                    let checked = held == before + 2 && running[0].gpu_end_time() > seen;
+                    kept.extend([work, behind]);
+                    checked
+                });
+                waits_return(name, case, kept.clone());
+                let errors: Vec<_> = kept.iter().map(CommandBuffer::error).collect();
+                let ended = abandoned.then_some(CommandBufferError::NotRun);
+                assert!(
+                    errors.chunks(2).all(|pair| pair == [None, ended]),
+                    "{name}: {case}: {errors:?}"
+                );
+            }
+            println!("{name}: a command buffer without a submission sent the held group");
+            drop((a, arena, event, queue, device));
+        });
+    }
+
     /// A wait the host's value meets is submitted with no semaphore wait (the semaphore never
     /// reaches it, so one would hang), and a GPU signal not above the host's value is left out.
     #[test]
@@ -1052,11 +1103,11 @@ pub(crate) mod on_device {
     }
 
     /// The command buffers of one submission retire in commit order, each with its own status
-    /// and GPU times: a group held behind two running submissions takes a command buffer, one
-    /// ended by an abandon while enqueued and committed after it, and two more; they complete in
-    /// that order, the ended one `NotRun` with no times. The other three, each the same work, run
-    /// back to back: each starts no earlier than the one before ends, where one shared end less
-    /// each one's duration would overlap them.
+    /// and GPU times: a group held behind two running submissions takes three command buffers,
+    /// then one ended by an abandon while enqueued and committed after them, which sends it; they
+    /// complete in that order, the ended one `NotRun` with no times. The other three, each the
+    /// same work, run back to back: each starts no earlier than the one before ends, where one
+    /// shared end less each one's duration would overlap them.
     #[test]
     fn every_device_retires_a_group_in_commit_order_each_with_its_own_times() {
         each_device("command_group_order", |name, _, device| {
@@ -1090,20 +1141,19 @@ pub(crate) mod on_device {
             behind_two(name, &device, &queue, |_, before| {
                 let log = Log::default();
                 let first = member("1", &log, &buffers[0], 1);
+                let rest = [
+                    member("2", &log, &buffers[1], 3),
+                    member("3", &log, &buffers[2], 4),
+                ];
                 // Joined to the group before the abandon, which ends only what is not.
-                within(name, || first.status() != CommandBufferStatus::Committed);
+                within(name, || rest[1].status() != CommandBufferStatus::Committed);
+                let submissions = device.counters().metrics().submissions - before;
                 let ended = queue.command_buffer().expect("a command buffer");
-                log.handlers("2", &ended);
+                log.handlers("4", &ended);
                 ended.enqueue().expect("an enqueue");
                 queue.abandon();
                 ended.commit().expect("a commit");
-                let rest = [
-                    member("3", &log, &buffers[1], 3),
-                    member("4", &log, &buffers[2], 4),
-                ];
-                within(name, || rest[1].status() != CommandBufferStatus::Committed);
-                let submissions = device.counters().metrics().submissions - before;
-                for command_buffer in [&first, &ended].into_iter().chain(&rest) {
+                for command_buffer in [&first].into_iter().chain(&rest).chain([&ended]) {
                     finished(name, command_buffer);
                 }
                 let completed: Vec<String> = (log.lines().into_iter())
@@ -1113,9 +1163,9 @@ pub(crate) mod on_device {
                     completed,
                     [
                         "1 completed Completed None",
-                        "2 completed Error Some(NotRun)",
+                        "2 completed Completed None",
                         "3 completed Completed None",
-                        "4 completed Completed None",
+                        "4 completed Error Some(NotRun)",
                     ],
                     "{name}"
                 );

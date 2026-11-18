@@ -478,7 +478,9 @@ made, with no lock, and never rewritten for layouts.
   the last segment is in a submission: passed to `vkQueueSubmit2`, or in a group held. A command
   buffer whose segments hold no commands, no event wait and no event signal takes no submission:
   the submit thread schedules it as it reaches it, and it completes with its queue's command
-  buffer before it, in a group held or in flight, or at once where that one has completed.
+  buffer before it, in flight, or at once where that one has completed. Where that one is in a
+  group held, it joins the group, which goes at once, so its completion waits only on submitted
+  work.
 - The completion thread retires command buffers as the progress semaphore reaches them, a
   submission's in commit order: the status, the blocks they kept, their recorders and their place
   in the queue, then the handlers. Scheduled and completed handlers run on it, every device's in
@@ -488,7 +490,7 @@ made, with no lock, and never rewritten for layouts.
   buffer alone. Without a wait or a hint, the lateness is bounded only while two submissions are
   in flight, and the completion that leaves fewer sends the group (the measured lateness is under
   "Known gaps"). A command buffer ended while its queue holds a group joins it, and retires in its
-  place.
+  place; the group goes at once.
 - A command buffer's times, its GPU times included, are nanoseconds of one host clock,
   `host_time()`: `CLOCK_MONOTONIC` on Linux and other Unix systems, `CLOCK_MONOTONIC_RAW` on
   macOS and the performance counter on Windows, each the host time domain the device calibrates
@@ -526,7 +528,7 @@ made, with no lock, and never rewritten for layouts.
 - `CommandQueue::abandon` ends every command buffer of the queue held at an event wait or not yet
   scheduled with `NotRun` and runs its handlers, as a Mac drops a dead process's held work, each
   retiring in the queue's order. Segments already submitted still complete, and so does a group
-  held; the queue stays usable.
+  held, which those it ended join and which goes at once; the queue stays usable.
 - At a loss of the device (or a failed submission, which the runtime takes as one), the submit
   thread ends what it holds, the completion thread ends what is in flight once the device is idle
   (at once on a lost device), host waits for pending signals end false, and every later commit
