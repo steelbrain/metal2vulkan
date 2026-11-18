@@ -21,7 +21,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 22] = [
+pub const WORKLOADS: [Workload; 23] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -109,6 +109,10 @@ pub const WORKLOADS: [Workload; 22] = [
     Workload {
         name: "constant_private",
         plan: constant_private,
+    },
+    Workload {
+        name: "texture_read",
+        plan: texture_read,
     },
 ];
 
@@ -1130,4 +1134,39 @@ fn constexpr_sampling() -> Plan {
         (double, expected),
         None,
     )
+}
+
+/// A texture read out to a buffer: each thread of a 2048x2048 grid, in threadgroups of 16x16,
+/// reads its texel of an `RGBA16Float` texture and stores it as a `float4` at `y * 2048 + x`
+/// (`texels_out`), 64 MiB stored. The kernel reads its position in the grid and nothing of its
+/// threadgroup, so a runtime may run it in workgroups of any shape; on some drivers a store per
+/// thread through a device address takes twice as long in 16x16 workgroups as in wide ones.
+fn texture_read() -> Plan {
+    const SIDE: u32 = 2048;
+    let texels = sixteenths(17, SIDE);
+    let stored = texels.iter().map(|texel| texel.to_bits()).collect();
+    Plan {
+        name: "texture_read".to_owned(),
+        library: Source::Authored,
+        buffers: vec![unset(16 * u64::from(SIDE) * u64::from(SIDE))],
+        textures: vec![TexturePlan::rgba16_float(SIDE, SIDE, Some(texels))],
+        dispatches: vec![Dispatch {
+            blits: Vec::new(),
+            function: "texels_out".to_owned(),
+            linked: Vec::new(),
+            constants: Vec::new(),
+            bindings: vec![texture(0, 0), buffer(0, 0), bytes(1, word_bytes(&[SIDE]))],
+            grid: texel_grid(SIDE),
+        }],
+        expect: vec![Expect {
+            buffer: 0,
+            values: Values::Words(stored),
+        }],
+        expect_textures: Vec::new(),
+        outputs: Vec::new(),
+        per_command_buffer: None,
+        per_encoder: None,
+        commit_to_complete: false,
+        scaled: None,
+    }
 }
