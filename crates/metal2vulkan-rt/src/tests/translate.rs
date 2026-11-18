@@ -1033,7 +1033,8 @@ mod on_device {
         });
     }
 
-    /// Every file under `dir`: its path under it, its length and its time on disk, in order.
+    /// Every file the store keeps under `dir`, its count (`state`) aside: its path under it, its
+    /// length and its time on disk, in order.
     fn files(dir: &Path) -> Vec<(String, u64, SystemTime)> {
         fn under(root: &Path, dir: &Path, all: &mut Vec<(String, u64, SystemTime)>) {
             for entry in std::fs::read_dir(dir).expect("the directory").flatten() {
@@ -1050,6 +1051,7 @@ mod on_device {
         }
         let mut all = Vec::new();
         under(dir, dir, &mut all);
+        all.retain(|(file, ..)| file != "state");
         all.sort();
         all
     }
@@ -1058,7 +1060,7 @@ mod on_device {
     fn pipeline_files(files: &[(String, u64, SystemTime)]) -> usize {
         files
             .iter()
-            .filter(|(file, ..)| file.starts_with("pipelines/"))
+            .filter(|(file, ..)| file.contains("/pipelines/"))
             .count()
     }
 
@@ -1178,7 +1180,7 @@ mod on_device {
                 .filter(|file| !before.contains(file))
                 .map(|(file, ..)| file)
                 .collect();
-            let pipelines = added.iter().filter(|file| file.starts_with("pipelines/"));
+            let pipelines = added.iter().filter(|file| file.contains("/pipelines/"));
             assert_eq!(pipelines.count(), 1, "{name}: added {added:?}");
             println!("{name}: the second process added {added:?}, rewrote nothing");
         }

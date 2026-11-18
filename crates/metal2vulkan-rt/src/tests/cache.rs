@@ -353,12 +353,12 @@ fn store_stress_child() {
 fn stores_in_threads_and_processes_racing_writes_moves_and_flips_corrupt_nothing() {
     let scratch = Scratch::new("store-stress");
     let exe = std::env::current_exe().expect("the test binary");
-    let mut children: Vec<_> = (0..3)
+    let children: Vec<_> = (0..3)
         .map(|_| {
             std::process::Command::new(&exe)
                 .args(["tests::cache::store_stress_child", "--exact", "--ignored"])
                 .env(STRESS_DIR, &scratch.0)
-                .stdout(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
                 .spawn()
                 .expect("a child")
         })
@@ -378,20 +378,23 @@ fn stores_in_threads_and_processes_racing_writes_moves_and_flips_corrupt_nothing
         }
     });
     let start = Instant::now();
-    for child in &mut children {
-        let status = loop {
-            if let Some(status) = child.try_wait().expect("the child") {
-                break status;
-            }
+    for mut child in children {
+        while child.try_wait().expect("the child").is_none() {
             if start.elapsed() > Duration::from_secs(120) {
                 let _ = child.kill();
                 panic!("a child ran past two minutes");
             }
             std::thread::sleep(Duration::from_millis(10));
-        };
+        }
+        let out = child.wait_with_output().expect("the child's output");
+        let said = String::from_utf8_lossy(&out.stdout);
         assert!(
-            status.success(),
-            "a child read a file whole each time: {status}"
+            out.status.success(),
+            "a child read a file whole each time: {said}"
+        );
+        assert!(
+            said.contains("1 passed"),
+            "the child ran the stress: {said}"
         );
     }
     for store in &stores {

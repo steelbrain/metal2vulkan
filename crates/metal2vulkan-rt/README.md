@@ -42,7 +42,9 @@ The runtime runs four threads per device: the block-maker, the submit thread, th
 thread, and the reaper, which frees the semaphores and command pools the others give up, one at a
 time, so no driver free runs on the completion thread and a submission waits behind at most one,
 lowers the compute pipeline states' emulated-SIMD-group variants after their creation returned,
-and writes each new `VkPipeline`'s data to the cache directory.
+and writes each new `VkPipeline`'s data to the cache directory. While an old generation of the
+cache directory is removed, a thread of the store's own does it, and ends with the removal; no
+teardown waits for it.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
@@ -877,7 +879,7 @@ that touch blocks first.
 ### The cache directory
 
 `DeviceOptions::pipeline_cache_dir` names a directory, made where it is missing, that the device
-keeps two things in, for compute and render pipeline states:
+keeps two kinds of file in, for compute and render pipeline states:
 
 - `translations/`: each function's lowering, a kernel's or a render pipeline's vertex or fragment
   function's, named by its `FunctionCompileKey`, which covers everything that changes the
@@ -896,17 +898,30 @@ keeps two things in, for compute and render pipeline states:
   nothing on the calling thread. At most 64 caches wait for the reaper; past that a pipeline's data is not
   written, and its next creation is a miss.
 
-The files of both kinds take at most `DeviceOptions::pipeline_cache_cap` bytes together (512 MiB
-where it is `None`); past it the least recently used go first. A file's use is its time on disk,
-moved forward when a use finds it more than an hour old, so the order holds across runs.
-`Metrics::cache_bytes_written` counts the bytes the device wrote there.
+Both kinds live in two generations, `g<N>/` (young) and `g<N-1>/` (old), each holding at most half
+of `DeviceOptions::pipeline_cache_cap` (512 MiB where it is `None`). A lookup tries young, then
+old, and a hit in old moves the file into young by a rename. A new file goes into young. The write
+that takes young past half the cap starts the next generation: young becomes old, and the old one
+is removed whole, by a thread the store starts for it. So a file stays for at least half the cap,
+and at most the whole cap, of files written or moved after its last use. Half the cap is what the
+store is sure to keep: a set of pipelines used over and over that is larger than half the cap is
+partly removed at each new generation and compiled again. On disk the store takes at most the
+cap, and while a removal runs, also what is left of the generation it removes. A file larger than
+half the cap is not kept. `Metrics::cache_bytes_written` counts the bytes the device wrote there.
+
+The bytes young holds are counted in `state`, a file of 24 bytes beside the generations, read and
+written under its lock, so devices open on one directory, in one process or several, share its
+files and one count; they should pass one cap, since each starts a generation at half its own.
+Opening the directory reads `state` and checks for a generation a removal left unfinished,
+which it then removes; it lists no directory and keeps nothing per file in memory.
 
 Each write is a temporary file renamed over its name, and each file checks itself (the
-translator's self-checking encoding, the pipeline data's checksum), so a file cut short is a
-miss. A failed read or write is a miss too, and never fails a call. Devices open on one
-directory, in one process or several, share its files, each keeping the cap over the files it
-knows: those there when it was made, and those it wrote or read since; a file another removed is
-a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is made without a
+translator's self-checking encoding, the pipeline data's checksum), so a file cut short, by a
+crash or a power loss, is a miss and is removed: nothing unchecked reaches the driver. A failed
+read or write, a full disk included, is a miss too, and never fails a call; in a directory the
+device can read and not write, its hits stay where they are and it writes nothing. A `state` that
+is missing or does not check is rebuilt from the generations' names, with young counted full.
+With no directory, nothing is kept on disk, and each `VkPipeline` is made without a
 `VkPipelineCache`.
 
 ### Known gaps of pipeline states

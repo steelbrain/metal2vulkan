@@ -242,18 +242,21 @@ pub struct DeviceOptions {
     /// compiled data in, made where it is missing, so a later device on it, in this process or
     /// another, takes them in place of lowering and compiling again
     /// ([`Metrics::translations_loaded`]). The files take at most
-    /// [`pipeline_cache_cap`](Self::pipeline_cache_cap) bytes, the least recently used going
-    /// first past it; a file that does not check, or a failed read or write, is a miss and never
-    /// fails a call. `None` keeps nothing on disk, so every boot lowers every kernel and compiles
+    /// [`pipeline_cache_cap`](Self::pipeline_cache_cap) bytes, in two generations of half of it
+    /// each: a file used again moves into the young one, and the old one is removed whole when
+    /// the young one fills. A file that does not check, or a failed read or write, is a miss and
+    /// never fails a call. `None` keeps nothing on disk, so every boot lowers every kernel and compiles
     /// every pipeline cold: a consumer should pass a directory. Metal keeps its compiled shaders
     /// in a system cache the program does not name.
     ///
     /// [`Metrics::translations_loaded`]: crate::Metrics::translations_loaded
     pub pipeline_cache_dir: Option<PathBuf>,
     /// The most bytes the files in [`pipeline_cache_dir`](Self::pipeline_cache_dir) take, the
-    /// lowered kernels and the pipelines' data together; `None` is 512 MiB. Devices on one
-    /// directory share its files, each keeping the cap over the files it knows: those there when
-    /// it was made, and those it wrote or read since.
+    /// lowered kernels and the pipelines' data together; `None` is 512 MiB. Half of it is what the
+    /// directory is sure to keep: a file stays for at least half the cap, and at most the cap, of
+    /// files written or used after its last use, and a file larger than half is not kept. Devices
+    /// on one directory, in one process or several, share its files and one count of their bytes,
+    /// and should pass one cap: each starts a new generation at half its own.
     pub pipeline_cache_cap: Option<u64>,
 }
 
