@@ -144,6 +144,12 @@ impl DeviceProfile {
         self.facts.deep_threadgroups
     }
 
+    /// What a read of an argument the pipeline's function constants removed does beside taking
+    /// zero.
+    pub(crate) fn absent_reads(&self) -> AbsentReads {
+        self.facts.absent_reads
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -591,6 +597,9 @@ pub(crate) struct ProfileFacts {
     /// How a kernel whose workgroup is its threadgroup runs a deep threadgroup, and the
     /// threadgroup the device reports it runs.
     pub(crate) deep_threadgroups: DeepThreadgroups,
+    /// What a read of an argument the pipeline's function constants removed does beside taking
+    /// zero.
+    pub(crate) absent_reads: AbsentReads,
 }
 
 impl ProfileFacts {
@@ -606,6 +615,7 @@ impl ProfileFacts {
         identity_region: IdentityRegion::Grid,
         oblivious_edge: ObliviousEdge::Partial,
         deep_threadgroups: DeepThreadgroups::Axes,
+        absent_reads: AbsentReads::Marked,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -620,6 +630,7 @@ impl ProfileFacts {
         identity_region: IdentityRegion::Sized,
         oblivious_edge: ObliviousEdge::Grid,
         deep_threadgroups: DeepThreadgroups::OneRow,
+        absent_reads: AbsentReads::Nil,
     };
 }
 
@@ -680,6 +691,20 @@ pub(crate) enum ObliviousEdge {
     /// masks and shifts of its local index, and an invocation past the grid returning before the
     /// body. `Device::from_queries`' profile.
     Grid,
+}
+
+/// What a read of a texture, sampler or threadgroup memory argument the pipeline's function
+/// constants removed does beside taking zero (`lower::access::absent`). Metal gives such a read
+/// no value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AbsentReads {
+    /// Where the read runs it sets `StatusBits::ABSENT_ARGUMENT_READ` in the command buffer's
+    /// `ExecutionStatus` word, which the consumer reports as a failed execution:
+    /// `Device::new`'s profile.
+    Marked,
+    /// It takes zero and writes no status word, a read's zeros and a query's size of 0 being
+    /// what the nil texture, set 1's element 0, answers too: `Device::from_queries`' profile.
+    Nil,
 }
 
 /// How a kernel whose workgroup is its threadgroup (`lower::dispatch::LocalSizeForm::Spec`) runs

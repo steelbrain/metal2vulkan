@@ -17,6 +17,9 @@
 //!   aggregates and merges). A write to (or fence of) the gated-off texture itself is dropped, as
 //!   Metal drops it on every device and layer measured. Gated on, the same kernels compile, without
 //!   the fact.
+//! - A fragment function's read of a gated-off texture is the same absent read on `Device::new`'s
+//!   profiles. On `Device::from_queries`' (`AbsentReads::Nil`) it and a kernel's take the same
+//!   zero and mark nothing: no fact, no status push field or binding.
 //! - A gated-off input that only feeds an output gated by the same constant is not observed (the
 //!   return stores only declared outputs), so the entry compiles without either.
 //! - A gated-off value argument whose read nothing observes compiles (the read is `undef`); an
@@ -40,8 +43,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
-use crate::device::{DevicePolicy, DeviceProfile};
-use crate::error::{DescriptorError, Error, RuntimeInput};
+use crate::device::{Device, DevicePolicy, DeviceProfile};
+use crate::error::{DescriptorError, Error, Feature, RuntimeInput};
 use crate::library::{FunctionArtifact, FunctionConstantValue, FunctionConstantValues};
 use crate::metal::DataType;
 use crate::pipeline::artifact::PrecisionNote;
@@ -54,8 +57,8 @@ use crate::pipeline::relocate::relocate;
 use crate::pipeline::stage_io::{IoRole, StageBuiltin};
 use crate::pipeline::sym::{SlotClass, Stage};
 use crate::pipeline::testing::{
-    engine_dir, fixtures_dir, llvm_assemble, meter, profile, status_reach, status_reach_on,
-    AssembleError, Scratch,
+    description, engine_dir, fixtures_dir, llvm_assemble, llvm_assemble_text, meter, profile,
+    status_reach, status_reach_on, AssembleError, Scratch, StatusReach,
 };
 use crate::spirv::testing::{check_words_valid, committed_profiles};
 
@@ -784,4 +787,138 @@ fn an_observed_element_of_an_absent_texture_table_is_an_absent_read() {
     let entry = "fc_kernel_absent_table";
     absent_read(&bc, entry, &[(0, false)]);
     compiles(&bc, entry, &[(0, true)]);
+}
+
+/// Two functions whose one texture `t`, which the boolean constant 0 gates, each reads at (0, 0)
+/// on its one path: a fragment function returning the texel plus (0, 1, 0, 0), and a kernel
+/// storing the texel and `t`'s width into `out`.
+const ABSENT_READS: &str = r#"
+target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+@has_t.MTL_FC_INIT_0_b = linkonce_odr hidden local_unnamed_addr addrspace(2) externally_initialized constant i8 undef, section "air.fc_initializer", align 1
+@__metal_implicit_fc_pred_0 = internal addrspace(2) global i8 0, align 1
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @_GLOBAL__sub_I_, ptr null }]
+
+define <4 x float> @fc_fragment_absent_read(ptr addrspace(1) %t) {
+  %s = tail call ptr addrspace(2) @air.get_read_sampler()
+  %r = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 1)
+  %v = extractvalue { <4 x float>, i8 } %r, 0
+  %c = fadd <4 x float> %v, <float 0.000000e+00, float 1.000000e+00, float 0.000000e+00, float 0.000000e+00>
+  ret <4 x float> %c
+}
+
+define void @fc_kernel_absent_read(ptr addrspace(1) %t, ptr addrspace(1) %out) {
+  %s = tail call ptr addrspace(2) @air.get_read_sampler()
+  %r = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 1)
+  %v = extractvalue { <4 x float>, i8 } %r, 0
+  store <4 x float> %v, ptr addrspace(1) %out, align 4
+  %w = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) %t, i32 0)
+  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i64 4
+  store i32 %w, ptr addrspace(1) %o, align 4
+  ret void
+}
+
+declare ptr addrspace(2) @air.get_read_sampler()
+declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32)
+declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
+declare i8 @air.normalize_function_constant_predicate.i8(i8)
+
+define internal void @_GLOBAL__sub_I_() section "air.static_init" {
+  %1 = load i8, ptr addrspace(2) @has_t.MTL_FC_INIT_0_b, align 1
+  %2 = tail call i8 @air.normalize_function_constant_predicate.i8(i8 %1)
+  store i8 %2, ptr addrspace(2) @__metal_implicit_fc_pred_0, align 1
+  ret void
+}
+
+!air.fragment = !{!0}
+!air.kernel = !{!6}
+!air.function_constants = !{!10}
+!air.version = !{!20}
+!air.language_version = !{!21}
+
+!0 = !{ptr @fc_fragment_absent_read, !1, !3}
+!1 = !{!2}
+!2 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"color"}
+!3 = !{!4}
+!4 = !{i32 0, !"air.function_constant", !5, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.read", !"air.arg_type_name", !"texture2d<float, read>", !"air.arg_name", !"t"}
+!5 = !{ptr addrspace(2) @__metal_implicit_fc_pred_0, !"bool", !"has_t"}
+!6 = !{ptr @fc_kernel_absent_read, !7, !8}
+!7 = !{}
+!8 = !{!4, !9}
+!9 = !{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!10 = !{ptr addrspace(2) @has_t.MTL_FC_INIT_0_b, !"bool", !"has_t", i32 0}
+!20 = !{i32 2, i32 8, i32 0}
+!21 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+/// With `t` gated off, each of [`ABSENT_READS`]' reads is an absent read. On `Device::new`'s
+/// profiles it marks the status: the fragment function and the kernel state the read and the
+/// `ExecutionStatus` it marks, reached by address where the profile addresses buffers and through
+/// the stage's binding of it elsewhere, or, without the stage's stores and atomics, are refused as
+/// `FunctionConstantArgument`. On `Device::from_queries`' four drivers (`AbsentReads::Nil`) each
+/// takes zero and marks nothing: no fact, no status push field or binding, and no texture slot.
+/// Each module validates.
+#[test]
+fn an_absent_read_marks_through_device_new_and_takes_zero_alone_through_from_queries() {
+    let bc = match llvm_assemble_text(ABSENT_READS) {
+        Ok(b) => b,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the module: {why}"),
+    };
+    let off = [(0, false)];
+    let queried: Vec<(&str, Device)> = [
+        "moltenvk-m3",
+        "lavapipe",
+        "amd-780m-radv",
+        "nvidia-rtx50-linux",
+    ]
+    .into_iter()
+    .map(|stem| {
+        let desc = description(stem).expect("description");
+        let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        (stem, device)
+    })
+    .collect();
+    for (entry, stage) in [
+        ("fc_fragment_absent_read", Stage::Fragment),
+        ("fc_kernel_absent_read", Stage::Kernel),
+    ] {
+        let read = RuntimeFact::AbsentArgumentRead { stage };
+        let mut marked = 0;
+        for (stem, p) in committed_profiles().expect("profiles") {
+            match compile_result(&bc, entry, &off, &p) {
+                Ok(a) => {
+                    assert!(a.facts.contains(&read), "{stem} {entry}: {:?}", a.facts);
+                    assert!(
+                        a.facts.contains(&RuntimeFact::ExecutionStatus),
+                        "{stem} {entry}: {:?}",
+                        a.facts
+                    );
+                    assert_eq!(status_reach(&a), status_reach_on(&p), "{stem} {entry}");
+                    validate(&a, &p);
+                    marked += 1;
+                }
+                Err(Error::Unsupported(u)) if u.feature == Feature::FunctionConstantArgument => {}
+                Err(e) => panic!("{stem} {entry}: {e}"),
+            }
+        }
+        assert!(marked > 0, "{entry}: no committed profile marks the read");
+        for (stem, device) in &queried {
+            let p = device.profile();
+            let a = compile_result(&bc, entry, &off, p)
+                .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+            assert!(
+                !a.facts.contains(&read) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
+                "{stem} {entry}: {:?}",
+                a.facts
+            );
+            assert_eq!(status_reach(&a), StatusReach::None, "{stem} {entry}");
+            assert_eq!(texture_slots(&a), Vec::<u32>::new(), "{stem} {entry}");
+            validate(&a, p);
+        }
+    }
 }

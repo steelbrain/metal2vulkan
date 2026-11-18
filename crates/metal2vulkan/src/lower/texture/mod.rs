@@ -686,11 +686,12 @@ pub enum TextureStrategy {
 /// An operation on the absent handle, alone or as a switch-at-use's arm. Metal gives a read through
 /// a removed texture or sampler no value, so a read, query, sample, gather, atomic, or `is_null` is
 /// the absent read: it marks the command buffer's execution status where it runs
-/// (`access::absent::mark`), and yields zero. A write or fence of a removed texture is dropped, as
-/// Metal drops one, and marks nothing.
+/// (`access::absent::mark`) on a profile whose absent reads mark it, and yields zero. A write or fence of a removed texture is dropped, as Metal drops one, and
+/// marks nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AbsentArgument {
-    /// Whether the operation marks the status: every one but a write or a fence.
+    /// Whether the operation marks the status: every one but a write or a fence, on a profile
+    /// whose absent reads mark it (`access::absent::require`).
     pub marks: bool,
     /// What it yields: zero of its result's lowered type, or nothing.
     pub value: NullArm,
@@ -708,10 +709,8 @@ impl AbsentArgument {
         inst: &Inst,
         t: &crate::air::intrinsics::Texture,
     ) -> Result<TextureStrategy, Error> {
-        let marks = !matches!(t.op, TexOp::Write | TexOp::Fence);
-        if marks {
-            crate::lower::access::absent::require(cx)?;
-        }
+        let marks = !matches!(t.op, TexOp::Write | TexOp::Fence)
+            && crate::lower::access::absent::require(cx)?;
         let value = match cx.entry.module.types().get(inst.ty) {
             Some(crate::air::ir::Type::Void) | None => NullArm::Nothing,
             _ => NullArm::Zero(cx.lowered_repr(Value::Inst(at), inst.ty)?),

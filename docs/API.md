@@ -1516,9 +1516,9 @@ for dependency in &pipeline.dependencies {
   buffer view; a planned heap's members are textures with images, so only a heap set the consumer
   keeps for every command (each live texture at its resource ID) holds texture buffers. Push constants carry the values the
   binder writes per command. A stage that writes the command buffer's `ExecutionStatus` (an absent
-  argument's read, a `seq_cst` fence, an argument buffer's cubic sampler) reaches it by device
-  address, a push hole, where the device addresses buffers (`bufferDeviceAddress` and
-  `shaderInt64`), and through a set-0 storage buffer of its own
+  argument's read on `Device::new`'s profile, a `seq_cst` fence, an argument buffer's cubic
+  sampler) reaches it by device address, a push hole, where the device addresses buffers
+  (`bufferDeviceAddress` and `shaderInt64`), and through a set-0 storage buffer of its own
   (`SyntheticBinding::ExecutionStatus`) where it does not. That binding counts against the
   stage's storage-buffer limits: past one, an absent read or a fence is refused
   (`DescriptorCount`), and a stage that would bind it only to test its argument samplers for a
@@ -3451,7 +3451,9 @@ bound.
   Metal gives no value: its compiler drops or folds such a read, and with its debug layer every such
   read is zero. Cost: such a read takes zero, Metal's answer under its debug layer, and the command
   buffer completes, its execution report stating the read (absent_argument_read); without the layer
-  Metal's compiler drops or folds the read instead.
+  Metal's compiler drops or folds the read instead. On `Device::from_queries`' profile the read
+  takes the same zero, a read's zeros and a query's size of 0 as the nil texture answers, but
+  writes no status and states no fact, so nothing reports it.
 - `metal2vulkan-degrade-mixed-depth-stencil-resolve` (precision). `MixedDepthStencilResolve`: A
   render pass whose one depth/stencil texture stores and resolves its depth
   (`StoreAndMultisampleResolve`) while it resolves its stencil alone (`MultisampleResolve`), which

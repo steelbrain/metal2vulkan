@@ -12,24 +12,31 @@
 //! is on the read's path only: a run that never reaches the read is Metal's exactly, and a module
 //! without one is unchanged.
 //!
+//! On `Device::from_queries`' profile (`AbsentReads::Nil`) the read writes no status: it takes the
+//! same zero of its result's type (a read's zeros and a query's size of 0, which the nil
+//! texture, set 1's element 0, answers too) and fetches nothing, a write of a removed texture is
+//! dropped, and the stage takes no `ExecutionStatus` buffer, push field or fact for it.
+//! `Device::new`'s profile marks the status as above.
+//!
 //! A load or atomic of threadgroup memory the constants removed is the same read
 //! ([`FunctionConstant::AbsentMemory`]), and so is a texture operation on a removed texture or
 //! sampler that lowering reaches through memory, an aggregate, a table, or a merge
 //! (`texture::AbsentArgument`), which shares [`require`] and [`mark`].
 //!
-//! The stage states [`RuntimeFact::AbsentArgumentRead`] and [`RuntimeFact::ExecutionStatus`]. It
-//! reaches the buffer by its device address ([`PushField::ExecutionStatusAddress`]) where the
-//! device addresses buffers (`bufferDeviceAddress` and `shaderInt64`), and through a storage-buffer
-//! binding of its own (`SyntheticBinding::ExecutionStatus`, [`StatusBinding`]) where it does not,
-//! one more storage descriptor of the stage: a stage past a per-stage limit with it is refused as
-//! `DescriptorCount` (`lower::select`), naming the limit. A vertex or fragment function needs its
-//! stage's stores and atomics; a device without them refuses the read as
-//! `FunctionConstantArgument`, naming what it needs.
+//! Where its reads mark, the stage states [`RuntimeFact::AbsentArgumentRead`] and
+//! [`RuntimeFact::ExecutionStatus`]. It reaches the buffer by its device address
+//! ([`PushField::ExecutionStatusAddress`]) where the device addresses buffers
+//! (`bufferDeviceAddress` and `shaderInt64`), and through a storage-buffer binding of its own
+//! (`SyntheticBinding::ExecutionStatus`, [`StatusBinding`]) where it does not, one more storage
+//! descriptor of the stage: a stage past a per-stage limit with it is refused as `DescriptorCount`
+//! (`lower::select`), naming the limit. A vertex or fragment function needs its stage's stores
+//! and atomics; a device without them refuses the read as `FunctionConstantArgument`, naming what
+//! it needs.
 
 use crate::air::intrinsics::{AirIntrinsic, FunctionConstant};
 use crate::air::ir::{Callee, Inst, InstId, InstKind, Type, Value, ValueId};
 use crate::bind::status::{StatusBits, StatusWord};
-use crate::device::profile::BufferAccess;
+use crate::device::profile::{AbsentReads, BufferAccess};
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::lower::emit::EmitCx;
@@ -44,11 +51,13 @@ use crate::spirv::error::BResult;
 use crate::spirv::ids::DemoteTy;
 use crate::spirv::ir::{AtomicOp, BinOp, Constant, Scope, Semantics, Type as SType};
 
-/// An absent read ([`FunctionConstant::AbsentRead`]): the status write, then zero.
+/// An absent read ([`FunctionConstant::AbsentRead`]): the status write where it marks, then zero.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AbsentRead {
     /// The lowered representation of the read's result; `None` for a read of no result.
     pub result: Option<DemoteTy>,
+    /// Whether it sets the status bit (`AbsentReads::Marked`, [`require`]).
+    pub marks: bool,
 }
 
 impl AbsentRead {
@@ -57,11 +66,15 @@ impl AbsentRead {
         "access.absent_read"
     }
 
-    /// An upper estimate of the SPIR-V words one read emits: the push field's load and the word's
-    /// address and pointer (or the binding's access chain), the bit, and the atomic `OR`; the zero
-    /// is a constant.
+    /// An upper estimate of the SPIR-V words one read emits: where it marks, the push field's load
+    /// and the word's address and pointer (or the binding's access chain), the bit, and the atomic
+    /// `OR`; the zero is a constant.
     pub fn words(&self) -> u32 {
-        32
+        if self.marks {
+            32
+        } else {
+            0
+        }
     }
 }
 
@@ -82,19 +95,24 @@ pub fn select(cx: &mut SelectCx<'_>, at: InstId, inst: &Inst) -> Result<Option<A
     else {
         return Ok(None);
     };
-    require(cx)?;
+    let marks = require(cx)?;
     let result = match cx.entry.module.types().get(inst.ty) {
         Some(Type::Void) => None,
         _ => Some(cx.lowered_repr(Value::Inst(at), inst.ty)?),
     };
-    Ok(Some(AbsentRead { result }))
+    Ok(Some(AbsentRead { result, marks }))
 }
 
-/// What an absent read needs, stated for the stage: the `ExecutionStatus` buffer
-/// ([`state_status`]), and the stage's stores and atomics; a device without them refuses the read
-/// as `FunctionConstantArgument`, naming what it needs. The texture and sampler families' arms on
-/// the absent handle need the same.
-pub fn require(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+/// What an absent read needs, stated for the stage, and whether it marks the status: on a profile
+/// whose absent reads mark it (`AbsentReads::Marked`), the `ExecutionStatus` buffer
+/// ([`state_status`]) and the stage's stores and atomics, a device without them refusing the read
+/// as `FunctionConstantArgument`, naming what it needs; on one whose absent reads read as nil
+/// (`AbsentReads::Nil`), nothing, and the read does not mark. The texture and sampler families'
+/// arms on the absent handle need the same.
+pub fn require(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
+    if cx.profile.absent_reads() == AbsentReads::Nil {
+        return Ok(false);
+    }
     if let Some(StatusShort::Stores(f)) = status_short(cx) {
         return Err(
             Unsupported::needs(Feature::FunctionConstantArgument, Capability::Feature(f)).into(),
@@ -103,7 +121,7 @@ pub fn require(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     state_status(cx, StatusBinding::Required);
     cx.facts
         .insert(RuntimeFact::AbsentArgumentRead { stage: cx.stage });
-    Ok(())
+    Ok(true)
 }
 
 /// What the stage lacks to write the command buffer's `ExecutionStatus` words. Each refusal
@@ -209,14 +227,17 @@ pub fn declare(
     }
 }
 
-/// Emit absent read `s`, whose result is `vid`: set the bit, and define the result as zero.
+/// Emit absent read `s`, whose result is `vid`: set the bit where it marks, and define the result
+/// as zero.
 pub fn emit(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     vid: ValueId,
     s: &AbsentRead,
 ) -> BResult<()> {
-    mark(cx, fb)?;
+    if s.marks {
+        mark(cx, fb)?;
+    }
     let Some(d) = &s.result else {
         return Ok(());
     };
