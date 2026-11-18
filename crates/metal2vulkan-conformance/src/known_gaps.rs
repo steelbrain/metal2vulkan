@@ -200,25 +200,28 @@ impl Reason {
     /// The reason `waiting_on` states at its head, or why a head that names the vocabulary is
     /// malformed: a reason without its parenthesis, or with an empty one.
     fn of(waiting_on: &str) -> Result<Reason, String> {
-        let heads: [(&str, fn(String) -> Reason); 2] = [
-            (NOT_BUILT_YET, |lane| Reason::NotBuiltYet { lane }),
-            (NO_STREAM_USES_IT, |census| Reason::NoStreamUsesIt {
-                census,
-            }),
-        ];
-        for (head, make) in heads {
-            let Some(rest) = waiting_on.strip_prefix(head) else {
-                continue;
-            };
-            let named = (rest.strip_prefix(" ("))
-                .and_then(|rest| rest.split_once(')'))
-                .map(|(named, _)| named.trim())
-                .filter(|named| !named.is_empty());
-            let why = || format!("a row waiting on \"{head}\" names who: \"{head} (<name>)\"");
-            return named.map(|named| make(named.to_owned())).ok_or_else(why);
+        if let Some(lane) = named_after(waiting_on, NOT_BUILT_YET)? {
+            return Ok(Reason::NotBuiltYet { lane });
+        }
+        if let Some(census) = named_after(waiting_on, NO_STREAM_USES_IT)? {
+            return Ok(Reason::NoStreamUsesIt { census });
         }
         Ok(Reason::Words)
     }
+}
+
+/// The name in parentheses after `head` where `waiting_on` starts with it, `None` where it does
+/// not, and why where the parenthesis is missing or empty.
+fn named_after(waiting_on: &str, head: &str) -> Result<Option<String>, String> {
+    let Some(rest) = waiting_on.strip_prefix(head) else {
+        return Ok(None);
+    };
+    (rest.strip_prefix(" ("))
+        .and_then(|rest| rest.split_once(')'))
+        .map(|(named, _)| named.trim())
+        .filter(|named| !named.is_empty())
+        .map(|named| Some(named.to_owned()))
+        .ok_or_else(|| format!("a row waiting on \"{head}\" names who: \"{head} (<name>)\""))
 }
 
 /// What `ledger`'s typed reasons count, as one line of a replay's report: its rows not built yet
