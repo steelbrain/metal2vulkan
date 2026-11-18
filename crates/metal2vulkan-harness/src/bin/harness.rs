@@ -60,6 +60,8 @@ const USAGE: &str = "usage: harness --runtime old|new[,old|new...] [--runs N] [-
                      [--store DIRECTORY] [--workloads DIRECTORY --description FILE]";
 
 fn main() -> ExitCode {
+    // Before any device starts its threads, so that theirs count too.
+    run::count_instructions();
     match parse(std::env::args().skip(1)).and_then(|args| run_all(&args)) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
@@ -631,6 +633,13 @@ fn print(runtime: &str, name: &str, report: &Report) {
     }
     for (count, value) in &report.counts {
         println!("M2V-MATRIX metric harness-{runtime}/{name}/{count}_per_run {value}");
+    }
+    // The whole process's user-space instructions per timed run at the 50th percentile, where the
+    // kernel offered the counter; none for a row the device sizes, whose work follows the size.
+    let mut instructions = report.instructions.clone();
+    instructions.sort_unstable();
+    if let (Some(&p50), None) = (instructions.get(instructions.len() / 2), report.scaled_to) {
+        println!("M2V-MATRIX instructions harness-{runtime}/{name}/per_run {p50}");
     }
 }
 

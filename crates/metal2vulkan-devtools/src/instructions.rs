@@ -13,9 +13,13 @@
 //! 0 of one that stayed on its efficiency cores). So where the kernel lists such units, the
 //! counter opens the event on each and sums them.
 //!
+//! [`ProcessInstructions`] counts the whole process in user space: the thread that opens it and
+//! every thread started after, through one inherited counter per core type. That is what the
+//! harness records per timed run, so work a runtime moves onto its own threads still counts.
+//!
 //! Only Linux offers the counters (read here on its little-endian targets): elsewhere
-//! [`InstructionCounter::new`] answers [`io::ErrorKind::Unsupported`], and a test records no
-//! `instructions` line there.
+//! [`InstructionCounter::new`] and [`ProcessInstructions::new`] answer
+//! [`io::ErrorKind::Unsupported`], and nothing records an `instructions` line there.
 
 use std::io;
 use std::marker::PhantomData;
@@ -87,6 +91,59 @@ impl InstructionCounter {
     }
 }
 
+/// User-space instructions retired by the whole process since [`ProcessInstructions::new`]: the
+/// thread that opened it and every thread started after it, summed over every core type.
+///
+/// A thread started before the open does not count, so a program opens it before it starts its
+/// threads (a device's, its driver's). Two [`ProcessInstructions::read`]s bracket a span of work
+/// in the whole process, whichever thread did it.
+pub struct ProcessInstructions {
+    #[cfg(all(target_os = "linux", target_endian = "little"))]
+    events: Vec<std::fs::File>,
+    #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+    never: std::convert::Infallible,
+}
+
+impl ProcessInstructions {
+    /// Opens the counters, counting from now. An error is the kernel's refusal (for one,
+    /// `perf_event_paranoid` above 2, or no hardware counters in a virtual machine), or
+    /// [`io::ErrorKind::Unsupported`] off Linux.
+    pub fn new() -> io::Result<Self> {
+        #[cfg(all(target_os = "linux", target_endian = "little"))]
+        {
+            let events = linux::core_events()?
+                .into_iter()
+                .map(linux::open_inherited)
+                .collect::<io::Result<Vec<_>>>()?;
+            Ok(Self { events })
+        }
+        #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+        {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "user-space instruction counters are read through Linux's perf_event_open alone",
+            ))
+        }
+    }
+
+    /// The user-space instructions the process retired since the open: its threads still running
+    /// and those that ended.
+    pub fn read(&self) -> io::Result<u64> {
+        #[cfg(all(target_os = "linux", target_endian = "little"))]
+        {
+            let mut retired = 0;
+            for event in &self.events {
+                retired += linux::read(event)?;
+            }
+            Ok(retired)
+        }
+        #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+        {
+            match self.never {}
+        }
+    }
+}
+
 #[cfg(all(target_os = "linux", target_endian = "little"))]
 mod linux {
     use std::fs::{self, File};
@@ -96,9 +153,10 @@ mod linux {
     /// `PERF_TYPE_HARDWARE` and its `PERF_COUNT_HW_INSTRUCTIONS`.
     const TYPE_HARDWARE: u32 = 0;
     const HW_INSTRUCTIONS: u64 = 1;
-    /// `perf_event_attr`'s bit fields `disabled`, `exclude_kernel` and `exclude_hv`, in a
-    /// little-endian target's bit order.
+    /// `perf_event_attr`'s bit fields `disabled`, `inherit`, `exclude_kernel` and `exclude_hv`, in
+    /// a little-endian target's bit order.
     const DISABLED: u64 = 1 << 0;
+    const INHERIT: u64 = 1 << 1;
     const EXCLUDE_KERNEL: u64 = 1 << 5;
     const EXCLUDE_HV: u64 = 1 << 6;
     /// `PERF_FLAG_FD_CLOEXEC`: the descriptor does not pass to a child the test starts.
@@ -147,13 +205,23 @@ mod linux {
 
     /// The calling thread's user-space instructions event of `config`, disabled until enabled.
     pub(super) fn open(config: u64) -> io::Result<File> {
+        open_with(config, DISABLED | EXCLUDE_KERNEL | EXCLUDE_HV)
+    }
+
+    /// The user-space instructions event of `config` of the calling thread and every thread it
+    /// starts after, counting from now.
+    pub(super) fn open_inherited(config: u64) -> io::Result<File> {
+        open_with(config, INHERIT | EXCLUDE_KERNEL | EXCLUDE_HV)
+    }
+
+    /// The calling thread's user-space instructions event of `config` with the bit fields `flags`.
+    fn open_with(config: u64, flags: u64) -> io::Result<File> {
         let mut attr = [0u8; ATTR_SIZE];
         attr[ATTR_TYPE..ATTR_TYPE + 4].copy_from_slice(&TYPE_HARDWARE.to_ne_bytes());
         attr[ATTR_SIZE_FIELD..ATTR_SIZE_FIELD + 4]
             .copy_from_slice(&(ATTR_SIZE as u32).to_ne_bytes());
         attr[ATTR_CONFIG..ATTR_CONFIG + 8].copy_from_slice(&config.to_ne_bytes());
-        attr[ATTR_FLAGS..ATTR_FLAGS + 8]
-            .copy_from_slice(&(DISABLED | EXCLUDE_KERNEL | EXCLUDE_HV).to_ne_bytes());
+        attr[ATTR_FLAGS..ATTR_FLAGS + 8].copy_from_slice(&flags.to_ne_bytes());
         let (thread, any_cpu, no_group): (libc::pid_t, libc::c_int, libc::c_int) = (0, -1, -1);
         // SAFETY: `attr` is a valid `perf_event_attr` of the size it states and outlives the
         // call; pid 0 and cpu -1 name the calling thread on any CPU, with no group.
@@ -195,7 +263,7 @@ mod linux {
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
-    use super::InstructionCounter;
+    use super::{InstructionCounter, ProcessInstructions};
     use std::path::Path;
 
     /// Iterations of the fixed loop on each CPU.
@@ -311,6 +379,36 @@ mod tests {
         println!(
             "M2V-MATRIX instructions instruction_counter/per_1000_iterations {}",
             counts[0] * 1000 / (ITERATIONS * cpus.len() as u64)
+        );
+    }
+
+    /// The process counter counts a thread started after it opened: the fixed loop on every CPU
+    /// that thread may use, on a thread of its own, is in the count once the thread ended.
+    #[test]
+    fn the_process_counter_counts_a_thread_started_after_it_opened() {
+        if !counters_offered() {
+            assert!(
+                ProcessInstructions::new().is_err(),
+                "the host offers no counters, yet a counter opened"
+            );
+            return;
+        }
+        let process = ProcessInstructions::new().expect("the host offers counters");
+        let cpus = allowed_cpus();
+        let expected = 2 * ITERATIONS * cpus.len() as u64;
+        let before = process.read().expect("reading the counters");
+        let worker = std::thread::spawn(move || {
+            for &cpu in &cpus {
+                pin(&[cpu]);
+                fixed_loop(ITERATIONS);
+            }
+        });
+        worker.join().expect("the loop's thread");
+        let counted = process.read().expect("reading the counters") - before;
+        // Starting and ending the thread and the pinning add their own instructions.
+        assert!(
+            (expected..expected + expected / 20).contains(&counted),
+            "{counted} user-space instructions counted for {expected}"
         );
     }
 }

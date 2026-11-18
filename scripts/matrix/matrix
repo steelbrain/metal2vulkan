@@ -839,7 +839,7 @@ def run_cmd(sha, only, dry):
 def print_leg(leg_id, leg):
     """A leg's verdict line, then each of its harness rows' times and GPU times."""
     print(results.verdict_line(leg_id, leg))
-    for line in results.harness_rows(leg["records"]["time"]):
+    for line in results.harness_rows(leg["records"]):
         print(f"  {line}")
 
 

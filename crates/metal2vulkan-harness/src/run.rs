@@ -10,11 +10,28 @@ use crate::{
     ComputeDevice, Device, Failed, Library, Refused, RenderCommandEncoder, Result, Storage,
     Texture, Waits,
 };
+use metal2vulkan_devtools::instructions::ProcessInstructions;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
+
+/// The whole process's user-space instruction counter, once [`count_instructions`] opened it;
+/// None where the kernel refused it (`perf_event_paranoid` above 2, no hardware counters, or not
+/// Linux), and then the harness records no instructions.
+static INSTRUCTIONS: OnceLock<Option<ProcessInstructions>> = OnceLock::new();
+
+/// Opens the process's instruction counter. The harness calls it before it makes any device, so
+/// that the threads a runtime and its driver start count on it.
+pub fn count_instructions() {
+    INSTRUCTIONS.get_or_init(|| ProcessInstructions::new().ok());
+}
+
+/// The process's user-space instructions so far, where its counter is open.
+fn instructions() -> Option<u64> {
+    INSTRUCTIONS.get()?.as_ref()?.read().ok()
+}
 
 /// The kernel of the authored library that moves bytes for the harness, 16 a thread.
 const COPY_FUNCTION: &str = "copy_words";
@@ -170,6 +187,10 @@ pub struct Report {
     /// Each run's process CPU time from before its command buffer's creation through the return
     /// of the wait for the run before it, in nanoseconds; empty where the host has no such clock.
     pub cpu_ns: Vec<f64>,
+    /// Each run's user-space instructions in the whole process over the same span, every thread
+    /// of the runtime and its driver included ([`count_instructions`]); empty where the kernel
+    /// refused the counter.
+    pub instructions: Vec<u64>,
     /// Each timed command buffer's time from just before its `commit` until its completed
     /// handler ran, in microseconds, by its place in its run: one list per place, the first
     /// committed first, each in the order the handlers ran. Empty unless the plan asks for it
@@ -994,9 +1015,13 @@ impl<D: ComputeDevice> Session for Harness<D> {
         for run in 1..=runs.timed {
             let wall = Instant::now();
             let cpu = clocks::process_cpu_nanos();
+            let retired = instructions();
             let (gpu_us, encoded) = self.next(plan, &made, &mut in_flight, completions.as_ref())?;
             if let (Some(before), Some(after)) = (cpu, clocks::process_cpu_nanos()) {
                 report.cpu_ns.push(after.saturating_sub(before) as f64);
+            }
+            if let (Some(before), Some(after)) = (retired, instructions()) {
+                report.instructions.push(after.saturating_sub(before));
             }
             report.wall_us.push(wall.elapsed().as_secs_f64() * 1e6);
             report.encode_ns.push(encoded.as_nanos() as f64);

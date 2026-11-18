@@ -1,0 +1,8 @@
+# The new runtime's user-space instructions per timed run that each frame and burst row
+# (results.WALL_ROWS) is held to by the instructions gate (results.STORED_INSTRUCTIONS): the whole process's count, the p50 over a
+# row's timed runs. One count per row in the `all` column where every leg's count lies within 3%
+# of the others', else one per driver family (a GPU leg id's vendor). A count only ratchets down:
+# a landing that lowers it by more than 1% stores the lower one, and nothing raises it without a
+# ruling. A row with no count here is gated against the old runtime's count alone, and its line
+# names it, until the counts of a matrix run are stored.
+row                              all

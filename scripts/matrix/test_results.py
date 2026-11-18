@@ -113,6 +113,12 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(self.problems(recs(metric={"a/barriers": 5, "a/passes": 2}), base),
                          ["metric a/barriers: 4 -> 5"])
 
+    def test_the_old_runtime_s_instructions_are_not_compared_to_its_base(self):
+        base = recs(instructions={"harness-old/frame/per_run": 100000, "harness-new/frame/per_run": 50000})
+        now = recs(instructions={"harness-old/frame/per_run": 105000, "harness-new/frame/per_run": 51000})
+        self.assertEqual(self.problems(now, base),
+                         ["instructions harness-new/frame/per_run: 50000 -> 51000 (+2.0%)"])
+
     def test_instructions_fail_past_one_percent(self):
         base = recs(instructions={"a/per_draw": 10000})
         self.assertEqual(self.problems(recs(instructions={"a/per_draw": 10100}), base), [])
@@ -583,19 +589,69 @@ class HarnessBudgetTests(unittest.TestCase):
             "M2V-MATRIX time harness-retime/sampling/2/new 36.000",
             "M2V-MATRIX time harness-retime-gpu/sampling/2/new 17.600"])
 
-    def test_every_row_shows_its_times_and_gpu_times_on_both_runtimes(self):
+    def test_every_row_shows_its_times_gpu_times_and_instructions_on_both_runtimes(self):
         times = {"harness-old/frame": 100.0, "harness-new/frame": 120.0,
                  "harness-gpu-old/frame": 80.25, "harness-gpu-new/frame": 81.0,
                  "harness-new/create_64MiB/first_take": 50.0, "harness-old/create_64MiB/first_take": 40.0,
                  "harness-old/sampling": 50.0, "harness-first/create_64MiB/first_take/2/new": 51.0,
                  "loop/gpu": 1000.0}
-        self.assertEqual(results.harness_rows(times), [
+        counted = {"harness-new/frame/per_run": 61253, "harness-old/frame/per_run": 149185}
+        self.assertEqual(results.harness_rows(recs(time=times, instructions=counted)), [
             "create_64MiB/first_take              new       50.0 us, GPU p50          - us | old       40.0 us, "
             "GPU p50          - us | 1.250",
-            "frame                                new      120.0 us, GPU p50       81.0 us | old      100.0 us, "
-            "GPU p50       80.2 us | 1.200",
+            "frame                                new      120.0 us, GPU p50       81.0 us, 61253 instructions | "
+            "old      100.0 us, GPU p50       80.2 us, 149185 instructions | 1.200, instructions 0.411",
             "sampling                             new          - us, GPU p50          - us | old       50.0 us, "
             "GPU p50          - us | -"])
+
+    def test_the_frame_and_burst_rows_keep_their_time_s_limit_and_pass_the_instructions_gate_too(self):
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 101.0,
+                 "harness-old/alu": 100.0, "harness-new/alu": 101.0}
+        counted = {"harness-new/frame/per_run": 61000, "harness-old/frame/per_run": 149000,
+                   "harness-new/alu/per_run": 9000, "harness-old/alu/per_run": 5000}
+
+        def budget(leg_id, counts, these=times):
+            return results.harness_budget(leg_id, leg_of(recs(time=these, instructions=counts)))
+
+        line = "harness budget frame: instructions new {} per run over old 149000 is {}, {}"
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}), \
+                mock.patch.object(results, "HARNESS_FLOORS", {}):
+            # Both within the time's budget. alu, not a frame or burst row, has no gate, its count
+            # over old's though it is.
+            with mock.patch.object(results, "STORED_INSTRUCTIONS", {}):
+                self.assertEqual(budget("10de:1e87", counted), ([], [line.format(61000, "0.409", "none stored")]))
+            stored = {"all": {"frame": 60000}}
+            with mock.patch.object(results, "STORED_INSTRUCTIONS", stored):
+                # Within 1.03 times the stored count: nothing to say.
+                self.assertEqual(budget("10de:1e87", counted), ([], []))
+                over = dict(counted, **{"harness-new/frame/per_run": 61900})
+                self.assertEqual(budget("10de:1e87", over)[0], [
+                    line.format(61900, "0.415", "stored 60000") + ": past 1.03 times the stored count"])
+                under = dict(counted, **{"harness-new/frame/per_run": 59000})
+                self.assertEqual(budget("10de:1e87", under), ([], [
+                    line.format(59000, "0.396", "stored 60000") + ": more than 1% under the stored count, "
+                    "which ratchets down to it"]))
+                past_old = dict(counted, **{"harness-new/frame/per_run": 150000})
+                self.assertEqual(budget("10de:1e87", past_old)[0], [
+                    line.format(150000, "1.007", "stored 60000") + ": new over old"])
+                # A time past its limit still fails, its count within the gate though it is.
+                slow = dict(times, **{"harness-new/frame": 120.0})
+                self.assertEqual(budget("10de:1e87", counted, slow)[0], [
+                    "harness budget frame: new 120.0 us over old 100.0 us is 1.200, past 1.03"])
+            # A driver family's count before every leg's.
+            with mock.patch.object(results, "STORED_INSTRUCTIONS", {"all": {"frame": 60000},
+                                                                    "1002": {"frame": 70000}}):
+                self.assertEqual(results.stored_count("1002:744c", "frame"), 70000)
+                self.assertEqual(results.stored_count("10de:2204", "frame"), 60000)
+            # A leg with no counts (Windows, or a refused counter) has no gate.
+            self.assertEqual(budget("8086:3e9b", {}), ([], []))
+
+    def test_the_stored_counts_table_reads_per_family_and_row(self):
+        text = "# a comment\nrow  all  1002\nframe  61253  -\nburst_160  -  90000\n"
+        self.assertEqual(results.read_counts(text), {"all": {"frame": 61253}, "1002": {"burst_160": 90000}})
+        for family, rows in results.STORED_INSTRUCTIONS.items():
+            self.assertRegex(family, r"^(all|[0-9a-f]{4})$")
+            self.assertTrue(all(row.startswith(results.WALL_ROWS) for row in rows), family)
 
     def test_every_ceiling_is_over_the_budget(self):
         for leg, rows in results.HARNESS_CEILINGS.items():

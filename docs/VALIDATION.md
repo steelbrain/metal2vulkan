@@ -303,7 +303,7 @@ changes the harness sets the base for the next.
 | Kind | What it counts | Fails when |
 |---|---|---|
 | `metric` | A deterministic count per frame or per command buffer: submissions, passes, barriers, bytes copied, pipelines created | It is larger than the base's |
-| `instructions` | User-space CPU instructions per draw or per dispatch | It is more than 1% over the base's |
+| `instructions` | User-space CPU instructions per draw or per dispatch, and per harness run (`harness-<runtime>/<row>/per_run`: the whole process's, every runtime and driver thread counted, the p50 over the row's timed runs) | It is more than 1% over the base's (the old runtime's are parked) |
 | `gauge` | Live objects of one resource kind, the key ending in the point it was read at: `@100` and `@200` (loop iterations), `@drop` (after the device dropped) | `@drop` is not 0, or `@200` differs from `@100`; for the memory pool's `blocks`, which frees allocations an earlier workload left idle once the most bytes in use over its window falls and the device is quiet for 20 ms, only `@200` over `@100` |
 | `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: its last command buffer's commit-to-complete time where the workload times it (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a record of its own, `harness-gpu-<runtime>/<row>`, parked here and judged by the harness budget) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs |
 | `size` | The size a harness row whose size follows the device ran at (`long_4cb`) | The leg's two runtimes ran the row at different sizes: its times are then not compared (the harness budget) |
@@ -349,7 +349,16 @@ instead, against the floor of the old runtime's GPU time from the same runs
 a few percent where its host time spreads up to 1.3 (the XTX's `simd_reduce`: GPU p50 36.96-37.12
 µs over 8 runs, host time 44.9-55.8 µs). The frame and burst rows (`WALL_ROWS` in
 `scripts/matrix/results.py`), whose GPU time spans the gaps between their command buffers and
-spreads as widely, stay on their times and the instructions gate. A row whose GPU time varies on
+spreads as widely, stay on their times and floors, and where both runtimes counted them (Linux,
+a node that grants the counter), each must also pass the instructions gate: its instructions per
+timed run on the new runtime (the whole process's, `instructions harness-<runtime>/<row>/per_run`)
+at most the old runtime's, and at most 1.03 times its stored count
+(`scripts/matrix/instructions.tsv`: one count per row where the legs agree within 3%, else one
+per driver family). A stored count only ratchets down: a leg more than 1% under it is named, and
+nothing raises it without a ruling; a row with none stored is named and gated against the old
+runtime alone. The count repeats to well under 1% between runs where the time does not, so a
+time that moves while its count holds names waits. Every row records its count; only these are
+gated on it. A row whose GPU time varies on
 one card itself (`CARD_VARIANCE`: the XTX's `sampling` and `constant_managed`) is named on the
 leg's line as the card's variance and fails nothing. A row over it fails its leg unless a ruling, made after the work on that
 row, gave it a ceiling on that GPU (`HARNESS_CEILINGS` in `scripts/matrix/results.py`); a ceiling
@@ -374,7 +383,8 @@ Each row's GPU time on each runtime, the p50 over its timed runs of a run's firs
 last GPU end, is recorded as `time harness-gpu-<runtime>/<row>` where the row has one. The budget
 judges a row on it as above, and shows it beside the times of a row it does not judge on it; it is
 parked for the `time` rule. `run` and `show` print, under each leg's line, every harness row's time and GPU time
-on both runtimes and the ratio of the times.
+on both runtimes and the ratio of the times, and where the leg counted them, its instructions per
+run and their ratio.
 The budget goes with the old runtime.
 
 The old runtime's translations do not move either. The golden hash table compiles through
@@ -386,8 +396,11 @@ exception is a range where a commit since the table's last bless has a subject t
 `metal2vulkan_devtools::instructions::InstructionCounter` measures `instructions`: the calling
 thread's user-space instructions from Linux's `perf_event_open`, the form an unprivileged process
 may open at `perf_event_paranoid` 2. On a hybrid x86 CPU it sums the event over each core type's
-unit, since the generic event counts on one of them only. Off Linux it opens nothing, so the
-Windows leg records no `instructions`.
+unit, since the generic event counts on one of them only.
+`metal2vulkan_devtools::instructions::ProcessInstructions` measures the harness's: one counter per
+core type opened with `inherit` before the harness makes a device, so it counts every thread the
+runtimes and their drivers start. Off Linux neither opens, so the Windows leg records no
+`instructions`; a node that refuses them records none either.
 
 The rules and the sizing of the matrix's jobs have their own tests, which need no cluster:
 
