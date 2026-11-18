@@ -1038,11 +1038,14 @@ mod on_device {
         });
     }
 
-    /// A state made after the device was quiesced has its emulated-SIMD-group variant marked not
-    /// lowered at once, as the reaper has ended: no dispatch waits for it.
+    /// A state made after the device was quiesced leaves its emulated-SIMD-group variant not
+    /// lowered, as every state does until a dispatch needs it. That need finds the reaper ended:
+    /// the variant is marked not lowered and the need refused at once (`Error::Quiesced`), so no
+    /// dispatch waits for it.
     #[test]
     fn every_device_marks_the_emulated_variant_of_a_state_made_after_quiesce() {
-        use crate::pipeline::Lowered;
+        use crate::pipeline::{Lowered, Which};
+        use crate::{Error, Gap};
 
         let Some(descriptor) = descriptor_of("gsm2_simd_products", "simd_float_products") else {
             return;
@@ -1055,15 +1058,31 @@ mod on_device {
                 println!("{name}: the kernel is refused; nothing to mark");
                 return;
             };
-            let Some(emulated) = &state.inner.compiled.emulated else {
+            let compiled = &state.inner.compiled;
+            let Some(emulated) = &compiled.emulated else {
                 println!("{name}: no emulated variant");
                 return;
             };
             assert!(
-                matches!(emulated.lowered.get(), Some(Lowered::Quiesced)),
-                "{name}: marked at once"
+                emulated.lowered.get().is_none(),
+                "{name}: not lowered at creation"
             );
-            println!("{name}: the emulated variant is marked not lowered");
+            let refused = Error::Unsupported(Gap::PartialSimdgroups {
+                threads_per_threadgroup: [1, 1, 1],
+                width: 32,
+            });
+            assert!(
+                matches!(
+                    compiled.later_kernel(Which::Emulated, refused),
+                    Err(Error::Quiesced)
+                ),
+                "{name}: the need refused"
+            );
+            assert!(
+                matches!(emulated.lowered.get(), Some(Lowered::Quiesced)),
+                "{name}: marked at the need"
+            );
+            println!("{name}: the emulated variant is marked not lowered at its first need");
         });
     }
 
