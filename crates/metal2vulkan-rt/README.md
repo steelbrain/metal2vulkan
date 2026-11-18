@@ -1527,8 +1527,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - A vertex fetch outside its buffer returns what the device gives: the floor enables no buffer
   robustness, so there is no bounds guarantee beyond the device's.
 - Not built, and so not methods: indirect draws, several viewports or scissor rectangles, the
-  triangle fill mode, the depth clip mode, depth bias, visibility results, `useResource:`, the
-  store action setters, tile functions and `setVertexBuffer:offset:attributeStride:atIndex:`.
+  triangle fill mode, the depth clip mode, depth bias, visibility results, `useResource:`,
+  `useHeap:stages:`, the store action setters, tile functions and
+  `setVertexBuffer:offset:attributeStride:atIndex:`. Where a replay stream calls
+  `useHeap:stages:` (`command-replay shapes` counts a stream's calls of each selector), it is
+  built in the compute encoder's form, `use_heap`: the command buffer keeps the block and declares
+  no access.
 - Refused by `Gap::RenderPass`, naming its `RenderPassKind`: a depth attachment, an attachment of
   more than one sample, a resolve, a 1D or 3D texture's attachment, the `Unknown` and
   `CustomSampleDepthStore` store actions, a clear of a format only a shader clears (extended
