@@ -881,6 +881,8 @@ mod rotated_textures;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod row_copies;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+mod rt_replay;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod runtime_data;
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 mod runtime_levels;
