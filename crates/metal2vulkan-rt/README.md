@@ -665,6 +665,10 @@ that touch blocks first.
   texture's format (`metal::format::integer_channels_word`); and for each constexpr sampler it
   samples through, the index the consumer gave it at the state's creation. Nothing is written
   into set 1 at bind or dispatch time, and every texture stays in its home layout.
+- `use_heap` is `useHeap:`, for the block a heap's memory is: the command buffer keeps the block
+  until it retires, as it keeps a used buffer's block, so a heap given back while the work runs
+  stays valid under it. It declares no access (Metal states no retention for it; keeping is the
+  safe reading).
 - A dispatch of a kernel that writes no memory (the translator's `PipelineInterface::writes_memory`:
   no store to a buffer or through a device address, no texture write and no atomic update, in the
   kernel or any function it calls) records nothing, binds nothing and reads no indirect buffer,

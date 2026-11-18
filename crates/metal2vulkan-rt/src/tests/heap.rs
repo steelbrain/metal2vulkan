@@ -3,15 +3,18 @@
 //! placed first-fit by that answer in one heap range of a Private block take no allocation and no
 //! texture block, and each keeps its own bytes; a texture may alias another; a placement past the
 //! heap's end, one off the image's alignment, a heap range past its block and a heap in a Shared
-//! block are refused; and every gauge reads zero after teardown.
+//! block are refused; and every gauge reads zero after teardown. A compute encoder's `use_heap`
+//! holds the heap's block for its command buffer once, past the consumer's release, until the
+//! command buffer retires, and a released block's number names nothing.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::each_device;
     use crate::{
-        Error, Gap, HeapRange, MemoryClass, PixelFormat, Refusal, Region, StorageMode,
-        TextureDescriptor, TextureType, TextureUsage,
+        DispatchType, Error, Gap, HeapRange, MemoryClass, PixelFormat, Refusal, Region,
+        StorageMode, TextureDescriptor, TextureType, TextureUsage,
     };
+    use std::sync::Arc;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -154,6 +157,51 @@ mod on_device {
                     .release_block(block)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             }
+        });
+    }
+
+    #[test]
+    fn every_device_holds_a_used_heap_until_its_command_buffer_retires() {
+        each_device("use_heap", |name, _, device| {
+            let block = (device.take_block(MemoryClass::Private, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let id = block.id;
+            let memory = Arc::downgrade(&device.block(id).expect("the claimed block"));
+            assert_eq!(
+                memory.strong_count(),
+                1,
+                "{name}: the claim alone holds the block"
+            );
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            for _ in 0..2 {
+                (encoder.use_heap(id)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            assert_eq!(
+                memory.strong_count(),
+                2,
+                "{name}: the command buffer holds the block once"
+            );
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                memory.strong_count(),
+                1,
+                "{name}: the command buffer holds the block past the consumer's release"
+            );
+            assert!(
+                matches!(encoder.use_heap(id), Err(Error::NoSuchBlock(at)) if at == id),
+                "{name}: a released block's number names nothing"
+            );
+            encoder.end_encoding();
+            (command_buffer.commit()).unwrap_or_else(|error| panic!("{name}: {error}"));
+            command_buffer.wait_until_completed();
+            wait_until("the command buffer to retire", || {
+                memory.strong_count() == 0
+            });
+            assert_eq!(command_buffer.error(), None, "{name}");
+            drop((command_buffer, queue));
         });
     }
 }

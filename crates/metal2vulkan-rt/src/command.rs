@@ -807,15 +807,20 @@ impl Building {
     /// retires.
     pub(crate) fn keep(&mut self, buffer: &Buffer) {
         let (block, copy) = buffer.held();
-        let blocks = &mut self.gpu.blocks;
-        if !blocks.iter().rev().any(|kept| Arc::ptr_eq(kept, block)) {
-            blocks.push(Arc::clone(block));
-        }
+        self.keep_block(block);
         if let Some(copy) = copy {
             let copies = &mut self.gpu.copies;
             if !copies.iter().rev().any(|kept| Arc::ptr_eq(kept, copy)) {
                 copies.push(Arc::clone(copy));
             }
+        }
+    }
+
+    /// Keeps `block` until the command buffer retires.
+    pub(crate) fn keep_block(&mut self, block: &Arc<Block>) {
+        let blocks = &mut self.gpu.blocks;
+        if !blocks.iter().rev().any(|kept| Arc::ptr_eq(kept, block)) {
+            blocks.push(Arc::clone(block));
         }
     }
 

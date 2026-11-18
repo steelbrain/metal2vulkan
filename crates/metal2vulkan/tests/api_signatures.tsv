@@ -9382,6 +9382,7 @@ method	metal2vulkan-rt::ComputeCommandEncoder::set_sampler_state	pub fn set_samp
 method	metal2vulkan-rt::ComputeCommandEncoder::set_texture	pub fn set_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::set_threadgroup_memory_length	pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
+method	metal2vulkan-rt::ComputeCommandEncoder::use_heap	pub fn use_heap(&mut self, heap: BlockId) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::use_resource	pub fn use_resource(&mut self, resource: Resource<'_>, usage: ResourceUsage) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::wait_for_fence	pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-rt::ComputePipelineDescriptor::lowering_inputs	pub fn lowering_inputs(&self) -> LoweringInputs

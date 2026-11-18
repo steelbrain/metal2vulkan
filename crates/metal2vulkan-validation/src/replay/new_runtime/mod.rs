@@ -479,6 +479,16 @@ impl NewRuntime {
         }
     }
 
+    /// The block of the heap argument `at` names; none for a skipped object.
+    fn heap_of(&self, call: &Call, at: usize) -> Result<Option<rt::BlockId>, PlayError> {
+        let id = Self::id(call, at)?;
+        match self.get(call, id)? {
+            Object::Block(range, _, _) => Ok(Some(range.block)),
+            Object::Skipped => Ok(None),
+            _ => Err(refuse(call, format!("#{id} is no heap"))),
+        }
+    }
+
     fn buffer_of(&self, call: &Call, id: u64) -> Result<rt::Buffer, PlayError> {
         match self.get(call, id)? {
             Object::Buffer(buffer, _) => Ok(buffer.clone()),

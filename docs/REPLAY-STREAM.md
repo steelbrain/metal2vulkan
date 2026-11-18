@@ -461,7 +461,7 @@ counted from 0), completes the work committed so far, reports as at the stream's
   - objects: render pipelines, depth-stencil states, render pass descriptors, libraries from
     source, and whatever a call makes of a skipped object (`skipped_objects`);
   - render and parallel render encoders (`skipped_encoders`), and every call of a skipped object
-    (`skipped_calls`, with `useResource:usage:` of one and a compute encoder's `useHeap:`);
+    (`skipped_calls`, with `useResource:usage:` and `useHeap:` of one);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
     (`skipped_dispatches`);
   - blit commands that name a skipped object (`skipped_blits`), and by kind: the host's copies

@@ -331,11 +331,13 @@ impl NewRuntime {
                 let fence = self.fence_of(call, 0)?;
                 self.compute(id).encoder.wait_for_fence(&fence)
             }
-            // The runtime makes no heap residency calls.
-            "useHeap:" => {
-                self.skips.calls += 1;
-                Ok(())
-            }
+            "useHeap:" => match self.heap_of(call, 0)? {
+                Some(heap) => self.compute(id).encoder.use_heap(heap),
+                None => {
+                    self.skips.calls += 1;
+                    Ok(())
+                }
+            },
             _ => return Err(refuse(call, "not played on a compute encoder")),
         };
         result.map_err(failed(call))

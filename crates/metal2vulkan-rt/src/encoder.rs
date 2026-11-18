@@ -6,6 +6,7 @@ use crate::counters::Metric;
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
+use crate::memory::BlockId;
 use crate::over;
 use crate::pipeline::{
     ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES, SQUARE,
@@ -505,6 +506,23 @@ impl ComputeCommandEncoder {
             Some((_, declared)) => *declared = merge(*declared, access),
             None => self.declared.push((id, access)),
         }
+        Ok(())
+    }
+
+    /// `useHeap:` (`useHeaps:count:` is a loop of it), for the heap whose memory is block `heap`:
+    /// a [`HeapRange`](crate::HeapRange)'s block, or the block a placement heap's buffers sit in.
+    /// The command buffer keeps the block until it retires, as it keeps a buffer's block for
+    /// [`use_resource`](Self::use_resource), so a heap the consumer gives back while the work
+    /// runs stays valid under it. Metal states no retention for `useHeap:`; keeping is the safe
+    /// reading. It declares no access: a dispatch touches its bound slots and the `use_resource`
+    /// declarations, and a kernel that reaches a heap's resources through addresses outside its
+    /// slots already orders against every write since the last barrier.
+    ///
+    /// Err: [`Error::NoSuchBlock`] for a number no handle names.
+    pub fn use_heap(&mut self, heap: BlockId) -> Result<(), Error> {
+        let building = self.building();
+        let block = building.device.block(heap)?;
+        building.keep_block(&block);
         Ok(())
     }
 
