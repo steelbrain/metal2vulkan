@@ -1247,18 +1247,26 @@ fn one_entry_set_specializes_a_sweeps_stages_once() {
 /// The old runtime's render descriptor key keeps its value: one known descriptor's key, pinned.
 /// The old runtime keeps answers under it in its cache directory, so a change of value is a
 /// change to the old runtime.
+///
+/// The key hashes the stages' AIR bytes, so the descriptor's functions come from a committed
+/// `.air` fixture, the same bytes on every host. An `.ll` fixture is assembled by the host's
+/// `llvm-as`, whose bitcode differs between LLVM releases (23.1.1, 23.1.4 and 23.1.5 each write
+/// other bytes of `stage_io.ll`), which made the pinned value depend on the host that ran it.
 #[test]
 fn the_old_render_descriptor_key_keeps_its_value() {
-    let Some(bc) = fixture("stage_io") else {
-        return;
-    };
+    let path = engine_dir().join("fbl_fetch_dual.air");
+    let bc = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let bytes: String = sha256(&bc).iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        bytes, "c77a9c963c06df07997811c3b73ded8a1dfdb40a79ae300f7d285ac01f89cbdd",
+        "the fixture's bytes, which the key hashes, changed: pin the key the new bytes give"
+    );
     let lib = Library::from_air(&bc).expect("library");
     let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
-        lib.function("stage_io_vertex_position").expect("vertex"),
+        lib.function("fbd_vertex").expect("vertex"),
     )));
     d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
-        lib.function("stage_io_fragment_primitive")
-            .expect("fragment"),
+        lib.function("fbd_dual_float").expect("fragment"),
     )));
     d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
         metal::PixelFormat::RGBA8Unorm,
@@ -1266,7 +1274,7 @@ fn the_old_render_descriptor_key_keeps_its_value() {
     let key = device("moltenvk-m3").render_descriptor_key(&d);
     let hex: String = key.digest().iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        hex, "5d351787c268658e80d5c79e3ba0de1e8bf7985ef70b91cf64bc64e3f2c032c7",
+        hex, "98be3009cdaf2256d5fa6c113aaaffad2406885c9d89430eef8b6f3ef6db39fa",
         "the old runtime's key of the descriptor"
     );
 }
