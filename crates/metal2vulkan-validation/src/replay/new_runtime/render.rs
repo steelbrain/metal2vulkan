@@ -127,6 +127,7 @@ impl NewRuntime {
                 function.descriptor.with_linked(linked),
             )))
         })?;
+        self.unbound.render(call.result, &descriptor);
         let made = self.numbered(|device, ids| {
             device.new_render_pipeline_state(&descriptor, |samplers| ids(samplers))
         });
