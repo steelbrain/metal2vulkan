@@ -1026,9 +1026,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row, so a device
   that holds 64 makes the same 50.
 - A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
-  its plain module). For the observing kernel the device tests run, a grid template over
-  threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole creation 2.7 to
-  2.9 ms on an RX 7900 XTX in a release build; a larger kernel's lowering takes longer.
+  its plain module), on the creating thread. For the observing kernel the device tests run, a
+  grid template over threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole
+  creation 2.7 to 2.9 ms on an RX 7900 XTX in a release build. Larger kernels take longer: in the
+  first 217 frames of one recorded stream on a Radeon 780M (release build), 23 of its 59 kernel
+  contents observed their partition, and their creations' 46 lowerings took 231 ms, 5.0 ms a
+  lowering. None of the 23 dispatched its partial-threadgroups module.
 - A kernel that reads anything the encoder does not supply yet, a function table, a
   `[[stage_in]]` fetch, constant data, or a sampler or texture state the translator would take
   from the bound object rather than from its resource ID, is refused (`Gap::KernelInput`). So is

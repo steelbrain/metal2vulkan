@@ -14,6 +14,7 @@
 //! is not a chain of exact steps) leaves the pair conflicting.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use crate::air::abi::{Builtin, ParamRole};
 use crate::air::intrinsics::{
@@ -203,7 +204,7 @@ pub(super) struct Addr {
     pub leaves: Option<Vec<BlockId>>,
     /// The address at each place of a thread, where it is a base the simdgroup shares plus an
     /// offset computed from the thread's place and constants alone ([`AddrFacts::lanes`]).
-    pub lanes: Option<Lanes>,
+    pub lanes: Option<Rc<Lanes>>,
 }
 
 /// A fact `x == c` wherever an access runs, where `x` differs between any two threads of a
@@ -295,19 +296,83 @@ pub(super) struct Lanes {
     pub bits: u32,
     /// The offset at each place, in the index width.
     pub offsets: Vec<u64>,
+    /// Each simdgroup's lanes in the order of their offsets (equal offsets by lane).
+    pub order: Vec<[u8; 32]>,
+    /// For each simdgroup, the step from each lane's offset to the next lane's, where one step
+    /// does: lane `i`'s offset is lane 0's plus `i` steps.
+    pub steps: [Option<u64>; BLOCKS],
     /// For each simdgroup after the first, the shift that makes its offsets the previous one's,
     /// lane by lane, where one shift does.
     pub shifts: [Option<u64>; BLOCKS],
 }
 
 impl Lanes {
+    /// The lanes of an address from `base` (computed in block `base_home`, where an
+    /// instruction computes it) reading `basis`, of index width `bits`, at `offsets`, one for
+    /// each of the [`PLACES`]: each simdgroup's shift from the previous one, its step from lane
+    /// to lane, and its lanes in the order of their offsets.
+    fn new(
+        (base, base_home, basis): (LaneBase, Option<BlockId>, Basis),
+        bits: u32,
+        offsets: Vec<u64>,
+        m: &mut Meter,
+    ) -> Result<Lanes, Error> {
+        let mask = u64::MAX >> (64 - bits);
+        let mut shifts = [None; BLOCKS];
+        let blocks = offsets.as_chunks::<32>().0;
+        for (k, pair) in blocks.windows(2).enumerate() {
+            let [before, here] = pair else {
+                continue;
+            };
+            let d = here[0].wrapping_sub(before[0]) & mask;
+            let one = here
+                .iter()
+                .zip(before)
+                .all(|(&y, &x)| y.wrapping_sub(x) & mask == d);
+            if let Some(slot) = shifts.get_mut(k + 1) {
+                *slot = one.then_some(d);
+            }
+        }
+        let mut steps = [None; BLOCKS];
+        for (slot, block) in steps.iter_mut().zip(blocks) {
+            let step = block[1].wrapping_sub(block[0]) & mask;
+            let one = (0u64..)
+                .zip(block)
+                .all(|(i, &x)| x.wrapping_sub(block[0]) & mask == i.wrapping_mul(step) & mask);
+            *slot = one.then_some(step);
+        }
+        let mut order = Vec::new();
+        m.reserve(&mut order, blocks.len())?;
+        for block in blocks {
+            let mut lanes: [u8; 32] = std::array::from_fn(|i| i as u8);
+            lanes.sort_unstable_by_key(|&i| (block.get(usize::from(i)).copied(), i));
+            order.push(lanes);
+        }
+        m.tick(2 * PLACES as u32)?;
+        Ok(Lanes {
+            base,
+            base_home,
+            basis,
+            bits,
+            offsets,
+            order,
+            steps,
+            shifts,
+        })
+    }
+
     /// Whether no two threads of one simdgroup, one running an access of `size` bytes at these
     /// addresses and the other one of `other_size` bytes at `other`'s, touch one byte: both from
     /// one base (one value in every thread of the simdgroup, so the base cancels), with places
     /// of one kind, and at no two lanes of one simdgroup do the byte ranges meet, modulo the
     /// index width. A simdgroup both addresses reach from the previous one by one shift, the same
-    /// for both, has the previous one's differences and its answer. `work` counts the lane pairs
-    /// compared.
+    /// for both, has the previous one's differences and its answer.
+    ///
+    /// The bytes of a lane at `x` and another's at `y` meet where `x - y` lies in one window of
+    /// the index width's circle ([`Window`]). Where both simdgroups step from lane to lane by one
+    /// step, their lanes' differences are lane 0's plus a multiple of it, at most 31 either way
+    /// ([`Window::stepped_apart`]); otherwise each simdgroup is one pass over both addresses'
+    /// lanes in the order of their offsets ([`Window::apart`]). `work` counts their steps.
     pub fn apart(&self, size: u64, other: &Lanes, other_size: u64, work: &mut u64) -> bool {
         let kinds = match (self.basis, other.basis) {
             (Basis::Lane, _) | (_, Basis::Lane) => true,
@@ -318,6 +383,8 @@ impl Lanes {
             || !kinds
             || self.offsets.len() != PLACES
             || other.offsets.len() != PLACES
+            || self.order.len() != BLOCKS
+            || other.order.len() != BLOCKS
         {
             return false;
         }
@@ -325,30 +392,203 @@ impl Lanes {
         if size > mask || other_size > mask {
             return false;
         }
-        let blocks = self.offsets.as_chunks::<32>().0;
-        let other_blocks = other.offsets.as_chunks::<32>().0;
+        let window = match Window::new(size, other_size, mask) {
+            Some(w) if w.len == 0 => return true,
+            Some(w) => w,
+            // Every two lanes' bytes meet.
+            None => return false,
+        };
+        let blocks = self.offsets.as_chunks::<32>().0.iter().zip(&self.order);
+        let other_blocks = other.offsets.as_chunks::<32>().0.iter().zip(&other.order);
         blocks
-            .iter()
             .zip(other_blocks)
             .zip(self.shifts.iter().zip(&other.shifts))
-            .all(|((a, b), shifts)| {
+            .zip(self.steps.iter().zip(&other.steps))
+            .all(|(((a, b), shifts), steps)| {
                 if let (Some(da), Some(db)) = shifts {
                     if da == db {
                         return true;
                     }
                 }
-                *work += 32 * 32;
-                a.iter().enumerate().all(|(i, &x)| {
-                    b.iter().enumerate().all(|(j, &y)| {
-                        // `[x, x + size)` and `[y, y + other_size)` meet where one starts inside
-                        // the other.
-                        i == j
-                            || (y.wrapping_sub(x) & mask >= size
-                                && x.wrapping_sub(y) & mask >= other_size)
-                    })
-                })
+                match steps {
+                    (Some(sa), Some(sb)) if sa == sb => {
+                        let lane0 = a.0[0].wrapping_sub(b.0[0]) & mask;
+                        window.stepped_apart(lane0, *sa, mask, work)
+                    }
+                    _ => window.apart(a, b, work),
+                }
             })
     }
+}
+
+/// Where the bytes of an access of `size` bytes at `x` meet those of one of `other_size` bytes
+/// at `y`, modulo the index width's modulus `m`: `[x, x + size)` and `[y, y + other_size)` meet
+/// where one starts inside the other, so where `x - y` lies in `(-size, other_size)`, or is 0
+/// and either size is not. That is `x` in `[y + start, y + start + len)` around the circle.
+#[derive(Clone, Copy, Debug)]
+struct Window {
+    start: u128,
+    len: u128,
+    m: u128,
+}
+
+impl Window {
+    /// The window of two accesses' sizes, both at most `mask`; `None` where it covers the whole
+    /// circle, so every two lanes' bytes meet.
+    fn new(size: u64, other_size: u64, mask: u64) -> Option<Window> {
+        let m = u128::from(mask) + 1;
+        let (size, other_size) = (u128::from(size), u128::from(other_size));
+        let (start, len) = match size {
+            0 => (0, other_size),
+            _ => ((m - (size - 1)) % m, size - 1 + other_size.max(1)),
+        };
+        (len < m).then_some(Window { start, len, m })
+    }
+
+    /// Whether difference `d` (`x - y` modulo `m`) lies in the window.
+    fn holds(&self, d: u64) -> bool {
+        let d = u128::from(d);
+        let from_start = match d >= self.start {
+            true => d - self.start,
+            false => d + self.m - self.start,
+        };
+        from_start < self.len
+    }
+
+    /// Whether two simdgroups whose lanes both step by `step` are apart: lane `i` of the one
+    /// and lane `j` of the other differ by `lane0 + (i - j) step` (`lane0`: their lanes 0's
+    /// difference), so no difference with `i - j` from 1 to 31 either way may lie in the window.
+    fn stepped_apart(&self, lane0: u64, step: u64, mask: u64, work: &mut u64) -> bool {
+        let mut steps = 0;
+        let apart = (1u64..32).all(|k| {
+            steps += 1;
+            let by = k.wrapping_mul(step);
+            !self.holds(lane0.wrapping_add(by) & mask) && !self.holds(lane0.wrapping_sub(by) & mask)
+        });
+        *work += steps;
+        apart
+    }
+
+    /// Whether no lane `j` of simdgroup `b` has a lane `i != j` of `a` in its window, each
+    /// simdgroup given as its offsets and its lanes in their order. The windows, taken in the
+    /// order of `b`'s offsets, start below `2 m` and rise; `a`'s offsets read three times, a
+    /// modulus apart, rise through `[0, 3 m)`, so two cursors walk once through them and find
+    /// each window's lanes, at most one copy of each lane since a window is shorter than `m`.
+    fn apart(
+        &self,
+        (a, a_order): (&[u64; 32], &[u8; 32]),
+        (b, b_order): (&[u64; 32], &[u8; 32]),
+        work: &mut u64,
+    ) -> bool {
+        let xs = a_order.map(|lane| a.get(usize::from(lane)).map_or(0, |&x| u128::from(x)));
+        // `a`'s `k`th offset in the order read three times, below `3 m`.
+        let at = |k: usize| {
+            xs.get(k % 32)
+                .filter(|_| k < 96)
+                .map(|&x| x + self.m * (k / 32) as u128)
+        };
+        let (mut lo, mut hi) = (0, 0);
+        let mut steps = 0;
+        let apart = b_order.iter().all(|&j| {
+            let Some(&y) = b.get(usize::from(j)) else {
+                return false;
+            };
+            let from = u128::from(y) + self.start;
+            while at(lo).is_some_and(|x| x < from) {
+                lo += 1;
+                steps += 1;
+            }
+            hi = hi.max(lo);
+            while at(hi).is_some_and(|x| x < from + self.len) {
+                hi += 1;
+                steps += 1;
+            }
+            steps += 1;
+            match hi - lo {
+                0 => true,
+                1 => a_order.get(lo % 32) == Some(&j),
+                _ => false,
+            }
+        });
+        *work += steps;
+        apart
+    }
+}
+
+/// One step of an address's program ([`AddrFacts::lane_program`]), which [`run_lanes`] runs on
+/// a stack of values at each place.
+#[derive(Clone, Copy, Debug)]
+enum LaneOp {
+    /// A constant, in its width.
+    Const(u64),
+    /// The place `p`, or `p mod 32` for a lane, in the width's `mask`.
+    Place { lane: bool, mask: u64 },
+    /// The two values on top, `x` below `y`, as `x op y` in width `w`.
+    Bin(BinOp, u32),
+    /// The value on top in `mask`'s width: zero-extended or truncated, or sign-extended from
+    /// width `wx` where `signed`.
+    Cast { signed: bool, wx: u32, mask: u64 },
+    /// The value on top, an index of width `w`, sign-extended (or truncated) to the index width,
+    /// scaled by `stride` and added to the offset.
+    Term { stride: u64, w: u32 },
+}
+
+/// The offset `program` computes at place `p`, from `konst`, wrapping: `None` where a shift
+/// there is by the width or more, or a division or remainder by 0.
+fn run_lanes(program: &[LaneOp], konst: u64, p: u64) -> Option<u64> {
+    let mut stack = [0u64; MAX_LANE_OPS as usize];
+    let mut depth = 0usize;
+    let mut off = konst;
+    for &op in program {
+        let value = match op {
+            LaneOp::Const(c) => c,
+            LaneOp::Place { lane, mask } => match lane {
+                true => p & 31 & mask,
+                false => p & mask,
+            },
+            LaneOp::Bin(op, w) => {
+                depth = depth.checked_sub(2)?;
+                let (x, y) = (*stack.get(depth)?, *stack.get(depth + 1)?);
+                let mask = u64::MAX >> (64 - w);
+                let signed = |z: u64| ((z << (64 - w)) as i64) >> (64 - w);
+                match op {
+                    BinOp::Add => x.wrapping_add(y) & mask,
+                    BinOp::Sub => x.wrapping_sub(y) & mask,
+                    BinOp::Mul => x.wrapping_mul(y) & mask,
+                    BinOp::And => x & y,
+                    BinOp::Or => x | y,
+                    BinOp::Xor => x ^ y,
+                    BinOp::Shl if y < u64::from(w) => (x << y) & mask,
+                    BinOp::LShr if y < u64::from(w) => x >> y,
+                    BinOp::AShr if y < u64::from(w) => (signed(x) >> y) as u64 & mask,
+                    BinOp::UDiv if y != 0 => x / y,
+                    BinOp::URem if y != 0 => x % y,
+                    _ => return None,
+                }
+            }
+            LaneOp::Cast { signed, wx, mask } => {
+                depth = depth.checked_sub(1)?;
+                let y = *stack.get(depth)?;
+                match signed {
+                    true => (((y << (64 - wx)) as i64) >> (64 - wx)) as u64 & mask,
+                    false => y & mask,
+                }
+            }
+            LaneOp::Term { stride, w } => {
+                depth = depth.checked_sub(1)?;
+                let v = *stack.get(depth)?;
+                let x = match w {
+                    64 => v,
+                    _ => (((v << (64 - w)) as i64) >> (64 - w)) as u64,
+                };
+                off = off.wrapping_add(x.wrapping_mul(stride));
+                continue;
+            }
+        };
+        *stack.get_mut(depth)? = value;
+        depth += 1;
+    }
+    Some(off)
 }
 
 /// The spelling of an anchor: a value, or a GEP's source type, canonical base, the indices
@@ -839,6 +1079,9 @@ pub(super) struct AddrFacts<'a> {
     guards: BTreeMap<u32, Guards>,
     /// By PHI or select: the objects it may point into ([`AddrFacts::roots`]), once walked.
     merges: BTreeMap<InstId, Option<Vec<Root>>>,
+    /// By pointer: its address at each place ([`AddrFacts::lanes`]), once computed, which the
+    /// accesses through it share.
+    lanes_of: BTreeMap<Value, Option<Rc<Lanes>>>,
     /// Each simdgroup lies within one row of its threadgroup (a single row, or rows of a multiple
     /// of 32 threads), so two of its threads' positions differ in `x` ([`AddrFacts::builtin_inj`])
     /// and are equal in `y` and `z` ([`AddrFacts::fixed`]).
@@ -881,6 +1124,7 @@ impl<'a> AddrFacts<'a> {
             anchors: BTreeMap::new(),
             guards: BTreeMap::new(),
             merges: BTreeMap::new(),
+            lanes_of: BTreeMap::new(),
             rows,
         })
     }
@@ -946,8 +1190,22 @@ impl<'a> AddrFacts<'a> {
             below,
             lone,
             leaves,
-            lanes: self.lanes(ptr, m)?,
+            lanes: self.lanes_once(ptr, m)?,
         })
+    }
+
+    /// [`AddrFacts::lanes`] of `ptr`, computed for its first access and shared by the rest.
+    fn lanes_once(&mut self, ptr: Value, m: &mut Meter) -> Result<Option<Rc<Lanes>>, Error> {
+        if let Some(found) = self.lanes_of.get(&ptr) {
+            return Ok(found.clone());
+        }
+        let lanes = self.lanes(ptr, m)?.map(Rc::new);
+        m.charge(tree_bytes(
+            1,
+            std::mem::size_of::<(Value, Option<Rc<Lanes>>)>(),
+        ))?;
+        self.lanes_of.insert(ptr, lanes.clone());
+        Ok(lanes)
     }
 
     /// Address `ptr` at each place of a thread ([`Lanes`]), where its walk down bitcasts, GEPs and
@@ -1056,60 +1314,42 @@ impl<'a> AddrFacts<'a> {
             }
             _ => LaneBase::Value(b),
         };
-        // Each index read once at place 0: what it reads of the thread, and how many operations.
+        // Each index read once: what it reads of the thread, how many operations, and its program,
+        // which then runs at each place.
         let mut basis = Basis::Lane;
         let mut ops = 0u32;
-        for &(_, k) in &terms {
+        let mut program: Vec<LaneOp> = Vec::new();
+        for &(stride, k) in &terms {
             if self
-                .place_value(k, 0, &mut Some((&mut basis, &mut ops)))
+                .lane_program(k, (&mut program, &mut basis, &mut ops), m)?
                 .is_none()
             {
+                m.release(crate::budget::vec_bytes(&program));
                 return Ok(None);
             }
+            // The index sign-extended (or truncated) to the index width.
+            let w = self.width(k).unwrap_or(64);
+            m.grow(&mut program, 1)?;
+            program.push(LaneOp::Term { stride, w });
+        }
+        // Place 0 first, before the work of every place is charged.
+        if run_lanes(&program, konst, 0).is_none() {
+            m.release(crate::budget::vec_bytes(&program));
+            return Ok(None);
         }
         m.tick(ops.saturating_mul(PLACES as u32))?;
         let mut offsets = Vec::new();
         m.reserve(&mut offsets, PLACES)?;
         for p in 0..PLACES as u64 {
-            let mut off = konst;
-            for &(stride, k) in &terms {
-                let Some(v) = self.place_value(k, p, &mut None) else {
-                    return Ok(None);
-                };
-                // The index sign-extended (or truncated) to the index width.
-                let w = self.width(k).unwrap_or(64);
-                let x = match w {
-                    64 => v,
-                    _ => (((v << (64 - w)) as i64) >> (64 - w)) as u64,
-                };
-                off = off.wrapping_add(x.wrapping_mul(stride));
-            }
+            let Some(off) = run_lanes(&program, konst, p) else {
+                m.release(crate::budget::vec_bytes(&program));
+                return Ok(None);
+            };
             offsets.push(off & mask);
         }
+        m.release(crate::budget::vec_bytes(&program));
         m.tick(PLACES as u32)?;
-        let mut shifts = [None; BLOCKS];
-        let blocks = offsets.as_chunks::<32>().0;
-        for (k, pair) in blocks.windows(2).enumerate() {
-            let [before, here] = pair else {
-                continue;
-            };
-            let d = here[0].wrapping_sub(before[0]) & mask;
-            let one = here
-                .iter()
-                .zip(before)
-                .all(|(&y, &x)| y.wrapping_sub(x) & mask == d);
-            if let Some(slot) = shifts.get_mut(k + 1) {
-                *slot = one.then_some(d);
-            }
-        }
-        Ok(Some(Lanes {
-            base,
-            base_home: self.home_of(b),
-            basis,
-            bits,
-            offsets,
-            shifts,
-        }))
+        Lanes::new((base, self.home_of(b), basis), bits, offsets, m).map(Some)
     }
 
     /// Constant address `c` as the constant its constant GEPs and pointer casts start from, and
@@ -1171,45 +1411,31 @@ impl<'a> AddrFacts<'a> {
         Ok((c, off))
     }
 
-    /// Integer `v` at place `p` of a thread ([`Lanes`]), in its width: a constant; the thread's
-    /// index in its threadgroup (`p`) or in its simdgroup (`p mod 32`); where each simdgroup lies
-    /// within one row, the `x` of its position in its threadgroup (`p`), a scalar or a position
-    /// vector's component 0; and additions, subtractions, multiplications, bitwise operations,
-    /// shifts below the width, unsigned divisions and remainders by a value other than 0,
-    /// extensions, truncations and freezes of such values and phis of one such value, each
-    /// wrapping at its width as the
-    /// operation does. `None` for anything else. `seen`, when given, records what the value
-    /// reads of the thread (an index and a position together are `None`: they are one place only
-    /// in a single row) and counts the operations, at most [`MAX_LANE_OPS`].
-    fn place_value(
+    /// Append to `program` the steps that compute integer `v` at a place of a thread
+    /// ([`Lanes`], [`run_lanes`]), in its width: a constant; the thread's index in its
+    /// threadgroup (`p`) or in its simdgroup (`p mod 32`); where each simdgroup lies within one
+    /// row, the `x` of its position in its threadgroup (`p`), a scalar or a position vector's
+    /// component 0; and additions, subtractions, multiplications, bitwise operations, shifts,
+    /// unsigned divisions and remainders, extensions, truncations and freezes of such values and
+    /// phis of one such value, each wrapping at its width as the operation does. A shift by the
+    /// width or more and a division or remainder by 0 have no value at the place they happen at
+    /// ([`run_lanes`]). `None` for anything else. `basis` records what the value reads of the
+    /// thread (an index and a position together are `None`: they are one place only in a single
+    /// row), and `ops` counts the values visited, at most [`MAX_LANE_OPS`].
+    fn lane_program(
         &self,
         v: Value,
-        p: u64,
-        seen: &mut Option<(&mut Basis, &mut u32)>,
-    ) -> Option<u64> {
-        if let Some((_, ops)) = seen {
-            **ops += 1;
-            if **ops > MAX_LANE_OPS {
-                return None;
-            }
+        (program, basis, ops): (&mut Vec<LaneOp>, &mut Basis, &mut u32),
+        m: &mut Meter,
+    ) -> Result<Option<()>, Error> {
+        *ops += 1;
+        if *ops > MAX_LANE_OPS {
+            return Ok(None);
         }
-        let w = self.width(v).filter(|w| (1..=64).contains(w))?;
-        let mask = u64::MAX >> (64 - w);
-        let place = |b: Basis, seen: &mut Option<(&mut Basis, &mut u32)>| {
-            let x = match b {
-                Basis::Lane => p & 31,
-                Basis::Index | Basis::Position => p,
-            };
-            if let Some((basis, _)) = seen {
-                **basis = match (**basis, b) {
-                    (Basis::Lane, b) | (b, Basis::Lane) => b,
-                    (x, y) if x == y => x,
-                    // An index and a position: one place only in a single row.
-                    _ => return None,
-                };
-            }
-            Some(x & mask)
+        let Some(w) = self.width(v).filter(|w| (1..=64).contains(w)) else {
+            return Ok(None);
         };
+        let mask = u64::MAX >> (64 - w);
         let builtin = |a: u32| {
             self.e
                 .ep
@@ -1221,15 +1447,20 @@ impl<'a> AddrFacts<'a> {
                     _ => None,
                 })
         };
-        match v {
-            Value::Const(c) => const_int(self.e, c).map(|i| i as u64 & mask),
+        let place = match v {
+            Value::Const(c) => {
+                let Some(i) = const_int(self.e, c) else {
+                    return Ok(None);
+                };
+                m.grow(program, 1)?;
+                program.push(LaneOp::Const(i as u64 & mask));
+                return Ok(Some(()));
+            }
             Value::Arg(a) => match builtin(a.raw()) {
-                Some(Builtin::ThreadIndexInThreadgroup) => place(Basis::Index, seen),
-                Some(Builtin::ThreadIndexInSimdgroup) => place(Basis::Lane, seen),
-                Some(Builtin::ThreadPositionInThreadgroup) if self.rows => {
-                    place(Basis::Position, seen)
-                }
-                _ => None,
+                Some(Builtin::ThreadIndexInThreadgroup) => Basis::Index,
+                Some(Builtin::ThreadIndexInSimdgroup) => Basis::Lane,
+                Some(Builtin::ThreadPositionInThreadgroup) if self.rows => Basis::Position,
+                _ => return Ok(None),
             },
             _ => match self.kind(v) {
                 Some(InstKind::ExtractElement {
@@ -1239,43 +1470,74 @@ impl<'a> AddrFacts<'a> {
                     && builtin(a.raw()) == Some(Builtin::ThreadPositionInThreadgroup)
                     && const_int(self.e, *c) == Some(0) =>
                 {
-                    place(Basis::Position, seen)
+                    Basis::Position
                 }
-                Some(InstKind::BinOp { op, a, b, .. }) => {
-                    let x = self.place_value(*a, p, seen)?;
-                    let y = self.place_value(*b, p, seen)?;
-                    let signed = |z: u64| ((z << (64 - w)) as i64) >> (64 - w);
-                    match op {
-                        BinOp::Add => Some(x.wrapping_add(y) & mask),
-                        BinOp::Sub => Some(x.wrapping_sub(y) & mask),
-                        BinOp::Mul => Some(x.wrapping_mul(y) & mask),
-                        BinOp::And => Some(x & y),
-                        BinOp::Or => Some(x | y),
-                        BinOp::Xor => Some(x ^ y),
-                        BinOp::Shl if y < u64::from(w) => Some((x << y) & mask),
-                        BinOp::LShr if y < u64::from(w) => Some(x >> y),
-                        BinOp::AShr if y < u64::from(w) => Some((signed(x) >> y) as u64 & mask),
-                        BinOp::UDiv if y != 0 => Some(x / y),
-                        BinOp::URem if y != 0 => Some(x % y),
-                        _ => None,
+                Some(&InstKind::BinOp { op, a, b, .. }) => {
+                    if self.lane_program(a, (program, basis, ops), m)?.is_none()
+                        || self.lane_program(b, (program, basis, ops), m)?.is_none()
+                    {
+                        return Ok(None);
                     }
-                }
-                Some(InstKind::Cast { op, v: x }) => {
-                    let wx = self.width(*x).filter(|w| (1..=64).contains(w))?;
-                    let y = self.place_value(*x, p, seen)?;
-                    match op {
-                        CastOp::ZExt | CastOp::Trunc => Some(y & mask),
-                        CastOp::SExt => {
-                            Some((((y << (64 - wx)) as i64) >> (64 - wx)) as u64 & mask)
-                        }
-                        _ => None,
+                    if !matches!(
+                        op,
+                        BinOp::Add
+                            | BinOp::Sub
+                            | BinOp::Mul
+                            | BinOp::And
+                            | BinOp::Or
+                            | BinOp::Xor
+                            | BinOp::Shl
+                            | BinOp::LShr
+                            | BinOp::AShr
+                            | BinOp::UDiv
+                            | BinOp::URem
+                    ) {
+                        return Ok(None);
                     }
+                    m.grow(program, 1)?;
+                    program.push(LaneOp::Bin(op, w));
+                    return Ok(Some(()));
                 }
-                Some(InstKind::Freeze(x)) => self.place_value(*x, p, seen),
-                Some(InstKind::Phi { .. }) => self.place_value(self.one_incoming(v)?, p, seen),
-                _ => None,
+                Some(&InstKind::Cast { op, v: x }) => {
+                    let Some(wx) = self.width(x).filter(|w| (1..=64).contains(w)) else {
+                        return Ok(None);
+                    };
+                    if self.lane_program(x, (program, basis, ops), m)?.is_none() {
+                        return Ok(None);
+                    }
+                    let signed = match op {
+                        CastOp::ZExt | CastOp::Trunc => false,
+                        CastOp::SExt => true,
+                        _ => return Ok(None),
+                    };
+                    m.grow(program, 1)?;
+                    program.push(LaneOp::Cast { signed, wx, mask });
+                    return Ok(Some(()));
+                }
+                Some(&InstKind::Freeze(x)) => {
+                    return self.lane_program(x, (program, basis, ops), m)
+                }
+                Some(InstKind::Phi { .. }) => {
+                    let Some(one) = self.one_incoming(v) else {
+                        return Ok(None);
+                    };
+                    return self.lane_program(one, (program, basis, ops), m);
+                }
+                _ => return Ok(None),
             },
-        }
+        };
+        *basis = match (*basis, place) {
+            (Basis::Lane, b) | (b, Basis::Lane) => b,
+            (x, y) if x == y => x,
+            // An index and a position: one place only in a single row.
+            _ => return Ok(None),
+        };
+        m.grow(program, 1)?;
+        program.push(LaneOp::Place {
+            lane: place == Basis::Lane,
+            mask,
+        });
+        Ok(Some(()))
     }
 
     /// The value phi `v` takes along every incoming edge, where it is one value: the phi is
@@ -3581,4 +3843,128 @@ fn inverse(p: crate::air::ir::IntPredicate) -> crate::air::ir::IntPredicate {
 fn within(root: Root, lo: i64, hi: i64) -> Option<Span> {
     let fits = |o: i64| (0..1i64 << 31).contains(&o);
     (fits(lo) && fits(hi)).then_some(Span { root, lo, hi })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Basis, LaneBase, Lanes, BLOCKS, PLACES};
+    use crate::air::ir::GlobalId;
+    use crate::pipeline::testing::meter;
+
+    /// The lanes of `offsets` (in `bits`' width) from one global.
+    fn lanes(bits: u32, offsets: Vec<u64>) -> Lanes {
+        let base = (LaneBase::Global(GlobalId::new(0)), None, Basis::Index);
+        Lanes::new(base, bits, offsets, &mut meter()).expect("lanes")
+    }
+
+    /// The answer by definition: in every simdgroup, every lane against every other lane.
+    fn every_pair(a: &[u64], size: u64, b: &[u64], other_size: u64, mask: u64) -> bool {
+        a.chunks(32).zip(b.chunks(32)).all(|(a, b)| {
+            a.iter().enumerate().all(|(i, &x)| {
+                b.iter().enumerate().all(|(j, &y)| {
+                    i == j
+                        || (y.wrapping_sub(x) & mask >= size
+                            && x.wrapping_sub(y) & mask >= other_size)
+                })
+            })
+        })
+    }
+
+    /// Offset sets of the shapes addresses take, in `mask`'s width: steps of the index, of the
+    /// lane alone and of the simdgroup, a lane step under simdgroups that move by different
+    /// shifts, exclusive ors, quotients, remainders (whose simdgroups step by one step or not),
+    /// ones near the top of the width that wrap, one offset for all, and pseudo-random ones in a
+    /// small range.
+    fn shapes(mask: u64, seed: u64) -> Vec<Vec<u64>> {
+        let mut state = seed | 1;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let top = mask.wrapping_sub(40);
+        let of = |f: &dyn Fn(u64) -> u64| (0..PLACES as u64).map(|p| f(p) & mask).collect();
+        let mut out: Vec<Vec<u64>> = vec![
+            of(&|p| p * 4),
+            of(&|p| p * 8 + 2),
+            of(&|p| (p & 31) * 4),
+            of(&|p| (p >> 5) * 4),
+            of(&|p| (p & 31) * 4 + (p >> 5) * (p >> 5) * 64),
+            of(&|p| (p ^ 1) * 4),
+            of(&|p| (p ^ 33) * 4),
+            of(&|p| (p / 3) * 4),
+            of(&|p| (p % 48) * 2),
+            of(&|p| top.wrapping_add(p * 4)),
+            of(&|p| p.wrapping_mul(mask)),
+            of(&|_| 12),
+        ];
+        out.extend((0..3).map(|_| {
+            let range = 1 + next() % 300;
+            (0..PLACES).map(|_| (next() % range) & mask).collect()
+        }));
+        out
+    }
+
+    /// The window answers every pair of offset sets and sizes as comparing every two lanes of
+    /// each simdgroup does, in each index width, sizes 0 and the width's largest included.
+    #[test]
+    fn the_window_answers_as_every_pair_of_lanes() {
+        let mut checked = 0;
+        for bits in [8u32, 16, 32, 64] {
+            let mask = u64::MAX >> (64 - bits);
+            let sets: Vec<Lanes> = shapes(mask, u64::from(bits))
+                .into_iter()
+                .map(|o| lanes(bits, o))
+                .collect();
+            let sizes = [
+                (4, 4),
+                (0, 0),
+                (0, 4),
+                (4, 0),
+                (1, 1),
+                (2, 8),
+                (16, 3),
+                (mask, 1),
+            ];
+            for a in &sets {
+                for b in &sets {
+                    for &(sa, sb) in &sizes {
+                        let mut work = 0;
+                        let got = a.apart(sa, b, sb, &mut work);
+                        let want = every_pair(&a.offsets, sa, &b.offsets, sb, mask);
+                        assert_eq!(got, want, "bits {bits}, sizes {sa} {sb}");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 4 * 15 * 15 * 8);
+    }
+
+    /// A pair of addresses apart in every simdgroup, whose simdgroups move by different shifts so
+    /// no simdgroup takes the previous one's answer, is charged for each simdgroup at most 32 +
+    /// 2 x 96 steps where their lanes step differently (one window for each lane, and two cursors
+    /// through the other address's offsets read three times), and at most 31 where both step by
+    /// one step (one for each difference of lanes). Comparing every two lanes was 1,024 for each.
+    #[test]
+    fn the_window_charges_each_simdgroup_its_steps_not_its_lane_pairs() {
+        let a = lanes(32, (0..PLACES as u64).map(|p| p * 4).collect());
+        let b = lanes(32, (0..PLACES as u64).map(|p| 8192 + p * 8).collect());
+        let mut work = 0;
+        assert!(a.apart(4, &b, 4, &mut work));
+        eprintln!("LANE-WINDOW: different steps: work {work} for {BLOCKS} simdgroups");
+        assert!(work <= (BLOCKS * (32 + 2 * 96)) as u64, "work {work}");
+        assert!(work < (BLOCKS * 32 * 32) as u64 / 4, "work {work}");
+        let c = lanes(
+            32,
+            (0..PLACES as u64)
+                .map(|p| 8192 + (p & 31) * 4 + (p >> 5) * 256)
+                .collect(),
+        );
+        let mut work = 0;
+        assert!(a.apart(4, &c, 4, &mut work));
+        eprintln!("LANE-WINDOW: one step: work {work} for {BLOCKS} simdgroups");
+        assert!(work <= (BLOCKS * 31) as u64, "work {work}");
+    }
 }
