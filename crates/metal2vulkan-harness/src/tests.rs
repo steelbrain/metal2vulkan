@@ -879,12 +879,12 @@ fn without_settling_a_warm_up_runs_its_least_count() {
 }
 
 #[test]
-fn a_steady_time_is_the_lowest_median_of_windows_of_ten() {
+fn a_steady_time_is_the_lowest_mean_of_windows_of_ten() {
     assert_eq!(steady(&[1.0; 4]), None, "fewer than 5 runs");
     assert_eq!(
         steady(&[3.0, 1.0, 2.0, 5.0, 4.0]),
         Some(3.0),
-        "their median below 10"
+        "their mean below 10"
     );
     // A clock that drops partway through: the faster windows' level, not the mix.
     let mut times = vec![100.0; 20];
@@ -892,6 +892,14 @@ fn a_steady_time_is_the_lowest_median_of_windows_of_ten() {
     times[3] = 400.0;
     assert_eq!(steady(&times), Some(100.0));
     assert_eq!(percentile(&times, 50), Some(105.0));
+    // Two runs' completions reported together: each pair's first wait takes both runs' GPU time
+    // and its second none (the old runtime's grouped submissions on ms01's Iris Xe, 4367 us of GPU
+    // a run). The time a run took, not the short wait's: a median of each window of 10 is 174.
+    let paired: Vec<f64> = (0..200)
+        .map(|run| if run % 2 == 0 { 9454.0 } else { 174.0 })
+        .collect();
+    assert_eq!(steady(&paired), Some(4814.0));
+    assert_eq!(percentile(&paired[..10], 50), Some(174.0));
 }
 
 #[test]

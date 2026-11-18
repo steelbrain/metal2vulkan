@@ -84,7 +84,7 @@
 //! ```
 //!
 //! where a plan workload's time is what a program waits on, timed on the host
-//! ([`run::matrix_time`]): the steady time ([`run::steady`]: the lowest median of the timed runs'
+//! ([`run::matrix_time`]): the steady time ([`run::steady`]: the lowest mean of the timed runs'
 //! consecutive windows of 10, with at least 5 timed runs) of each run's last command buffer's
 //! commit-to-complete time where the workload times its command buffers'
 //! ([`plan::Plan::commit_to_complete`]), the lateness of the others a column that decides nothing, else

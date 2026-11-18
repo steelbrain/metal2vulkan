@@ -51,21 +51,25 @@ const SETTLE_LEAST: Duration = Duration::from_millis(500);
 /// The longest settling warm-up; the timed runs start then, settled or not.
 const SETTLE_MOST: Duration = Duration::from_secs(5);
 
-/// The fewest timed runs whose median is a workload's time.
+/// The fewest timed runs that give a workload a time ([`steady`]).
 pub const LEAST_TIMED: usize = 5;
 
-/// A workload's time from its timed runs' `times`: the lowest median of their consecutive
-/// windows of 10 runs, so that a clock that drops partway through the runs does not move it; with
-/// fewer than 10 runs, their median; `None` with fewer than [`LEAST_TIMED`].
+/// A workload's time from its timed runs' `times`: the lowest mean of their consecutive windows
+/// of 10 runs, the time 10 runs took over 10, so that a clock that drops partway through the runs
+/// does not move it; with fewer than 10 runs, their mean; `None` with fewer than [`LEAST_TIMED`].
+/// A mean, not a median: where a runtime reports two runs' completions together, one run's wait
+/// takes both runs' time and the next run's none, and a median of such alternating runs is the
+/// short one's, while their mean is the time each run took.
 pub fn steady(times: &[f64]) -> Option<f64> {
     if times.len() < LEAST_TIMED {
         return None;
     }
+    let mean = |window: &[f64]| window.iter().sum::<f64>() / window.len() as f64;
     if times.len() < WINDOW {
-        return percentile(times, 50);
+        return Some(mean(times));
     }
     (times.as_chunks::<WINDOW>().0.iter())
-        .filter_map(|window| percentile(window, 50))
+        .map(|window| mean(window))
         .min_by(f64::total_cmp)
 }
 
