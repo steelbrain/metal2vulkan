@@ -981,6 +981,7 @@ impl ComputePipelineState {
         let whole = Kernel {
             module,
             entry: c"main".to_owned(),
+            digest: [0; 32],
             interface,
             variants: Mutex::new(Vec::new()),
         };

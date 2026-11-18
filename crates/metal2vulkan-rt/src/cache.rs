@@ -225,7 +225,7 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 /// Writes `bytes` to `path` through a temporary file beside it, named for this process and this
-/// write, then renamed over it.
+/// write, then renamed over it; its directory is made where it is missing.
 fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     static WRITES: AtomicU64 = AtomicU64::new(0);
     let mut temp = path.as_os_str().to_owned();
@@ -235,7 +235,13 @@ fn write_whole(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         WRITES.fetch_add(1, Relaxed)
     ));
     let temp = PathBuf::from(temp);
-    let written = fs::File::create(&temp).and_then(|mut file| file.write_all(bytes));
+    let created = fs::File::create(&temp).or_else(|error| match (error.kind(), path.parent()) {
+        (std::io::ErrorKind::NotFound, Some(dir)) => {
+            fs::create_dir_all(dir).and_then(|()| fs::File::create(&temp))
+        }
+        _ => Err(error),
+    });
+    let written = created.and_then(|mut file| file.write_all(bytes));
     match written.and_then(|()| fs::rename(&temp, path)) {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -400,7 +406,7 @@ impl Caches {
     /// pipeline's cache is to be destroyed at once.
     pub(crate) fn take_pending(&self) -> bool {
         self.pending
-            .fetch_update(Relaxed, Relaxed, |pending| {
+            .try_update(Relaxed, Relaxed, |pending| {
                 (pending < PENDING).then_some(pending + 1)
             })
             .is_ok()
