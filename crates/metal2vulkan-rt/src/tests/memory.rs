@@ -756,6 +756,14 @@ mod on_device {
                 "{name}: after the refused staging buffer"
             );
             drop(textures.pop());
+            // The textures' layout transitions ride the pending upload, which holds them until a
+            // commit submits it and it retires.
+            {
+                let queue = device.new_command_queue(1).expect("a queue");
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                command_buffer.commit().expect("a commit");
+                command_buffer.wait_until_completed();
+            }
             wait_until("the texture's memory freed", || {
                 counters.gauges().blocks == u64::from(MAX) - 1
             });
