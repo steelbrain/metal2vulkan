@@ -271,7 +271,7 @@ pub(crate) struct CopyUnit {
 impl CopyUnit {
     /// Whether the unit is a 32-bit float depth, which no upload takes
     /// ([`Gap::FloatDepthUpload`]).
-    fn float_depth(&self) -> bool {
+    pub(crate) fn float_depth(&self) -> bool {
         self.aspect == vk::ImageAspectFlags::DEPTH && self.bytes == 4
     }
 

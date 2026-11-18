@@ -2237,6 +2237,9 @@ field	metal2vulkan-rt::BlockInfo.len	pub len: u64
 field	metal2vulkan-rt::BytesPlace.bytes_per_image	pub bytes_per_image: u64
 field	metal2vulkan-rt::BytesPlace.bytes_per_row	pub bytes_per_row: u64
 field	metal2vulkan-rt::BytesPlace.offset	pub offset: u64
+field	metal2vulkan-rt::BufferLayout.bytes_per_image	pub bytes_per_image: u64
+field	metal2vulkan-rt::BufferLayout.bytes_per_row	pub bytes_per_row: u64
+field	metal2vulkan-rt::BufferLayout.offset	pub offset: u64
 field	metal2vulkan-rt::ComputePipelineDescriptor.buffers	pub buffers: BTreeMap<u32, metal::Mutability>
 field	metal2vulkan-rt::ComputePipelineDescriptor.kernel	pub kernel: StageSource
 field	metal2vulkan-rt::ComputePipelineDescriptor.max_call_stack_depth	pub max_call_stack_depth: u32
@@ -9233,7 +9236,9 @@ method	metal2vulkan-air::tensor_ops::OperandForm::is_cooperative	pub const fn is
 method	metal2vulkan-air::tensor_ops::OperandIndex::from_raw	pub fn from_raw(raw: u64) -> Option<OperandIndex>
 method	metal2vulkan-air::tensor_ops::RunForm::arity	pub fn arity(&self) -> usize
 method	metal2vulkan-air::tensor_ops::RunForm::operand_args	pub fn operand_args(&self) -> [usize; 3]
+method	metal2vulkan-rt::BlitCommandEncoder::copy_from_buffer	pub fn copy_from_buffer(&mut self, source: &Buffer, layout: BufferLayout, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture	pub fn copy_from_texture(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
+method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture_to_buffer	pub fn copy_from_texture_to_buffer(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Buffer, layout: BufferLayout) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::end_encoding	pub fn end_encoding(mut self)
 method	metal2vulkan-rt::BlockId::get	pub fn get(self) -> u32
 method	metal2vulkan-rt::Buffer::block	pub fn block(&self) -> BlockId
@@ -11379,6 +11384,7 @@ struct	metal2vulkan-rt::BlockId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash
 struct	metal2vulkan-rt::BlockInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct BlockInfo
 struct	metal2vulkan-rt::Buffer	#[derive(Clone)] pub struct Buffer
 struct	metal2vulkan-rt::BytesPlace	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct BytesPlace
+struct	metal2vulkan-rt::BufferLayout	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct BufferLayout
 struct	metal2vulkan-rt::CommandBuffer	#[derive(Clone)] pub struct CommandBuffer
 struct	metal2vulkan-rt::CommandQueue	#[derive(Clone)] pub struct CommandQueue
 struct	metal2vulkan-rt::ComputeCommandEncoder	pub struct ComputeCommandEncoder
@@ -13297,6 +13303,7 @@ variant	metal2vulkan-rt::Error::Thread	Thread(io::Error)
 variant	metal2vulkan-rt::Error::Translation	Translation(metal2vulkan::error::Error)
 variant	metal2vulkan-rt::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
+variant	metal2vulkan-rt::Gap::BufferCopyAlignment	BufferCopyAlignment { pixel_format: PixelFormat, offset: u64, bytes_per_row: u64, bytes_per_image: u64 }
 variant	metal2vulkan-rt::Gap::CubicSampler	CubicSampler
 variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::HeapTexture	HeapTexture { pixel_format: PixelFormat }
@@ -13406,6 +13413,7 @@ variant	metal2vulkan-rt::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGro
 variant	metal2vulkan-rt::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
 variant	metal2vulkan-rt::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan-rt::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
+variant	metal2vulkan-rt::Refusal::BufferCopyLayout	BufferCopyLayout { offset: u64, bytes_per_row: u64, bytes_per_image: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferIndex	BufferIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferTooLong	BufferTooLong { length: u64, max: u64 }

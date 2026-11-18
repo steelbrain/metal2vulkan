@@ -6,7 +6,13 @@
 //! barrier an earlier encoder owed, and the hazard sets start again. The second moves them home
 //! once the copy has run, its writes visible to every later command. Nothing is copied but the
 //! region Metal names.
+//!
+//! A copy between a buffer and a texture is the same: `vkCmdCopyBufferToImage` or
+//! `vkCmdCopyImageToBuffer` against the buffer's own range of its block, one region per image of
+//! the region, between the same two barriers; the second also makes a write into the buffer
+//! visible to every later command, and to the host where the buffer is Shared.
 
+use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::error::{Error, Gap, Refusal};
@@ -27,6 +33,21 @@ pub struct TexturePlace {
     pub level: u32,
     /// The first texel, `[x, y, z]`.
     pub origin: [u32; 3],
+}
+
+/// No Metal counterpart as a type: where a texture's region lies in a buffer, which Metal's
+/// copies between a buffer and a texture take as three arguments
+/// (`sourceOffset:sourceBytesPerRow:sourceBytesPerImage:`, or the destination's).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct BufferLayout {
+    /// The region's first byte in the buffer.
+    pub offset: u64,
+    /// From one row's first byte to the next's: a row of texels, or of blocks of a compressed
+    /// format. Unused for a region one row high.
+    pub bytes_per_row: u64,
+    /// From one image's first byte to the next's, for a region of a 3D texture more than one image
+    /// deep; unused for any other.
+    pub bytes_per_image: u64,
 }
 
 /// `MTLBlitCommandEncoder`: records each copy into its command buffer at once.
@@ -152,6 +173,145 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
+    /// `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:`
+    /// `toTexture:destinationSlice:destinationLevel:destinationOrigin:`: `size` texels from
+    /// `source`, laid out as `layout` says, to `to` in `destination`, one
+    /// `vkCmdCopyBufferToImage` a 3D region's image. The options form with no option is this
+    /// call. Sizes of 0 copy as [`copy_from_texture`](Self::copy_from_texture)'s do. The command
+    /// buffer keeps the texture and the buffer's block until it retires.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's buffer or texture;
+    /// [`Refusal::TextureRegion`]; [`Refusal::BufferCopyLayout`] for a layout Metal's validation
+    /// stops; [`Gap::BufferCopyAlignment`] for one no copy command in the floor addresses;
+    /// [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`]; [`Error::Vulkan`] where the command
+    /// buffer cannot record.
+    pub fn copy_from_buffer(
+        &mut self,
+        source: &Buffer,
+        layout: BufferLayout,
+        size: [u32; 3],
+        destination: &Texture,
+        to: TexturePlace,
+    ) -> Result<(), Error> {
+        self.buffer_copy(destination, to, size, source, layout, true)
+    }
+
+    /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:`
+    /// `destinationOffset:destinationBytesPerRow:destinationBytesPerImage:`: `size` texels at
+    /// `from` in `source` to `destination`, laid out as `layout` says, one
+    /// `vkCmdCopyImageToBuffer` a 3D region's image. The options form with no option is this
+    /// call. Bytes between the region's rows and images are kept. Sizes of 0 copy as
+    /// [`copy_from_texture`](Self::copy_from_texture)'s do. The command buffer keeps the texture
+    /// and the buffer's block until it retires.
+    ///
+    /// Err: as [`copy_from_buffer`](Self::copy_from_buffer)'s, but for [`Gap::FloatDepthUpload`].
+    pub fn copy_from_texture_to_buffer(
+        &mut self,
+        source: &Texture,
+        from: TexturePlace,
+        size: [u32; 3],
+        destination: &Buffer,
+        layout: BufferLayout,
+    ) -> Result<(), Error> {
+        self.buffer_copy(source, from, size, destination, layout, false)
+    }
+
+    /// A copy of `size` texels at `at` in `texture` from or, not `into_image`, to `buffer`.
+    fn buffer_copy(
+        &mut self,
+        texture: &Texture,
+        at: TexturePlace,
+        size: [u32; 3],
+        buffer: &Buffer,
+        layout: BufferLayout,
+        into_image: bool,
+    ) -> Result<(), Error> {
+        let building = self.building();
+        let core = Arc::clone(building.device.core());
+        if !texture.is_of(&core) || !buffer.is_of(&core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        let lies = Lies {
+            base: buffer.offset(),
+            len: buffer.length(),
+            layout,
+        };
+        let Some(copy) = buffer_copy(&Side::of(texture), at, size, lies, into_image)? else {
+            return Ok(());
+        };
+        building.keep_texture(texture);
+        building.keep(buffer.held_block());
+        let command = building.ordered_command()?;
+        // Marked after `ordered_command`, which may have split the recording at a signal: the
+        // mark is the copy's own segment's.
+        if !into_image && buffer.is_shared() {
+            building.wrote_host();
+        }
+        use vk::AccessFlags2 as Access;
+        use vk::PipelineStageFlags2 as Stage;
+        let (layout, access) = match into_image {
+            true => (
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                Access::TRANSFER_WRITE,
+            ),
+            false => (vk::ImageLayout::TRANSFER_SRC_OPTIMAL, Access::TRANSFER_READ),
+        };
+        let earlier = [memory_barrier(Reach::Commands)];
+        let away = [texture.away(&copy.placed, layout, access)];
+        let back = [texture.back(&copy.placed, layout)];
+        let written = [vk::MemoryBarrier2::default()
+            .src_stage_mask(Stage::COPY)
+            .src_access_mask(Access::TRANSFER_WRITE)
+            .dst_stage_mask(Stage::ALL_COMMANDS)
+            .dst_access_mask(Access::MEMORY_READ | Access::MEMORY_WRITE)];
+        let written = match into_image {
+            true => &written[..0],
+            false => &written[..],
+        };
+        let device = &core.device;
+        let vk_buffer = buffer.held_block().memory.buffer;
+        // SAFETY: the command buffer records outside any render pass and keeps the image and the
+        // buffer's block until it retires; the subresource is in its home layout between
+        // commands and in `layout` between the barriers; each region lies in the image and, by
+        // `buffer_copy`, in the buffer's range of the block, its offset aligned as the command
+        // requires.
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default()
+                    .memory_barriers(&earlier)
+                    .image_memory_barriers(&away),
+            );
+            for region in copy.regions() {
+                match into_image {
+                    true => device.cmd_copy_buffer_to_image(
+                        command,
+                        vk_buffer,
+                        texture.image(),
+                        layout,
+                        &[region],
+                    ),
+                    false => device.cmd_copy_image_to_buffer(
+                        command,
+                        texture.image(),
+                        layout,
+                        vk_buffer,
+                        &[region],
+                    ),
+                }
+            }
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default()
+                    .memory_barriers(written)
+                    .image_memory_barriers(&back),
+            );
+        }
+        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::Barriers);
+        Ok(())
+    }
+
     /// `endEncoding`. Each copy ordered itself, so the encoder owes no barrier.
     pub fn end_encoding(mut self) {
         self.end();
@@ -192,6 +352,172 @@ pub(crate) struct ImageCopy {
     pub(crate) from: Placed,
     pub(crate) to: Placed,
     pub(crate) aspect: vk::ImageAspectFlags,
+}
+
+/// A buffer's side of a copy: its offset in its block, its length, and where the region lies
+/// in it.
+#[derive(Clone, Copy)]
+pub(crate) struct Lies {
+    pub(crate) base: u64,
+    pub(crate) len: u64,
+    pub(crate) layout: BufferLayout,
+}
+
+/// A copy between a buffer and a texture, checked: the texture's region, its aspect, and where
+/// each image of it lies in the buffer's block.
+pub(crate) struct BufferCopy {
+    pub(crate) placed: Placed,
+    pub(crate) aspect: vk::ImageAspectFlags,
+    /// The first image's first byte in the block.
+    pub(crate) offset: u64,
+    /// A row's stride in texels; 0 for a region one row high.
+    pub(crate) row_length: u32,
+    pub(crate) bytes_per_image: u64,
+}
+
+impl BufferCopy {
+    /// One region an image of the texture's region, each with its own offset: a stride of
+    /// images that is no whole number of rows needs no row count.
+    pub(crate) fn regions(&self) -> impl Iterator<Item = vk::BufferImageCopy> + '_ {
+        let [x, y, z] = self.placed.origin;
+        let [width, height, depth] = self.placed.size;
+        (0..depth).map(move |image| vk::BufferImageCopy {
+            buffer_offset: self.offset + u64::from(image) * self.bytes_per_image,
+            buffer_row_length: self.row_length,
+            buffer_image_height: 0,
+            image_subresource: self.placed.layers(self.aspect),
+            image_offset: vk::Offset3D {
+                x: x as i32,
+                y: y as i32,
+                z: (z + image) as i32,
+            },
+            image_extent: vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            },
+        })
+    }
+}
+
+/// Checks a copy of `size` texels at `at` in `texture` and the bytes `lies` names in a buffer,
+/// `into_image` for a copy into the texture. `None` where it copies nothing.
+///
+/// Metal's validation stops an offset or a row stride of a format of single texels that is no
+/// whole number of its texels, rows or images closer than the region's, and a region past the
+/// buffer's end ([`Refusal::BufferCopyLayout`]). A copy command in the floor further takes an
+/// offset of whole texel blocks, a multiple of 4 for a depth or stencil aspect, for each image,
+/// and a row stride of whole blocks ([`Gap::BufferCopyAlignment`]).
+///
+/// Err: [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`]; [`Refusal::TextureRegion`];
+/// [`Refusal::BufferCopyLayout`]; [`Gap::BufferCopyAlignment`].
+pub(crate) fn buffer_copy(
+    texture: &Side<'_>,
+    at: TexturePlace,
+    size: [u32; 3],
+    lies: Lies,
+    into_image: bool,
+) -> Result<Option<BufferCopy>, Error> {
+    let d = texture.descriptor;
+    let pixel_format = d.pixel_format;
+    let Some(unit) = texture.unit else {
+        return Err(Error::Unsupported(Gap::TextureBytes { pixel_format }));
+    };
+    if into_image && unit.float_depth() {
+        return Err(Error::Unsupported(Gap::FloatDepthUpload { pixel_format }));
+    }
+    let mut size = size;
+    if size[1] == 0
+        && matches!(
+            d.texture_type,
+            TextureType::Type1D | TextureType::Type1DArray
+        )
+    {
+        size[1] = 1;
+    }
+    if size[2] == 0 && d.texture_type != TextureType::Type3D {
+        size[2] = 1;
+    }
+    let region = Region {
+        origin: at.origin,
+        size,
+    };
+    let Some(placed) = place(d, unit.block, region, at.level, at.slice)? else {
+        return Ok(None);
+    };
+    let Lies { base, len, layout } = lies;
+    let BufferLayout {
+        offset,
+        bytes_per_row,
+        bytes_per_image,
+    } = layout;
+    let refused = || {
+        Error::Refused(Refusal::BufferCopyLayout {
+            offset,
+            bytes_per_row,
+            bytes_per_image,
+            len,
+        })
+    };
+    let [bw, bh] = unit.block;
+    let bytes = u64::from(unit.bytes);
+    let row = u64::from(placed.size[0].div_ceil(bw)) * bytes;
+    let rows = u64::from(placed.size[1].div_ceil(bh));
+    let images = u64::from(placed.size[2]);
+    let single = unit.block == [1, 1];
+    if single && (offset % bytes != 0 || (rows > 1 && bytes_per_row % bytes != 0)) {
+        return Err(refused());
+    }
+    let image_span = match rows {
+        1 => Some(row),
+        _ if bytes_per_row < row => return Err(refused()),
+        _ => (rows - 1)
+            .checked_mul(bytes_per_row)
+            .and_then(|span| span.checked_add(row)),
+    };
+    let span = match (images, image_span) {
+        (_, None) => None,
+        (1, span) => span,
+        (_, Some(image_span)) if bytes_per_image < image_span => return Err(refused()),
+        (_, Some(image_span)) => (images - 1)
+            .checked_mul(bytes_per_image)
+            .and_then(|span| span.checked_add(image_span)),
+    };
+    if span
+        .and_then(|span| span.checked_add(offset))
+        .is_none_or(|end| end > len)
+    {
+        return Err(refused());
+    }
+    let align = match unit.aspect {
+        vk::ImageAspectFlags::COLOR => bytes,
+        _ => 4,
+    };
+    let start = base + offset;
+    let row_length = match rows {
+        1 => Some(0),
+        _ => u32::try_from(bytes_per_row / bytes)
+            .ok()
+            .and_then(|elements| elements.checked_mul(bw)),
+    };
+    let aligned = start % align == 0
+        && (rows == 1 || bytes_per_row % bytes == 0)
+        && (images == 1 || bytes_per_image % align == 0);
+    let (Some(row_length), true) = (row_length, aligned) else {
+        return Err(Error::Unsupported(Gap::BufferCopyAlignment {
+            pixel_format,
+            offset,
+            bytes_per_row,
+            bytes_per_image,
+        }));
+    };
+    Ok(Some(BufferCopy {
+        placed,
+        aspect: unit.aspect,
+        offset: start,
+        row_length,
+        bytes_per_image,
+    }))
 }
 
 /// Checks a copy of `size` texels from `from` in `source` to `to` in `destination`, `same` where

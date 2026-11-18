@@ -1,4 +1,4 @@
-//! Blit copies between textures.
+//! Blit copies between textures, and between buffers and textures.
 //!
 //! - The rules: a texture copies into one of its own pixel format and sample count; two formats
 //!   or two sample counts are `Refusal::TextureCopyMismatch`, as Metal's validation refuses them;
@@ -17,8 +17,18 @@
 //!   must leave are plain Metal's: their FNV-1a 64 hashes are those of probe `blit_copy_layouts.m`
 //!   in the conformance crate (an Apple M3 Max, macOS 27.0.1, job m3-max-43464, plain and under
 //!   the validation layer).
+//! - Between a buffer and a texture: each image of the region lies at its own offset, its rows a
+//!   count of texels apart; what Metal's validation stops is `Refusal::BufferCopyLayout`, and an
+//!   offset or row stride a copy command cannot address `Gap::BufferCopyAlignment`. Under a device
+//!   cfg: bytes from a buffer land in a mipmap level, a slice of a 1D array and BC1 blocks, and a
+//!   slice's and a 3D region's bytes land in buffers at padded strides, everything around each
+//!   region kept and each result plain Metal's (job m3-max-43555); one copy into a Shared buffer
+//!   alone is one submission and three barriers, the segment's end reaching the host, and copies
+//!   no byte of the runtime's own.
 
-use crate::blit::{texture_copy, ImageCopy, Side, TexturePlace};
+use crate::blit::{
+    buffer_copy, texture_copy, BufferCopy, BufferLayout, ImageCopy, Lies, Side, TexturePlace,
+};
 use crate::error::{Error, Gap, Refusal};
 use crate::texture::{CopyUnit, Placed};
 use crate::{PixelFormat, TextureDescriptor, TextureType};
@@ -77,7 +87,7 @@ fn copied(result: Result<Option<ImageCopy>, Error>) -> ImageCopy {
     }
 }
 
-fn refused(result: Result<Option<ImageCopy>, Error>) -> Refusal {
+fn refused<T>(result: Result<Option<T>, Error>) -> Refusal {
     match result {
         Err(Error::Refused(refusal)) => refusal,
         Err(other) => panic!("not a refusal: {other}"),
@@ -85,7 +95,7 @@ fn refused(result: Result<Option<ImageCopy>, Error>) -> Refusal {
     }
 }
 
-fn gap(result: Result<Option<ImageCopy>, Error>) -> Gap {
+fn gap<T>(result: Result<Option<T>, Error>) -> Gap {
     match result {
         Err(Error::Unsupported(gap)) => gap,
         Err(other) => panic!("not a gap: {other}"),
@@ -384,12 +394,320 @@ fn what_metal_refuses_is_refused_and_what_one_command_does_not_make_is_a_gap() {
     ));
 }
 
+/// A buffer at `base` in its block, `len` bytes long, and a region in it at `offset`, rows
+/// `bytes_per_row` and images `bytes_per_image` apart.
+fn lies(base: u64, len: u64, offset: u64, bytes_per_row: u64, bytes_per_image: u64) -> Lies {
+    Lies {
+        base,
+        len,
+        layout: BufferLayout {
+            offset,
+            bytes_per_row,
+            bytes_per_image,
+        },
+    }
+}
+
+/// The buffer copy `result` checked, which copies something.
+fn buffer_copied(result: Result<Option<BufferCopy>, Error>) -> BufferCopy {
+    match result {
+        Ok(Some(copy)) => copy,
+        Ok(None) => panic!("it copies nothing"),
+        Err(error) => panic!("{error}"),
+    }
+}
+
+/// Each region's offset in the block, image offset and extent.
+fn regions(copy: &BufferCopy) -> Vec<(u64, [i32; 3], [u32; 3])> {
+    copy.regions()
+        .map(|region| {
+            let (o, e) = (region.image_offset, region.image_extent);
+            (
+                region.buffer_offset,
+                [o.x, o.y, o.z],
+                [e.width, e.height, e.depth],
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_buffer_copy_places_each_image_at_its_own_offset() {
+    let mut rgba = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [13, 7, 1]);
+    rgba.mipmap_level_count = 3;
+    let rgba = side(&rgba, vk::Format::R8G8B8A8_UNORM, color(4));
+    // Rows 32 bytes apart are 8 texels apart, from the buffer's offset in its block on.
+    let copy = buffer_copied(buffer_copy(
+        &rgba,
+        at(0, 1, [1, 1, 0]),
+        [4, 2, 1],
+        lies(256, 256, 16, 32, 0),
+        true,
+    ));
+    assert_eq!(copy.placed, placed(1, 0, [1, 1, 0], [4, 2, 1]));
+    assert_eq!(copy.row_length, 8);
+    assert_eq!(regions(&copy), [(272, [1, 1, 0], [4, 2, 1])]);
+    // One row reads no row stride.
+    let row = buffer_copied(buffer_copy(
+        &rgba,
+        at(0, 0, [0; 3]),
+        [4, 1, 1],
+        lies(0, 256, 0, 0, 0),
+        false,
+    ));
+    assert_eq!(row.row_length, 0);
+    // A 3D region's images each at their own offset, 24 bytes apart: no whole number of rows.
+    let volume = descriptor(TextureType::Type3D, PixelFormat::R8Unorm, [4, 4, 3]);
+    let volume = side(&volume, vk::Format::R8_UNORM, color(1));
+    let copy = buffer_copied(buffer_copy(
+        &volume,
+        at(0, 0, [1, 0, 0]),
+        [3, 4, 3],
+        lies(0, 128, 8, 5, 24),
+        false,
+    ));
+    assert_eq!(copy.row_length, 5);
+    assert_eq!(
+        regions(&copy),
+        [
+            (8, [1, 0, 0], [3, 4, 1]),
+            (32, [1, 0, 1], [3, 4, 1]),
+            (56, [1, 0, 2], [3, 4, 1])
+        ]
+    );
+    // A 1D array's slice, a height and depth of 0 one texel; its image stride is not read.
+    let mut line = descriptor(TextureType::Type1DArray, PixelFormat::R32Float, [16, 1, 1]);
+    line.array_length = 2;
+    let line = side(&line, vk::Format::R32_SFLOAT, color(4));
+    let copy = buffer_copied(buffer_copy(
+        &line,
+        at(1, 0, [3, 0, 0]),
+        [8, 0, 0],
+        lies(0, 256, 16, 32, 40),
+        true,
+    ));
+    assert_eq!(copy.placed, placed(0, 1, [3, 0, 0], [8, 1, 1]));
+    assert_eq!(regions(&copy), [(16, [3, 0, 0], [8, 1, 1])]);
+    // BC1 blocks: a row of blocks is 8 bytes.
+    let bc1 = descriptor(TextureType::Type2D, PixelFormat::BC1RGBA, [8, 8, 1]);
+    let block = Some(CopyUnit {
+        aspect: vk::ImageAspectFlags::COLOR,
+        bytes: 8,
+        block: [4, 4],
+    });
+    let bc1 = side(&bc1, vk::Format::BC1_RGBA_UNORM_BLOCK, block);
+    let copy = buffer_copied(buffer_copy(
+        &bc1,
+        at(0, 0, [0; 3]),
+        [8, 8, 1],
+        lies(0, 64, 8, 24, 0),
+        true,
+    ));
+    assert_eq!(copy.row_length, 12);
+    assert!(matches!(
+        buffer_copy(
+            &bc1,
+            at(0, 0, [0; 3]),
+            [0, 8, 1],
+            lies(0, 64, 0, 16, 0),
+            true
+        ),
+        Ok(None)
+    ));
+}
+
+#[test]
+fn a_layout_metal_stops_is_refused_and_one_a_copy_command_cannot_address_is_a_gap() {
+    let rgba = descriptor(TextureType::Type2D, PixelFormat::RGBA8Unorm, [8, 8, 1]);
+    let rgba = side(&rgba, vk::Format::R8G8B8A8_UNORM, color(4));
+    let two_rows =
+        |lies, into_image| buffer_copy(&rgba, at(0, 0, [0; 3]), [4, 2, 1], lies, into_image);
+    let layout = |offset, bytes_per_row, bytes_per_image, len| Refusal::BufferCopyLayout {
+        offset,
+        bytes_per_row,
+        bytes_per_image,
+        len,
+    };
+    // Metal's validation: an offset or a row stride of no whole texels, rows closer than the
+    // region's, and a region past the buffer's end.
+    assert_eq!(
+        refused(two_rows(lies(0, 4096, 2, 16, 0), true)),
+        layout(2, 16, 0, 4096)
+    );
+    assert_eq!(
+        refused(two_rows(lies(0, 4096, 0, 18, 0), false)),
+        layout(0, 18, 0, 4096)
+    );
+    assert_eq!(
+        refused(two_rows(lies(0, 4096, 0, 12, 0), true)),
+        layout(0, 12, 0, 4096)
+    );
+    assert_eq!(
+        refused(two_rows(lies(0, 4096, 4080, 16, 0), true)),
+        layout(4080, 16, 0, 4096)
+    );
+    assert!(two_rows(lies(0, 4096, 4064, 16, 0), true).is_ok());
+    let volume = descriptor(TextureType::Type3D, PixelFormat::R8Unorm, [4, 4, 2]);
+    let volume = side(&volume, vk::Format::R8_UNORM, color(1));
+    let deep = |bytes_per_image| {
+        buffer_copy(
+            &volume,
+            at(0, 0, [0; 3]),
+            [4, 4, 2],
+            lies(0, 4096, 0, 4, bytes_per_image),
+            true,
+        )
+    };
+    assert_eq!(refused(deep(12)), layout(0, 4, 12, 4096));
+    assert!(deep(18).is_ok());
+    // Metal takes an R8Unorm offset of 2.
+    let r8 = descriptor(TextureType::Type2D, PixelFormat::R8Unorm, [8, 8, 1]);
+    let r8 = side(&r8, vk::Format::R8_UNORM, color(1));
+    assert!(buffer_copy(
+        &r8,
+        at(0, 0, [0; 3]),
+        [4, 2, 1],
+        lies(0, 4096, 2, 8, 0),
+        true
+    )
+    .is_ok());
+    // A copy command: a depth offset a multiple of 4, every image's offset whole texel blocks,
+    // rows whole blocks.
+    let alignment =
+        |pixel_format, offset, bytes_per_row, bytes_per_image| Gap::BufferCopyAlignment {
+            pixel_format,
+            offset,
+            bytes_per_row,
+            bytes_per_image,
+        };
+    let depth = descriptor(TextureType::Type2D, PixelFormat::Depth16Unorm, [8, 8, 1]);
+    let unit = |aspect, bytes, block| {
+        Some(CopyUnit {
+            aspect,
+            bytes,
+            block,
+        })
+    };
+    let depth = side(
+        &depth,
+        vk::Format::D16_UNORM,
+        unit(vk::ImageAspectFlags::DEPTH, 2, [1, 1]),
+    );
+    let out_of_depth = |offset| {
+        buffer_copy(
+            &depth,
+            at(0, 0, [0; 3]),
+            [4, 2, 1],
+            lies(0, 4096, offset, 8, 0),
+            false,
+        )
+    };
+    assert_eq!(
+        gap(out_of_depth(2)),
+        alignment(PixelFormat::Depth16Unorm, 2, 8, 0)
+    );
+    assert!(out_of_depth(4).is_ok());
+    let bc1 = descriptor(TextureType::Type2D, PixelFormat::BC1RGBA, [8, 8, 1]);
+    let bc1 = side(
+        &bc1,
+        vk::Format::BC1_RGBA_UNORM_BLOCK,
+        unit(vk::ImageAspectFlags::COLOR, 8, [4, 4]),
+    );
+    let blocks = |offset, bytes_per_row| {
+        buffer_copy(
+            &bc1,
+            at(0, 0, [0; 3]),
+            [8, 8, 1],
+            lies(0, 4096, offset, bytes_per_row, 0),
+            true,
+        )
+    };
+    assert_eq!(
+        gap(blocks(0, 20)),
+        alignment(PixelFormat::BC1RGBA, 0, 20, 0)
+    );
+    assert_eq!(
+        gap(blocks(4, 16)),
+        alignment(PixelFormat::BC1RGBA, 4, 16, 0)
+    );
+    // The buffer's own offset in its block counts.
+    assert_eq!(
+        gap(two_rows(lies(2, 4096, 0, 16, 0), true)),
+        alignment(PixelFormat::RGBA8Unorm, 0, 16, 0)
+    );
+    let words = descriptor(TextureType::Type3D, PixelFormat::RGBA8Unorm, [4, 4, 2]);
+    let words = side(&words, vk::Format::R8G8B8A8_UNORM, color(4));
+    assert_eq!(
+        gap(buffer_copy(
+            &words,
+            at(0, 0, [0; 3]),
+            [4, 4, 2],
+            lies(0, 4096, 0, 16, 66),
+            true
+        )),
+        alignment(PixelFormat::RGBA8Unorm, 0, 16, 66)
+    );
+    // No plain copy of the image's bytes, and no upload of a 32-bit float depth.
+    let mut msaa = descriptor(
+        TextureType::Type2DMultisample,
+        PixelFormat::RGBA8Unorm,
+        [8, 8, 1],
+    );
+    msaa.sample_count = 4;
+    let msaa = side(&msaa, vk::Format::R8G8B8A8_UNORM, None);
+    assert_eq!(
+        gap(buffer_copy(
+            &msaa,
+            at(0, 0, [0; 3]),
+            [4, 2, 1],
+            lies(0, 4096, 0, 16, 0),
+            false
+        )),
+        Gap::TextureBytes {
+            pixel_format: PixelFormat::RGBA8Unorm
+        }
+    );
+    let float = descriptor(TextureType::Type2D, PixelFormat::Depth32Float, [8, 8, 1]);
+    let float = side(
+        &float,
+        vk::Format::D32_SFLOAT,
+        unit(vk::ImageAspectFlags::DEPTH, 4, [1, 1]),
+    );
+    let float_copy = |into_image| {
+        buffer_copy(
+            &float,
+            at(0, 0, [0; 3]),
+            [4, 2, 1],
+            lies(0, 4096, 0, 16, 0),
+            into_image,
+        )
+    };
+    assert_eq!(
+        gap(float_copy(true)),
+        Gap::FloatDepthUpload {
+            pixel_format: PixelFormat::Depth32Float
+        }
+    );
+    assert!(float_copy(false).is_ok());
+    assert!(matches!(
+        refused(buffer_copy(
+            &rgba,
+            at(1, 0, [0; 3]),
+            [4, 2, 1],
+            lies(0, 4096, 0, 16, 0),
+            true
+        )),
+        Refusal::TextureRegion { level: 0, slice: 1 }
+    ));
+}
+
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        CommandBuffer, Device, DispatchType, Error, Gap, IndexClass, PixelFormat, Refusal, Region,
-        StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
+        Buffer, BufferLayout, CommandBuffer, Device, DispatchType, Error, Gap, IndexClass,
+        MemoryClass, PixelFormat, Refusal, Region, StorageMode, Texture, TextureDescriptor,
+        TexturePlace, TextureType, TextureUsage,
     };
 
     /// A byte pattern of `len` bytes, different at every offset of one call and between calls.
@@ -812,6 +1130,264 @@ mod on_device {
                 command_buffer.blit_command_encoder(),
                 Err(Error::Refused(Refusal::Committed))
             ));
+        });
+    }
+
+    /// Writes `bytes` over the start of a Shared buffer.
+    fn write(buffer: &Buffer, bytes: &[u8]) {
+        let contents = buffer.contents().expect("a Shared buffer");
+        assert!(bytes.len() as u64 <= buffer.length());
+        // SAFETY: the range lies in the buffer, which is alive, and no GPU work uses it.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len()) };
+    }
+
+    /// A Shared buffer's bytes, as the host reads them.
+    fn read(buffer: &Buffer) -> Vec<u8> {
+        let contents = buffer.contents().expect("a Shared buffer");
+        // SAFETY: the buffer is alive, `length` bytes long, and no GPU work uses it.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), buffer.length() as usize) }.to_vec()
+    }
+
+    /// `into` with `rows` (an offset in `from`, one in `into`) of `len` bytes each copied over.
+    fn moved(
+        mut into: Vec<u8>,
+        from: &[u8],
+        rows: impl Iterator<Item = (usize, usize)>,
+        len: usize,
+    ) -> Vec<u8> {
+        for (from_at, into_at) in rows {
+            into[into_at..into_at + len].copy_from_slice(&from[from_at..from_at + len]);
+        }
+        into
+    }
+
+    /// Bytes from buffers land in a mipmap level, a 1D array's slice and BC1 blocks, and a
+    /// slice's and a 3D region's bytes land in buffers at padded strides, as plain Metal leaves
+    /// them; one copy into a Shared buffer alone costs one submission and three barriers, the
+    /// segment's end reaching the host, and copies nothing of the runtime's own.
+    #[test]
+    fn every_device_copies_between_buffers_and_textures() {
+        each_device("blit_buffers", |name, _, device| {
+            device
+                .grant_indices(IndexClass::Texture, 4096, 16)
+                .expect("a grant");
+            device
+                .grant_indices(IndexClass::StorageTexture, 1, 16)
+                .expect("a grant");
+            let read_usage = TextureUsage::SHADER_READ;
+            let make = |texture_type, format, extent, index| {
+                texture(&device, texture_type, format, extent, read_usage, index)
+                    .unwrap_or_else(|error| panic!("{name}: {format:?}: {error}"))
+            };
+            let levels = make(
+                TextureType::Type2D,
+                PixelFormat::RGBA8Unorm,
+                [13, 7, 1],
+                4096,
+            );
+            let slices = make(
+                TextureType::Type2DArray,
+                PixelFormat::RGBA8Unorm,
+                [8, 8, 1],
+                4097,
+            );
+            let volume = make(TextureType::Type3D, PixelFormat::R8Unorm, [4, 4, 3], 4098);
+            let mut line =
+                TextureDescriptor::new(TextureType::Type1DArray, PixelFormat::R32Float, 16, 1);
+            line.array_length = 2;
+            line.usage = read_usage;
+            line.storage_mode = StorageMode::Shared;
+            let lines = (device.new_texture(&line, Some(4099)))
+                .unwrap_or_else(|error| panic!("{name}: a 1D array: {error}"));
+            let level = |texture, slice, level, unit| Level {
+                texture,
+                slice,
+                level,
+                unit,
+                block: 1,
+            };
+            let (level1, slice2) = (level(&levels, 0, 1, 4), level(&slices, 2, 0, 4));
+            let (volume0, line1) = (level(&volume, 0, 0, 1), level(&lines, 1, 0, 4));
+            let level_before = level1.write(12);
+            let slice_bytes = slice2.write(13);
+            let volume_bytes = volume0.write(15);
+            let line_before = line1.write(19);
+            let block = (device.take_block(MemoryClass::Shared, 4096))
+                .expect("a Shared block")
+                .id;
+            let mut next = 0;
+            let mut buffer = |len: u64, seed: u8| {
+                let buffer = (device.new_buffer(block, next, len, true)).expect("a buffer");
+                next += len.next_multiple_of(256);
+                let bytes = pattern(len as usize, seed);
+                write(&buffer, &bytes);
+                (buffer, bytes)
+            };
+            let (into_level, level_source) = buffer(256, 11);
+            let (from_slice, slice_before) = buffer(1024, 14);
+            let (from_volume, volume_before) = buffer(128, 16);
+            let (into_line, line_source) = buffer(256, 18);
+            let (into_blocks, block_source) = buffer(64, 17);
+            let layout = |offset, bytes_per_row, bytes_per_image| BufferLayout {
+                offset,
+                bytes_per_row,
+                bytes_per_image,
+            };
+            let place = |slice, level, origin| TexturePlace {
+                slice,
+                level,
+                origin,
+            };
+            let queue = device.new_command_queue(4).expect("a queue");
+            let first = queue.command_buffer().expect("a command buffer");
+            first.commit().expect("a commit");
+            finished(name, &first);
+
+            // A slice's region into a buffer at 64, rows 48 apart, alone.
+            let counters = device.counters();
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .copy_from_texture_to_buffer(
+                    &slices,
+                    place(2, 0, [2, 3, 0]),
+                    [5, 4, 1],
+                    &from_slice,
+                    layout(64, 48, 0),
+                )
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - before.submissions,
+                    after.barriers - before.barriers,
+                    after.bytes_copied - before.bytes_copied,
+                    after.passes - before.passes,
+                ),
+                (1, 3, 0, 1),
+                "{name}: submissions, barriers, bytes copied, passes"
+            );
+            let rows = (0..4).map(|y| (((3 + y) * 8 + 2) * 4, 64 + y * 48));
+            assert_eq!(
+                read(&from_slice),
+                metal(
+                    moved(slice_before, &slice_bytes, rows, 20),
+                    0x186e_870a_23ed_18a5
+                ),
+                "{name}: a slice into a buffer"
+            );
+
+            // Into a level at 16, rows 32 apart; a 3D region out at 8, rows 5 and images 24
+            // apart; into a 1D array's slice; and BC1 blocks where the device makes them.
+            let bc1 = texture(
+                &device,
+                TextureType::Type2D,
+                PixelFormat::BC1RGBA,
+                [8, 8, 1],
+                read_usage,
+                4100,
+            );
+            let bc1 = match bc1 {
+                Ok(texture) => Some(texture),
+                Err(Error::Unsupported(Gap::TextureFormat { .. })) => {
+                    println!("{name}: no BC1 texture on this device");
+                    None
+                }
+                Err(error) => panic!("{name}: BC1: {error}"),
+            };
+            let blocks0 = bc1.as_ref().map(|texture| Level {
+                texture,
+                slice: 0,
+                level: 0,
+                unit: 8,
+                block: 4,
+            });
+            let blocks_before = blocks0.as_ref().map(|level| level.write(20));
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            let copied = [
+                encoder.copy_from_buffer(
+                    &into_level,
+                    layout(16, 32, 0),
+                    [4, 2, 1],
+                    &levels,
+                    place(0, 1, [1, 1, 0]),
+                ),
+                encoder.copy_from_texture_to_buffer(
+                    &volume,
+                    place(0, 0, [1, 0, 0]),
+                    [3, 4, 3],
+                    &from_volume,
+                    layout(8, 5, 24),
+                ),
+                encoder.copy_from_buffer(
+                    &into_line,
+                    layout(16, 32, 40),
+                    [8, 1, 1],
+                    &lines,
+                    place(1, 0, [3, 0, 0]),
+                ),
+            ];
+            for result in copied {
+                result.unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            if let Some(bc1) = &bc1 {
+                encoder
+                    .copy_from_buffer(
+                        &into_blocks,
+                        layout(8, 16, 0),
+                        [4, 4, 1],
+                        bc1,
+                        place(0, 0, [4, 4, 0]),
+                    )
+                    .unwrap_or_else(|error| panic!("{name}: BC1: {error}"));
+            }
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let rows = (0..2).map(|y| (16 + y * 32, ((1 + y) * 6 + 1) * 4));
+            assert_eq!(
+                level1.read(),
+                metal(
+                    moved(level_before, &level_source, rows, 16),
+                    0xa5b4_4bf7_f3be_f955
+                ),
+                "{name}: a buffer into a level"
+            );
+            let rows =
+                (0..3).flat_map(|z| (0..4).map(move |y| (z * 16 + y * 4 + 1, 8 + z * 24 + y * 5)));
+            assert_eq!(
+                read(&from_volume),
+                metal(
+                    moved(volume_before, &volume_bytes, rows, 3),
+                    0xf57f_e637_5f8f_f12d
+                ),
+                "{name}: a 3D region into a buffer"
+            );
+            assert_eq!(
+                line1.read(),
+                metal(
+                    moved(line_before, &line_source, [(16, 12)].into_iter(), 32),
+                    0x8ec4_0174_4810_bfc5
+                ),
+                "{name}: a buffer into a 1D array's slice"
+            );
+            if let (Some(blocks0), Some(blocks_before)) = (blocks0, blocks_before) {
+                assert_eq!(
+                    blocks0.read(),
+                    metal(
+                        moved(blocks_before, &block_source, [(8, 24)].into_iter(), 8),
+                        0x2be2_b29b_0bcd_00a5
+                    ),
+                    "{name}: BC1 blocks from a buffer"
+                );
+            }
         });
     }
 }

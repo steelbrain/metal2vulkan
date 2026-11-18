@@ -41,7 +41,7 @@ mod texture;
 mod times;
 
 pub use arrays::{IndexClass, IndexGrant, ResourceId};
-pub use blit::{BlitCommandEncoder, TexturePlace};
+pub use blit::{BlitCommandEncoder, BufferLayout, TexturePlace};
 pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus};
 pub use counters::{Counters, Gauges, Metrics};

@@ -520,8 +520,29 @@ that touch blocks first.
   (`Refusal::TextureRegion`). Not built (`Gap::TextureCopy`): what one `vkCmdCopyImage` in the
   floor does not make (a multisample texture, a format of depth and stencil both, one pixel format
   held in two Vulkan formats by the textures' usages, a 1D texture with another type), and one
-  level and slice of a texture into itself. The slice-and-level and whole-texture forms of `copyFromTexture`, and the
-  other blit commands, are not built yet.
+  level and slice of a texture into itself.
+- `copy_from_buffer` is `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:`
+  `sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` and
+  `copy_from_texture_to_buffer` is `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:`
+  `sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:`, a
+  `BufferLayout` holding the offset and the two strides; their options forms with no option are
+  the same calls. Each records `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` against the
+  buffer's own range of its block, one region an image of the region, each at its own offset, so
+  an image stride of no whole number of rows copies too. The bytes between the region's rows and
+  images are kept. It records the same two barriers as a copy between textures; the second also
+  makes a write into the buffer visible to every later command, and a write into a Shared buffer
+  marks the segment, whose end barrier then reaches the host. A command buffer of one copy into a
+  Shared buffer has three barriers.
+- Refused (`Refusal::BufferCopyLayout`), as Metal's validation stops them: an offset or row
+  stride of no whole number of a format's texels, rows or images closer than the region's, and a
+  region past the buffer's end. Metal reads no row stride of a region one row high and no image
+  stride of a region one image deep, and neither does the runtime. Not built
+  (`Gap::BufferCopyAlignment`), though Metal takes them: an image's offset in the buffer's block
+  that is no multiple of a texel block's bytes, or of 4 for a depth or stencil aspect, and a row
+  stride of no whole number of a compressed format's blocks; also what `replace_region` and
+  `get_bytes` refuse (`Gap::TextureBytes`, and `Gap::FloatDepthUpload` into a texture).
+- The slice-and-level and whole-texture forms of `copyFromTexture`, and the other blit commands,
+  are not built yet.
 
 ## Compute pipeline states
 

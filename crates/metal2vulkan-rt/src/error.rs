@@ -342,6 +342,32 @@ pub enum Refusal {
         /// The bytes given.
         len: u64,
     },
+    /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) or
+    /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
+    /// whose offset or row stride, for a format of single texels, is no whole number of its
+    /// texels; whose rows or images are closer than the region's; or whose region runs past the
+    /// buffer's end. A row stride of a region one row high and an image stride of one one image
+    /// deep are not read.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `blit_buffer_copy_rules.m` in
+    /// the conformance crate, jobs m3-max-43541 and m3-max-43545: Metal's validation layer stops an
+    /// RGBA8Unorm offset of 2, `sourceOffset (2) must be a multiple of 4 bytes`, a row stride of
+    /// 18, `sourceBytesPerRow (18) must be a multiple of 4 bytes`, and the same of a copy into a
+    /// buffer, a row stride of 12 for rows of 16 bytes, an image stride of 12 for images of 16,
+    /// and a region 16 bytes past the buffer's end, `totalBytesUsed(4112) must be <= [sourceBuffer
+    /// length](4096)`; it takes an R8Unorm offset of 2, a row stride of 0 for one row, image
+    /// strides of no whole number of rows, and an image stride on a 2D texture and on a slice of a
+    /// 1D array).
+    BufferCopyLayout {
+        /// The region's first byte in the buffer.
+        offset: u64,
+        /// The bytes from one row's start to the next's.
+        bytes_per_row: u64,
+        /// The bytes from one image's start to the next's.
+        bytes_per_image: u64,
+        /// The buffer's length.
+        len: u64,
+    },
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// between textures of two pixel formats, or of two sample counts.
     ///
@@ -476,18 +502,20 @@ pub enum Gap {
     /// Basis: ours (the translator's identity domains do not filter bicubically, and Vulkan's
     /// cubic filter is not Metal's).
     CubicSampler,
-    /// [`Texture::replace_region`](crate::Texture::replace_region) or
-    /// [`Texture::get_bytes`](crate::Texture::get_bytes) of a texture whose image is no plain
-    /// copy of Metal's bytes in one aspect: a format of depth and stencil both, or a multisample
-    /// texture.
+    /// [`Texture::replace_region`](crate::Texture::replace_region),
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes) or a blit copy between a buffer and a
+    /// texture ([`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer))
+    /// of a texture whose image is no plain copy of Metal's bytes in one aspect: a format of depth
+    /// and stencil both, or a multisample texture.
     ///
     /// Basis: ours (no copy between such an image and bytes is built).
     TextureBytes {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
-    /// [`Texture::replace_region`](crate::Texture::replace_region) into a 32-bit float depth
-    /// (`Depth32Float`). Metal keeps any `float` there; Vulkan copies no depth outside `[0, 1]`
+    /// [`Texture::replace_region`](crate::Texture::replace_region) or
+    /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) into a
+    /// 32-bit float depth (`Depth32Float`). Metal keeps any `float` there; Vulkan copies no depth outside `[0, 1]`
     /// into a depth aspect without `VK_EXT_depth_range_unrestricted`, which the floor does not
     /// require (the Intel devices measured lack it), and no recorded stream uploads one.
     ///
@@ -521,6 +549,25 @@ pub enum Gap {
     HeapTexture {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
+    },
+    /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) or
+    /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
+    /// whose bytes no copy command in the floor addresses, though Metal takes them: an image's
+    /// offset in the buffer's block that is no multiple of a texel block's bytes (of 4 for a depth
+    /// or stencil aspect: a 16-bit depth at an offset of 2), or a row stride of no whole number of
+    /// a compressed format's blocks.
+    ///
+    /// Basis: ours (Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an
+    /// aligned offset; each is built when a replay stream makes one).
+    BufferCopyAlignment {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
+        /// The region's first byte in the buffer.
+        offset: u64,
+        /// The bytes from one row's start to the next's.
+        bytes_per_row: u64,
+        /// The bytes from one image's start to the next's.
+        bytes_per_image: u64,
     },
 }
 
@@ -796,6 +843,15 @@ impl fmt::Display for Refusal {
                 f,
                 "rows {bytes_per_row} and images {bytes_per_image} bytes apart in {len} bytes do not hold the region"
             ),
+            Refusal::BufferCopyLayout {
+                offset,
+                bytes_per_row,
+                bytes_per_image,
+                len,
+            } => write!(
+                f,
+                "a region at {offset} with rows {bytes_per_row} and images {bytes_per_image} bytes apart is no layout Metal takes in a buffer of {len} bytes"
+            ),
             Refusal::TextureCopyMismatch {
                 source,
                 destination,
@@ -868,6 +924,15 @@ impl fmt::Display for Gap {
             Gap::HeapTexture { pixel_format } => write!(
                 f,
                 "a heap texture of {pixel_format:?} is not placed in this heap on this device"
+            ),
+            Gap::BufferCopyAlignment {
+                pixel_format,
+                offset,
+                bytes_per_row,
+                bytes_per_image,
+            } => write!(
+                f,
+                "a copy of {pixel_format:?} at {offset} with rows {bytes_per_row} and images {bytes_per_image} bytes apart in a buffer is not built"
             ),
         }
     }
