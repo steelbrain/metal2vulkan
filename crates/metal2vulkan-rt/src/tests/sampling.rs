@@ -506,24 +506,30 @@ mod on_device {
                 "{name}: D written through the index"
             );
 
+            // B holds texels of its own, so a read through the index tells it from D and the
+            // source.
+            fn flat(_: u32, _: u32) -> [f32; 4] {
+                [0.25, 0.5, 0.75, 1.0]
+            }
             let b = texture(&device, SIDE, write, AT);
-            fill(name, &b);
+            fill_with(name, &b, flat);
             drop(a);
             assert_eq!(counters.gauges().descriptor_slots, slots + 4, "{name}");
             pass([&b, &target]);
-            let got = texels(&target, SIDE / 2);
+            let half = SIDE / 2;
+            let got = texels(&target, half);
+            let flats: Vec<f32> = (0..half * half).flat_map(|_| flat(0, 0)).collect();
             assert!(
-                near(&got, &means()),
+                near(&got, &flats),
                 "{name}: sampled through the index: {got:?}"
             );
             pass([&source, &b]);
             let mean = means();
-            let half = SIDE / 2;
             let want: Vec<f32> = (0..SIDE)
                 .flat_map(|y| (0..SIDE).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
                 .map(|(x, y, c)| match x < half && y < half {
                     true => mean[(4 * (y * half + x) + c) as usize],
-                    false => texel(x, y)[c as usize],
+                    false => flat(x, y)[c as usize],
                 })
                 .collect();
             let got = texels(&b, SIDE);
