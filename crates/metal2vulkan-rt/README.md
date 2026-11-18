@@ -297,14 +297,18 @@ made, with no lock, and never rewritten for layouts.
   group's execution are one of the allowed outcomes. A guest that waits for a completion before
   writing has, by that fact, a command buffer not in a held group.
 - `Device::minimum_linear_texture_alignment(pixel_format)` answers
-  `minimumLinearTextureAlignmentForPixelFormat:` from the device's own linear images: the
+  `minimumLinearTextureAlignmentForPixelFormat:` with the device's linear row rounding: the
   smallest power of two from 16 to 4,096 at which the device lays the rows of a 3-row linear
   image of each width of 1, 3, 17, 64, 65, 100, 129, 1,000 and 1,920 texels at the row rounded up
-  to it, and of which the image's memory alignment is a factor; the largest over shader read,
-  read and render, and read and write, where the device makes such images; 16 where no
-  candidate holds. Each image is made, read and destroyed, never bound, once per format for the
-  device's life. A texture at an offset in its block and a pitch that are multiples of the
-  answer is in place at the widths tried; the answer promises nothing for other widths.
+  to it; the largest over shader read, read and render, and read and write, where the device
+  makes such images; 16 where no candidate holds, and a texture of that format over a buffer is
+  then never in place. Each image is made, read and destroyed, never bound, once per format for
+  the device's life. The answer leaves out the image's memory alignment
+  (`VkMemoryRequirements::alignment`): a texture whose pitch is a multiple of the answer is in
+  place, at the widths tried, only where its place in the buffer's memory is a multiple of that
+  alignment too, and copied elsewhere (over a Managed buffer's device copy, refused). NVIDIA and
+  AMD give the same number for both; the UHD 630 rounds rows to 64 bytes and aligns its linear
+  images' memory to 4,096. The answer promises nothing for widths not tried.
 - The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
   copy, its pages written then, and kept for the device's life, so no copy allocates memory and
   the host writes resident pages. It is a ring: each copy takes a span at a multiple of 256 bytes,

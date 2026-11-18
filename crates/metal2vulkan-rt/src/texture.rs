@@ -440,15 +440,19 @@ impl Device {
         heap_fit(core, descriptor, &requirements, &dedicated)
     }
 
-    /// `minimumLinearTextureAlignmentForPixelFormat:`: what a texture over a buffer's offset and
-    /// rows are to be multiples of for the device's own linear image to hold it in place
-    /// ([`Buffer::new_texture`]). It is the smallest power of two from 16 to 4,096 at which the
-    /// device lays the rows of a linear image of the format, of every width tried, at the row
-    /// rounded up to it, and of which the image's memory alignment is a factor; the largest over
-    /// reading, reading and rendering, and reading and a shader's writes, where the device makes
-    /// such an image; Metal's 16 where no candidate holds. The device answers: each image is
-    /// made, read with `vkGetImageSubresourceLayout` and destroyed, never bound, once per format
-    /// for the device's life. The answer differs by device, as Metal's does by GPU.
+    /// `minimumLinearTextureAlignmentForPixelFormat:`: the device's linear row rounding, the
+    /// smallest power of two from 16 to 4,096 at which the device lays the rows of a linear image
+    /// of the format, of every width tried, at the row rounded up to it; the largest over reading,
+    /// reading and rendering, and reading and a shader's writes, where the device makes such an
+    /// image; Metal's 16 where no candidate holds, so that a texture of the format over a buffer
+    /// is never in place. The device answers: each image is made, read with
+    /// `vkGetImageSubresourceLayout` and destroyed, never bound, once per format for the device's
+    /// life. The answer differs by device, as Metal's does by GPU.
+    ///
+    /// A texture over a buffer ([`Buffer::new_texture`]) whose pitch is a multiple of the answer
+    /// is in place where its place in the buffer's memory is also a multiple of the linear
+    /// image's memory alignment (`VkMemoryRequirements::alignment`), which the answer does not
+    /// include; at any other place it is copied, or over a Managed buffer's device copy refused.
     ///
     /// Err: [`Gap::TextureFormat`] for a format no texture is made of.
     pub fn minimum_linear_texture_alignment(
@@ -480,18 +484,16 @@ impl Device {
                 let Some(unit) = plan.unit.filter(|unit| unit.block == [1, 1]) else {
                     break;
                 };
-                let Some((pitch, align)) = linear_layout(core, &d, &shape, &plan) else {
+                let Some((pitch, _)) = linear_layout(core, &d, &shape, &plan) else {
                     break;
                 };
-                rows.push((u64::from(width * unit.bytes), pitch, align));
+                rows.push((u64::from(width * unit.bytes), pitch));
             }
             if rows.len() < WIDTHS.len() {
                 continue;
             }
             let holds = |candidate: u64| {
-                (rows.iter()).all(|&(row, pitch, align)| {
-                    pitch == row.next_multiple_of(candidate) && candidate.is_multiple_of(align)
-                })
+                (rows.iter()).all(|&(row, pitch)| pitch == row.next_multiple_of(candidate))
             };
             let found = (4..=12).map(|power| 1u64 << power).find(|&p| holds(p));
             answer = answer.max(found);
@@ -499,6 +501,14 @@ impl Device {
         let answer = answer.unwrap_or(16);
         lock(&core.linear_alignments).insert(pixel_format, answer);
         Ok(answer)
+    }
+
+    /// For the device tests: the memory alignment of the device's linear image of `d`, `None`
+    /// where it makes none.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn linear_memory_alignment(&self, d: &TextureDescriptor) -> Option<u64> {
+        let (shape, plan, _) = self.prepare(d).ok()?;
+        linear_layout(self.core(), d, &shape, &plan).map(|(_, align)| align)
     }
 
     /// `MTLHeap`'s `newTextureWithDescriptor:`, at `index`: a texture as [`Device::new_texture`]

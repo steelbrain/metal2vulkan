@@ -1,7 +1,10 @@
 //! Textures over a buffer: under a device cfg, on every device of the cfg's kind, the linear
-//! alignment answer is a power of two from 16 to 4,096, the same when asked again; an RGBA8Unorm
-//! texture over a Shared buffer at an offset and pitch of the answer, its rows longer than their
-//! texels, is made in place: it allocates nothing and stages nothing, its image's bytes are the
+//! alignment answer is a power of two from 16 to 4,096, the same when asked again, and the count
+//! of formats that answer 16 is printed; at each width tried, a texture over a Shared buffer whose
+//! pitch is its row rounded up to the answer, at a place of the linear image's memory alignment,
+//! is in place; an RGBA8Unorm texture over a Shared buffer at a pitch of the answer, its rows
+//! longer than their texels, at such a place, is made in place: it allocates nothing and stages
+//! nothing, its image's bytes are the
 //! host's in the buffer as they change, `replace_region` and `get_bytes` write and read the
 //! buffer, and a blit's write to the texture reaches the host in the buffer. Over a Managed buffer
 //! the image is the bytes shaders reach, which `replace_region` changes. Rows past the buffer,
@@ -19,9 +22,17 @@ mod on_device {
     const WIDTH: u32 = 100;
     const HEIGHT: u32 = 10;
     const ROW: u64 = WIDTH as u64 * 4;
-    /// The buffer's offset in its block: a multiple of every answer.
+    /// The buffer's offset in its block: a multiple of every answer and memory alignment.
     const AT: u64 = 65_536;
     const LEN: u64 = 65_536;
+    /// The formats whose answers are printed.
+    const FORMATS: [PixelFormat; 5] = [
+        PixelFormat::R8Unorm,
+        PixelFormat::RGBA8Unorm,
+        PixelFormat::R32Float,
+        PixelFormat::RGBA16Float,
+        PixelFormat::RGBA32Float,
+    ];
 
     fn whole() -> Region {
         Region {
@@ -70,13 +81,7 @@ mod on_device {
     fn every_device_holds_a_texture_over_a_buffer_in_place() {
         each_device("over", |name, _, device| {
             let mut answers = Vec::new();
-            for pf in [
-                PixelFormat::R8Unorm,
-                PixelFormat::RGBA8Unorm,
-                PixelFormat::R32Float,
-                PixelFormat::RGBA16Float,
-                PixelFormat::RGBA32Float,
-            ] {
+            for pf in FORMATS {
                 let answer = (device.minimum_linear_texture_alignment(pf))
                     .unwrap_or_else(|error| panic!("{name}: {pf:?}: {error}"));
                 assert!(
@@ -85,11 +90,22 @@ mod on_device {
                 );
                 answers.push((pf, answer));
             }
-            println!("over: {name}: minimum linear texture alignments {answers:?}");
+            let sixteen = answers.iter().filter(|&&(_, answer)| answer == 16).count();
+            println!(
+                "over: {name}: minimum linear texture alignments {answers:?}; {sixteen} of {} \
+                 formats answer 16",
+                FORMATS.len()
+            );
             let align = answers[1].1;
             let again = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(again, align, "{name}: asked again");
+            // The image's memory alignment, which the answer leaves out: a place of it.
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
+            d.usage = TextureUsage::SHADER_READ;
+            let memory = (device.linear_memory_alignment(&d)).expect("a linear image");
+            let offset = align.next_multiple_of(memory);
 
             let counters = device.counters();
             let core = device.core();
@@ -99,8 +115,21 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut now: Vec<u8> = (0..LEN).map(|i| (i % 253) as u8).collect();
             write(&buffer, &now);
+            // At each width tried, the row rounded up to the answer is the device's own pitch.
+            for width in [1, 3, 17, 64, 65, 100] {
+                let row = u64::from(width) * 4;
+                let mut w = d;
+                w.width = width;
+                let memory = (device.linear_memory_alignment(&w)).expect("a linear image");
+                let at = align.next_multiple_of(memory);
+                let texture = (buffer.new_texture(&w, None, at, row.next_multiple_of(align)))
+                    .unwrap_or_else(|error| panic!("{name}: width {width}: {error}"));
+                assert!(
+                    texture.copied_over().is_none(),
+                    "{name}: width {width} at the answer's pitch is in place"
+                );
+            }
             let pitch = (ROW + 1).next_multiple_of(align);
-            let offset = align;
             // Read and written by shaders, at indices of a grant.
             (device.grant_indices(IndexClass::StorageTexture, 1, 4)).expect("a grant");
             let mut d =
