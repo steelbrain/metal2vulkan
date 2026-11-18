@@ -591,6 +591,12 @@ pub(crate) mod on_device {
                     let work = queue_fill(&queue, &a, 1);
                     within(name, || work.status() != CommandBufferStatus::Committed);
                     let held = submissions();
+                    if held != before + 2 {
+                        // The busy work ended first: the fill went alone and no group is held, so
+                        // nothing would rise behind it.
+                        finished(name, &work);
+                        return false;
+                    }
                     let behind = queue.command_buffer().expect("a command buffer");
                     if abandoned {
                         (behind.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
@@ -602,9 +608,8 @@ pub(crate) mod on_device {
                     within(name, || submissions() > held);
                     let seen = host_time();
                     finished(name, &running[0]);
-                    // The fill was held behind both busy ones, and its group went before the first
-                    // of them ended on the GPU.
-                    let checked = held == before + 2 && running[0].gpu_end_time() > seen;
+                    // The group went before the first busy one ended on the GPU.
+                    let checked = running[0].gpu_end_time() > seen;
                     kept.extend([work, behind]);
                     checked
                 });
@@ -1952,11 +1957,10 @@ pub(crate) mod on_device {
     /// reaches commands, a Shared fill whose end barrier reaches the host, an event's signal and
     /// wait (which end and lead infos), and between them a command buffer with nothing for the GPU
     /// (no timestamps, no info) records the same barriers, passes and bytes copied and leaves the
-    /// same words
-    /// committed behind two busy submissions, held in groups, as committed one at a time. The
-    /// groups pass two submit infos for the mix's four command buffers with commands: one for the
-    /// fills up to the signal, which ends the group, and one the wait leads. One at a time passes
-    /// one each.
+    /// same words committed behind two busy submissions, held in groups, as committed one at a
+    /// time. The groups pass two submit infos for the mix's four command buffers with commands:
+    /// one for the fills up to the signal, which ends the group, and one the wait leads. One at a
+    /// time passes one each.
     #[test]
     fn every_device_shares_submit_infos_within_a_group_and_records_what_it_records_alone() {
         each_device("command_infos", |name, _, device| {
