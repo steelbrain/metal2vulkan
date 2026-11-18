@@ -10,7 +10,8 @@
 //!   an anisotropic state is made. A cubic filter is `Gap::CubicSampler`. A state made at an index
 //!   another holds takes it, and the earlier state's going leaves it; the grant waits for the
 //!   index's owner, and the index is free once that state is gone. The device's samplers come
-//!   back to zero with the device.
+//!   back to zero with the device. A state's constexpr samplers numbered up to one the
+//!   translator refuses give back what the earlier ones took.
 
 use crate::error::{Error, Limit};
 use crate::sampler::SamplerTable;
@@ -149,6 +150,65 @@ mod on_device {
                 (0, 0, 0),
                 "{name}"
             );
+        }
+    }
+
+    /// A state's constexpr samplers, numbered up to one whose device sampler the translator does
+    /// not state: the refusal gives back what the earlier one took, its arrays' elements at once
+    /// and its device sampler through the reaper, and leaves its index free.
+    #[test]
+    fn a_refused_constexpr_sampler_gives_back_the_ones_numbered_before_it() {
+        use metal2vulkan::pipeline::{CombinedSampler, NumberedSampler, SamplerRef};
+        // Linear on both filters, clamped to the edge on every axis, levels 0 to 65504: no
+        // default sampler shares its create info.
+        let linear = [
+            1 | (1 << 3) | (1 << 6) | (1 << 9) | (1 << 11) | (0x7bff << 40),
+            0,
+        ];
+        // The same state with a NaN level bias, of which the translator makes no device sampler.
+        let nan_bias = [linear[0], 0x7e00];
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(
+            !devices.is_empty(),
+            "the loader lists no device of this cfg's kind"
+        );
+        for (name, physical) in devices {
+            let device = Device::new(&physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let counters = device.counters();
+            let grant = device
+                .grant_indices(IndexClass::Sampler, 1, 2)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let before = counters.gauges();
+            let samplers = vec![
+                NumberedSampler::Constexpr(linear),
+                NumberedSampler::Constexpr(nan_bias),
+            ];
+            let uses = [linear, nan_bias]
+                .map(|words| CombinedSampler::new(SamplerRef::Constexpr(words), false, false));
+            let numbered = crate::pipeline::number_samplers(
+                device.core(),
+                samplers,
+                &[(0, uses[0]), (1, uses[1])],
+                |_| Ok(vec![1, 2]),
+                || Error::Unsupported(Gap::KernelInput),
+            );
+            assert!(
+                matches!(numbered, Err(Error::Translation(_))),
+                "{name}: the NaN bias is the translator's refusal"
+            );
+            assert_eq!(
+                counters.gauges().descriptor_slots,
+                before.descriptor_slots,
+                "{name}: the linear sampler's elements are given back"
+            );
+            crate::tests::command::on_device::within("the reaper frees the device sampler", || {
+                counters.gauges().device_samplers == before.device_samplers
+            });
+            device
+                .release_indices(grant)
+                .unwrap_or_else(|error| panic!("{name}: index 1 is free: {error}"));
         }
     }
 }

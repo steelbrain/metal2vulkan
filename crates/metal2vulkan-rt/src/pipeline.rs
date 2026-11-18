@@ -180,24 +180,41 @@ pub(crate) fn number_samplers(
         let NumberedSampler::Constexpr(words) = *sampler else {
             continue;
         };
-        let mut held = [None; 3];
-        for (_, sampler) in uses.iter().filter(|(place, _)| *place == at) {
-            let desc = sampler
-                .constexpr_sampler(profile)
-                .map_err(Error::Translation)?
-                .ok_or_else(gap)?;
-            held[sampler_array(sampler)] = Some(canonical(desc));
+        // Any refusal gives back the elements the constexpr samplers before this one took.
+        let held = constexpr_uses(profile, uses, at, gap).and_then(|held| {
+            if held.iter().all(Option::is_none) {
+                return Ok(false);
+            }
+            hold_constexpr(core, numbered.ids[at], words, held).map(|()| true)
+        });
+        match held {
+            Ok(true) => numbered.held.push(at),
+            Ok(false) => {}
+            Err(error) => {
+                numbered.release(core);
+                return Err(error);
+            }
         }
-        if held.iter().all(Option::is_none) {
-            continue;
-        }
-        if let Err(error) = hold_constexpr(core, numbered.ids[at], words, held) {
-            numbered.release(core);
-            return Err(error);
-        }
-        numbered.held.push(at);
     }
     Ok(numbered)
+}
+
+/// The device sampler of each sampler array the uses of `uses` at place `at` sample through.
+fn constexpr_uses(
+    profile: &metal2vulkan::device::DeviceProfile,
+    uses: &[(usize, CombinedSampler)],
+    at: usize,
+    gap: fn() -> Error,
+) -> Result<[Option<metal2vulkan::vk::SamplerDesc>; 3], Error> {
+    let mut held = [None; 3];
+    for (_, sampler) in uses.iter().filter(|(place, _)| *place == at) {
+        let desc = sampler
+            .constexpr_sampler(profile)
+            .map_err(Error::Translation)?
+            .ok_or_else(gap)?;
+        held[sampler_array(sampler)] = Some(canonical(desc));
+    }
+    Ok(held)
 }
 
 impl Numbered {
