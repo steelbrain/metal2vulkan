@@ -356,11 +356,12 @@ fn run<B: Backend>(
     };
     let (played, ended) = player.play(reader);
     let counters = backend.counters();
-    // The objects whose ID the program saw that the runtime gives otherwise, the typed gap of the
-    // compute pipeline states' IDs aside: a word that names one in the program's memory names
-    // something else in the play.
-    let gap_ids = counters.get("gap_pipeline_ids").copied().unwrap_or(0);
-    let differing_ids = (played.ids.len() as u64).saturating_sub(gap_ids);
+    // The objects whose ID the program saw that the runtime gives otherwise: a word that names one
+    // in the program's memory names something else in the play. The IDs nothing in the play can
+    // read are aside: the compute pipeline states' (a typed gap) and the skipped objects'.
+    let unread = |key: &str| counters.get(key).copied().unwrap_or(0);
+    let unread_ids = unread("gap_pipeline_ids") + unread("skipped_resource_ids");
+    let differing_ids = (played.ids.len() as u64).saturating_sub(unread_ids);
     let stream = &played.total.stream;
     let fixed = |key: &str| stream.get(key).copied().unwrap_or(0);
     report.line(&format!(

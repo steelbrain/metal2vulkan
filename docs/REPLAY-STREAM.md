@@ -507,15 +507,18 @@ counted from 0), completes the work committed so far, reports as at the stream's
   textures and sampler states indices from the whole of each index class. Its readback serves
   Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives a
   compute pipeline state no `gpuResourceID`, so each one the program saw is reported on an `id`
-  line as `none` and counted (`gap_pipeline_ids`).
+  line as `none` and counted (`gap_pipeline_ids`); each skipped object's the program saw is
+  reported so too and counted (`skipped_resource_ids`). Nothing in the play reads either, so
+  neither counts among the differing IDs.
 
 `report.txt` holds one line per item: `device NAME runtime old|rt snapshots yes|no` first, then
 `relocation relocated_words=N misaligned_address_words=N address_arguments=N unrelocated_writes=N
 differing_ids=N` (the play's address words relocated and those left at 4 past a multiple of 8,
 the address arguments beside which a data word that only looks like an address stands out, the
 writes and uploads into objects with no recorded range, which nothing relocates, and the objects
-whose ID differs from the recording's, the compute pipeline states' typed gap aside: any such
-object makes the play an error, as a word that names it names something else in the play),
+whose ID differs from the recording's, those of the compute pipeline states' typed gap and of
+the skipped objects aside: any such object makes the play an error, as a word that names it
+names something else in the play),
 `completed IDS COUNTS`, `frame N COUNTS`,
 `end N wall_nanos=NANOS resident_bytes=BYTES times KEY=NANOS ... live KEY=VALUE ...` for each
 frame (the nanoseconds from the frame before's end, or the first call played, to this frame's,

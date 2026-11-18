@@ -46,6 +46,9 @@ struct Skips {
     mipmaps: u64,
     /// Every other call on a skipped object or naming one, a skipped encoder's among them.
     calls: u64,
+    /// The skipped objects whose `gpuResourceID` the player asked: nothing in the play reads
+    /// their IDs, so none is compared.
+    resource_ids: u64,
 }
 
 /// Textures the play made in place of what the runtime cannot make: an ordinary texture of the
@@ -1498,7 +1501,10 @@ impl Backend for NewRuntime {
                 self.unanswered_pipeline_ids += 1;
                 return Ok(None);
             }
-            Some(Object::Skipped) => return Ok(None),
+            Some(Object::Skipped) => {
+                self.skips.resource_ids += 1;
+                return Ok(None);
+            }
             _ => {
                 return Err(PlayError::Invalid(format!(
                     "gpuResourceID of #{object}, which has none"
@@ -1560,6 +1566,7 @@ impl Backend for NewRuntime {
             ("substituted_tiled_textures", self.substitutes.tiled),
             ("substituted_gap_textures", self.substitutes.gaps),
             ("skipped_calls", self.skips.calls),
+            ("skipped_resource_ids", self.skips.resource_ids),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
         ])
     }
