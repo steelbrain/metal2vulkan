@@ -309,11 +309,14 @@ mod on_device {
             let device = Device::new(physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
+            device
+                .grant_indices(IndexClass::Texture, 4096, 8)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
             let staged = || counters.gauges().staging_bytes;
             assert_eq!(staged(), 0, "{name}: before any copy");
             // A copy of 256 KiB: the region, made at the first copy.
             let small = 256;
-            let texture = (device.new_texture(&square(small), None))
+            let texture = (device.new_texture(&square(small), Some(4096)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let bytes = vec![7u8; (small * small * 4) as usize];
             texture
@@ -330,7 +333,7 @@ mod on_device {
             // A copy of 2304 texels square, 21,233,664 bytes, larger than the region: a staging
             // buffer of its own besides, until the upload that copies through it is gone.
             let large = 2304;
-            let big = (device.new_texture(&square(large), None))
+            let big = (device.new_texture(&square(large), Some(4097)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let bytes: Vec<u8> = (0..large * large * 4).map(|i| (i % 251) as u8).collect();
             let len = bytes.len() as u64;
