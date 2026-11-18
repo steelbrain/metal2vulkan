@@ -230,6 +230,13 @@ impl Pool {
         lock(&self.state)
     }
 
+    /// The zeroed blocks of `class` no one holds: the tests wait for the block-maker thread to
+    /// have made its ready ones, and with them its fills' submissions.
+    #[cfg(test)]
+    pub(crate) fn idle(&self, class: MemoryClass) -> usize {
+        self.lock().idle[class.index()].len()
+    }
+
     fn wait<'a>(&self, state: MutexGuard<'a, State>) -> MutexGuard<'a, State> {
         self.changed
             .wait(state)

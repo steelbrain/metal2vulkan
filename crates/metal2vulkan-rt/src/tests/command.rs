@@ -614,11 +614,16 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A Private buffer of a whole block, for work that keeps the GPU busy.
+    /// A Private buffer of a whole block, for work that keeps the GPU busy. It returns once the
+    /// block-maker thread has made the next ready Private block, whose zero fill is a submission
+    /// of its own, so the submissions a test counts after it are its command buffers'.
     fn private(device: &Device) -> Buffer {
         let block = device
             .take_block(MemoryClass::Private, 1)
             .expect("a Private block");
+        within("the next ready Private block", || {
+            device.core().pool.idle(MemoryClass::Private) > 0
+        });
         device
             .new_buffer(block.id, 0, BLOCK_LEN, false)
             .expect("a buffer")
@@ -721,6 +726,8 @@ pub(crate) mod on_device {
             behind_two(name, &device, &queue, |_, before| {
                 let log = Log::default();
                 let first = member("1", &log, &buffers[0], 1);
+                // Joined to the group before the abandon, which ends only what is not.
+                within(name, || first.status() != CommandBufferStatus::Committed);
                 let ended = queue.command_buffer().expect("a command buffer");
                 log.handlers("2", &ended);
                 ended.enqueue().expect("an enqueue");
