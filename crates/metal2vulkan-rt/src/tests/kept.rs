@@ -2,6 +2,7 @@
 //! taken; a later use and every borrow of it change no count; clearing releases every object.
 
 use crate::kept::{Handle, Kept};
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 /// A handle of one `Arc`, as the runtime's objects are.
@@ -10,10 +11,15 @@ struct Probe {
     inner: Arc<u32>,
 }
 
-// SAFETY: the handle is its one `Arc` and nothing else, and its address is that `Arc`'s pointer.
-unsafe impl Handle for Probe {
+impl Handle for Probe {
     fn address(&self) -> usize {
         Arc::as_ptr(&self.inner) as usize
+    }
+
+    unsafe fn uncounted(&self) -> ManuallyDrop<Probe> {
+        // SAFETY: as the runtime's handles do.
+        let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
+        ManuallyDrop::new(Probe { inner })
     }
 }
 

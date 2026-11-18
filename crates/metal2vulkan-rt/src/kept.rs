@@ -16,16 +16,19 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
 
-/// A handle to a shared object that is one `Arc` and nothing else: a copy of it made bit for bit
-/// is the same object, and dropping no copy but one keeps the count right.
-///
-/// # Safety
-///
-/// The type holds exactly one `Arc` and no other state, and `address` is that `Arc`'s pointer.
-pub(crate) unsafe trait Handle: Clone {
-    /// The object's address: the same for every handle to it, and no other object's while it
-    /// lives.
+/// A handle to a shared object that is one `Arc` and nothing else.
+pub(crate) trait Handle: Clone {
+    /// The object's address: its `Arc`'s pointer, the same for every handle to it, and no other
+    /// object's while it lives.
     fn address(&self) -> usize;
+
+    /// Another handle to the object, made of the same pointer, that took no count: dropping it
+    /// would give back one it never took, so it is never dropped.
+    ///
+    /// # Safety
+    ///
+    /// The object lives past the handle's last use.
+    unsafe fn uncounted(&self) -> ManuallyDrop<Self>;
 }
 
 /// A handle borrowed from what a recording keeps: the same object, which this copy neither
@@ -40,10 +43,8 @@ impl<T: Handle> Lent<T> {
     ///
     /// The recording the borrow is used in keeps `object` until after the borrow's last use.
     unsafe fn of(object: &T) -> Lent<T> {
-        // SAFETY: `T: Handle` is one `Arc`, so the copy is the same object; it is never dropped,
-        // so the count stays the kept handle's, and the caller keeps that one alive past the
-        // copy's last use.
-        Lent(ManuallyDrop::new(unsafe { std::ptr::read(object) }))
+        // SAFETY: the caller keeps the object alive past the borrow's last use.
+        Lent(unsafe { object.uncounted() })
     }
 }
 

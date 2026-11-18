@@ -1409,9 +1409,15 @@ impl Drop for Compiled {
     }
 }
 
-// SAFETY: the handle is its one `Arc` and nothing else, and its address is that `Arc`'s pointer.
-unsafe impl crate::kept::Handle for ComputePipelineState {
+impl crate::kept::Handle for ComputePipelineState {
     fn address(&self) -> usize {
         Arc::as_ptr(&self.inner) as *const () as usize
+    }
+
+    unsafe fn uncounted(&self) -> std::mem::ManuallyDrop<ComputePipelineState> {
+        // SAFETY: the pointer is a live `Arc`'s; the handle made of it is never dropped, and the
+        // caller keeps the object alive past its last use.
+        let inner = unsafe { Arc::from_raw(Arc::as_ptr(&self.inner)) };
+        std::mem::ManuallyDrop::new(ComputePipelineState { inner })
     }
 }

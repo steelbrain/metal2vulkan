@@ -47,7 +47,7 @@ struct Slots {
     free: Vec<u32>,
     /// The kept-object lists of retired command buffers, empty, with their capacity
     /// (`crate::kept`): at most one per slot.
-    objects: Vec<Box<Objects>>,
+    objects: Vec<Objects>,
 }
 
 impl Slots {
@@ -124,7 +124,7 @@ impl CommandQueue {
             Arc::clone(&self.inner),
             self.device.clone(),
             slot,
-            kept,
+            Box::new(kept),
         ))
     }
 
@@ -179,6 +179,7 @@ impl QueueInner {
     /// holds.
     pub(crate) fn release(&self, slot: u32, kept: Box<Objects>) {
         self.counters.fall(Gauge::CommandBuffers);
+        let kept = *kept;
         let mut slots = lock(&self.slots);
         slots.free.push(slot);
         slots.objects.push(kept);
