@@ -1732,6 +1732,7 @@ impl Backend for NewRuntime {
             ("kernels", gauges.kernels),
             ("command_buffers", gauges.command_buffers),
             ("spilled_bytes", gauges.spilled_bytes),
+            ("managed_spilled_bytes", gauges.managed_spilled_bytes),
             ("shared_idle_bytes", gauges.shared_idle_bytes),
             ("private_idle_bytes", gauges.private_idle_bytes),
             ("capture_bytes", gauges.capture_bytes),

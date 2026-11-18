@@ -114,7 +114,9 @@ in its memory.
   once its last block is given back, so the next tries device-local memory again. Textures are not
   placed in a spilled block: a texture then takes an allocation of its own, which spills in the
   same way where the image allows another type. A Managed buffer whose device copy finds no
-  device-local room is its Shared range, as on a unified device, for its life.
+  device-local room for a copy block takes a Private block of its own, which spills the same way:
+  still its second copy, so `did_modify_range` and a GPU write keep Metal's two-copy rule. Where
+  no memory type has room, the buffer is refused with the allocation's error.
 - Every `VkDeviceMemory` the runtime holds counts against the device's `maxMemoryAllocationCount`:
   each block (texture blocks among them), each texture's own allocation, the staging region (from
   the first texture copy on), the staging buffer of a copy larger than the region while it runs, the
@@ -173,9 +175,10 @@ in its memory.
   of a Shared block (`Refusal::ManagedBlockNotShared` for a Private one): the consumer's bytes,
   which `contents` answers. Vulkan's device type picks its form, as `Device::has_unified_memory`
   answers it. On an integrated or CPU device the buffer is its bytes, as a Shared buffer is, and
-  `did_modify_range` does nothing. Elsewhere shaders reach a device copy at `gpu_address`: a place
-  in a copy block, a Private block of the pool of 16 MiB (of the copy's own length past that)
-  that holds device copies alone. The rest past its first `copied` bytes is zeroed in the upload,
+  `did_modify_range` does nothing. Elsewhere shaders reach a device copy at `gpu_address`, always:
+  a place in a copy block, a Private block of the pool of 16 MiB (of the copy's own length past
+  that) that holds device copies alone, or where device-local memory has no room for one, a
+  Private block of the copy's own in whatever memory type has room. The rest past its first `copied` bytes is zeroed in the upload,
   and those bytes are named as `did_modify_range` names a range.
   `Buffer::did_modify_range(start, length)` names a range changed (`Refusal::ModifiedRange` past
   the buffer), merged with the buffer's others where they overlap or touch, and submits nothing.
@@ -223,6 +226,9 @@ after a quiesce.
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one block at a time and only
   after 20 ms with no commit. `Metrics::allocations_freed` counts the frees, and
   `Metrics::submissions_during_frees` the submits made while one was in progress.
+- On a full discrete card a Managed buffer's device copy goes to another memory type, host memory
+  where the card has no other device-local type, and its kernels read it across the host link:
+  `Gauges::managed_spilled_bytes` counts those buffers' bytes while they live.
 
 ## Set 1 and index grants
 

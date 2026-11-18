@@ -4,12 +4,16 @@
 //! device-local and counts its bytes as spilled until it is freed; where the buffer takes no other
 //! type, the take fails with the allocation's error. While the pool's Private blocks spill, a
 //! texture takes no texture block (an allocation of its own, itself spilled where the image takes
-//! another type, else the allocation's error), and a Managed buffer takes its Shared range, as on
-//! a unified device. Every gauge reads zero after teardown.
+//! another type, else the allocation's error), and Metal's two-copy rule holds for a Managed
+//! buffer: where the device is not unified, its device copy is a Private block of its own in
+//! another memory type, its bytes counted in `Gauges::managed_spilled_bytes` while it lives. Every
+//! gauge reads zero after teardown.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::each_device;
+    use crate::tests::compute::on_device::WORDS;
+    use crate::tests::managed::on_device::two_copy_rule;
     use crate::{MemoryClass, PixelFormat, TextureDescriptor, TextureType, TextureUsage};
     use std::sync::atomic::Ordering::Relaxed;
     use std::thread;
@@ -83,28 +87,33 @@ mod on_device {
             };
             assert_eq!(core.places.blocks(), 0, "{name}: no texture block");
 
-            // A Managed buffer takes its Shared range.
-            let shared = (device.take_block(MemoryClass::Shared, 1))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let managed = (device.new_managed_buffer(shared.id, 4096, 4096, 4096))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            assert_eq!(
-                managed.gpu_address(),
-                shared.gpu_address + 4096,
-                "{name}: the Managed buffer is its Shared range"
-            );
+            // A Managed buffer keeps two copies where the device is not unified, its device copy
+            // spilled and counted.
+            let spilled = if device.has_unified_memory() {
+                0
+            } else {
+                (WORDS * 4) as u64
+            };
+            two_copy_rule(name, &device, |_| {
+                assert_eq!(
+                    counters.gauges().managed_spilled_bytes,
+                    spilled,
+                    "{name}: the Managed buffer's spilled bytes"
+                );
+            });
+            wait_until("the Managed buffer's device copy freed", || {
+                counters.gauges().managed_spilled_bytes == 0
+            });
             core.fail_private.store(0, Relaxed);
             println!(
                 "spill: {name}: a texture of its own while blocks spill: {}; gauges {:?}",
                 texture.is_some(),
                 counters.gauges()
             );
-            drop((texture, managed));
-            for block in [plain, shared] {
-                device
-                    .release_block(block)
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
-            }
+            drop(texture);
+            device
+                .release_block(plain)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
 }

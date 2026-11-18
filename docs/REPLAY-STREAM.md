@@ -561,7 +561,8 @@ counters, and `player` what of the wall time is left, the player's own work; the
 union of the GPU intervals of the command buffers the frame waited for, where the runtime gives
 them, which runs beside the rest; and the backend's gauges then, as they stand, never as growth:
 the new runtime's live
-blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes and idle Shared and
+blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes, Managed buffers'
+spilled bytes (`managed_spilled_bytes`) and idle Shared and
 Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
 `private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),

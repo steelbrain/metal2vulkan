@@ -82,6 +82,8 @@ pub(crate) enum Gauge {
     DeviceSamplers,
     /// [`Gauges::spilled_bytes`].
     SpilledBytes,
+    /// [`Gauges::managed_spilled_bytes`].
+    ManagedSpilledBytes,
     /// [`Gauges::shared_idle_bytes`].
     SharedIdleBytes,
     /// [`Gauges::private_idle_bytes`].
@@ -161,6 +163,7 @@ struct Atomics {
     events: AtomicU64,
     device_samplers: AtomicU64,
     spilled_bytes: AtomicU64,
+    managed_spilled_bytes: AtomicU64,
     shared_idle_bytes: AtomicU64,
     private_idle_bytes: AtomicU64,
     capture_bytes: AtomicU64,
@@ -366,6 +369,7 @@ impl Counters {
             Gauge::Events => &a.events,
             Gauge::DeviceSamplers => &a.device_samplers,
             Gauge::SpilledBytes => &a.spilled_bytes,
+            Gauge::ManagedSpilledBytes => &a.managed_spilled_bytes,
             Gauge::SharedIdleBytes => &a.shared_idle_bytes,
             Gauge::PrivateIdleBytes => &a.private_idle_bytes,
             Gauge::CaptureBytes => &a.capture_bytes,
@@ -439,6 +443,7 @@ impl Counters {
             events: a.events.load(Relaxed),
             device_samplers: a.device_samplers.load(Relaxed),
             spilled_bytes: a.spilled_bytes.load(Relaxed),
+            managed_spilled_bytes: a.managed_spilled_bytes.load(Relaxed),
             shared_idle_bytes: a.shared_idle_bytes.load(Relaxed),
             private_idle_bytes: a.private_idle_bytes.load(Relaxed),
             capture_bytes: a.capture_bytes.load(Relaxed),
@@ -642,6 +647,10 @@ pub struct Gauges {
     /// was out of memory: blocks whose [`BlockInfo::device_local`](crate::BlockInfo) is false and
     /// textures' allocations of their own.
     pub spilled_bytes: u64,
+    /// Bytes of Managed buffers whose device copy is not in device-local memory: device-local
+    /// memory had no room when they were made, so the copy went to another memory type and their
+    /// kernels read host memory. Metal has no counterpart.
+    pub managed_spilled_bytes: u64,
     /// Bytes of idle Shared allocations, which hold no block anyone holds: those the idle rule
     /// keeps (at most the most bytes of Shared allocations in use over the last 3 seconds less
     /// those in use now), and the reserve that keeps the free bytes at 8 MiB or more.

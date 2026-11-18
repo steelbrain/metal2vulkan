@@ -7,7 +7,9 @@
 //! while it waits, where there is a device copy; a write after the range is named and before the
 //! commit is seen. Three rings' worth named with nothing held streams through the ring alone;
 //! more than a ring behind a command buffer held on the host takes staging of its own, which it
-//! gives back as it retires, and reads the bytes of its commit. A range past the buffer and a
+//! gives back as it retires, and reads the bytes of its commit. Metal's two-copy rule holds where
+//! `Device::has_unified_memory` is false: a kernel's write stays in the device copy, and a range
+//! named with no host write puts the consumer's bytes back over it. A range past the buffer and a
 //! Managed buffer over a Private block are refused, and every gauge reads zero after teardown.
 //!
 //! Managed textures, on every device: the image takes the named bytes of a region at its upload
@@ -46,10 +48,10 @@ fn changed_ranges_merge_where_they_overlap_or_touch() {
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use crate::capture::CAPTURE_LEN;
     use crate::tests::command::on_device::{each_device, finished, within, Arena};
-    use crate::tests::compute::on_device::{add, WORDS};
+    use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::{
         Block, Buffer, BytesPlace, CommandBuffer, ComputePipelineState, Device, DispatchType,
         Error, MemoryClass, PixelFormat, Refusal, Region, StorageMode, TextureDescriptor,
@@ -207,6 +209,89 @@ mod on_device {
         encoder.set_buffer(Some(out), 0, 2).expect("a buffer");
         (encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1])).expect("a dispatch");
         encoder.end_encoding();
+    }
+
+    /// Metal's two-copy rule on `device`, its answer to `has_unified_memory` deciding which form
+    /// holds. A Managed buffer of [`WORDS`] words, written and named; a kernel takes each word `x`
+    /// to `x * 2 + 1`; the whole range is named again with no host write; a second kernel reads
+    /// the buffer. With two copies (`has_unified_memory` false) the kernel's write stays in the
+    /// device copy, the consumer's bytes keep the host's words, the second name puts them back
+    /// over the copy and the reader reads the host's words, and the buffer's address is not its
+    /// Shared range's: no such device makes a Managed buffer of one copy. With one copy the
+    /// kernel's write is the buffer's bytes, which the reader reads. `alive` runs while the
+    /// buffer lives, its kernels done.
+    pub(crate) fn two_copy_rule(name: &str, device: &Device, alive: impl FnOnce(&Buffer)) {
+        let two = !device.has_unified_memory();
+        let len = (WORDS * 4) as u64;
+        let mut arena = Arena::new(device);
+        let (zero, out) = (arena.buffer(), arena.buffer());
+        let cpu = (device.take_block(MemoryClass::Shared, 1))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let managed = (device.new_managed_buffer(cpu.id, 0, len, 0))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        if two {
+            assert_ne!(
+                managed.gpu_address(),
+                cpu.gpu_address,
+                "{name}: a device that is not unified keeps a device copy"
+            );
+        } else {
+            assert_eq!(managed.gpu_address(), cpu.gpu_address, "{name}: one copy");
+        }
+        let host: Vec<u32> = (0..WORDS as u32).map(|i| i * 3 + 7).collect();
+        let bytes =
+            |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|w| w.to_le_bytes()).collect() };
+        write(&managed, 0, &bytes(&host));
+        (managed.did_modify_range(0, len)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let queue = device.new_command_queue(2).expect("a queue");
+
+        let stepper = step(device);
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder =
+            (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+        encoder
+            .set_compute_pipeline_state(&stepper)
+            .expect("a state");
+        encoder.set_buffer(Some(&managed), 0, 0).expect("a buffer");
+        (encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1])).expect("a dispatch");
+        encoder.end_encoding();
+        command_buffer.commit().expect("a commit");
+        finished("the step", &command_buffer);
+        assert_eq!(command_buffer.error(), None, "{name}");
+        let stepped: Vec<u32> = host.iter().map(|x| x * 2 + 1).collect();
+        assert!(
+            read(&managed, len as usize) == bytes(if two { &host } else { &stepped }),
+            "{name}: the consumer's bytes after the kernel's write (two copies: {two})"
+        );
+
+        // Named with no host write: the consumer's bytes go back over the device copy.
+        (managed.did_modify_range(0, len)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let reader = add(device);
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        kernel(&command_buffer, &reader, [&managed, &zero, &out]);
+        command_buffer.commit().expect("a commit");
+        finished("the reader", &command_buffer);
+        assert_eq!(command_buffer.error(), None, "{name}");
+        assert!(
+            read(&out, len as usize) == bytes(if two { &host } else { &stepped }),
+            "{name}: the reader reads {} (two copies: {two})",
+            if two {
+                "the host's words"
+            } else {
+                "the kernel's write"
+            }
+        );
+        println!("managed two copies: {name}: two copies {two}");
+        alive(&managed);
+        drop((managed, zero, out, arena));
+        (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+
+    #[test]
+    fn every_device_keeps_metal_s_two_copy_rule_for_a_managed_buffer() {
+        each_device("managed two copies", |name, _, device| {
+            two_copy_rule(name, &device, |_| {});
+        });
     }
 
     /// A kernel reads a Managed buffer's bytes as they were at its commit where it has a device

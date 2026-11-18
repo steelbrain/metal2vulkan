@@ -55,8 +55,19 @@ struct Inner {
 /// last gone frees its place.
 pub(crate) struct DeviceCopy {
     core: Arc<Core>,
-    place: Place,
+    at: CopyAt,
     block: Memory,
+}
+
+/// Where a device copy lies in its block.
+enum CopyAt {
+    /// A place in a copy block of the device's set.
+    Place(Place),
+    /// The whole of a Private block of its own, taken where device-local memory had no room for
+    /// a copy block: in whatever memory type had room, its `len` bytes counted in
+    /// [`Gauges::managed_spilled_bytes`](crate::Gauges::managed_spilled_bytes) where that is not
+    /// device-local.
+    Own { len: u64 },
 }
 
 impl DeviceCopy {
@@ -72,13 +83,24 @@ impl DeviceCopy {
 
     /// The copy's offset in [`buffer`](Self::buffer).
     pub(crate) fn offset(&self) -> u64 {
-        self.place.offset
+        match self.at {
+            CopyAt::Place(place) => place.offset,
+            CopyAt::Own { .. } => 0,
+        }
     }
 }
 
 impl Drop for DeviceCopy {
     fn drop(&mut self) {
-        self.core.copies.release(&self.core, self.place);
+        match self.at {
+            CopyAt::Place(place) => self.core.copies.release(&self.core, place),
+            CopyAt::Own { len } => {
+                if self.block.spilled() {
+                    self.core.counters.fall_by(Gauge::ManagedSpilledBytes, len);
+                }
+                self.core.pool.give_back(self.block);
+            }
+        }
     }
 }
 
@@ -173,13 +195,17 @@ impl Device {
     ///
     /// Metal keeps such a copy on a Mac with a discrete GPU. The consumer chooses the range of its
     /// bytes, as for [`Device::new_buffer`]. A buffer a command buffer uses holds its device copy
-    /// until the command buffer retires. Where device-local memory has no room for the copy, the
-    /// buffer is its bytes, as on a device whose Shared type is device-local: Metal never fails a
-    /// Managed buffer for want of video memory, and no second copy is kept in system memory.
+    /// until the command buffer retires. Where device-local memory has no room for a copy block,
+    /// the device copy is a Private block of its own in whatever memory type has room, still the
+    /// buffer's second copy, so the two-copy rule holds on every such device; its kernels then
+    /// read host memory, counted in
+    /// [`Gauges::managed_spilled_bytes`](crate::Gauges::managed_spilled_bytes). Where no memory
+    /// type has room, the buffer is refused, as Metal returns nil for a buffer it cannot make.
     ///
     /// Err: as [`Device::new_buffer`]; [`Refusal::ManagedBlockNotShared`] for a Private block;
     /// [`Error::Quiesced`], and what taking a Private block or the upload's command buffer can
-    /// return, for a device copy.
+    /// return (the allocation's out-of-device-memory error where no memory type has room), for a
+    /// device copy.
     pub fn new_managed_buffer(
         &self,
         block: BlockId,
@@ -217,18 +243,23 @@ impl Device {
         if core.unified_memory() {
             return Ok(self.buffer(block, offset, length, contents, None));
         }
-        let (place, copy_block) = match core.copies.place(core, length, COPY_ALIGN) {
-            Ok(found) => found,
-            // No device-local room for the copy: the consumer's Shared range, as on a unified
-            // device, chosen here for the buffer's life.
+        let (at, copy_block) = match core.copies.place(core, length, COPY_ALIGN) {
+            Ok((place, copy_block)) => (CopyAt::Place(place), copy_block),
+            // No device-local room for a copy block: a Private block of the copy's own, in
+            // whatever memory type has room, which is Metal's own second copy; with none, the
+            // allocation's error.
             Err(error) if error.is_out_of_device_memory() => {
-                return Ok(self.buffer(block, offset, length, contents, None));
+                let own = core.take_memory(MemoryClass::Private, length)?;
+                if own.spilled() {
+                    core.counters.rise_by(Gauge::ManagedSpilledBytes, length);
+                }
+                (CopyAt::Own { len: length }, own)
             }
             Err(error) => return Err(error),
         };
         let copy = Arc::new(DeviceCopy {
             core: Arc::clone(core),
-            place,
+            at,
             block: copy_block,
         });
         let copied = copied.min(length);

@@ -2294,15 +2294,16 @@ field	metal2vulkan-rt::Gauges.device_samplers	pub device_samplers: u64
 field	metal2vulkan-rt::Gauges.events	pub events: u64
 field	metal2vulkan-rt::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
+field	metal2vulkan-rt::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
 field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
-field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
 field	metal2vulkan-rt::Gauges.stage_entries	pub stage_entries: u64
 field	metal2vulkan-rt::Gauges.stage_entry_bytes	pub stage_entry_bytes: u64
+field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::HeapRange.block	pub block: BlockId
 field	metal2vulkan-rt::HeapRange.len	pub len: u64

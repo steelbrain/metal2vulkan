@@ -1050,7 +1050,8 @@ impl Core {
     }
 
     /// Whether Vulkan's device type is integrated or CPU ([`Device::has_unified_memory`]): then a
-    /// Managed buffer is its Shared range, with no device copy.
+    /// Managed buffer is its Shared range, with no device copy; else every Managed buffer keeps
+    /// one.
     pub(crate) fn unified_memory(&self) -> bool {
         self.unified_memory
     }
