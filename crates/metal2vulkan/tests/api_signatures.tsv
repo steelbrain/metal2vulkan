@@ -9240,6 +9240,7 @@ method	metal2vulkan-rt::BlitCommandEncoder::copy_from_buffer	pub fn copy_from_bu
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture	pub fn copy_from_texture(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::copy_from_texture_to_buffer	pub fn copy_from_texture_to_buffer(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Buffer, layout: BufferLayout) -> Result<(), Error>
 method	metal2vulkan-rt::BlitCommandEncoder::end_encoding	pub fn end_encoding(mut self)
+method	metal2vulkan-rt::BlitCommandEncoder::fill_buffer	pub fn fill_buffer(&mut self, buffer: &Buffer, range: Range<u64>, value: u8) -> Result<(), Error>
 method	metal2vulkan-rt::BlockId::get	pub fn get(self) -> u32
 method	metal2vulkan-rt::Buffer::block	pub fn block(&self) -> BlockId
 method	metal2vulkan-rt::Buffer::contents	pub fn contents(&self) -> Option<NonNull<u8>>
@@ -13305,6 +13306,7 @@ variant	metal2vulkan-rt::Error::Unsupported	Unsupported(Gap)
 variant	metal2vulkan-rt::Error::Vulkan	Vulkan { call: &'static str, result: vk::Result }
 variant	metal2vulkan-rt::Gap::BufferCopyAlignment	BufferCopyAlignment { pixel_format: PixelFormat, offset: u64, bytes_per_row: u64, bytes_per_image: u64 }
 variant	metal2vulkan-rt::Gap::CubicSampler	CubicSampler
+variant	metal2vulkan-rt::Gap::FillAlignment	FillAlignment { start: u64, end: u64 }
 variant	metal2vulkan-rt::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::HeapTexture	HeapTexture { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::IndirectCommandBuffers	IndirectCommandBuffers
@@ -13421,6 +13423,7 @@ variant	metal2vulkan-rt::Refusal::Committed	Committed
 variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
 variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen
 variant	metal2vulkan-rt::Refusal::HeapTexturePlace	HeapTexturePlace { offset: u64, size: u64, align: u64, heap_len: u64 }
+variant	metal2vulkan-rt::Refusal::FillRange	FillRange { start: u64, end: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::IndexInUse	IndexInUse { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesGranted	IndicesGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesInUse	IndicesInUse { class: IndexClass, index: u32 }

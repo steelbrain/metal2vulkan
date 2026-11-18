@@ -37,9 +37,9 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 36 | 36 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 37 | 37 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 13 | 13 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -55,9 +55,9 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 7 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 11 | 8 | 0 | 0 | 17 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 12 | 8 | 0 | 0 | 17 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 13 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -619,7 +619,7 @@ Columns:
 | `ManagedBlockNotShared` | A Managed buffer whose bytes are in a Private block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: a Managed buffer's bytes are the consumer's, which it maps; a Private block has no mapping | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ModifiedRange` | A changed range that leaves its buffer (`Buffer::did_modify_range`) | every device (a public call's own check of its arguments) | `ours`: the copy of such a range would write past the buffer's device copy | 1: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)` | `-` |
 | `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
-| `OtherDevice` | An event, a buffer, a texture or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block, a texture's image and a pipeline belong to the `VkDevice` that made them | 11: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-rt/src/blit.rs (copy_from_texture)` (+8) | `-` |
+| `OtherDevice` | An event, a buffer, a texture or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block, a texture's image and a pipeline belong to the `VkDevice` that made them | 12: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-rt/src/blit.rs (copy_from_texture)` (+9) | `-` |
 | `NoCommandBuffers` | A queue that may hold no command buffer (`Device::new_command_queue` with a count of 0) | every device (a public call's own check of its arguments) | `ours`: its first `commandBuffer` call would wait forever | 1: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)` | `-` |
 | `EncoderOpen` | A second encoder, an encode call, or a commit or enqueue, while an encoder of the command buffer is open | every device (a public call's own check of its arguments) | `metal-documented`: a command buffer has one active encoder at a time, ended by `endEncoding` before another is made or the command buffer is committed | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
 | `NoPipeline` | A dispatch with no pipeline state set | every device (a public call's own check of its arguments) | `metal-documented`: a compute dispatch needs a compute pipeline state set first | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)` | `-` |
@@ -646,6 +646,7 @@ Columns:
 | `TextureRegion` | `Texture::replace_region`, `Texture::get_bytes` or a blit copy (`BlitCommandEncoder::copy_from_texture`) of a level or slice past the texture's,... | every device (a public call's own check of its arguments) | `ours`: no texel of the texture is there to copy | 1: `crates/metal2vulkan-rt/src/texture.rs (place)` | `-` |
 | `TextureBytesLayout` | `Texture::replace_region` or `Texture::get_bytes` with rows closer than a row of the region, images closer than an image of it, or bytes too few... | every device (a public call's own check of its arguments) | `ours`: the call would read or write past the bytes it is given, or one texel's bytes over another's | 1: `crates/metal2vulkan-rt/src/texture.rs (copy)` | `-` |
 | `BufferCopyLayout` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose offset or row stride, for a format of single... | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_buffer_copy_rules.m` in the conformance crate, jobs m3-max-43541 and m3-max-43545: Metal's validation layer stops an RGBA8Unorm offset of 2, `sourceOffset (2) must be a multiple of 4 bytes`, a row stride of 18, `sourceBytesPerRow (18) must be a multiple of 4 bytes`, and the same of a copy into a buffer, a row stride of 12 for rows of 16 bytes, an image stride of 12 for images of 16, and a region 16 bytes past the buffer's end, `totalBytesUsed(4112) must be <= [sourceBuffer length](4096)`; it takes an R8Unorm offset of 2, a row stride of 0 for one row, image strides of no whole number of rows, and an image stride on a 2D texture and on a slice of a 1D array | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)` | `-` |
+| `FillRange` | `BlitCommandEncoder::fill_buffer` of an empty range, or of one past the buffer's end | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_fill_rules.m` in the conformance crate, job m3-max-43573: Metal's validation layer stops both, `range.length(0) must not be 0` and `(range.location + range.length)(68) must be <= [buffer length](64)` | 1: `crates/metal2vulkan-rt/src/blit.rs (fill_range)` | `-` |
 | `TextureCopyMismatch` | `BlitCommandEncoder::copy_from_texture` between textures of two pixel formats, or of two sample counts | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1, probe `blit_copy_format_pairs.m` in the conformance crate: Metal's validation layer stops every pair of two formats it was given, sRGB, integer, float, channel order, depth and compressed pairs among them, with `[sourceTexture pixelFormat](...) must equal [destinationTexture pixelFormat](...)`, and a source of four samples into one of one with `[sourceTexture sampleCount](4) must equal [destinationTexture sampleCount](1)` | 1: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)` | `-` |
 | `ManagedTextureBytes` | A Managed texture's bytes the device cannot copy in place (`Device::new_managed_texture`) | every device (a public call's own check of its arguments) | `ours`: a buffer-to-image copy reads a place only so laid out, and the consumer's bytes are the place the copy reads | 4: `crates/metal2vulkan-rt/src/texture.rs (check_places)`, `crates/metal2vulkan-rt/src/texture.rs (named)` (+2) | `-` |
 | `HeapTexturePlace` | A heap texture whose image does not lie in its heap (`Device::new_heap_texture`) | every device (a public call's own check of its arguments) | `ours`: an image bound past its heap's range would take memory the heap does not hold, and Vulkan binds an image only at its alignment | 1: `crates/metal2vulkan-rt/src/texture.rs (make)` | `-` |
@@ -682,6 +683,7 @@ Columns:
 | `TextureCopy` | `BlitCommandEncoder::copy_from_texture` that no single `vkCmdCopyImage` in the floor makes | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 copies none of these with one command; each is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)` | `-` |
 | `HeapTexture` | A heap texture the runtime does not place (`Device::new_heap_texture` and `Device::heap_texture_size_and_align`) | every device (a public call's own check of its arguments) | `ours`: heap textures are built for Private heaps of placeable images | 2: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`, `crates/metal2vulkan-rt/src/texture.rs (new_heap_texture)` | `-` |
 | `BufferCopyAlignment` | `BlitCommandEncoder::copy_from_buffer` or `BlitCommandEncoder::copy_from_texture_to_buffer` whose bytes no copy command in the floor addresses,... | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an aligned offset; each is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)` | `-` |
+| `FillAlignment` | `BlitCommandEncoder::fill_buffer` of a range that does not start and end on whole 4-byte words of the buffer's block, which Metal fills byte by... | every device (a public call's own check of its arguments) | `ours`: `vkCmdFillBuffer` writes whole words; a byte fill is built when a replay stream makes one | 1: `crates/metal2vulkan-rt/src/blit.rs (fill_range)` | `-` |
 
 ## Appendix: every site
 
@@ -1176,7 +1178,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::ManagedBlockNotShared`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ModifiedRange`: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)`
 - `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (open)`
-- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_texture)`; `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource, 2 sites)`; `crates/metal2vulkan-rt/src/texture.rs (new_managed_texture)`
+- `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_texture)`; `crates/metal2vulkan-rt/src/blit.rs (fill_buffer)`; `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource, 2 sites)`; `crates/metal2vulkan-rt/src/texture.rs (new_managed_texture)`
 - `rt:Refusal::NoCommandBuffers`: `crates/metal2vulkan-rt/src/queue.rs (new_command_queue)`
 - `rt:Refusal::EncoderOpen`: `crates/metal2vulkan-rt/src/command.rs (open)`
 - `rt:Refusal::NoPipeline`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`
@@ -1203,6 +1205,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::TextureRegion`: `crates/metal2vulkan-rt/src/texture.rs (place)`
 - `rt:Refusal::TextureBytesLayout`: `crates/metal2vulkan-rt/src/texture.rs (copy)`
 - `rt:Refusal::BufferCopyLayout`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`
+- `rt:Refusal::FillRange`: `crates/metal2vulkan-rt/src/blit.rs (fill_range)`
 - `rt:Refusal::TextureCopyMismatch`: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)`
 - `rt:Refusal::ManagedTextureBytes`: `crates/metal2vulkan-rt/src/texture.rs (check_places)`; `crates/metal2vulkan-rt/src/texture.rs (named)`; `crates/metal2vulkan-rt/src/texture.rs (named_host)`; `crates/metal2vulkan-rt/src/texture.rs (upload_region)`
 - `rt:Refusal::HeapTexturePlace`: `crates/metal2vulkan-rt/src/texture.rs (make)`
@@ -1229,4 +1232,5 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::TextureCopy`: `crates/metal2vulkan-rt/src/blit.rs (texture_copy)`
 - `rt:Gap::HeapTexture`: `crates/metal2vulkan-rt/src/texture.rs (heap_fit)`; `crates/metal2vulkan-rt/src/texture.rs (new_heap_texture)`
 - `rt:Gap::BufferCopyAlignment`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`
+- `rt:Gap::FillAlignment`: `crates/metal2vulkan-rt/src/blit.rs (fill_range)`
 

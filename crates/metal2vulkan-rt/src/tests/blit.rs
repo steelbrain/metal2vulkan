@@ -1,4 +1,4 @@
-//! Blit copies between textures, and between buffers and textures.
+//! Blit copies between textures, and between buffers and textures; buffer fills.
 //!
 //! - The rules: a texture copies into one of its own pixel format and sample count; two formats
 //!   or two sample counts are `Refusal::TextureCopyMismatch`, as Metal's validation refuses them;
@@ -25,9 +25,14 @@
 //!   region kept and each result plain Metal's (job m3-max-43555); one copy into a Shared buffer
 //!   alone is one submission and three barriers, the segment's end reaching the host, and copies
 //!   no byte of the runtime's own.
+//! - A fill takes a range of whole words inside the buffer: an empty range or one past the end is
+//!   `Refusal::FillRange`, one of no whole words `Gap::FillAlignment`. Under a device cfg its
+//!   bytes are plain Metal's (probe `blit_fill_rules.m`, job m3-max-43571), at one submission and
+//!   three barriers alone.
 
 use crate::blit::{
-    buffer_copy, texture_copy, BufferCopy, BufferLayout, ImageCopy, Lies, Side, TexturePlace,
+    buffer_copy, fill_range, texture_copy, BufferCopy, BufferLayout, ImageCopy, Lies, Side,
+    TexturePlace,
 };
 use crate::error::{Error, Gap, Refusal};
 use crate::texture::{CopyUnit, Placed};
@@ -699,6 +704,30 @@ fn a_layout_metal_stops_is_refused_and_one_a_copy_command_cannot_address_is_a_ga
         )),
         Refusal::TextureRegion { level: 0, slice: 1 }
     ));
+}
+
+#[test]
+fn a_fill_takes_whole_words_of_a_range_inside_the_buffer() {
+    // The range's offset is the buffer's in its block plus its own.
+    assert!(matches!(fill_range(256, 64, 4..12), Ok((260, 8))));
+    for (start, end) in [(8, 8), (60, 68), (12, 4)] {
+        assert!(
+            matches!(
+                fill_range(0, 64, start..end),
+                Err(Error::Refused(Refusal::FillRange { len: 64, .. }))
+            ),
+            "{start}..{end}"
+        );
+    }
+    for (base, start, end) in [(0, 1, 9), (0, 4, 10), (2, 4, 12)] {
+        assert!(
+            matches!(
+                fill_range(base, 64, start..end),
+                Err(Error::Unsupported(Gap::FillAlignment { .. }))
+            ),
+            "{base}: {start}..{end}"
+        );
+    }
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -1388,6 +1417,50 @@ mod on_device {
                     "{name}: BC1 blocks from a buffer"
                 );
             }
+        });
+    }
+
+    /// A fill's bytes are plain Metal's, everything around the range kept, at one submission and
+    /// three barriers alone, the segment's end reaching the host.
+    #[test]
+    fn every_device_fills_a_range_of_a_buffer() {
+        each_device("blit_fill", |name, _, device| {
+            let block = (device.take_block(MemoryClass::Shared, 4096))
+                .expect("a Shared block")
+                .id;
+            let buffer = (device.new_buffer(block, 256, 64, true)).expect("a buffer");
+            let before = pattern(64, 21);
+            write(&buffer, &before);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+            let metrics = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .fill_buffer(&buffer, 4..12, 0xab)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - metrics.submissions,
+                    after.barriers - metrics.barriers,
+                    after.bytes_copied - metrics.bytes_copied,
+                    after.passes - metrics.passes,
+                ),
+                (1, 3, 0, 1),
+                "{name}: submissions, barriers, bytes copied, passes"
+            );
+            let mut want = before;
+            want[4..12].fill(0xab);
+            assert_eq!(
+                read(&buffer),
+                metal(want, 0x5d28_bc84_b408_472d),
+                "{name}: the fill"
+            );
         });
     }
 }

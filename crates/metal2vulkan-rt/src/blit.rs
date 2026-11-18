@@ -11,6 +11,9 @@
 //! `vkCmdCopyImageToBuffer` against the buffer's own range of its block, one region per image of
 //! the region, between the same two barriers; the second also makes a write into the buffer
 //! visible to every later command, and to the host where the buffer is Shared.
+//!
+//! A fill is one `vkCmdFillBuffer` between two barriers: the first after every earlier command,
+//! as a copy's, the second making its writes visible to every later command.
 
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
@@ -20,6 +23,7 @@ use crate::record::{memory_barrier, Reach};
 use crate::texture::{place, CopyUnit, Placed, Region, Texture, TextureDescriptor};
 use ash::vk;
 use metal2vulkan::metal::TextureType;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// No Metal counterpart as a type: the slice, mipmap level and origin a blit names in one
@@ -312,6 +316,64 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
+    /// `fillBuffer:range:value:`: `value` in every byte of `range` of `buffer`, one
+    /// `vkCmdFillBuffer` of the byte four times over in each word. The command buffer keeps the
+    /// buffer's block until it retires.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's buffer; [`Refusal::FillRange`] for an
+    /// empty range or one past the buffer's end; [`Gap::FillAlignment`] for a range that does not
+    /// start and end on whole 4-byte words of the buffer's block; [`Error::Vulkan`] where the
+    /// command buffer cannot record.
+    pub fn fill_buffer(
+        &mut self,
+        buffer: &Buffer,
+        range: Range<u64>,
+        value: u8,
+    ) -> Result<(), Error> {
+        let building = self.building();
+        let core = Arc::clone(building.device.core());
+        if !buffer.is_of(&core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        let (offset, length) = fill_range(buffer.offset(), buffer.length(), range)?;
+        building.keep(buffer.held_block());
+        let command = building.ordered_command()?;
+        // Marked after `ordered_command`, as a copy into a buffer is.
+        if buffer.is_shared() {
+            building.wrote_host();
+        }
+        let earlier = [memory_barrier(Reach::Commands)];
+        let written = [vk::MemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)];
+        let device = &core.device;
+        // SAFETY: the command buffer records outside any render pass and keeps the buffer's block
+        // until it retires; the range lies in the buffer's range of the block, in whole words
+        // (`fill_range`).
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default().memory_barriers(&earlier),
+            );
+            device.cmd_fill_buffer(
+                command,
+                buffer.held_block().memory.buffer,
+                offset,
+                length,
+                u32::from_ne_bytes([value; 4]),
+            );
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default().memory_barriers(&written),
+            );
+        }
+        core.counters.count(Metric::Barriers);
+        core.counters.count(Metric::Barriers);
+        Ok(())
+    }
+
     /// `endEncoding`. Each copy ordered itself, so the encoder owes no barrier.
     pub fn end_encoding(mut self) {
         self.end();
@@ -352,6 +414,23 @@ pub(crate) struct ImageCopy {
     pub(crate) from: Placed,
     pub(crate) to: Placed,
     pub(crate) aspect: vk::ImageAspectFlags,
+}
+
+/// Checks a fill of `range` of a buffer at `base` in its block, `len` bytes long: its offset in
+/// the block and its length.
+///
+/// Err: [`Refusal::FillRange`]; [`Gap::FillAlignment`].
+pub(crate) fn fill_range(base: u64, len: u64, range: Range<u64>) -> Result<(u64, u64), Error> {
+    let Range { start, end } = range;
+    if start >= end || end > len {
+        return Err(Error::Refused(Refusal::FillRange { start, end, len }));
+    }
+    let offset = base + start;
+    let length = end - start;
+    if offset % 4 != 0 || length % 4 != 0 {
+        return Err(Error::Unsupported(Gap::FillAlignment { start, end }));
+    }
+    Ok((offset, length))
 }
 
 /// A buffer's side of a copy: its offset in its block, its length, and where the region lies

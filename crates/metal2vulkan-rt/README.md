@@ -541,6 +541,11 @@ that touch blocks first.
   that is no multiple of a texel block's bytes, or of 4 for a depth or stencil aspect, and a row
   stride of no whole number of a compressed format's blocks; also what `replace_region` and
   `get_bytes` refuse (`Gap::TextureBytes`, and `Gap::FloatDepthUpload` into a texture).
+- `fill_buffer` is `fillBuffer:range:value:`: one `vkCmdFillBuffer` of the byte in each word,
+  between the same two barriers, a fill of a Shared buffer marking the segment as a copy into
+  one does. Refused (`Refusal::FillRange`), as Metal's validation stops them: an empty range and
+  one past the buffer's end. Not built (`Gap::FillAlignment`): a range that does not start and end
+  on whole 4-byte words of the buffer's block, which Metal fills byte by byte.
 - The slice-and-level and whole-texture forms of `copyFromTexture`, and the other blit commands,
   are not built yet.
 

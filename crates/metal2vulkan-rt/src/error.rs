@@ -368,6 +368,21 @@ pub enum Refusal {
         /// The buffer's length.
         len: u64,
     },
+    /// [`BlitCommandEncoder::fill_buffer`](crate::BlitCommandEncoder::fill_buffer) of an empty
+    /// range, or of one past the buffer's end.
+    ///
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, probe `blit_fill_rules.m` in the
+    /// conformance crate, job m3-max-43573: Metal's validation layer stops both,
+    /// `range.length(0) must not be 0` and
+    /// `(range.location + range.length)(68) must be <= [buffer length](64)`).
+    FillRange {
+        /// The range's first byte.
+        start: u64,
+        /// The byte after its last.
+        end: u64,
+        /// The buffer's length.
+        len: u64,
+    },
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// between textures of two pixel formats, or of two sample counts.
     ///
@@ -568,6 +583,19 @@ pub enum Gap {
         bytes_per_row: u64,
         /// The bytes from one image's start to the next's.
         bytes_per_image: u64,
+    },
+    /// [`BlitCommandEncoder::fill_buffer`](crate::BlitCommandEncoder::fill_buffer) of a range
+    /// that does not start and end on whole 4-byte words of the buffer's block, which Metal fills
+    /// byte by byte (probe `blit_fill_rules.m` in the conformance crate, an Apple M3 Max, macOS
+    /// 27.0.1, job m3-max-43571).
+    ///
+    /// Basis: ours (`vkCmdFillBuffer` writes whole words; a byte fill is built when a replay
+    /// stream makes one).
+    FillAlignment {
+        /// The range's first byte.
+        start: u64,
+        /// The byte after its last.
+        end: u64,
     },
 }
 
@@ -852,6 +880,10 @@ impl fmt::Display for Refusal {
                 f,
                 "a region at {offset} with rows {bytes_per_row} and images {bytes_per_image} bytes apart is no layout Metal takes in a buffer of {len} bytes"
             ),
+            Refusal::FillRange { start, end, len } => write!(
+                f,
+                "a fill of {start}..{end} is empty or past the buffer's {len} bytes"
+            ),
             Refusal::TextureCopyMismatch {
                 source,
                 destination,
@@ -933,6 +965,10 @@ impl fmt::Display for Gap {
             } => write!(
                 f,
                 "a copy of {pixel_format:?} at {offset} with rows {bytes_per_row} and images {bytes_per_image} bytes apart in a buffer is not built"
+            ),
+            Gap::FillAlignment { start, end } => write!(
+                f,
+                "a fill of {start}..{end}, not whole 4-byte words, is not built"
             ),
         }
     }
