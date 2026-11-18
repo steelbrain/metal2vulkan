@@ -33,6 +33,10 @@ const LAYER: &str = "VK_LAYER_KHRONOS_validation";
 /// physical devices made from it, which hold it, to go too.
 const PATIENCE: Duration = Duration::from_secs(60);
 
+/// The most tools a device's tool query may list: a count past it is no device's, and fails the
+/// test by name rather than sizing an allocation.
+const MOST_TOOLS: u32 = 64;
+
 /// Whether a guard's instance is alive in this process.
 static OPEN: AtomicBool = AtomicBool::new(false);
 
@@ -71,38 +75,55 @@ pub(crate) fn instance(extensions: &[&CStr]) -> Validated {
     );
     let instance = Instance::new(extensions)
         .unwrap_or_else(|error| panic!("{test}: an instance at the floor: {error}"));
-    let devices = devices_of_the_cfgs_kind(&instance);
+    let watch = Watch {
+        instance: std::sync::Arc::downgrade(&instance.shared),
+        test: test.clone(),
+        log: log_of(std::process::id()),
+        expected: Vec::new(),
+    };
+    // The guard first: a failed check below drops it, which lets the next test of the process
+    // open its own.
+    let validated = Validated { instance, watch };
+    let devices = devices_of_the_cfgs_kind(&validated);
     assert!(!devices.is_empty(), "{test}: no device of this cfg's kind");
     for (name, physical) in &devices {
         assert!(
-            validation_tool(&instance, physical.raw()).is_some(),
+            validation_tool(&validated, name, physical.raw()).is_some(),
             "{test}: {name} lists no active validation tool: the loader found no {LAYER} \
              (VK_LAYER_PATH names the layer's directory)"
         );
     }
     drop(devices);
-    let watch = Watch {
-        instance: std::sync::Arc::downgrade(&instance.shared),
-        test,
-        log: log_of(std::process::id()),
-        expected: Vec::new(),
-    };
-    Validated { instance, watch }
+    validated
 }
 
-/// The active validation tool `physical` lists, by its name and version.
+/// The active validation tool `physical` (the device `name`) lists, by its name and version.
+///
+/// The count starts at 0, through the entry point itself: the Windows Intel driver (Vulkan
+/// 1.3.215) returns `VK_SUCCESS` and writes no count when asked for the count alone, and the layer
+/// adds its own tool to whatever the count below it holds.
 pub(crate) fn validation_tool(
     instance: &Instance,
+    name: &str,
     physical: ash::vk::PhysicalDevice,
 ) -> Option<String> {
     let (_, vk_instance) = instance.raw();
-    // SAFETY: `physical` is one of `instance`'s, a Vulkan 1.3 instance.
-    let count = unsafe { vk_instance.get_physical_device_tool_properties_len(physical) }
-        .expect("the tool count");
-    let mut tools = vec![ash::vk::PhysicalDeviceToolProperties::default(); count];
+    let tools_of = vk_instance.fp_v1_3().get_physical_device_tool_properties;
+    let mut count = 0;
+    // SAFETY: `physical` is one of `instance`'s, a Vulkan 1.3 instance; a count query.
+    unsafe { tools_of(physical, &mut count, std::ptr::null_mut()) }
+        .result()
+        .unwrap_or_else(|error| panic!("{name}: the tool count: {error}"));
+    assert!(
+        count <= MOST_TOOLS,
+        "{name}: vkGetPhysicalDeviceToolProperties returned {count} tools"
+    );
+    let mut tools = vec![ash::vk::PhysicalDeviceToolProperties::default(); count as usize];
     // SAFETY: as above; `tools` holds `count` entries.
-    unsafe { vk_instance.get_physical_device_tool_properties(physical, &mut tools) }
-        .expect("the tools");
+    unsafe { tools_of(physical, &mut count, tools.as_mut_ptr()) }
+        .result()
+        .unwrap_or_else(|error| panic!("{name}: the tools: {error}"));
+    tools.truncate(count as usize);
     tools
         .iter()
         .find(|tool| {
@@ -258,7 +279,7 @@ mod on_device {
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
-            let tool = validation_tool(&instance, physical.raw()).expect("a validation tool");
+            let tool = validation_tool(&instance, name, physical.raw()).expect("a validation tool");
             println!("{name}: validation tool {tool}");
         }
         let (name, physical) = &devices[0];
