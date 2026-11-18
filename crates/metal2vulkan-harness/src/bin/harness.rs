@@ -3,8 +3,15 @@
 //!
 //! ```text
 //! harness --runtime old|new[,old|new...] [--runs N] [--warmup N] [--no-settle]
-//!     [--only NAME,NAME...] [--size NAME=N]... [--workloads DIRECTORY --description FILE]
+//!     [--only NAME,NAME...] [--size NAME=N]... [--store DIRECTORY]
+//!     [--workloads DIRECTORY --description FILE]
 //! ```
+//!
+//! Each runtime's device keeps its pipelines (the old runtime's shader cache, the new runtime's
+//! cache directory) in a store of its own: `<DIRECTORY>/<place>-<runtime>` under `--store`, so a
+//! second run on the same directory is warm, or a directory made for the run under the OS temp
+//! directory and removed after it, so every run is cold. Each runtime's line says whether its
+//! store was fresh or held files, and so does each `create_state` row.
 //!
 //! A workload whose size follows the device runs at the size `--size` gives it, timing no base;
 //! without one, the first runtime sizes it. Each such workload's size prints as its row's `size`
@@ -25,7 +32,7 @@ use metal2vulkan_harness::run::{
     matrix_time, percentile, run_each, steady, CreateReport, Harness, Report, Runs, Session, Warmup,
 };
 use metal2vulkan_harness::{authored, description, old, rt, Error, Failed, Result, Waits};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 /// The command's arguments.
@@ -35,12 +42,14 @@ struct Args {
     only: Option<Vec<String>>,
     /// The sizes `--size` gives, by workload.
     sizes: Vec<(String, u32)>,
+    /// The directory of the runtimes' stores, `--store`.
+    store: Option<PathBuf>,
     workloads: Option<PathBuf>,
     description: Option<PathBuf>,
 }
 
 const USAGE: &str = "usage: harness --runtime old|new[,old|new...] [--runs N] [--warmup N] \
-                     [--no-settle] [--only NAME,NAME...] [--size NAME=N]... \
+                     [--no-settle] [--only NAME,NAME...] [--size NAME=N]... [--store DIRECTORY] \
                      [--workloads DIRECTORY --description FILE]";
 
 fn main() -> ExitCode {
@@ -64,6 +73,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
         },
         only: None,
         sizes: Vec::new(),
+        store: None,
         workloads: None,
         description: None,
     };
@@ -84,6 +94,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
                     .ok_or_else(|| format!("--size takes NAME=N, not {given}; {USAGE}"))?;
                 parsed.sizes.push((name.to_owned(), size.parse()?));
             }
+            "--store" => parsed.store = Some(value()?.into()),
             "--workloads" => parsed.workloads = Some(value()?.into()),
             "--description" => parsed.description = Some(value()?.into()),
             _ => return Err(format!("unknown argument {flag}; {USAGE}").into()),
@@ -95,11 +106,58 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args> {
     Ok(parsed)
 }
 
-/// The session of the runtime named `name`.
-fn session(name: &str, authored: &[u8]) -> Result<Box<dyn Session>> {
+/// The directory of the runtimes' stores: `--store`'s, or one made under the OS temp directory
+/// for this run, removed when the run ends.
+struct Stores {
+    root: PathBuf,
+    made: bool,
+}
+
+impl Stores {
+    fn of(store: Option<&Path>) -> Stores {
+        match store {
+            Some(root) => Stores {
+                root: root.to_owned(),
+                made: false,
+            },
+            None => Stores {
+                root: std::env::temp_dir().join(format!("m2v-harness-{}", std::process::id())),
+                made: true,
+            },
+        }
+    }
+}
+
+impl Drop for Stores {
+    fn drop(&mut self) {
+        if self.made {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+}
+
+/// How many files `directory` holds, in it and below; 0 where it does not exist.
+fn files(directory: &Path) -> usize {
+    (std::fs::read_dir(directory).into_iter().flatten().flatten())
+        .map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_dir() => files(&entry.path()),
+            Ok(_) => 1,
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// The session of the runtime named `name`, its device's pipelines kept in `store`.
+fn session(name: &str, authored: &[u8], store: &Path) -> Result<Box<dyn Session>> {
     match name {
-        "old" => Ok(Box::new(Harness::new(old::system_default()?, authored)?)),
-        "new" => Ok(Box::new(Harness::new(rt::system_default()?, authored)?)),
+        "old" => Ok(Box::new(Harness::new(
+            old::system_default(Some(store))?,
+            authored,
+        )?)),
+        "new" => Ok(Box::new(Harness::new(
+            rt::system_default(Some(store))?,
+            authored,
+        )?)),
         other => Err(format!("no runtime {other}; the runtimes are: old, new").into()),
     }
 }
@@ -170,10 +228,21 @@ fn workloads(args: &Args) -> Result<(Vec<Workload>, Vec<Create>)> {
 fn run_all(args: &Args) -> Result<bool> {
     let (workloads, creates) = workloads(args)?;
     let air = authored::library_air()?;
+    let stores = Stores::of(args.store.as_deref());
+    let mut stored = Vec::with_capacity(args.runtimes.len());
     let mut sessions = Vec::with_capacity(args.runtimes.len());
     for runtime in &args.runtimes {
-        let session = session(runtime, &air)?;
-        println!("runtime {runtime}: device {}", session.device_name());
+        let store = stores.root.join(format!("{}-{runtime}", sessions.len()));
+        let state = match files(&store) {
+            0 => "fresh".to_owned(),
+            held => format!("warm, {held} files"),
+        };
+        let session = session(runtime, &air, &store)?;
+        println!(
+            "runtime {runtime}: device {}; store {state}",
+            session.device_name()
+        );
+        stored.push(state);
         sessions.push((runtime.as_str(), session));
     }
     println!(
@@ -284,8 +353,8 @@ fn run_all(args: &Args) -> Result<bool> {
             .collect::<Result<Vec<CreateReport>>>();
         match reports {
             Ok(reports) => {
-                for ((runtime, _), report) in sessions.iter().zip(&reports) {
-                    print_create(runtime, create, report);
+                for (((runtime, _), report), store) in sessions.iter().zip(&reports).zip(&stored) {
+                    print_create(runtime, create, report, store);
                 }
             }
             Err(why) => {
@@ -374,7 +443,7 @@ fn gauges(gauges: &[(u32, Vec<(&'static str, u64)>)]) -> String {
 }
 
 /// `report`'s row, and its matrix lines.
-fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
+fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &str) {
     let us = |p| percentile(&report.create_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     println!(
         "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}{}",
@@ -390,10 +459,12 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
         time(&report.create_us),
         gauges(&report.gauges),
         match (report.first_us, report.first_create_us, &create.makes) {
-            (Some(us), Some(_), Makes::RenderStates { .. }) =>
-                format!("; first {us:.1} us, its creation alone"),
-            (Some(us), Some(create), _) =>
-                format!("; first {us:.1} us with one dispatch, its creation {create:.1} us"),
+            (Some(us), Some(_), Makes::RenderStates { .. }) => {
+                format!("; first {us:.1} us, its creation alone; store {store}")
+            }
+            (Some(us), Some(create), _) => format!(
+                "; first {us:.1} us with one dispatch, its creation {create:.1} us; store {store}"
+            ),
             _ => String::new(),
         },
     );

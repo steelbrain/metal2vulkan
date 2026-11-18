@@ -281,9 +281,13 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     re-timed alone in results.RETIME_PAIRS pairs, old then new, the second pair new then old, their
     times kept as harness-retime/<row>/<pair>/<runtime> (results.harness_budget). A row whose size
     follows the device is sized by the first runtime's run, and every later run, warm and re-timed
-    ones included, is given that size (`--size`), so each runtime times the same work."""
+    ones included, is given that size (`--size`), so each runtime times the same work. Each
+    runtime's main run also has a fresh empty store for its pipelines (`--store`), so its first
+    uses and its `create_state` row are cold for both runtimes; its warm run takes the same store,
+    warm; a re-timed row's runs each take a fresh store of the harness's own."""
     warm = " ".join(HARNESS_WARM)
     profile = unprofile = ""
+    store = '"$(cygpath -w "$store")"' if windows else '"$store"'
     if windows:
         profile = r"""      mkdir -p "$cache/AppData/Local" && w=$(cygpath -w "$cache") || exit 3
       saved_local=$LOCALAPPDATA saved_profile=$USERPROFILE
@@ -300,14 +304,14 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     out=$(mktemp -d) || exit 3
     sizes=
     for runtime in {" ".join(HARNESS_RUNTIMES)}; do
-      cache=$(mktemp -d) || exit 3
+      cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
       export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
-{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes 2>&1 | tee "$out/$runtime"
+{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --store {store} 2>&1 | tee "$out/$runtime"
       r=${{PIPESTATUS[0]}}
       [ -n "$sizes" ] || sizes=$(sed -n "{sized}" "$out/$runtime" | tr '\\n' ' ')
       case " {warm} " in
         *" $runtime "*)
-          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --runs 5 --warmup 1 --no-settle 2>&1 |
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --store {store} --runs 5 --warmup 1 --no-settle 2>&1 |
             sed -n "{rename}" ;;
       esac
       if [ "$runtime" = {HARNESS_RUNTIMES[-1]} ]; then
@@ -327,7 +331,7 @@ def harness_runs(manifest_dir, command, leg, windows=False):
         done
       fi
       unset MESA_SHADER_CACHE_DIR __GL_SHADER_DISK_CACHE_PATH{unprofile}
-      rm -rf "$cache"
+      rm -rf "$cache" "$store"
       echo "M2V-SUITE {leg} harness-$runtime exit $r"
       [ $r -eq 0 ] || rc=1
     done

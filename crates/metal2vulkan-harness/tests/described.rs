@@ -184,11 +184,11 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
     let mut sessions: [(&str, Box<dyn Session>); 2] = [
         (
             "old",
-            Box::new(Harness::new(old::system_default().unwrap(), &air).unwrap()),
+            Box::new(Harness::new(old::system_default(None).unwrap(), &air).unwrap()),
         ),
         (
             "new",
-            Box::new(Harness::new(rt::system_default().unwrap(), &air).unwrap()),
+            Box::new(Harness::new(rt::system_default(None).unwrap(), &air).unwrap()),
         ),
     ];
     let runs = Runs {

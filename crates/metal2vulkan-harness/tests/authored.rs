@@ -65,13 +65,13 @@ fn every_workload(session: &mut dyn Session) {
 #[test]
 fn every_authored_workload_matches_its_reference_on_the_old_runtime() {
     let air = authored::library_air().unwrap();
-    every_workload(&mut Harness::new(old::system_default().unwrap(), &air).unwrap());
+    every_workload(&mut Harness::new(old::system_default(None).unwrap(), &air).unwrap());
 }
 
 #[test]
 fn every_authored_workload_matches_its_reference_on_the_new_runtime() {
     let air = authored::library_air().unwrap();
-    let mut session = Harness::new(rt::system_default().unwrap(), &air).unwrap();
+    let mut session = Harness::new(rt::system_default(None).unwrap(), &air).unwrap();
     every_workload(&mut session);
     let waits = session.first_use_waits().unwrap();
     assert!(waits.count > 0 && waits.nanos > 0, "{waits:?}");

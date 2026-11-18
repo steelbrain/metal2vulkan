@@ -12,12 +12,19 @@ use runtime::{
     BlitOption, CommandBufferStatus, HeapDescriptor, HeapType, Origin, PipelineOptions,
     ResourceOptions, TextureDescriptor,
 };
+use std::path::Path;
 use std::ptr::NonNull;
 
 /// The old runtime's `MTLCreateSystemDefaultDevice`: the preferred Vulkan physical device
-/// (discrete, then integrated, virtual, CPU) it can open, with its default options.
-pub fn system_default() -> Result<runtime::Device> {
-    Ok(runtime::Device::system_default()?)
+/// (discrete, then integrated, virtual, CPU) it can open, with its default options and its
+/// shader cache in `store` where one is given (else its per-user directory).
+pub fn system_default(store: Option<&Path>) -> Result<runtime::Device> {
+    let Some(store) = store else {
+        return Ok(runtime::Device::system_default()?);
+    };
+    let mut options = runtime::DeviceOptions::default();
+    options.shader_cache = runtime::ShaderCacheOptions::in_directory(store);
+    Ok(runtime::Device::system_default_with(&options)?)
 }
 
 fn size(size: Size) -> runtime::Size {

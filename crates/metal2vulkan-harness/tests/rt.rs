@@ -7,7 +7,7 @@ use metal2vulkan_harness::{rt, Buffer, Device, Storage};
 
 #[test]
 fn a_range_given_back_is_the_next_taken_and_live_buffers_lie_apart() {
-    let device = rt::system_default().unwrap();
+    let device = rt::system_default(None).unwrap();
     let at = |buffer: &rt::Buffer| buffer.contents().unwrap().as_ptr() as usize;
     let first = device.new_buffer(4096, Storage::Shared).unwrap();
     let second = device.new_buffer(4096, Storage::Shared).unwrap();

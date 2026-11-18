@@ -37,6 +37,7 @@ use metal2vulkan_rt as rt;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::Path;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -68,8 +69,9 @@ pub(crate) fn size(size: Size) -> Result<[u32; 3]> {
 
 /// The new runtime's `MTLCreateSystemDefaultDevice`: the first physical device of the most
 /// preferred type (discrete, integrated, virtual, CPU, other) that opens, in the loader's order
-/// within a type, as the old runtime chooses.
-pub fn system_default() -> Result<Device> {
+/// within a type, as the old runtime chooses, with its cache directory `store` where one is given
+/// (else none).
+pub fn system_default(store: Option<&Path>) -> Result<Device> {
     let instance = rt::Instance::new(&[])?;
     let (_, vk_instance) = instance.raw();
     let mut candidates: Vec<(u8, String, rt::PhysicalDevice)> = (instance.physical_devices()?)
@@ -95,7 +97,9 @@ pub fn system_default() -> Result<Device> {
     candidates.sort_by_key(|(rank, ..)| *rank);
     let mut refused = Vec::new();
     for (_, name, physical) in candidates {
-        match rt::Device::new(&physical, rt::DeviceOptions::default()) {
+        let mut options = rt::DeviceOptions::default();
+        options.pipeline_cache_dir = store.map(Path::to_path_buf);
+        match rt::Device::new(&physical, options) {
             Ok(device) => {
                 for class in [
                     rt::IndexClass::Texture,

@@ -38,9 +38,14 @@
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \
-//!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--size NAME=N]... \
+//!     [--warmup 5] [--no-settle] [--only NAME,NAME...] [--size NAME=N]... [--store DIRECTORY] \
 //!     [--workloads DIRECTORY --description FILE]
 //! ```
+//!
+//! Each runtime's device keeps its pipelines in a store of its own, under `--store`'s directory
+//! (a second run on it is warm) or under one made for the run in the OS temp directory and
+//! removed after it (every run cold), so the runtimes' first uses and pipeline creations compare
+//! like for like; each runtime's line and its `create_state` row say whether the store was fresh.
 //!
 //! After a workload's first run, two of its runs are in flight: each run is committed while the
 //! GPU runs the one before it, so the GPU does not idle between runs, and a run is waited for
