@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 51 | 51 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 54 | 54 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 20 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 23 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 20 | 0 | 0 | 0 |
 
@@ -618,8 +618,11 @@ Columns:
 |---|---|---|---|---|---|
 | `EmptyBuffer` | A buffer of no bytes (`Device::new_buffer` with a length of 0) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max: newBufferWithLength:0 answers nil | 2: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`, `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
 | `BufferTooLong` | A buffer longer than `MAX_BUFFER_LENGTH` (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `ours`: this crate's cap: a buffer's every byte lies within 2^31 bytes of each bind address in it | 2: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`, `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
-| `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 2: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`, `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
-| `ManagedBlockNotShared` | A Managed buffer whose bytes are in a Private block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: a Managed buffer's bytes are the consumer's, which it maps; a Private block has no mapping | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `BufferPastBlock` | A buffer whose range leaves its block (`Device::new_buffer`) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M3 Max, macOS 27.0.1: a placement heap of 1 MiB answers nil for a 4096-byte buffer at offset 1,047,552 | 1: `crates/metal2vulkan-rt/src/buffer.rs (placed)` | `-` |
+| `ManagedBlockNotShared` | A Managed buffer whose bytes are in a block the host does not map, a Private block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: a Managed buffer's bytes are the consumer's, which the host reaches through the block's mapping; a Private block has none | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `ManagedCopyMissing` | A Managed buffer given no place for its device copy on a device that keeps one, where `Device::has_unified_memory` is false... | every device (a public call's own check of its arguments) | `ours`: Metal keeps a Managed buffer's second copy on a Mac with a discrete GPU; the consumer places it, as it places every buffer | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `ManagedCopyOnUnified` | A Managed buffer given a place for a device copy on a device that keeps none, where `Device::has_unified_memory` is true... | every device (a public call's own check of its arguments) | `ours`: on unified memory a Managed buffer is its bytes, as Metal keeps one copy of a Managed buffer on Apple silicon | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
+| `ManagedCopyNotPrivate` | A Managed buffer whose device copy is placed in a block that is not Private (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: shaders reach the device copy in Private memory, device-local where it has room, as a discrete GPU's Metal keeps the copy in its own memory | 1: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ModifiedRange` | A changed range that leaves its buffer (`Buffer::did_modify_range`) | every device (a public call's own check of its arguments) | `ours`: the copy of such a range would write past the buffer's device copy | 1: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)` | `-` |
 | `Committed` | A call on a command buffer already committed | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts "commit an already committed command buffer", "Completed handler provided after commit call" and "Scheduled handler provided after commit call" | 1: `crates/metal2vulkan-rt/src/command.rs (open)` | `-` |
 | `OtherDevice` | An event, a buffer, a texture or a pipeline state of another device in an encode call (`CommandBuffer::encode_wait_for_event`,... | every device (a public call's own check of its arguments) | `ours`: an event's semaphore, a buffer's block, a texture's image, a pipeline and a block belong to the `VkDevice` that made them | 23: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-rt/src/blit.rs (copy_from_buffer_to_buffer)` (+20) | `-` |
@@ -1200,8 +1203,11 @@ Each refusal's sites, with the function that builds it.
 - `floor::SetLayout`: `crates/metal2vulkan-rt/src/arrays.rs (supported)`
 - `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::BufferTooLong`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
-- `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (placed)`
 - `rt:Refusal::ManagedBlockNotShared`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::ManagedCopyMissing`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::ManagedCopyOnUnified`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::ManagedCopyNotPrivate`: `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ModifiedRange`: `crates/metal2vulkan-rt/src/buffer.rs (did_modify_range)`
 - `rt:Refusal::Committed`: `crates/metal2vulkan-rt/src/command.rs (open)`
 - `rt:Refusal::OtherDevice`: `crates/metal2vulkan-rt/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_buffer_to_buffer)`; `crates/metal2vulkan-rt/src/blit.rs (copy_from_texture)`; `crates/metal2vulkan-rt/src/blit.rs (fill_buffer)`; `crates/metal2vulkan-rt/src/blit.rs (synchronize_resource)`; `crates/metal2vulkan-rt/src/command.rs (check)`; `crates/metal2vulkan-rt/src/device.rs (release_block)`; `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/encoder.rs (set_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/encoder.rs (use_resource, 2 sites)`; `crates/metal2vulkan-rt/src/fence.rs (used_on)`; `crates/metal2vulkan-rt/src/pass.rs (check)`; `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_buffer)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_depth_stencil_state)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_render_pipeline_state)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_sampler_state)`; `crates/metal2vulkan-rt/src/render_encoder.rs (set_texture)`; `crates/metal2vulkan-rt/src/texture.rs (new_managed_texture)`

@@ -90,12 +90,35 @@ pub enum Refusal {
         /// The block's length.
         block_len: u64,
     },
-    /// A Managed buffer whose bytes are in a Private block
+    /// A Managed buffer whose bytes are in a block the host does not map, a Private block
     /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
     ///
-    /// Basis: ours (a Managed buffer's bytes are the consumer's, which it maps; a Private block
-    /// has no mapping).
+    /// Basis: ours (a Managed buffer's bytes are the consumer's, which the host reaches through
+    /// the block's mapping; a Private block has none).
     ManagedBlockNotShared {
+        /// The block named.
+        block: BlockId,
+    },
+    /// A Managed buffer given no place for its device copy on a device that keeps one, where
+    /// [`Device::has_unified_memory`](crate::Device::has_unified_memory) is false
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (Metal keeps a Managed buffer's second copy on a Mac with a discrete GPU; the
+    /// consumer places it, as it places every buffer).
+    ManagedCopyMissing,
+    /// A Managed buffer given a place for a device copy on a device that keeps none, where
+    /// [`Device::has_unified_memory`](crate::Device::has_unified_memory) is true
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (on unified memory a Managed buffer is its bytes, as Metal keeps one copy of a
+    /// Managed buffer on Apple silicon).
+    ManagedCopyOnUnified,
+    /// A Managed buffer whose device copy is placed in a block that is not Private
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (shaders reach the device copy in Private memory, device-local where it has
+    /// room, as a discrete GPU's Metal keeps the copy in its own memory).
+    ManagedCopyNotPrivate {
         /// The block named.
         block: BlockId,
     },
@@ -1101,6 +1124,19 @@ impl fmt::Display for Refusal {
             Refusal::ManagedBlockNotShared { block } => write!(
                 f,
                 "a Managed buffer's bytes are in block {}, which is Private",
+                block.get()
+            ),
+            Refusal::ManagedCopyMissing => write!(
+                f,
+                "a Managed buffer on a device without unified memory needs a place for its device copy"
+            ),
+            Refusal::ManagedCopyOnUnified => write!(
+                f,
+                "a Managed buffer on a device with unified memory keeps no device copy to place"
+            ),
+            Refusal::ManagedCopyNotPrivate { block } => write!(
+                f,
+                "a Managed buffer's device copy is placed in block {}, which is not Private",
                 block.get()
             ),
             Refusal::ModifiedRange {

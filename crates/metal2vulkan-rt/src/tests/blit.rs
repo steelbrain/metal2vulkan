@@ -1668,8 +1668,9 @@ pub(crate) mod on_device {
             // Into a Managed buffer: its bytes shaders reach, brought to the host by a
             // synchronize.
             let copied = !device.core().unified_memory();
-            let managed = (device.new_managed_buffer(block.id, 512, 64, 64))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed =
+                (crate::tests::managed::on_device::new_managed(&device, block.id, 512, 64, 64))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
             encoder
@@ -1723,8 +1724,9 @@ pub(crate) mod on_device {
             let start = (device.new_buffer(block.id, 256, 64, None)).expect("a buffer");
             write(&start, &before);
             drop(start);
-            let managed = (device.new_managed_buffer(block.id, 256, 64, 64))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed =
+                (crate::tests::managed::on_device::new_managed(&device, block.id, 256, 64, 64))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
             // Made before the first command buffer, whose upload moves it home.
             device
                 .grant_indices(IndexClass::Texture, 4096, 1)

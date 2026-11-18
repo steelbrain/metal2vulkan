@@ -739,9 +739,10 @@ pub struct Gauges {
     /// was out of memory: blocks whose [`BlockInfo::device_local`](crate::BlockInfo) is false and
     /// textures' allocations of their own.
     pub spilled_bytes: u64,
-    /// Bytes of Managed buffers whose device copy is not in device-local memory: device-local
-    /// memory had no room when they were made, so the copy went to another memory type and their
-    /// kernels read host memory. Metal has no counterpart.
+    /// Bytes of Managed buffers whose device copy the consumer placed in a Private block that
+    /// spilled to another memory type than the Private one (device-local memory had no room when
+    /// the block's allocation was made), so their kernels read host memory; counted per buffer
+    /// while it lives. Metal has no counterpart.
     pub managed_spilled_bytes: u64,
     /// Bytes of idle Shared allocations, which hold no block anyone holds: those the idle rule
     /// keeps (at most the most bytes of Shared allocations in use over the last 3 seconds less

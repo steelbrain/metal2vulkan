@@ -409,8 +409,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   the bytes it was made with: a copied buffer's bytes, or a no-copy one's bytes at its making
   (section 5). A stream with no identity record gives a no-copy buffer none, so its GPU copy takes
   the writes recorded before its first use (a commit of a command buffer one of whose encoders
-  names it), the nearest record the stream has of its bytes at its making. On a device with
-  unified memory the runtime keeps one copy anyway. The report's `managed` line says which form
+  names it), the nearest record the stream has of its bytes at its making. Where the device keeps
+  a GPU copy, the player places it as it places a Private buffer of the buffer's length (below), a
+  buffer made in a stream's block or heap included, and frees that range as it frees the buffer's.
+  On a device with unified memory the runtime keeps one copy anyway. The report's `managed` line says which form
   played and from what, counts the Managed buffers and the no-copy ones whose contents came from
   first use, not from create, and says where a two-copy recording played as one copy.
 - **Announced bytes** (both runtimes' backends). On a stream whose header has bit 0 set (section
@@ -555,9 +557,10 @@ counted from 0), completes the work committed so far, reports as at the stream's
   runtime's.
 
   The counts are among its executed counters. A play with any of them above zero is no gate
-  result: `report.txt` says so on a `skipped` line. It places buffers of their own in the
-  runtime's blocks of 16 MiB of either class (a longer one in a block of its own), a
-  range freed for reuse once every command buffer committed before its release completed, gives
+  result: `report.txt` says so on a `skipped` line. It places buffers of their own, and the GPU
+  copies of two-copy Managed buffers, in the runtime's blocks of 16 MiB of either class (a longer
+  one in a block of its own), a range freed for reuse once every command buffer committed before
+  its release completed, gives
   the runtime back a block or heap of the stream at its release (`release_block`), and gives
   textures and sampler states indices from the whole of each index class (section 5): its
   `indices named N: ...` line counts the objects placed at the index the stream named, those
@@ -600,7 +603,8 @@ union of the GPU intervals of the command buffers the frame waited for, where th
 them, which runs beside the rest; and the backend's gauges then, as they stand, never as growth:
 the new runtime's live
 blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes, Managed buffers'
-spilled bytes (`managed_spilled_bytes`) and idle Shared and
+spilled bytes (`managed_spilled_bytes`: the bytes of those whose GPU copy the player placed in a
+spilled Private block) and idle Shared and
 Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and
 `private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),

@@ -1,5 +1,5 @@
 //! Buffers: views of a range of a block, with no Vulkan object of their own; a Managed buffer's
-//! device copy, where the device has one, is a place in a copy block ([`crate::places`]).
+//! device copy, where the device has one, is a range of a Private block the consumer placed it in.
 
 use crate::capture::Named;
 use crate::counters::Gauge;
@@ -8,7 +8,6 @@ use crate::error::{Error, Refusal};
 use crate::fill;
 use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
 use crate::over::ManagedOvers;
-use crate::places::Place;
 use crate::submit::Held;
 use ash::vk;
 use std::ptr::NonNull;
@@ -19,10 +18,6 @@ use std::sync::Arc;
 /// either side of it; a byte of a longer buffer could lie where no access reaches it. Metal
 /// answers nil past a device's `maxBufferLength`; the consumer states one no larger than this.
 pub const MAX_BUFFER_LENGTH: u64 = 1 << 31;
-
-/// The alignment of a device copy in its block: a multiple of every storage buffer, uniform buffer
-/// and copy offset alignment Vulkan lets a device require.
-const COPY_ALIGN: u64 = 256;
 
 /// `MTLBuffer`: `length` bytes at `offset` in a block the consumer took, with no `VkBuffer` or
 /// memory of its own. Shaders reach it by its device address.
@@ -50,56 +45,39 @@ struct Inner {
     overs: Arc<ManagedOvers>,
 }
 
-/// A Managed buffer's device copy: a place in a copy block of Private memory, which shaders reach.
-/// The buffer, each command buffer that uses it and each upload that copies into it hold it; the
-/// last gone frees its place.
+/// A Managed buffer's device copy: `len` bytes at `offset` in a Private block the consumer placed
+/// it in, which shaders reach. The buffer, each command buffer that uses it and each upload that
+/// copies into it hold it, and so the block. Where the block spilled to another memory type than
+/// the Private one, its bytes count in
+/// [`Gauges::managed_spilled_bytes`](crate::Gauges::managed_spilled_bytes) while it lives.
 pub(crate) struct DeviceCopy {
     core: Arc<Core>,
-    at: CopyAt,
-    block: Memory,
-}
-
-/// Where a device copy lies in its block.
-enum CopyAt {
-    /// A place in a copy block of the device's set.
-    Place(Place),
-    /// The whole of a Private block of its own, taken where device-local memory had no room for
-    /// a copy block: in whatever memory type had room, its `len` bytes counted in
-    /// [`Gauges::managed_spilled_bytes`](crate::Gauges::managed_spilled_bytes) where that is not
-    /// device-local.
-    Own { len: u64 },
+    block: Arc<Block>,
+    offset: u64,
+    len: u64,
 }
 
 impl DeviceCopy {
     /// The copy block's buffer.
     pub(crate) fn buffer(&self) -> vk::Buffer {
-        self.block.buffer
+        self.block.memory.buffer
     }
 
     /// The copy block's memory.
     pub(crate) fn memory(&self) -> &Memory {
-        &self.block
+        &self.block.memory
     }
 
     /// The copy's offset in [`buffer`](Self::buffer).
     pub(crate) fn offset(&self) -> u64 {
-        match self.at {
-            CopyAt::Place(place) => place.offset,
-            CopyAt::Own { .. } => 0,
-        }
+        self.offset
     }
 }
 
 impl Drop for DeviceCopy {
     fn drop(&mut self) {
-        match self.at {
-            CopyAt::Place(place) => self.core.copies.release(&self.core, place),
-            CopyAt::Own { len } => {
-                if self.block.spilled() {
-                    self.core.counters.fall_by(Gauge::ManagedSpilledBytes, len);
-                }
-                self.core.pool.give_back(self.block);
-            }
+        if self.block.memory.spilled() {
+            (self.core.counters).fall_by(Gauge::ManagedSpilledBytes, self.len);
         }
     }
 }
@@ -149,16 +127,8 @@ impl Device {
                 max: MAX_BUFFER_LENGTH,
             }));
         }
-        let block = self.block(block)?;
-        let block_len = block.memory.len;
-        let end = offset
-            .checked_add(length)
-            .filter(|&end| end <= block_len)
-            .ok_or(Error::Refused(Refusal::BufferPastBlock {
-                offset,
-                length,
-                block_len,
-            }))?;
+        let block = self.placed(block, offset, length)?;
+        let end = offset + length;
         let contents = block.memory.mapping.map(|mapping| {
             // SAFETY: `offset` is inside the block.
             Mapping::new(unsafe { mapping.at(offset) })
@@ -178,38 +148,45 @@ impl Device {
         Ok(self.buffer(block, offset, length, contents, None))
     }
 
-    /// `newBufferWithLength:options:` and `newBufferWithBytes:length:options:` with
-    /// `MTLResourceStorageModeManaged`: `length` bytes at `offset` in a Shared block the consumer
-    /// holds are the consumer's bytes, which [`Buffer::contents`] answers. Which form the buffer
-    /// takes is the device's memory-type query's answer:
+    /// `newBufferWithLength:options:`, `newBufferWithBytes:length:options:` and
+    /// `newBufferWithBytesNoCopy:length:options:deallocator:` with
+    /// `MTLResourceStorageModeManaged`: `length` bytes at `bytes` (a block the consumer holds and
+    /// the offset in it) are the consumer's bytes, which [`Buffer::contents`] answers. The block is
+    /// one the host maps: a Shared block. Which form the buffer takes is the device's memory-type
+    /// query's answer:
     ///
     /// - where Vulkan's device type is integrated or CPU ([`Device::has_unified_memory`]), the
-    ///   buffer is its bytes, as a Shared buffer is, and [`Buffer::did_modify_range`] does
-    ///   nothing;
-    /// - elsewhere shaders reach a device copy in Private memory the device holds, at
-    ///   [`Buffer::gpu_address`]. The rest past its first `copied` bytes is zeroed, ahead of every
-    ///   command buffer committed after this call, and those first bytes (all of them where
-    ///   `copied` is the length or more) are named as [`Buffer::did_modify_range`] names a range:
-    ///   the next commit takes them from the consumer's bytes. The consumer's own bytes are as it
-    ///   wrote them.
+    ///   buffer is its bytes, as a Shared buffer is, its [`Buffer::gpu_address`] the bytes' block's
+    ///   address plus their offset, and [`Buffer::did_modify_range`] does nothing. `copy` is
+    ///   `None`;
+    /// - elsewhere shaders reach a device copy at `copy`, `length` bytes at that offset in a
+    ///   Private block the consumer holds, its [`Buffer::gpu_address`] that block's address plus
+    ///   the offset. The rest past its first `copied` bytes is zeroed, ahead of every command
+    ///   buffer committed after this call, and those first bytes (all of them where `copied` is
+    ///   the length or more) are named as [`Buffer::did_modify_range`] names a range: the next
+    ///   commit takes them from the consumer's bytes. The consumer's own bytes are as it wrote
+    ///   them.
     ///
-    /// Metal keeps such a copy on a Mac with a discrete GPU. The consumer chooses the range of its
-    /// bytes, as for [`Device::new_buffer`]. A buffer a command buffer uses holds its device copy
-    /// until the command buffer retires. Where device-local memory has no room for a copy block,
-    /// the device copy is a Private block of its own in whatever memory type has room, still the
-    /// buffer's second copy, so the two-copy rule holds on every such device; its kernels then
-    /// read host memory, counted in
-    /// [`Gauges::managed_spilled_bytes`](crate::Gauges::managed_spilled_bytes). Where no memory
-    /// type has room, the buffer is refused, as Metal returns nil for a buffer it cannot make.
+    /// Metal keeps such a copy on a Mac with a discrete GPU, and places it itself. Here the
+    /// consumer places both, as it places every buffer ([`Device::new_buffer`]): any byte offset,
+    /// and it reuses either range only once the work that named the buffer there before has
+    /// completed. The runtime writes the copy's `length` bytes and no byte past them, so the
+    /// slack the consumer leaves after either range is the consumer's. A buffer a command buffer
+    /// uses holds its device copy's block until the command buffer retires. A copy placed in a
+    /// Private block that spilled to another memory type is still the buffer's second copy, so
+    /// the two-copy rule holds on every such device; its kernels then read host memory, its bytes
+    /// counted in [`Gauges::managed_spilled_bytes`](crate::Gauges::managed_spilled_bytes) while the
+    /// buffer lives.
     ///
-    /// Err: as [`Device::new_buffer`]; [`Refusal::ManagedBlockNotShared`] for a Private block;
-    /// [`Error::Quiesced`], and what taking a Private block or the upload's command buffer can
-    /// return (the allocation's out-of-device-memory error where no memory type has room), for a
-    /// device copy.
+    /// Err: as [`Device::new_buffer`], for either range; [`Refusal::ManagedBlockNotShared`] for
+    /// bytes in a block the host does not map; [`Refusal::ManagedCopyMissing`] for no `copy` where
+    /// the device keeps one, [`Refusal::ManagedCopyOnUnified`] for a `copy` where it keeps none
+    /// and [`Refusal::ManagedCopyNotPrivate`] for a `copy` in a Shared block; for a device copy,
+    /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be made.
     pub fn new_managed_buffer(
         &self,
-        block: BlockId,
-        offset: u64,
+        bytes: (BlockId, u64),
+        copy: Option<(BlockId, u64)>,
         length: u64,
         copied: u64,
     ) -> Result<Buffer, Error> {
@@ -222,45 +199,41 @@ impl Device {
                 max: MAX_BUFFER_LENGTH,
             }));
         }
-        let block = self.block(block)?;
-        let block_len = block.memory.len;
-        offset
-            .checked_add(length)
-            .filter(|&end| end <= block_len)
-            .ok_or(Error::Refused(Refusal::BufferPastBlock {
-                offset,
-                length,
-                block_len,
-            }))?;
+        let (block, offset) = bytes;
+        let block = self.placed(block, offset, length)?;
         let Some(mapping) = block.memory.mapping else {
             return Err(Error::Refused(Refusal::ManagedBlockNotShared {
                 block: block.memory.id,
             }));
         };
+        let core = self.core();
+        let copy = match (core.unified_memory(), copy) {
+            (true, None) => None,
+            (true, Some(_)) => return Err(Error::Refused(Refusal::ManagedCopyOnUnified)),
+            (false, None) => return Err(Error::Refused(Refusal::ManagedCopyMissing)),
+            (false, Some((copy_block, copy_offset))) => {
+                let copy_block = self.placed(copy_block, copy_offset, length)?;
+                if copy_block.memory.class != MemoryClass::Private {
+                    return Err(Error::Refused(Refusal::ManagedCopyNotPrivate {
+                        block: copy_block.memory.id,
+                    }));
+                }
+                Some((copy_block, copy_offset))
+            }
+        };
         // SAFETY: `offset` is inside the block.
         let contents = Some(Mapping::new(unsafe { mapping.at(offset) }));
-        let core = self.core();
-        if core.unified_memory() {
+        let Some((copy_block, copy_offset)) = copy else {
             return Ok(self.buffer(block, offset, length, contents, None));
-        }
-        let (at, copy_block) = match core.copies.place(core, length, COPY_ALIGN) {
-            Ok((place, copy_block)) => (CopyAt::Place(place), copy_block),
-            // No device-local room for a copy block: a Private block of the copy's own, in
-            // whatever memory type has room, which is Metal's own second copy; with none, the
-            // allocation's error.
-            Err(error) if error.is_out_of_device_memory() => {
-                let own = core.take_memory(MemoryClass::Private, length)?;
-                if own.spilled() {
-                    core.counters.rise_by(Gauge::ManagedSpilledBytes, length);
-                }
-                (CopyAt::Own { len: length }, own)
-            }
-            Err(error) => return Err(error),
         };
+        if copy_block.memory.spilled() {
+            core.counters.rise_by(Gauge::ManagedSpilledBytes, length);
+        }
         let copy = Arc::new(DeviceCopy {
             core: Arc::clone(core),
-            at,
             block: copy_block,
+            offset: copy_offset,
+            len: length,
         });
         let copied = copied.min(length);
         if copied < length {
@@ -293,6 +266,23 @@ impl Device {
         Ok(buffer)
     }
 
+    /// The block `block`, which the consumer holds, where `length` bytes at `offset` lie in it.
+    ///
+    /// Err: [`Error::NoSuchBlock`]; [`Refusal::BufferPastBlock`].
+    fn placed(&self, block: BlockId, offset: u64, length: u64) -> Result<Arc<Block>, Error> {
+        let block = self.block(block)?;
+        let block_len = block.memory.len;
+        offset
+            .checked_add(length)
+            .filter(|&end| end <= block_len)
+            .ok_or(Error::Refused(Refusal::BufferPastBlock {
+                offset,
+                length,
+                block_len,
+            }))?;
+        Ok(block)
+    }
+
     /// A new buffer's handle, counted in [`Gauges::buffers`](crate::Gauges::buffers).
     fn buffer(
         &self,
@@ -320,10 +310,10 @@ impl Device {
 
 impl Buffer {
     /// `gpuAddress`: the block's device address plus the buffer's offset; of a Managed buffer with
-    /// a device copy, the copy's address.
+    /// a device copy, the copy block's device address plus the copy's offset.
     pub fn gpu_address(&self) -> u64 {
         match &self.inner.copy {
-            Some(copy) => copy.block.address + copy.offset(),
+            Some(copy) => copy.block.memory.address + copy.offset(),
             None => self.inner.block.memory.address + self.inner.offset,
         }
     }

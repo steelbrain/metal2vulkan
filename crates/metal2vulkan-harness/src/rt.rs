@@ -11,8 +11,9 @@
 //!
 //! A `Managed` buffer is the runtime's (`Device::new_managed_buffer`) over a range of a Shared
 //! block: its `contents` are the CPU's bytes, which the harness writes and names with
-//! `did_modify_range`, and where the device is neither integrated nor a CPU the runtime keeps a
-//! device copy, which the next commit brings up to date.
+//! `did_modify_range`. Where the device is neither integrated nor a CPU the runtime keeps a device
+//! copy, which the next commit brings up to date, at a range of a Private block the harness places
+//! as it places a Private buffer of the same length, and frees with the buffer.
 //!
 //! Its known gaps and the device's limits (`Error::Unsupported`, `Error::Limit`) are typed
 //! refusals ([`Refused`]); its other errors are failures.
@@ -170,17 +171,17 @@ impl Indices {
 }
 
 impl Device {
-    /// A `Managed` buffer over `length` bytes at `start` of Shared block `block`: its bytes zeroed
-    /// as a zeroed Shared buffer over them zeroes them, and its device copy, where it has one,
-    /// zeroed with nothing copied.
+    /// A `Managed` buffer over `length` bytes at `bytes` of a Shared block, its device copy at
+    /// `copy` of a Private block where the device keeps one: its bytes zeroed as a zeroed Shared
+    /// buffer over them zeroes them, and its device copy zeroed with nothing copied.
     fn new_managed_buffer(
         &self,
-        block: rt::BlockId,
-        start: u64,
+        bytes: (rt::BlockId, u64),
+        copy: Option<(rt::BlockId, u64)>,
         length: u64,
     ) -> std::result::Result<rt::Buffer, rt::Error> {
-        drop(self.device.new_buffer(block, start, length, Some(0))?);
-        self.device.new_managed_buffer(block, start, length, 0)
+        drop(self.device.new_buffer(bytes.0, bytes.1, length, Some(0))?);
+        self.device.new_managed_buffer(bytes, copy, length, 0)
     }
 
     /// `make` at the next index of `class` that no earlier object still holds.
@@ -231,10 +232,12 @@ impl Device {
     }
 }
 
-/// `MTLBuffer`: the runtime's buffer, and its place, freed when it is dropped.
+/// `MTLBuffer`: the runtime's buffer, and its place and a `Managed` buffer's device copy's, freed
+/// when it is dropped.
 pub struct Buffer {
     buffer: rt::Buffer,
     placed: Placed,
+    copy: Option<Placed>,
     heap: Rc<RefCell<Heap>>,
 }
 
@@ -316,7 +319,11 @@ impl Heap {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        self.heap.borrow_mut().free(&self.placed);
+        let mut heap = self.heap.borrow_mut();
+        heap.free(&self.placed);
+        if let Some(copy) = &self.copy {
+            heap.free(copy);
+        }
     }
 }
 
@@ -375,9 +382,27 @@ impl crate::Device for Device {
             Storage::Private => rt::MemoryClass::Private,
         };
         let placed = self.heap.borrow_mut().place(class, length)?;
+        let copy = match storage {
+            Storage::Managed if !self.device.has_unified_memory() => {
+                match self
+                    .heap
+                    .borrow_mut()
+                    .place(rt::MemoryClass::Private, length)
+                {
+                    Ok(copy) => Some(copy),
+                    Err(why) => {
+                        self.heap.borrow_mut().free(&placed);
+                        return Err(why);
+                    }
+                }
+            }
+            _ => None,
+        };
         let (block, start) = placed.at();
         let made = match storage {
-            Storage::Managed => self.new_managed_buffer(block, start, length),
+            Storage::Managed => {
+                self.new_managed_buffer((block, start), copy.as_ref().map(Placed::at), length)
+            }
             Storage::Shared | Storage::Private => {
                 self.device.new_buffer(block, start, length, Some(0))
             }
@@ -386,10 +411,15 @@ impl crate::Device for Device {
             Ok(buffer) => Ok(Buffer {
                 buffer,
                 placed,
+                copy,
                 heap: Rc::clone(&self.heap),
             }),
             Err(why) => {
-                self.heap.borrow_mut().free(&placed);
+                let mut heap = self.heap.borrow_mut();
+                heap.free(&placed);
+                if let Some(copy) = &copy {
+                    heap.free(copy);
+                }
                 Err(error(why))
             }
         }

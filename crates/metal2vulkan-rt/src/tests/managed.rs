@@ -10,7 +10,11 @@
 //! gives back as it retires, and reads the bytes of its commit. Metal's two-copy rule holds where
 //! `Device::has_unified_memory` is false: a kernel's write stays in the device copy, and a range
 //! named with no host write puts the consumer's bytes back over it. A range past the buffer and a
-//! Managed buffer over a Private block are refused, and every gauge reads zero after teardown.
+//! Managed buffer over a Private block are refused, and every gauge reads zero after teardown. The
+//! consumer places the device copy: at an odd offset of its Private block it holds the bytes there
+//! and nowhere else, the consumer's slack after it and the bytes before it as the consumer left
+//! them; a missing copy, a copy on a unified device, one in a Shared block and one past its block
+//! are refused.
 //!
 //! Managed textures, on every device: the image takes the named bytes of a region at its upload
 //! and nothing outside it, `get_bytes` reads the named bytes, `replace_region` writes them and
@@ -53,14 +57,31 @@ pub(crate) mod on_device {
     use crate::tests::command::on_device::{each_device, finished, within, Arena};
     use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::{
-        Block, Buffer, BytesPlace, CommandBuffer, ComputePipelineState, Device, DispatchType,
-        Error, MemoryClass, PixelFormat, Refusal, Region, StorageMode, TextureDescriptor,
-        TextureType, TextureUsage,
+        Block, BlockId, Buffer, BytesPlace, CommandBuffer, ComputePipelineState, Device,
+        DispatchType, Error, MemoryClass, PixelFormat, Refusal, Region, StorageMode,
+        TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
     use std::time::Instant;
 
     const LEN: u64 = 64 << 10;
+
+    /// [`Device::new_managed_buffer`] of `length` bytes at `offset` in Shared block `bytes`, placed
+    /// as a consumer places it: its device copy, where the device keeps one, at the start of a
+    /// Private block taken for it, which the buffer holds once the handle here is gone.
+    pub(crate) fn new_managed(
+        device: &Device,
+        bytes: BlockId,
+        offset: u64,
+        length: u64,
+        copied: u64,
+    ) -> Result<Buffer, Error> {
+        if device.has_unified_memory() {
+            return device.new_managed_buffer((bytes, offset), None, length, copied);
+        }
+        let copy = device.take_block(MemoryClass::Private, length)?;
+        device.new_managed_buffer((bytes, offset), Some((copy.id, 0)), length, copied)
+    }
 
     /// The bytes shaders reach at `managed`'s address, `len` of them, copied by the GPU into
     /// `into`, a Shared buffer as long.
@@ -123,7 +144,7 @@ pub(crate) mod on_device {
             drop(start);
 
             // The first half copied, the rest zero.
-            let managed = (device.new_managed_buffer(cpu.id, 0, LEN, LEN / 2))
+            let managed = (new_managed(&device, cpu.id, 0, LEN, LEN / 2))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut expected = first.clone();
             if copied {
@@ -187,7 +208,7 @@ pub(crate) mod on_device {
             }
             let private = (device.take_block(MemoryClass::Private, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            match device.new_managed_buffer(private.id, 0, 256, 0) {
+            match device.new_managed_buffer((private.id, 0), None, 256, 0) {
                 Err(Error::Refused(Refusal::ManagedBlockNotShared { block })) => {
                     assert_eq!(block, private.id, "{name}")
                 }
@@ -203,6 +224,173 @@ pub(crate) mod on_device {
                 device
                     .release_block(block)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    /// The bytes of the whole of Private block `block`, `len` of them, copied by the GPU into
+    /// `into`, a Shared buffer as long; `through` is a buffer in the block for the command buffer
+    /// to keep.
+    fn block_bytes(device: &Device, through: &Buffer, into: &Buffer, len: u64) -> Vec<u8> {
+        let queue = device.new_command_queue(1).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let (source, _) = through.device_range();
+        let (target, to) = into.device_range();
+        command_buffer
+            .record_for_test(&[through, into], |device, command| {
+                let region = vk::BufferCopy {
+                    src_offset: 0,
+                    dst_offset: to,
+                    size: len,
+                };
+                // SAFETY: the command buffer is recording; both ranges are the buffers' blocks',
+                // which it keeps.
+                unsafe { device.cmd_copy_buffer(command, source, target, &[region]) };
+            })
+            .expect("a copy");
+        command_buffer.commit().expect("a commit");
+        finished("the copy", &command_buffer);
+        read(into, len as usize)
+    }
+
+    /// The consumer places a Managed buffer's device copy, at any byte offset. Where the device
+    /// keeps a copy: placed 4099 bytes into a Private block the consumer filled with `0xA5`,
+    /// `gpu_address` is the block's address plus 4099; the copy's first 600 bytes take the
+    /// consumer's bytes and the rest of its 1000 zeros, and nothing else of the block changes; a
+    /// GPU write into the consumer's slack past the copy (at 5100 to 5200) stays through a later
+    /// copy-in of the whole buffer, which lands at 4099 to 5099 alone. Without one the buffer is
+    /// its bytes, at their block's address plus their offset. A missing copy, a copy on a unified
+    /// device, a copy in a Shared block and a copy past its block are refused.
+    #[test]
+    fn every_device_places_a_managed_buffer_s_device_copy_where_the_consumer_says() {
+        const BLOCK: u64 = 64 << 10;
+        const AT: u64 = 4099;
+        const LENGTH: u64 = 1000;
+        const COPIED: u64 = 600;
+        each_device("managed placed", |name, _, device| {
+            let cpu = (device.take_block(MemoryClass::Shared, 2 * BLOCK))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let first: Vec<u8> = (0..LENGTH).map(|i| (i * 7 % 251 + 1) as u8).collect();
+            let start = (device.new_buffer(cpu.id, 0, LENGTH, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            write(&start, 0, &first);
+            drop(start);
+            if device.has_unified_memory() {
+                let managed = (device.new_managed_buffer((cpu.id, AT), None, LENGTH, COPIED))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                assert_eq!(
+                    managed.gpu_address(),
+                    cpu.gpu_address + AT,
+                    "{name}: one copy"
+                );
+                let private = (device.take_block(MemoryClass::Private, BLOCK))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                match device.new_managed_buffer((cpu.id, 0), Some((private.id, 0)), 256, 0) {
+                    Err(Error::Refused(Refusal::ManagedCopyOnUnified)) => {}
+                    other => panic!(
+                        "{name}: a copy on a unified device: {:?}",
+                        other.map(|_| ())
+                    ),
+                }
+                println!("managed placed: {name}: no device copy");
+                drop(managed);
+                for block in [cpu, private] {
+                    (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+                }
+                return;
+            }
+            let private = (device.take_block(MemoryClass::Private, BLOCK))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let whole = (device.new_buffer(private.id, 0, BLOCK, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let into = (device.new_buffer(cpu.id, BLOCK, BLOCK, None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (target, base) = whole.device_range();
+            let fill = |range: std::ops::Range<u64>, word: u32| {
+                let queue = device.new_command_queue(1).expect("a queue");
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                command_buffer
+                    .record_for_test(&[&whole], |device, command| {
+                        // SAFETY: the command buffer is recording; the range is the block's, which
+                        // it keeps, and whole words.
+                        unsafe {
+                            device.cmd_fill_buffer(
+                                command,
+                                target,
+                                base + range.start,
+                                range.end - range.start,
+                                word,
+                            )
+                        }
+                    })
+                    .expect("a fill");
+                command_buffer.commit().expect("a commit");
+                finished("the fill", &command_buffer);
+            };
+            fill(0..BLOCK, 0xA5A5_A5A5);
+
+            let managed =
+                (device.new_managed_buffer((cpu.id, 0), Some((private.id, AT)), LENGTH, COPIED))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                managed.gpu_address(),
+                private.gpu_address + AT,
+                "{name}: the copy where the consumer placed it"
+            );
+            // The consumer's write into its slack, in the commit that takes the first bytes in.
+            fill(5100..5200, 0x7777_7777);
+            let mut want = vec![0xA5; BLOCK as usize];
+            want[AT as usize..(AT + COPIED) as usize].copy_from_slice(&first[..COPIED as usize]);
+            want[(AT + COPIED) as usize..(AT + LENGTH) as usize].fill(0);
+            want[5100..5200].fill(0x77);
+            assert!(
+                block_bytes(&device, &whole, &into, BLOCK) == want,
+                "{name}: the block after the copy's creation and the slack write"
+            );
+
+            // The whole buffer named: the copy-in lands on the copy alone.
+            let second: Vec<u8> = (0..LENGTH).map(|i| (i * 13 % 241 + 3) as u8).collect();
+            write(&managed, 0, &second);
+            (managed.did_modify_range(0, LENGTH)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            want[AT as usize..(AT + LENGTH) as usize].copy_from_slice(&second);
+            assert!(
+                block_bytes(&device, &whole, &into, BLOCK) == want,
+                "{name}: the block after a copy-in of the whole buffer"
+            );
+
+            let refused = |copy: Option<(BlockId, u64)>| {
+                device
+                    .new_managed_buffer((cpu.id, 0), copy, 256, 0)
+                    .map(|_| ())
+            };
+            match refused(None) {
+                Err(Error::Refused(Refusal::ManagedCopyMissing)) => {}
+                other => panic!("{name}: no copy: {other:?}"),
+            }
+            match refused(Some((cpu.id, BLOCK))) {
+                Err(Error::Refused(Refusal::ManagedCopyNotPrivate { block })) => {
+                    assert_eq!(block, cpu.id, "{name}")
+                }
+                other => panic!("{name}: a copy in a Shared block: {other:?}"),
+            }
+            match refused(Some((private.id, private.len - 255))) {
+                Err(Error::Refused(Refusal::BufferPastBlock {
+                    offset,
+                    length: 256,
+                    block_len,
+                })) => {
+                    assert_eq!(
+                        (offset, block_len),
+                        (private.len - 255, private.len),
+                        "{name}"
+                    )
+                }
+                other => panic!("{name}: a copy past its block: {other:?}"),
+            }
+            println!("managed placed: {name}: device copy at {AT} of its block");
+            drop((managed, whole, into));
+            for block in [cpu, private] {
+                (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
             }
         });
     }
@@ -240,16 +428,21 @@ pub(crate) mod on_device {
         let (zero, out) = (arena.buffer(), arena.buffer());
         let cpu = (device.take_block(MemoryClass::Shared, 1))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let managed = (device.new_managed_buffer(cpu.id, 0, len, 0))
+        // The device copy where the consumer places it: 4 KiB into a Private block it takes.
+        let copy = two.then(|| {
+            (device.take_block(MemoryClass::Private, len + 4096))
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+        });
+        let at = copy.as_ref().map(|copy| (copy.id, 4096));
+        let managed = (device.new_managed_buffer((cpu.id, 0), at, len, 0))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        if two {
-            assert_ne!(
+        match &copy {
+            Some(copy) => assert_eq!(
                 managed.gpu_address(),
-                cpu.gpu_address,
-                "{name}: a device that is not unified keeps a device copy"
-            );
-        } else {
-            assert_eq!(managed.gpu_address(), cpu.gpu_address, "{name}: one copy");
+                copy.gpu_address + 4096,
+                "{name}: a device that is not unified keeps a device copy where it is placed"
+            ),
+            None => assert_eq!(managed.gpu_address(), cpu.gpu_address, "{name}: one copy"),
         }
         let host: Vec<u32> = (0..WORDS as u32).map(|i| i * 3 + 7).collect();
         let bytes =
@@ -294,10 +487,15 @@ pub(crate) mod on_device {
                 "the kernel's write"
             }
         );
-        println!("managed two copies: {name}: two copies {two}");
+        println!(
+            "managed two copies: {name}: two copies {two}, the copy's block device-local {:?}",
+            copy.as_ref().map(|copy| copy.device_local)
+        );
         alive(&managed);
         drop((managed, zero, out, arena));
-        (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        for block in [Some(cpu), copy].into_iter().flatten() {
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
     }
 
     #[test]
@@ -321,7 +519,7 @@ pub(crate) mod on_device {
             let (zero, out) = (arena.buffer(), arena.buffer());
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let managed = (device.new_managed_buffer(cpu.id, 0, 256, 0))
+            let managed = (new_managed(&device, cpu.id, 0, 256, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let state = add(&device);
             let queue = device.new_command_queue(4).expect("a queue");
@@ -409,7 +607,7 @@ pub(crate) mod on_device {
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let into = (device.new_buffer(side.id, 0, len, None))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let managed = (device.new_managed_buffer(cpu.id, 0, len, 0))
+        let managed = (new_managed(device, cpu.id, 0, len, 0))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         write(&managed, 0, bytes);
         (managed.did_modify_range(0, len)).unwrap_or_else(|error| panic!("{name}: {error}"));

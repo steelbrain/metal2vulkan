@@ -249,7 +249,7 @@ mod on_device {
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             let managed = |offset: u64| {
-                (device.new_managed_buffer(cpu.id, offset, LEN, 0))
+                (crate::tests::managed::on_device::new_managed(&device, cpu.id, offset, LEN, 0))
                     .unwrap_or_else(|e| panic!("{name}: {e}"))
             };
             let over = |buffer: &Buffer| {
@@ -487,8 +487,9 @@ entry:
             let pitch = pitch(&device);
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
-            let buffer = (device.new_managed_buffer(cpu.id, 0, LEN, 0))
-                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let buffer =
+                (crate::tests::managed::on_device::new_managed(&device, cpu.id, 0, LEN, 0))
+                    .unwrap_or_else(|e| panic!("{name}: {e}"));
             let texture = (buffer.new_texture(&descriptor(), None, 0, pitch))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(

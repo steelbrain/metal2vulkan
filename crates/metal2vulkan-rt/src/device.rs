@@ -166,8 +166,6 @@ pub(crate) struct Core {
     pub(crate) claims: Mutex<HashMap<BlockId, Weak<Claim>>>,
     /// The blocks textures are placed in.
     pub(crate) places: Places,
-    /// The blocks Managed buffers' device copies are placed in.
-    pub(crate) copies: Places,
     pub(crate) filler: Filler,
     pub(crate) recorders: Recorders,
     pub(crate) work: Work,
@@ -469,7 +467,6 @@ impl Device {
             pool,
             claims: Mutex::new(HashMap::new()),
             places: Places::new(),
-            copies: Places::new(),
             filler,
             recorders: Recorders::new(family),
             work,
@@ -1174,8 +1171,7 @@ impl Drop for Core {
             // SAFETY: every upload that copied through it retired, and no call reads it.
             unsafe { region.free(self) };
         }
-        let placed = (self.places.remaining().into_iter()).chain(self.copies.remaining());
-        let placed = placed.collect();
+        let placed = self.places.remaining();
         memory::free_all(self, placed);
         let pools = std::mem::take(
             self.query_pools

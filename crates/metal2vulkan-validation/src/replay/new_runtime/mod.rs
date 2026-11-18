@@ -253,6 +253,9 @@ pub struct NewRuntime {
     /// The read-backs of a stream that records its announced bytes, kept out of the CPU copies
     /// (`aside`).
     asides: aside::Asides,
+    /// The places of the GPU copies of the Managed buffers in a place of the play's own, on a
+    /// device that keeps a GPU copy: given back with the buffer's place.
+    device_copies: HashMap<u64, Place>,
     /// The queue each command buffer was made on.
     queue_of: HashMap<u64, u64>,
     /// The bytes those copies staged.
@@ -516,6 +519,7 @@ impl NewRuntime {
             users: HashMap::new(),
             seconds: second::Seconds::default(),
             asides: aside::Asides::default(),
+            device_copies: HashMap::new(),
             queue_of: HashMap::new(),
             staged_bytes: 0,
             unanswered_pipeline_ids: 0,
@@ -748,9 +752,18 @@ impl NewRuntime {
                 let shared = shared.map_err(failed(call))?;
                 write_into(&shared, 0, bytes)?;
                 let copied = bytes.len() as u64;
-                let managed = self.device.new_managed_buffer(block, start, length, copied);
+                // The GPU copy, placed as a Private buffer of its length is.
+                let copy = (self
+                    .places
+                    .take(rt::MemoryClass::Private, length, completed))
+                .map_err(failed(call))?;
+                let at = (copy.block, copy.range.start);
+                let managed =
+                    (self.device).new_managed_buffer((block, start), Some(at), length, copied);
                 self.asides.two_copies(call.result);
-                managed.map_err(failed(call))?
+                let managed = managed.map_err(failed(call))?;
+                self.device_copies.insert(call.result, copy);
+                managed
             }
             _ => {
                 let buffer = self.device.new_buffer(block, start, length, Some(0));
@@ -1341,19 +1354,37 @@ impl NewRuntime {
         range: rt::HeapRange,
         class: rt::MemoryClass,
     ) -> Result<Option<(Object, Made)>, PlayError> {
-        // A buffer of `length` bytes and storage options `raw` at `offset` in the block.
+        // A buffer of `length` bytes and storage options `raw` at `offset` in the block. A
+        // two-copy Managed one's GPU copy, on a device that keeps one, is the one place the play
+        // holds for it, placed as a Private buffer of its length is; the stream's block holds its
+        // bytes.
         let device = self.device.clone();
         let mut placed = |length: u64, raw: u64, offset: u64| {
             let at = range.offset + offset;
+            let mut copy = None;
             let buffer = match storage(call, raw)? {
                 rt::StorageMode::Managed if class == rt::MemoryClass::Shared => {
                     match self.managed_form(call)? {
                         ManagedCopies::One => device.new_buffer(range.block, at, length, None),
+                        ManagedCopies::Two if device.has_unified_memory() => {
+                            self.seconds.in_block += 1;
+                            device.new_managed_buffer((range.block, at), None, length, length)
+                        }
                         ManagedCopies::Two => {
-                            if device.has_unified_memory() {
-                                self.seconds.in_block += 1;
-                            }
-                            device.new_managed_buffer(range.block, at, length, length)
+                            let completed = self.completed();
+                            let place =
+                                (self
+                                    .places
+                                    .take(rt::MemoryClass::Private, length, completed))
+                                .map_err(failed(call))?;
+                            let copy_at = (place.block, place.range.start);
+                            copy = Some(place);
+                            device.new_managed_buffer(
+                                (range.block, at),
+                                Some(copy_at),
+                                length,
+                                length,
+                            )
                         }
                     }
                 }
@@ -1364,7 +1395,7 @@ impl NewRuntime {
                 let placed = (call.receiver, offset..offset + length);
                 self.unwritten.made(call.result, Some(placed));
             }
-            addressed(buffer, None)
+            addressed(buffer, copy)
         };
         match &*call.selector {
             "newBufferWithLength:options:offset:" => {
@@ -1534,6 +1565,9 @@ impl Backend for NewRuntime {
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => {
                     let users = self.users_of(call.receiver);
+                    if let Some(copy) = self.device_copies.remove(&call.receiver) {
+                        self.places.give(copy, self.commits, users.clone());
+                    }
                     self.places.give(place, self.commits, users);
                 }
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a

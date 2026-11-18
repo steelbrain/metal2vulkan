@@ -1,7 +1,6 @@
-//! Places: the Private blocks the runtime places its own resources in, taken as the consumer takes
-//! blocks. The device has two sets: texture blocks, where textures' images are bound, and copy
-//! blocks, which hold Managed buffers' device copies. Neither set holds the other's kind, so no
-//! buffer lies beside an optimal image in one allocation.
+//! Places: the Private blocks the runtime places textures' images in, taken as the consumer takes
+//! blocks. A texture block holds images alone, so no buffer lies beside an optimal image in one
+//! block.
 //!
 //! A place is a resource's bytes at a multiple of its alignment: the first that fits, in the
 //! blocks in the order they were taken; where none fits, the next block comes from the pool: of
@@ -12,8 +11,7 @@
 //! Nothing zeroes a texture's bytes, as Metal leaves a new texture's contents undefined.
 //!
 //! An image in a texture block is optimal. The block's own `VkBuffer`, which spans it, aliases the
-//! images (Vulkan's memory aliasing), and nothing records through it. A copy block's `VkBuffer` is
-//! what the device copies are reached through.
+//! images (Vulkan's memory aliasing), and nothing records through it.
 
 use crate::device::{lock, Core};
 use crate::error::Error;

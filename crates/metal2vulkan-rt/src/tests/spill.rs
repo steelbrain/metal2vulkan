@@ -5,9 +5,10 @@
 //! type, the take fails with the allocation's error. While the pool's Private blocks spill, a
 //! texture takes no texture block (an allocation of its own, itself spilled where the image takes
 //! another type, else the allocation's error), and Metal's two-copy rule holds for a Managed
-//! buffer: where the device is not unified, its device copy is a Private block of its own in
-//! another memory type, its bytes counted in `Gauges::managed_spilled_bytes` while it lives. Every
-//! gauge reads zero after teardown.
+//! buffer: where the device is not unified, its device copy, which the consumer places in a Private
+//! block it takes while the pool's Private blocks spill, is in another memory type, its bytes
+//! counted in `Gauges::managed_spilled_bytes` while it lives. Every gauge reads zero after
+//! teardown.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {

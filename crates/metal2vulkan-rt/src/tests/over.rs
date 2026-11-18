@@ -303,8 +303,9 @@ mod on_device {
 
             // Over a Managed buffer the image lies in the bytes shaders reach: its device copy,
             // where it has one, which replace_region's rows reach as did_modify_range's do.
-            let managed = (device.new_managed_buffer(cpu.id, 2 * AT, LEN, LEN))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed =
+                (crate::tests::managed::on_device::new_managed(&device, cpu.id, 2 * AT, LEN, LEN))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut bytes: Vec<u8> = (0..LEN).map(|i| (i % 239) as u8).collect();
             write(&managed, &bytes);
             (managed.did_modify_range(0, LEN)).unwrap_or_else(|error| panic!("{name}: {error}"));

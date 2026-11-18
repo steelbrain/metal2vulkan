@@ -116,10 +116,9 @@ in its memory.
   `Gauges::spilled_bytes` counts the bytes until they are freed. A spilled allocation is freed
   once its last block is given back, so the next tries device-local memory again. Textures are not
   placed in a spilled block: a texture then takes an allocation of its own, which spills in the
-  same way where the image allows another type. A Managed buffer whose device copy finds no
-  device-local room for a copy block takes a Private block of its own, which spills the same way:
-  still its second copy, so `did_modify_range` and a GPU write keep Metal's two-copy rule. Where
-  no memory type has room, the buffer is refused with the allocation's error.
+  same way where the image allows another type. A Managed buffer's device copy that the consumer
+  places in a spilled block is still its second copy, so `did_modify_range` and a GPU write keep
+  Metal's two-copy rule.
 - Every `VkDeviceMemory` the runtime holds counts against the device's `maxMemoryAllocationCount`:
   each block (texture blocks among them), each texture's own allocation, the staging region (from
   the first texture copy on), the staging buffer of a copy larger than the region while it runs, the
@@ -174,15 +173,18 @@ in its memory.
   translator may read as signed, so the consumer states a maximum buffer length (Metal's
   `maxBufferLength`) no larger than `MAX_BUFFER_LENGTH`, and places no buffer longer than that in
   a block, whether Metal's `newBufferWithLength:`, a heap's or a no-copy buffer stands behind it.
-- `Device::new_managed_buffer(block, offset, length, copied)` makes a Managed buffer over a range
-  of a Shared block (`Refusal::ManagedBlockNotShared` for a Private one): the consumer's bytes,
-  which `contents` answers. Vulkan's device type picks its form, as `Device::has_unified_memory`
-  answers it. On an integrated or CPU device the buffer is its bytes, as a Shared buffer is, and
-  `did_modify_range` does nothing. Elsewhere shaders reach a device copy at `gpu_address`, always:
-  a place in a copy block, a Private block of the pool of 16 MiB (of the copy's own length past
-  that) that holds device copies alone, or where device-local memory has no room for one, a
-  Private block of the copy's own in whatever memory type has room. The rest past its first `copied` bytes is zeroed in the upload,
-  and those bytes are named as `did_modify_range` names a range.
+- `Device::new_managed_buffer(bytes, copy, length, copied)` makes a Managed buffer whose bytes are
+  `length` bytes at `bytes`, a block the consumer holds and an offset in it: the consumer's bytes,
+  which `contents` answers, in a block the host maps (`Refusal::ManagedBlockNotShared` for a
+  Private one). Vulkan's device type picks its form, as `Device::has_unified_memory` answers it.
+  On an integrated or CPU device the buffer is its bytes, as a Shared buffer is, its `gpu_address`
+  theirs, `did_modify_range` does nothing, and `copy` is `None` (`Refusal::ManagedCopyOnUnified`
+  otherwise). Elsewhere shaders reach a device copy at `gpu_address`, always: `length` bytes at
+  `copy`, a Private block the consumer holds and an offset in it, placed by the consumer as it
+  places a Private buffer (`Refusal::ManagedCopyMissing` for none, `Refusal::ManagedCopyNotPrivate`
+  for a Shared block). Either offset is any byte, and `gpu_address` is the block's address plus
+  it. The copy's rest past its first `copied` bytes is zeroed in the upload, and those bytes are
+  named as `did_modify_range` names a range.
   `Buffer::did_modify_range(start, length)` names a range changed (`Refusal::ModifiedRange` past
   the buffer), merged with the buffer's others where they overlap or touch, and submits nothing.
   The next commit of a command buffer with commands, on any queue, takes the bytes of every range
@@ -206,11 +208,15 @@ in its memory.
   `capture_waits`, `capture_streams`, `capture_overflows` and `capture_overflow_bytes` count them,
   `capture_copy_nanos` and `capture_wait_nanos` time the commits' host copies and waits, and
   `Gauges::capture_bytes` counts the ring and the staging blocks alive. A command buffer
-  keeps each device copy it uses until it retires; the copy's place is free then.
+  keeps each device copy it uses, and so the copy's block, until it retires.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
 the buffer there before has completed. A command buffer keeps each block it uses until it retires,
-so a block released meanwhile goes back to the pool only then.
+so a block released meanwhile goes back to the pool only then. Placement is the consumer's, and so
+is the slack past a buffer's length: the runtime writes no byte of a block outside the ranges of
+the buffers placed in it (a zero fill, a Managed buffer's copy-in and its device copy's zeroing
+each cover exactly the buffer's bytes), so what lies between and after them is as the consumer
+left it.
 
 ### The consumer's mappings
 
@@ -230,8 +236,9 @@ after a quiesce.
   NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one block at a time and only
   after 20 ms with no commit. `Metrics::allocations_freed` counts the frees, and
   `Metrics::submissions_during_frees` the submits made while one was in progress.
-- On a full discrete card a Managed buffer's device copy goes to another memory type, host memory
-  where the card has no other device-local type, and its kernels read it across the host link:
+- On a full discrete card a Private block the consumer takes goes to another memory type, host
+  memory where the card has no other device-local type, and the kernels that read a Managed
+  buffer's device copy placed there read it across the host link:
   `Gauges::managed_spilled_bytes` counts those buffers' bytes while they live.
 
 ## Set 1 and index grants
