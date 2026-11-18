@@ -1116,6 +1116,8 @@ impl Drop for Core {
             unsafe { region.free(self) };
         }
         if let Some(region) = self.work.take_region() {
+            self.counters
+                .fall_by(Gauge::StagingBytes, crate::staging::REGION_LEN);
             // SAFETY: every upload that copied through it retired, and no call reads it.
             unsafe { region.free(self) };
         }

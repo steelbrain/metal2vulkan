@@ -88,6 +88,8 @@ pub(crate) enum Gauge {
     PrivateIdleBytes,
     /// [`Gauges::capture_bytes`].
     CaptureBytes,
+    /// [`Gauges::staging_bytes`].
+    StagingBytes,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -158,6 +160,7 @@ struct Atomics {
     shared_idle_bytes: AtomicU64,
     private_idle_bytes: AtomicU64,
     capture_bytes: AtomicU64,
+    staging_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -355,6 +358,7 @@ impl Counters {
             Gauge::SharedIdleBytes => &a.shared_idle_bytes,
             Gauge::PrivateIdleBytes => &a.private_idle_bytes,
             Gauge::CaptureBytes => &a.capture_bytes,
+            Gauge::StagingBytes => &a.staging_bytes,
         }
     }
 
@@ -425,6 +429,7 @@ impl Counters {
             shared_idle_bytes: a.shared_idle_bytes.load(Relaxed),
             private_idle_bytes: a.private_idle_bytes.load(Relaxed),
             capture_bytes: a.capture_bytes.load(Relaxed),
+            staging_bytes: a.staging_bytes.load(Relaxed),
         }
     }
 }
@@ -630,4 +635,8 @@ pub struct Gauges {
     /// Bytes of staging for Managed buffers' captures: the capture ring, once a commit made it, and
     /// the staging blocks of overflows that command buffers not yet retired hold.
     pub capture_bytes: u64,
+    /// Bytes of staging for copies between textures and the CPU (`replace_region`, `get_bytes`):
+    /// the staging region, once a copy made it, and the staging buffers of their own that copies
+    /// larger than the region hold until the upload that copies through them is gone.
+    pub staging_bytes: u64,
 }

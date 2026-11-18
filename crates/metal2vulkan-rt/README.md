@@ -404,7 +404,8 @@ made, with no lock, and never rewritten for layouts.
   the host writes the next. Where the ring has no room, the call waits for its oldest span's
   submission, submitting the upload first where the span is in it (`Metrics::upload_waits`). A
   copy larger than 16 MiB has a staging buffer of its own, which counts against the upload's
-  64 MiB.
+  64 MiB. `Gauges::staging_bytes` counts the region once made and each such buffer until the
+  upload that copies through it is gone.
 - `Texture::new_texture_view(pixel_format, texture_type, levels, slices, index)` is
   `newTextureViewWithPixelFormat:textureType:levels:slices:`, and with the texture's own type and
   every level and slice `newTextureViewWithPixelFormat:`. A view is a texture over the parent's

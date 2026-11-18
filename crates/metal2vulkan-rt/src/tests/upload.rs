@@ -12,6 +12,8 @@
 //!   holds it for a zero fill, count against the bound: a block of the bound's length alone keeps
 //!   the upload pending, and past the bound the next call sends it and frees them;
 //! - zero fills past [`UPLOAD_ENTRIES`] submit it;
+//! - the staging gauge counts the region once a copy made it, and a copy larger than the region's
+//!   staging buffer of its own until the upload that copies through it is gone;
 //!
 //! and every gauge reads zero after teardown.
 
@@ -295,6 +297,58 @@ mod on_device {
                  metrics {:?}",
                 counters.metrics()
             );
+        }
+    }
+
+    #[test]
+    fn every_device_counts_its_staging_bytes() {
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let counters = device.counters();
+            let staged = || counters.gauges().staging_bytes;
+            assert_eq!(staged(), 0, "{name}: before any copy");
+            // A copy of 256 KiB: the region, made at the first copy.
+            let small = 256;
+            let texture = (device.new_texture(&square(small), None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let bytes = vec![7u8; (small * small * 4) as usize];
+            texture
+                .replace_region(
+                    whole(small),
+                    0,
+                    0,
+                    &bytes,
+                    u64::from(small * 4),
+                    bytes.len() as u64,
+                )
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(staged(), REGION_LEN, "{name}: the region");
+            // A copy of 2304 texels square, 21,233,664 bytes, larger than the region: a staging
+            // buffer of its own besides, until the upload that copies through it is gone.
+            let large = 2304;
+            let big = (device.new_texture(&square(large), None))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let bytes: Vec<u8> = (0..large * large * 4).map(|i| (i % 251) as u8).collect();
+            let len = bytes.len() as u64;
+            big.replace_region(whole(large), 0, 0, &bytes, u64::from(large * 4), len)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                staged(),
+                REGION_LEN + len,
+                "{name}: a staging buffer of its own"
+            );
+            let mut read = vec![0; len as usize];
+            big.get_bytes(&mut read, u64::from(large * 4), len, whole(large), 0, 0)
+                .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
+            assert!(read == bytes, "{name}: the large copy's bytes");
+            wait_until("the staging buffers gone", || staged() == REGION_LEN);
+            drop((texture, big));
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
     }
 }

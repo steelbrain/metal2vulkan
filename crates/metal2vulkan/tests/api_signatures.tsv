@@ -2295,6 +2295,7 @@ field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
+field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::HeapRange.block	pub block: BlockId
 field	metal2vulkan-rt::HeapRange.len	pub len: u64

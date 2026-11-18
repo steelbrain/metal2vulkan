@@ -857,6 +857,7 @@ impl Work {
             state = self.lock();
             if state.region.is_none() {
                 state.region = Some(made);
+                core.counters.rise_by(Gauge::StagingBytes, REGION_LEN);
             } else {
                 // SAFETY: another call made the region first; nothing used this one.
                 unsafe { made.free(core) };

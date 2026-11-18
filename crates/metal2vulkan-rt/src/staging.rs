@@ -263,8 +263,9 @@ impl Stage {
 }
 
 /// A host-visible buffer of a copy's bytes, in memory of its own of the Shared type, mapped for
-/// its life, for a copy larger than the region. The reaper frees it once its last holder, the
-/// upload that copies through it among them, is gone.
+/// its life, for a copy larger than the region, counted in `Gauges::staging_bytes` while it lives.
+/// The reaper frees it once its last holder, the upload that copies through it among them, is
+/// gone.
 pub(crate) struct Staging {
     core: Arc<Core>,
     buffer: vk::Buffer,
@@ -280,6 +281,7 @@ impl Staging {
     /// bound or mapped.
     pub(crate) fn new(core: &Arc<Core>, len: u64) -> Result<Staging, Error> {
         let (buffer, memory, mapping) = host_buffer(core, len)?;
+        core.counters.rise_by(Gauge::StagingBytes, len);
         Ok(Staging {
             core: Arc::clone(core),
             buffer,
@@ -359,6 +361,7 @@ fn host_buffer(core: &Core, len: u64) -> Result<(vk::Buffer, vk::DeviceMemory, M
 
 impl Drop for Staging {
     fn drop(&mut self) {
+        self.core.counters.fall_by(Gauge::StagingBytes, self.len);
         self.core.reaper.give(Job::Free(Free::Staging {
             buffer: self.buffer,
             memory: self.memory,
