@@ -684,7 +684,7 @@ impl NewRuntime {
         self.completed
     }
 
-    /// Waits until the commits up to `commit` have retired: `waitUntilCompleted` returns once the
+    /// Waits until the commits up to `commit` have retired: `wait_until_completed` returns once the
     /// command buffer's handlers have run.
     fn wait_for(&mut self, commit: u64) {
         while self.completed() < commit {
