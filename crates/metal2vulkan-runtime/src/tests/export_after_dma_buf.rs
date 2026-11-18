@@ -734,10 +734,10 @@ fn a_shared_dma_buf_import_is_host_coherent_or_refused_untried() {
     );
     let flags = |index: u32| types[index as usize].property_flags;
     if order.is_empty() {
-        assert_eq!(
-            imported,
-            Err(ImportFailure::NoMemoryType),
-            "{name}: allowed {allowed:#b}"
+        assert!(
+            matches!(imported, Err(ImportFailure::NoMemoryType)),
+            "{name}: allowed {allowed:#b}: {:?}",
+            imported.err()
         );
         let local = vk::MemoryPropertyFlags::DEVICE_LOCAL.as_raw();
         for export in [MemoryExport::OpaqueFd, MemoryExport::DmaBuf] {
@@ -760,8 +760,8 @@ fn a_shared_dma_buf_import_is_host_coherent_or_refused_untried() {
     let (memory, type_index, _) = imported.unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
     assert!(
         flags(type_index).contains(vk::MemoryPropertyFlags::HOST_COHERENT),
-        "{name}: type {type_index}, {:?}",
-        flags(type_index)
+        "{name}: type {type_index}, {:#x}",
+        flags(type_index).as_raw()
     );
     // A buffer over the whole import, made for dma-bufs, bound at 0.
     let usage = vk::BufferUsageFlags::from(device.vk_buffer_usage());
@@ -776,7 +776,11 @@ fn a_shared_dma_buf_import_is_host_coherent_or_refused_untried() {
     let raw = unsafe { handles.device.create_buffer(&chained, None) }.unwrap();
     // SAFETY: the buffer just made.
     let requirements = unsafe { handles.device.get_buffer_memory_requirements(raw) };
-    assert!(requirements.size <= bytes, "{name}: {requirements:?}");
+    assert!(
+        requirements.size <= bytes,
+        "{name}: the buffer takes {} bytes",
+        requirements.size
+    );
     // SAFETY: the import's type is among the buffer's (`dma_buf_buffer_types`), and it holds the
     // buffer's size.
     unsafe { handles.device.bind_buffer_memory(raw, memory, 0) }.unwrap();
@@ -852,10 +856,10 @@ fn a_shared_dma_buf_import_is_host_coherent_or_refused_untried() {
         .filter(|(read, wrote)| read != wrote)
         .count();
     eprintln!(
-        "{SHARED} on {name}: allowed {allowed:#b}, imported as type {type_index} ({:?}); bytes \
+        "{SHARED} on {name}: allowed {allowed:#b}, imported as type {type_index} ({:#x}); bytes \
          the GPU's fill left unseen through the mapping {gpu_written} of {bytes}; bytes of the \
          CPU's writes the GPU's copy missed {copied_wrong} of {half}",
-        flags(type_index)
+        flags(type_index).as_raw()
     );
     drop(buffer);
     drop(queue);
