@@ -955,6 +955,179 @@ mod on_device {
         });
     }
 
+    /// A shader-read render target of `format`, `SIDE` a side and `levels` levels, at `index`.
+    fn readable(device: &Device, format: PixelFormat, levels: u32, index: u32) -> Texture {
+        let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
+        d.usage = TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ;
+        d.storage_mode = StorageMode::Shared;
+        d.mipmap_level_count = levels;
+        (device.new_texture(&d, Some(index))).unwrap_or_else(|error| panic!("{format:?}: {error}"))
+    }
+
+    /// A draw reads, through a texture, the attachment its own pass renders, as Metal reads a
+    /// render target: after a memory barrier, what an earlier draw of the pass rendered, at the
+    /// fragment's own pixel and at another pixel, the rendering ended and begun again around one
+    /// barrier. The pass's first such draw moves the image to the feedback layout, a barrier of
+    /// its own. A device without the attachment reads refuses the draw,
+    /// `Gap::Draw { AttachmentRead }`, and records nothing for it.
+    #[test]
+    fn every_device_reads_its_attachment_through_a_texture_after_a_memory_barrier() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let own = descriptor(&library, "own_pixel_fragment", PixelFormat::RGBA8Unorm);
+        let first = descriptor(&library, "first_texel_fragment", PixelFormat::RGBA8Unorm);
+        each_device("attachment_reads", |name, _, device| {
+            (device.grant_indices(IndexClass::Texture, 4096, 4))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let reads = device.core().feedback.is_some();
+            let plain = state(name, &device, &plain);
+            let mut buffers = Buffers::new(&device);
+            // Three triangles over the whole target, their colors none, blue and green.
+            let whole = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+            let positions = buffers.of(&device, &floats(&[whole; 3].concat()));
+            let colors: Vec<f32> = [[0.0; 4], BLUE, [0.0, 1.0, 0.0, 0.0]]
+                .iter()
+                .flat_map(|c| [*c; 3].concat())
+                .collect();
+            let colors = buffers.of(&device, &floats(&colors));
+            let queue = device.new_command_queue(4).expect("a queue");
+            for (case, (reading, index)) in
+                [("own pixel", (&own, 4096)), ("first texel", (&first, 4097))]
+            {
+                let reading = state(name, &device, reading);
+                let color = readable(&device, PixelFormat::RGBA8Unorm, 1, index);
+                // The upload that moves the new target to its home layout, in a submission apart.
+                let upload = queue.command_buffer().expect("a command buffer");
+                (upload.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+                run(name, &upload);
+                let counters = device.counters();
+                settled(&device);
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let draw = |result: Result<(), Error>| {
+                    result.unwrap_or_else(|e| panic!("{name} {case}: {e}"))
+                };
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                draw(encoder.set_fragment_texture(Some(&color), 0));
+                draw(encoder.set_render_pipeline_state(&reading));
+                // The pass's first read of its attachment: the clear's black, and none added.
+                let moved = encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0);
+                if !reads {
+                    assert_eq!(
+                        format!("{moved:?}"),
+                        format!(
+                            "{:?}",
+                            Err::<(), _>(Error::Unsupported(Gap::Draw {
+                                kind: DrawKind::AttachmentRead
+                            }))
+                        ),
+                        "{name} {case}: a device without the attachment reads"
+                    );
+                    encoder.end_encoding();
+                    run(name, &command_buffer);
+                    continue;
+                }
+                draw(moved);
+                // Blue over every pixel, then the barrier, then each pixel read plus green.
+                draw(encoder.set_render_pipeline_state(&plain));
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                draw(encoder.memory_barrier());
+                draw(encoder.set_render_pipeline_state(&reading));
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 6, 3, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let after = counters.metrics();
+                assert_eq!(
+                    (after.barriers - before.barriers, after.passes - before.passes),
+                    (5, 1),
+                    "{name} {case}: barriers (the pass's two, the move, the memory barrier's, the segment's end), passes"
+                );
+                let want = texels(|_, _| [0.0, 1.0, 1.0, 1.0]);
+                assert_eq!(
+                    read(&color, 4),
+                    want,
+                    "{name} {case}: every pixel blue read plus green"
+                );
+            }
+            match reads {
+                true => println!("{name}: an attachment read after a memory barrier, at its own pixel and at another"),
+                false => println!("{name}: no attachment reads; the reading draw refused"),
+            }
+        });
+    }
+
+    /// A pass that renders a texture's second level reads its first through a view of both
+    /// levels, which reaches the rendered one: the draw reads through the feedback loop, its
+    /// whole image moved, and samples the level an earlier pass rendered.
+    #[test]
+    fn every_device_samples_a_lower_level_while_its_pass_renders_the_next() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "first_level_fragment", PixelFormat::RGBA8Unorm);
+        each_device("attachment_levels", |name, _, device| {
+            if device.core().feedback.is_none() {
+                println!("{name}: no attachment reads");
+                return;
+            }
+            for (class, first) in [(IndexClass::Texture, 4096), (IndexClass::Sampler, 1)] {
+                (device.grant_indices(class, first, 4))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            let state = (device.new_render_pipeline_state(&d, |_| Ok(vec![CONSTEXPR])))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let chain = readable(&device, PixelFormat::RGBA8Unorm, 2, 4096);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            // The first level cleared to blue by a pass of no draw.
+            let mut first = pass(&chain, None);
+            first.color_attachments[0].clear_color = crate::ClearColor::new(0.0, 0.0, 1.0, 1.0);
+            (command_buffer.render_command_encoder(&first))
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+                .end_encoding();
+            let mut second = pass(&chain, None);
+            second.color_attachments[0].level = 1;
+            let mut encoder = (command_buffer.render_command_encoder(&second))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            draw(encoder.set_fragment_texture(Some(&chain), 0));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let side = SIDE / 2;
+            let mut bytes = vec![0; (side * side * 4) as usize];
+            let region = Region {
+                origin: [0; 3],
+                size: [side, side, 1],
+            };
+            (chain.get_bytes(
+                &mut bytes,
+                u64::from(side * 4),
+                u64::from(side * side * 4),
+                region,
+                1,
+                0,
+            ))
+            .expect("get_bytes");
+            let want: Vec<u8> = (0..side * side).flat_map(|_| rgba8(BLUE)).collect();
+            assert_eq!(
+                bytes, want,
+                "{name}: the second level, each texel the first's blue"
+            );
+            println!("{name}: a lower level sampled while its pass renders the next");
+        });
+    }
+
     /// What Metal refuses is refused, and what a draw does not build is a gap.
     #[test]
     fn every_device_refuses_the_draws_it_does_not_build() {

@@ -47,6 +47,16 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::portability_subset::NAME,
 ];
 
+/// The device extensions of a draw that reads, through a texture, an attachment its own pass
+/// renders (Metal's texture read of a render target): device creation enables both, with their
+/// features, where the device lists both, reports both features and its descriptor limits hold the
+/// sampled-texture array's feedback elements, and neither otherwise. The read is the feedback
+/// loop's (`VK_EXT_attachment_feedback_loop_layout` and its dynamic state).
+pub const ATTACHMENT_READ_EXTENSIONS: &[&CStr] = &[
+    ash::ext::attachment_feedback_loop_layout::NAME,
+    ash::ext::attachment_feedback_loop_dynamic_state::NAME,
+];
+
 /// The translator's name for an extension device creation enables that its shaders may use, or
 /// that its description of the device must enable: the portability subset, where the device lists
 /// it.
@@ -175,6 +185,14 @@ pub struct Features {
     /// enabled only where the device lists it, and then only the portability features the floor asks
     /// of such a device.
     pub portability: vk::PhysicalDevicePortabilitySubsetFeaturesKHR<'static>,
+    /// `VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT`, of
+    /// `VK_EXT_attachment_feedback_loop_layout`: read where the device lists it, and enabled with
+    /// the other attachment-read features alone.
+    pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>,
+    /// `VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT`, of
+    /// `VK_EXT_attachment_feedback_loop_dynamic_state`: likewise.
+    pub feedback_loop_dynamic:
+        vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -210,6 +228,12 @@ macro_rules! feature {
     };
     (@structure portability) => {
         "VkPhysicalDevicePortabilitySubsetFeaturesKHR"
+    };
+    (@structure feedback_loop) => {
+        "VkPhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT"
+    };
+    (@structure feedback_loop_dynamic) => {
+        "VkPhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT"
     };
     (@translator) => {
         None
@@ -315,6 +339,14 @@ pub(crate) const OPTIONAL: &[Feature] = &[
     // control flow where it offers that.
     feature!(maximal_reconvergence.shader_maximal_reconvergence => ShaderMaximalReconvergence),
     feature!(subgroup_uniform_control_flow.shader_subgroup_uniform_control_flow => ShaderSubgroupUniformControlFlow),
+];
+
+/// The features of a draw that reads an attachment of its own pass through a texture
+/// ([`ATTACHMENT_READ_EXTENSIONS`]): enabled together where the device reports both, and neither
+/// otherwise; a device without them refuses such a draw.
+pub(crate) const ATTACHMENT_READS: &[Feature] = &[
+    feature!(feedback_loop.attachment_feedback_loop_layout),
+    feature!(feedback_loop_dynamic.attachment_feedback_loop_dynamic_state),
 ];
 
 /// What the translator's shaders may use of what device creation enables: each enabled feature of
@@ -488,11 +520,15 @@ pub struct Capabilities {
     /// `shaderSubgroupUniformControlFlow`: SIMD groups reconverge where control flow is uniform,
     /// the mode where maximal reconvergence is not offered.
     pub subgroup_uniform_control_flow: bool,
+    /// Every attachment-read feature, with [`ATTACHMENT_READ_EXTENSIONS`]: a draw may read,
+    /// through a texture, an attachment its own pass renders, as Metal reads a render target.
+    pub attachment_reads: bool,
     /// The features device creation enables: every one the floor requires, and each of the
     /// optional ones the device reports.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
-    /// [`OPTIONAL_EXTENSIONS`] the device lists.
+    /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
+    /// [`attachment_reads`](Self::attachment_reads) holds.
     pub extensions: Vec<&'static CStr>,
     /// The first queue family with graphics and compute, whose timestamps the floor checked.
     pub queue_family: u32,
@@ -592,6 +628,9 @@ unsafe fn query(
             listed(ash::khr::shader_subgroup_uniform_control_flow::NAME);
         let robustness2_listed = listed(ash::ext::robustness2::NAME);
         let portability_listed = listed(ash::khr::portability_subset::NAME);
+        let feedback_loop_listed = listed(ash::ext::attachment_feedback_loop_layout::NAME);
+        let feedback_loop_dynamic_listed =
+            listed(ash::ext::attachment_feedback_loop_dynamic_state::NAME);
 
         let Features {
             core,
@@ -602,6 +641,8 @@ unsafe fn query(
             subgroup_uniform_control_flow,
             robustness2,
             portability,
+            feedback_loop,
+            feedback_loop_dynamic,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -619,6 +660,12 @@ unsafe fn query(
         if portability_listed {
             features = features.push_next(&mut *portability);
         }
+        if feedback_loop_listed {
+            features = features.push_next(&mut *feedback_loop);
+        }
+        if feedback_loop_dynamic_listed {
+            features = features.push_next(&mut *feedback_loop_dynamic);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -628,6 +675,8 @@ unsafe fn query(
         subgroup_uniform_control_flow.p_next = std::ptr::null_mut();
         robustness2.p_next = std::ptr::null_mut();
         portability.p_next = std::ptr::null_mut();
+        feedback_loop.p_next = std::ptr::null_mut();
+        feedback_loop_dynamic.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -715,6 +764,16 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     for feature in OPTIONAL {
         *(feature.field)(&mut features) = *(feature.field)(&mut reported);
     }
+    let listed =
+        |extension: &CStr| (device.extensions.iter()).any(|name| name.as_c_str() == extension);
+    let attachment_reads = ATTACHMENT_READ_EXTENSIONS.iter().all(|&name| listed(name))
+        && (ATTACHMENT_READS.iter()).all(|feature| *(feature.field)(&mut reported) == vk::TRUE)
+        && feedback_room(device);
+    if attachment_reads {
+        for feature in ATTACHMENT_READS {
+            *(feature.field)(&mut features) = vk::TRUE;
+        }
+    }
     Ok(Capabilities {
         float16: features.vulkan12.shader_float16 == vk::TRUE,
         storage_read_without_format: features.core.shader_storage_image_read_without_format
@@ -728,15 +787,20 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             .subgroup_uniform_control_flow
             .shader_subgroup_uniform_control_flow
             == vk::TRUE,
+        attachment_reads,
         features,
         extensions: DEVICE_EXTENSIONS
             .iter()
-            .chain(OPTIONAL_EXTENSIONS.iter().filter(|&&extension| {
-                device
-                    .extensions
+            .chain(
+                OPTIONAL_EXTENSIONS
                     .iter()
-                    .any(|name| name.as_c_str() == extension)
-            }))
+                    .filter(|&&extension| listed(extension)),
+            )
+            .chain(
+                ATTACHMENT_READ_EXTENSIONS
+                    .iter()
+                    .filter(|_| attachment_reads),
+            )
             .copied()
             .collect(),
         queue_family,
@@ -823,6 +887,21 @@ pub(crate) fn flag_names(flags: vk::MemoryPropertyFlags) -> String {
         .map(|(_, name)| *name)
         .collect::<Vec<_>>()
         .join(" | ")
+}
+
+/// Whether the device's descriptor limits hold the sampled-texture array's feedback elements
+/// (`arrays::sampled_images`) beside the floor's arrays: what the attachment reads take beyond
+/// [`limits`].
+fn feedback_room(device: &Queried) -> bool {
+    let limits = &device.limits;
+    let descriptors = &device.vulkan12;
+    let sampled = 2 * SAMPLED_IMAGES;
+    descriptors.max_per_stage_descriptor_update_after_bind_sampled_images >= sampled
+        && descriptors.max_descriptor_set_update_after_bind_sampled_images >= sampled
+        && descriptors.max_per_stage_update_after_bind_resources
+            >= sampled + STORAGE_IMAGES + limits.max_color_attachments
+        && descriptors.max_update_after_bind_descriptors_in_all_pools
+            >= sampled + STORAGE_IMAGES + SAMPLER_ARRAYS * SAMPLERS
 }
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime

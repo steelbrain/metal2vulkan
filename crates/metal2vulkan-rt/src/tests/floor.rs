@@ -4,9 +4,9 @@
 
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
-    Queried, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, MEMORY_FLAG_NAMES, OPTIONAL,
-    OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY, PRIVATE_MEMORY, REQUIRED,
-    RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
+    Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS,
+    MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY,
+    PRIVATE_MEMORY, REQUIRED, RING_MEMORY, SHARED_MEMORY, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -1029,6 +1029,11 @@ fn the_readme_states_the_floor() {
                 .iter()
                 .map(|name| (name, "device, where listed")),
         )
+        .chain(
+            ATTACHMENT_READ_EXTENSIONS
+                .iter()
+                .map(|name| (name, "device, with the attachment reads")),
+        )
         .map(|(name, place)| (name.to_string_lossy().into_owned(), place.to_string()))
         .collect();
     assert_eq!(stated, code, "the README's extensions");
@@ -1039,6 +1044,10 @@ fn the_readme_states_the_floor() {
         (
             ["Portability feature", "Structure", "Used for"],
             PORTABILITY,
+        ),
+        (
+            ["Attachment-read feature", "Structure", "Used for"],
+            ATTACHMENT_READS,
         ),
     ] {
         let stated: BTreeSet<(String, String)> = table(&section, &header)
@@ -1130,6 +1139,8 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut subgroup_uniform_control_flow,
             mut robustness2,
             mut portability,
+            mut feedback_loop,
+            mut feedback_loop_dynamic,
         } = capabilities.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .features(core)
@@ -1146,6 +1157,11 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(ash::khr::portability_subset::NAME) {
             features = features.push_next(&mut portability);
+        }
+        if capabilities.attachment_reads {
+            features = features
+                .push_next(&mut feedback_loop)
+                .push_next(&mut feedback_loop_dynamic);
         }
         let extensions: Vec<*const c_char> = capabilities
             .extensions

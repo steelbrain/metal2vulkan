@@ -505,7 +505,9 @@ pub struct Metrics {
     /// an encoder that wrote or a memory barrier call, recorded before the next command, two
     /// around each blit copy, fill and synchronize copy, and two around each render pass, the
     /// first of each pair paying what is owed, with one inside a render pass at a memory barrier
-    /// after a draw that wrote memory. A draw takes none.
+    /// after a draw that wrote memory, one at a draw that moves an attachment's image to the
+    /// feedback layout, and one at a draw that reads an attachment after a memory barrier owed to
+    /// it. Any other draw takes none.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
     /// copies between a texture over a buffer and its image of its own

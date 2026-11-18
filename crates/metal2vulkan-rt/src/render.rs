@@ -729,7 +729,13 @@ impl RenderCompiled {
             .alpha_to_coverage_enable(fixed.alpha_to_coverage);
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default();
         let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&fixed.blends);
-        let dynamic_states = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&DYNAMIC);
+        // Where the device reads attachments through textures, every pipeline takes the feedback
+        // loop's enable as dynamic state too: a state is made before any draw binds its textures.
+        let feedback = core.feedback.is_some();
+        let states: Vec<vk::DynamicState> = (DYNAMIC.iter().copied())
+            .chain(feedback.then_some(vk::DynamicState::ATTACHMENT_FEEDBACK_LOOP_ENABLE_EXT))
+            .collect();
+        let dynamic_states = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&states);
         let mut rendering = vk::PipelineRenderingCreateInfo::default()
             .color_attachment_formats(&fixed.colors)
             .stencil_attachment_format(fixed.stencil);

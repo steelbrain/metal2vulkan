@@ -217,7 +217,8 @@ pub(crate) struct Target {
     pub(crate) texture: Texture,
     pub(crate) attachment: Attachment,
     /// The layout the pass renders it in: its home, or the attachment layout for an image whose
-    /// home is shader-read-only, which the pass moves there and back.
+    /// home is shader-read-only, which the pass moves there and back; the feedback layout once a
+    /// draw of the pass read it through a texture (`crate::render_encoder`).
     pub(crate) layout: vk::ImageLayout,
     load: vk::AttachmentLoadOp,
     store: vk::AttachmentStoreOp,
@@ -252,24 +253,41 @@ impl Target {
         new: vk::ImageLayout,
     ) -> vk::ImageMemoryBarrier2<'static> {
         let a = &self.attachment;
-        vk::ImageMemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
-            .old_layout(old)
-            .new_layout(new)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(a.image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: a.aspects,
-                base_mip_level: a.level,
-                level_count: 1,
-                base_array_layer: a.layer,
-                layer_count: 1,
-            })
+        layout_barrier(a.image, self.range(), old, new)
     }
+
+    /// Its level and layer, every aspect.
+    pub(crate) fn range(&self) -> vk::ImageSubresourceRange {
+        let a = &self.attachment;
+        vk::ImageSubresourceRange {
+            aspect_mask: a.aspects,
+            base_mip_level: a.level,
+            level_count: 1,
+            base_array_layer: a.layer,
+            layer_count: 1,
+        }
+    }
+}
+
+/// The barrier that moves `range` of `image` from `old` to `new`, after every earlier command and
+/// before every later one.
+pub(crate) fn layout_barrier(
+    image: vk::Image,
+    range: vk::ImageSubresourceRange,
+    old: vk::ImageLayout,
+    new: vk::ImageLayout,
+) -> vk::ImageMemoryBarrier2<'static> {
+    vk::ImageMemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
+        .old_layout(old)
+        .new_layout(new)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(image)
+        .subresource_range(range)
 }
 
 /// A pass descriptor checked against its textures: its attachments, by index for the colors,

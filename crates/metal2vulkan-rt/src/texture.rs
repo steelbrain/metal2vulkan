@@ -285,6 +285,12 @@ pub(crate) struct Image {
     storage: Option<vk::ImageView>,
     /// The layout the image is in outside a copy, which its elements name.
     home: vk::ImageLayout,
+    /// The image has the feedback usage (a shader-read colour render target of no storage view,
+    /// its home shader-read-only, on a device that reads attachments so): each texture over it
+    /// has a second element of the sampled-texture array, at its index plus
+    /// [`SAMPLED_IMAGES`](crate::floor::SAMPLED_IMAGES), naming the feedback layout, which a pass
+    /// moves the whole image to for a draw that reads an attachment of the pass through it.
+    feedback: bool,
     /// Every aspect of the image's format, which a change of layout names.
     aspects: vk::ImageAspectFlags,
     /// The layout the image is made in: undefined, or preinitialized for a texture over a buffer
@@ -418,8 +424,14 @@ impl Drop for TextureInner {
             // work that reads them is pending: each command buffer that used the texture held it
             // until it retired.
             unsafe {
-                core.arrays
-                    .write_texture(&core.device, class, index, None, None)
+                core.arrays.write_texture(
+                    &core.device,
+                    class,
+                    index,
+                    None,
+                    None,
+                    self.image.feedback,
+                )
             };
             lock(&core.arrays.grants).vacate(class, index);
             core.counters.fall(Gauge::DescriptorSlots);
@@ -770,6 +782,7 @@ impl Device {
             sampled,
             storage,
             home,
+            feedback: plan.feedback && home == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             aspects: plan.aspects,
             first,
             homed: AtomicBool::new(false),
@@ -806,6 +819,7 @@ impl Device {
                     index,
                     sampled.map(|view| (view, home)),
                     storage,
+                    inner.image.feedback,
                 )
             };
         }
@@ -843,10 +857,20 @@ struct Plan {
     /// Whether the texture has a storage view.
     storage: bool,
     home: vk::ImageLayout,
+    /// The image has the feedback usage, and each sampled view a second element ([`Image`]).
+    feedback: bool,
     aspects: vk::ImageAspectFlags,
     unit: Option<CopyUnit>,
     word: u32,
     emulation: FormatEmulation,
+}
+
+impl Plan {
+    /// The usage of a linear image of the plan, over a buffer in place: without the feedback
+    /// usage, as its home is general and no pass moves it to the feedback layout.
+    fn linear_usage(&self) -> vk::ImageUsageFlags {
+        self.usage & !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT
+    }
 }
 
 /// The slices of each level of a texture of descriptor `d`: a cube's six faces each a slice, and
@@ -993,7 +1017,7 @@ fn linear_extent(core: &Core, shape: &Shape, plan: &Plan) -> Option<vk::Extent3D
         .format(plan.format)
         .ty(shape.image_type)
         .tiling(vk::ImageTiling::LINEAR)
-        .usage(plan.usage)
+        .usage(plan.linear_usage())
         .flags(shape.flags);
     core.image_format_properties(&linear)
         .map(|properties| properties.max_extent)
@@ -1025,6 +1049,7 @@ fn linear_layout(
     }
     let info = image_info(d, shape, plan)
         .tiling(vk::ImageTiling::LINEAR)
+        .usage(plan.linear_usage())
         .initial_layout(vk::ImageLayout::PREINITIALIZED);
     let device = &core.device;
     // SAFETY: the device is live, and makes a linear image of the format, usage and extent.
@@ -1175,6 +1200,16 @@ fn plan(
             false => vk::ImageUsageFlags::COLOR_ATTACHMENT,
         };
     }
+    // A draw may read an attachment of its own pass through such a texture, in the feedback
+    // layout (`crate::render_encoder`), where the device reads attachments so.
+    let mut feedback = core.feedback.is_some()
+        && read
+        && render
+        && !storage
+        && aspects == vk::ImageAspectFlags::COLOR;
+    if feedback {
+        image_usage |= vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+    }
     let home = match (storage, read, render) {
         (true, _, _) => vk::ImageLayout::GENERAL,
         (false, true, _) => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -1188,7 +1223,15 @@ fn plan(
         .tiling(vk::ImageTiling::OPTIMAL)
         .usage(image_usage)
         .flags(shape.flags);
-    let properties = core.image_format_properties(&info).ok_or_else(gap)?;
+    let mut properties = core.image_format_properties(&info);
+    // A format the device makes without the feedback usage alone is made so, and its draws read
+    // no attachment of their own pass through it.
+    if properties.is_none() && feedback {
+        feedback = false;
+        image_usage &= !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
+        properties = core.image_format_properties(&info.usage(image_usage));
+    }
+    let properties = properties.ok_or_else(gap)?;
     let max = properties.max_extent;
     let max_extent = [max.width, max.height, max.depth];
     if shape.extent.iter().zip(max_extent).any(|(&e, m)| e > m)
@@ -1230,6 +1273,7 @@ fn plan(
         sampled,
         storage,
         home,
+        feedback,
         aspects,
         unit,
         word,
@@ -1475,6 +1519,7 @@ impl Made {
         let info = match bind {
             Bind::InPlace { .. } => image_info(d, shape, plan)
                 .tiling(vk::ImageTiling::LINEAR)
+                .usage(plan.linear_usage())
                 .initial_layout(vk::ImageLayout::PREINITIALIZED),
             Bind::Pooled | Bind::Heap { .. } => image_info(d, shape, plan),
         };
@@ -2244,6 +2289,7 @@ impl Texture {
                     index,
                     sampled.map(|view| (view, inner.image.home)),
                     storage,
+                    inner.image.feedback,
                 )
             };
         }
@@ -2260,6 +2306,49 @@ impl Texture {
     /// Its image.
     pub(crate) fn image(&self) -> vk::Image {
         self.inner.image.image
+    }
+
+    /// Whether it reaches `level` and `layer` of its image: a view reaches its own levels and
+    /// slices alone.
+    pub(crate) fn reaches(&self, level: u32, layer: u32) -> bool {
+        let d = &self.inner.descriptor;
+        let [first_level, first_layer] = self.inner.base();
+        (first_level..first_level + d.mipmap_level_count).contains(&level)
+            && (first_layer..first_layer + slices(d)).contains(&layer)
+    }
+
+    /// Whether a draw may read an attachment of its own pass through it, its image in the
+    /// feedback layout ([`Image`]'s `feedback`).
+    pub(crate) fn feedback(&self) -> bool {
+        self.inner.image.feedback
+    }
+
+    /// Its resource id while its image is in the feedback layout: its second element's, at its
+    /// index plus [`SAMPLED_IMAGES`](crate::floor::SAMPLED_IMAGES), with its own word. Nil for a
+    /// texture no shader reaches.
+    pub(crate) fn feedback_resource_id(&self) -> ResourceId {
+        match self.inner.index {
+            Some((_, index)) => ResourceId {
+                index: index + crate::floor::SAMPLED_IMAGES,
+                word: self.inner.word,
+            },
+            None => ResourceId::default(),
+        }
+    }
+
+    /// Every level and layer of its image, every aspect.
+    pub(crate) fn whole(&self) -> vk::ImageSubresourceRange {
+        let root = match &self.inner.view {
+            Some(view) => &view.parent.inner.descriptor,
+            None => &self.inner.descriptor,
+        };
+        vk::ImageSubresourceRange {
+            aspect_mask: self.inner.image.aspects,
+            base_mip_level: 0,
+            level_count: root.mipmap_level_count,
+            base_array_layer: 0,
+            layer_count: slices(root),
+        }
     }
 
     /// Its image's format.

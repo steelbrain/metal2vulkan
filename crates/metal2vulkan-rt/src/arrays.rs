@@ -18,6 +18,12 @@
 //! comparison (`MTLCompareFunctionNever`) does. Vulkan has no null sampler. The device writes
 //! every element once at creation ([`Arrays::new`]).
 //!
+//! Where the device reads attachments through textures (`floor::Capabilities::attachment_reads`),
+//! the sampled-texture array is twice as long: element `i + 65,536` is texture `i`'s in the
+//! attachment feedback layout, written with element `i` for a texture whose image a pass may move
+//! there (`crate::render_encoder`), and a null descriptor otherwise. No index of a grant reaches
+//! it; a draw pushes it in place of the texture's own while its image is in that layout.
+//!
 //! The consumer names each range of indices it takes ([`Device::grant_indices`]), so resource IDs
 //! are chosen on the guest's side and reproduce in replay. Three classes, disjoint: storage-capable
 //! textures take 1 to 4,095, one index valid in both texture arrays; other textures 4,096 to
@@ -283,16 +289,21 @@ pub(crate) struct Arrays {
 }
 
 impl Arrays {
-    /// Makes set 1 and writes every element its default.
+    /// Makes set 1 and writes every element its default; with `feedback`, the sampled-texture
+    /// array holds the feedback elements too.
     ///
     /// # Safety
     ///
     /// `device` is live and was made with the floor's features, `nullDescriptor` and the
     /// update-after-bind features among them.
-    pub(crate) unsafe fn new(device: &ash::Device, counters: &Counters) -> Result<Arrays, Error> {
+    pub(crate) unsafe fn new(
+        device: &ash::Device,
+        counters: &Counters,
+        feedback: bool,
+    ) -> Result<Arrays, Error> {
         let mut made = Made::default();
         // SAFETY: the caller's contract; what was made is destroyed where a later step fails.
-        let arrays = unsafe { made.make(device, counters) };
+        let arrays = unsafe { made.make(device, counters, feedback) };
         if arrays.is_err() {
             // SAFETY: nothing else holds what was made.
             unsafe { made.destroy(device, counters) };
@@ -312,12 +323,15 @@ impl Arrays {
 
     /// Writes a texture's elements at `index` of `class`: the sampled-texture array's with
     /// `sampled` and its layout, and for a storage-capable texture the storage-texture array's
-    /// with `storage`; a null descriptor where a view is `None`.
+    /// with `storage`; a null descriptor where a view is `None`. With `feedback`, also the
+    /// sampled-texture array's element at `index` plus [`SAMPLED_IMAGES`], with the sampled view
+    /// in the attachment feedback layout.
     ///
     /// # Safety
     ///
     /// The caller owns the elements (the index is occupied for it, or is being vacated by it), and
-    /// each view is live and of the device, of an image in that layout whenever work uses it.
+    /// each view is live and of the device, of an image in that layout whenever work uses it;
+    /// `feedback` only where the set was made with the feedback elements.
     pub(crate) unsafe fn write_texture(
         &self,
         device: &ash::Device,
@@ -325,17 +339,32 @@ impl Arrays {
         index: u32,
         sampled: Option<(vk::ImageView, vk::ImageLayout)>,
         storage: Option<vk::ImageView>,
+        feedback: bool,
     ) {
         let (view, layout) = sampled.unwrap_or((
             vk::ImageView::null(),
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         ));
+        let looped = [vk::DescriptorImageInfo::default()
+            .image_view(view)
+            .image_layout(vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)];
         let sampled = [vk::DescriptorImageInfo::default()
             .image_view(view)
             .image_layout(layout)];
         let storage = [vk::DescriptorImageInfo::default()
             .image_view(storage.unwrap_or_default())
             .image_layout(vk::ImageLayout::GENERAL)];
+        if feedback {
+            let write = write(
+                self.set,
+                SAMPLED_BINDING,
+                vk::DescriptorType::SAMPLED_IMAGE,
+                &looped,
+            )
+            .dst_array_element(index + SAMPLED_IMAGES);
+            // SAFETY: as below; the element is the texture's alone.
+            unsafe { device.update_descriptor_sets(&[write], &[]) };
+        }
         let writes = [
             write(
                 self.set,
@@ -434,7 +463,13 @@ impl Made {
     /// # Safety
     ///
     /// As [`Arrays::new`].
-    unsafe fn make(&mut self, device: &ash::Device, counters: &Counters) -> Result<Arrays, Error> {
+    unsafe fn make(
+        &mut self,
+        device: &ash::Device,
+        counters: &Counters,
+        feedback: bool,
+    ) -> Result<Arrays, Error> {
+        let sampled = sampled_images(feedback);
         let empty = vk::DescriptorSetLayoutCreateInfo::default();
         // SAFETY: the device is live.
         unsafe { supported(device, &empty, 0) }?;
@@ -445,7 +480,9 @@ impl Made {
         // SAFETY: the device is live, with the update-after-bind features of each binding's type
         // (the floor's).
         let layout = unsafe {
-            with_arrays_layout(BINDINGS.map(|(_, _, count)| count), |info| {
+            let mut counts = BINDINGS.map(|(_, _, count)| count);
+            counts[SAMPLED_BINDING as usize] = sampled;
+            with_arrays_layout(counts, |info| {
                 supported(device, info, 1)?;
                 device
                     .create_descriptor_set_layout(info, None)
@@ -456,7 +493,7 @@ impl Made {
         let sizes = [
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLED_IMAGE,
-                descriptor_count: SAMPLED_IMAGES,
+                descriptor_count: sampled,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_IMAGE,
@@ -503,7 +540,7 @@ impl Made {
         let compare = default(true)?;
         self.compare = Some(compare);
         // SAFETY: the set is the device's and no command buffer uses it yet.
-        unsafe { fill(device, set, plain, compare) };
+        unsafe { fill(device, set, sampled, plain, compare) };
         Ok(Arrays {
             empty,
             layout,
@@ -583,23 +620,34 @@ pub(crate) unsafe fn supported(
     }
 }
 
-/// Writes every element of `set` its default: a null descriptor in each texture array, `plain`
-/// in the plain and integer-texture sampler arrays and `compare` in the comparison array.
+/// The elements of the sampled-texture array: [`SAMPLED_IMAGES`], twice that with the feedback
+/// elements.
+pub(crate) fn sampled_images(feedback: bool) -> u32 {
+    match feedback {
+        true => 2 * SAMPLED_IMAGES,
+        false => SAMPLED_IMAGES,
+    }
+}
+
+/// Writes every element of `set` its default: a null descriptor in each texture array, the
+/// sampled-texture array's `sampled` elements, `plain` in the plain and integer-texture sampler
+/// arrays and `compare` in the comparison array.
 ///
 /// # Safety
 ///
-/// `set` is set 1 of `device`, `nullDescriptor` is enabled, and no other thread writes an element
-/// of it meanwhile.
+/// `set` is set 1 of `device`, of `sampled` sampled-texture elements, `nullDescriptor` is enabled,
+/// and no other thread writes an element of it meanwhile.
 unsafe fn fill(
     device: &ash::Device,
     set: vk::DescriptorSet,
+    sampled: u32,
     plain: vk::Sampler,
     compare: vk::Sampler,
 ) {
     let sampled = vec![
         vk::DescriptorImageInfo::default()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-        SAMPLED_IMAGES as usize
+        sampled as usize
     ];
     let storage = vec![
         vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL);

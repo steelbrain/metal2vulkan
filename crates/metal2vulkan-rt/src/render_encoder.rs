@@ -16,6 +16,24 @@
 //! buffer's device copy, `crate::over`), recording the copy between. A memory barrier after no
 //! such draw records nothing: the pass's first barrier ordered everything before it.
 //!
+//! A draw may read an attachment of its own pass through a texture, as Metal reads a render target
+//! (`floor::Capabilities::attachment_reads`): through the attachment feedback loop. Its image is a
+//! shader-read colour render target with no storage view, whose home is shader-read-only. At the
+//! pass's first draw that reads it, the rendering ends, one barrier moves the whole image to the
+//! feedback layout (its rendered level and layer from the attachment layout, the rest from home),
+//! and the rendering begins again with the attachment in that layout; the pass's second barrier
+//! moves the whole image home. While it is there, every draw of the pass reads the image's
+//! textures through their elements in that layout (`crate::arrays`). Every pipeline takes the
+//! feedback loop's enable as dynamic state, which the encoder sets at its first draw and where it
+//! changes: colour for a draw that reads an attachment, none otherwise.
+//!
+//! What such a draw reads that an earlier draw of the pass rendered, Metal orders by a memory
+//! barrier between the two. A memory barrier after draws that wrote no memory, where the pass
+//! moved an image, is owed to the next draw that reads an attachment: the rendering ends, one
+//! global barrier is recorded and it begins again, which orders every pixel, the draw's own and
+//! any other it reads. A move orders everything before it, so a barrier before the pass's first
+//! move records nothing.
+//!
 //! A draw sets Metal's state as dynamic state: every state at the encoder's first draw, Metal's
 //! defaults where the encoder set none, and after that what changed. A viewport is Vulkan's with
 //! its height negated (from `y + height`), so framebuffer rows, the fragment position and
@@ -32,7 +50,7 @@ use crate::error::{DrawKind, Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
 use crate::over;
-use crate::pass::{Pass, RenderPassDescriptor};
+use crate::pass::{layout_barrier, Pass, RenderPassDescriptor};
 use crate::pipeline::{FieldValue, PUSH_STAGES};
 use crate::record::{memory_barrier, Reach};
 use crate::render::{RenderPipelineState, FRAGMENT, VERTEX};
@@ -89,8 +107,9 @@ pub struct IndexBuffer<'a> {
 }
 
 /// The dynamic state a draw records before it: the viewport and scissor, the cull mode, the
-/// front face, the depth and stencil tests, the stencil references, the blend constants, and the
-/// depth bias the encoder does not set.
+/// front face, the depth and stencil tests, the stencil references, the blend constants, the
+/// depth bias the encoder does not set, and the feedback loop's enable where the device reads
+/// attachments.
 const VIEWPORT: u32 = 1;
 const CULL: u32 = 2;
 const FRONT: u32 = 4;
@@ -98,7 +117,27 @@ const TESTS: u32 = 8;
 const REFERENCE: u32 = 16;
 const BLEND: u32 = 32;
 const BIAS: u32 = 64;
-const ALL: u32 = 127;
+const LOOP: u32 = 128;
+const ALL: u32 = 255;
+
+/// An image the pass moved whole to the feedback layout, which its second barrier moves home.
+struct Moved {
+    /// Its textures' hazard id.
+    hazard: u32,
+    image: vk::Image,
+    /// Every level and layer of it.
+    whole: vk::ImageSubresourceRange,
+    home: vk::ImageLayout,
+}
+
+/// An image a draw moves to the feedback layout: its attachment's level and layer from the layout
+/// the pass renders it in, the rest of it from home.
+struct Move {
+    moved: Moved,
+    /// The attachment's level and layer.
+    rendered: vk::ImageSubresourceRange,
+    from: vk::ImageLayout,
+}
 
 /// What a buffer slot holds.
 #[derive(Clone, Default)]
@@ -217,6 +256,15 @@ pub struct RenderCommandEncoder {
     topology: Option<(vk::PrimitiveTopology, bool)>,
     /// A draw since the rendering began wrote memory: a memory barrier ends the rendering.
     wrote: bool,
+    /// A draw since the encoder last ordered its draws rendered.
+    drew: bool,
+    /// A memory barrier after draws that wrote no memory, which the next draw that reads an
+    /// attachment pays.
+    owed: bool,
+    /// The images the pass moved to the feedback layout.
+    moved: Vec<Moved>,
+    /// The feedback loop's aspects the last draw set: colour for a draw that reads an attachment.
+    loop_aspects: vk::ImageAspectFlags,
     /// The fixed-function vertex buffers of the draw being recorded: binding, buffer and offset.
     vertex_buffers: Vec<(u32, vk::Buffer, u64)>,
     /// The push bytes of the draw being recorded.
@@ -270,6 +318,10 @@ impl CommandBuffer {
                     dirty: ALL,
                     topology: None,
                     wrote: false,
+                    drew: false,
+                    owed: false,
+                    moved: Vec::new(),
+                    loop_aspects: vk::ImageAspectFlags::NONE,
                     vertex_buffers: Vec::new(),
                     push: Vec::new(),
                     pass,
@@ -669,17 +721,70 @@ impl RenderCommandEncoder {
     /// `memoryBarrierWithScope:afterStages:beforeStages:` and
     /// `memoryBarrierWithResources:count:afterStages:beforeStages:`: after a draw of the encoder
     /// that wrote memory, the rendering ends, one global memory barrier is recorded, and the
-    /// rendering begins again, loading what it stored; after none, nothing is recorded, as the
-    /// pass's first barrier ordered everything before it.
+    /// rendering begins again, loading what it stored. After draws that only rendered, where the
+    /// pass moved an image to the feedback layout, the barrier is owed to the next draw that reads
+    /// an attachment through a texture, which records it first (the module's documentation);
+    /// otherwise nothing is recorded, as the pass's first barrier ordered everything before it and
+    /// no draw reads an attachment before a move that orders everything before it.
     ///
     /// Err: [`Error::Vulkan`] where the command buffer cannot record.
     pub fn memory_barrier(&mut self) -> Result<(), Error> {
-        if !self.wrote {
-            return Ok(());
+        if self.wrote {
+            return self.ordered();
         }
+        self.owed |= self.drew && !self.moved.is_empty();
+        Ok(())
+    }
+
+    /// Ends the rendering, records one global memory barrier and begins the rendering again: the
+    /// encoder's draws so far are ordered before its later ones.
+    fn ordered(&mut self) -> Result<(), Error> {
+        (self.drew, self.owed) = (false, false);
         self.interrupt(|building| {
             let command = building.ordered_command()?;
             building.barrier(command, Reach::Commands);
+            Ok(())
+        })
+    }
+
+    /// Moves each image of `moves` whole to the feedback layout: the rendering ends, one barrier
+    /// orders every earlier command before every later one and moves them, and the rendering
+    /// begins again with their attachments in that layout.
+    fn feedback_moves(&mut self, moves: Vec<Move>) -> Result<(), Error> {
+        let looped = vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+        let mut images = Vec::new();
+        for m in &moves {
+            let Moved {
+                image, whole, home, ..
+            } = m.moved;
+            images.push(layout_barrier(image, m.rendered, m.from, looped));
+            for range in around(whole, m.rendered) {
+                images.push(layout_barrier(image, range, home, looped));
+            }
+        }
+        for t in self.pass.colors.iter_mut().flatten() {
+            if (moves.iter()).any(|m| m.moved.hazard == t.texture.hazard_id()) {
+                t.layout = looped;
+            }
+        }
+        self.moved.extend(moves.into_iter().map(|m| m.moved));
+        (self.drew, self.owed) = (false, false);
+        self.interrupt(|building| {
+            let command = building.ordered_command()?;
+            let core = Arc::clone(building.device.core());
+            let memory = [memory_barrier(Reach::Commands)];
+            // SAFETY: the command buffer records outside any rendering; each range is in the
+            // layout it moves from: the attachment's in the layout the pass rendered it in, the
+            // rest of the image at home.
+            unsafe {
+                core.device.cmd_pipeline_barrier2(
+                    command,
+                    &vk::DependencyInfo::default()
+                        .memory_barriers(&memory)
+                        .image_memory_barriers(&images),
+                )
+            };
+            core.counters.count(Metric::Barriers);
             Ok(())
         })
     }
@@ -851,16 +956,51 @@ impl RenderCommandEncoder {
             };
             self.vertex_buffers.push((binding, buffer, offset));
         }
-        // A texture the pass renders into, read or written as the pass renders it, is a feedback
-        // loop the runtime does not build.
+        // A texture whose image the pass renders. One that reaches the attachment's level and
+        // layer reads the attachment: from the fragment function, never written, of an image of
+        // the feedback usage that one attachment of the pass renders. One that reaches neither
+        // reads its image at home, or, once the pass moved the image, in the feedback layout,
+        // never written. The pass's first draw that reads an attachment moves its image.
         let tables = &self.tables;
-        let rendered = (draws.textures.iter()).any(|&(table, slot, _)| {
-            tables[table].texture(slot).is_some_and(|texture| {
-                (self.pass.targets()).any(|t| t.texture.hazard_id() == texture.hazard_id())
-            })
-        });
-        if rendered {
-            return gap(DrawKind::AttachmentRead);
+        let mut reads = false;
+        let mut moves: Vec<Move> = Vec::new();
+        for &(table, slot, access) in &draws.textures {
+            let Some(texture) = tables[table].texture(slot) else {
+                continue;
+            };
+            let hazard = texture.hazard_id();
+            let mut rendered = (self.pass.targets()).filter(|t| t.texture.hazard_id() == hazard);
+            let Some(target) = rendered.next() else {
+                continue;
+            };
+            let a = &target.attachment;
+            let reaches = texture.reaches(a.level, a.layer);
+            let moved = (self.moved.iter()).any(|m| m.hazard == hazard)
+                || (moves.iter()).any(|m| m.moved.hazard == hazard);
+            if !reaches && !moved {
+                continue;
+            }
+            let readable = core.feedback.is_some()
+                && texture.feedback()
+                && !access.writes()
+                && (table == FRAGMENT || !reaches)
+                && rendered.next().is_none();
+            if !readable {
+                return gap(DrawKind::AttachmentRead);
+            }
+            reads |= reaches;
+            if !moved {
+                moves.push(Move {
+                    moved: Moved {
+                        hazard,
+                        image: a.image,
+                        whole: texture.whole(),
+                        home: a.home,
+                    },
+                    rendered: target.range(),
+                    from: target.layout,
+                });
+            }
         }
         for &(_, table, value) in &draws.fields {
             if let FieldValue::BufferAddress { slot, mask } = value {
@@ -879,6 +1019,24 @@ impl RenderCommandEncoder {
             return Ok(());
         }
         let pipeline = compiled.pipeline(topology)?;
+        // The attachments the draw reads: their images moved, which orders everything before, or
+        // the barrier owed paid.
+        if !moves.is_empty() {
+            self.feedback_moves(moves)?;
+        } else if reads && self.owed {
+            self.ordered()?;
+        }
+        if core.feedback.is_some() {
+            let aspects = match reads {
+                true => vk::ImageAspectFlags::COLOR,
+                false => vk::ImageAspectFlags::NONE,
+            };
+            if aspects != self.loop_aspects {
+                self.loop_aspects = aspects;
+                self.dirty |= LOOP;
+            }
+        }
+        let tables = &self.tables;
         // The copies the draw needs first: its textures over a buffer in an image of their own
         // (`crate::over`), and the textures over a Managed buffer's device copy it reaches
         // (`crate::over::ManagedOvers`), each recorded between the rendering's end and its new
@@ -951,6 +1109,7 @@ impl RenderCommandEncoder {
             building.wrote_host();
         }
         self.wrote |= draws.writes_memory;
+        self.drew = true;
         let (bind, first) = building.bind_graphics(pipeline);
         self.fill_push(&state);
         let device = &core.device;
@@ -974,7 +1133,7 @@ impl RenderCommandEncoder {
             if bind {
                 device.cmd_bind_pipeline(command, vk::PipelineBindPoint::GRAPHICS, pipeline);
             }
-            self.record_state(device, topology, restart);
+            self.record_state(device, core.feedback.as_ref(), topology, restart);
             for &(binding, buffer, offset) in &self.vertex_buffers {
                 device.cmd_bind_vertex_buffers(command, binding, &[buffer], &[offset]);
             }
@@ -1035,8 +1194,15 @@ impl RenderCommandEncoder {
                     let address = tables.address(slot);
                     push[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }
+                // A texture whose image the pass moved to the feedback layout reads through its
+                // element in that layout.
                 FieldValue::TextureId(slot) => {
-                    let id = (tables.texture(slot)).map_or(0, |t| t.gpu_resource_id().to_bits());
+                    let id = (tables.texture(slot)).map_or(0, |t| {
+                        match (self.moved.iter()).any(|m| m.hazard == t.hazard_id()) {
+                            true => t.feedback_resource_id().to_bits(),
+                            false => t.gpu_resource_id().to_bits(),
+                        }
+                    });
                     push[at..at + 8].copy_from_slice(&id.to_le_bytes());
                 }
                 FieldValue::SamplerId(slot) => {
@@ -1070,6 +1236,7 @@ impl RenderCommandEncoder {
     unsafe fn record_state(
         &mut self,
         device: &ash::Device,
+        feedback: Option<&ash::ext::attachment_feedback_loop_dynamic_state::Device>,
         topology: vk::PrimitiveTopology,
         restart: bool,
     ) {
@@ -1129,6 +1296,13 @@ impl RenderCommandEncoder {
             if dirty & BIAS != 0 {
                 device.cmd_set_depth_bias(command, 0.0, 0.0, 0.0);
                 device.cmd_set_depth_bias_enable(command, false);
+            }
+            // Every pipeline takes the enable as dynamic state where the device reads attachments.
+            if let (true, Some(feedback)) = (dirty & LOOP != 0, feedback) {
+                (feedback.fp().cmd_set_attachment_feedback_loop_enable_ext)(
+                    command,
+                    self.loop_aspects,
+                );
             }
             if self.topology != Some((topology, restart)) {
                 device.cmd_set_primitive_topology(command, topology);
@@ -1193,9 +1367,16 @@ impl RenderCommandEncoder {
         };
         let core = Arc::clone(building.device.core());
         let later = [memory_barrier(Reach::Commands)];
+        let looped = vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+        let moved = &self.moved;
         let back: Vec<vk::ImageMemoryBarrier2> = (self.pass.targets())
-            .filter(|t| t.moves())
+            .filter(|t| t.moves() && !moved.iter().any(|m| m.hazard == t.texture.hazard_id()))
             .map(|t| t.barrier(t.layout, t.attachment.home))
+            .chain(
+                moved
+                    .iter()
+                    .map(|m| layout_barrier(m.image, m.whole, looped, m.home)),
+            )
             .collect();
         let device = &core.device;
         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
@@ -1219,6 +1400,39 @@ impl Drop for RenderCommandEncoder {
     fn drop(&mut self) {
         self.end();
     }
+}
+
+/// `whole` but `rendered`, one level and layer of it: at most four ranges.
+fn around(
+    whole: vk::ImageSubresourceRange,
+    rendered: vk::ImageSubresourceRange,
+) -> Vec<vk::ImageSubresourceRange> {
+    let (level, layer) = (rendered.base_mip_level, rendered.base_array_layer);
+    let levels = |first: u32, end: u32| {
+        (first < end).then_some(vk::ImageSubresourceRange {
+            base_mip_level: first,
+            level_count: end - first,
+            ..whole
+        })
+    };
+    let layers = |first: u32, end: u32| {
+        (first < end).then_some(vk::ImageSubresourceRange {
+            base_mip_level: level,
+            level_count: 1,
+            base_array_layer: first,
+            layer_count: end - first,
+            ..whole
+        })
+    };
+    [
+        levels(whole.base_mip_level, level),
+        levels(level + 1, whole.base_mip_level + whole.level_count),
+        layers(whole.base_array_layer, layer),
+        layers(layer + 1, whole.base_array_layer + whole.layer_count),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// The slot of buffer index `index`.

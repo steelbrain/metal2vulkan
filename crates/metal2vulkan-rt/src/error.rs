@@ -917,7 +917,12 @@ pub enum DrawKind {
     /// A pipeline state whose colour or stencil formats are not its pass's attachments': Metal's
     /// validation stops most such draws, and plain Metal zeroes or drops the colours.
     AttachmentFormats,
-    /// A draw that binds a texture whose image the pass renders into.
+    /// A draw that binds a texture whose image the pass renders, where the attachment feedback
+    /// loop does not read it: on a device without the attachment reads
+    /// (`floor::Capabilities::attachment_reads`), from the vertex function at the rendered level
+    /// and layer, written, of a depth or stencil attachment, of an image with a storage view or
+    /// over a buffer in place, or of an image two attachments of the pass render. Metal reads a
+    /// render target through a texture.
     AttachmentRead,
 }
 
