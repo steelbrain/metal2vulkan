@@ -4,6 +4,10 @@
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
+/// The most threads a device runs at once: its reaper, block-maker, submit and completion
+/// threads, and its cache directory's removal thread while one runs.
+const THREADS: usize = 5;
+
 /// A metric the runtime adds to.
 #[derive(Clone, Copy)]
 pub(crate) enum Metric {
@@ -116,6 +120,8 @@ pub struct Counters {
 
 #[derive(Default)]
 struct Atomics {
+    /// [`Gauges::threads`]: each slot a running thread's id, 0 where none holds it.
+    threads: [AtomicU64; THREADS],
     submissions: AtomicU64,
     submit_infos: AtomicU64,
     passes: AtomicU64,
@@ -439,10 +445,23 @@ impl Counters {
         }
     }
 
+    /// Holds a slot of [`Gauges::threads`] for the calling thread, a thread the runtime started,
+    /// until the guard drops as it ends.
+    pub(crate) fn thread_started(&self) -> ThreadSlot {
+        let id = os_thread_id();
+        let slot = (self.atomics.threads.iter())
+            .position(|slot| slot.compare_exchange(0, id, Relaxed, Relaxed).is_ok());
+        ThreadSlot {
+            atomics: Arc::clone(&self.atomics),
+            slot,
+        }
+    }
+
     /// No Metal counterpart: the live count of each kind of resource.
     pub fn gauges(&self) -> Gauges {
         let a = &self.atomics;
         Gauges {
+            threads: std::array::from_fn(|slot| a.threads[slot].load(Relaxed)),
             buffers: a.buffers.load(Relaxed),
             textures: a.textures.load(Relaxed),
             samplers: a.samplers.load(Relaxed),
@@ -628,11 +647,57 @@ pub struct Metrics {
     pub capture_wait_nanos: u64,
 }
 
+/// A thread's slot in [`Gauges::threads`], given back as it drops.
+pub(crate) struct ThreadSlot {
+    atomics: Arc<Atomics>,
+    slot: Option<usize>,
+}
+
+impl Drop for ThreadSlot {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot {
+            self.atomics.threads[slot].store(0, Relaxed);
+        }
+    }
+}
+
+/// The calling thread's id as the OS numbers it: Linux's `gettid`, the Apple platforms'
+/// `pthread_threadid_np`, Windows' `GetCurrentThreadId`; 0 on any other.
+fn os_thread_id() -> u64 {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: `gettid` takes no argument and cannot fail.
+        unsafe { libc::syscall(libc::SYS_gettid) as u64 }
+    }
+    #[cfg(target_vendor = "apple")]
+    {
+        let mut id = 0;
+        // SAFETY: a null thread names the calling one, and `id` outlives the call.
+        unsafe { libc::pthread_threadid_np(0 as libc::pthread_t, &mut id) };
+        id
+    }
+    #[cfg(windows)]
+    {
+        // SAFETY: it takes no argument and cannot fail.
+        u64::from(unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() })
+    }
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
+    {
+        0
+    }
+}
+
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the
-/// device is torn down.
+/// device is torn down, [`threads`](Self::threads) once its cache directory's removal thread,
+/// which no teardown waits for, has ended too.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Gauges {
+    /// The OS id of each thread the device runs (its reaper, block-maker, submit and completion
+    /// threads, and its cache directory's removal thread while one runs), in no order, 0 in a
+    /// slot no thread holds; all 0 on an OS whose thread ids the runtime does not read. The
+    /// harness tells the runtime's own threads from the driver's by them.
+    pub threads: [u64; THREADS],
     /// Buffers.
     pub buffers: u64,
     /// Textures: each one's image, its views and its memory, until the reaper frees them.

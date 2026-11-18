@@ -82,7 +82,6 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
-use std::thread;
 use std::time::{Duration, SystemTime};
 
 /// The cap of the lowerings in a cache directory where the consumer names none: half of it, what
@@ -138,6 +137,8 @@ pub(crate) struct Store {
     /// Young's number as this store last read or wrote the state file, 0 before it has: what a
     /// lookup tries, without reading the file. It only grows.
     young: AtomicU64,
+    /// The device's counters, whose thread gauge holds the removal thread while it runs.
+    counters: Counters,
     /// The times the store listed the cache directory.
     #[cfg(test)]
     pub(crate) listings: AtomicUsize,
@@ -149,7 +150,7 @@ pub(crate) struct Store {
 impl Store {
     /// The store in `root`, made where it is missing; it starts the removal of a generation a
     /// removal before left, and of an earlier version's pipeline data.
-    pub(crate) fn open(root: PathBuf, cap: u64) -> Arc<Store> {
+    pub(crate) fn open(root: PathBuf, cap: u64, counters: Counters) -> Arc<Store> {
         let _ = fs::create_dir_all(&root);
         let path = root.join(STATE);
         let opened = File::options()
@@ -170,6 +171,7 @@ impl Store {
             writer: Mutex::new(()),
             removing: AtomicBool::new(false),
             young: AtomicU64::new(0),
+            counters,
             #[cfg(test)]
             listings: AtomicUsize::new(0),
             #[cfg(test)]
@@ -270,7 +272,7 @@ impl Store {
         let start = std::time::Instant::now();
         while self.removing.load(SeqCst) {
             assert!(start.elapsed().as_secs() < 60, "the removal ends");
-            thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
 
@@ -415,9 +417,8 @@ impl Store {
             return;
         }
         let store = Arc::clone(self);
-        let started = thread::Builder::new()
-            .name("m2v-store-remove".to_string())
-            .spawn(move || store.remove());
+        let started =
+            crate::device::start("m2v-store-remove", &self.counters, move || store.remove());
         if started.is_err() {
             self.removing.store(false, SeqCst);
         }
@@ -829,10 +830,11 @@ unsafe fn data_size(device: &ash::Device, cache: vk::PipelineCache) -> u64 {
 }
 
 impl Caches {
-    /// A device's caches, in `dir` where there is one, the lowerings at most `cap` bytes.
-    pub(crate) fn new(dir: Option<&Path>, cap: u64) -> Caches {
+    /// A device's caches, in `dir` where there is one, the lowerings at most `cap` bytes; its
+    /// removal thread counts in `counters`' thread gauge.
+    pub(crate) fn new(dir: Option<&Path>, cap: u64, counters: &Counters) -> Caches {
         Caches {
-            store: dir.map(|dir| Store::open(dir.to_owned(), cap)),
+            store: dir.map(|dir| Store::open(dir.to_owned(), cap, counters.clone())),
             dir: dir.map(Path::to_owned),
             blob: OnceLock::new(),
             pipelines: Mutex::new(Pipelines {
@@ -944,7 +946,7 @@ impl Caches {
             .writes_stalled
             .load(std::sync::atomic::Ordering::Acquire)
         {
-            thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::from_millis(1));
         }
         if let Some(store) = &self.store {
             if store.put(file, bytes) {

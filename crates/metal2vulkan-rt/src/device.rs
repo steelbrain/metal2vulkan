@@ -390,11 +390,12 @@ impl Device {
         answer(&mut properties.properties.limits);
         let max_allocations = properties.properties.limits.max_memory_allocation_count;
         let granularity = properties.properties.limits.buffer_image_granularity;
+        let counters = Counters::new();
         let caches = Caches::new(
             options.pipeline_cache_dir.as_deref(),
             (options.pipeline_cache_cap).unwrap_or(cache::DEFAULT_CAP),
+            &counters,
         );
-        let counters = Counters::new();
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
         let made = unsafe { objects(&device, &capabilities, &counters, max_allocations) };
@@ -709,19 +710,35 @@ impl Device {
     }
 }
 
+/// Starts a thread of the runtime's named `name`, which runs `body` holding a slot of the
+/// device's [`Gauges::threads`](crate::Gauges::threads) until it ends: every thread the runtime
+/// starts starts here.
+pub(crate) fn start(
+    name: &str,
+    counters: &Counters,
+    body: impl FnOnce() + Send + 'static,
+) -> std::io::Result<thread::JoinHandle<()>> {
+    let counters = counters.clone();
+    thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            let _slot = counters.thread_started();
+            body();
+        })
+}
+
 /// Starts a runtime thread that serves `core` in `role`.
 fn spawn(name: &str, core: &Arc<Core>, role: Role, body: fn(Arc<Core>)) -> Result<Runner, Error> {
     let ended = Arc::new(Ended::default());
     let ending = Ending(Arc::clone(&ended));
     let core = Arc::clone(core);
-    let handle = thread::Builder::new()
-        .name(name.to_string())
-        .spawn(move || {
-            let _ending = ending;
-            SERVES.set((Arc::as_ptr(&core) as usize, role));
-            body(core);
-        })
-        .map_err(Error::Thread)?;
+    let counters = core.counters.clone();
+    let handle = start(name, &counters, move || {
+        let _ending = ending;
+        SERVES.set((Arc::as_ptr(&core) as usize, role));
+        body(core);
+    })
+    .map_err(Error::Thread)?;
     Ok(Runner {
         handle,
         ended,

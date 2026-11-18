@@ -401,6 +401,13 @@ impl crate::Device for Device {
         named(self.device.counters().gauges())
     }
 
+    /// `Gauges::threads`: its reaper, block-maker, submit and completion threads, and its cache
+    /// directory's removal thread while one runs.
+    fn threads(&self) -> Vec<u64> {
+        let threads = self.device.counters().gauges().threads;
+        threads.into_iter().filter(|&id| id != 0).collect()
+    }
+
     /// The same gauges through the device's counters, which stay readable once it is torn down.
     fn gauges_after_drop(&self) -> Option<crate::GaugeReader> {
         let counters = self.device.counters();

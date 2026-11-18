@@ -113,11 +113,13 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(self.problems(recs(metric={"a/barriers": 5, "a/passes": 2}), base),
                          ["metric a/barriers: 4 -> 5"])
 
-    def test_the_old_runtime_s_instructions_are_not_compared_to_its_base(self):
-        base = recs(instructions={"harness-old/frame/per_run": 100000, "harness-new/frame/per_run": 50000})
-        now = recs(instructions={"harness-old/frame/per_run": 105000, "harness-new/frame/per_run": 51000})
-        self.assertEqual(self.problems(now, base),
-                         ["instructions harness-new/frame/per_run: 50000 -> 51000 (+2.0%)"])
+    def test_the_harness_s_instructions_are_not_compared_to_the_base(self):
+        # The instructions gate judges them (harness_budget); a driver's threads swing the whole count.
+        base = recs(instructions={"harness-old/frame/per_run": 100000, "harness-new/frame/per_run": 50000,
+                                  "harness-new/frame/own_per_run": 30000, "a/per_draw": 10000})
+        now = recs(instructions={"harness-old/frame/per_run": 105000, "harness-new/frame/per_run": 71000,
+                                 "harness-new/frame/own_per_run": 31000, "a/per_draw": 10200})
+        self.assertEqual(self.problems(now, base), ["instructions a/per_draw: 10000 -> 10200 (+2.0%)"])
 
     def test_instructions_fail_past_one_percent(self):
         base = recs(instructions={"a/per_draw": 10000})
@@ -610,45 +612,60 @@ class HarnessBudgetTests(unittest.TestCase):
                  "harness-new/create_64MiB/first_take": 50.0, "harness-old/create_64MiB/first_take": 40.0,
                  "harness-old/sampling": 50.0, "harness-first/create_64MiB/first_take/2/new": 51.0,
                  "loop/gpu": 1000.0}
-        counted = {"harness-new/frame/per_run": 61253, "harness-old/frame/per_run": 149185}
+        counted = {"harness-new/frame/per_run": 61253, "harness-old/frame/per_run": 149185,
+                   "harness-new/frame/own_per_run": 40001, "harness-new/frame/others_per_run": 21252}
         self.assertEqual(results.harness_rows(recs(time=times, instructions=counted)), [
             "create_64MiB/first_take              new       50.0 us, GPU p50          - us | old       40.0 us, "
             "GPU p50          - us | 1.250",
-            "frame                                new      120.0 us, GPU p50       81.0 us, 61253 instructions | "
-            "old      100.0 us, GPU p50       80.2 us, 149185 instructions | 1.200, instructions 0.411",
+            "frame                                new      120.0 us, GPU p50       81.0 us, 61253 instructions "
+            "(40001 own) | old      100.0 us, GPU p50       80.2 us, 149185 instructions | 1.200, "
+            "instructions 0.411, own over old 0.268",
             "sampling                             new          - us, GPU p50          - us | old       50.0 us, "
             "GPU p50          - us | -"])
 
     def test_the_frame_and_burst_rows_keep_their_time_s_limit_and_pass_the_instructions_gate_too(self):
         times = {"harness-old/frame": 100.0, "harness-new/frame": 101.0,
                  "harness-old/alu": 100.0, "harness-new/alu": 101.0}
-        counted = {"harness-new/frame/per_run": 61000, "harness-old/frame/per_run": 149000,
+        counted = {"harness-new/frame/per_run": 161000, "harness-old/frame/per_run": 149000,
+                   "harness-new/frame/own_per_run": 61000, "harness-new/frame/others_per_run": 100000,
                    "harness-new/alu/per_run": 9000, "harness-old/alu/per_run": 5000}
 
         def budget(leg_id, counts, these=times):
             return results.harness_budget(leg_id, leg_of(recs(time=these, instructions=counts)))
 
-        line = "harness budget frame: instructions new {} per run over old 149000 is {}, {}"
+        def lenient(own, ratio, others=100000, over=""):
+            return (f"harness budget frame: LENIENT instructions new own {own} per run over old whole 149000 is "
+                    f"{ratio}; new others {others}, old's driver threads not separable{over}")
+
+        exact = "harness budget frame: EXACT instructions new own {} per run, {}"
         with mock.patch.object(results, "HARNESS_CEILINGS", {}), \
                 mock.patch.object(results, "HARNESS_FLOORS", {}):
             # Both within the time's budget. alu, not a frame or burst row, has no gate, its count
-            # over old's though it is.
+            # over old's though it is. The whole count, a driver's threads in it, is over old's
+            # and judges nothing: the runtime's own count is the one gated.
             with mock.patch.object(results, "STORED_INSTRUCTIONS", {}):
-                self.assertEqual(budget("10de:1e87", counted), ([], [line.format(61000, "0.409", "none stored")]))
+                self.assertEqual(budget("10de:1e87", counted), ([], [
+                    exact.format(61000, "none stored"), lenient(61000, "0.409")]))
             stored = {"all": {"frame": 60000}}
             with mock.patch.object(results, "STORED_INSTRUCTIONS", stored):
-                # Within 1.03 times the stored count: nothing to say.
-                self.assertEqual(budget("10de:1e87", counted), ([], []))
-                over = dict(counted, **{"harness-new/frame/per_run": 61900})
-                self.assertEqual(budget("10de:1e87", over)[0], [
-                    line.format(61900, "0.415", "stored 60000") + ": past 1.03 times the stored count"])
-                under = dict(counted, **{"harness-new/frame/per_run": 59000})
+                # Within 1.03 times the stored count: only the lenient line.
+                self.assertEqual(budget("10de:1e87", counted), ([], [lenient(61000, "0.409")]))
+                over = dict(counted, **{"harness-new/frame/own_per_run": 61900})
+                self.assertEqual(budget("10de:1e87", over), ([
+                    exact.format(61900, "stored 60000, is 1.032") + ": past 1.03 times the stored count"],
+                    [lenient(61900, "0.415")]))
+                under = dict(counted, **{"harness-new/frame/own_per_run": 59000})
                 self.assertEqual(budget("10de:1e87", under), ([], [
-                    line.format(59000, "0.396", "stored 60000") + ": more than 1% under the stored count, "
-                    "which ratchets down to it"]))
-                past_old = dict(counted, **{"harness-new/frame/per_run": 150000})
+                    exact.format(59000, "stored 60000, is 0.983") + ": more than 1% under the stored count, "
+                    "which ratchets down to it", lenient(59000, "0.396")]))
+                past_old = dict(counted, **{"harness-new/frame/own_per_run": 150000})
                 self.assertEqual(budget("10de:1e87", past_old)[0], [
-                    line.format(150000, "1.007", "stored 60000") + ": new over old"])
+                    exact.format(150000, "stored 60000, is 2.500") + ": past 1.03 times the stored count",
+                    lenient(150000, "1.007", over=": new own over old whole")])
+                # A whole count with no count of the runtime's own threads: the gate could not run.
+                no_own = {key: value for key, value in counted.items() if "own" not in key and "others" not in key}
+                self.assertEqual(budget("10de:1e87", no_own)[0], [
+                    "harness budget frame: instructions new 161000 per run, but no count of its own threads"])
                 # A time past its limit still fails, its count within the gate though it is.
                 slow = dict(times, **{"harness-new/frame": 120.0})
                 self.assertEqual(budget("10de:1e87", counted, slow)[0], [

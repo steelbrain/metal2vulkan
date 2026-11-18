@@ -58,6 +58,11 @@ impl crate::Device for runtime::Device {
         None
     }
 
+    /// None: the old runtime gives no account of its threads.
+    fn threads(&self) -> Vec<u64> {
+        Vec::new()
+    }
+
     /// The `VkPipeline`s its pipeline states' variants made (`WorkCounts::variant_pipelines_made`):
     /// compute regions, replays and draws, those made at a state's creation among them.
     fn pipelines_created(&self) -> u64 {

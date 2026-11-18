@@ -253,7 +253,8 @@ def leg_problems(leg, records, base):
                 problems.append(f"metric {key}: {was} -> {value}")
         for key, value in sorted(records["instructions"].items()):
             was = base["instructions"].get(key)
-            if was is not None and not key.startswith(PARKED_RECORDS) and value > was * (1 + INSTRUCTIONS_BAND):
+            if (was is not None and not key.startswith(PARKED_RECORDS + ("harness-",))
+                    and value > was * (1 + INSTRUCTIONS_BAND)):
                 problems.append(f"instructions {key}: {was} -> {value} (+{(value / was - 1) * 100:.1f}%)")
     return problems
 
@@ -350,14 +351,22 @@ def gpu_beside(times, runtime, row):
 
 
 #: The instructions gate of the frame and burst rows (WALL_ROWS), beside the judgement of their
-#: time: on Linux, the whole process's user-space instructions per timed run (`instructions
-#: harness-<runtime>/<row>/per_run`, the p50 over its timed runs, every runtime and driver thread
-#: counted). The new runtime's count is at most the old's, and at most HARNESS_BUDGET times its
-#: stored count (STORED_INSTRUCTIONS), with no floor and no ceiling: the count repeats to well
-#: under 1% (0.16 to 0.27% across processes on the 2080's node). A time that moves while the
-#: count does not names waits. A leg that records no instructions (the kernel refused the
-#: counter, or Windows) has no gate. Every row records its count; only these are gated on it.
+#: time, on Linux's user-space instructions per timed run, each the p50 over the row's timed runs.
+#: The harness records the whole process's (`instructions harness-<runtime>/<row>/per_run`), and
+#: where the runtime names the threads it started (the new runtime's `Gauges::threads`), the count
+#: of those and the harness's own thread (`.../own_per_run`) and the rest, the threads a driver
+#: started for itself (`.../others_per_run`). A driver's threads swing by millions of instructions
+#: per run between processes (NVIDIA's on burst_160: 0 to 25 million), the runtime's own do not.
+#: The gate is on the runtime's own: EXACT, the new runtime's own count at most HARNESS_BUDGET
+#: times its stored count (STORED_INSTRUCTIONS), which ratchets down; and LENIENT, printed on
+#: every row, the new runtime's own count at most the old's whole count, the old runtime naming
+#: none of its threads, so its driver's share cannot be taken out. The base comparison of
+#: leg_problems skips the harness's counts: this gate judges them. A leg that records no
+#: instructions (the kernel refused the counter, or Windows) has no gate. Every row records its
+#: counts; only these are gated on them.
 INSTRUCTIONS_PER_RUN = "/per_run"
+#: The new runtime's own threads' count of a row, and the rest of the process's.
+OWN_PER_RUN, OTHERS_PER_RUN = "/own_per_run", "/others_per_run"
 
 
 def read_counts(text):
@@ -378,10 +387,11 @@ def read_counts(text):
     return counts
 
 
-#: The new runtime's instructions per timed run that each WALL_ROWS row is held to
-#: (`instructions.tsv`, beside this file): one count per row where the legs' counts lie within 3%
-#: of each other, else one per driver family. A count only ratchets down: a landing that lowers a
-#: row's count by more than 1% stores the lower one, and nothing raises it without a ruling.
+#: The new runtime's own threads' instructions per timed run (OWN_PER_RUN) that each WALL_ROWS
+#: row is held to (`instructions.tsv`, beside this file): one count per row where the legs' counts
+#: lie within 3% of each other, else one per driver family. A count only ratchets down: a landing
+#: that lowers a row's count by more than 1% stores the lower one, and nothing raises it without a
+#: ruling.
 STORED_INSTRUCTIONS = read_counts((Path(__file__).resolve().parent / "instructions.tsv").read_text())
 
 
@@ -396,24 +406,33 @@ def stored_count(leg_id, row):
 
 def instruction_gate(leg_id, row, records):
     """ROW's instructions gate on LEG_ID from the leg's RECORDS: (problems, parked), both empty
-    where ROW is not a WALL_ROWS row or a runtime recorded no count. A count over the old
-    runtime's, or past HARNESS_BUDGET times the stored count, is a problem; one more than
-    INSTRUCTIONS_BAND under the stored count, or a row with none stored, is named."""
-    counted = [records["instructions"].get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}")
-               for runtime in ("new", "old")]
-    if not row.startswith(WALL_ROWS) or not all(counted):
+    where ROW is not a WALL_ROWS row or a runtime recorded no whole count. EXACT: the new runtime's
+    own count past HARNESS_BUDGET times the stored count is a problem; one more than
+    INSTRUCTIONS_BAND under it, or a row with none stored, is named. LENIENT, named on every row:
+    the new runtime's own count over the old's whole count is a problem. A new runtime that
+    recorded its whole count but not its own is a problem: the gate could not run."""
+    counted = records["instructions"]
+    new, old = (counted.get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}") for runtime in ("new", "old"))
+    if not row.startswith(WALL_ROWS) or not new or not old:
         return [], []
-    (new, old), stored = counted, stored_count(leg_id, row)
-    line = (f"harness budget {row}: instructions new {new} per run over old {old} is {new / old:.3f}, "
-            + (f"stored {stored}" if stored else "none stored"))
-    if new > old:
-        return [f"{line}: new over old"], []
-    if stored and new > HARNESS_BUDGET * stored:
-        return [f"{line}: past {HARNESS_BUDGET} times the stored count"], []
-    if stored and new < (1 - INSTRUCTIONS_BAND) * stored:
-        return [], [f"{line}: more than {INSTRUCTIONS_BAND:.0%} under the stored count, which ratchets "
-                    "down to it"]
-    return [], [] if stored else [line]
+    own, others = (counted.get(f"harness-new/{row}{part}") for part in (OWN_PER_RUN, OTHERS_PER_RUN))
+    if own is None:
+        return [f"harness budget {row}: instructions new {new} per run, but no count of its own threads"], []
+    problems, parked = [], []
+    stored = stored_count(leg_id, row)
+    exact = f"harness budget {row}: EXACT instructions new own {own} per run, " + (
+        f"stored {stored}, is {own / stored:.3f}" if stored else "none stored")
+    if stored and own > HARNESS_BUDGET * stored:
+        problems.append(f"{exact}: past {HARNESS_BUDGET} times the stored count")
+    elif stored and own < (1 - INSTRUCTIONS_BAND) * stored:
+        parked.append(f"{exact}: more than {INSTRUCTIONS_BAND:.0%} under the stored count, which ratchets "
+                      "down to it")
+    elif not stored:
+        parked.append(exact)
+    lenient = (f"harness budget {row}: LENIENT instructions new own {own} per run over old whole {old} is "
+               f"{own / old:.3f}; new others {others}, old's driver threads not separable")
+    (problems if own > old else parked).append(lenient + (": new own over old whole" if own > old else ""))
+    return problems, parked
 
 
 #: The harness rows over HARNESS_BUDGET that a ruling gave a ceiling, per GPU leg, each a ratio of
@@ -705,8 +724,9 @@ def harness_budget(leg_id, leg):
 
 def harness_rows(records):
     """Every harness row timed on either runtime in a leg's RECORDS, one line each: its time, its
-    GPU time (HARNESS_GPU) and, where recorded, its instructions per run, on the new runtime and on
-    the old, `-` where it has none, and new over old of the times and of the instructions."""
+    GPU time (HARNESS_GPU) and, where recorded, its instructions per run (with its own threads'
+    where the runtime names them), on the new runtime and on the old, `-` where it has none, and
+    new over old of the times and of the instructions (and of new's own over old's whole)."""
     times, counted = records["time"], records["instructions"]
     rows = sorted({key.split("/", 1)[1] for key in times if key.startswith((HARNESS_NEW, HARNESS_OLD))})
     lines = []
@@ -719,6 +739,9 @@ def harness_rows(records):
             instructions = counted.get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}")
             if instructions is not None:
                 cell += f", {instructions} instructions"
+            own = counted.get(f"harness-{runtime}/{row}{OWN_PER_RUN}")
+            if own is not None:
+                cell += f" ({own} own)"
             cells.append(cell)
         new, old = times.get(HARNESS_NEW + row), times.get(HARNESS_OLD + row)
         ratio = f"{new / old:.3f}" if new is not None and old else "-"
@@ -726,6 +749,9 @@ def harness_rows(records):
         new_i, old_i = (counted.get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}") for runtime in ("new", "old"))
         if new_i is not None and old_i:
             line += f", instructions {new_i / old_i:.3f}"
+            own = counted.get(f"harness-new/{row}{OWN_PER_RUN}")
+            if own is not None:
+                line += f", own over old {own / old_i:.3f}"
         lines.append(line)
     return lines
 

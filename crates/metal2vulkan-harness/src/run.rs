@@ -10,7 +10,7 @@ use crate::{
     ComputeDevice, Device, Failed, Library, Refused, RenderCommandEncoder, Result, Storage,
     Texture, Waits,
 };
-use metal2vulkan_devtools::instructions::ProcessInstructions;
+use metal2vulkan_devtools::instructions::{this_thread, ProcessInstructions, ThreadInstructions};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -187,10 +187,15 @@ pub struct Report {
     /// Each run's process CPU time from before its command buffer's creation through the return
     /// of the wait for the run before it, in nanoseconds; empty where the host has no such clock.
     pub cpu_ns: Vec<f64>,
-    /// Each run's user-space instructions in the whole process over the same span, every thread
-    /// of the runtime and its driver included ([`count_instructions`]); empty where the kernel
-    /// refused the counter.
+    /// Each run's user-space instructions in the whole process from just before its command
+    /// buffer's creation through just after the wait, every thread of the runtime and its driver
+    /// included ([`count_instructions`]); empty where the kernel refused the counter.
     pub instructions: Vec<u64>,
+    /// Each run's user-space instructions over the same span on the harness's own thread and the
+    /// threads the runtime started ([`Device::threads`](crate::Device::threads)), the runtime's own
+    /// work; empty where the runtime names no thread or the kernel refused the counter. The rest
+    /// of [`instructions`](Self::instructions) is the threads a driver started for itself.
+    pub own_instructions: Vec<u64>,
     /// Each timed command buffer's time from just before its `commit` until its completed
     /// handler ran, in microseconds, by its place in its run: one list per place, the first
     /// committed first, each in the order the handlers ran. Empty unless the plan asks for it
@@ -503,6 +508,18 @@ impl<D: ComputeDevice> Harness<D> {
         let encoded = started.elapsed();
         let before = std::mem::replace(in_flight, run);
         Ok((wait_run::<D>(&before)?, encoded))
+    }
+
+    /// The counter of the runtime's own work: the harness's thread and the threads the runtime
+    /// started ([`Device::threads`](crate::Device::threads)); none where the runtime names no
+    /// thread or the kernel refuses the counter.
+    fn own_threads(&self) -> Option<ThreadInstructions> {
+        let runtime = self.device.threads();
+        if runtime.is_empty() {
+            return None;
+        }
+        let ids: Vec<u64> = this_thread().into_iter().chain(runtime).collect();
+        ThreadInstructions::new(&ids).ok()
     }
 
     /// Makes the library `source` names, where it is the render library or a metallib no plan
@@ -1012,18 +1029,24 @@ impl<D: ComputeDevice> Session for Harness<D> {
         };
         let completions = (plan.commit_to_complete).then(|| Arc::new(Completions::default()));
         let (submitted, infos) = (self.device.submissions(), self.device.submit_infos());
+        let own = self.own_threads();
+        let own_count = || own.as_ref().and_then(|own| own.read().ok());
         for run in 1..=runs.timed {
+            // The counters are read outside the timed span, so their reads do not lengthen it.
+            let (retired, owned) = (instructions(), own_count());
             let wall = Instant::now();
             let cpu = clocks::process_cpu_nanos();
-            let retired = instructions();
             let (gpu_us, encoded) = self.next(plan, &made, &mut in_flight, completions.as_ref())?;
             if let (Some(before), Some(after)) = (cpu, clocks::process_cpu_nanos()) {
                 report.cpu_ns.push(after.saturating_sub(before) as f64);
             }
+            report.wall_us.push(wall.elapsed().as_secs_f64() * 1e6);
+            if let (Some(before), Some(after)) = (owned, own_count()) {
+                report.own_instructions.push(after.saturating_sub(before));
+            }
             if let (Some(before), Some(after)) = (retired, instructions()) {
                 report.instructions.push(after.saturating_sub(before));
             }
-            report.wall_us.push(wall.elapsed().as_secs_f64() * 1e6);
             report.encode_ns.push(encoded.as_nanos() as f64);
             report.gpu_us.push(gpu_us);
             if run == 100 || run == 200 {

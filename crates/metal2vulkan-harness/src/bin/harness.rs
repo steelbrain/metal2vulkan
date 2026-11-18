@@ -644,12 +644,29 @@ fn print(runtime: &str, name: &str, report: &Report) {
     for (count, value) in &report.counts {
         println!("M2V-MATRIX metric harness-{runtime}/{name}/{count}_per_run {value}");
     }
-    // The whole process's user-space instructions per timed run at the 50th percentile, where the
-    // kernel offered the counter; none for a row the device sizes, whose work follows the size.
-    let mut instructions = report.instructions.clone();
-    instructions.sort_unstable();
-    if let (Some(&p50), None) = (instructions.get(instructions.len() / 2), report.scaled_to) {
-        println!("M2V-MATRIX instructions harness-{runtime}/{name}/per_run {p50}");
+    // User-space instructions per timed run at the 50th percentile, where the kernel offered the
+    // counter: the whole process's, the runtime's own threads' with the harness's where the
+    // runtime names its threads, and the rest, the threads a driver started for itself. None for a
+    // row the device sizes, whose work follows the size.
+    if report.scaled_to.is_none() {
+        let p50 = |mut values: Vec<u64>| {
+            values.sort_unstable();
+            values.get(values.len() / 2).copied()
+        };
+        if let Some(whole) = p50(report.instructions.clone()) {
+            println!("M2V-MATRIX instructions harness-{runtime}/{name}/per_run {whole}");
+        }
+        if report.own_instructions.len() == report.instructions.len() {
+            let others = (report.instructions.iter().zip(&report.own_instructions))
+                .map(|(whole, own)| whole.saturating_sub(*own))
+                .collect();
+            if let (Some(own), Some(others)) = (p50(report.own_instructions.clone()), p50(others)) {
+                println!("M2V-MATRIX instructions harness-{runtime}/{name}/own_per_run {own}");
+                println!(
+                    "M2V-MATRIX instructions harness-{runtime}/{name}/others_per_run {others}"
+                );
+            }
+        }
     }
 }
 

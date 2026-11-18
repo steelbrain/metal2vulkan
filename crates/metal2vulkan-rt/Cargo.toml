@@ -23,13 +23,13 @@ ash = { workspace = true, features = ["std", "loaded"] }
 # The translator: Metal AIR to SPIR-V, through its public API only.
 metal2vulkan = { version = "0.2.0", path = "../metal2vulkan", features = ["ash"] }
 
-# The host clock of command buffer times on unix.
+# The host clock of command buffer times, and the ids of the runtime's threads, on unix.
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
-# The same on Windows: the performance counter.
+# The same on Windows: the performance counter and `GetCurrentThreadId`.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_Performance"] }
+windows-sys = { workspace = true, features = ["Win32_System_Performance", "Win32_System_Threading"] }
 
 [dev-dependencies]
 # The tests' fixture assembler and fixture directories. Path-only, so publishing drops it.

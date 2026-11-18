@@ -9,6 +9,7 @@
 use crate::cache::{
     blob_name, checksum, frame, prune_blobs, unframe, Pending, State, Store, BLOBS_KEPT,
 };
+use crate::counters::Counters;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -80,7 +81,7 @@ fn state(store: &Store) -> State {
 #[test]
 fn a_store_filled_past_its_cap_stays_within_it_and_moves_on() {
     let scratch = Scratch::new("store-cap");
-    let store = Store::open(scratch.0.clone(), 1000);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
     assert_eq!(state(&store), State { young: 1, bytes: 0 });
     for n in 0..40 {
         assert!(store.put(&name(n), &[n as u8; 100]), "file {n} written");
@@ -124,7 +125,7 @@ fn a_store_filled_past_its_cap_stays_within_it_and_moves_on() {
 #[test]
 fn a_hit_in_old_moves_into_young_and_outlives_the_next_generation() {
     let scratch = Scratch::new("store-old");
-    let store = Store::open(scratch.0.clone(), 1000);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
     for n in 0..6 {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
@@ -152,8 +153,8 @@ fn a_hit_in_old_moves_into_young_and_outlives_the_next_generation() {
 #[test]
 fn a_lookup_reads_no_state_and_sees_another_stores_move_at_its_next_write() {
     let scratch = Scratch::new("store-young");
-    let first = Store::open(scratch.0.clone(), 1000);
-    let second = Store::open(scratch.0.clone(), 1000);
+    let first = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let second = Store::open(scratch.0.clone(), 1000, Counters::new());
     assert!(first.put(&name(0), &[0; 100]));
     let reads = first.state_reads.load(Relaxed);
     for _ in 0..10 {
@@ -189,7 +190,7 @@ fn a_lookup_reads_no_state_and_sees_another_stores_move_at_its_next_write() {
 #[test]
 fn a_reopened_store_reads_its_state_and_lists_no_directory() {
     let scratch = Scratch::new("store-reopen");
-    let store = Store::open(scratch.0.clone(), 1000);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
     assert_eq!(
         store.listings.load(Relaxed),
         1,
@@ -201,7 +202,7 @@ fn a_reopened_store_reads_its_state_and_lists_no_directory() {
     store.settle();
     let before = state(&store);
     drop(store);
-    let reopened = Store::open(scratch.0.clone(), 1000);
+    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
     assert_eq!(state(&reopened), before);
     // Files 20 to 22 in young, file 15 in old.
     for n in [20, 21, 22, 15] {
@@ -218,7 +219,7 @@ fn a_reopened_store_reads_its_state_and_lists_no_directory() {
 #[test]
 fn a_removal_cut_short_is_finished_by_the_next_open() {
     let scratch = Scratch::new("store-cut");
-    let store = Store::open(scratch.0.clone(), 1000);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
     for n in 0..16 {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
@@ -232,7 +233,7 @@ fn a_removal_cut_short_is_finished_by_the_next_open() {
         fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
         fs::write(&path, [0; 100]).expect("the file");
     }
-    let reopened = Store::open(scratch.0.clone(), 1000);
+    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
     reopened.settle();
     assert!(!reopened.generation(2).exists() && !reopened.generation(1).exists());
     assert!(reopened.generation(3).exists() && reopened.generation(4).exists());
@@ -259,7 +260,7 @@ fn store_exit_child() {
     let Some(dir) = std::env::var_os(EXIT_DIR) else {
         return;
     };
-    let store = Store::open(PathBuf::from(dir), EXIT_CAP);
+    let store = Store::open(PathBuf::from(dir), EXIT_CAP, Counters::new());
     for n in 0..=2 * EXIT_FILES {
         assert!(store.put(&name(n), &[1; 10]));
     }
@@ -290,7 +291,7 @@ fn a_process_that_exits_in_a_removal_leaves_it_to_the_next_open() {
     assert!(status.success(), "the child wrote every file");
     let dead = scratch.0.join("g1");
     assert!(dead.exists(), "the child exited before its removal ended");
-    let reopened = Store::open(scratch.0.clone(), EXIT_CAP);
+    let reopened = Store::open(scratch.0.clone(), EXIT_CAP, Counters::new());
     reopened.settle();
     assert!(!dead.exists(), "the next open finished the removal");
     assert_eq!(
@@ -311,7 +312,7 @@ fn a_process_that_exits_in_a_removal_leaves_it_to_the_next_open() {
 #[test]
 fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
     let scratch = Scratch::new("store-state");
-    let store = Store::open(scratch.0.clone(), 1000);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
     for n in 0..13 {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
@@ -320,7 +321,7 @@ fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
     drop(store);
     for torn in [&b"cut short"[..], &[7; 24][..], &[][..]] {
         fs::write(scratch.0.join("state"), torn).expect("the state torn");
-        let reopened = Store::open(scratch.0.clone(), 1000);
+        let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
         assert_eq!(
             reopened.listings.load(Relaxed),
             1,
@@ -337,7 +338,7 @@ fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
         assert_eq!(reopened.get(&name(12), whole), Some(vec![12; 100]));
     }
     fs::remove_file(scratch.0.join("state")).expect("the state removed");
-    let reopened = Store::open(scratch.0.clone(), 1000);
+    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
     assert_eq!(
         state(&reopened),
         State {
@@ -362,7 +363,7 @@ fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
 #[test]
 fn a_torn_file_is_a_miss_and_is_removed() {
     let scratch = Scratch::new("store-torn");
-    let store = Store::open(scratch.0.clone(), 1000);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
     let data: Vec<u8> = (0..=255).collect();
     assert!(store.put(&name(1), &framed(&data)));
     let path = store.generation(1).join(name(1));
@@ -381,8 +382,8 @@ fn a_torn_file_is_a_miss_and_is_removed() {
 #[test]
 fn stores_on_one_directory_share_its_files_and_its_count() {
     let scratch = Scratch::new("store-share");
-    let first = Store::open(scratch.0.clone(), 1000);
-    let second = Store::open(scratch.0.clone(), 1000);
+    let first = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let second = Store::open(scratch.0.clone(), 1000, Counters::new());
     assert!(first.put(&name(1), b"compiled"));
     assert_eq!(second.get(&name(1), whole), Some(b"compiled".to_vec()));
     assert_eq!(state(&second).bytes, 8);
@@ -534,7 +535,7 @@ fn the_write_queue_refuses_a_file_past_its_bound() {
 #[test]
 fn an_earlier_versions_pipeline_data_is_removed_at_open() {
     let scratch = Scratch::new("store-earlier");
-    let store = Store::open(scratch.0.clone(), 1000);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
     for n in 0..6 {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
@@ -548,7 +549,7 @@ fn an_earlier_versions_pipeline_data_is_removed_at_open() {
         fs::create_dir_all(dir).expect("an earlier version's directory");
         fs::write(dir.join(format!("{:064x}", 1)), [1; 50]).expect("its file");
     }
-    let reopened = Store::open(scratch.0.clone(), 1000);
+    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
     reopened.settle();
     for g in [1, 2] {
         let dir = scratch.0.join(format!("g{g}/pipelines"));
@@ -605,7 +606,7 @@ fn store_stress_child() {
     let Some(dir) = std::env::var_os(STRESS_DIR) else {
         return;
     };
-    let store = Store::open(PathBuf::from(dir), STRESS_CAP);
+    let store = Store::open(PathBuf::from(dir), STRESS_CAP, Counters::new());
     assert_eq!(stress(&store, u64::from(std::process::id()), 4000), 0);
     store.settle();
 }
@@ -625,7 +626,7 @@ fn stores_in_threads_and_processes_racing_writes_moves_and_flips_corrupt_nothing
         })
         .collect();
     let stores: Vec<Arc<Store>> = (0..3)
-        .map(|_| Store::open(scratch.0.clone(), STRESS_CAP))
+        .map(|_| Store::open(scratch.0.clone(), STRESS_CAP, Counters::new()))
         .collect();
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..6)

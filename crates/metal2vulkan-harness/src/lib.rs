@@ -231,6 +231,11 @@ pub trait Device: Sized {
     /// they end with it. No Metal counterpart.
     fn gauges_after_drop(&self) -> Option<GaugeReader>;
 
+    /// The OS ids of the threads the runtime started for the device and runs now, by its own
+    /// account; empty where it gives none. The harness counts these and its own thread as the
+    /// runtime's work, apart from the threads a driver starts for itself. No Metal counterpart.
+    fn threads(&self) -> Vec<u64>;
+
     /// How many `VkPipeline`s the runtime has created on the device so far, by its own count. No
     /// Metal counterpart.
     fn pipelines_created(&self) -> u64;

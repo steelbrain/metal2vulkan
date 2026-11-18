@@ -16,9 +16,11 @@
 //! [`ProcessInstructions`] counts the whole process in user space: the thread that opens it and
 //! every thread started after, through one inherited counter per core type. That is what the
 //! harness records per timed run, so work a runtime moves onto its own threads still counts.
+//! [`ThreadInstructions`] counts named threads alone, by their OS ids: the harness's own thread and
+//! the threads a runtime says it started, apart from the threads a driver starts for itself.
 //!
 //! Only Linux offers the counters (read here on its little-endian targets): elsewhere
-//! [`InstructionCounter::new`] and [`ProcessInstructions::new`] answer
+//! [`InstructionCounter::new`], [`ProcessInstructions::new`] and [`ThreadInstructions::new`] answer
 //! [`io::ErrorKind::Unsupported`], and nothing records an `instructions` line there.
 
 use std::io;
@@ -144,6 +146,80 @@ impl ProcessInstructions {
     }
 }
 
+/// User-space instructions retired by the threads of this process whose OS ids were given to
+/// [`ThreadInstructions::new`], each alone (not the threads it starts), summed over every core
+/// type, since the open.
+pub struct ThreadInstructions {
+    #[cfg(all(target_os = "linux", target_endian = "little"))]
+    events: Vec<std::fs::File>,
+    #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+    never: std::convert::Infallible,
+}
+
+impl ThreadInstructions {
+    /// Opens the counters on threads `ids` (Linux thread ids, as [`this_thread`] gives), counting
+    /// from now. A thread that already ended is skipped: it retires nothing more. An error is the
+    /// kernel's refusal, or [`io::ErrorKind::Unsupported`] off Linux.
+    pub fn new(ids: &[u64]) -> io::Result<Self> {
+        #[cfg(all(target_os = "linux", target_endian = "little"))]
+        {
+            let configs = linux::core_events()?;
+            let mut events = Vec::with_capacity(ids.len() * configs.len());
+            for &id in ids {
+                let thread = libc::pid_t::try_from(id).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, format!("thread id {id}"))
+                })?;
+                for &config in &configs {
+                    match linux::open_thread(thread, config) {
+                        Ok(event) => events.push(event),
+                        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => break,
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            Ok(Self { events })
+        }
+        #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+        {
+            let _ = ids;
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "user-space instruction counters are read through Linux's perf_event_open alone",
+            ))
+        }
+    }
+
+    /// The user-space instructions the threads retired since the open.
+    pub fn read(&self) -> io::Result<u64> {
+        #[cfg(all(target_os = "linux", target_endian = "little"))]
+        {
+            let mut retired = 0;
+            for event in &self.events {
+                retired += linux::read(event)?;
+            }
+            Ok(retired)
+        }
+        #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+        {
+            match self.never {}
+        }
+    }
+}
+
+/// The calling thread's Linux thread id (`gettid`), which [`ThreadInstructions::new`] takes; `None`
+/// off Linux.
+pub fn this_thread() -> Option<u64> {
+    #[cfg(all(target_os = "linux", target_endian = "little"))]
+    {
+        // SAFETY: `gettid` takes no argument and cannot fail.
+        u64::try_from(unsafe { libc::syscall(libc::SYS_gettid) }).ok()
+    }
+    #[cfg(not(all(target_os = "linux", target_endian = "little")))]
+    {
+        None
+    }
+}
+
 #[cfg(all(target_os = "linux", target_endian = "little"))]
 mod linux {
     use std::fs::{self, File};
@@ -214,17 +290,28 @@ mod linux {
         open_with(config, INHERIT | EXCLUDE_KERNEL | EXCLUDE_HV)
     }
 
+    /// Thread `thread`'s own user-space instructions event of `config`, counting from now.
+    pub(super) fn open_thread(thread: libc::pid_t, config: u64) -> io::Result<File> {
+        open_on(thread, config, EXCLUDE_KERNEL | EXCLUDE_HV)
+    }
+
     /// The calling thread's user-space instructions event of `config` with the bit fields `flags`.
     fn open_with(config: u64, flags: u64) -> io::Result<File> {
+        open_on(0, config, flags)
+    }
+
+    /// Thread `thread`'s user-space instructions event of `config` (0: the calling thread) with the
+    /// bit fields `flags`.
+    fn open_on(thread: libc::pid_t, config: u64, flags: u64) -> io::Result<File> {
         let mut attr = [0u8; ATTR_SIZE];
         attr[ATTR_TYPE..ATTR_TYPE + 4].copy_from_slice(&TYPE_HARDWARE.to_ne_bytes());
         attr[ATTR_SIZE_FIELD..ATTR_SIZE_FIELD + 4]
             .copy_from_slice(&(ATTR_SIZE as u32).to_ne_bytes());
         attr[ATTR_CONFIG..ATTR_CONFIG + 8].copy_from_slice(&config.to_ne_bytes());
         attr[ATTR_FLAGS..ATTR_FLAGS + 8].copy_from_slice(&flags.to_ne_bytes());
-        let (thread, any_cpu, no_group): (libc::pid_t, libc::c_int, libc::c_int) = (0, -1, -1);
+        let (any_cpu, no_group): (libc::c_int, libc::c_int) = (-1, -1);
         // SAFETY: `attr` is a valid `perf_event_attr` of the size it states and outlives the
-        // call; pid 0 and cpu -1 name the calling thread on any CPU, with no group.
+        // call; `thread` names a thread (0 the calling one) and cpu -1 any CPU, with no group.
         let fd = unsafe {
             libc::syscall(
                 libc::SYS_perf_event_open,
@@ -263,7 +350,7 @@ mod linux {
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
-    use super::{InstructionCounter, ProcessInstructions};
+    use super::{this_thread, InstructionCounter, ProcessInstructions, ThreadInstructions};
     use std::path::Path;
 
     /// Iterations of the fixed loop on each CPU.
@@ -379,6 +466,46 @@ mod tests {
         println!(
             "M2V-MATRIX instructions instruction_counter/per_1000_iterations {}",
             counts[0] * 1000 / (ITERATIONS * cpus.len() as u64)
+        );
+    }
+
+    /// The thread counter counts the threads it was given and no other: a thread's fixed loop on
+    /// every CPU it may use is in the count of a counter opened on its id, the opening thread's own
+    /// loop is not.
+    #[test]
+    fn the_thread_counter_counts_the_threads_named_and_no_other() {
+        if !counters_offered() {
+            assert!(
+                ThreadInstructions::new(&[this_thread().expect("Linux")]).is_err(),
+                "the host offers no counters, yet a counter opened"
+            );
+            return;
+        }
+        let cpus = allowed_cpus();
+        let expected = 2 * ITERATIONS * cpus.len() as u64;
+        let worker_loops = ITERATIONS * cpus.len() as u64;
+        let (id_tx, id_rx) = std::sync::mpsc::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let worker = std::thread::spawn(move || {
+            id_tx.send(this_thread().expect("Linux")).expect("the id");
+            go_rx.recv().expect("the go");
+            for &cpu in &cpus {
+                pin(&[cpu]);
+                fixed_loop(ITERATIONS);
+            }
+        });
+        let id = id_rx.recv().expect("the worker's id");
+        let counter = ThreadInstructions::new(&[id]).expect("the host offers counters");
+        let before = counter.read().expect("reading the counters");
+        // The opening thread's own loop, as long as the worker's, which the counter is not on.
+        fixed_loop(worker_loops);
+        go_tx.send(()).expect("the go");
+        worker.join().expect("the loop's thread");
+        let counted = counter.read().expect("reading the counters") - before;
+        // The wait for the go, the pinning and the thread's end add their own instructions.
+        assert!(
+            (expected..expected + expected / 20).contains(&counted),
+            "{counted} user-space instructions counted for {expected}"
         );
     }
 

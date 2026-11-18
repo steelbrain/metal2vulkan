@@ -45,7 +45,9 @@ time, so no driver free runs on the completion thread and a submission waits beh
 lowers the compute pipeline states' emulated-SIMD-group variants after their creation returned,
 and makes the device's pipeline cache when it starts and writes it to the cache directory once
 pipeline creation is quiet. While an old generation of the cache directory is removed, a thread of
-the store's own does it, and ends with the removal; no teardown waits for it.
+the store's own does it, and ends with the removal; no teardown waits for it. `Gauges::threads`
+holds the OS id of each of these threads while it runs, so a tool can tell the runtime's own work
+from the threads a driver starts for itself.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with

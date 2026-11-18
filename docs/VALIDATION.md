@@ -303,7 +303,7 @@ changes the harness sets the base for the next.
 | Kind | What it counts | Fails when |
 |---|---|---|
 | `metric` | A deterministic count per frame or per command buffer: submissions, passes, barriers, bytes copied, pipelines created | It is larger than the base's |
-| `instructions` | User-space CPU instructions per draw or per dispatch, and per harness run (`harness-<runtime>/<row>/per_run`: the whole process's, every runtime and driver thread counted, the p50 over the row's timed runs) | It is more than 1% over the base's (the old runtime's are parked) |
+| `instructions` | User-space CPU instructions per draw or per dispatch, and per harness run, the p50 over the row's timed runs: the whole process's (`harness-<runtime>/<row>/per_run`), and where the runtime names its threads, theirs with the harness's thread (`.../own_per_run`) and the rest, a driver's own threads (`.../others_per_run`) | It is more than 1% over the base's; the harness's counts are judged by the instructions gate instead |
 | `gauge` | Live objects of one resource kind, the key ending in the point it was read at: `@100` and `@200` (loop iterations), `@drop` (after the device dropped) | `@drop` is not 0, or `@200` differs from `@100`; for the memory pool's `blocks`, which frees allocations an earlier workload left idle once the most bytes in use over its window falls and the device is quiet for 20 ms, only `@200` over `@100` |
 | `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: its last command buffer's commit-to-complete time where the workload times it (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a record of its own, `harness-gpu-<runtime>/<row>`, parked here and judged by the harness budget) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs |
 | `size` | The size a harness row whose size follows the device ran at (`long_4cb`) | The leg's two runtimes ran the row at different sizes: its times are then not compared (the harness budget) |
@@ -350,15 +350,19 @@ a few percent where its host time spreads up to 1.3 (the XTX's `simd_reduce`: GP
 µs over 8 runs, host time 44.9-55.8 µs). The frame and burst rows (`WALL_ROWS` in
 `scripts/matrix/results.py`), whose GPU time spans the gaps between their command buffers and
 spreads as widely, stay on their times and floors, and where both runtimes counted them (Linux,
-a node that grants the counter), each must also pass the instructions gate: its instructions per
-timed run on the new runtime (the whole process's, `instructions harness-<runtime>/<row>/per_run`)
-at most the old runtime's, and at most 1.03 times its stored count
-(`scripts/matrix/instructions.tsv`: one count per row where the legs agree within 3%, else one
-per driver family). A stored count only ratchets down: a leg more than 1% under it is named, and
-nothing raises it without a ruling; a row with none stored is named and gated against the old
-runtime alone. The count repeats to well under 1% between runs where the time does not, so a
-time that moves while its count holds names waits. Every row records its count; only these are
-gated on it. A row whose GPU time varies on
+a node that grants the counter), each must also pass the instructions gate, on the new runtime's
+own instructions per timed run: those of the threads it started, which `Gauges::threads` names,
+and of the harness's thread (`instructions harness-new/<row>/own_per_run`). A driver's own threads
+are left out (`.../others_per_run`, shown beside): they swing by millions of instructions per run
+between processes (NVIDIA's on `burst_160`, 0 to 25 million), where the runtime's own do not.
+EXACT: the own count is at most 1.03 times its stored count (`scripts/matrix/instructions.tsv`:
+one count per row where the legs agree within 3%, else one per driver family). A stored count
+only ratchets down: a leg more than 1% under it is named, and nothing raises it without a ruling;
+a row with none stored is named. LENIENT, named on every row: the own count is at most the old
+runtime's whole count (`.../per_run`), the old runtime naming none of its threads, so its driver's
+share cannot be taken out. A new runtime that records its whole count but not its own fails the
+row. A time that moves while its count holds names waits. Every row records its counts; only
+these are gated on them. A row whose GPU time varies on
 one card itself (`CARD_VARIANCE`: the XTX's `sampling` and `constant_managed`) is named on the
 leg's line as the card's variance and fails nothing. A row over it fails its leg unless a ruling, made after the work on that
 row, gave it a ceiling on that GPU (`HARNESS_CEILINGS` in `scripts/matrix/results.py`); a ceiling
@@ -387,7 +391,7 @@ last GPU end, is recorded as `time harness-gpu-<runtime>/<row>` where the row ha
 judges a row on it as above, and shows it beside the times of a row it does not judge on it; it is
 parked for the `time` rule. `run` and `show` print, under each leg's line, every harness row's time and GPU time
 on both runtimes and the ratio of the times, and where the leg counted them, its instructions per
-run and their ratio.
+run (with the new runtime's own) and their ratios.
 The budget goes with the old runtime.
 
 The old runtime's translations do not move either. The golden hash table compiles through
@@ -402,7 +406,9 @@ may open at `perf_event_paranoid` 2. On a hybrid x86 CPU it sums the event over 
 unit, since the generic event counts on one of them only.
 `metal2vulkan_devtools::instructions::ProcessInstructions` measures the harness's: one counter per
 core type opened with `inherit` before the harness makes a device, so it counts every thread the
-runtimes and their drivers start. Off Linux neither opens, so the Windows leg records no
+runtimes and their drivers start. `metal2vulkan_devtools::instructions::ThreadInstructions`
+measures the runtime's own: one counter per core type on each thread it names, opened by its OS
+id before a row's timed runs. Off Linux none opens, so the Windows leg records no
 `instructions`; a node that refuses them records none either.
 
 The rules and the sizing of the matrix's jobs have their own tests, which need no cluster:
