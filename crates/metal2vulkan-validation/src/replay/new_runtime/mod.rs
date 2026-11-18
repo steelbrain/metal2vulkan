@@ -932,11 +932,12 @@ impl NewRuntime {
                 let shared = shared.map_err(failed(call))?;
                 write_into(&shared, 0, bytes)?;
                 let copied = bytes.len() as u64;
-                // The GPU copy, placed as a Private buffer of its length is.
-                let copy = (self
-                    .places
-                    .take(rt::MemoryClass::Private, length, completed))
-                .map_err(failed(call))?;
+                // The GPU copy, placed as a Private buffer of its length is, with the same slack.
+                let copy =
+                    (self
+                        .places
+                        .take(rt::MemoryClass::Private, length, recorded, completed))
+                    .map_err(failed(call))?;
                 let at = (copy.block, copy.range.start);
                 let managed =
                     (self.device).new_managed_buffer((block, start), Some(at), length, copied);
@@ -1555,11 +1556,16 @@ impl NewRuntime {
                         }
                         ManagedCopies::Two => {
                             let completed = self.completed();
-                            let place =
-                                (self
-                                    .places
-                                    .take(rt::MemoryClass::Private, length, completed))
-                                .map_err(failed(call))?;
+                            // The GPU copy keeps the slack the buffer had in the recording.
+                            let recorded =
+                                granule(call.answer("gpuAddress").and_then(Value::as_address));
+                            let place = (self.places.take(
+                                rt::MemoryClass::Private,
+                                length,
+                                recorded,
+                                completed,
+                            ))
+                            .map_err(failed(call))?;
                             let copy_at = (place.block, place.range.start);
                             copy = Some(place);
                             device.new_managed_buffer(

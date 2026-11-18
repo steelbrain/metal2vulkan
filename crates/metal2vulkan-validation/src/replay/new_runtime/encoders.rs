@@ -381,7 +381,8 @@ impl NewRuntime {
         let completed = self.completed();
         let (places, device) = (&mut self.places, &self.device);
         self.asides.read_back(object, length, |length| {
-            let place = places.take(rt::MemoryClass::Shared, length, completed);
+            // The play's own aside: no recorded slack.
+            let place = places.take(rt::MemoryClass::Shared, length, granule(None), completed);
             let place = place.map_err(failed(call))?;
             let buffer = device.new_buffer(place.block, place.range.start, length, Some(0));
             Ok((buffer.map_err(failed(call))?, place))
