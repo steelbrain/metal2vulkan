@@ -1009,33 +1009,56 @@ pub(crate) mod on_device {
             .expect("a buffer")
     }
 
-    /// Busy work a queue keeps in flight until the test lets it end: each command buffer's
-    /// submission waits for a timeline semaphore to reach 1, which only the host signals
-    /// ([`Busy::open`]), then fills a block. It is submitted and does not complete before the
-    /// test's checks are made, however fast the device or however loaded the host. A wait
+    /// Busy work a queue keeps in flight until the test lets it end. Ahead of it, the test submits
+    /// on the runtime's `VkQueue`, under its lock, one batch of its own that waits for a timeline
+    /// semaphore to reach 1, which only the host signals ([`Busy::open`]). A semaphore wait's
+    /// second synchronization scope holds every command later in submission order, so each busy
+    /// command buffer (a fill of a block) is submitted and in flight and does not complete before
+    /// the test's checks are made, however fast the device or however loaded the host. A wait
     /// submitted before its signal is defined for a timeline semaphore, and the host signals it
     /// with `vkSignalSemaphore` (an event the host sets while a command buffer waiting on it is
     /// pending is not: `VUID-vkSetEvent-event-09543`). Dropped, it opens the work and waits for
-    /// each one, so a failed check does not leave the device's work waiting forever.
+    /// each busy command buffer and for its own batch, so a failed check does not leave the
+    /// device's work waiting forever.
     struct Busy {
         device: Device,
         semaphore: vk::Semaphore,
+        /// Signalled as the test's own batch completes.
+        gate: vk::Fence,
         work: Buffer,
         running: Vec<CommandBuffer>,
     }
 
     impl Busy {
         fn new(device: &Device) -> Busy {
+            let core = device.core();
             let mut timeline = vk::SemaphoreTypeCreateInfo::default()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
                 .initial_value(0);
             let info = vk::SemaphoreCreateInfo::default().push_next(&mut timeline);
-            // SAFETY: the device is live; the semaphore is destroyed in `drop`.
-            let semaphore = unsafe { device.core().device.create_semaphore(&info, None) }
-                .expect("a timeline semaphore");
+            // SAFETY: the device is live; the semaphore and the fence are destroyed in `drop`.
+            let (semaphore, gate) = unsafe {
+                (
+                    (core.device.create_semaphore(&info, None)).expect("a timeline semaphore"),
+                    (core
+                        .device
+                        .create_fence(&vk::FenceCreateInfo::default(), None))
+                    .expect("a fence"),
+                )
+            };
+            let wait = [vk::SemaphoreSubmitInfo::default()
+                .semaphore(semaphore)
+                .value(1)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)];
+            let batch = [vk::SubmitInfo2::default().wait_semaphore_infos(&wait)];
+            let queue = lock(&core.queues.runtime);
+            // SAFETY: the queue is held for the call; the batch only waits.
+            unsafe { core.device.queue_submit2(*queue, &batch, gate) }.expect("the gate's batch");
+            drop(queue);
             Busy {
                 device: device.clone(),
                 semaphore,
+                gate,
                 work: private(device),
                 running: Vec::new(),
             }
@@ -1052,7 +1075,6 @@ pub(crate) mod on_device {
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let (target, offset) = self.work.device_range();
             let size = self.work.length();
-            command_buffer.wait_semaphore_for_test(self.semaphore, 1);
             command_buffer
                 .record_for_test(&[&self.work], |device, command| {
                     // SAFETY: the command buffer is recording outside any render pass; the range
@@ -1094,8 +1116,14 @@ pub(crate) mod on_device {
             for command_buffer in &self.running {
                 command_buffer.wait_until_completed();
             }
-            // SAFETY: every submission that waits on it completed.
-            unsafe { (self.device.core().device).destroy_semaphore(self.semaphore, None) };
+            let device = &self.device.core().device;
+            // SAFETY: the gate's batch, the only one that names the semaphore, completed once the
+            // fence is signalled.
+            unsafe {
+                (device.wait_for_fences(&[self.gate], true, u64::MAX)).expect("the gate's batch");
+                device.destroy_fence(self.gate, None);
+                device.destroy_semaphore(self.semaphore, None);
+            }
         }
     }
 
