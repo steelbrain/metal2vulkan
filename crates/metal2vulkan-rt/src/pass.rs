@@ -235,8 +235,11 @@ impl Target {
     /// attachment the pass loads or does not care for, and for the stencil attachment.
     pub(crate) fn clear_color(&self) -> Option<vk::ClearColorValue> {
         let color = self.attachment.aspects == vk::ImageAspectFlags::COLOR;
+        if !color || self.load != vk::AttachmentLoadOp::CLEAR {
+            return None;
+        }
         // SAFETY: a colour attachment's clear value is its colour (`Pass::check`).
-        (color && self.load == vk::AttachmentLoadOp::CLEAR).then(|| unsafe { self.clear.color })
+        Some(unsafe { self.clear.color })
     }
 
     /// Its `VkRenderingAttachmentInfo`; `resumed`, for a rendering the pass begins again, which
