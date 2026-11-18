@@ -1405,13 +1405,12 @@ pub enum Feature {
     /// Kernel `[[stage_in]]`: a stage-input descriptor combination whose Metal meaning is not
     /// established.
     KernelStageIn,
-    /// A vertex buffer layout stepped per instance at a rate above 1, or at the constant step
-    /// (`MTLVertexStepFunctionConstant`), on a profile that fetches every attribute in fixed
-    /// function (the identity domains, where the pulled fetch is not taken): fixed-function input
-    /// divides the instance index only with `vertexAttributeInstanceRateDivisor` (and
-    /// `vertexAttributeInstanceRateZeroDivisor` for the constant step), a rate within
-    /// `maxVertexAttribDivisor`, and `supportsNonZeroFirstInstance`, as a Metal draw may carry a
-    /// base instance.
+    /// A vertex buffer layout stepped per instance at a rate above 1, on a profile that fetches
+    /// every attribute in fixed function (the identity domains, where the pulled fetch is not
+    /// taken): fixed-function input divides the instance index only with
+    /// `vertexAttributeInstanceRateDivisor`, a rate within `maxVertexAttribDivisor`, and
+    /// `supportsNonZeroFirstInstance`, as a Metal draw may carry a base instance. The refusal
+    /// names the feature, else the limit, the profile lacks.
     VertexStepRate,
     /// A vertex attribute whose layout fixed-function input cannot fetch, on a profile that fetches
     /// every attribute in fixed function (the identity domains, where the pulled fetch is not

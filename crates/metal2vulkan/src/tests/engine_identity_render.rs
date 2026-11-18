@@ -37,6 +37,7 @@ use crate::pipeline::descriptor::{
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{PushField, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{description, engine_dir, llvm_assemble, AssembleError};
+use crate::pipeline::vertex::VertexStride;
 use crate::spirv::testing::check_words_valid;
 use crate::vk;
 
@@ -217,20 +218,22 @@ fn device_new_still_refuses_render_functions_under_the_identity_domains() {
     }
 }
 
-/// Under the identity domains with no buffer robustness, `ima_vertex`'s attributes are fetched in
-/// fixed function, its `short` mark into a variable declared `int`, and a layout stepped per
-/// instance at rate 2 is refused by the divisor feature it needs.
-#[test]
-fn from_queries_fetches_every_attribute_in_fixed_function() {
+/// `icb_merged_attributes`' library, or `None` (printed) where `llvm-as` is missing.
+fn ima_library() -> Option<Library> {
     let ll = engine_dir().join("icb_merged_attributes.ll");
-    let library = match llvm_assemble(&ll) {
-        Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+    match llvm_assemble(&ll) {
+        Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
         Err(AssembleError::Missing(why)) => {
             eprintln!("SKIPPED: {why}");
-            return;
+            None
         }
         Err(e) => panic!("{}: {e:?}", ll.display()),
-    };
+    }
+}
+
+/// `ima_vertex` and `ima_fragment` into one `RGBA32Uint` attachment: attribute 0 a `float2` in
+/// layout 0 of stride 8, attribute 1 a `short` in layout 1 of stride 4, both stepped per vertex.
+fn ima_descriptor(library: &Library) -> RenderPipelineDescriptor {
     let function = |name| {
         StageSource::Function(FunctionDescriptor::new(
             library.function(name).expect("the function"),
@@ -252,17 +255,35 @@ fn from_queries_fetches_every_attribute_in_fixed_function() {
         .layouts
         .insert(1, VertexBufferLayoutDescriptor::new(Some(4)));
     d.vertex_descriptor = Some(vertex);
+    d
+}
+
+/// `stem`'s profile under the identity domains with no buffer robustness and without
+/// `vertexAttributeInstanceRateDivisor`, as the new runtime's floor enables neither.
+fn fixed_function_device(stem: &str) -> Device {
+    let mut desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
+    for robust in [
+        VkFeature::RobustBufferAccess,
+        VkFeature::RobustBufferAccess2,
+    ] {
+        desc.features.remove(&robust);
+    }
+    desc.features
+        .remove(&VkFeature::VertexAttributeInstanceRateDivisor);
+    Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Under the identity domains with no buffer robustness, `ima_vertex`'s attributes are fetched in
+/// fixed function, its `short` mark into a variable declared `int`, and a layout stepped per
+/// instance at rate 2 is refused by the divisor feature it needs.
+#[test]
+fn from_queries_fetches_every_attribute_in_fixed_function() {
+    let Some(library) = ima_library() else {
+        return;
+    };
+    let d = ima_descriptor(&library);
     for stem in PROFILES {
-        let mut desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
-        for robust in [
-            VkFeature::RobustBufferAccess,
-            VkFeature::RobustBufferAccess2,
-        ] {
-            desc.features.remove(&robust);
-        }
-        desc.features
-            .remove(&VkFeature::VertexAttributeInstanceRateDivisor);
-        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let device = fixed_function_device(stem);
         let p = (device.compile_render_pipeline(&d, &Budget::standard()))
             .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
         let formats: Vec<vk::Format> = p.vertex_input.attributes.iter().map(|a| a.format).collect();
@@ -299,5 +320,60 @@ fn from_queries_fetches_every_attribute_in_fixed_function() {
             ),
             other => panic!("{stem}: {:?}", other.map(|_| "compiled")),
         }
+    }
+}
+
+/// Under the identity domains Metal's constant step is a vertex-rate binding of stride 0, with no
+/// divisor and whatever the layout's own stride: on lavapipe, without
+/// `vertexAttributeInstanceRateDivisor` and without `supportsNonZeroFirstInstance`, `ima_vertex`'s
+/// mark layout at the constant step links to that binding, both modules L3-valid. On the
+/// portability subset of `moltenvk-m3`, whose `minVertexInputBindingStrideAlignment` of 1 makes a
+/// stride of 0 illegal (`VUID-VkVertexInputBindingDescription-stride-04456`), it is refused as
+/// `Unsupported{VertexInputLayout}`. Before the vertex-rate form both were
+/// `Unsupported{VertexStepRate}`, needing the divisor.
+#[test]
+fn from_queries_fetches_a_constant_step_at_vertex_rate_with_stride_zero() {
+    let Some(library) = ima_library() else {
+        return;
+    };
+    let mut d = ima_descriptor(&library);
+    let layouts = &mut d.vertex_descriptor.as_mut().expect("the layouts").layouts;
+    let layout = layouts.get_mut(&1).expect("layout 1");
+    layout.step_function = VertexStepFunction::Constant;
+    layout.step_rate = 0;
+    let lavapipe = fixed_function_device("lavapipe");
+    assert!(
+        !lavapipe
+            .profile()
+            .fields()
+            .limits
+            .supports_non_zero_first_instance,
+        "lavapipe's description reports supportsNonZeroFirstInstance, so this proves less"
+    );
+    let p = (lavapipe.compile_render_pipeline(&d, &Budget::standard()))
+        .unwrap_or_else(|e| panic!("lavapipe: {e:?}"));
+    let bindings: Vec<(u32, vk::VertexInputRate, u32, VertexStride)> = (p.vertex_input.bindings)
+        .iter()
+        .map(|b| (b.buffer_index, b.input_rate, b.divisor, b.stride))
+        .collect();
+    assert_eq!(
+        bindings,
+        [
+            (0, vk::VertexInputRate::VERTEX, 1, VertexStride::Static(8)),
+            (1, vk::VertexInputRate::VERTEX, 1, VertexStride::Static(0)),
+        ],
+        "lavapipe: the constant step's binding"
+    );
+    assert!(p.vertex_input.pulled.is_empty(), "lavapipe: nothing pulled");
+    for stage in &p.stages {
+        check_words_valid(&stage.spirv, &p.requirements, lavapipe.profile())
+            .unwrap_or_else(|e| panic!("lavapipe: {:?}: {e}", stage.stage));
+    }
+    let portable = fixed_function_device("moltenvk-m3");
+    match portable.compile_render_pipeline(&d, &Budget::standard()) {
+        Err(Error::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::VertexInputLayout, "moltenvk-m3: {u:?}")
+        }
+        other => panic!("moltenvk-m3: {:?}", other.map(|_| "compiled")),
     }
 }

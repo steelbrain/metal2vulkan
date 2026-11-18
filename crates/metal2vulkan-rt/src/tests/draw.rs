@@ -21,7 +21,8 @@
 //!     `set_vertex_bytes`' copy, fetched in fixed function; an unnormalized signed-integer
 //!     attribute (the owned fixture `engine/icb_merged_attributes.ll`'s `short` mark) is
 //!     sign-extended into a variable declared `int`, and a layout stepped per instance at rate 2
-//!     is the translator's refusal.
+//!     is the translator's refusal; a layout at Metal's constant step reads its first element
+//!     for every vertex and instance, from a base instance of 1.
 //!   - a draw whose vertex buffer is bound off its argument's alignment is refused before
 //!     anything is recorded, and the same buffers bound aligned draw.
 //!   - what Metal refuses is refused, and what a draw does not build is a gap: no pipeline state,
@@ -700,6 +701,99 @@ mod on_device {
                 Ok(_) => panic!("{name}: a step rate of 2 made a state"),
             }
             println!("{name}: a short of -2 read as int, a step rate of 2 refused");
+        });
+    }
+
+    /// Metal's constant step reads the layout's first element for every vertex and instance: a
+    /// vertex-rate binding of stride 0, with no divisor, on every device. `ima_vertex`'s `uint`
+    /// mark comes from a layout at the constant step over four distinct marks; two instances of a
+    /// triangle are drawn from vertex 1 at base instance 1, each instance moved down 4 rows, the
+    /// second covering the lower half of the target over the first. Every texel holds the first
+    /// mark with the provoking vertex's ID, 1, and its instance: 1 in the upper half, 2 in the
+    /// lower. A vertex-rate binding at the layout's stride would read the second mark there, and
+    /// any instance step the second and third.
+    #[test]
+    fn every_device_fetches_a_constant_step_attribute_for_every_vertex_and_instance() {
+        let Some(library) = library(&engine_dir().join("icb_merged_attributes.ll")) else {
+            return;
+        };
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let mut d = RenderPipelineDescriptor::new(function("ima_vertex"));
+        d.fragment = Some(function("ima_fragment"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+        let mut vertex = VertexDescriptor::new();
+        let attributes = [(VertexFormat::Float2, 8), (VertexFormat::UInt, 4)];
+        for (index, (format, stride)) in (0u32..).zip(attributes) {
+            let attribute = VertexAttributeDescriptor::new(format, 0, index);
+            vertex.attributes.insert(index, attribute);
+            vertex
+                .layouts
+                .insert(index, VertexBufferLayoutDescriptor::new(Some(stride)));
+        }
+        let marks = vertex.layouts.get_mut(&1).expect("the marks' layout");
+        marks.step_function = VertexStepFunction::Constant;
+        marks.step_rate = 0;
+        d.vertex_descriptor = Some(vertex);
+        // `ima_vertex` maps pixel positions to clip space by the frame's width and height and
+        // moves instance `iid` down `iid` rows of the frame's row stride, 4. Vertices 1 to 3 are a
+        // triangle twice the target's side, starting 4 rows above it: instance 1 covers the whole
+        // target and instance 2 its lower half, and no pixel centre lies on an edge. Vertex 0 is
+        // not drawn.
+        let side = SIDE as f32;
+        let positions = floats(&[
+            side,
+            side,
+            0.0,
+            -4.0,
+            2.0 * side,
+            -4.0,
+            0.0,
+            2.0 * side - 4.0,
+        ]);
+        let frame = floats(&[side, side, 4.0, 0.0]);
+        let marks: Vec<u8> = [0xA0u32, 0xA1, 0xA2, 0xA3]
+            .iter()
+            .flat_map(|m| m.to_le_bytes())
+            .collect();
+        each_device("draw_constant_step", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let xy = buffers.of(&device, &positions);
+            let mark = buffers.of(&device, &marks);
+            let color = target(
+                &device,
+                PixelFormat::RGBA32Uint,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&xy), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&mark), 0, 1));
+            draw(encoder.set_vertex_bytes(&frame, 2));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 1, 3, 2, 1));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            for (at, texel) in read(&color, 16).chunks(16).enumerate() {
+                let word = |i: usize| u32::from_le_bytes([0, 1, 2, 3].map(|b| texel[4 * i + b]));
+                let instance = match at / SIDE as usize {
+                    0..4 => 1,
+                    _ => 2,
+                };
+                assert_eq!(
+                    [word(0), word(1), word(2), word(3)],
+                    [0xA0, 1, instance, 1],
+                    "{name}: texel {at}"
+                );
+            }
+            println!("{name}: the first mark at every vertex of instances 1 and 2");
         });
     }
 

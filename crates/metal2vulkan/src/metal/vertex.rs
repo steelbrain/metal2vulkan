@@ -155,7 +155,8 @@ pub const MAX_VERTEX_ALIGNMENT: u32 = 4;
 pub enum AttributeFetch {
     /// Fixed-function vertex input of this format, with this binding input rate and divisor
     /// (divisor 1 when not divided, and 0 -- the same element for every instance -- for Metal's
-    /// constant step, whose binding link emits with a stride of 0).
+    /// constant step at instance rate). Link emits a constant step's binding with a stride of 0
+    /// at either rate.
     FixedFunction {
         format: vk::Format,
         input_rate: vk::VertexInputRate,
@@ -176,7 +177,8 @@ pub enum AttributeFetch {
 ///   it Vulkan requires `firstInstance == 0` for any divisor other than 1), else pulled. Vulkan
 ///   fetches at `firstInstance + (instance - firstInstance) / n`, the same element MoltenVK maps
 ///   Metal's step rate to (expected, not verified on Metal).
-/// - `Constant`: instance rate with divisor 0, on a binding `pipeline::link::vertex` emits with a
+/// - `Constant` (outside the identity domains, which take the vertex-rate form below): instance
+///   rate with divisor 0, on a binding `pipeline::link::vertex` emits with a
 ///   **stride of 0**; pulled where that binding is not available. Metal fetches the layout's first
 ///   element whatever the base instance, and Vulkan's zero divisor fetches at
 ///   `firstInstance * stride` ("Vertex Input Extraction":
@@ -211,11 +213,19 @@ pub enum AttributeFetch {
 /// fetch reads through a descriptor, which those domains hold none of. Every attribute is fetched
 /// in fixed function, and the containment rule above does not move it: the device bounds the
 /// fetch as it bounds any (with no buffer robustness, a fetch outside its buffer reads what the
-/// device gives). What fixed-function input cannot take is refused by what it needs: a rate above
-/// 1 or the constant step without the divisor it takes ([`Feature::VertexStepRate`], with the
-/// missing `vertexAttributeInstanceRate*Divisor` feature or the `maxVertexAttribDivisor` limit), a
-/// format the profile cannot fetch as `VERTEX_BUFFER` ([`Feature::Format`], with that format
-/// usage), and `FloatRGB9E5`, whose fixed-function fetch a conformant device's answer differs from
+/// device gives). `Constant` is there a **vertex-rate** binding of stride 0, on every device,
+/// with no divisor: Vulkan computes a vertex-rate attribute's address as
+/// `bufferBindingAddress + vertexIndex * stride + attribDesc.offset` ("Vertex Input Address
+/// Calculation"), so a stride of 0 reads the layout's first element for every vertex and every
+/// instance, Metal's constant step; and a binding's stride has no lower bound but the portability
+/// subset's (`VUID-VkVertexInputBindingDescription-stride-00619` bounds it above by
+/// `maxVertexInputBindingStride` and is the only other rule on it, and
+/// `VUID-vkCmdBindVertexBuffers2-pStrides-06209` names 0 as a stride a bind may set), where link
+/// refuses it as `Feature::VertexInputLayout`. What fixed-function input cannot take is refused by
+/// what it needs: a per-instance rate above 1 ([`Feature::VertexStepRate`], with the missing
+/// `vertexAttributeInstanceRateDivisor` feature or the `maxVertexAttribDivisor` limit), a format
+/// the profile cannot fetch as `VERTEX_BUFFER` ([`Feature::Format`], with that format usage), and
+/// `FloatRGB9E5`, whose fixed-function fetch a conformant device's answer differs from
 /// (`Feature::Format`, not implemented).
 pub fn attribute_fetch(
     format: VertexFormat,
@@ -259,8 +269,16 @@ pub(crate) fn fetch_as(
             {
                 (vk::VertexInputRate::INSTANCE, n)
             }
-            n => return pulled(divided(profile, Some(n))),
+            n => return pulled(divided(profile, n)),
         },
+        // Under the identity domains, a vertex-rate binding that link emits with a stride of 0:
+        // its address is `bufferBindingAddress + vertexIndex * 0 + attribDesc.offset` for every
+        // vertex and instance (the Vulkan specification's "Vertex Input Address Calculation"),
+        // the layout's first element, which is what Metal's constant step reads. A stride of 0 is
+        // legal on any binding outside the portability subset: its only other rule,
+        // VUID-VkVertexInputBindingDescription-stride-00619, bounds it above, and
+        // VUID-vkCmdBindVertexBuffers2-pStrides-06209 names 0 among the strides a bind may set.
+        VertexStepFunction::Constant if identity => (vk::VertexInputRate::VERTEX, 1),
         // Metal's constant step reads the layout's first element whatever the base instance, and a
         // zero divisor reads element `firstInstance`: the same element for every draw exactly on a
         // binding of stride 0, which link emits for this fetch and the portability subset forbids.
@@ -274,7 +292,7 @@ pub(crate) fn fetch_as(
         {
             (vk::VertexInputRate::INSTANCE, 0)
         }
-        VertexStepFunction::Constant => return pulled(divided(profile, None)),
+        VertexStepFunction::Constant => return Ok(AttributeFetch::Pulled),
         VertexStepFunction::PerPatch | VertexStepFunction::PerPatchControlPoint => {
             return Err(Unsupported::not_implemented(Feature::Tessellation).into())
         }
@@ -304,37 +322,27 @@ pub(crate) fn fetch_as(
     })
 }
 
-/// The refusal of a divided instance step that fixed-function input cannot take on `profile`:
-/// Metal's per-instance step at rate `n` above 1 (`Some(n)`), or its constant step (`None`). It
-/// names what the profile lacks of the divisor: `vertexAttributeInstanceRateDivisor`, and
-/// `vertexAttributeInstanceRateZeroDivisor` for the constant step, or the rate past
-/// `maxVertexAttribDivisor`; where it lacks none of those, `supportsNonZeroFirstInstance` (or the
-/// portability subset's stride of 0, for the constant step), which no capability names.
-fn divided(profile: &DeviceProfile, rate: Option<u32>) -> Unsupported {
+/// The refusal of Metal's per-instance step at rate `n` above 1 where fixed-function input cannot
+/// divide the instance index on `profile`. It names what the profile lacks:
+/// `vertexAttributeInstanceRateDivisor`, else the rate past `maxVertexAttribDivisor`; where it
+/// lacks neither, `supportsNonZeroFirstInstance`, which no capability names (a Metal draw may
+/// carry a base instance, and a divisor other than 1 needs a nonzero `firstInstance` to be legal,
+/// VUID-vkCmdDraw-pNext-09461).
+fn divided(profile: &DeviceProfile, n: u32) -> Unsupported {
     let f = profile.fields();
-    let divisor = f.fragment.vertex_attribute_divisor;
-    let mut needs = Vec::new();
-    if !divisor {
-        needs.push(Capability::Feature(
+    let needs = match f.fragment.vertex_attribute_divisor {
+        false => Some(Capability::Feature(
             VkFeature::VertexAttributeInstanceRateDivisor,
-        ));
-    }
-    match rate {
-        None if !f.fragment.vertex_attribute_zero_divisor => needs.push(Capability::Feature(
-            VkFeature::VertexAttributeInstanceRateZeroDivisor,
         )),
-        Some(n) if divisor && n > f.limits.max_vertex_attrib_divisor => {
-            needs.push(Capability::Limit {
-                limit: VkLimit::MaxVertexAttribDivisor,
-                required: u64::from(n),
-                available: u64::from(f.limits.max_vertex_attrib_divisor),
-            })
-        }
-        _ => {}
-    }
-    match needs.is_empty() {
-        true => Unsupported::not_implemented(Feature::VertexStepRate),
-        false => Unsupported::needs_any_of(Feature::VertexStepRate, vec![needs]),
+        true => (n > f.limits.max_vertex_attrib_divisor).then_some(Capability::Limit {
+            limit: VkLimit::MaxVertexAttribDivisor,
+            required: u64::from(n),
+            available: u64::from(f.limits.max_vertex_attrib_divisor),
+        }),
+    };
+    match needs {
+        Some(needs) => Unsupported::needs(Feature::VertexStepRate, needs),
+        None => Unsupported::not_implemented(Feature::VertexStepRate),
     }
 }
 

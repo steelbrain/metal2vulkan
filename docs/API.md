@@ -1178,11 +1178,14 @@ A `RenderPipeline` holds:
   (`Device::from_queries`' profile) nothing is pulled, as the pulled fetch reads through a
   descriptor: every attribute is fetched in fixed function, with or without buffer robustness
   (a fetch outside its buffer reads what the device gives), an unnormalized signed-integer format
-  into a variable declared `int`; an attribute fixed-function input cannot take is refused,
-  `Unsupported{VertexStepRate}` (a per-instance rate above 1 or the constant step without the
-  divisor features), `Unsupported{Format}` (a format the device cannot fetch as `VERTEX_BUFFER`,
+  into a variable declared `int`, the constant step at vertex rate on a binding of stride 0 (no
+  divisor); an attribute fixed-function input cannot take is refused,
+  `Unsupported{VertexStepRate}` (a per-instance rate above 1, naming the missing
+  `vertexAttributeInstanceRateDivisor` or the `maxVertexAttribDivisor` it passes),
+  `Unsupported{Format}` (a format the device cannot fetch as `VERTEX_BUFFER`,
   and `FloatRGB9E5`) or `Unsupported{VertexInputLayout}` (an offset or stride off the format's
-  alignment or past the device's limits, or more attributes or layouts than its limits);
+  alignment or past the device's limits, more attributes or layouts than its limits, or the
+  constant step's stride of 0 under the portability subset);
 - `graphics`: the fixed-function state (topology, attachment formats and blend states, sample
   count, dynamic states, input attachments, ...). Build
   `VkPipelineColorBlendStateCreateInfo::pAttachments` from `graphics.color_blend_attachments()`.

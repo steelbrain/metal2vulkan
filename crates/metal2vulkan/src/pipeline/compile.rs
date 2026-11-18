@@ -2525,8 +2525,8 @@ pub(crate) fn fragment_inputs(
 /// A constant step is in that set because it is the stronger statement of the same thing: the
 /// fetch reads the layout's first element for every vertex and every instance, so a varying it
 /// makes is alike at every vertex of a primitive as surely as a per-instance one's is. It needs
-/// saying here only since the step became a fixed-function binding (`metal::vertex::fetch_as`
-/// answers a divisor of 0): a pulled constant-step fetch reads element 0 in the shader, where the
+/// saying here only since the step became a fixed-function binding of stride 0
+/// (`metal::vertex::fetch_as`): a pulled constant-step fetch reads element 0 in the shader, where the
 /// uniformity is already plain, so this listing is what keeps the two fetch paths writing the
 /// same varyings flat.
 fn instanced_attributes(

@@ -1176,13 +1176,20 @@ or does not check is rebuilt from the generations' names, with young counted ful
     validation crate's device profiles of RADV, ANV, NVIDIA and lavapipe report the bit for
     every one of them but `FloatRGB9E5`, which only lavapipe's reports;
   - steps: per vertex, and per instance at rate 1, map to the vertex and instance input rates;
+    the constant step is a vertex-rate binding of stride 0, on every device and with no divisor:
+    Vulkan reads a vertex-rate attribute at `vertexIndex * stride` past the bound offset, so every
+    vertex and instance reads the layout's first element, and no rule but the portability
+    subset's bounds a binding's stride from below;
   - offsets and strides: the descriptor's, baked, each a multiple of the format's component size
-    and within the device's offset and stride limits.
+    and within the device's offset and stride limits; on a portability-subset device the constant
+    step's stride of 0 is below `minVertexInputBindingStrideAlignment` and refused
+    (`VertexInputLayout`).
 - What has no fixed-function equivalent on the floor is refused at creation by the translator,
   `Error::Translation` naming what it needs, and never pulled into the shader:
-  - a per-instance step rate above 1, and the constant step (`VertexStepRate`): Vulkan divides the
-    instance index only with `VK_KHR_vertex_attribute_divisor`'s features and
-    `supportsNonZeroFirstInstance`, which the floor does not enable;
+  - a per-instance step rate above 1 (`VertexStepRate`, needing
+    `vertexAttributeInstanceRateDivisor`): Vulkan divides the instance index only with that
+    feature, a rate within `maxVertexAttribDivisor` and `supportsNonZeroFirstInstance`, and the
+    floor does not enable the feature;
   - a format the device's query does not report for `VERTEX_BUFFER` (`Format`, with the format),
     and `FloatRGB9E5` on every device (`Format`, not implemented: of those profiles only
     lavapipe's reports the format, and its fetch answers 0 for the fourth component, where Metal

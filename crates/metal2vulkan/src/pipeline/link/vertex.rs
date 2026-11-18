@@ -25,13 +25,15 @@
 //!    fixed-function input only under robust buffer access (`VUID-vkCmdDraw-None-02721`), and a
 //!    Metal draw may fetch past its buffer, so the fetch moves into the shader behind the check.
 //!    Every later item then finds no fixed-function attribute.
-//!    A layout of Metal's **constant step** is answered there with a divisor of 0, whose binding
-//!    this module emits with a **stride of 0** ([`binding_stride`]): Vulkan's zero divisor fetches
-//!    element `firstInstance`, Metal's constant step the first element whatever the base instance,
-//!    and a stride of 0 is what makes those the same bytes for every draw. Items 3, 4 and 6 read
-//!    the stride the binding carries and not the layout's, so such a binding meets their limits as
-//!    a stride of 0 does -- including the portability subset's, which a stride of 0 fails, so the
-//!    constant step stays pulled there;
+//!    A layout of Metal's **constant step** is answered there with a divisor of 0 at instance
+//!    rate, or under the identity domains at vertex rate, and this module emits its binding with
+//!    a **stride of 0** ([`binding_stride`]): Vulkan's zero divisor fetches element
+//!    `firstInstance` and a vertex-rate binding element `vertexIndex`, Metal's constant step the
+//!    first element whatever the vertex, instance and base instance, and a stride of 0 is what
+//!    makes those the same bytes for every draw. Items 3, 4 and 6 read the stride the binding
+//!    carries and not the layout's, so such a binding meets their limits as a stride of 0 does --
+//!    including the portability subset's, which a stride of 0 fails, so the constant step stays
+//!    pulled there, and under the identity domains is refused there;
 //! 3. **alignment**: Metal lets a stride and an attribute offset be any byte multiple on Apple5 and
 //!    later, while Vulkan's fixed-function attribute address must be a multiple of the format's
 //!    component size (of the whole format for a packed one). An attribute whose offset or static
@@ -94,7 +96,7 @@ use crate::lower::stage_io::fetch::{class_match, encoding, ClassMatch, Encoding}
 use crate::metal::vertex::{
     fetch_as, vertex_alignment, vk_scaled_vertex_format, vk_vertex_format, AttributeFetch,
 };
-use crate::metal::VertexFormat;
+use crate::metal::{VertexFormat, VertexStepFunction};
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::descriptor::{
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
@@ -150,18 +152,19 @@ fn class_format(
 }
 
 /// The stride the Vulkan binding of `fetch` on `layout` is emitted with (`None`: set per bind, a
-/// runtime fact the binder owns): **0** for Metal's constant step, which `metal::vertex::fetch_as`
-/// answers with a divisor of 0 and no other step can, and `layout`'s own otherwise.
+/// runtime fact the binder owns): **0** for a fixed-function fetch of Metal's constant step, and
+/// `layout`'s own otherwise.
 ///
-/// A zero divisor fetches element `firstInstance` ("Vertex Input Extraction"), and Metal's
-/// constant step fetches the layout's first element whatever the base instance, so the binding
-/// must read the same bytes at every base instance: `firstInstance * 0`. The layout's own stride
-/// is not key data of a fetch that reads one element, and every limit below reads the stride the
-/// binding carries rather than the layout's, so a constant-step binding meets them as a stride of
-/// 0 does.
+/// Metal's constant step fetches the layout's first element for every vertex and instance,
+/// whatever the base instance. `metal::vertex::fetch_as` answers it with an instance-rate binding
+/// of divisor 0, which fetches element `firstInstance`, or under the identity domains with a
+/// vertex-rate binding, which fetches element `vertexIndex` ("Vertex Input Address
+/// Calculation"); at a stride of 0 both read the first element. The layout's own stride is not
+/// key data of a fetch that reads one element, and every limit below reads the stride the binding
+/// carries rather than the layout's, so a constant-step binding meets them as a stride of 0 does.
 fn binding_stride(fetch: AttributeFetch, layout: &VertexBufferLayoutDescriptor) -> Option<u32> {
-    match fetch {
-        AttributeFetch::FixedFunction { divisor: 0, .. } => Some(0),
+    match (fetch, layout.step_function) {
+        (AttributeFetch::FixedFunction { .. }, VertexStepFunction::Constant) => Some(0),
         _ => layout.stride,
     }
 }
@@ -525,11 +528,13 @@ pub fn vertex_input_state(
         }
     }
     // The varyings the stage writes alike at every vertex of a primitive hold only while the
-    // attributes it took as stepped per instance are.
+    // attributes it took as stepped per instance or at the constant step are: an instance-rate
+    // binding, or a constant step's binding of stride 0, which reads one element at any rate.
     for a in &vs.io.instanced_attributes {
         let per_instance = resolved.get(a).is_some_and(|r| match r.fetch {
             AttributeFetch::FixedFunction { input_rate, .. } => {
                 input_rate == crate::vk::VertexInputRate::INSTANCE
+                    || r.layout.step_function == VertexStepFunction::Constant
             }
             AttributeFetch::Pulled => false,
         });

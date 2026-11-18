@@ -58,7 +58,8 @@ pub struct VertexBinding {
     pub buffer_index: u32,
     pub input_rate: vk::VertexInputRate,
     /// Instance divisor (`VK_EXT_vertex_attribute_divisor`); 1 when not divided, 0 for a constant
-    /// step with zero-divisor support.
+    /// step at instance rate with zero-divisor support. Under the identity domains a constant step
+    /// is a vertex-rate binding of divisor 1 and stride 0.
     pub divisor: u32,
     pub stride: VertexStride,
 }
