@@ -476,7 +476,7 @@ impl crate::ComputeDevice for Device {
         }
     }
 
-    /// At an index as [`new_texture`](Self::new_texture) places a texture.
+    /// At an index, as `new_texture` places a texture.
     fn new_texture_view(
         &self,
         parent: &rt::Texture,
