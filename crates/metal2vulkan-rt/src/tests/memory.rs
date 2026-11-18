@@ -1792,7 +1792,30 @@ mod on_device {
                 metrics.kept_bytes_zeroed,
                 per(metrics.kept_zeroing_nanos, metrics.kept_bytes_zeroed >> 20),
             );
-            drop((third, private));
+
+            // A take that leaves the class's free bytes under 8 MiB: the block-maker thread makes
+            // and zeroes the next allocation. The host pages the process holds, before and after.
+            let resident = || {
+                let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+                let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+                Some(pages * 4096)
+            };
+            let (zeroed, before) = (metrics.allocations_zeroed, resident());
+            let low = (device.take_block(MemoryClass::Shared, 2 * LEN))
+                .unwrap_or_else(|error| panic!("{name}: a Shared block: {error}"));
+            assert_eq!(low.zeroed, 2 * LEN, "{name}: the allocation's clean bytes");
+            wait_until("the next allocation zeroed", || {
+                counters.metrics().allocations_zeroed > zeroed
+            });
+            if let (Some(before), Some(after)) = (before, resident()) {
+                println!(
+                    "memory: {name}: zero mark; the next Shared allocation made and zeroed ahead \
+                     of need, 16 MiB: the process's resident bytes went from {before} to {after} \
+                     ({:+} MiB)",
+                    (after as i64 - before as i64) / (1 << 20)
+                );
+            }
+            drop((third, private, low));
             drop(device);
             wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
