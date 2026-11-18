@@ -3,6 +3,7 @@
 
 use super::addresses::AddressMap;
 use super::new_runtime::unwritten::Unwritten;
+use super::new_runtime::{next_index, top_index};
 use super::player::{
     Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
     TextureWrites, WAIT_COMPLETED,
@@ -10,8 +11,10 @@ use super::player::{
 use super::stream::{segments, Call, StreamError, StreamReader, StreamWriter};
 use super::value::{hex, Value};
 use crate::ScratchDir;
+use metal2vulkan_rt as rt;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -1004,6 +1007,62 @@ fn a_resource_id_the_runtime_gives_otherwise_is_reported() {
         "{lines:?}"
     );
     assert!(lines.contains(&"id #4 0x7 none".to_owned()), "{lines:?}");
+}
+
+/// A texture its descriptor marks `outside` is outside the program's IDs: a `gpuResourceID`
+/// record of it, where the mark or the record is wrong, stops the play, naming the call; a plain
+/// texture's is compared as ever.
+#[test]
+fn a_texture_marked_outside_whose_id_the_program_saw_stops_the_play() {
+    let mut kept = Kept {
+        ids: HashMap::from([(5, 0x10)]),
+        ..Kept::default()
+    };
+    let id = |id: u64| [("gpuResourceID", Value::Uint(id))];
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 2, &[map(&[])], &[])?;
+        let outside = map(&[("outside", Value::Bool(true))]);
+        w.call("m2v.textureDescriptor", 0, 3, &[outside], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 4, &[Value::Object(3)], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 5, &[Value::Object(2)], &[])?;
+        w.call("gpuResourceID", 5, 0, &[], &id(0x10))?;
+        w.call("gpuResourceID", 4, 0, &[], &id(0x11))
+    });
+    match ended {
+        Err(PlayError::Invalid(why)) => assert!(why.contains("gpuResourceID of #4"), "{why}"),
+        other => panic!("the play went on past a marked texture's ID: {other:?}"),
+    }
+    assert_eq!(kept.asked, [5]);
+    assert_eq!(report.ids, []);
+}
+
+/// The new runtime's backend places a texture marked `outside` at the highest free index of its
+/// class and leaves its sequence where it was: the plain texture made after it takes the index
+/// it takes where the stream makes no marked one, and a second marked texture the next free
+/// index down.
+#[test]
+fn a_texture_marked_outside_takes_no_index_of_the_sequence() {
+    let range = 8..16;
+    let in_use = RefCell::new(HashSet::new());
+    let make = |index: u32| match in_use.borrow_mut().insert(index) {
+        true => Ok(index),
+        false => Err(rt::Error::Refused(rt::Refusal::IndexInUse {
+            class: rt::IndexClass::Texture,
+            index,
+        })),
+    };
+    let plain = |last: &mut u32| next_index(last, range.clone(), |_| false, make).unwrap();
+    let mut last = 0;
+    let unmarked = [plain(&mut last).unwrap(), plain(&mut last).unwrap()];
+    in_use.borrow_mut().clear();
+    let mut last = 0;
+    let first = plain(&mut last).unwrap();
+    let marked = top_index(range.clone(), make).unwrap().unwrap();
+    let second = plain(&mut last).unwrap();
+    let marked_again = top_index(range.clone(), make).unwrap().unwrap();
+    assert_eq!([first, second], unmarked);
+    assert_eq!((marked, marked_again), (15, 14));
 }
 
 /// The first object of the player's own.

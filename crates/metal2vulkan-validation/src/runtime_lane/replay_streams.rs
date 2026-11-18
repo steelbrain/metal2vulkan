@@ -12,6 +12,7 @@
 //! - A pass setter's object 0 clears the attachment's texture it sets to nil.
 //! - A buffer made as a copy of host memory starts with its contents, and the IDs the program saw
 //!   are compared with the runtime's.
+//! - A texture its descriptor marks `outside` takes none of the program's IDs.
 //! - A Private buffer's bytes a stream holds around a dispatch go in before the dispatch, and the
 //!   bytes it leaves are compared with the stream's after.
 //!
@@ -658,6 +659,53 @@ fn a_copied_buffer_starts_with_its_contents_and_ids_are_compared() {
             (7, recorded)
         );
         assert!(report.ids[0].played.is_some_and(|id| id != recorded));
+    });
+}
+
+/// Two plain textures and, where `marked`, a texture its descriptor marks `outside` made between
+/// them, the IDs the program saw of the plain ones `recorded`.
+fn outside_stream(dir: &ScratchDir, marked: bool, recorded: [u64; 2]) -> PathBuf {
+    written(dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 2, &[render_target(vec![])], &[])?;
+        let outside = render_target(vec![("outside", Value::Bool(true))]);
+        w.call("m2v.textureDescriptor", 0, 3, &[outside], &[])?;
+        w.call("newTextureWithDescriptor:", 1, 4, &[Value::Object(2)], &[])?;
+        if marked {
+            w.call("newTextureWithDescriptor:", 1, 5, &[Value::Object(3)], &[])?;
+        }
+        w.call("newTextureWithDescriptor:", 1, 6, &[Value::Object(2)], &[])?;
+        for (texture, id) in [(4, recorded[0]), (6, recorded[1])] {
+            let answer = [("gpuResourceID", Value::Uint(id))];
+            w.call("gpuResourceID", texture, 0, &[], &answer)?;
+        }
+        Ok(())
+    })
+}
+
+/// A texture its descriptor marks `outside` takes none of the program's IDs: the plain textures
+/// made around it give the IDs they give where the stream makes no marked one, which a play of
+/// that stream names (its records' IDs, 0, differ from them).
+#[test]
+fn a_texture_marked_outside_leaves_the_program_its_ids() {
+    let (plain, marked) = (
+        ScratchDir::new("replay-plain").unwrap(),
+        ScratchDir::new("replay-outside").unwrap(),
+    );
+    let reference = outside_stream(&plain, false, [0, 0]);
+    on_device_with(at_plan, |device| {
+        let report = play("outside-reference", device, &reference);
+        let given: Vec<Option<u64>> = report.ids.iter().map(|ids| ids.played).collect();
+        let [Some(first), Some(second)] = given[..] else {
+            panic!("the plain textures gave no IDs: {:?}", report.ids);
+        };
+        let path = outside_stream(&marked, true, [first, second]);
+        let report = play("outside", device, &path);
+        assert_eq!(
+            report.ids,
+            [],
+            "the marked texture moved the plain ones' IDs"
+        );
     });
 }
 

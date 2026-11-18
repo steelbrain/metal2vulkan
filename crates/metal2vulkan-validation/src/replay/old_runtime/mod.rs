@@ -347,6 +347,7 @@ impl OldRuntime {
                     // A drawable the stream never saw made: a texture of its descriptor.
                     descriptor @ Value::Map(_) => {
                         let f = Fields::of(call, descriptor, &descriptors::TEXTURE_KEYS)?;
+                        f.only("outside", Fields::bool, false)?;
                         let mut made = TextureDescriptor::default();
                         descriptors::texture(call, &f, &mut made)?;
                         made

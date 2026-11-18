@@ -137,6 +137,9 @@ pub struct NewRuntime {
     places: Places,
     /// The last index taken of each class: textures, storage-capable textures, samplers.
     last: [u32; 3],
+    /// The texture descriptors the stream marks `outside` (section 5 of docs/REPLAY-STREAM.md):
+    /// a texture of one takes an index outside the sequence of `last`.
+    outside: HashSet<u64>,
     /// Each constexpr sampler's index, by its state words.
     constexprs: HashMap<[u64; 2], u32>,
     /// The commits so far, and the committed command buffers not yet seen complete, in order.
@@ -232,7 +235,7 @@ fn storage(call: &Call, raw: u64) -> Result<rt::StorageMode, PlayError> {
 }
 
 /// The keys of a texture descriptor: `m2v.textureDescriptor`'s, and a drawable's.
-const TEXTURE_KEYS: [&str; 19] = [
+const TEXTURE_KEYS: [&str; 20] = [
     "textureType",
     "pixelFormat",
     "width",
@@ -252,6 +255,7 @@ const TEXTURE_KEYS: [&str; 19] = [
     "writeSwizzleEnabled",
     "allowGpuOptimizedContents",
     "rotation",
+    "outside",
 ];
 
 /// `f`'s properties set on `d`. The resource index is the guest's, which the player relocates
@@ -381,6 +385,7 @@ impl NewRuntime {
             device,
             objects: HashMap::new(),
             last: [0; 3],
+            outside: HashSet::new(),
             constexprs: HashMap::new(),
             commits: 0,
             in_flight: VecDeque::new(),
@@ -539,22 +544,26 @@ impl NewRuntime {
             rt::IndexClass::StorageTexture => 1,
             _ => 2,
         };
-        let range = class.range();
-        for _ in range.clone() {
-            let mut index = self.last[slot] + 1;
-            if !range.contains(&index) {
-                index = range.start;
-            }
-            self.last[slot] = index;
-            if class == rt::IndexClass::Sampler && self.constexprs.values().any(|&i| i == index) {
-                continue;
-            }
-            match make(index) {
-                Err(rt::Error::Refused(rt::Refusal::IndexInUse { .. })) => continue,
-                made => return made.map_err(failed(call)),
-            }
+        let constexprs = &self.constexprs;
+        let skip =
+            |index| class == rt::IndexClass::Sampler && constexprs.values().any(|&i| i == index);
+        match next_index(&mut self.last[slot], class.range(), skip, make) {
+            Some(made) => made.map_err(failed(call)),
+            None => Err(refuse(call, format!("every {class:?} index is in use"))),
         }
-        Err(refuse(call, format!("every {class:?} index is in use")))
+    }
+
+    /// `make` at the highest index of `class` that no live object holds ([`top_index`]).
+    fn place_outside<T>(
+        &mut self,
+        call: &Call,
+        class: rt::IndexClass,
+        make: impl Fn(u32) -> Result<T, rt::Error>,
+    ) -> Result<T, PlayError> {
+        match top_index(class.range(), make) {
+            Some(made) => made.map_err(failed(call)),
+            None => Err(refuse(call, format!("every {class:?} index is in use"))),
+        }
     }
 
     /// A buffer of `length` bytes and storage `mode` in a place of its own, zeroed, holding
@@ -611,21 +620,24 @@ impl NewRuntime {
         addressed(buffer, Some(place))
     }
 
-    /// A texture of `descriptor`, at an index where shaders reach it.
+    /// A texture of `descriptor`, at an index where shaders reach it: the next of its class's
+    /// sequence, or for a texture `outside` the program's IDs one outside it.
     fn new_texture(
         &mut self,
         call: &Call,
         descriptor: &rt::TextureDescriptor,
         heap: Option<(rt::HeapRange, u64)>,
+        outside: bool,
     ) -> Result<rt::Texture, PlayError> {
         let device = self.device.clone();
         let make = |index: Option<u32>| match heap {
             Some((range, offset)) => device.new_heap_texture(descriptor, index, range, offset),
             None => device.new_texture(descriptor, index),
         };
-        match texture_class(descriptor.usage) {
-            Some(class) => self.place(call, class, |index| make(Some(index))),
-            None => make(None).map_err(failed(call)),
+        match (texture_class(descriptor.usage), outside) {
+            (Some(class), false) => self.place(call, class, |index| make(Some(index))),
+            (Some(class), true) => self.place_outside(call, class, |index| make(Some(index))),
+            (None, _) => make(None).map_err(failed(call)),
         }
     }
 
@@ -954,13 +966,27 @@ impl NewRuntime {
             }
             "newTextureWithDescriptor:" => {
                 // A drawable the stream never saw made comes as a map: a texture of it.
-                let descriptor = self.descriptor_or_map(call, 0)?;
-                let texture = self.new_texture(call, &descriptor, None)?;
+                let outside =
+                    matches!(arg(call, 0)?, Value::Object(id) if self.outside.contains(id));
+                let descriptor = match outside {
+                    true => self.described(call, 0)?,
+                    false => self.descriptor_or_map(call, 0)?,
+                };
+                let texture = self.new_texture(call, &descriptor, None, outside)?;
                 unaddressed(Object::Texture(texture))
             }
             "MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:mipmapped:"
             | "m2v.textureDescriptor" => {
                 let descriptor = made_texture_descriptor(call)?;
+                if call.selector.starts_with("m2v.") {
+                    let f = Fields::arg(call, 0, &TEXTURE_KEYS)?;
+                    if f.bool("outside")? == Some(true) {
+                        if f.list("resourceIndex")?.is_some() {
+                            return Err(refuse(call, "a texture outside with a resource index"));
+                        }
+                        self.outside.insert(call.result);
+                    }
+                }
                 unaddressed(Object::TextureDescriptor(Box::new(descriptor)))
             }
             // Every index is the backend's already.
@@ -995,6 +1021,7 @@ impl NewRuntime {
         match arg(call, at)? {
             map @ Value::Map(_) => {
                 let f = Fields::of(call, map, &TEXTURE_KEYS)?;
+                f.only("outside", Fields::bool, false)?;
                 let mut d = rt::TextureDescriptor::new(
                     rt::TextureType::Type2D,
                     rt::PixelFormat::Invalid,
@@ -1016,7 +1043,7 @@ impl NewRuntime {
         descriptor: &rt::TextureDescriptor,
         count: fn(&mut Substitutes) -> &mut u64,
     ) -> Result<Option<(Object, Made)>, PlayError> {
-        let texture = self.new_texture(call, descriptor, None)?;
+        let texture = self.new_texture(call, descriptor, None, false)?;
         *count(&mut self.substitutes) += 1;
         unaddressed(Object::Texture(texture))
     }
@@ -1074,11 +1101,22 @@ impl NewRuntime {
         self.texture_or_substitute(call, parent.usage, &own, make)
     }
 
+    /// The texture descriptor object argument `at` names, refused where the stream marks it
+    /// `outside`: only a device's `newTextureWithDescriptor:` makes a texture outside the
+    /// program's IDs.
     fn texture_descriptor(
         &self,
         call: &Call,
         at: usize,
     ) -> Result<rt::TextureDescriptor, PlayError> {
+        if self.outside.contains(&Self::id(call, at)?) {
+            return Err(refuse(call, format!("argument {at} is marked outside")));
+        }
+        self.described(call, at)
+    }
+
+    /// The texture descriptor object argument `at` names, marked or not.
+    fn described(&self, call: &Call, at: usize) -> Result<rt::TextureDescriptor, PlayError> {
         let id = Self::id(call, at)?;
         match self.get(call, id)? {
             Object::TextureDescriptor(descriptor) => Ok(**descriptor),
@@ -1127,7 +1165,8 @@ impl NewRuntime {
             }
             "newTextureWithDescriptor:offset:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
-                let texture = self.new_texture(call, &descriptor, Some((range, uint(call, 1)?)))?;
+                let heap = Some((range, uint(call, 1)?));
+                let texture = self.new_texture(call, &descriptor, heap, false)?;
                 unaddressed(Object::Texture(texture))
             }
             _ => Err(refuse(call, "not played on a heap")),
@@ -1254,12 +1293,55 @@ fn write_into(buffer: &rt::Buffer, offset: u64, bytes: &[u8]) -> Result<(), Play
     Ok(())
 }
 
+/// The index of `range` after `last` that `make` takes, `last` moved to each index tried: the
+/// sequence the program's own objects take, wrapping at the range's end. An index `skip` names or
+/// `make` finds in use is passed over; none where every index is.
+pub(super) fn next_index<T>(
+    last: &mut u32,
+    range: Range<u32>,
+    skip: impl Fn(u32) -> bool,
+    make: impl Fn(u32) -> Result<T, rt::Error>,
+) -> Option<Result<T, rt::Error>> {
+    for _ in range.clone() {
+        let mut index = *last + 1;
+        if !range.contains(&index) {
+            index = range.start;
+        }
+        *last = index;
+        if skip(index) {
+            continue;
+        }
+        match make(index) {
+            Err(rt::Error::Refused(rt::Refusal::IndexInUse { .. })) => continue,
+            made => return Some(made),
+        }
+    }
+    None
+}
+
+/// The highest index of `range` that `make` takes, an index in use passed over: one outside the
+/// sequence [`next_index`] hands out, which it leaves as it was, so the program's objects take the
+/// indices they take without this one. None where every index is in use.
+pub(super) fn top_index<T>(
+    range: Range<u32>,
+    make: impl Fn(u32) -> Result<T, rt::Error>,
+) -> Option<Result<T, rt::Error>> {
+    for index in range.rev() {
+        match make(index) {
+            Err(rt::Error::Refused(rt::Refusal::IndexInUse { .. })) => continue,
+            made => return Some(made),
+        }
+    }
+    None
+}
+
 impl Backend for NewRuntime {
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         if &*call.selector == "release" {
             self.owners.remove(&call.receiver);
             self.fresh.remove(&call.receiver);
             self.unwritten.released(call.receiver);
+            self.outside.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => self.places.give(place, self.commits),
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a

@@ -24,7 +24,7 @@ use metal2vulkan_runtime::{
 
 /// The keys of a texture descriptor: `m2v.textureDescriptor`'s, and a drawable's
 /// (`storageMode`).
-pub(super) const TEXTURE_KEYS: [&str; 19] = [
+pub(super) const TEXTURE_KEYS: [&str; 20] = [
     "textureType",
     "pixelFormat",
     "width",
@@ -44,6 +44,7 @@ pub(super) const TEXTURE_KEYS: [&str; 19] = [
     "writeSwizzleEnabled",
     "allowGpuOptimizedContents",
     "rotation",
+    "outside",
 ];
 
 /// `f`'s properties set on `d`, in the map's order.
@@ -87,6 +88,13 @@ pub(super) fn texture(call: &Call, f: &Fields, d: &mut TextureDescriptor) -> Res
     }
     if let Some(index) = f.list("resourceIndex")? {
         d.placement = placement(call, index)?;
+    }
+    // A texture outside the program's IDs (docs/REPLAY-STREAM.md, section 5).
+    if f.bool("outside")? == Some(true) {
+        if f.list("resourceIndex")?.is_some() {
+            return Err(refuse(call, "a texture outside with a resource index"));
+        }
+        d.placement = metal2vulkan_runtime::IdPlacement::Outside;
     }
     f.only("protectionOptions", Fields::uint, 0)?;
     f.only("framebufferOnly", Fields::bool, false)?;

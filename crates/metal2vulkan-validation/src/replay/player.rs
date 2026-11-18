@@ -745,6 +745,9 @@ pub struct Player<'b, B: Backend> {
     events: HashMap<u64, u64>,
     /// The live objects whose `gpuResourceID` the player compared.
     compared: HashSet<u64>,
+    /// The live texture descriptors marked `outside` and the textures made of them: objects outside
+    /// the program's IDs, whose `gpuResourceID` the program never saw (section 5).
+    outside: HashSet<u64>,
     /// The `m2v.privateBytes` records, read ahead, by the position of the dispatch each names.
     ahead: HashMap<u64, Vec<Around>>,
     /// The placement heaps' layouts on the runtime, read ahead, by heap.
@@ -960,6 +963,7 @@ impl<'b, B: Backend> Player<'b, B> {
             committed: Vec::new(),
             events: HashMap::new(),
             compared: HashSet::new(),
+            outside: HashSet::new(),
             ahead: HashMap::new(),
             layouts: HashMap::new(),
             position: 0,
@@ -1357,6 +1361,12 @@ impl<'b, B: Backend> Player<'b, B> {
                 "gpuResourceID of #{object}, made by no call"
             )));
         }
+        if self.outside.contains(&object) {
+            return Err(invalid(format!(
+                "gpuResourceID of #{object}, a texture its descriptor marks outside the \
+                 program's IDs"
+            )));
+        }
         // A getter that raised answers nothing.
         let Some(recorded) = call.answer("gpuResourceID") else {
             return Ok(());
@@ -1487,6 +1497,17 @@ impl<'b, B: Backend> Player<'b, B> {
             },
         };
         self.kinds.insert(object, kind);
+        let marked = match (selector, call.args.first()) {
+            ("m2v.textureDescriptor", Some(Value::Map(fields))) => (fields.iter())
+                .any(|(key, value)| &**key == "outside" && *value == Value::Bool(true)),
+            ("newTextureWithDescriptor:", Some(Value::Object(descriptor))) => {
+                self.outside.contains(descriptor)
+            }
+            _ => false,
+        };
+        if marked {
+            self.outside.insert(object);
+        }
         if kind == Kind::Encoder {
             *self.fixed.entry(ENCODERS).or_default() += 1;
         }
@@ -1838,6 +1859,7 @@ impl<'b, B: Backend> Player<'b, B> {
         self.addresses.remove(object);
         self.owner.remove(&object);
         self.compared.remove(&object);
+        self.outside.remove(&object);
         if let Some(pending) = self.pending.get_mut(&object) {
             if pending.committed {
                 pending.released = true;

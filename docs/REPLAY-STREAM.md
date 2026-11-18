@@ -167,6 +167,16 @@ and the (name id, value) answer pairs.
   whether or not the index is forced: a texture descriptor's and a render pipeline's
   `resourceIndex` (`[index, forced]`), a sampler's (an index), and a view's `resourceIndex:`
   argument. Every other object takes the ID its runtime gives it.
+- **Textures outside the program's IDs.** A texture the recorder makes for itself, not the
+  program's (the host's cursor), comes from a texture descriptor record whose map holds
+  `outside: true` and a device's `newTextureWithDescriptor:` of that descriptor. Live, it took no
+  ID in Metal's space, so the program's textures took theirs as if it were not there. The player
+  makes it where it moves no ID of the program's: on the old runtime with no ID
+  (`IdPlacement::Outside`), on the new runtime at the highest free index of its class, outside
+  the sequence the program's textures take. A marked descriptor with a `resourceIndex`, a marked
+  descriptor any other call makes a texture of, and a drawable's map with the mark are refused; a
+  `gpuResourceID` record of a marked texture stops the play (`invalid stream`): the program never
+  saw its ID, so the mark or the record is wrong.
 - **The IDs the program saw.** Each `gpuResourceID` the platform answered of a texture, sampler,
   depth-stencil state, compute or render pipeline, indirect command buffer or visible function
   table is a `gpuResourceID` record: the object its receiver, no arguments, result 0, and the ID
@@ -270,7 +280,8 @@ and the (name id, value) answer pairs.
     in the order `textureType`, `pixelFormat`, `width`, `height`, `depth`, `mipmapLevelCount`,
     `sampleCount`, `arrayLength`, `usage`, `resourceOptions`, `swizzle`, `resourceIndex`
     (`[index, forced]`), `protectionOptions`, `framebufferOnly`, `isDrawable`,
-    `writeSwizzleEnabled`, `allowGpuOptimizedContents`, `rotation`.
+    `writeSwizzleEnabled`, `allowGpuOptimizedContents`, `rotation`, and `outside` (a bool; only
+    `true` is written), the mark of a texture outside the program's IDs (section 5).
     `MTLTextureDescriptor.texture2DDescriptorWithPixelFormat:width:height:mipmapped:` makes one
     too; `setUsage:` and `setResourceOptions:` on it change it.
   - `MTLRenderPassDescriptor.new` (`[]`) makes a render pass descriptor. `m2v.setPass` (`[map]`)
