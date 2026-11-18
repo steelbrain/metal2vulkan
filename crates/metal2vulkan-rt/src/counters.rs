@@ -145,7 +145,7 @@ impl Counters {
     /// change, where `max` do.
     pub(crate) fn rise_below(&self, gauge: Gauge, max: u64) -> bool {
         (self.gauge(gauge))
-            .fetch_update(Relaxed, Relaxed, |live| (live < max).then_some(live + 1))
+            .try_update(Relaxed, Relaxed, |live| (live < max).then_some(live + 1))
             .is_ok()
     }
 

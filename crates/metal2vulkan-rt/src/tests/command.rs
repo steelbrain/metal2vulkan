@@ -509,7 +509,10 @@ pub(crate) mod on_device {
             let buffer = arena.buffer();
             // Fewer slots than command buffers, so slots and their queries are reused.
             let queue = device.new_command_queue(4).expect("a queue");
-            let ends: Arc<Mutex<Vec<(usize, u64, u64, u64)>>> = Arc::default();
+            // Each command buffer's index, GPU start and end, and the host time its completed
+            // handler read.
+            type Ends = Arc<Mutex<Vec<(usize, u64, u64, u64)>>>;
+            let ends: Ends = Arc::default();
             let first = host_time();
             let mut committed = Vec::new();
             for index in 0..24 {

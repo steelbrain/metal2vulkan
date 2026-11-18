@@ -147,7 +147,7 @@ pub(crate) struct Core {
     /// less.
     max_block_len: u64,
     /// The device's `maxMemoryAllocationCount`: the most allocations live at once
-    /// ([`memory::allocate`](crate::memory::allocate)).
+    /// ([`memory::allocate`]).
     pub(crate) max_allocations: u32,
     pub(crate) pool: Pool,
     pub(crate) filler: Filler,
