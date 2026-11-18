@@ -458,7 +458,12 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
         us(90),
         time(&report.create_us),
         gauges(&report.gauges),
-        match (report.first_us, report.first_create_us, report.again_us, &create.makes) {
+        match (
+            report.first_us,
+            report.first_create_us,
+            report.again_us,
+            &create.makes
+        ) {
             (Some(us), Some(_), _, Makes::RenderStates { .. }) => {
                 format!("; first {us:.1} us, its creation alone; store {store}")
             }

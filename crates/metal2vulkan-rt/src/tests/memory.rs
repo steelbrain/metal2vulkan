@@ -1090,25 +1090,25 @@ mod on_device {
                 "{name}: the four within the window"
             );
 
-            // Eleven seconds on: the small block's give-back frees the three oldest.
+            // Eleven seconds on: the small block's give-back frees the three oldest. The gauge of
+            // allocations falls after each one's free, which follows its kept block's hook and
+            // the idle gauge's fall: once it reads the zero source, the reserve, the fourth and
+            // the Private allocation, the three hooks and the idle gauge are final.
             core.pool.advance_clock(Duration::from_secs(6));
             device.release_block(small).expect("a release");
             wait_until("three idle Shared allocations freed", || {
-                hook.unmapped().len() == 3
+                counters.gauges().blocks == ZERO_SOURCE + 3
             });
-            wait_until("the idle gauge", || {
-                counters.gauges().shared_idle_bytes == 2 * len
-            });
+            assert_eq!(
+                (hook.unmapped().len(), counters.gauges().shared_idle_bytes),
+                (3, 2 * len),
+                "{name}: three unmapped, the reserve and the fourth idle"
+            );
             for (unmapped, block) in hook.unmapped().iter().zip(&four) {
                 assert_eq!(unmapped.block, *block, "{name}: the oldest first");
                 assert_eq!(unmapped.thread.as_deref(), Some("m2v-blocks"), "{name}");
                 assert_eq!(unmapped.first, None, "{name}: no block recorded");
             }
-            assert_eq!(
-                counters.gauges().blocks,
-                ZERO_SOURCE + 3,
-                "{name}: the zero source, the reserve, the fourth and the Private allocation"
-            );
 
             // Eleven seconds later, the Shared class quiet: a Private take of the kept block's
             // length and its give-back free the fourth.
