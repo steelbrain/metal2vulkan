@@ -289,7 +289,7 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let side = (device.take_block(MemoryClass::Shared, len))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let into = (device.new_buffer(side.id, 0, len, false))
+            let into = (device.new_buffer(side.id, 0, len, None))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let managed = (device.new_managed_buffer(cpu.id, 0, len, 0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
