@@ -762,11 +762,11 @@ pub struct AccessPlan {
     /// uniform read is a scalar load).
     pub unwritten: BTreeSet<usize>,
     /// Memory-plan slots reached under the identity domains from their address as it is, which
-    /// the binder holds to a multiple of their argument's alignment ([`address_alignment`],
-    /// `RuntimeFact::AddressAlignment`), and whose window the analysis bounds to at most 2 GiB
-    /// (`DIRECT_WINDOW`): no access rounds the address (`psb::prepare_direct`), and `uvec2` and
-    /// `uvec4` units are taken at offsets proven multiples of their size. Every other
-    /// device-address slot is reached from the word below each access (`psb::prepare_at`).
+    /// the binder holds to a multiple of their argument's alignment, at least 4
+    /// ([`address_alignment`], `RuntimeFact::AddressAlignment`): no access rounds the address
+    /// (`psb::prepare_direct`), and `uvec2` and `uvec4` units are taken at offsets proven
+    /// multiples of their size. Every other device-address slot is reached from the word below
+    /// each access (`psb::prepare_at`).
     pub aligned: BTreeSet<usize>,
     /// The units ([`Units`]) the static-root accesses of each slot read or write whole, by
     /// memory-plan slot index: narrow units whose storage access the profile has, and `uvec2`
@@ -1622,15 +1622,15 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         };
         let form = match l {
             SlotLowering::View(kind) => BufferForm::Descriptor(descriptor_view(*kind)),
-            SlotLowering::Psb { start } => {
+            SlotLowering::Psb { .. } => {
                 addressed_slot(cx, plan.slot);
                 if let Some(align) = address_alignment(cx, plan) {
                     cx.facts.insert(RuntimeFact::AddressAlignment {
                         slot: plan.slot,
                         align,
                     });
-                    // A word memory's base is a multiple of 4, and of 16 for its vector units.
-                    if align >= 4 && start % 16 == 0 && direct_window(*window) {
+                    // A word memory's base is a multiple of 4.
+                    if align >= 4 {
                         cx.families.access.aligned.insert(i);
                     }
                 }
@@ -1696,28 +1696,14 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     Ok(slots)
 }
 
-/// The longest window a slot reached from its address as it is may have
-/// ([`AccessPlan::aligned`]): each access's byte offset from the window's start is added to its
-/// address sign-extended from 32 bits (`psb::prepare_direct`), which is exact below 2 GiB only. A slot no access bounds, or one with a longer window, keeps the
-/// word memory's 64-bit address arithmetic, exact to 4 GiB.
-const DIRECT_WINDOW: u64 = 1 << 31;
-
-/// Whether a slot with `window` may be reached from its address as it is: the window is
-/// `Bounded` and at most [`DIRECT_WINDOW`] long, so every access's byte offset from its start is
-/// below 2^31 and its sign extension is exact.
-pub(crate) fn direct_window(window: Window) -> bool {
-    matches!(window, Window::Bounded { len, .. } if len <= DIRECT_WINDOW)
-}
-
 /// The alignment (2, 4, 8 or 16) the binder holds a device-address slot's address to under the
 /// identity domains: its argument's `air.arg_type_align_size`, at most 16. Metal's API validation
 /// refuses a buffer bound at an offset that is not a multiple of its argument type's alignment
 /// ("must be a multiple of 4 but was set to 2" for a `uint *` argument, "of 16 ... 8" for a
 /// `float4 *`, "of 2 ... 1" for a `ushort *`; `probes/vector_access_placement.m` in the conformance
-/// crate). A slot whose alignment is at least 4 and whose window starts at a multiple of 16 and
-/// is at most [`DIRECT_WINDOW`] long is then reached from its address as it is
-/// ([`AccessPlan::aligned`]). `None` for a buffer-table
-/// element, an argument buffer, and an argument with no alignment or one of 1.
+/// crate). A slot whose alignment is at least 4 is then reached from its address as it is
+/// ([`AccessPlan::aligned`]). `None` for a buffer-table element, an argument buffer, and an
+/// argument with no alignment or one of 1.
 fn address_alignment(cx: &SelectCx<'_>, plan: &SlotPlan) -> Option<u32> {
     if !identity(cx.profile) || plan.element.is_some() || plan.argument_buffer {
         return None;

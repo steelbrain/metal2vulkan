@@ -21,7 +21,7 @@ use crate::device::{Device, DevicePolicy};
 use crate::library::FunctionConstantValues;
 use crate::lower::dispatch::region_bytes;
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::interface::{PushLoc, SlotInterface};
+use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, SpecKey};
 use crate::pipeline::testing::{
     compile, compile_kept, description, engine_dir, link_and_validate, llvm_assemble, meter,
@@ -134,10 +134,9 @@ fn device_alignments(words: &[u32]) -> Vec<u32> {
 /// Every device-address load and store of the two kernels claims at most the alignment the
 /// translator proves for its address: 4 where the buffer is a `uint` one Metal binds at any
 /// multiple of 4, whatever the `align 16` of the AIR's `uint4` and `float4` accesses through it,
-/// and 16 where it is a `float4` one. The access is one `uvec4` there only where the slot is
-/// reached from its address as it is (`lower::access::direct_window`: a window bounded to at most
-/// 2 GiB); a `Whole` window, which an access may reach past 2 GiB, keeps the word form. Each
-/// argument states its alignment (`RuntimeFact::AddressAlignment`). Each module passes L3.
+/// and 16 where it is a `float4` one, where the access is one `uvec4`: a slot held to at least 4
+/// is reached from its address as it is, whatever its window. Each argument states its alignment
+/// (`RuntimeFact::AddressAlignment`). Each module passes L3.
 #[test]
 fn device_accesses_claim_at_most_the_proven_alignment() {
     let Some(bc) = bitcode() else {
@@ -171,17 +170,11 @@ fn device_accesses_claim_at_most_the_proven_alignment() {
                 claimed.iter().all(|&c| (4..=align).contains(&u64::from(c))),
                 "{what}: claimed {claimed:?}, proven {align}"
             );
-            // A `float4` access at an offset proven a multiple of 16 is one `uvec4` access where
-            // its slot's window takes the direct form, and words where it does not.
-            let direct = (a.interface.slots.values()).all(|s| match s {
-                SlotInterface::Buffer(b) => crate::lower::access::direct_window(b.window),
-                _ => true,
-            });
-            let unit = if direct { align } else { 4 };
+            // A `float4` access at an offset proven a multiple of 16 is one `uvec4` access.
             assert_eq!(
                 claimed.iter().max().copied().map(u64::from),
-                Some(unit),
-                "{what}: claimed {claimed:?}, proven {align}, direct {direct}"
+                Some(align),
+                "{what}: claimed {claimed:?}, proven {align}"
             );
             // Both arguments state their alignment, which the binder holds their addresses to.
             let stated: Vec<u32> = (a.facts.iter())

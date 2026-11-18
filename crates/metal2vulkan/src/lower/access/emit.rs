@@ -282,7 +282,7 @@ pub(super) fn prepare(
             let address = cx.push_field(fb, PushField::SlotGuestBase(choice.slot))?;
             let address = super::pointer::slot_guest_base_u64(fb, address)?;
             match aligned {
-                true => psb::prepare_direct(fb, address, m, start)?,
+                true => psb::prepare_direct(address, m),
                 false => psb::prepare_at(fb, address, m, start)?,
             }
         } else {

@@ -173,8 +173,9 @@ enum Reach {
     /// From a slot's own device address under the identity domains ([`prepare_direct`]): each
     /// unit at that address plus its 32-bit byte offset sign-extended, in 64-bit integers, then
     /// one `OpConvertUToPtr` to the unit's block (`NonWritable` for a load of an unwritten slot).
-    /// The offset is below 2^31, the window being at most `DIRECT_WINDOW`, so the sign extension
-    /// is exact. It is the integer form of an access chain's signed index, which a device adds as
+    /// Every byte of a buffer lies within 2^31 bytes of each bind address in it, the runtime
+    /// making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the sign
+    /// extension is exact. It is the integer form of an access chain's signed index, which a device adds as
     /// it would that index: no shift of the offset in 64 bits, no zero-extended offset to split
     /// into a scalar base and a vector one, and no pointer bitcast.
     Direct,
@@ -208,39 +209,23 @@ pub fn prepare_at(
     })
 }
 
-/// Prepare an access of a static slot whose window starts at `start` at the `u32` displacement
-/// `m` from its bind offset, under the identity domains, from `address` (a `u64`), the slot's own
-/// device address, which the binder holds to a multiple of 16 or of the argument's alignment
-/// (`RuntimeFact::AddressAlignment`), and `start` a multiple of 16: the access is the byte offset
-/// `m − start` (in 32 bits, below 2^31 as the window is at most 2 GiB long, `DIRECT_WINDOW`)
-/// from `address + start`, as a descriptor view's is `m` from its base.
-/// Nothing is rounded, so a constant offset is one immediate. Uncontained, as Metal contains no
-/// device-address access.
-pub fn prepare_direct(
-    fb: &mut FunctionBuilder<'_>,
-    address: Value,
-    m: Value,
-    start: i64,
-) -> BResult<PsbAccess> {
-    let (base, off) = match start {
-        0 => (address, m),
-        // `m − start` modulo 2^32 from `address + start` (its two's-complement bits are its value
-        // modulo 2^64).
-        _ => {
-            let k = k64(fb, start as u64)?;
-            let base = fb.binary(BinOp::IAdd, address, k)?;
-            let k = crate::memory::leaf::k32(fb, start as u32)?;
-            (base, crate::memory::leaf::u32_op(fb, BinOp::ISub, m, k)?)
-        }
-    };
-    Ok(PsbAccess {
+/// Prepare an access of a static slot at the `u32` displacement `m` from its bind offset, under
+/// the identity domains, from `address` (a `u64`), the slot's own device address, which the
+/// binder holds to a multiple of the argument's alignment (`RuntimeFact::AddressAlignment`): the
+/// access is the byte offset `m`, read as signed, from `address`, as a descriptor view's is `m`
+/// from its base. Every byte of a buffer lies within 2^31 bytes of each bind address in it, the
+/// runtime making no buffer longer than 2 GiB (`metal2vulkan_rt::MAX_BUFFER_LENGTH`), so the
+/// offset is exact whatever the slot's window. Nothing is rounded, so a constant offset is one
+/// immediate. Uncontained, as Metal contains no device-address access.
+pub fn prepare_direct(address: Value, m: Value) -> PsbAccess {
+    PsbAccess {
         mem: PsbMem {
             reach: Reach::Direct,
-            ..PsbMem::at(base)
+            ..PsbMem::at(address)
         },
-        off,
+        off: m,
         inb: None,
-    })
+    }
 }
 
 /// The narrow units a device-address memory loads and stores directly on profile `p`: the 1- and

@@ -120,7 +120,6 @@ mod engine_not_mipmapped_anisotropic;
 mod engine_nullable_private;
 mod engine_nuw;
 mod engine_offset_arms;
-mod engine_offsets_past_2gib;
 mod engine_offsets_to_2gib;
 mod engine_opencl_mode;
 mod engine_padded_blends;
