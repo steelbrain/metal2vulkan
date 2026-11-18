@@ -455,15 +455,18 @@ made, with no lock, and never rewritten for layouts.
   `enqueue` takes the command buffer's place in its queue; `commit` hands it to the submit
   thread and returns. A committed command buffer holds no device handle.
 - The submit thread passes what is ready to `vkQueueSubmit2` in the device's commit order, each
-  queue's command buffers in groups: a submission holds at most four command buffers of one
+  queue's command buffers in groups: a submission holds at most sixteen command buffers of one
   queue, ahead of them the upload (zero fills, texture copies and new textures' moves to their
-  home layouts), and only its last submit info signals the progress semaphore. The upload records
+  home layouts), and only its last submit info signals the progress semaphore. Consecutive
+  command buffers that no event wait or signal separates share one submit info, the upload with
+  the first: the GPU runs them in order either way, and a driver may pay for each info (the UHD
+  630's paid about 160 us apiece). `Metrics::submit_infos` counts them. The upload records
   at most 4,096 calls and keeps at most 64 MiB on its own account: the staging buffers of copies
   larger than the staging region, and the textures and blocks released while it held them. A call
   that finds it past either submits it and waits for it to complete before recording, so nothing
   grows without a commit. While fewer than two of a queue's submissions are not yet seen complete,
   each of its command buffers goes at once, alone. While two are, the ones committed meanwhile
-  are held in one group, each scheduled as it joins, and the group goes when it holds four, when
+  are held in one group, each scheduled as it joins, and the group goes when it holds sixteen, when
   a completion leaves fewer than two in flight (the completion thread wakes the submit thread as
   it retires; no commit or wait is needed), when the host is to wait for one of them
   (`wait_until_completed`, or `CommandQueue::send_now`, the hint for a wait the runtime does not
@@ -480,7 +483,7 @@ made, with no lock, and never rewritten for layouts.
   submission's in commit order: the status, the blocks they kept, their recorders and their place
   in the queue, then the handlers. Scheduled and completed handlers run on it, every device's in
   turn, so no handler waits for a command buffer. A command buffer of a group is seen complete
-  with the group's last: up to the GPU time of the three after it late. Only a queue already two
+  with the group's last: up to the GPU time of the fifteen after it late. Only a queue already two
   submissions behind holds a group; one whose submissions have completed sends its next command
   buffer alone. Without a wait or a hint, the lateness is bounded only while two submissions are
   in flight, and the completion that leaves fewer sends the group. The worst case measured: four

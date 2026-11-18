@@ -26,6 +26,7 @@ mod sampler;
 mod sampling;
 mod spill;
 mod staging;
+mod submit_infos;
 mod texture;
 mod translate;
 mod upload;

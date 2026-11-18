@@ -38,8 +38,10 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 
-/// The command buffers one submission ends at most.
-const GROUP: usize = 4;
+/// The command buffers one submission ends at most. A larger group is fewer submissions, until
+/// the group grows past what a completion can release: on the UHD 630, sixteen ran a burst of 160
+/// command buffers in half the time no bound did (probe 06860a3848, job m3-max-44105).
+const GROUP: usize = 16;
 
 /// The submissions of a queue not yet seen complete at which its command buffers are held in a
 /// group.
@@ -264,12 +266,43 @@ struct Batch {
     wrote: Vec<Texture>,
 }
 
-/// One segment's submit info.
+/// One segment's part of a submit info: its event waits, its commands and its signals.
 #[derive(Default)]
-struct Staged {
-    waits: Vec<vk::SemaphoreSubmitInfo<'static>>,
-    command: Option<vk::CommandBufferSubmitInfo<'static>>,
-    signals: Vec<vk::SemaphoreSubmitInfo<'static>>,
+pub(crate) struct Staged {
+    pub(crate) waits: Vec<vk::SemaphoreSubmitInfo<'static>>,
+    pub(crate) command: Option<vk::CommandBufferSubmitInfo<'static>>,
+    pub(crate) signals: Vec<vk::SemaphoreSubmitInfo<'static>>,
+}
+
+/// One `VkSubmitInfo2` of a submission: the waits of its first segment, the commands of each of
+/// its segments, and the signals of its last.
+pub(crate) struct Info<'a> {
+    pub(crate) waits: &'a [vk::SemaphoreSubmitInfo<'static>],
+    pub(crate) commands: Vec<vk::CommandBufferSubmitInfo<'static>>,
+    pub(crate) signals: &'a [vk::SemaphoreSubmitInfo<'static>],
+}
+
+/// The submit infos of a submission's segments, in order: a segment that waits on nothing joins
+/// the info before it where that one signals nothing, so only an event wait or signal starts a new
+/// one. The GPU runs the command buffers of one info in order, as it runs those of consecutive
+/// infos, and a driver may pay for each info: the UHD 630's paid about 160 us apiece (probe
+/// 06860a3848, job m3-max-43935).
+pub(crate) fn infos(segments: &[Staged]) -> Vec<Info<'_>> {
+    let mut infos: Vec<Info<'_>> = Vec::with_capacity(1);
+    for staged in segments {
+        match infos.last_mut() {
+            Some(last) if staged.waits.is_empty() && last.signals.is_empty() => {
+                last.commands.extend(staged.command);
+                last.signals = &staged.signals;
+            }
+            _ => infos.push(Info {
+                waits: &staged.waits,
+                commands: staged.command.into_iter().collect(),
+                signals: &staged.signals,
+            }),
+        }
+    }
+    infos
 }
 
 /// A command buffer of a submission: with an error where it ended before it was submitted.
@@ -1433,13 +1466,14 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
             ..Staged::default()
         }),
     }
-    let infos: Vec<vk::SubmitInfo2<'_>> = segments
+    let merged = infos(&segments);
+    let infos: Vec<vk::SubmitInfo2<'_>> = merged
         .iter()
-        .map(|staged| {
+        .map(|info| {
             vk::SubmitInfo2::default()
-                .wait_semaphore_infos(&staged.waits)
-                .command_buffer_infos(staged.command.as_slice())
-                .signal_semaphore_infos(&staged.signals)
+                .wait_semaphore_infos(info.waits)
+                .command_buffer_infos(&info.commands)
+                .signal_semaphore_infos(info.signals)
         })
         .collect();
     if ok {
@@ -1450,6 +1484,7 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         ok = unsafe { device.queue_submit2(*queue, &infos, vk::Fence::null()) }.is_ok();
         drop(queue);
         core.counters.count(Metric::Submissions);
+        core.counters.submitted_infos(infos.len() as u64);
     }
     if !ok {
         complete::lose(core);

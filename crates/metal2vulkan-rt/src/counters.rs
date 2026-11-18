@@ -89,6 +89,7 @@ pub struct Counters {
 #[derive(Default)]
 struct Atomics {
     submissions: AtomicU64,
+    submit_infos: AtomicU64,
     passes: AtomicU64,
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
@@ -183,6 +184,11 @@ impl Counters {
         a.commit_lock_wait_max_nanos.fetch_max(nanos, Relaxed);
     }
 
+    /// A submission of `infos` submit infos ([`Metrics::submit_infos`]).
+    pub(crate) fn submitted_infos(&self, infos: u64) {
+        self.atomics.submit_infos.fetch_add(infos, Relaxed);
+    }
+
     /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
     pub(crate) fn copied(&self, bytes: u64) {
         self.atomics.bytes_copied.fetch_add(bytes, Relaxed);
@@ -271,6 +277,7 @@ impl Counters {
         let a = &self.atomics;
         Metrics {
             submissions: a.submissions.load(Relaxed),
+            submit_infos: a.submit_infos.load(Relaxed),
             passes: a.passes.load(Relaxed),
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
@@ -326,6 +333,9 @@ impl Counters {
 pub struct Metrics {
     /// `vkQueueSubmit2` calls.
     pub submissions: u64,
+    /// The `VkSubmitInfo2`s those calls passed: the command buffers of a submission that no event
+    /// wait or signal separates share one, and the upload shares the first.
+    pub submit_infos: u64,
     /// Encoders recorded: compute and blit, and later render.
     pub passes: u64,
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each

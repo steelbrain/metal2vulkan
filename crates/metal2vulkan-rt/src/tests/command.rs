@@ -1706,4 +1706,129 @@ pub(crate) mod on_device {
             drop((queue, device));
         });
     }
+
+    /// The command buffers of a group share submit infos where no event wait or signal separates
+    /// them, and record what they record alone. A mix of a fill whose segment's end barrier
+    /// reaches commands, a Shared fill whose end barrier reaches the host, a command buffer with
+    /// nothing for the GPU (no timestamps, no info), and an event's signal and wait (which end and
+    /// lead infos) records the same barriers, passes and bytes copied and leaves the same words
+    /// committed behind two busy submissions, held in groups, as committed one at a time; the
+    /// groups pass fewer submit infos than the mix has command buffers with commands, and one at a
+    /// time passes one each.
+    #[test]
+    fn every_device_shares_submit_infos_within_a_group_and_records_what_it_records_alone() {
+        each_device("command_infos", |name, _, device| {
+            let busy = private(&device);
+            let queue = queue(&device);
+            let mut arena = Arena::new(&device);
+            let (a, b) = (arena.buffer(), arena.buffer());
+            let event = shared_event(&device);
+            let counters = device.counters();
+            // The mix, each command buffer handed to `commit` as it is made: the fills write
+            // `base + 1..=3` into `a` and `value` into every byte of `b`.
+            let mix = |base: u32, value: u8, signal: u64, commit: &dyn Fn(&CommandBuffer)| {
+                let first = queue.command_buffer().expect("a command buffer");
+                fill(&first, &a, base + 1);
+                commit(&first);
+                let shared = queue.command_buffer().expect("a command buffer");
+                let mut encoder = shared.blit_command_encoder().expect("an encoder");
+                encoder.fill_buffer(&b, 0..256, value).expect("a fill");
+                encoder.end_encoding();
+                commit(&shared);
+                let empty = queue.command_buffer().expect("a command buffer");
+                commit(&empty);
+                let signals = queue.command_buffer().expect("a command buffer");
+                fill(&signals, &a, base + 2);
+                signals
+                    .encode_signal_event(event.as_event(), signal)
+                    .expect("a signal");
+                commit(&signals);
+                let waits = queue.command_buffer().expect("a command buffer");
+                waits
+                    .encode_wait_for_event(event.as_event(), signal)
+                    .expect("a wait");
+                fill(&waits, &a, base + 3);
+                commit(&waits);
+                vec![first, shared, empty, signals, waits]
+            };
+            let deterministic = || {
+                let m = counters.metrics();
+                (m.barriers, m.passes, m.bytes_copied)
+            };
+            let infos = || counters.metrics().submit_infos;
+            let bytes = |buffer: &Buffer| {
+                let contents = buffer.contents().expect("a Shared buffer");
+                // SAFETY: the buffer is alive and 256 bytes long, and no command writes it now.
+                unsafe { std::slice::from_raw_parts(contents.as_ptr(), 256) }.to_vec()
+            };
+
+            // Behind two busy submissions: the mix is held in groups.
+            let busy_work = || {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let (target, offset) = busy.device_range();
+                command_buffer
+                    .record_for_test(&[&busy], |device, command| {
+                        for word in 0..16 {
+                            // SAFETY: the command buffer is recording; the range is the
+                            // buffer's, in whole words.
+                            unsafe {
+                                device.cmd_fill_buffer(command, target, offset, BLOCK_LEN, word)
+                            };
+                        }
+                    })
+                    .expect("fills");
+                command_buffer.commit().expect("a commit");
+                command_buffer
+            };
+            let held = [busy_work(), busy_work()];
+            let (before, infos_before) = (deterministic(), infos());
+            let grouped = mix(10, 0x5a, 1, &|command_buffer| {
+                command_buffer.commit().expect("a commit")
+            });
+            for command_buffer in held.iter().chain(&grouped) {
+                finished(name, command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            let in_groups = (deterministic(), infos() - infos_before);
+            let grouped_words = (word(&a), bytes(&b));
+
+            // One at a time, each complete before the next is made.
+            let (before_alone, infos_alone) = (deterministic(), infos());
+            let alone = mix(10, 0x5a, 2, &|command_buffer| {
+                command_buffer.commit().expect("a commit");
+                finished(name, command_buffer);
+            });
+            let one_at_a_time = (deterministic(), infos() - infos_alone);
+            let delta = |(after, _): ((u64, u64, u64), u64), (b, p, c): (u64, u64, u64)| {
+                (after.0 - b, after.1 - p, after.2 - c)
+            };
+            assert_eq!(
+                delta(in_groups, before),
+                delta(one_at_a_time, before_alone),
+                "{name}: barriers, passes and bytes copied, in groups and one at a time"
+            );
+            assert_eq!(
+                grouped_words,
+                (word(&a), bytes(&b)),
+                "{name}: the words, in groups and one at a time"
+            );
+            assert_eq!((word(&a), bytes(&b)), (13, vec![0x5a; 256]), "{name}");
+            assert!(
+                in_groups.1 < 4,
+                "{name}: {} submit infos for four command buffers with commands, in groups",
+                in_groups.1
+            );
+            assert_eq!(
+                one_at_a_time.1, 4,
+                "{name}: one submit info each, one at a time"
+            );
+            println!(
+                "{name}: the mix passed {} submit infos in groups",
+                in_groups.1
+            );
+            drop((
+                grouped, alone, held, a, b, arena, event, busy, queue, device,
+            ));
+        });
+    }
 }
