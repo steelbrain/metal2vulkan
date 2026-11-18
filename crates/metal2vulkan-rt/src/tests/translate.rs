@@ -2089,13 +2089,20 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
     /// A kernel of 256 threads whose every threadgroup access is a whole `float` word, over one
     /// `[[threadgroup(0)]]` region of `params[0]` words: each thread stores each of its words'
     /// indices, and after a barrier writes, for each of its words `k`, the word `params[0] - 1 - k`
-    /// to `out[k]`, and for each of its `float4`s `j` the `float4`'s sum to `out[params[0] + j]`.
+    /// to `out[k]`, and after a barrier on device memory, for each of its `float4`s `j`, the
+    /// `float4`'s sum to `out[params[0] + j]`. The kernel leaves no pair to lockstep, so no device
+    /// runs it on emulated SIMD groups, whose arena keeps composed words: it masks `params[0]` to
+    /// 18 bits (every device's limit is fewer words), which bounds each loop's counter, so two
+    /// threads of one SIMD group never meet within a loop; and the barrier orders the two loops'
+    /// stores to `out`, which two such threads could make to one word (a loop runs once in a
+    /// thread past the region).
     const FLOAT_ARENA: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 
 define void @float_arena(ptr addrspace(3) %a, ptr addrspace(1) %out, ptr addrspace(2) %params, i32 %t) {
 entry:
-  %w = load i32, ptr addrspace(2) %params, align 4
+  %given = load i32, ptr addrspace(2) %params, align 4
+  %w = and i32 %given, 262143
   %last = sub i32 %w, 1
   %w4 = lshr i32 %w, 2
   br label %fill
@@ -2123,10 +2130,14 @@ back:
   store i32 %xo, ptr addrspace(1) %o, align 4
   %k2 = add i32 %k, 256
   %more2 = icmp ult i32 %k2, %w
-  br i1 %more2, label %back, label %vectors
+  br i1 %more2, label %back, label %apart
+
+apart:
+  tail call void @air.wg.barrier(i32 1, i32 1)
+  br label %vectors
 
 vectors:
-  %j = phi i32 [ %t, %back ], [ %j2, %vectors ]
+  %j = phi i32 [ %t, %apart ], [ %j2, %vectors ]
   %j4 = shl i32 %j, 2
   %q4 = getelementptr inbounds float, ptr addrspace(3) %a, i32 %j4
   %y = load <4 x float>, ptr addrspace(3) %q4, align 16
@@ -2196,6 +2207,10 @@ declare void @air.wg.barrier(i32, i32)
                 .compile_function(function, &descriptor.lowering_inputs(), &Budget::standard())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let census = &lowered.strategies().entries;
+            let lockstep: Vec<_> = (census.keys())
+                .filter(|strategy| strategy.starts_with("barrier.lockstep"))
+                .collect();
+            assert!(lockstep.is_empty(), "{name}: {lockstep:?}");
             for strategy in [
                 "access.threadgroup.store.floats",
                 "access.threadgroup.load.floats",
