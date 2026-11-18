@@ -408,7 +408,11 @@ old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `c
   accumulated visibility results, and protection options, rotation, `framebufferOnly` and
   `isDrawable` other than their defaults; it does not play `defaultColorSampleCount`, which changes
   nothing a pass shows. It plays a no-copy buffer as a buffer of its length, so one of the
-  read-only option (bit 24) is made without it and keeps the GPU writes Metal drops.
+  read-only option (bit 24) is made without it and keeps the GPU writes Metal drops. No device
+  here compiles Metal source, so it skips a library from source, whatever a call makes of a
+  skipped object (`skipped_objects`), every call of one (`skipped_calls`, with a render encoder's
+  `setRenderPipelineState:` of one) and the draws of a render encoder whose pipeline state is one
+  (`skipped_draws`).
 - The new runtime's backend plays compute, blits, `synchronizeResource:`, fences, events and
   queues. What the new runtime does not build yet it skips and counts, and never fakes:
   - objects: render pipelines, depth-stencil states, render pass descriptors, libraries from
@@ -425,13 +429,21 @@ old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `c
   The counts are among its executed counters. A play with any of them above zero is no gate
   result: `report.txt` says so on a `skipped` line. It places buffers of their own in the
   runtime's pooled blocks (16 MiB Shared, 64 MiB Private; a longer one in a block of its own), a
-  range freed for reuse once every command buffer committed before its release completed, and
-  gives textures and sampler states indices from the whole of each index class. Its readback
-  serves Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives
-  a compute pipeline state no `gpuResourceID`, so each one the program saw is reported on an `id`
+  range freed for reuse once every command buffer committed before its release completed, gives
+  the runtime back a block or heap of the stream at its release (`release_block`), and gives
+  textures and sampler states indices from the whole of each index class. Its readback serves
+  Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives a
+  compute pipeline state no `gpuResourceID`, so each one the program saw is reported on an `id`
   line as `none` and counted (`gap_pipeline_ids`).
 
 `report.txt` holds one line per item: `device NAME`, `completed IDS COUNTS`, `frame N COUNTS`,
+`end N wall_nanos=NANOS resident_bytes=BYTES live KEY=VALUE ...` for each frame (the
+nanoseconds from the frame before's end, or the first call played, to this frame's, the wait for
+its work included; the process's resident memory then where the system tells it, `VmRSS` on
+Linux; and the backend's gauges then, as they stand, never as growth: the new runtime's live
+blocks, buffers, textures, pipelines, kernels, command buffers and spilled bytes, and the bytes
+of the blocks the backend holds for the stream by class, `shared_block_bytes` and
+`private_block_bytes`; the old runtime's live memory blocks, empty ones kept and dedicated ones),
 `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
 gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none` where the
 runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
@@ -443,8 +455,8 @@ encoders around them (`N` the encoders split, `COUNTS` the executed counts of th
 offsets it moved in them and the bytes it added to their sizes), `total COUNTS` (its `calls` the
 calls played: where
 the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
-in a record cut short, `skipped KEY=VALUE ...: no gate result` where the new runtime's backend
-skipped anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute
+in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
+anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute
 pipeline states whose `gpuResourceID` the player asked, which the new runtime does not give),
 then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
 KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness

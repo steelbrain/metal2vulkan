@@ -5,9 +5,9 @@
 //! [--blobs DIR] [--runtime old|rt]` plays the stream whose first segment is `FILE` through the
 //! old runtime (the default) or the new one (`rt`) and writes `DIR/report.txt`: `device NAME`,
 //! the player's report lines, `cut SEGMENT OFFSET` where the last segment ends in a record cut
-//! short, `skipped ...` where the new runtime skipped what it does not build yet (such a play is
-//! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`. The exit status is 0 for `ok`, 1 for a play that
-//! stopped and 2 for a harness failure (a bad command line, no device, an unreadable stream).
+//! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
+//! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`. The exit
+//! status is 0 for `ok`, 1 for a play that stopped and 2 for a harness failure (a bad command line, no device, an unreadable stream).
 //!
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
 //! then `cut SEGMENT OFFSET` where the last segment ends in a record cut short.
@@ -229,23 +229,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                     return 2;
                 }
             };
-            let code = run(&mut backend, &mut reader, &mut report);
-            let counters = backend.counters();
-            let counted = |prefix: &str| -> Vec<String> {
-                (counters.iter())
-                    .filter(|(name, count)| name.starts_with(prefix) && **count > 0)
-                    .map(|(name, count)| format!("{name}={count}"))
-                    .collect()
-            };
-            let skips = counted("skipped_");
-            if !skips.is_empty() {
-                report.line(&format!("skipped {}: no gate result", skips.join(" ")));
-            }
-            let gaps = counted("gap_");
-            if !gaps.is_empty() {
-                report.line(&format!("gaps {}", gaps.join(" ")));
-            }
-            code
+            run(&mut backend, &mut reader, &mut report)
         }
         Some(other) => {
             report.line(&format!("error runtime: {other} is neither old nor rt"));
@@ -307,6 +291,21 @@ fn run<B: Backend>(backend: &mut B, reader: &mut StreamReader, report: &mut Repo
     }
     if let Some((segment, offset)) = reader.truncated() {
         report.line(&format!("cut {} {offset}", segment.display()));
+    }
+    let counters = backend.counters();
+    let counted = |prefix: &str| -> Vec<String> {
+        (counters.iter())
+            .filter(|(name, count)| name.starts_with(prefix) && **count > 0)
+            .map(|(name, count)| format!("{name}={count}"))
+            .collect()
+    };
+    let skips = counted("skipped_");
+    if !skips.is_empty() {
+        report.line(&format!("skipped {}: no gate result", skips.join(" ")));
+    }
+    let gaps = counted("gap_");
+    if !gaps.is_empty() {
+        report.line(&format!("gaps {}", gaps.join(" ")));
     }
     match ended {
         Ok(()) => {

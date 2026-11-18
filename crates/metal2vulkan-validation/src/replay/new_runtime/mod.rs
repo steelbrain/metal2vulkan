@@ -17,7 +17,7 @@ use super::translator;
 use super::value::Value;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions};
 use metal2vulkan_rt as rt;
-use places::{Place, Places};
+use places::{class_index, Place, Places};
 use std::collections::{HashMap, VecDeque};
 
 /// What the play skipped because the runtime does not build it yet.
@@ -93,6 +93,8 @@ pub struct NewRuntime {
     /// The compute pipeline states whose `gpuResourceID` the player asked, which the runtime does
     /// not give: a typed gap, counted.
     unanswered_pipeline_ids: u64,
+    /// The bytes of the stream's live blocks and heaps, by class (`class_index`).
+    block_bytes: [u64; 2],
 }
 
 /// A made object with no address.
@@ -280,6 +282,7 @@ impl NewRuntime {
             completed: 0,
             skips: Skips::default(),
             unanswered_pipeline_ids: 0,
+            block_bytes: [0; 2],
         })
     }
 
@@ -708,6 +711,7 @@ impl NewRuntime {
                     .device
                     .take_block(class, length)
                     .map_err(failed(call))?;
+                self.block_bytes[class_index(class)] += length;
                 let made = Made {
                     address: Some(info.gpu_address),
                 };
@@ -935,8 +939,17 @@ fn write_into(buffer: &rt::Buffer, offset: u64, bytes: &[u8]) -> Result<(), Play
 impl Backend for NewRuntime {
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         if &*call.selector == "release" {
-            if let Some(Object::Buffer(_, Some(place))) = self.objects.remove(&call.receiver) {
-                self.places.give(place, self.commits);
+            match self.objects.remove(&call.receiver) {
+                Some(Object::Buffer(_, Some(place))) => self.places.give(place, self.commits),
+                // The runtime keeps the block while a buffer of it lives or work uses it, as a
+                // heap's resources keep the heap.
+                Some(Object::Block(range, class)) => {
+                    self.device
+                        .release_block(range.block)
+                        .map_err(failed(call))?;
+                    self.block_bytes[class_index(class)] -= range.len;
+                }
+                _ => {}
             }
             return Ok(Made::default());
         }
@@ -1153,6 +1166,28 @@ impl Backend for NewRuntime {
             ("skipped_blits", self.skips.blits),
             ("skipped_calls", self.skips.calls),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
+        ])
+    }
+
+    /// The runtime's gauges, and the bytes of the blocks the backend holds by class: the stream's
+    /// blocks and heaps, and the blocks it places the stream's other buffers in.
+    fn live(&mut self) -> Counters {
+        let gauges = self.device.counters().gauges();
+        let placed = self.places.bytes();
+        let held = |class: rt::MemoryClass| {
+            let at = class_index(class);
+            self.block_bytes[at] + placed[at]
+        };
+        Counters::from([
+            ("blocks", gauges.blocks),
+            ("buffers", gauges.buffers),
+            ("textures", gauges.textures),
+            ("pipelines", gauges.pipelines),
+            ("kernels", gauges.kernels),
+            ("command_buffers", gauges.command_buffers),
+            ("spilled_bytes", gauges.spilled_bytes),
+            ("shared_block_bytes", held(rt::MemoryClass::Shared)),
+            ("private_block_bytes", held(rt::MemoryClass::Private)),
         ])
     }
 

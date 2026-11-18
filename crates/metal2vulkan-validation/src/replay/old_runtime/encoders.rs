@@ -260,10 +260,16 @@ impl OldRuntime {
                 let (at, to_at, length) = (uint(call, 1)?, uint(call, 3)?, uint(call, 4)?);
                 (self.blit(id)).copy_from_buffer_to_buffer(&from, at, &to, to_at, length)
             }
+            // The form without options copies as the one with none.
             "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:\
-             toTexture:destinationSlice:destinationLevel:destinationOrigin:options:" => {
+             toTexture:destinationSlice:destinationLevel:destinationOrigin:options:"
+            | "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:\
+               toTexture:destinationSlice:destinationLevel:destinationOrigin:" => {
                 let (from, to) = (self.buffer(call, 0)?, self.texture(call, 5)?);
-                let option = blit_option(call, uint(call, 9)?)?;
+                let option = match call.args.get(9) {
+                    Some(_) => blit_option(call, uint(call, 9)?)?,
+                    None => BlitOption::None,
+                };
                 self.blit(id).copy_from_buffer_to_texture(
                     &from,
                     uint(call, 1)?,
@@ -400,16 +406,27 @@ impl OldRuntime {
 
     pub(super) fn render_call(&mut self, call: &Call) -> Result<(), PlayError> {
         let id = call.receiver;
+        if call.selector.starts_with("draw") && self.unpiped.contains(&id) {
+            self.skips.draws += 1;
+            return Ok(());
+        }
         let primitive =
             |at: usize| DrawPrimitiveType::from_raw(uint(call, at)?).map_err(failed(call));
         let result = match &*call.selector {
             "endEncoding" => {
+                self.unpiped.remove(&id);
                 let Some(Object::Render(encoder)) = self.objects.remove(&id) else {
                     unreachable!("a render encoder's call");
                 };
                 encoder.end_encoding()
             }
+            "setRenderPipelineState:" if self.skipped(Self::id(call, 0)?) => {
+                self.unpiped.insert(id);
+                self.skips.calls += 1;
+                return Ok(());
+            }
             "setRenderPipelineState:" => {
+                self.unpiped.remove(&id);
                 let state =
                     self.kind(
                         call,

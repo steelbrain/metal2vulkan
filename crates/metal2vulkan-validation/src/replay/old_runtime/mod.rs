@@ -22,7 +22,7 @@ use metal2vulkan_runtime::{
     RenderPassDescriptor, RenderPipelineState, ResourceId, ResourceIdKind, ResourceOptions,
     SamplerState, SharedEvent, Size, StorageMode, Texture, TextureDescriptor, TextureLevelQuery,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// One object of the stream, as the runtime holds it.
 enum Object {
@@ -49,6 +49,19 @@ enum Object {
     Fence(Fence),
     Event(Event),
     SharedEvent(SharedEvent),
+    /// What no device here builds: a library from source, and what is made from it.
+    Skipped,
+}
+
+/// What the play skipped, counted.
+#[derive(Default)]
+struct Skips {
+    /// Libraries from source, and objects made from a skipped one or naming one.
+    objects: u64,
+    /// Draws through a skipped render pipeline state.
+    draws: u64,
+    /// Every other call on a skipped object or naming one.
+    calls: u64,
 }
 
 /// The old runtime on one device.
@@ -61,6 +74,9 @@ pub struct OldRuntime {
     readback: Option<CommandQueue>,
     /// What `m2v.copyToGuestRam` copies into: the host's memory, which nothing in a replay reads.
     host: Option<Buffer>,
+    skips: Skips,
+    /// The render encoders whose pipeline state is a skipped one: their draws are skipped.
+    unpiped: HashSet<u64>,
 }
 
 /// A made object with no address.
@@ -98,6 +114,23 @@ impl OldRuntime {
             objects: HashMap::new(),
             readback: None,
             host: None,
+            skips: Skips::default(),
+            unpiped: HashSet::new(),
+        }
+    }
+
+    /// Whether `id` is an object the play skipped.
+    fn skipped(&self, id: u64) -> bool {
+        matches!(self.objects.get(&id), Some(Object::Skipped))
+    }
+
+    /// Whether `value` names an object the play skipped, at any depth.
+    fn holds_skipped(&self, value: &Value) -> bool {
+        match value {
+            Value::Object(id) => self.skipped(*id),
+            Value::List(items) => items.iter().any(|item| self.holds_skipped(item)),
+            Value::Map(entries) => entries.iter().any(|(_, item)| self.holds_skipped(item)),
+            _ => false,
         }
     }
 
@@ -328,7 +361,7 @@ impl OldRuntime {
                 let descriptor = made_texture_descriptor(call)?;
                 unaddressed(Object::TextureDescriptor(Box::new(descriptor)))
             }
-            "MTLRenderPassDescriptor.new" => {
+            "MTLRenderPassDescriptor.new" | "MTLRenderPassDescriptor.renderPassDescriptor" => {
                 unaddressed(Object::Pass(Box::new(RenderPassDescriptor::new())))
             }
             "reserveResourceIndicesForResourceType:indices:indexCount:" => {
@@ -640,6 +673,30 @@ impl Backend for OldRuntime {
             self.objects.remove(&call.receiver);
             return Ok(Made::default());
         }
+        if self.skipped(call.receiver) {
+            // A call on a skipped object; what it makes is skipped too.
+            self.skips.calls += 1;
+            if call.result != 0 {
+                self.objects.insert(call.result, Object::Skipped);
+            }
+            return Ok(Made::default());
+        }
+        let encodes = matches!(
+            self.objects.get(&call.receiver),
+            Some(
+                Object::CommandBuffer(_) | Object::Compute(_) | Object::Blit(_) | Object::Render(_)
+            )
+        );
+        let names_skipped = call.args.iter().any(|value| self.holds_skipped(value));
+        // No device here compiles Metal source: such a library is skipped, and what is made of a
+        // skipped object with it.
+        if &*call.selector == "newLibraryWithSource:options:error:"
+            || (call.result != 0 && !encodes && names_skipped)
+        {
+            self.skips.objects += 1;
+            self.objects.insert(call.result, Object::Skipped);
+            return Ok(Made::default());
+        }
         let receiver = match call.receiver {
             0 => None,
             id => Some(self.get(call, id)?),
@@ -835,6 +892,32 @@ impl Backend for OldRuntime {
                     + c.cmd_fill_buffer,
             ),
             ("pipelines_made", counts.variant_pipelines_made),
+            ("device_memory_allocated", counts.device_memory_allocated),
+            (
+                "pooled_memory_blocks_made",
+                counts.pooled_memory_blocks_made,
+            ),
+            (
+                "pooled_memory_blocks_freed",
+                counts.pooled_memory_blocks_freed,
+            ),
+            ("skipped_objects", self.skips.objects),
+            ("skipped_draws", self.skips.draws),
+            ("skipped_calls", self.skips.calls),
+        ])
+    }
+
+    /// The runtime's live memory blocks: pooled ones with a placement, empty ones kept (pooled or
+    /// dedicated), and dedicated ones with their placement.
+    fn live(&mut self) -> Counters {
+        let counts = self.device.work_counts();
+        Counters::from([
+            ("memory_blocks", counts.memory_blocks_live),
+            ("empty_memory_blocks", counts.empty_memory_blocks_live),
+            (
+                "dedicated_memory_blocks",
+                counts.dedicated_memory_blocks_live,
+            ),
         ])
     }
 

@@ -10,11 +10,12 @@ use std::ops::Range;
 /// Where a buffer's place starts: Metal's buffers lie at multiples of 256 bytes.
 const ALIGN: u64 = 256;
 
-/// A buffer's place: its block, its bytes there, and whether the block is its own.
+/// A buffer's place: its block, its bytes there, and the block's class where the block is its
+/// own.
 pub(super) struct Place {
     pub(super) block: rt::BlockId,
     pub(super) range: Range<u64>,
-    own: bool,
+    own: Option<rt::MemoryClass>,
 }
 
 /// One pooled block: its free ranges, in order.
@@ -29,6 +30,16 @@ pub(super) struct Places {
     blocks: Vec<Block>,
     /// A released buffer's place, and the commits before its release.
     held: Vec<(Place, u64)>,
+    /// The bytes of the blocks held, pooled and own, by class (`class_index`).
+    bytes: [u64; 2],
+}
+
+/// `class`'s index in a pair of per-class values: Private, then Shared.
+pub(super) fn class_index(class: rt::MemoryClass) -> usize {
+    match class {
+        rt::MemoryClass::Private => 0,
+        rt::MemoryClass::Shared => 1,
+    }
 }
 
 impl Places {
@@ -37,7 +48,14 @@ impl Places {
             device,
             blocks: Vec::new(),
             held: Vec::new(),
+            bytes: [0; 2],
         }
+    }
+
+    /// The bytes of the blocks the places hold, by class (`class_index`): pooled blocks whole,
+    /// own blocks at their buffers' lengths.
+    pub(super) fn bytes(&self) -> [u64; 2] {
+        self.bytes
     }
 
     /// A place of `len` bytes of `class`, once every place whose commits have all completed
@@ -51,10 +69,11 @@ impl Places {
         self.free_completed(completed)?;
         if len > class.block_len() {
             let info = self.device.take_block(class, len)?;
+            self.bytes[class_index(class)] += len;
             return Ok(Place {
                 block: info.id,
                 range: 0..len,
-                own: true,
+                own: Some(class),
             });
         }
         let span = len.next_multiple_of(ALIGN);
@@ -67,11 +86,12 @@ impl Places {
                 return Ok(Place {
                     block: block.info.id,
                     range: range.start..range.start + len,
-                    own: false,
+                    own: None,
                 });
             }
         }
         let info = self.device.take_block(class, class.block_len())?;
+        self.bytes[class_index(class)] += info.len;
         let mut free = Vec::new();
         free.push(0..info.len);
         let range = take_from(&mut free, span).expect("a new block holds any pooled place");
@@ -80,7 +100,7 @@ impl Places {
         Ok(Place {
             block,
             range: range.start..range.start + len,
-            own: false,
+            own: None,
         })
     }
 
@@ -97,9 +117,10 @@ impl Places {
                 continue;
             }
             let (place, _) = self.held.swap_remove(at);
-            if place.own {
+            if let Some(class) = place.own {
                 // The runtime keeps the block for the command buffers that use it.
                 self.device.release_block(place.block)?;
+                self.bytes[class_index(class)] -= place.range.end;
                 continue;
             }
             let span = (place.range.end - place.range.start).next_multiple_of(ALIGN);

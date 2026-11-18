@@ -389,6 +389,10 @@ impl Backend for Kept {
         counters
     }
 
+    fn live(&mut self) -> Counters {
+        Counters::from([("calls", self.calls.len() as u64)])
+    }
+
     fn snapshots(&self) -> bool {
         !self.declines_snapshots
     }
@@ -1140,6 +1144,31 @@ fn a_message_to_nil_does_nothing() {
     ended.unwrap();
     assert_eq!(kept.calls, ["#1 = MTLCreateSystemDefaultDevice"]);
     assert_eq!(report.total.stream["calls"], 2);
+}
+
+/// Each frame's end reports the backend's gauges as they stand then, never their growth over the
+/// frame, beside the frame's wall time.
+#[test]
+fn a_frame_end_reports_the_gauges_as_they_stand() {
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        w.call("newCommandQueue", 1, 3, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        Ok(())
+    });
+    ended.unwrap();
+    let live: Vec<_> = report.ends.iter().map(|end| end.live["calls"]).collect();
+    assert_eq!(live, [2, 3]);
+    let lines = report.lines();
+    let ends: Vec<_> = lines
+        .iter()
+        .filter(|line| line.starts_with("end "))
+        .collect();
+    assert_eq!(ends.len(), 2, "{lines:?}");
+    assert!(ends[1].ends(" live calls=3"), "{lines:?}");
 }
 
 /// On a backend that takes no snapshots, a dispatch an `m2v.privateBytes` record names plays as it

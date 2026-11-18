@@ -84,6 +84,9 @@ pub trait Backend {
     ) -> Result<(u64, u64), PlayError>;
     /// The runtime's counters now.
     fn counters(&mut self) -> Counters;
+    /// The runtime's gauges now: what it holds live, which a frame's end reports as it stands
+    /// (`Report::ends`), never as growth.
+    fn live(&mut self) -> Counters;
     /// Whether the player takes the `m2v.privateBytes` snapshots on this backend: they split the
     /// program's compute encoders around a dispatch with blits between buffers and fences of the
     /// player's own. Where it does not, those dispatches play as they are, counted
@@ -207,6 +210,30 @@ pub struct Report {
     /// The whole play's counts, the player's own work left out. Its calls are the calls played:
     /// where a play stopped, the stopping call is the next.
     pub total: Counts,
+    /// Each frame's end, as `frames` counts them.
+    pub ends: Vec<End>,
+}
+
+/// A frame's end: how long the frame took to play, and what the process and the runtime held.
+/// None of it is fixed by the stream; it differs between plays.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct End {
+    /// Nanoseconds from the end of the frame before (the first call played, for the first) to
+    /// this one's, the wait for its work included.
+    pub wall_nanos: u64,
+    /// The process's resident memory then, in bytes, where the system tells it (`VmRSS` on
+    /// Linux).
+    pub resident_bytes: Option<u64>,
+    /// The runtime's gauges then (`Backend::live`).
+    pub live: Counters,
+}
+
+/// The process's resident memory in bytes: `VmRSS` of `/proc/self/status`, where there is one.
+fn resident_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|line| line.starts_with("VmRSS:"))?;
+    let kib = line.split_whitespace().nth(1)?.parse::<u64>().ok()?;
+    Some(kib * 1024)
 }
 
 /// The placement heaps whose layout the player changed for the runtime's answers: how many, the
@@ -242,6 +269,17 @@ impl Report {
         }
         for (at, counters) in self.frames.iter().enumerate() {
             lines.push(format!("frame {at}{}", counted(counters)));
+        }
+        for (at, end) in self.ends.iter().enumerate() {
+            let resident =
+                (end.resident_bytes).map_or(String::new(), |r| format!(" resident_bytes={r}"));
+            let live: String = (end.live.iter())
+                .map(|(key, value)| format!(" {key}={value}"))
+                .collect();
+            lines.push(format!(
+                "end {at} wall_nanos={}{resident} live{live}",
+                end.wall_nanos
+            ));
         }
         for check in &self.checks {
             let verdict = match check.recorded {
@@ -470,6 +508,8 @@ pub struct Player<'b, B: Backend> {
     /// The counts the stream fixes, since the last group.
     fixed: Counters,
     frame: Counts,
+    /// When the frame being played began: the first call played, or the frame before's end.
+    frame_began: Option<std::time::Instant>,
     report: Report,
 }
 
@@ -661,6 +701,7 @@ impl<'b, B: Backend> Player<'b, B> {
             baseline,
             fixed,
             frame: Counts::default(),
+            frame_began: None,
             report: Report::default(),
         }
     }
@@ -690,6 +731,7 @@ impl<'b, B: Backend> Player<'b, B> {
 
     fn all(&mut self, stream: &mut StreamReader, left_out: &mut Counters) -> Result<(), PlayError> {
         while let Some(call) = stream.next_call()? {
+            self.frame_began.get_or_insert_with(std::time::Instant::now);
             let issued = self.issued(&call);
             match self.ahead.remove(&self.position) {
                 Some(ranges) if self.backend.snapshots() => {
@@ -852,6 +894,13 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.drain()?;
                 self.report.frames.push(self.frame.clone());
                 self.frame = Counts::default();
+                let now = std::time::Instant::now();
+                let began = self.frame_began.replace(now).unwrap_or(now);
+                self.report.ends.push(End {
+                    wall_nanos: u64::try_from((now - began).as_nanos()).unwrap_or(u64::MAX),
+                    resident_bytes: resident_bytes(),
+                    live: self.backend.live(),
+                });
                 Ok(())
             }
             "commit" => self.commit(call.receiver),
