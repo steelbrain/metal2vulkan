@@ -1084,7 +1084,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
     }
 
     let runtime = crate::Instance::new(&[]).expect("the runtime's instance");
-    let (_, instance) = runtime.raw();
+    let (entry, instance) = runtime.raw();
     // SAFETY: `instance` is live.
     let physicals = unsafe { instance.enumerate_physical_devices() }.expect("the physical devices");
     let mut checked = 0;
@@ -1116,7 +1116,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             vk::api_version_patch(api)
         );
         // SAFETY: as above.
-        let capabilities = match unsafe { check(&entry, &instance, physical) } {
+        let capabilities = match unsafe { check(entry, instance, physical) } {
             Ok(capabilities) => capabilities,
             Err(refusal) => {
                 below.push(format!("{name} ({version}, {info}): {refusal}"));
