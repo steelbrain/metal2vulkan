@@ -47,7 +47,7 @@ use crate::air::ir::{
 use crate::air::Entry;
 use crate::budget::{tree_bytes, Growth, Meter};
 use crate::device::function_storage;
-use crate::device::profile::{Limits, NarrowWrap};
+use crate::device::profile::{Limits, NarrowWrap, PushWindow};
 use crate::device::requirements::{VkFeature, VkLimit};
 use crate::device::subgroup::{self, SimdClass, SubgroupRequirement, Tier};
 use crate::device::DeviceProfile;
@@ -1862,7 +1862,7 @@ fn finish(
     };
     plan.estimate.add(walk);
     if access::identity(p) {
-        identity_admits(&plan)?;
+        identity_admits(&plan, p)?;
     }
     Ok(plan)
 }
@@ -1910,13 +1910,14 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
     )
 }
 
-/// Under the identity domains, the plans lowered so far: a kernel that reaches memory only
-/// through its buffer slots' device addresses, its textures' and runtime samplers' resource IDs
-/// and its constexpr samplers' pushed indices, with no descriptor and no state of a bound texture
-/// or sampler but its resource ID's
+/// Under the identity domains on profile `p`, the plans lowered so far: a kernel, or on the floor's
+/// push window (`PushWindow::Floor`, `Device::from_queries`' profile) a vertex or fragment
+/// function, that reaches memory only through its buffer slots' device addresses, its textures'
+/// and runtime samplers' resource IDs and its constexpr samplers' pushed indices, with no
+/// descriptor and no state of a bound texture or sampler but its resource ID's
 /// (`SlotPlan::identity_lowered`, [`identity_unsourced`]). Its fields past the push window are a
 /// parameter block, whose address the window holds.
-fn identity_admits(plan: &Plan) -> Result<(), Error> {
+fn identity_admits(plan: &Plan, p: &DeviceProfile) -> Result<(), Error> {
     let fields = plan.push.fields.iter().all(|f| match (f.field, f.loc) {
         (PushField::ArgumentTableAddress, loc) => matches!(loc, PushLoc::Push { .. }),
         (field, _) => matches!(
@@ -1976,7 +1977,12 @@ fn identity_admits(plan: &Plan) -> Result<(), Error> {
         && sampled.bicubic_routines.is_empty()
         && !sampled.cubic_reach
         && sampled.slots.values().all(|r| !r.min_level && !r.emulated);
-    if plan.stage == Stage::Kernel
+    let stage = match plan.stage {
+        Stage::Kernel => true,
+        Stage::Vertex | Stage::Fragment => p.push_window() == PushWindow::Floor,
+        _ => false,
+    };
+    if stage
         && fields
         && addressed
         && textures

@@ -627,7 +627,9 @@ pub(crate) enum NarrowWrap {
 }
 
 /// How many bytes of push constants a kernel's push window holds (`lower::push::window`): the
-/// fields a kernel reads from push constants up to it, the rest from its `ArgumentTable`.
+/// fields a kernel reads from push constants up to it, the rest from its `ArgumentTable`. Under
+/// the identity domains, vertex and fragment functions lower on the floor's window alone
+/// (`lower::select`'s `identity_admits`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PushWindow {
     /// 128 bytes, what Vulkan guarantees (`maxPushConstantsSize`): `Device::new`'s profile.
@@ -965,7 +967,8 @@ pub enum PointerDomain {
     /// 64-bit Vulkan device address of the byte it names, as Metal's `gpuAddress` is, and a
     /// buffer slot is reached at its own address, pushed, uncontained. Needs
     /// `bufferDeviceAddress` and `shaderInt64`. So far it lowers a kernel that reaches memory
-    /// only through its buffer slots; any other function is refused as
+    /// only through its buffer slots, and, on `Device::from_queries`' profile, a vertex or
+    /// fragment function that does; any other function is refused as
     /// [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
     Identity,
 }
