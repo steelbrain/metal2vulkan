@@ -300,6 +300,8 @@ struct Kept {
     declines_snapshots: bool,
     /// The GPU start and end it gives each command buffer; one not here has none.
     gpu: HashMap<u64, (u64, u64)>,
+    /// The recording device's `hasUnifiedMemory` the player told it.
+    unified: Option<bool>,
 }
 
 impl Backend for Kept {
@@ -405,6 +407,10 @@ impl Backend for Kept {
 
     fn snapshots(&self) -> bool {
         !self.declines_snapshots
+    }
+
+    fn recorded_unified_memory(&mut self, unified: bool) {
+        self.unified = Some(unified);
     }
 }
 
@@ -1166,6 +1172,26 @@ fn a_message_to_nil_does_nothing() {
     });
     ended.unwrap();
     assert_eq!(kept.calls, ["#1 = MTLCreateSystemDefaultDevice"]);
+    assert_eq!(report.total.stream["calls"], 2);
+}
+
+/// A device identity record plays as nothing and tells the backend how the recording device kept
+/// Managed buffers.
+#[test]
+fn a_device_identity_record_tells_the_backend_how_managed_buffers_were_kept() {
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let answers = [
+            ("name", Value::Str("GPU".into())),
+            ("hasUnifiedMemory", Value::Bool(false)),
+        ];
+        w.call("m2v.deviceIdentity", 1, 0, &[], &answers)?;
+        Ok(())
+    });
+    ended.unwrap();
+    assert_eq!(kept.calls, ["#1 = MTLCreateSystemDefaultDevice"]);
+    assert_eq!(kept.unified, Some(false));
     assert_eq!(report.total.stream["calls"], 2);
 }
 

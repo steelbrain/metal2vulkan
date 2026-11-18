@@ -121,6 +121,9 @@ impl NewRuntime {
             };
             super::unaddressed(Object::Compute(Box::new(compute)))
         };
+        if call.result != 0 && call.selector.contains("CommandEncoder") {
+            self.owners.insert(call.result, call.receiver);
+        }
         match &*call.selector {
             "computeCommandEncoder" => encoder(0),
             "computeCommandEncoderWithDispatchType:" => encoder(uint(call, 0)?),
@@ -131,7 +134,6 @@ impl NewRuntime {
             "blitCommandEncoder" => {
                 let encoder = command_buffer.blit_command_encoder();
                 let encoder = encoder.map_err(failed(call))?;
-                self.blit_owners.insert(call.result, call.receiver);
                 super::unaddressed(Object::Blit(Box::new(encoder)))
             }
             "renderCommandEncoderWithDescriptor:"
@@ -142,6 +144,9 @@ impl NewRuntime {
             "commit" => {
                 command_buffer.commit().map_err(failed(call))?;
                 self.commits += 1;
+                // Its first use committed, a no-copy Managed buffer's GPU copy changes only by
+                // `didModifyRange:` from here.
+                self.fresh.retain(|_, user| *user != Some(call.receiver));
                 self.in_flight.push_back((self.commits, command_buffer));
                 for place in self.staging.remove(&call.receiver).unwrap_or_default() {
                     self.places.give(place, self.commits);
@@ -404,7 +409,7 @@ impl NewRuntime {
             copied.map_err(failed(call))?;
         }
         self.staged_bytes += len;
-        match self.blit_owners.get(&id).copied() {
+        match self.owners.get(&id).copied() {
             Some(command_buffer) => self.staging.entry(command_buffer).or_default().push(place),
             None => self.places.give(place, self.commits),
         }
@@ -429,7 +434,7 @@ impl NewRuntime {
                 let Some(Object::Blit(encoder)) = self.objects.remove(&id) else {
                     unreachable!("a blit encoder's call");
                 };
-                self.blit_owners.remove(&id);
+                self.owners.remove(&id);
                 (*encoder).end_encoding();
                 Ok(())
             }

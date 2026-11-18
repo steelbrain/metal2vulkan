@@ -111,6 +111,21 @@ struct Creation {
     new_kernel: bool,
 }
 
+/// How the device that recorded a stream kept a Managed buffer: Metal's `hasUnifiedMemory`
+/// there. With unified memory a Managed buffer is one copy, so a CPU write needs no
+/// `didModifyRange:`; without it the GPU has a copy of its own, made from the buffer's bytes at
+/// its creation and changed after only by `didModifyRange:`. A stream does not record it: the
+/// player is told it for each stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManagedCopies {
+    /// Recorded with unified memory: every Managed buffer plays as a Shared one, on every device.
+    One,
+    /// Recorded without it: a Managed buffer plays as the runtime's Managed buffer. A no-copy
+    /// one's GPU copy takes the bytes the stream records before its first use, its nearest record
+    /// of its bytes at creation.
+    Two,
+}
+
 /// The new runtime on one device.
 pub struct NewRuntime {
     device: rt::Device,
@@ -127,8 +142,22 @@ pub struct NewRuntime {
     completed: u64,
     skips: Skips,
     substitutes: Substitutes,
-    /// Each open blit encoder's command buffer.
-    blit_owners: HashMap<u64, u64>,
+    /// Each open encoder's command buffer.
+    owners: HashMap<u64, u64>,
+    /// How the recording's device kept Managed buffers; `None` where the player was not told,
+    /// and a Managed buffer is refused.
+    managed: Option<ManagedCopies>,
+    /// The Managed buffers made.
+    managed_buffers: u64,
+    /// The no-copy Managed buffers of a two-copy stream whose first use has not been committed,
+    /// with the command buffer that first uses one: the stream's writes into such a buffer go to
+    /// its GPU copy too.
+    fresh: HashMap<u64, Option<u64>>,
+    /// The no-copy Managed buffers whose GPU copy took bytes written before their first use.
+    from_first_use: HashSet<u64>,
+    /// Whether the stream told the form itself (`m2v.deviceIdentity`): its no-copy Managed
+    /// buffers then carry their bytes at creation.
+    identity: bool,
     /// The staging places of each command buffer not yet committed, which hold the bytes of its
     /// guest-RAM copies: given back at its commit, free once it completes.
     staging: HashMap<u64, Vec<Place>>,
@@ -142,6 +171,17 @@ pub struct NewRuntime {
     /// Each compute pipeline state made, in order, and the kernels made so far.
     creations: Vec<Creation>,
     kernels: HashSet<Kernel>,
+}
+
+/// The objects `values` name, lists included.
+fn objects_named(values: &[Value], out: &mut Vec<u64>) {
+    for value in values {
+        match value {
+            Value::Object(id) => out.push(*id),
+            Value::List(items) => objects_named(items, out),
+            _ => {}
+        }
+    }
 }
 
 /// A made object with no address.
@@ -341,7 +381,12 @@ impl NewRuntime {
             completed: 0,
             skips: Skips::default(),
             substitutes: Substitutes::default(),
-            blit_owners: HashMap::new(),
+            owners: HashMap::new(),
+            managed: None,
+            managed_buffers: 0,
+            fresh: HashMap::new(),
+            from_first_use: HashSet::new(),
+            identity: false,
             staging: HashMap::new(),
             staged_bytes: 0,
             unanswered_pipeline_ids: 0,
@@ -349,6 +394,26 @@ impl NewRuntime {
             creations: Vec::new(),
             kernels: HashSet::new(),
         })
+    }
+
+    /// The backend told how the stream's recording device kept Managed buffers.
+    pub fn with_managed(mut self, copies: ManagedCopies) -> Self {
+        self.managed = Some(copies);
+        self
+    }
+
+    /// How a Managed buffer of `call` plays: as a Shared buffer for a one-copy stream, the
+    /// runtime's Managed buffer for a two-copy one; refused where the player was not told.
+    fn managed_form(&mut self, call: &Call) -> Result<ManagedCopies, PlayError> {
+        let copies = self.managed.ok_or_else(|| {
+            refuse(
+                call,
+                "a Managed buffer, and the stream's Managed form (one copy or two: the \
+                 recording device's hasUnifiedMemory) was not given",
+            )
+        })?;
+        self.managed_buffers += 1;
+        Ok(copies)
     }
 
     fn get(&self, call: &Call, id: u64) -> Result<&Object, PlayError> {
@@ -476,14 +541,28 @@ impl NewRuntime {
     }
 
     /// A buffer of `length` bytes and storage `mode` in a place of its own, zeroed, holding
-    /// `bytes` from its start.
+    /// `bytes` from its start; `no_copy` where its bytes are the program's memory.
     fn new_buffer(
         &mut self,
         call: &Call,
         length: u64,
         mode: rt::StorageMode,
         bytes: &[u8],
+        no_copy: bool,
     ) -> Result<Option<(Object, Made)>, PlayError> {
+        let mode = match mode {
+            rt::StorageMode::Managed => match self.managed_form(call)? {
+                ManagedCopies::One => rt::StorageMode::Shared,
+                ManagedCopies::Two => {
+                    // A stream that tells its form gives a no-copy buffer's bytes at creation.
+                    if no_copy && !self.identity && bytes.is_empty() {
+                        self.fresh.insert(call.result, None);
+                    }
+                    rt::StorageMode::Managed
+                }
+            },
+            mode => mode,
+        };
         let class = match mode {
             rt::StorageMode::Private if bytes.is_empty() => rt::MemoryClass::Private,
             rt::StorageMode::Shared | rt::StorageMode::Managed => rt::MemoryClass::Shared,
@@ -739,11 +818,13 @@ impl NewRuntime {
             }
             "newBufferWithLength:options:" => {
                 let mode = storage(call, uint(call, 1)?)?;
-                self.new_buffer(call, uint(call, 0)?, mode, &[])
+                self.new_buffer(call, uint(call, 0)?, mode, &[], false)
             }
             "newBufferWithBytesNoCopy:length:options:deallocator:" => {
                 let mode = storage(call, uint(call, 2)?)?;
-                self.new_buffer(call, uint(call, 1)?, mode, &[])
+                // The pages' bytes at creation, where the stream gives them.
+                let bytes = arg(call, 0)?.as_bytes().unwrap_or_default();
+                self.new_buffer(call, uint(call, 1)?, mode, bytes, true)
             }
             "newBufferWithBytes:length:options:" => {
                 let length = uint(call, 1)?;
@@ -752,7 +833,7 @@ impl NewRuntime {
                     .and_then(|length| data(call, 0).ok()?.get(..length))
                     .ok_or_else(|| refuse(call, "fewer bytes than its length"))?;
                 let mode = storage(call, uint(call, 2)?)?;
-                self.new_buffer(call, length, mode, bytes)
+                self.new_buffer(call, length, mode, bytes, false)
             }
             "newBufferWithDescriptor:" => {
                 let f = Fields::arg(
@@ -768,12 +849,17 @@ impl NewRuntime {
                         "zeroFrom",
                     ],
                 )?;
-                if f.get("contents").is_some() {
-                    return Err(refuse(call, "contents that are no bytes"));
-                }
+                // A no-copy buffer's bytes at creation, where the stream gives them.
+                let contents = match f.get("contents") {
+                    None => &[][..],
+                    Some(value) => value
+                        .as_bytes()
+                        .ok_or_else(|| refuse(call, "contents that are no bytes"))?,
+                };
                 let raw = option_sets(call, 0, f.list("options")?.unwrap_or_default())?;
                 let length = f.required("length", Fields::uint)?;
-                self.new_buffer(call, length, storage(call, raw)?, &[])
+                let no_copy = f.get("noCopy").and_then(Value::as_bool) == Some(true);
+                self.new_buffer(call, length, storage(call, raw)?, contents, no_copy)
             }
             "m2v.newBlockWithLength:storageMode:" | "newHeapWithDescriptor:" => {
                 let (length, class) = match &*call.selector {
@@ -989,11 +1075,16 @@ impl NewRuntime {
     ) -> Result<Option<(Object, Made)>, PlayError> {
         // A buffer of `length` bytes and storage options `raw` at `offset` in the block.
         let device = self.device.clone();
-        let placed = |length: u64, raw: u64, offset: u64| {
+        let mut placed = |length: u64, raw: u64, offset: u64| {
             let at = range.offset + offset;
             let buffer = match storage(call, raw)? {
                 rt::StorageMode::Managed if class == rt::MemoryClass::Shared => {
-                    device.new_managed_buffer(range.block, at, length, length)
+                    match self.managed_form(call)? {
+                        ManagedCopies::One => device.new_buffer(range.block, at, length, false),
+                        ManagedCopies::Two => {
+                            device.new_managed_buffer(range.block, at, length, length)
+                        }
+                    }
                 }
                 _ => device.new_buffer(range.block, at, length, false),
             };
@@ -1141,6 +1232,8 @@ fn write_into(buffer: &rt::Buffer, offset: u64, bytes: &[u8]) -> Result<(), Play
 impl Backend for NewRuntime {
     fn call(&mut self, call: &Call) -> Result<Made, PlayError> {
         if &*call.selector == "release" {
+            self.owners.remove(&call.receiver);
+            self.fresh.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => self.places.give(place, self.commits),
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a
@@ -1176,6 +1269,19 @@ impl Backend for NewRuntime {
             self.skips.objects += 1;
             self.objects.insert(call.result, Object::Skipped);
             return Ok(Made::default());
+        }
+        if !self.fresh.is_empty() {
+            // An encoder naming a no-copy Managed buffer not yet used: its command buffer is the
+            // buffer's first use.
+            if let Some(&user) = self.owners.get(&call.receiver) {
+                let mut named = Vec::new();
+                objects_named(&call.args, &mut named);
+                for id in named {
+                    if let Some(first @ None) = self.fresh.get_mut(&id) {
+                        *first = Some(user);
+                    }
+                }
+            }
         }
         let made = match call.receiver {
             0 => self.device_call(call)?,
@@ -1273,7 +1379,21 @@ impl Backend for NewRuntime {
 
     fn write(&mut self, target: u64, offset: u64, bytes: &[u8]) -> Result<(), PlayError> {
         match self.objects.get(&target) {
-            Some(Object::Buffer(buffer, _)) => write_into(buffer, offset, bytes),
+            Some(Object::Buffer(buffer, _)) => {
+                write_into(buffer, offset, bytes)?;
+                // Bytes recorded before a no-copy Managed buffer's first use are its contents
+                // at creation, as near as the stream has them: its GPU copy takes them too.
+                if self.fresh.contains_key(&target) && !bytes.is_empty() {
+                    let length = bytes.len() as u64;
+                    let did = buffer.did_modify_range(offset, length);
+                    did.map_err(|error| PlayError::Runtime {
+                        selector: "m2v.write".into(),
+                        error: error.to_string(),
+                    })?;
+                    self.from_first_use.insert(target);
+                }
+                Ok(())
+            }
             Some(Object::Block(range, rt::MemoryClass::Shared, _)) => {
                 let whole = self
                     .device
@@ -1428,7 +1548,40 @@ impl Backend for NewRuntime {
             let kernel = if made.new_kernel { "new" } else { "again" };
             format!("pipeline {at} wall_nanos={} kernel={kernel}", made.nanos)
         });
-        lines.collect()
+        let mut lines: Vec<String> = lines.collect();
+        if let Some(copies) = self.managed {
+            let from = match self.identity {
+                true => "the stream's device identity",
+                false => "the player's setting",
+            };
+            let mut line = match copies {
+                ManagedCopies::One => format!(
+                    "managed one copy ({from}): {} Managed buffers played as Shared",
+                    self.managed_buffers
+                ),
+                ManagedCopies::Two => format!(
+                    "managed two copies ({from}): {} Managed buffers; {} no-copy ones with \
+                     contents from first use, not from create",
+                    self.managed_buffers,
+                    self.from_first_use.len()
+                ),
+            };
+            if copies == ManagedCopies::Two && self.device.has_unified_memory() {
+                line.push_str(
+                    "; recorded with two copies, played as this device's one copy (unified memory)",
+                );
+            }
+            lines.push(line);
+        }
+        lines
+    }
+
+    fn recorded_unified_memory(&mut self, unified: bool) {
+        self.identity = true;
+        self.managed = Some(match unified {
+            true => ManagedCopies::One,
+            false => ManagedCopies::Two,
+        });
     }
 
     /// The runtime makes no blits between buffers yet.

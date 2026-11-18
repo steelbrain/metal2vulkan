@@ -100,6 +100,12 @@ and the (name id, value) answer pairs.
   its last reference). Releasing a device releases everything it made.
 - **Devices:** `MTLCreateSystemDefaultDevice`, one per device the recording's host made; every
   guest process may share one. The player serves every recorded device from one runtime device.
+- **Device identity:** `m2v.deviceIdentity` (receiver: the device; no arguments) follows each
+  `MTLCreateSystemDefaultDevice` record, and opens every later segment, one record per live device
+  in id order. Its answers are `name` (the recording runtime's device name) and
+  `hasUnifiedMemory` (what the guest's `hasUnifiedMemory` answered), and later keys may join them.
+  It plays as nothing; the player takes from it how the recording kept Managed buffers
+  (section 10). A stream without it says nothing of that.
 - Everything else is made by its Metal selector: queues, command buffers, encoders of every kind,
   buffers, heaps, textures and views, samplers, depth and stencil states, events, shared events,
   fences, indirect command buffers, libraries, functions, pipeline states, argument encoders and
@@ -127,6 +133,14 @@ and the (name id, value) answer pairs.
   without a pinned address answers none. `newBufferWithBytesNoCopy:length:options:deallocator:`
   is `[nil, length, options, nil]`, and a no-copy descriptor's `contents` nil; their bytes arrive
   as writes.
+- **A no-copy Managed buffer's bytes at its making.** Where the device's `hasUnifiedMemory` is
+  false, the GPU copy of a Managed buffer is made from its bytes at its making, then changed only by
+  `didModifyRange:`. A no-copy one (storage mode Managed) then carries those bytes:
+  `newBufferWithBytesNoCopy:length:options:deallocator:`'s first argument holds all its bytes as
+  the making read them (a blob where they are 64 bytes or longer, bytes otherwise), and a no-copy
+  descriptor's `contents` holds its bytes up to `zeroFrom` (all of them where `zeroFrom` is nil;
+  nil where it is 0), its GPU copy zero from there. Its bytes still arrive as writes before its
+  first use, as any buffer's do.
 - **Copied buffers.** A buffer `newBufferWithDescriptor:` made as a copy of host memory (`contents`
   set, `noCopy` not) carries the bytes it starts with as its descriptor's `contents`: a blob where
   they are 64 bytes or longer, bytes otherwise. The player makes the buffer, then puts them at its
@@ -321,7 +335,7 @@ and the (name id, value) answer pairs.
 | `front`, `back` | `frontFaceStencil`, `backFaceStencil` |
 | `heapType` | `type` |
 | `options` | the setters of `resourceOptions`, `storageMode` and `hazardTrackingMode` |
-| `pinnedGpuAddress`, `contents`, `noCopy`, `deallocator`, `zeroFrom` | the host's buffer creation: a pin, the bytes a copied buffer starts with (section 5), no-copy host memory and its deallocator, and the bytes known zero from an offset |
+| `pinnedGpuAddress`, `contents`, `noCopy`, `deallocator`, `zeroFrom` | the host's buffer creation: a pin, the bytes a copied buffer starts with or a no-copy Managed one's at its making (section 5), no-copy host memory and its deallocator, and the bytes known zero from an offset |
 | `openGlModeEnabled`, `openClMode` | `openGLModeEnabled`, `openCLModeEnabled` |
 | `znear`, `zfar` | `MTLViewport`'s `znear` and `zfar` |
 | `rotation`, `isDrawable`, `framebufferOnly`, `protectionOptions`, `writeSwizzleEnabled` | Apple's texture descriptor properties of those names |
@@ -339,8 +353,9 @@ and the (name id, value) answer pairs.
 ## 10. The player
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-[--blobs DIR] [--runtime old|rt] [--snapshots yes|no]` plays a stream (its first segment) on one
-device through the old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`.
+[--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]` plays a
+stream (its first segment) on one device through the old runtime (the default) or the new one
+(`rt`), and writes `DIR/report.txt`.
 With `--snapshots no` it takes no `m2v.privateBytes` snapshot on either runtime: each such dispatch
 plays as it is, counted on the `unsnapshotted` line, so two runtimes' plays do the same work and
 their times and memory compare. `command-replay dump --stream FILE` prints the call records as text, and
@@ -348,6 +363,18 @@ their times and memory compare. `command-replay dump --stream FILE` prints the c
 
 - It relocates (section 5) and plays the host's plumbing as the plain calls it stands for
   (section 4).
+- **Managed buffers** (the new runtime) play in the form the recording device kept them: its
+  `m2v.deviceIdentity` record's `hasUnifiedMemory`, or where the stream has none, `--managed`
+  (`one-copy` for unified memory, `two-copy` for a GPU copy). With neither, a Managed buffer stops
+  the play with an error that says so. One copy: every Managed buffer plays as a Shared buffer, on
+  every device. Two copies: it plays as the runtime's Managed buffer, whose GPU copy starts from
+  the bytes it was made with: a copied buffer's bytes, or a no-copy one's bytes at its making
+  (section 5). A stream with no identity record gives a no-copy buffer none, so its GPU copy takes
+  the writes recorded before its first use (a commit of a command buffer one of whose encoders
+  names it), the nearest record the stream has of its bytes at its making. On a device with
+  unified memory the runtime keeps one copy anyway. The report's `managed` line says which form
+  played and from what, counts the Managed buffers and the no-copy ones whose contents came from
+  first use, not from create, and says where a two-copy recording played as one copy.
 - After each commit, before each write, check and present, and where the program waited, it waits
   for every committed command buffer that can complete: one whose event waits are met by values the
   CPU set or by signals of command buffers that can complete. It never waits on a command buffer

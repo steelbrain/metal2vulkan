@@ -2,9 +2,12 @@
 //! or the new one, or print its records.
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-//! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no]` plays the stream whose first segment is
-//! `FILE` through the old runtime (the default) or the new one (`rt`), with `--snapshots no`
-//! taking no `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), and
+//! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]` plays the
+//! stream whose first segment is `FILE` through the old runtime (the default) or the new one
+//! (`rt`), with `--snapshots no` taking no `m2v.privateBytes` snapshot on either (so two
+//! runtimes' plays do the same work), and `--managed` telling the new runtime how the recording
+//! device kept Managed buffers where the stream has no `m2v.deviceIdentity` record (one copy:
+//! unified memory; two copies: a GPU copy; with neither, a Managed buffer stops the play), and
 //! writes `DIR/report.txt`: `device NAME runtime old|rt snapshots yes|no`, `relocation ...` (the
 //! words relocated, the address arguments, the writes into objects with no recorded range, and
 //! the objects whose ID differs from the recording's), the player's report lines, the backend's
@@ -29,14 +32,16 @@ use metal2vulkan_runtime::{DeviceOptions, ShaderCacheOptions};
 use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
-    segments, Backend, NewRuntime, OldRuntime, PlayError, Player, StreamError, StreamReader, Value,
+    segments, Backend, ManagedCopies, NewRuntime, OldRuntime, PlayError, Player, StreamError,
+    StreamReader, Value,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
-                     --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no]\n       command-replay dump --stream FILE\n       \
+                     --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
+                     [--managed one-copy|two-copy]\n       command-replay dump --stream FILE\n       \
                      command-replay shapes --stream FILE";
 
 fn main() {
@@ -215,6 +220,17 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    let managed = match options.get("managed").map(String::as_str) {
+        None => None,
+        Some("one-copy") => Some(ManagedCopies::One),
+        Some("two-copy") => Some(ManagedCopies::Two),
+        Some(other) => {
+            report.line(&format!(
+                "error managed: {other} is neither one-copy nor two-copy"
+            ));
+            return 2;
+        }
+    };
     // The first line says which mode ran: a timing table never comes from a snapshotting play
     // unnoticed.
     let mode = match snapshots {
@@ -242,7 +258,10 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             let mut backend = match open_rt(device_type, cache) {
                 Ok((backend, name)) => {
                     report.line(&format!("device {name} runtime rt {mode}"));
-                    backend
+                    match managed {
+                        Some(copies) => backend.with_managed(copies),
+                        None => backend,
+                    }
                 }
                 Err(error) => {
                     report.line(&format!("error device: {error}"));

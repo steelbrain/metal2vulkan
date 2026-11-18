@@ -105,6 +105,10 @@ pub trait Backend {
     /// player's own. Where it does not, those dispatches play as they are, counted
     /// (`Report::unsnapshotted`).
     fn snapshots(&self) -> bool;
+
+    /// The recording device's `hasUnifiedMemory`, from the stream's `m2v.deviceIdentity` record:
+    /// how it kept Managed buffers. A backend with one form of Managed buffer ignores it.
+    fn recorded_unified_memory(&mut self, _unified: bool) {}
 }
 
 /// Why a play stopped.
@@ -1124,6 +1128,12 @@ impl<'b, B: Backend> Player<'b, B> {
             "m2v.part" => {
                 let queue = self.queue_of(call.receiver)?;
                 self.part(queue, call.result)
+            }
+            "m2v.deviceIdentity" => {
+                if let Some(unified) = call.answer("hasUnifiedMemory").and_then(Value::as_bool) {
+                    self.backend.recorded_unified_memory(unified);
+                }
+                Ok(())
             }
             "m2v.setCompletionJoinsNext"
             | "m2v.holdsNoPredication"
