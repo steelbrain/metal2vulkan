@@ -282,6 +282,38 @@ fn the_address_map_relocates_by_the_innermost_live_range() {
     );
 }
 
+/// Words below the first live range and at or past the last one's end stay, and those inside move:
+/// the span check before each lookup keeps every word a lookup would keep.
+#[test]
+fn words_outside_the_live_ranges_span_stay() {
+    let block = 1u64 << 46;
+    let mut map = AddressMap::default();
+    map.insert(1, block, 0x100, 0x10_0000).unwrap();
+    map.insert(2, block + 0x1000, 0x100, 0x20_0000).unwrap();
+    let words = [
+        block - 8,
+        block,
+        block + 0x800,
+        block + 0x1008,
+        block + 0x1100,
+    ];
+    let mut bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    assert_eq!(map.relocate(&mut bytes, 0), (2, 0));
+    let after: Vec<u64> = (bytes.chunks_exact(8))
+        .map(|w| u64::from_le_bytes(w.try_into().unwrap()))
+        .collect();
+    assert_eq!(
+        after,
+        [
+            block - 8,
+            0x10_0000,
+            block + 0x800,
+            0x20_0008,
+            block + 0x1100
+        ]
+    );
+}
+
 /// A range that meets a live one in part ends that one, whose inner ranges stay: the program put
 /// the newer object in that memory while the older lived on, so a word there relocates by the newer
 /// one.

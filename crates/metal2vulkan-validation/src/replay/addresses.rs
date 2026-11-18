@@ -124,9 +124,18 @@ impl AddressMap {
     /// rewritten, and the 8-byte values at 4 past a multiple of 8 that lie in a live range, which
     /// stay as they are.
     pub fn relocate(&self, bytes: &mut [u8], offset: u64) -> (u64, u64) {
-        if self.top.is_empty() {
+        // The live ranges' span: a level's ranges are disjoint, so the top level's first starts it
+        // and its last ends it. A word outside it lies in no range and takes no lookup.
+        let (Some((&low, _)), Some((_, last))) =
+            (self.top.first_key_value(), self.top.last_key_value())
+        else {
             return (0, 0);
-        }
+        };
+        let high = last.end;
+        let relocated = |value: u64| match (low..high).contains(&value) {
+            true => self.relocated(value),
+            false => None,
+        };
         let word = |at: usize, bytes: &[u8]| {
             let at = bytes.get(at..at + 8)?;
             Some(u64::from_le_bytes(at.try_into().expect("8 bytes")))
@@ -134,13 +143,13 @@ impl AddressMap {
         let misaligned_first = ((12 - offset % 8) % 8) as usize;
         let misaligned = (misaligned_first..bytes.len())
             .step_by(8)
-            .filter(|&at| word(at, bytes).and_then(|v| self.relocated(v)).is_some())
+            .filter(|&at| word(at, bytes).and_then(relocated).is_some())
             .count() as u64;
         let first = ((8 - offset % 8) % 8) as usize;
         let mut rewritten = 0;
         let mut at = first;
         while let Some(value) = word(at, bytes) {
-            if let Some(moved) = self.relocated(value) {
+            if let Some(moved) = relocated(value) {
                 bytes[at..at + 8].copy_from_slice(&moved.to_le_bytes());
                 rewritten += 1;
             }
