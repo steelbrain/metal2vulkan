@@ -221,7 +221,7 @@ pub trait Session {
     /// takes the range the last one left: one checked whole, then `runs`, each checked to start
     /// zero (every 4 KiB), then written all over before its release. Compute pipeline states of
     /// one content: the first, of a content the device has not seen, timed apart, then `runs`'
-    /// warm-up and [`STATE_CREATIONS`](crate::authored::STATE_CREATIONS) timed ones.
+    /// warm-up and [`crate::authored::STATE_CREATIONS`] timed ones.
     fn create(&mut self, makes: Makes, runs: Runs) -> Result<CreateReport>;
 
     /// Drops the session, its device last; the device's gauges after that, where the runtime's

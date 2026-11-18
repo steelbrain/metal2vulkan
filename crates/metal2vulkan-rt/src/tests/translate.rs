@@ -148,6 +148,7 @@ mod on_device {
 
         state
             .inner
+            .compiled
             .emulated
             .as_ref()
             .and_then(|emulated| emulated.lowered.get())
@@ -751,6 +752,7 @@ mod on_device {
             }
             let emulated = state
                 .inner
+                .compiled
                 .emulated
                 .as_ref()
                 .and_then(|emulated| emulated.lowered.get());
@@ -823,12 +825,14 @@ mod on_device {
                 );
                 let emulated = state
                     .inner
+                    .compiled
                     .emulated
                     .as_ref()
                     .and_then(|emulated| emulated.lowered.get())
                     .is_some_and(|lowered| matches!(lowered, Lowered::Made(..)))
                     && state
                         .inner
+                        .compiled
                         .whole
                         .interface
                         .multiples

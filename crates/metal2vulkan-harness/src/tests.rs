@@ -1,6 +1,6 @@
 //! The harness's CPU-side parts: its statistics, its comparisons and its plans.
 
-use crate::authored::WORKLOADS;
+use crate::authored::{Makes, WORKLOADS};
 use crate::description;
 use crate::plan::{
     Binding, BufferPlan, Comparison, Constant, Dispatch, Expect, Filter, Grid, Output, Plan,
@@ -903,7 +903,7 @@ impl Session for Answers {
         }
     }
 
-    fn create(&mut self, _: u64, _: Runs) -> Result<CreateReport> {
+    fn create(&mut self, _: Makes, _: Runs) -> Result<CreateReport> {
         Ok(CreateReport::default())
     }
 
