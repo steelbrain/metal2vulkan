@@ -6,6 +6,7 @@ use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::reaper::{Free, Job};
 use crate::times::Stamps;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
 /// `MTLCommandQueue`: one FIFO on the submit thread. Every queue submits to the device's one
@@ -27,6 +28,9 @@ pub(crate) struct QueueInner {
     room: Condvar,
     /// Two timestamp queries per slot.
     pub(crate) stamps: Stamps,
+    /// The latest GPU end time of its command buffers retired, in host nanoseconds: where a
+    /// command buffer with nothing for the GPU places its times.
+    pub(crate) last_end: AtomicU64,
     counters: Counters,
     /// The device, without keeping it: a command buffer handle that outlives the device's
     /// handles holds its queue, and neither keeps the device from its teardown.
@@ -70,6 +74,7 @@ impl Device {
                 }),
                 room: Condvar::new(),
                 stamps: Stamps::new(core, max_command_buffer_count)?,
+                last_end: AtomicU64::new(0),
                 counters: core.counters.clone(),
                 core: Arc::downgrade(core),
             }),

@@ -1486,4 +1486,100 @@ pub(crate) mod on_device {
             "exit modes with a failed run: {failed:?}"
         );
     }
+
+    /// A command buffer with nothing for the GPU takes no submission. Committed behind busy work
+    /// on its queue and before more, it completes between them, its completed handler between
+    /// theirs, its GPU start and end equal and at the busy one's end; committed alone, it
+    /// completes at once, its times equal and not before its commit. Metal reports both so.
+    #[test]
+    fn every_device_completes_an_empty_command_buffer_without_a_submission() {
+        each_device("command_empty", |name, _, device| {
+            let work = private(&device);
+            let queue = queue(&device);
+            let log = Log::default();
+            let before = device.counters().metrics().submissions;
+            let logged = |label: &'static str, command_buffer: &CommandBuffer| {
+                let log = log.clone();
+                command_buffer
+                    .add_completed_handler(move |_| log.push(label))
+                    .expect("a completed handler");
+            };
+            let fills = |command_buffer: &CommandBuffer| {
+                let (target, offset) = work.device_range();
+                let size = work.length();
+                command_buffer
+                    .record_for_test(&[&work], |device, command| {
+                        for word in 0..64 {
+                            // SAFETY: the command buffer is recording; the range is the
+                            // buffer's, in whole words.
+                            unsafe { device.cmd_fill_buffer(command, target, offset, size, word) };
+                        }
+                    })
+                    .expect("fills");
+            };
+            let first = queue.command_buffer().expect("a command buffer");
+            fills(&first);
+            logged("first", &first);
+            let empty = queue.command_buffer().expect("a command buffer");
+            logged("empty", &empty);
+            let last = queue.command_buffer().expect("a command buffer");
+            fills(&last);
+            logged("last", &last);
+            for command_buffer in [&first, &empty, &last] {
+                command_buffer.commit().expect("a commit");
+            }
+            for command_buffer in [&first, &empty, &last] {
+                finished(name, command_buffer);
+            }
+            assert_eq!(log.lines(), ["first", "empty", "last"], "{name}");
+            let submissions = device.counters().metrics().submissions - before;
+            assert_eq!(submissions, 2, "{name}: the empty one took no submission");
+            let (start, end) = (empty.gpu_start_time(), empty.gpu_end_time());
+            assert_eq!(start, end, "{name}: equal times");
+            assert!(
+                start > 0 && start >= first.gpu_end_time(),
+                "{name}: {start}"
+            );
+            assert_eq!(empty.status(), CommandBufferStatus::Completed, "{name}");
+            let alone = queue.command_buffer().expect("a command buffer");
+            alone.commit().expect("a commit");
+            finished(name, &alone);
+            let (start, end) = (alone.gpu_start_time(), alone.gpu_end_time());
+            assert_eq!(start, end, "{name}: equal times alone");
+            assert!(start >= alone.kernel_start_time(), "{name}: alone {start}");
+            println!("{name}: an empty command buffer completed in order with no submission");
+            drop((first, empty, last, alone, work, queue, device));
+        });
+    }
+
+    /// A stream of command buffers with nothing for the GPU leaves nothing behind: 10,000
+    /// committed, none waited for until the last, take no submission, the live command buffers
+    /// never pass the queue's 64, and every gauge is back where it was once they retire.
+    #[test]
+    fn every_device_keeps_its_gauges_flat_under_ten_thousand_empty_commits() {
+        each_device("command_empty_stream", |name, _, device| {
+            let queue = queue(&device);
+            let counters = device.counters();
+            let (gauges, submissions) = (counters.gauges(), counters.metrics().submissions);
+            let mut last = None;
+            for at in 0..10_000 {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                command_buffer.commit().expect("a commit");
+                let live = counters.gauges().command_buffers;
+                assert!(
+                    live <= gauges.command_buffers + 64,
+                    "{name}: {live} live at {at}"
+                );
+                last = Some(command_buffer);
+            }
+            finished(name, &last.take().expect("the last"));
+            within("the stream's retirement", || counters.gauges() == gauges);
+            assert_eq!(
+                counters.metrics().submissions,
+                submissions,
+                "{name}: a submission"
+            );
+            drop((queue, device));
+        });
+    }
 }

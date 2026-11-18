@@ -429,7 +429,10 @@ made, with no lock, and never rewritten for layouts.
   group, the one held going first. The thread holds a segment whose event waits are not met, and
   its queue's later command buffers behind it, while the segments before it run, so the host can
   see a signal the command buffer makes before its wait. Other queues go on. `Scheduled` means
-  the last segment is in a submission: passed to `vkQueueSubmit2`, or in a group held.
+  the last segment is in a submission: passed to `vkQueueSubmit2`, or in a group held. A command
+  buffer whose segments hold no commands, no event wait and no event signal takes no submission:
+  the submit thread schedules it as it reaches it, and it completes with its queue's command
+  buffer before it, in a group held or in flight, or at once where that one has completed.
 - The completion thread retires command buffers as the progress semaphore reaches them, a
   submission's in commit order: the status, the blocks they kept, their recorders and their place
   in the queue, then the handlers. Scheduled and completed handlers run on it, every device's in
@@ -451,7 +454,10 @@ made, with no lock, and never rewritten for layouts.
   ends, read once it completes with no wait, and placed on the host clock by the device's last
   calibration: one `vkGetCalibratedTimestampsEXT` call reading the GPU's clock and the host's
   together, made as the device starts and again at a completion once 100 ms have passed since
-  the last, never for each command buffer. A command buffer's GPU times so fall between
+  the last, never for each command buffer. A command buffer that took no submission writes no
+  query: its `gpu_start_time` and `gpu_end_time` are one time, never 0: the latest `gpu_end_time`
+  of its queue's command buffers before it, or its commit where that is later, the shape Metal
+  reports for a command buffer that does no work. A command buffer's GPU times so fall between
   `host_time()` before its commit and after its completion, within the calibration's deviation
   and the clocks' drift over 100 ms. Each queue has a pool of two queries per command buffer it
   may have made at once, all reset on the host as it is made (`hostQueryReset`); a command

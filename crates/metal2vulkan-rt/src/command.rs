@@ -18,6 +18,7 @@ use crate::sampler::SamplerState;
 use crate::texture::Texture;
 use crate::times::{self, Stamps, Times};
 use ash::vk;
+use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -161,6 +162,16 @@ pub(crate) struct Gpu {
     pub(crate) ring: Writes,
 }
 
+impl Gpu {
+    /// Nothing for the GPU: no segment holds commands, a wait or a signal. Such a command buffer
+    /// records no timestamps and takes no submission.
+    pub(crate) fn is_empty(&self) -> bool {
+        (self.segments.iter()).all(|segment| {
+            segment.command.is_none() && segment.waits.is_empty() && segment.signals.is_empty()
+        })
+    }
+}
+
 /// One submission's part of a command buffer: its waits, its commands and its signals.
 #[derive(Default)]
 pub(crate) struct Segment {
@@ -193,11 +204,14 @@ pub(crate) struct Pending {
 impl Pending {
     /// How many of its slot's two queries the segments it has passed to the GPU write, the start
     /// first: the start in the first segment with commands, the end in the last segment, which
-    /// its commit gave commands.
+    /// its commit gave commands unless the command buffer has nothing for the GPU.
     pub(crate) fn stamps_written(&self) -> u32 {
-        let start =
-            (self.gpu.segments[..self.next].iter()).any(|segment| segment.command.is_some());
-        let end = self.next == self.gpu.segments.len();
+        let segments = &self.gpu.segments;
+        let start = (segments[..self.next].iter()).any(|segment| segment.command.is_some());
+        let end = self.next == segments.len()
+            && segments
+                .last()
+                .is_some_and(|segment| segment.command.is_some());
         u32::from(start) + u32::from(end)
     }
 }
@@ -411,7 +425,7 @@ impl CommandBuffer {
             drop(work);
             let error = ended.unwrap_or(CommandBufferError::DeviceLost { in_flight: false });
             core.done
-                .end_all(&core, vec![(Arc::clone(&self.inner), pending, error)]);
+                .end_all(&core, vec![(Arc::clone(&self.inner), pending, Some(error))]);
         } else {
             // One ended while enqueued retires behind its queue's work held or in flight.
             work.commit(&self.inner, pending, ended);
@@ -507,7 +521,10 @@ impl CommandBuffer {
     /// the device's last calibration of its clock against the host's
     /// (`vkGetCalibratedTimestampsEXT`, read as the device starts and again at a completion once
     /// 100 ms have passed since the last). 0 until it completes, and for one that ended with an
-    /// error.
+    /// error. One whose segments hold no commands, no event wait and no event signal writes no
+    /// timestamp: its start and end are one time, the latest GPU end of its queue's command
+    /// buffers before it, or its commit where that is later, as Metal reports for a command buffer
+    /// that does no work.
     pub fn gpu_start_time(&self) -> u64 {
         self.state().times.gpu_start
     }
@@ -515,7 +532,7 @@ impl CommandBuffer {
     /// `GPUEndTime`, in nanoseconds of [`host_time`](crate::host_time) where Metal gives seconds:
     /// the timestamp written where its last segment ended, placed on the host clock as
     /// [`gpu_start_time`](Self::gpu_start_time) is. 0 until it completes, and for one that ended
-    /// with an error.
+    /// with an error; its start time for one that writes no timestamp.
     pub fn gpu_end_time(&self) -> u64 {
         self.state().times.gpu_end
     }
@@ -559,8 +576,12 @@ impl Building {
     }
 
     /// At commit: records the end timestamp into the last segment, beginning a command buffer for
-    /// it where the segment has none, and ends it.
+    /// it where the segment has none, and ends it; nothing where the command buffer has nothing
+    /// for the GPU.
     fn finish(&mut self) -> Result<(), Error> {
+        if self.gpu.is_empty() {
+            return Ok(());
+        }
         let command = match self.last().command {
             Some(command) => command,
             None => self.begin()?,
@@ -910,9 +931,18 @@ pub(crate) fn retire(
 ) {
     {
         let mut state = lock(&inner.state);
+        // One with nothing for the GPU, as Metal reports it: its start and end equal, at its
+        // queue's previous command buffer's end or its own commit, whichever is later.
+        let gpu_times = gpu_times.or_else(|| {
+            (error.is_none() && gpu.is_empty()).then(|| {
+                let at = (inner.queue.last_end.load(Relaxed)).max(state.times.kernel_start);
+                (at, at)
+            })
+        });
         if let Some((start, end)) = gpu_times {
             state.times.gpu_start = start;
             state.times.gpu_end = end;
+            inner.queue.last_end.fetch_max(end, Relaxed);
         }
         state.status = match error {
             Some(_) => CommandBufferStatus::Error,

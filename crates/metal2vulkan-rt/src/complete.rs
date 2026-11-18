@@ -239,8 +239,9 @@ impl Done {
         self.wake(&mut state, &core.device, flight_only);
     }
 
-    /// Command buffers that ended: each retires with its error once what it had in flight
-    /// completes, at once where it had nothing in flight.
+    /// Command buffers that retire with no submission of their own, each with its error where
+    /// it ended: each retires once what it had in flight completes, at once where it had nothing
+    /// in flight.
     pub(crate) fn end_all(&self, core: &Core, ended: Vec<Ended>) {
         if ended.is_empty() {
             return;
@@ -260,7 +261,7 @@ impl Done {
                     cb,
                     gpu,
                     handlers,
-                    error: Some(error),
+                    error,
                     written,
                 },
             };

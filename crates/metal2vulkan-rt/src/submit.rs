@@ -265,8 +265,9 @@ struct Staged {
 /// A command buffer of a submission: with an error where it ended before it was submitted.
 pub(crate) type Finished = (Arc<CbInner>, Pending, Option<CommandBufferError>);
 
-/// An ended command buffer, with how it ended.
-pub(crate) type Ended = (Arc<CbInner>, Pending, CommandBufferError);
+/// A command buffer that retires with no submission of its own: with how it ended, or with no
+/// error where it had nothing to submit.
+pub(crate) type Ended = Finished;
 
 /// A command buffer that joined a group, with its scheduled handlers.
 pub(crate) type Joined = (Arc<CbInner>, Vec<Handler>);
@@ -929,6 +930,24 @@ impl WorkState {
         let Some(pending) = entry.pending.as_mut() else {
             return Step::Idle;
         };
+        // A command buffer with nothing for the GPU takes no submission: it is scheduled now and
+        // completes with its queue's work before it.
+        if pending.gpu.is_empty() {
+            if let Some(Entry {
+                cb,
+                pending: Some(mut pending),
+                ..
+            }) = fifo.entries.pop_front()
+            {
+                cb.scheduled(now);
+                let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+                if !scheduled.is_empty() {
+                    joined.push((Arc::clone(&cb), scheduled));
+                }
+                fifo.behind_held(cb, pending, None, ended);
+            }
+            return Step::Staged;
+        }
         let segment = &pending.gpu.segments[pending.next];
         // A segment that waits on a semaphore leads its group: a driver that merges a submission's
         // entries gathers their waits ahead of the first one's commands.
@@ -1076,16 +1095,29 @@ impl Fifo {
             ..
         } = entry;
         let error = own.unwrap_or(error);
-        let Some(mut pending) = pending else {
+        let Some(pending) = pending else {
             cb.end_uncommitted(error);
             return;
         };
+        if let Some(group) = &mut self.group {
+            // The head whose segments the group holds is ended now, if it was the head.
+            group.partial = false;
+        }
+        self.behind_held(cb, pending, Some(error), ended);
+    }
+
+    /// Retires a committed command buffer with no submission of its own: behind the group held,
+    /// which it joins to retire with; else once the queue's submissions in flight and the command
+    /// buffers it ended before complete, at once where none is.
+    fn behind_held(
+        &mut self,
+        cb: Arc<CbInner>,
+        mut pending: Pending,
+        error: Option<CommandBufferError>,
+        ended: &mut Vec<Ended>,
+    ) {
         match &mut self.group {
-            Some(group) => {
-                // The head whose segments the group holds is ended now, if it was the head.
-                group.partial = false;
-                group.finished.push((cb, pending, Some(error)));
-            }
+            Some(group) => group.finished.push((cb, pending, error)),
             None => {
                 let in_flight = self.in_flight.back().copied().unwrap_or(0);
                 pending.value = pending.value.max(in_flight).max(self.behind);
@@ -1161,7 +1193,7 @@ fn end(
     {
         let error = own.unwrap_or_else(|| error(pending.as_ref()));
         match pending {
-            Some(pending) => ended.push((cb, pending, error)),
+            Some(pending) => ended.push((cb, pending, Some(error))),
             None => cb.end_uncommitted(error),
         }
     }
@@ -1184,7 +1216,7 @@ pub(crate) fn run(core: Arc<Core>) {
                 // where an earlier segment of theirs did.
                 for (cb, pending, own) in fifo.group.into_iter().flat_map(|group| group.finished) {
                     let error = own.unwrap_or_else(|| error(Some(&pending)));
-                    ended.push((cb, pending, error));
+                    ended.push((cb, pending, Some(error)));
                 }
                 ended.extend(end(fifo.entries, error));
             }
