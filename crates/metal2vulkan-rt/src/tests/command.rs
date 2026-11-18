@@ -980,6 +980,11 @@ pub(crate) mod on_device {
     /// The submissions a queue keeps in flight before it holds a group ([`IN_FLIGHT`]).
     const AHEAD: u64 = IN_FLIGHT as u64;
 
+    /// The fills of 16 MiB each busy command buffer of a round takes, a round with more once the
+    /// work ended before the check: 1,024 (16 GiB, about 17 ms on an RX 7900 XTX) was outlived by
+    /// the host under a loaded run of the device suite beside it, so the last is 4,096.
+    const FILLS: [u32; 5] = [16, 64, 256, 1024, 4096];
+
     /// Runs `body` with as many command buffers of busy work committed on `queue` as a queue
     /// keeps in flight ([`IN_FLIGHT`]), each a submission of its own ([`busy_alone`]), so its next
     /// commit is held, each of more fills each time, until `body` answers that it checked what it
@@ -994,7 +999,7 @@ pub(crate) mod on_device {
         mut body: impl FnMut(&[CommandBuffer], u64, u64) -> bool,
     ) {
         let buffer = private(device);
-        let checked = [16, 64, 256, 1024].into_iter().any(|fills| {
+        let checked = FILLS.into_iter().any(|fills| {
             let before = device.counters().metrics().submissions;
             let seen = device.core().done.completed();
             let running: Vec<CommandBuffer> = (0..IN_FLIGHT)
@@ -1024,7 +1029,7 @@ pub(crate) mod on_device {
             let buffer = arena.buffer();
             let work = private(&device);
             let (first, second) = (queue(&device), queue(&device));
-            let checked = [16, 64, 256, 1024].into_iter().any(|fills| {
+            let checked = FILLS.into_iter().any(|fills| {
                 let before = device.counters().metrics();
                 let running: Vec<CommandBuffer> = [&first, &second]
                     .into_iter()
@@ -1149,7 +1154,7 @@ pub(crate) mod on_device {
             let work = private(&device);
             let queue = queue(&device);
             let submissions = || device.counters().metrics().submissions;
-            let checked = [16, 64, 256, 1024].into_iter().any(|fills| {
+            let checked = FILLS.into_iter().any(|fills| {
                 let before = submissions();
                 let running = [
                     busy_alone(name, &device, &queue, &work, fills),
