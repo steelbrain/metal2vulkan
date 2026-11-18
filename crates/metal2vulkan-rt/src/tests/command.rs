@@ -1712,9 +1712,10 @@ pub(crate) mod on_device {
     /// reaches commands, a Shared fill whose end barrier reaches the host, a command buffer with
     /// nothing for the GPU (no timestamps, no info), and an event's signal and wait (which end and
     /// lead infos) records the same barriers, passes and bytes copied and leaves the same words
-    /// committed behind two busy submissions, held in groups, as committed one at a time; the
-    /// groups pass fewer submit infos than the mix has command buffers with commands, and one at a
-    /// time passes one each.
+    /// committed behind two busy submissions, held in groups, as committed one at a time. The
+    /// groups pass two submit infos for the mix's four command buffers with commands: one for the
+    /// fills up to the signal, which ends the group, and one the wait leads. One at a time passes
+    /// one each.
     #[test]
     fn every_device_shares_submit_infos_within_a_group_and_records_what_it_records_alone() {
         each_device("command_infos", |name, _, device| {
@@ -1766,8 +1767,17 @@ pub(crate) mod on_device {
             let mut signal = 0;
             let mut kept = Vec::new();
             let mut counted = None;
-            behind_two(name, &device, &queue, |running, _| {
+            // The submit infos counted once the last try's work completed.
+            let mut mark = infos();
+            behind_two(name, &device, &queue, |running, submitted| {
                 signal += 1;
+                // The two busy ones are submitted and counted, one submit info each, before the
+                // mix's counts start: `behind_two` runs the body once they are committed, which
+                // may be before the submit thread counts them.
+                within(name, || {
+                    let m = counters.metrics();
+                    m.submissions >= submitted + 2 && m.submit_infos >= mark + 2
+                });
                 let (before, infos_before) = (deterministic(), infos());
                 let grouped = mix(10, 0x5a, signal, &|command_buffer| {
                     command_buffer.commit().expect("a commit")
@@ -1782,6 +1792,7 @@ pub(crate) mod on_device {
                 if ran {
                     counted = Some((before, (deterministic(), infos() - infos_before)));
                 }
+                mark = infos();
                 kept.extend(grouped);
                 ran
             });
@@ -1809,10 +1820,9 @@ pub(crate) mod on_device {
                 "{name}: the words, in groups and one at a time"
             );
             assert_eq!((word(&a), bytes(&b)), (13, vec![0x5a; 256]), "{name}");
-            assert!(
-                in_groups.1 < 4,
-                "{name}: {} submit infos for four command buffers with commands, in groups",
-                in_groups.1
+            assert_eq!(
+                in_groups.1, 2,
+                "{name}: submit infos for four command buffers with commands, in groups"
             );
             assert_eq!(
                 one_at_a_time.1, 4,
