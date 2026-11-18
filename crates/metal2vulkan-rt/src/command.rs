@@ -6,8 +6,9 @@ use crate::counters::Metric;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::event::{Event, EventInner};
-use crate::hazard::Hazards;
+use crate::hazard::{Access, Hazards};
 use crate::memory::Block;
+use crate::over::{self, Overs};
 use crate::pipeline::ComputePipelineState;
 use crate::queue::QueueInner;
 use crate::readback;
@@ -17,6 +18,7 @@ use crate::sampler::SamplerState;
 use crate::texture::Texture;
 use crate::times::{self, Stamps, Times};
 use ash::vk;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 /// `MTLCommandBuffer`.
@@ -166,6 +168,9 @@ pub(crate) struct Segment {
     pub(crate) command: Option<vk::CommandBuffer>,
     /// At most one per event, the highest value.
     pub(crate) signals: Vec<(Arc<EventInner>, u64)>,
+    /// What its commands did to textures over a buffer in an image of their own; once it ends,
+    /// what the submit thread needs of that (`crate::over`).
+    pub(crate) overs: Overs,
 }
 
 pub(crate) struct Handlers {
@@ -590,6 +595,17 @@ impl Building {
         let core = Arc::clone(self.device.core());
         match self.last().command {
             Some(command) => {
+                // The images commands wrote go back to their buffers first (`crate::over`).
+                let back = self.last().overs.end();
+                if !back.is_empty() {
+                    // SAFETY: the command buffer records outside any render pass and keeps each
+                    // texture, which holds its buffer, until it retires; each image is in its
+                    // home layout between commands.
+                    unsafe {
+                        over::record_side(&core.device, command, &back, false, &core.counters)
+                    };
+                    self.host_written |= back.iter().any(|copy| copy.shared);
+                }
                 // Its end barrier pays what is owed and starts the hazard sets again.
                 self.owed = false;
                 self.args_unordered = false;
@@ -775,6 +791,64 @@ impl Building {
         if !textures.iter().rev().any(|kept| kept.id() == texture.id()) {
             textures.push(texture.clone());
         }
+    }
+
+    /// Whether the commands track what they write for textures over a buffer in an image of
+    /// their own (`crate::over`): while any lives.
+    pub(crate) fn copies_over(&self) -> bool {
+        self.device.core().copied_overs.load(Ordering::Relaxed) > 0
+    }
+
+    /// Before a command that makes `accesses` (by hazard id), `unbound` where it reaches memory
+    /// through an address outside its resources: records the copies its textures over a buffer
+    /// in an image of their own need first (`crate::over`), in the segment the command goes in,
+    /// ordered as a blit's copy is.
+    ///
+    /// Err: [`Error::Vulkan`] where the command buffer cannot record.
+    pub(crate) fn overs_before(
+        &mut self,
+        accesses: &[(u32, Access)],
+        unbound: bool,
+    ) -> Result<(), Error> {
+        if !self.copies_over() {
+            return Ok(());
+        }
+        if !self.last().signals.is_empty() {
+            self.split()?;
+        }
+        let segments = &mut self.gpu.segments;
+        let last = segments.len() - 1;
+        let copies = segments[last]
+            .overs
+            .before(accesses, &self.gpu.textures, unbound);
+        if copies.is_empty() {
+            return Ok(());
+        }
+        let command = self.ordered_command()?;
+        let core = Arc::clone(self.device.core());
+        // SAFETY: the command buffer records outside any render pass and keeps each texture,
+        // which holds its buffer, until it retires; each image is in its home layout between
+        // commands.
+        let host = unsafe { over::record(&core.device, command, &copies, &core.counters) };
+        self.host_written |= host;
+        Ok(())
+    }
+
+    /// After a command that made `accesses` (by hazard id), `unbound` where it wrote through an
+    /// address outside its resources (`crate::over`); a command recorded while no texture over a
+    /// buffer in an image of its own lived is untracked.
+    pub(crate) fn overs_after(&mut self, accesses: &[(u32, Access)], unbound: bool) {
+        match self.copies_over() {
+            true => self.last().overs.after(accesses, unbound),
+            false => self.overs_untracked(),
+        }
+    }
+
+    /// After a command whose writes were not tracked: a texture over a buffer in an image of its
+    /// own first used later takes its bytes in again first, as after a write through an address
+    /// outside its resources (`crate::over`).
+    pub(crate) fn overs_untracked(&mut self) {
+        self.last().overs.after(&[], true);
     }
 
     /// Keeps `state` until the command buffer retires.

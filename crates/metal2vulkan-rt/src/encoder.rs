@@ -723,7 +723,20 @@ impl ComputeCommandEncoder {
                 .building
                 .as_mut()
                 .expect("an encoder holds its command buffer's recording until it ends");
-            let wrote = building.dispatch_hazards(serial, &kernel.interface, &accesses)?;
+            // Textures over a buffer in an image of their own take their copies first
+            // (`crate::over`).
+            let interface = &kernel.interface;
+            let overs =
+                (building.copies_over()).then(|| accesses.each(interface).collect::<Vec<_>>());
+            if let Some(overs) = &overs {
+                let unbound = interface.reads_unbound || interface.writes_unbound;
+                building.overs_before(overs, unbound)?;
+            }
+            let wrote = building.dispatch_hazards(serial, interface, &accesses)?;
+            match &overs {
+                Some(overs) => building.overs_after(overs, interface.writes_unbound),
+                None => building.overs_untracked(),
+            }
             // Marked after the hazards' barrier, which may have split the recording at a signal:
             // the mark is the dispatch's own segment's.
             if host {

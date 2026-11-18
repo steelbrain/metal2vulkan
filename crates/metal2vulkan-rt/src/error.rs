@@ -601,13 +601,13 @@ pub enum Gap {
         destination: PixelFormat,
     },
     /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) the runtime
-    /// does not hold in place: other than 2D of one level, sample and slice; of a format of
-    /// other than one color texel an element; over a block that spilled; of a format and usage
-    /// the device makes no linear image of; or where the
-    /// device's linear image lays its rows at another pitch than the texture's, or needs an
-    /// alignment its place misses. The copy form for those is not built yet.
+    /// does not make: other than 2D of one level, sample and slice; of a format of other than
+    /// one color texel an element; whose first texel in the bytes shaders reach is not a whole
+    /// number of texels in, which no copy addresses; or over a Managed buffer's device copy where
+    /// the device's linear image does not hold it in place.
     ///
-    /// Basis: ours (only the in-place linear image is built).
+    /// Basis: ours (the in-place linear image and the copy form take one 2D color image; the copy
+    /// form is built over buffers of no device copy only).
     TextureOverBuffer {
         /// The texture's pixel format.
         pixel_format: PixelFormat,

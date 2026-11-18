@@ -27,10 +27,11 @@ use crate::error::Error;
 use crate::event::EventInner;
 use crate::fill;
 use crate::memory::Block;
+use crate::over::{self, Leans};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
 use crate::staging::{At, Oldest, Region, Stage, Staging, REGION_LEN};
-use crate::texture::Image;
+use crate::texture::{Image, OverCopy};
 use crate::times;
 use ash::vk;
 use std::collections::{HashMap, VecDeque};
@@ -245,6 +246,12 @@ struct Batch {
     partial: bool,
     /// Events it signals that the completion thread is not yet watching.
     watch: Vec<Arc<EventInner>>,
+    /// What its segments wrote of buffers under textures over a buffer in an image of their own
+    /// (`crate::over`).
+    leans: Leans,
+    /// The copies into those textures' images its upload makes first: one for each texture a
+    /// segment leans on the leading copy for.
+    overs: Vec<OverCopy>,
 }
 
 /// One segment's submit info.
@@ -929,6 +936,11 @@ impl WorkState {
         if waits && fifo.group.is_some() {
             return Step::Goes(index);
         }
+        // A segment that leans on the leading copy for a buffer an earlier segment of the group
+        // wrote leads its group, so its copy follows the write (`crate::over`).
+        if (fifo.group.as_ref()).is_some_and(|group| group.leans.conflicts(&segment.overs)) {
+            return Step::Goes(index);
+        }
         let place = entry.place;
         if fifo.group.is_none() && others_hold {
             self.counters.count(Metric::GroupsBesideAnotherQueue);
@@ -940,7 +952,17 @@ impl WorkState {
             count: 0,
             partial: false,
             watch: Vec::new(),
+            leans: Leans::default(),
+            overs: Vec::new(),
         });
+        group.leans.join(&segment.overs);
+        for texture in segment.overs.leaning() {
+            if let Some((_, copy)) = texture.copied_over() {
+                if !group.overs.iter().any(|kept| kept.image == copy.image) {
+                    group.overs.push(copy);
+                }
+            }
+        }
         let staged = stage(segment, &mut group.watch);
         // An event's signal goes at once: nothing waits on it behind a held group.
         let signals = !staged.signals.is_empty();
@@ -1262,6 +1284,8 @@ impl Batch {
             count: 0,
             partial: false,
             watch: Vec::new(),
+            leans: Leans::default(),
+            overs: Vec::new(),
         }
     }
 }
@@ -1274,21 +1298,33 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         mut segments,
         finished,
         watch,
+        overs,
         ..
     } = batch;
     let device = &core.device;
-    // An upload begun for textures gone before their move records nothing.
-    let mut upload = match upload {
-        Some(upload) if upload.entries == 0 => {
+    // An upload begun for textures gone before their move records nothing; one is begun for the
+    // copies into textures over a buffer in an image of their own.
+    let (mut upload, mut ok) = match upload {
+        Some(upload) if upload.entries == 0 && overs.is_empty() => {
             upload.retire(core);
-            None
+            (None, true)
         }
-        upload => upload,
+        None if !overs.is_empty() => match Upload::begin(core) {
+            Ok(upload) => (Some(upload), true),
+            Err(_) => (None, false),
+        },
+        upload => (upload, true),
     };
     // What the upload wrote is visible to every command after it, and to the host once the
     // submission completes.
-    let mut ok = upload.as_mut().is_none_or(|upload| {
+    ok &= upload.as_mut().is_none_or(|upload| {
         upload.copy_modified(core);
+        // Each texture over a buffer in an image of its own that a segment leans on takes the
+        // buffer's bytes (`crate::over`).
+        // SAFETY: the upload's command buffer is recording, and only this thread has it; the
+        // command buffers of the submission hold each texture, which holds its buffer, until it
+        // retires, and each image is in its home layout, any move there recorded before.
+        unsafe { over::record_side(device, upload.command, &overs, true, &core.counters) };
         record::barrier(device, upload.command, Reach::Host);
         core.counters.count(Metric::Barriers);
         // SAFETY: the upload's command buffer was recording under the work lock, which `close`

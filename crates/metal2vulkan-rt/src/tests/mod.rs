@@ -3,6 +3,7 @@ mod blit;
 mod cache;
 mod command;
 mod compute;
+mod copy_over;
 mod device;
 mod fence;
 mod floor;

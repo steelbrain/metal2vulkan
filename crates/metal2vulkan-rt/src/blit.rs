@@ -28,6 +28,7 @@ use crate::counters::Metric;
 use crate::encoder::Resource;
 use crate::error::{Error, Gap, Refusal};
 use crate::fence::Fence;
+use crate::hazard::Access;
 use crate::record::{memory_barrier, Reach};
 use crate::texture::{place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor};
 use ash::vk;
@@ -135,12 +136,18 @@ impl BlitCommandEncoder {
         };
         building.keep_texture(source);
         building.keep_texture(destination);
+        let overs = [
+            (source.hazard_id(), Access::Read),
+            (destination.hazard_id(), Access::ReadWrite),
+        ];
+        building.overs_before(&overs, false)?;
         let command = building.ordered_command()?;
         // Marked after `ordered_command`, as in `buffer_copy`: the host reads a texture over a
         // Shared buffer's bytes in the buffer.
         if destination.host_reads() {
             building.wrote_host();
         }
+        building.overs_after(&overs, false);
         let (read, write) = (
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -277,7 +284,19 @@ impl BlitCommandEncoder {
         let vk_buffer = buffer.device_range().0;
         building.keep_texture(texture);
         building.keep(buffer);
+        let overs = match into_image {
+            true => [
+                (texture.hazard_id(), Access::ReadWrite),
+                (buffer.id(), Access::Read),
+            ],
+            false => [
+                (texture.hazard_id(), Access::Read),
+                (buffer.id(), Access::ReadWrite),
+            ],
+        };
+        building.overs_before(&overs, false)?;
         let command = building.ordered_command()?;
+        building.overs_after(&overs, false);
         // Marked after `ordered_command`, which may have split the recording at a signal: the
         // mark is the copy's own segment's.
         let host = match into_image {
@@ -287,13 +306,15 @@ impl BlitCommandEncoder {
         if host {
             building.wrote_host();
         }
-        use vk::AccessFlags2 as Access;
         let (layout, access) = match into_image {
             true => (
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                Access::TRANSFER_WRITE,
+                vk::AccessFlags2::TRANSFER_WRITE,
             ),
-            false => (vk::ImageLayout::TRANSFER_SRC_OPTIMAL, Access::TRANSFER_READ),
+            false => (
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::AccessFlags2::TRANSFER_READ,
+            ),
         };
         let earlier = [memory_barrier(Reach::Commands)];
         let away: Vec<_> = (copies.iter())
@@ -372,7 +393,10 @@ impl BlitCommandEncoder {
         let (vk_buffer, base) = buffer.device_range();
         let (offset, length) = fill_range(base, buffer.length(), range)?;
         building.keep(buffer);
+        let overs = [(buffer.id(), Access::Write)];
+        building.overs_before(&overs, false)?;
         let command = building.ordered_command()?;
+        building.overs_after(&overs, false);
         // Marked after `ordered_command`, as a copy into a buffer is.
         if buffer.is_shared() {
             building.wrote_host();

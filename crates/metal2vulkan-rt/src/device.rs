@@ -31,7 +31,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::{c_char, CString};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -186,6 +186,9 @@ pub(crate) struct Core {
     pub(crate) constexprs: Mutex<HashMap<u32, Constexpr>>,
     /// [`Device::minimum_linear_texture_alignment`]'s answers, one per pixel format asked.
     pub(crate) linear_alignments: Mutex<HashMap<metal2vulkan::metal::PixelFormat, u64>>,
+    /// The live textures over a buffer in an image of their own (`crate::over`): while there are
+    /// any, the commands track what they write.
+    pub(crate) copied_overs: AtomicUsize,
     /// The device's compute limits.
     pub(crate) limits: ComputeLimits,
     /// The parameter ring.
@@ -458,6 +461,7 @@ impl Device {
             samplers: Mutex::new(SamplerTable::new(sampler_cap)),
             constexprs: Mutex::new(HashMap::new()),
             linear_alignments: Mutex::new(HashMap::new()),
+            copied_overs: AtomicUsize::new(0),
             limits,
             ring: Ring::new(),
             ids: Ids::new(),

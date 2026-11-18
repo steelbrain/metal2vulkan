@@ -33,6 +33,8 @@ pub(crate) enum Metric {
     LoneSubmissionsAcrossQueues,
     /// [`Metrics::forced_flushes_across_queues`].
     ForcedFlushesAcrossQueues,
+    /// [`Metrics::over_copies`].
+    OverCopies,
 }
 
 /// A gauge the runtime moves.
@@ -96,6 +98,7 @@ struct Atomics {
     groups_beside_another_queue: AtomicU64,
     lone_submissions_across_queues: AtomicU64,
     forced_flushes_across_queues: AtomicU64,
+    over_copies: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -141,6 +144,7 @@ impl Counters {
             Metric::GroupsBesideAnotherQueue => &a.groups_beside_another_queue,
             Metric::LoneSubmissionsAcrossQueues => &a.lone_submissions_across_queues,
             Metric::ForcedFlushesAcrossQueues => &a.forced_flushes_across_queues,
+            Metric::OverCopies => &a.over_copies,
         };
         atomic.fetch_add(1, Relaxed);
     }
@@ -266,6 +270,7 @@ impl Counters {
             groups_beside_another_queue: a.groups_beside_another_queue.load(Relaxed),
             lone_submissions_across_queues: a.lone_submissions_across_queues.load(Relaxed),
             forced_flushes_across_queues: a.forced_flushes_across_queues.load(Relaxed),
+            over_copies: a.over_copies.load(Relaxed),
         }
     }
 
@@ -305,8 +310,9 @@ pub struct Metrics {
     /// apart from any command buffer, is not counted.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
-    /// counted copy at commit where a device offers no linear image. A blit's own copy, and a
-    /// synchronize's, is the program's and is not counted.
+    /// copies between a texture over a buffer and its image of its own
+    /// ([`over_copies`](Self::over_copies)). A blit's own copy, and a synchronize's, is the
+    /// program's and is not counted.
     pub bytes_copied: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
@@ -361,6 +367,11 @@ pub struct Metrics {
     /// wait or the end. No path of the submit thread sends one, so this stays 0; it is counted to
     /// show it.
     pub forced_flushes_across_queues: u64,
+    /// Copies between a texture over a buffer the device's linear image does not hold in place
+    /// and its image of its own ([`Buffer::new_texture`](crate::Buffer::new_texture)): the
+    /// buffer's bytes into the image, in the upload that leads a submission or after a command
+    /// wrote the buffer, and the image back into the buffer after a command wrote the texture.
+    pub over_copies: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the
