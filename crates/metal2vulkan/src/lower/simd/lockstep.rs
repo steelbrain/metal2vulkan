@@ -670,10 +670,10 @@ impl OrderKey {
 
 /// Order the threadgroup-memory and device-memory accesses of kernel `e` that only Apple's
 /// simdgroup lockstep orders, by inserting barriers into its body (see the module
-/// documentation), for the device and variant of `key`. Where the key's one-row variant and
-/// each simdgroup lying within one row orders no pair a simdgroup barrier would
-/// ([`Lockstep::rows`]), only the threadgroup barriers are inserted. An entry of another stage,
-/// or a kernel without such a pair, is returned unchanged.
+/// documentation), for the device and variant of `key`. Where the key's one-row variant
+/// (`LoweringInputs::one_row`) and, with each simdgroup lying within one row, no pair wants more
+/// than a threadgroup barrier, only the threadgroup barriers are inserted, on every device. An
+/// entry of another stage, or a kernel without such a pair, is returned unchanged.
 pub fn order(mut e: Entry, key: OrderKey, m: &mut Meter) -> Result<Entry, Error> {
     if !matches!(e.ep.stage, AbiStage::Kernel { .. }) {
         return Ok(e);
@@ -771,11 +771,12 @@ fn decide(
     // `rows`). A threadgroup barrier none of them wants orders only pairs that meet where a
     // simdgroup spans two rows, so it runs only in such a threadgroup (`Order::Rows`). And where
     // none of them wants more than a threadgroup barrier, a dispatch of such threadgroups needs
-    // none of the simdgroup barriers; only a kernel whose subgroup barriers keep a 32-lane tier
-    // asks that (`tangle`, without the device's own lockstep).
+    // none of the simdgroup barriers (`cleared`): the one-row variant leaves them out on every
+    // device, and the plan states it (`rows`) where the kernel's subgroup barriers keep a 32-lane
+    // tier (`tangle`, without the device's own lockstep), the old binder's one-row regions.
     drop(af);
     let mut in_rows: BTreeSet<Want> = BTreeSet::new();
-    if (tangle && !device) || wants.iter().any(|w| w.order == Order::Threadgroup) {
+    if one_row || (tangle && !device) || wants.iter().any(|w| w.order == Order::Threadgroup) {
         let mut rows_af = AddrFacts::new(e, body, &layouts, &us, true, m)?;
         for (_, acc) in &spaces {
             pairs(
@@ -789,7 +790,8 @@ fn decide(
             )?;
         }
     }
-    let rows = tangle && !device && in_rows.iter().all(|w| w.order == Order::Threadgroup);
+    let cleared = in_rows.iter().all(|w| w.order == Order::Threadgroup);
+    let rows = tangle && !device && cleared;
     let mut wants: BTreeSet<Want> = wants
         .into_iter()
         .map(
@@ -804,7 +806,7 @@ fn decide(
         .collect();
     // The one-row variant keeps the threadgroup barriers alone: in a threadgroup whose simdgroups
     // each lie within one row, no pair a simdgroup barrier or an `Order::Rows` one orders meets.
-    if one_row && rows {
+    if one_row && cleared {
         wants.retain(|w| w.order == Order::Threadgroup);
         if wants.is_empty() {
             return Ok(None);

@@ -354,9 +354,10 @@ pub enum RuntimeFact {
     /// (`VariantKey::one_row`), which has none of those barriers.
     RowLockstep,
     /// The kernel was compiled under `VariantKey::one_row` (`LoweringInputs::one_row`): it runs
-    /// threadgroups whose simdgroups each lie within one row, without the lockstep simdgroup
-    /// barriers its `RowLockstep` plan had (its threadgroup ones kept). Its plans state the
-    /// variant, and a dispatch with a region of more than one row asks for the variant without it.
+    /// threadgroups whose simdgroups each lie within one row, without the lockstep barriers that
+    /// order only pairs meeting where a simdgroup spans two rows (its threadgroup ones kept),
+    /// whatever its device. Its plans state the variant, and a dispatch with a region of more than
+    /// one row asks for the variant without it.
     OneRow,
     /// Unit axes (`lower::simd::uniform`, "Unit axes"; bit 0 `x`, bit 1 `y`, bit 2 `z`). Where
     /// `axes` is 0, the kernel's walk is predicated and `relief` holds, at bit `m − 1`, each mask

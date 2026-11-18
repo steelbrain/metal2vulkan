@@ -41,8 +41,9 @@ pub struct LoweringInputs {
     pub emulated_simdgroups: bool,
     /// A kernel runs threadgroups whose simdgroups each lie within one row
     /// (`VariantKey::one_row`): the lockstep barriers it takes are its threadgroup ones alone
-    /// where, so dispatched, no pair a simdgroup barrier orders meets (`air::Lockstep::rows`), and
-    /// with no simdgroup barrier it takes no simd class and pins no subgroup for them. A kernel
+    /// where, so dispatched, no pair wants more than a threadgroup barrier, on every device (the
+    /// old binder asks for it where `air::Lockstep::rows` holds), and with no simdgroup barrier it
+    /// takes no simd class and pins no subgroup for them. A kernel
     /// compiled under it depends on `RuntimeFact::OneRow`. Any other function compiles as without
     /// it.
     #[cfg_attr(feature = "serde", serde(default))]

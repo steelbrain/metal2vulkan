@@ -11177,6 +11177,7 @@ method	metal2vulkan::library::CompiledFunction::required_subgroup_size	pub fn re
 method	metal2vulkan::library::CompiledFunction::requirements	pub fn requirements(&self) -> &Requirements
 method	metal2vulkan::library::CompiledFunction::requires_full_subgroups	pub fn requires_full_subgroups(&self) -> bool
 method	metal2vulkan::library::CompiledFunction::resolves_handles	pub fn resolves_handles(&self) -> bool
+method	metal2vulkan::library::CompiledFunction::runs_lockstep_barriers_in_rows	pub fn runs_lockstep_barriers_in_rows(&self) -> bool
 method	metal2vulkan::library::CompiledFunction::slots	pub fn slots(&self) -> &BTreeMap<SlotRef, SlotInterface>
 method	metal2vulkan::library::CompiledFunction::stage	pub fn stage(&self) -> Stage
 method	metal2vulkan::library::CompiledFunction::strategies	pub fn strategies(&self) -> &StrategyCensus

@@ -2901,3 +2901,188 @@ fn a_texel_s_samples_in_a_row_need_no_emulated_simdgroups_on_wave64() {
         );
     }
 }
+
+/// What a [`row_store_kernel`] stores.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowStores {
+    /// The three words `3 cell + k` of its cell `cell = y * stride + x`, in `int` arithmetic as
+    /// Apple compiles it (`nsw` on every step, the index sign-extended), which two threads of one
+    /// simdgroup in different rows may share for all the IR shows.
+    Cells,
+    /// The same words in `uint` arithmetic, whose steps carry no flags: a step may wrap, and the
+    /// order does not prove two threads of one row apart in such an index.
+    WrappingCells,
+    /// 1 at `x` and 2 at `x + 1`, which two threads of one row share.
+    Neighbours,
+}
+
+/// A kernel over its position in the grid `(x, y)` that loads `src[x]` and stores to `dst`, of
+/// buffers 0 and 1 and the uniform `stride` at buffer 2, what `stores` says; where `guarded`, only
+/// a thread whose `x` is under `stride` does, past a branch on that test, as a kernel that bounds
+/// its grid is compiled.
+fn row_store_kernel(name: &str, stores: RowStores, guarded: bool) -> String {
+    let cells = |flags: &str, ext: &str| {
+        let mut body = format!(
+            "%row = mul{flags} i32 %w, %y
+  %cell = add{flags} i32 %row, %x
+  %d0 = mul{flags} i32 %cell, 3"
+        );
+        for k in 0..3 {
+            if k > 0 {
+                body += &format!("\n  %d{k} = add{flags} i32 %d0, {k}");
+            }
+            body += &format!(
+                "\n  %e{k} = {ext} i32 %d{k} to i64
+  %p{k} = getelementptr inbounds i32, ptr addrspace(1) %dst, i64 %e{k}
+  store i32 %v, ptr addrspace(1) %p{k}, align 4"
+            );
+        }
+        body
+    };
+    let body = match stores {
+        RowStores::Cells => cells(" nsw", "sext"),
+        RowStores::WrappingCells => cells("", "zext"),
+        RowStores::Neighbours => "%e0 = zext i32 %x to i64
+  %p0 = getelementptr inbounds i32, ptr addrspace(1) %dst, i64 %e0
+  store i32 1, ptr addrspace(1) %p0, align 4
+  %x1 = add i32 %x, 1
+  %e1 = zext i32 %x1 to i64
+  %p1 = getelementptr inbounds i32, ptr addrspace(1) %dst, i64 %e1
+  store i32 2, ptr addrspace(1) %p1, align 4"
+            .to_owned(),
+    };
+    let (test, body) = match guarded {
+        true => (
+            "%inside = icmp ult i32 %x, %w
+  br i1 %inside, label %body, label %done
+
+body:
+  ",
+            format!("{body}\n  br label %done\n\ndone:"),
+        ),
+        false => ("", body),
+    };
+    format!(
+        r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @{name}(ptr addrspace(1) %src, ptr addrspace(1) %dst, ptr addrspace(2) %stride, <2 x i32> %position) {{
+  %y = extractelement <2 x i32> %position, i64 1
+  %w = load i32, ptr addrspace(2) %stride, align 4
+  %x = extractelement <2 x i32> %position, i64 0
+  {test}%c = zext i32 %x to i64
+  %ps = getelementptr inbounds i32, ptr addrspace(1) %src, i64 %c
+  %v = load i32, ptr addrspace(1) %ps, align 4
+  {body}
+  ret void
+}}
+
+!air.kernel = !{{!0}}
+!air.version = !{{!20}}
+!air.language_version = !{{!21}}
+
+!0 = !{{ptr @{name}, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !4, !5, !6}}
+!3 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"src"}}
+!4 = !{{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"dst"}}
+!5 = !{{i32 2, !"air.buffer", !"air.buffer_size", i32 4, !"air.location_index", i32 2, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"stride"}}
+!6 = !{{i32 3, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint2", !"air.arg_name", !"position"}}
+!20 = !{{i32 2, i32 8, i32 0}}
+!21 = !{{!"Metal", i32 4, i32 0, i32 0}}
+"#
+    )
+}
+
+/// On lavapipe's `Device::from_queries` profile under the identity domains (the new runtime's),
+/// whose 8-lane subgroups hold no 32-lane tier, the lockstep order gives the stores of every
+/// [`row_store_kernel`] barriers and states no `RowLockstep`, each kernel with its stores in its
+/// entry block and past a bounds test. The one-row variant (`LoweringInputs::one_row`) clears
+/// every pair of the cells kernel there too: no lockstep barrier, no simd class, `OneRow` stated;
+/// with partial threadgroups it does not observe its threadgroup partition, which the variant
+/// without `one_row` does, and its pipeline runs its grid in tiles (`GridTiles`, which the identity
+/// domains state). The neighbours kernel's variant keeps its barriers, as its pair meets within
+/// one row, and so does the wrapping cells kernel's, whose unflagged index the order does not
+/// prove apart in rows. Every plain module runs a barrier where each simdgroup lies within one row
+/// (`CompiledFunction::runs_lockstep_barriers_in_rows`) but the unguarded cells kernel's: its
+/// barriers stand where the whole threadgroup runs and order only pairs that meet across rows, so
+/// its module runs them only where a simdgroup spans two rows, and its one-row variant clears
+/// nothing more at such a size. Past the bounds test they are simdgroup barriers, which run there.
+#[test]
+fn a_one_row_variant_clears_the_pairs_apart_in_rows_without_a_32_lane_tier() {
+    let desc = crate::pipeline::testing::description("lavapipe").unwrap_or_else(|e| panic!("{e}"));
+    let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+    let p = dev.profile();
+    let budget = Budget::standard();
+    let mut one_row = LoweringInputs::new();
+    one_row.one_row = true;
+    let lockstep = |plan: &Plan| {
+        (plan.census().keys())
+            .filter(|name| name.starts_with("barrier.lockstep"))
+            .count()
+    };
+    for (name, stores, guarded) in [
+        ("row_cells", RowStores::Cells, false),
+        ("row_cells_wrapping", RowStores::WrappingCells, false),
+        ("row_neighbours", RowStores::Neighbours, false),
+        ("row_cells_guarded", RowStores::Cells, true),
+        ("row_cells_wrapping_guarded", RowStores::WrappingCells, true),
+        ("row_neighbours_guarded", RowStores::Neighbours, true),
+    ] {
+        let Some(bc) = assemble_text(name, &row_store_kernel(name, stores, guarded)) else {
+            return;
+        };
+        let (plain, _) = typed_module(&bc, name, p).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(lockstep(&plain) > 0, "{name}: {:?}", plain.census());
+        assert!(!plain.facts.contains(&RuntimeFact::RowLockstep), "{name}");
+        let f = Library::from_air(&bc)
+            .ok()
+            .and_then(|lib| lib.function(name).ok())
+            .map(FunctionDescriptor::new)
+            .expect("kernel");
+        let own = dev
+            .compile_function(&f, &LoweringInputs::new(), &budget)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(
+            own.runs_lockstep_barriers_in_rows(),
+            guarded || stores != RowStores::Cells,
+            "{name}: {:?}",
+            plain.census()
+        );
+        let (row, _) =
+            typed_module_with(&bc, name, p, &one_row).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(row.facts.contains(&RuntimeFact::OneRow), "{name}");
+        if stores != RowStores::Cells {
+            assert!(lockstep(&row) > 0, "{name}: {:?}", row.census());
+            continue;
+        }
+        assert_eq!(lockstep(&row), 0, "{name}: {:?}", row.census());
+        assert_eq!(row.simd, (SimdClass::None, Tier::NoSubgroup), "{name}");
+        let entries = crate::pipeline::StageEntries::new();
+        let mut partial = LoweringInputs::new();
+        partial.partial_threadgroups = true;
+        let mut rows = partial.clone();
+        rows.one_row = true;
+        let observes = |inputs: &LoweringInputs| {
+            dev.kernel_observes_partition(&f, inputs, &budget, &entries)
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+        };
+        assert!(observes(&partial), "{name}: the partial variant");
+        assert!(!observes(&rows), "{name}: the one-row partial variant");
+        let compiled = dev
+            .compile_function(&f, &rows, &budget)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(!compiled.observes_threadgroup_partition(), "{name}");
+        let pipeline = dev
+            .compile_compute_pipeline(
+                &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
+                &budget,
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(
+            (pipeline.dependencies.iter()).any(|d| d.fact == RuntimeFact::GridTiles),
+            "{name}: {:?}",
+            pipeline.dependencies
+        );
+    }
+}

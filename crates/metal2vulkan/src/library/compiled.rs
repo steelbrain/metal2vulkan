@@ -320,6 +320,17 @@ impl CompiledFunction {
         self.0.kernel.partition_simdgroups
     }
 
+    /// Whether the function, a kernel, runs a barrier its lockstep order inserted (the barriers
+    /// for accesses only a simdgroup's lockstep orders) in a threadgroup whose simdgroups each lie
+    /// within one row: any of them but those that order only pairs meeting where a simdgroup
+    /// spans two rows, which run only where the threadgroup's size lets a simdgroup span two
+    /// (more than one row, of a width not a multiple of 32), a test the driver folds. Only where
+    /// this holds can its one-row variant (`LoweringInputs::one_row`) run fewer barriers there
+    /// than it does. `false` where the order inserted none.
+    pub fn runs_lockstep_barriers_in_rows(&self) -> bool {
+        self.0.kernel.lockstep_in_rows
+    }
+
     /// Whether the function, a kernel, is image-only: it samples, gathers or reads a texture, and
     /// loads, stores and updates atomically nothing in device memory, through no load, store,
     /// atomic or call but a texture or sampler operation on a pointer into the `device` address
@@ -500,4 +511,9 @@ pub struct KernelFacts {
     /// pointer into the `device` address space. Loads of `constant` memory and texture writes are
     /// allowed. Decided from the entry's AIR alone; `false` for a function that is not a kernel.
     pub image_only: bool,
+    /// The kernel's lockstep order inserted a barrier that runs where each simdgroup lies within
+    /// one row of its threadgroup: any of its barriers but those that order only pairs meeting
+    /// where a simdgroup spans two rows (`air::Lockstep::across_rows`), which run only where the
+    /// local size lets one span them. `false` where the order inserted none.
+    pub lockstep_in_rows: bool,
 }

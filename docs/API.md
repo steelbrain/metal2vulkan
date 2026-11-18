@@ -1924,6 +1924,12 @@ region states no grid and is unflagged, and all of its invocations run.
 lowering, what `CompiledFunction::observes_threadgroup_partition` answers for the compile under the
 same inputs (from the specialized entry `entries` holds, ordered for the device), so a runtime
 lowers only the variant a creation needs.
+`CompiledFunction::runs_lockstep_barriers_in_rows` (`KernelFacts::lockstep_in_rows`) states
+whether a kernel's lockstep order inserted a barrier that runs in a threadgroup whose simdgroups
+each lie within one row: any but those that order only pairs meeting where a simdgroup spans two
+rows, which the module runs only where its local size lets a simdgroup span them, a test of
+specialization constants the driver folds. Only where it holds can the kernel's one-row variant
+(`LoweringInputs::one_row`) run fewer barriers than its own module at such a size.
 `CompiledFunction::is_image_only` (`KernelFacts::image_only`) states, from the AIR alone, a kernel
 that samples, gathers or reads a texture and loads, stores and updates atomically nothing through
 a `device` pointer (`constant` loads and texture writes allowed), which a runtime may run in

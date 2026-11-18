@@ -3073,6 +3073,7 @@ impl Analyzed {
             partition_oblivious: observed == Partition::Oblivious,
             partition_simdgroups: observed == Partition::Simdgroups,
             image_only: self.image_only,
+            lockstep_in_rows: spec.lockstep.barriers.len() > spec.lockstep.across_rows.len(),
         };
         Ok((plan, kernel))
     }
