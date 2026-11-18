@@ -15,7 +15,6 @@ pub(super) mod indices;
 pub(super) mod places;
 mod render;
 pub(super) mod second;
-pub(super) mod unbound;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
@@ -225,8 +224,6 @@ pub struct NewRuntime {
     skips: Skips,
     /// The frame and the stream position of the call being played (`Backend::locate`).
     at: (u64, u64),
-    /// The draws and dispatches whose pipeline state reads a buffer argument nothing is bound to.
-    unbound: unbound::Unbound,
     substitutes: Substitutes,
     /// Each open encoder's command buffer.
     owners: HashMap<u64, u64>,
@@ -505,7 +502,6 @@ impl NewRuntime {
             completed: 0,
             skips: Skips::default(),
             at: (0, 0),
-            unbound: unbound::Unbound::default(),
             substitutes: Substitutes::default(),
             owners: HashMap::new(),
             managed: None,
@@ -1203,13 +1199,11 @@ impl NewRuntime {
                 let d = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(
                     function.descriptor,
                 ));
-                self.unbound.compute(call.result, &d);
                 let state = self.timed_state(call, &d, function.kernel)?;
                 unaddressed(Object::ComputePipeline(state))
             }
             "newComputePipelineStateWithDescriptor:options:reflection:error:" => {
                 let (d, kernel) = self.compute_pipeline(call)?;
-                self.unbound.compute(call.result, &d);
                 let state = self.timed_state(call, &d, kernel)?;
                 unaddressed(Object::ComputePipeline(state))
             }
@@ -1659,7 +1653,6 @@ impl Backend for NewRuntime {
             // Skipped encoders too: what the program's GPU passes reach is the stream's.
             let compute = matches!(self.objects.get(&call.receiver), Some(Object::Compute(_)));
             self.unwritten.encoded(call, command_buffer, compute);
-            self.unbound.encoded(call, self.at.0, self.at.1);
             let mut named = Vec::new();
             objects_named(&call.args, &mut named);
             named.retain(|id| {
@@ -2013,7 +2006,6 @@ impl Backend for NewRuntime {
             ("skipped_calls", self.skips.calls),
             ("skipped_resource_ids", self.skips.resource_ids),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
-            ("unbound_buffer_reads", self.unbound.count()),
         ])
     }
 
@@ -2097,7 +2089,6 @@ impl Backend for NewRuntime {
         lines.push(self.asides.line());
         lines.push(self.unwritten.line());
         lines.push(self.indices.line());
-        lines.push(self.unbound.line());
         lines
     }
 

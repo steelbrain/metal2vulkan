@@ -5,7 +5,6 @@ use super::addresses::AddressMap;
 use super::new_runtime::indices::Indices;
 use super::new_runtime::places::Waiting;
 use super::new_runtime::second::merge;
-use super::new_runtime::unbound::{Stage, Unbound};
 use super::new_runtime::unwritten::Unwritten;
 use super::player::{
     Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
@@ -1523,65 +1522,6 @@ fn a_frame_end_reports_the_gauges_as_they_stand() {
         .collect();
     assert_eq!(ends.len(), 2, "{lines:?}");
     assert!(ends[1].ends_with(" live calls=3"), "{lines:?}");
-}
-
-/// A draw or dispatch is counted where its pipeline state reads a buffer argument its encoder
-/// set nothing at, or set to `nil`, since the encoder was made; bytes bind one, and a state with
-/// no reflection is counted for nothing.
-#[test]
-fn a_draw_reading_a_buffer_argument_nothing_is_bound_to_is_counted() {
-    let call = |selector: &str, receiver: u64, args: Vec<Value>| Call {
-        selector: selector.into(),
-        receiver,
-        result: 0,
-        args,
-        answers: Vec::new(),
-    };
-    let draw = |encoder: u64| call("drawPrimitives:vertexStart:vertexCount:", encoder, vec![]);
-    let mut unbound = Unbound::default();
-    unbound.made(7, &[(Stage::Vertex, 0), (Stage::Fragment, 1)]);
-    let calls = [
-        call("setRenderPipelineState:", 9, vec![Value::Object(7)]),
-        call(
-            "setVertexBuffer:offset:atIndex:",
-            9,
-            vec![Value::Object(3), Value::Uint(0), Value::Uint(0)],
-        ),
-        // Fragment buffer 1 unbound: counted.
-        draw(9),
-        call(
-            "setFragmentBytes:length:atIndex:",
-            9,
-            vec![Value::Bytes(vec![0; 4]), Value::Uint(4), Value::Uint(1)],
-        ),
-        draw(9),
-        // Unset again: counted.
-        call(
-            "setFragmentBuffer:offset:atIndex:",
-            9,
-            vec![Value::Nil, Value::Uint(0), Value::Uint(1)],
-        ),
-        draw(9),
-        call("endEncoding", 9, vec![]),
-        // A state with no reflection: nothing counted.
-        call("setComputePipelineState:", 10, vec![Value::Object(8)]),
-        call("dispatchThreads:threadsPerThreadgroup:", 10, vec![]),
-    ];
-    for (position, call) in (0..).zip(&calls) {
-        unbound.encoded(call, 4, position);
-    }
-    let line = unbound.line();
-    assert!(
-        line.starts_with("unbound buffer reads 2: ") && line.contains(" of 1 states; "),
-        "{line}"
-    );
-    assert!(
-        line.ends_with(
-            "first: position 2 frame 4 state #7 Fragment buffer 1, \
-             position 6 frame 4 state #7 Fragment buffer 1"
-        ),
-        "{line}"
-    );
 }
 
 /// The new runtime's `unwritten` line counts, once, a Shared buffer a committed dispatch read

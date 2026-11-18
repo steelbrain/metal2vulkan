@@ -573,13 +573,7 @@ counted from 0), completes the work committed so far, reports as at the stream's
   textures and sampler states indices from the whole of each index class (section 5): its
   `indices named N: ...` line counts the objects placed at the index the stream named, those
   whose named index the runtime refused, the indices the program reserved, and the placements
-  that waited for an index's holders' commits, with the time waited. Its
-  `unbound buffer reads N: ...` line counts the draws and dispatches whose pipeline state reads a
-  buffer argument (one its reflection lists as used) that its encoder bound nothing to: no
-  `setBuffer`, `setBuffers` or `setBytes` of that stage at that index since the encoder was made,
-  or a `nil` buffer there; with the states they ran, the states the translator gave no reflection
-  of, and the first eight by stream position and frame. `unbound_buffer_reads` counts them per
-  frame. Metal leaves such a read undefined; the player plays it as the stream has it. Its readback serves
+  that waited for an index's holders' commits, with the time waited. Its readback serves
   Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives a
   compute or render pipeline state no `gpuResourceID`, so each one the program saw is reported on
   an `id` line as `none` and counted (`gap_pipeline_ids`); each skipped object's the program saw
