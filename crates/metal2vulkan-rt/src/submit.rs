@@ -53,7 +53,9 @@ pub(crate) const GROUP: usize = 16;
 /// and the second of four long command buffers was seen complete 74.7 ms after its commit against
 /// 99.2 ms (76.5 against 96.8 on an RTX 2080, 46.8 against 57.7 on an RX 550), while a burst of
 /// 160 kept its time within 0.5% on all three (probe b15b306d2f, jobs m3-max-44423, m3-max-44424
-/// and m3-max-44437). Not four: behind four the UHD 630 ran that burst in 2768-2839 us against
+/// and m3-max-44437). On an RTX 3090 the frame's mean commit-to-complete came to 152-165 us
+/// against 183-188 us, and the four long command buffers' to 32.6-32.9 ms against 44.3-67.2 ms,
+/// the burst within 0.1% (jobs m3-max-44525 and m3-max-44546). Not four: behind four the UHD 630 ran that burst in 2768-2839 us against
 /// 1850-1860 us, more of its command buffers going alone, and the RTX 2080's long rows came to
 /// 78.1-78.2 ms against 42.8-43.2 ms (jobs m3-max-44442 and m3-max-44443).
 pub(crate) const IN_FLIGHT: usize = 3;
