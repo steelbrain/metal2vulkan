@@ -432,8 +432,8 @@ mod on_device {
         each_device("block_held_by_encoding", |name, _, device| {
             let kernels = Kernels::new(&device);
             let queue = device.new_command_queue(4).expect("a queue");
-            let take = || {
-                (device.take_block(MemoryClass::Shared, SMALL))
+            let take = |len: u64| {
+                (device.take_block(MemoryClass::Shared, len))
                     .unwrap_or_else(|error| panic!("{name}: a block: {error}"))
             };
             let encode = |buffer: &Buffer| {
@@ -451,12 +451,12 @@ mod on_device {
                 encoder.end_encoding();
                 command_buffer
             };
-            let first = take();
+            let first = take(SMALL);
             let first_address = first.gpu_address;
             let buffer = (device.new_buffer(first.id, 0, SMALL, Some(0))).expect("a buffer");
             let command_buffer = encode(&buffer);
             drop((buffer, first));
-            let second = take();
+            let second = take(SMALL);
             assert!(
                 second.gpu_address + SMALL <= first_address
                     || first_address + SMALL <= second.gpu_address,
@@ -483,14 +483,16 @@ mod on_device {
             assert_eq!(after, expected, "{name}: the other block's bytes");
             drop((command_buffer, second));
 
-            // Dropped uncommitted, the command buffer gives the block back.
-            let third = take();
+            // Dropped uncommitted, the command buffer gives the block back: a length no other
+            // block given back has, so the next take of it gets this one or a new range.
+            let len = SMALL + (64 << 10);
+            let third = take(len);
             let third_address = third.gpu_address;
-            let buffer = (device.new_buffer(third.id, 0, SMALL, Some(0))).expect("a buffer");
+            let buffer = (device.new_buffer(third.id, 0, len, Some(0))).expect("a buffer");
             let command_buffer = encode(&buffer);
             drop((buffer, third));
             drop(command_buffer);
-            let again = take();
+            let again = take(len);
             assert_eq!(
                 again.gpu_address, third_address,
                 "{name}: the block given back"
