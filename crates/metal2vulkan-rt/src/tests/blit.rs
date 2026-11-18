@@ -741,7 +741,7 @@ fn a_fill_takes_whole_words_of_a_range_inside_the_buffer() {
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device, finished, within};
     use crate::{
         BlitCommandEncoder, Buffer, BufferLayout, BytesPlace, CommandBuffer, Device, DispatchType,
         Error, Gap, IndexClass, MemoryClass, PixelFormat, Refusal, Region, Resource, StorageMode,
@@ -997,6 +997,7 @@ mod on_device {
                 size: [4, 3, 1],
             };
             let counters = device.counters();
+            settled(&device);
             let before = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             into_array.record(name, &command_buffer);
@@ -1070,6 +1071,7 @@ mod on_device {
                 "{name}: across slices"
             );
 
+            settled(&device);
             let before = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut compute = command_buffer
@@ -1283,6 +1285,7 @@ mod on_device {
 
             // A slice's region into a buffer at 64, rows 48 apart, alone.
             let counters = device.counters();
+            settled(&device);
             let before = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
@@ -1442,6 +1445,7 @@ mod on_device {
             write(&buffer, &before);
             let queue = device.new_command_queue(4).expect("a queue");
             let counters = device.counters();
+            settled(&device);
             let metrics = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
@@ -1470,6 +1474,16 @@ mod on_device {
                 metal(want, 0x5d28_bc84_b408_472d),
                 "{name}: the fill"
             );
+        });
+    }
+
+    /// Returns once the pool holds a ready block of each class again: the block-maker thread
+    /// makes one after a block is taken, a Private one zeroed in a submission of its own, which a
+    /// count of a test's own work must not take in.
+    fn settled(device: &Device) {
+        within("a ready block of each class", || {
+            let pool = &device.core().pool;
+            pool.idle(MemoryClass::Private) > 0 && pool.idle(MemoryClass::Shared) > 0
         });
     }
 
@@ -1535,6 +1549,7 @@ mod on_device {
             );
 
             // The fill and a synchronize.
+            settled(&device);
             let metrics = counters.metrics();
             let reaches = counters.host_reaches();
             let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -1569,6 +1584,7 @@ mod on_device {
             );
 
             // A synchronize of a texture without named bytes records nothing.
+            settled(&device);
             let metrics = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
@@ -1703,6 +1719,7 @@ mod on_device {
             assert_eq!(read(&named), vec![0; 2048], "{name}: the copies alone");
 
             // The synchronize.
+            settled(&device);
             let metrics = counters.metrics();
             let reaches = counters.host_reaches();
             let command_buffer = queue.command_buffer().expect("a command buffer");
