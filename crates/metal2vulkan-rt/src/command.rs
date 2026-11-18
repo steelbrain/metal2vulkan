@@ -666,7 +666,8 @@ impl Building {
         if self.gpu.is_empty() {
             return Ok(());
         }
-        let command = match self.last().command {
+        let last = self.last().command;
+        let command = match last {
             Some(command) => command,
             None if self.started && self.gpu.stamps.is_none() => return self.close(),
             None => self.begin()?,
