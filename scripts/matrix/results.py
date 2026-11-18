@@ -15,6 +15,14 @@ from pathlib import Path
 KINDS = ("metric", "instructions", "gauge", "time", "size")
 #: A gauge's key ends in the point it was read at.
 GAUGE_POINTS = ("100", "200", "drop")
+#: The new runtime's memory pool's gauges, by their last key component: its `VkDeviceMemory`
+#: allocations. The pool frees an idle allocation once the most bytes in use over its window falls
+#: past it and the device has been quiet for 20 ms, so allocations an earlier workload left idle
+#: may go between a later one's iterations 100 and 200: the harness's long_4cb, whose runs leave
+#: 20 ms gaps between submissions, fell from 11 to 8 on the RTX 5080 under a 10 s window, each free
+#: at least 20 ms after the last commit (memory.rs's WINDOW_SECS, QUIET_NANOS). Such a gauge fails
+#: only if it rises between @100 and @200; at @drop it is 0 like any other.
+POOL_GAUGES = ("blocks",)
 #: `instructions` may grow by this fraction over the base before it fails.
 INSTRUCTIONS_BAND = 0.01
 #: A GPU's slowdown over the base fails past this multiple of the median slowdown...
@@ -235,7 +243,8 @@ def leg_problems(leg, records, base):
         if point == "drop" and value != 0:
             problems.append(f"gauge {name}: {value} live at device drop")
         if (point == "200" and not name.startswith(PARKED_RECORDS) and f"{name}@100" in gauges
-                and value != gauges[f"{name}@100"]):
+                and value != gauges[f"{name}@100"]
+                and (name.rpartition("/")[2] not in POOL_GAUGES or value > gauges[f"{name}@100"])):
             problems.append(f"gauge {name}: {gauges[f'{name}@100']} at iteration 100, {value} at 200")
     if base is not None:
         for key, value in sorted(records["metric"].items()):

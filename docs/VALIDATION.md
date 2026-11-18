@@ -304,7 +304,7 @@ changes the harness sets the base for the next.
 |---|---|---|
 | `metric` | A deterministic count per frame or per command buffer: submissions, passes, barriers, bytes copied, pipelines created | It is larger than the base's |
 | `instructions` | User-space CPU instructions per draw or per dispatch | It is more than 1% over the base's |
-| `gauge` | Live objects of one resource kind, the key ending in the point it was read at: `@100` and `@200` (loop iterations), `@drop` (after the device dropped) | `@drop` is not 0, or `@200` differs from `@100` |
+| `gauge` | Live objects of one resource kind, the key ending in the point it was read at: `@100` and `@200` (loop iterations), `@drop` (after the device dropped) | `@drop` is not 0, or `@200` differs from `@100`; for the memory pool's `blocks`, which frees allocations an earlier workload left idle once the most bytes in use over its window falls and the device is quiet for 20 ms, only `@200` over `@100` |
 | `time` | A duration in microseconds: what a program waits on in a harness workload's run, timed on the host: its last command buffer's commit-to-complete time where the workload times it (the others' lateness is a column of the harness's table and no record), else the host wall time a run adds (a run's GPU time is a record of its own, `harness-gpu-<runtime>/<row>`, parked) | Only as a cross-GPU outlier: its ratio to the base's is more than 1.25 times the median of that ratio over at least 3 GPUs |
 | `size` | The size a harness row whose size follows the device ran at (`long_4cb`) | The leg's two runtimes ran the row at different sizes: its times are then not compared (the harness budget) |
 

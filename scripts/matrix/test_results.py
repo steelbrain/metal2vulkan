@@ -123,6 +123,17 @@ class RuleTests(unittest.TestCase):
         now = recs(gauge={"l/b@100": 7, "l/b@200": 7, "l/b@drop": 0})
         self.assertEqual(self.problems(now, None), [])
 
+    def test_a_pool_gauge_may_fall_between_iterations_but_not_rise_and_must_reach_zero(self):
+        fell = {"harness-new/long_4cb/blocks@100": 11, "harness-new/long_4cb/blocks@200": 8,
+                "harness-new/long_4cb/buffers@100": 2, "harness-new/long_4cb/buffers@200": 1}
+        self.assertEqual(self.problems(recs(gauge=fell), None),
+                         ["gauge harness-new/long_4cb/buffers: 2 at iteration 100, 1 at 200"])
+        rose = {"harness-new/long_4cb/blocks@100": 8, "harness-new/long_4cb/blocks@200": 9,
+                "harness-new/creates/device/blocks@drop": 1}
+        self.assertEqual(self.problems(recs(gauge=rose), None), [
+            "gauge harness-new/creates/device/blocks: 1 live at device drop",
+            "gauge harness-new/long_4cb/blocks: 8 at iteration 100, 9 at 200"])
+
     def test_a_failed_suite_fails_the_leg(self):
         leg = leg_of(recs(), code=100)
         self.assertEqual(results.leg_problems(leg, recs(), None), ["suite rt exited 100"])
