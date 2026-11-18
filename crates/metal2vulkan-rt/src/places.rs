@@ -8,13 +8,12 @@
 //! the class's block length ([`MemoryClass::block_len`]), or of the place's own length where that
 //! is longer. A place is free again once its resource is freed, after every command buffer and
 //! upload that used it retired. One empty block of the block length is kept for the next place;
-//! another block that empties goes back to the pool, which zeroes and keeps it for a take of its
-//! length.
+//! another block that empties goes back to the pool, which keeps it for a take of its length.
+//! Nothing zeroes a texture's bytes, as Metal leaves a new texture's contents undefined.
 //!
 //! An image in a texture block is optimal. The block's own `VkBuffer`, which spans it, aliases the
-//! images (Vulkan's memory aliasing), and only the pool uses it: to zero the block before it is
-//! taken and after it is given back, when no image is in it. A copy block's `VkBuffer` is what the
-//! device copies are reached through.
+//! images (Vulkan's memory aliasing), and nothing records through it. A copy block's `VkBuffer` is
+//! what the device copies are reached through.
 
 use crate::device::{lock, Core};
 use crate::error::Error;

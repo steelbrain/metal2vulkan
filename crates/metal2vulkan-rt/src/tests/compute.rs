@@ -364,7 +364,7 @@ pub(crate) mod on_device {
                 .take_block(MemoryClass::Private, 1)
                 .expect("a Private block");
             let private = device
-                .new_buffer(block.id, 0, 256, true)
+                .new_buffer(block.id, 0, 256, Some(0))
                 .expect("a Private buffer");
             let bytes: Vec<u8> = (0..WORDS as u32)
                 .flat_map(|index| (100 + index).to_le_bytes())

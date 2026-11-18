@@ -27,7 +27,10 @@
 //! names them. They have no CPU reference: each runtime's outputs must match the first
 //! runtime's. The creation workloads ([`authored::CREATES`]) run with the authored ones: `Shared`
 //! buffers of 4 KiB, 1 MiB and 64 MiB, each made and released in turn over the range the last
-//! one left ([`run::Session::create`]), each checked to start zero; and compute pipeline states of
+//! one left ([`run::Session::create`]), each checked to start zero; `Private` buffers of 16 MiB,
+//! each with its first use, one command buffer that reads its ends, timed through to completion
+//! (`create_private_16MiB`: the runtime's zeroing of the buffer lands in that time, wherever it
+//! does it); and compute pipeline states of
 //! one content (`create_state`), the first of a content the device has not seen timed apart
 //! with one dispatch of it through to completion (`first`: a runtime may compile its pipeline in
 //! the creation or at the first dispatch, and the sum holds both; the row also shows the creation

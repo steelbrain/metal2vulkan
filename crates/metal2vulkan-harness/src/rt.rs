@@ -341,7 +341,7 @@ impl crate::Device for Device {
         };
         let placed = self.heap.borrow_mut().place(class, length)?;
         let (block, start) = placed.at();
-        match self.device.new_buffer(block, start, length, true) {
+        match self.device.new_buffer(block, start, length, Some(0)) {
             Ok(buffer) => Ok(Buffer {
                 buffer,
                 placed,

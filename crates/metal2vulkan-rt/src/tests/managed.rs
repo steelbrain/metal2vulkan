@@ -98,10 +98,10 @@ mod on_device {
             let counters = device.counters();
             let cpu = (device.take_block(MemoryClass::Shared, 2 * LEN))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let into = (device.new_buffer(cpu.id, LEN, LEN, true))
+            let into = (device.new_buffer(cpu.id, LEN, LEN, Some(0)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let first: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8).collect();
-            let start = (device.new_buffer(cpu.id, 0, LEN, false))
+            let start = (device.new_buffer(cpu.id, 0, LEN, None))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             write(&start, 0, &first);
             drop(start);
@@ -230,7 +230,7 @@ mod on_device {
                     bytes_per_image: 0,
                 },
             ];
-            let named = (device.new_buffer(cpu.id, 4096, NAMED, true))
+            let named = (device.new_buffer(cpu.id, 4096, NAMED, Some(0)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut now: Vec<u8> = (0..NAMED).map(|i| (i % 251) as u8).collect();
             write(&named, 0, &now);
@@ -340,7 +340,7 @@ mod on_device {
             );
             let private = (device.take_block(MemoryClass::Private, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let unmapped = (device.new_buffer(private.id, 0, NAMED, false))
+            let unmapped = (device.new_buffer(private.id, 0, NAMED, None))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(refused(&places, &unmapped, "Private"), (0, 0));
             d.storage_mode = StorageMode::Managed;

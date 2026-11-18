@@ -382,7 +382,7 @@ impl Device {
         let counters = Counters::new();
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
-        let made = unsafe { objects(&device, &capabilities, family, &counters, max_allocations) };
+        let made = unsafe { objects(&device, &capabilities, &counters, max_allocations) };
         let (memory_types, filler, done, arrays, layout) = match made {
             Ok(made) => made,
             Err(error) => {
@@ -574,10 +574,10 @@ impl Device {
     /// [`BlockMappings::unmap`]; the take waits for that only where its own allocation fails, and
     /// then takes a range of those bytes where one fits.
     ///
-    /// Every block reads zero, as Metal's new buffers do, whether new or taken again: an
-    /// allocation is zeroed as it is made, a block's bytes as it is given back, a Shared one
-    /// through the mapping (which also makes each page resident before the block is handed out)
-    /// and a Private one by a GPU fill.
+    /// A block's bytes are undefined, new or taken again: nothing zeroes them, and a Shared
+    /// block's pages become resident as they are first written. A buffer reads zero where
+    /// [`Device::new_buffer`] zeroes its range, as `newBufferWithLength:options:` does in Metal;
+    /// Metal is silent on the bytes of a placement heap's memory and of a texture placed there.
     ///
     /// Err: [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's largest allocation or
     /// buffer; [`Limit::BlockIds`](crate::Limit::BlockIds);
@@ -634,8 +634,8 @@ impl Device {
     /// handle, made explicit ([`Block`]).
     ///
     /// It takes effect once no [`Buffer`](crate::Buffer) of the block remains and every command
-    /// buffer that used it has retired. The block-maker thread then zeroes it and keeps it, with
-    /// the same number, address and mapping, for a later [`take_block`](Device::take_block) of its
+    /// buffer that used it has retired. The block-maker thread then keeps it, with the same
+    /// number, address, mapping and bytes, for a later [`take_block`](Device::take_block) of its
     /// length. An allocation none of whose blocks is held is idle, and one that holds a block is
     /// in use: the device keeps a class's idle allocations while their bytes and those of its
     /// allocations in use stay at or under the most bytes it had in use over the last 10 seconds,
@@ -819,12 +819,12 @@ fn finish(runner: Option<Runner>, core: &Arc<Core>, deadline: Option<Instant>) -
     done
 }
 
-/// The memory types the floor chooses on a new device, the zero fill's objects, and the
-/// completion thread's semaphores.
+/// The memory types the floor chooses on a new device, the zero source, and the completion
+/// thread's semaphores.
 ///
 /// # Safety
 ///
-/// `device` was made with `capabilities.features`, and `family` is its queues' family.
+/// `device` was made with `capabilities.features`.
 /// The translator for `raw` with what device creation enables of `capabilities`, under the identity
 /// domains: a buffer argument is the guest's address of the buffer, a push field, and a texture or
 /// a sampler its resource ID. It is decided by the device's Vulkan queries alone
@@ -900,7 +900,6 @@ unsafe fn consumer_features(
 unsafe fn objects(
     device: &ash::Device,
     capabilities: &floor::Capabilities,
-    family: u32,
     counters: &Counters,
     max_allocations: u32,
 ) -> Result<(floor::MemoryTypes, Filler, Done, Arrays, vk::PipelineLayout), Error> {
@@ -909,15 +908,8 @@ unsafe fn objects(
         unsafe { floor::memory_types(device, capabilities) }.map_err(Error::BelowFloor)?;
     // SAFETY: the caller's contract; the Shared type is host-visible and host-coherent, and the
     // floor chose it for buffers of every usage.
-    let mut filler = unsafe {
-        Filler::new(
-            device,
-            family,
-            memory_types.shared,
-            counters,
-            max_allocations,
-        )
-    }?;
+    let mut filler =
+        unsafe { Filler::new(device, memory_types.shared, counters, max_allocations) }?;
     // SAFETY: the device is live.
     let made = unsafe { Done::new(device) }.and_then(|mut done| {
         // SAFETY: the device is live, with the floor's features.
@@ -958,7 +950,7 @@ unsafe fn objects(
     match made {
         Ok((done, arrays, layout)) => Ok((memory_types, filler, done, arrays, layout)),
         Err(error) => {
-            // SAFETY: the fill's objects are unused.
+            // SAFETY: the zero source is unused.
             if unsafe { filler.destroy(device) } {
                 counters.fall(Gauge::Blocks);
             }

@@ -2306,6 +2306,7 @@ field	metal2vulkan-rt::Metrics.block_bytes_made	pub block_bytes_made: u64
 field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
 field	metal2vulkan-rt::Metrics.blocks_reused	pub blocks_reused: u64
 field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
+field	metal2vulkan-rt::Metrics.bytes_zeroed	pub bytes_zeroed: u64
 field	metal2vulkan-rt::Metrics.cache_bytes_written	pub cache_bytes_written: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_max_nanos	pub commit_lock_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_nanos	pub commit_lock_wait_nanos: u64
@@ -9399,7 +9400,7 @@ method	metal2vulkan-rt::Device::heap_texture_size_and_align	pub fn heap_texture_
 method	metal2vulkan-rt::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
 method	metal2vulkan-rt::Device::minimum_linear_texture_alignment	pub fn minimum_linear_texture_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error>
-method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: BlockId, offset: u64, length: u64, zeroed: bool) -> Result<Buffer, Error>
+method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: BlockId, offset: u64, length: u64, zero_from: Option<u64>) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
 method	metal2vulkan-rt::Device::new_event	pub fn new_event(&self) -> Result<Event, Error>
 method	metal2vulkan-rt::Device::new_fence	pub fn new_fence(&self) -> Fence

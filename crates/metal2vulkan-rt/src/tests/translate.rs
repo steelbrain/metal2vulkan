@@ -179,7 +179,7 @@ mod on_device {
         fn buffer(&mut self, len: u64) -> Buffer {
             let buffer = self
                 .device
-                .new_buffer(self.block.id, self.next, len, true)
+                .new_buffer(self.block.id, self.next, len, Some(0))
                 .expect("a buffer");
             self.next += len.next_multiple_of(256);
             buffer
@@ -1444,7 +1444,7 @@ mod on_device {
             let kernel = state(name, &device, &descriptor);
             // A taken block reads zero, so the buffer needs no second zeroing.
             let big = device
-                .new_buffer(block.id, 0, LEN, false)
+                .new_buffer(block.id, 0, LEN, None)
                 .expect("the large buffer");
             let mut buffers = Buffers::new(&device, 64 * 1024);
             let idx = buffers.buffer(64);

@@ -129,7 +129,7 @@ mod on_device {
             let core = device.core();
             let cpu = (device.take_block(MemoryClass::Shared, 2 * AT + LEN))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let buffer = (device.new_buffer(cpu.id, AT, LEN, true))
+            let buffer = (device.new_buffer(cpu.id, AT, LEN, Some(0)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let mut now: Vec<u8> = (0..LEN).map(|i| (i % 253) as u8).collect();
             write(&buffer, &now);

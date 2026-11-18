@@ -1,8 +1,9 @@
 //! Memory blocks and buffers: the plan of a zero fill, a block's length and alignment, the idle
 //! rule's window and surplus; and, under a device cfg, on every device of the cfg's kind, that the
 //! device makes an allocation of each class as it is made and the next only while a class's free
-//! bytes run low, that blocks are handed out zeroed and buffers view them, that a block given back
-//! is kept for a take of its length, that a take beside kept blocks of other lengths allocates and
+//! bytes run low, that blocks are handed out and buffers view them, zeroed from their
+//! `zero_from` (a Private buffer's fill ahead of a copy into it in the next command buffer), that
+//! a block given back is kept for a take of its length, its bytes as written, that a take beside kept blocks of other lengths allocates and
 //! their bytes are given back after the hook, and taken where its allocation fails, that idle
 //! allocations follow the window's peak down, that seeded takes and releases of mixed lengths all
 //! return, and that teardown frees everything with the gauges at zero.
@@ -140,7 +141,8 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Block, BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus, Device,
-        DeviceOptions, Error, Gauges, Instance, Limit, MemoryClass, Refusal, MAX_BUFFER_LENGTH,
+        DeviceOptions, Error, Gauges, Instance, Limit, MemoryClass, PixelFormat, Refusal,
+        TextureDescriptor, TextureType, MAX_BUFFER_LENGTH,
     };
     use ash::vk;
     use std::collections::HashMap;
@@ -308,35 +310,6 @@ mod on_device {
                 device.cmd_fill_buffer(command, buffer, offset, size, word)
             });
         }
-
-        /// Copies `size` bytes of `from` at `offset` to the start of `to`.
-        fn copy(&self, from: vk::Buffer, to: vk::Buffer, offset: u64, size: u64) {
-            let region = [vk::BufferCopy {
-                src_offset: offset,
-                dst_offset: 0,
-                size,
-            }];
-            // SAFETY: recorded in `run`; the range is in both buffers.
-            self.run(|device, command| unsafe {
-                device.cmd_copy_buffer(command, from, to, &region)
-            });
-        }
-    }
-
-    impl Gpu {
-        /// Whether every byte of the Private block `private` reads zero, copied a Shared block's
-        /// length at a time to the start of the pooled Shared block `shared`, whose bytes are
-        /// `host`.
-        fn reads_zero(&self, private: vk::Buffer, shared: vk::Buffer, host: &mut [u8]) -> bool {
-            let step = MemoryClass::Shared.block_len();
-            (0..MemoryClass::Private.block_len())
-                .step_by(step as usize)
-                .all(|offset| {
-                    host.fill(0xFF);
-                    self.copy(private, shared, offset, step);
-                    host.iter().all(|&byte| byte == 0)
-                })
-        }
     }
 
     impl Drop for Gpu {
@@ -408,14 +381,14 @@ mod on_device {
             };
             assert_eq!(block.len, MAX_BUFFER_LENGTH, "{name}");
             let buffer = device
-                .new_buffer(block.id, 0, MAX_BUFFER_LENGTH, false)
+                .new_buffer(block.id, 0, MAX_BUFFER_LENGTH, None)
                 .expect("a buffer of 2 GiB");
             assert_eq!(
                 (buffer.gpu_address(), buffer.length()),
                 (block.gpu_address, MAX_BUFFER_LENGTH),
                 "{name}"
             );
-            match device.new_buffer(block.id, 0, MAX_BUFFER_LENGTH + 1, false) {
+            match device.new_buffer(block.id, 0, MAX_BUFFER_LENGTH + 1, None) {
                 Err(Error::Refused(Refusal::BufferTooLong { length, max })) => {
                     assert_eq!((length, max), (MAX_BUFFER_LENGTH + 1, MAX_BUFFER_LENGTH))
                 }
@@ -436,14 +409,15 @@ mod on_device {
         }
     }
 
-    /// Blocks of both classes are handed out zeroed, buffers view them, a zeroed buffer zeroes
-    /// exactly its bytes, the refusals are Metal's, a block longer than an allocation has an
-    /// allocation of its own, a released block lives until its last buffer is gone and is then
-    /// zeroed and kept, and freed once the window no longer holds its bytes, through the hook on
-    /// the block-maker thread while still mapped; and teardown frees the rest through the hook on
-    /// the dropping thread, with every gauge at zero.
+    /// Blocks of both classes are handed out, buffers view them, a zeroed buffer zeroes exactly
+    /// its bytes from its `zero_from`, counted as the buffer's bytes and not the block's, the
+    /// refusals are Metal's, a block longer than an allocation has an allocation of its own, a
+    /// released block lives until its last buffer is gone and is then kept, its bytes as written,
+    /// and freed once the window no longer holds its bytes, through the hook on the block-maker
+    /// thread while still mapped; and teardown frees the rest through the hook on the dropping
+    /// thread, with every gauge at zero.
     #[test]
-    fn every_device_hands_out_zeroed_blocks_and_buffers_and_frees_them_through_the_hook() {
+    fn every_device_hands_out_blocks_and_buffers_and_frees_them_through_the_hook() {
         let instance = Instance::new(&[]).expect("an instance at the floor");
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
@@ -458,7 +432,7 @@ mod on_device {
             let counters = device.counters();
             let gpu = Gpu::new(&device);
 
-            // A new Shared block reads zero, through its mapping.
+            // A new Shared block, mapped.
             let shared = device
                 .take_block(MemoryClass::Shared, MemoryClass::Shared.block_len())
                 .expect("a Shared block");
@@ -468,12 +442,8 @@ mod on_device {
             );
             assert_ne!(shared.gpu_address, 0, "{name}: a Shared block's address");
             let host = bytes(&shared);
-            assert!(
-                host.iter().all(|&byte| byte == 0),
-                "{name}: a new Shared block"
-            );
 
-            // A new Private block reads zero, copied into the Shared block.
+            // A new Private block, unmapped.
             let private = device
                 .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
                 .expect("a Private block");
@@ -483,18 +453,10 @@ mod on_device {
             );
             assert_ne!(private.gpu_address, 0, "{name}: a Private block's address");
             assert_ne!(private.id, shared.id);
-            assert!(
-                gpu.reads_zero(
-                    vk_buffer(&device, private.id),
-                    vk_buffer(&device, shared.id),
-                    host
-                ),
-                "{name}: a new Private block"
-            );
 
             // Buffers are views: the block's address and mapping plus the offset.
             let view = device
-                .new_buffer(shared.id, 4096, 256, false)
+                .new_buffer(shared.id, 4096, 256, None)
                 .expect("a Shared buffer");
             let base = shared.contents.unwrap().as_ptr() as usize;
             assert_eq!(view.gpu_address(), shared.gpu_address + 4096);
@@ -507,7 +469,7 @@ mod on_device {
                 (shared.id, 4096, 256)
             );
             let whole = device
-                .new_buffer(private.id, 0, MemoryClass::Private.block_len(), false)
+                .new_buffer(private.id, 0, MemoryClass::Private.block_len(), None)
                 .expect("a Private buffer");
             assert_eq!(
                 (whole.gpu_address(), whole.contents()),
@@ -521,29 +483,54 @@ mod on_device {
             drop(clone);
             assert_eq!(counters.gauges().buffers, 2);
 
-            // A zeroed buffer zeroes exactly its bytes: in a Shared block through the mapping, in a
-            // Private one by a fill of its whole words and copies of the bytes beside them.
-            host[..8192].fill(0xFF);
-            let zeroed = device
-                .new_buffer(shared.id, 4097, 7, true)
-                .expect("a zeroed Shared buffer");
-            for (index, &byte) in host[..8192].iter().enumerate() {
-                let inside = (4097..4104).contains(&index);
+            // A zeroed buffer zeroes exactly its bytes from its `zero_from`, counted as the
+            // buffer's bytes: in a Shared block through the mapping, in a Private one by a fill of
+            // its whole words and copies of the bytes beside them.
+            for zero_from in [Some(0), Some(3), Some(7), Some(9), None] {
+                host[..8192].fill(0xFF);
+                let before = counters.metrics().bytes_zeroed;
+                let zeroed = device
+                    .new_buffer(shared.id, 4097, 7, zero_from)
+                    .expect("a zeroed Shared buffer");
+                let from = 4097 + zero_from.unwrap_or(7).min(7) as usize;
+                for (index, &byte) in host[..8192].iter().enumerate() {
+                    let inside = (from..4104).contains(&index);
+                    assert_eq!(
+                        byte,
+                        if inside { 0 } else { 0xFF },
+                        "{name}: {zero_from:?}, Shared byte {index}"
+                    );
+                }
                 assert_eq!(
-                    byte,
-                    if inside { 0 } else { 0xFF },
-                    "{name}: Shared byte {index}"
+                    counters.metrics().bytes_zeroed - before,
+                    (4104 - from) as u64,
+                    "{name}: {zero_from:?}, the Shared bytes zeroed"
                 );
+                drop(zeroed);
             }
-            drop(zeroed);
             // A zeroed Private range is filled ahead of the next command buffer committed, whose
             // commands see the fill.
             let queue = device.new_command_queue(1).expect("a queue");
-            for (offset, length) in [(4097, 13), (8001, 2), (4096, 64), (4099, 1), (1, 8000)] {
+            for (offset, length, zero_from) in [
+                (4097, 13, 0),
+                (8001, 2, 0),
+                (4096, 64, 0),
+                (4099, 1, 0),
+                (1, 8000, 0),
+                (4096, 64, 5),
+                (4097, 13, 12),
+                (1, 8000, 4000),
+            ] {
                 gpu.fill(vk_buffer(&device, private.id), 0, 8192, u32::MAX);
+                let before = counters.metrics().bytes_zeroed;
                 let zeroed = device
-                    .new_buffer(private.id, offset, length, true)
+                    .new_buffer(private.id, offset, length, Some(zero_from))
                     .expect("a zeroed Private buffer");
+                assert_eq!(
+                    counters.metrics().bytes_zeroed - before,
+                    length - zero_from,
+                    "{name}: {offset}+{length} from {zero_from}, the Private bytes zeroed"
+                );
                 let (from, to) = (
                     vk_buffer(&device, private.id),
                     vk_buffer(&device, shared.id),
@@ -563,12 +550,12 @@ mod on_device {
                 copy.commit().expect("a commit");
                 copy.wait_until_completed();
                 assert_eq!(copy.status(), CommandBufferStatus::Completed, "{name}");
-                let range = offset as usize..(offset + length) as usize;
+                let range = (offset + zero_from) as usize..(offset + length) as usize;
                 for (index, &byte) in host[..8192].iter().enumerate() {
                     let expected = if range.contains(&index) { 0 } else { 0xFF };
                     assert_eq!(
                         byte, expected,
-                        "{name}: {offset}+{length}, Private byte {index}"
+                        "{name}: {offset}+{length} from {zero_from}, Private byte {index}"
                     );
                 }
                 drop(zeroed);
@@ -576,12 +563,12 @@ mod on_device {
 
             // Metal's refusals, and the device's limit.
             assert!(matches!(
-                device.new_buffer(shared.id, 0, 0, false),
+                device.new_buffer(shared.id, 0, 0, None),
                 Err(Error::Refused(Refusal::EmptyBuffer))
             ));
             // Past 2 GiB, whatever the block: the length is refused before the range.
             for length in [MAX_BUFFER_LENGTH + 1, u64::MAX] {
-                match device.new_buffer(shared.id, 0, length, false) {
+                match device.new_buffer(shared.id, 0, length, None) {
                     Err(Error::Refused(Refusal::BufferTooLong { length: l, max })) => {
                         assert_eq!((l, max), (length, MAX_BUFFER_LENGTH), "{name}")
                     }
@@ -590,7 +577,7 @@ mod on_device {
             }
             let shared_len = MemoryClass::Shared.block_len();
             for (offset, length) in [(shared_len - 4, 8), (u64::MAX, 2), (shared_len, 1)] {
-                match device.new_buffer(shared.id, offset, length, false) {
+                match device.new_buffer(shared.id, offset, length, None) {
                     Err(Error::Refused(Refusal::BufferPastBlock {
                         offset: o,
                         length: l,
@@ -605,7 +592,7 @@ mod on_device {
             ));
 
             // A block longer than an allocation: an allocation of its own length, rounded up to
-            // the granule, zeroed.
+            // the granule.
             let asked = 2 * MemoryClass::Shared.block_len() + 1;
             let long = device
                 .take_block(MemoryClass::Shared, asked)
@@ -616,22 +603,17 @@ mod on_device {
                 long.len
             );
             let long_host = bytes(&long);
-            assert!(
-                long_host.iter().all(|&byte| byte == 0),
-                "{name}: a long block"
-            );
             long_host[0] = 0x5A;
             hook.record(&long);
             let last_view: Buffer = device
-                .new_buffer(long.id, 0, 16, false)
+                .new_buffer(long.id, 0, 16, None)
                 .expect("a buffer of the long block");
 
-            // Released, it lives while its buffer does, then is zeroed and kept, its allocation
-            // idle.
+            // Released, it lives while its buffer does, then is kept, its allocation idle.
             let long_id = long.id;
             device.release_block(long).expect("a release");
             assert!(matches!(
-                device.new_buffer(long_id, 0, 16, false),
+                device.new_buffer(long_id, 0, 16, None),
                 Err(Error::NoSuchBlock(id)) if id == long_id
             ));
             assert!(
@@ -648,8 +630,8 @@ mod on_device {
             assert!(hook.unmapped().is_empty(), "{name}: unmapped while kept");
 
             // Eleven seconds on, the window no longer holds its allocation: the next take, of a
-            // small Private block, frees it through the hook on the block-maker thread, zeroed and
-            // still mapped.
+            // small Private block, frees it through the hook on the block-maker thread, still
+            // mapped, its bytes as written.
             core.pool.advance_clock(Duration::from_secs(11));
             let nudge = device
                 .take_block(MemoryClass::Private, 1)
@@ -663,8 +645,8 @@ mod on_device {
             assert_eq!(unmapped[0].thread.as_deref(), Some("m2v-blocks"));
             assert_eq!(
                 unmapped[0].first,
-                Some(0),
-                "{name}: zeroed, and unmapped while still mapped"
+                Some(0x5A),
+                "{name}: unmapped while still mapped, its bytes as written"
             );
 
             // Teardown unmaps the rest on this thread, and frees every block.
@@ -755,10 +737,11 @@ mod on_device {
         }
     }
 
-    /// A block given back is zeroed and kept, and a take of its length takes it again with its
-    /// number, address and mapping, allocating nothing and running no hook: Shared blocks of
-    /// 16 MiB, 1 MiB and 40 MiB (an allocation of its own), and a Private block the GPU wrote,
-    /// which reads zero when taken again.
+    /// A block given back is kept, its bytes as written, and a take of its length takes it again
+    /// with its number, address and mapping, allocating nothing and running no hook: Shared blocks
+    /// of 16 MiB, 1 MiB and 40 MiB (an allocation of its own), and a Private block the GPU wrote,
+    /// whose bytes are the GPU's when taken again, and read zero in a buffer zeroed over a range of
+    /// them, there alone.
     #[test]
     fn every_device_keeps_given_back_blocks_for_takes_of_their_length() {
         const MIB: u64 = 1 << 20;
@@ -803,9 +786,11 @@ mod on_device {
                         "{name}: the kept block of {} bytes",
                         info.len
                     );
-                    assert!(
-                        bytes(&block).iter().all(|&byte| byte == 0),
-                        "{name}: a kept block taken again"
+                    let host = bytes(&block);
+                    assert_eq!(
+                        (host[0], host[host.len() - 1]),
+                        (0x5A, 0x5A),
+                        "{name}: a kept block taken again, its bytes as written"
                     );
                     block
                 })
@@ -818,7 +803,9 @@ mod on_device {
             assert_eq!(counters.metrics().blocks_reused, reused + 3, "{name}");
             assert!(hook.unmapped().is_empty(), "{name}: {:?}", hook.unmapped());
 
-            // A Private block written by the GPU and given back reads zero when taken again.
+            // A Private block written by the GPU and given back holds the GPU's bytes when taken
+            // again; a buffer zeroed over a range of them reads zero there, ahead of the next
+            // command buffer committed, and nowhere else.
             let gpu = Gpu::new(&device);
             let private_len = MemoryClass::Private.block_len();
             let private = (device.take_block(MemoryClass::Private, private_len))
@@ -839,16 +826,41 @@ mod on_device {
             let shared = (again.iter())
                 .find(|block| block.len == MemoryClass::Shared.block_len())
                 .expect("the 16 MiB block");
-            assert!(
-                gpu.reads_zero(
-                    vk_buffer(&device, back.id),
-                    vk_buffer(&device, shared.id),
-                    bytes(shared)
-                ),
-                "{name}: a Private block taken again"
-            );
+            let zeroed = (device.new_buffer(back.id, 4096, 4096, Some(0)))
+                .unwrap_or_else(|error| panic!("{name}: a zeroed Private buffer: {error}"));
+            let host = bytes(shared);
+            host[..3 * 4096].fill(0x11);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let (from, to) = (vk_buffer(&device, back.id), vk_buffer(&device, shared.id));
+            let copy = queue.command_buffer().expect("a command buffer");
+            copy.record_for_test(&[], |device, command| {
+                let region = [vk::BufferCopy {
+                    src_offset: 0,
+                    dst_offset: 0,
+                    size: 3 * 4096,
+                }];
+                // SAFETY: the command buffer is recording; both blocks are held and span the
+                // region.
+                unsafe { device.cmd_copy_buffer(command, from, to, &region) };
+            })
+            .expect("a copy");
+            copy.commit().expect("a commit");
+            copy.wait_until_completed();
+            assert_eq!(copy.status(), CommandBufferStatus::Completed, "{name}");
+            for (index, &byte) in host[..3 * 4096].iter().enumerate() {
+                let expected = if (4096..8192).contains(&index) {
+                    0
+                } else {
+                    0xFF
+                };
+                assert_eq!(
+                    byte, expected,
+                    "{name}: the Private block taken again, byte {index}"
+                );
+            }
             let mut handed: Vec<BlockId> = infos.iter().map(|info| info.id).collect();
             handed.push(private_info.id);
+            drop((zeroed, copy, queue));
             drop((again, back, gpu));
             drop(device);
             assert_eq!(
@@ -867,7 +879,7 @@ mod on_device {
     /// A take that no free range fits while the class keeps only blocks of other lengths makes its
     /// allocation at once, counted as a taker's allocation, and the block-maker thread then gives
     /// the kept blocks' bytes back to their allocations, after each one's hook on that thread,
-    /// still mapped and zeroed; a later take is a range of those bytes, allocating nothing: three
+    /// still mapped, their bytes as written; a later take is a range of those bytes, allocating nothing: three
     /// kept Shared blocks of 24 MiB and takes of 20 MiB, each returning within 30 seconds.
     #[test]
     fn every_device_allocates_beside_kept_blocks_of_other_lengths_and_gives_their_bytes_back() {
@@ -889,6 +901,7 @@ mod on_device {
             let first = *kept[0];
             let mut handed: Vec<BlockId> = kept.iter().map(|block| block.id).collect();
             for block in &kept {
+                bytes(block)[0] = 0x5A;
                 hook.record(block);
             }
             for block in kept {
@@ -927,7 +940,11 @@ mod on_device {
             });
             for unmapped in hook.unmapped() {
                 assert_eq!(unmapped.thread.as_deref(), Some("m2v-blocks"), "{name}");
-                assert_eq!(unmapped.first, Some(0), "{name}: zeroed, still mapped");
+                assert_eq!(
+                    unmapped.first,
+                    Some(0x5A),
+                    "{name}: still mapped, its bytes as written"
+                );
             }
             let shared = take("the second take");
             assert_eq!(
@@ -935,9 +952,10 @@ mod on_device {
                 first.contents.map(|c| c.as_ptr() as usize),
                 "{name}: a range of the first kept block's bytes"
             );
-            assert!(
-                bytes(&shared).iter().all(|&byte| byte == 0),
-                "{name}: a block of a kept block's bytes"
+            assert_eq!(
+                bytes(&shared)[0],
+                0x5A,
+                "{name}: a block of a kept block's bytes, as written"
             );
             assert_eq!(
                 counters.metrics().blocks_made,
@@ -1316,6 +1334,140 @@ mod on_device {
             wait_until("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop("memory_allocation_count", counters.gauges());
             println!("memory: {name}: refused past {MAX} allocations");
+        }
+    }
+
+    /// A zeroed Private buffer's fill goes ahead of the next command buffer committed, before a
+    /// copy that command buffer makes into the buffer: each copied range holds the copy, the rest
+    /// of the buffer from its `zero_from` reads zero, a copy into the bytes before `zero_from`
+    /// holds as well, and the block's bytes outside the buffer are as they were. A `zero_from` at
+    /// the length zeroes nothing. A texture placed in a block zeroes nothing.
+    #[test]
+    fn every_device_fills_a_zeroed_private_buffer_before_a_copy_into_it_in_the_next_command_buffer()
+    {
+        const LEN: u64 = 4096;
+        const AT: u64 = 1024;
+        const SPAN: u64 = 2 * AT + LEN;
+        // The copies' source, at 64 KiB in the Shared block: a pattern with no zero byte.
+        const SOURCE: u64 = 64 << 10;
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::new(physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let counters = device.counters();
+            let gpu = Gpu::new(&device);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let private = (device
+                .take_block(MemoryClass::Private, MemoryClass::Private.block_len()))
+            .unwrap_or_else(|error| panic!("{name}: a Private block: {error}"));
+            let shared = (device.take_block(MemoryClass::Shared, MemoryClass::Shared.block_len()))
+                .unwrap_or_else(|error| panic!("{name}: a Shared block: {error}"));
+            let host = bytes(&shared);
+            let source = SOURCE as usize..(SOURCE + LEN) as usize;
+            for (index, byte) in host[source].iter_mut().enumerate() {
+                *byte = (index % 251) as u8 + 1;
+            }
+            let (to_private, to_shared) = (
+                vk_buffer(&device, private.id),
+                vk_buffer(&device, shared.id),
+            );
+            // Each case: the buffer's `zero_from`, and the ranges of it copied into.
+            for (zero_from, copies) in [
+                (0, vec![(100, 300)]),
+                (1000, vec![(0, 1000)]),
+                (1000, vec![(0, 1000), (2000, 2100)]),
+                (LEN, vec![(0, LEN)]),
+            ] {
+                gpu.fill(to_private, 0, SPAN, u32::MAX);
+                let before = counters.metrics().bytes_zeroed;
+                let buffer = (device.new_buffer(private.id, AT, LEN, Some(zero_from)))
+                    .unwrap_or_else(|error| panic!("{name}: a zeroed Private buffer: {error}"));
+                assert_eq!(
+                    counters.metrics().bytes_zeroed - before,
+                    LEN - zero_from,
+                    "{name}: from {zero_from}, the bytes zeroed"
+                );
+                let regions: Vec<vk::BufferCopy> = (copies.iter())
+                    .map(|&(start, end)| vk::BufferCopy {
+                        src_offset: SOURCE + start,
+                        dst_offset: AT + start,
+                        size: end - start,
+                    })
+                    .collect();
+                let back = [vk::BufferCopy {
+                    src_offset: 0,
+                    dst_offset: 0,
+                    size: SPAN,
+                }];
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                command_buffer
+                    .record_for_test(&[&buffer], |device, command| {
+                        let barrier = [vk::MemoryBarrier2::default()
+                            .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                            .dst_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)];
+                        let dependency = vk::DependencyInfo::default().memory_barriers(&barrier);
+                        // SAFETY: the command buffer is recording; both blocks are held and span
+                        // the regions.
+                        unsafe {
+                            device.cmd_copy_buffer(command, to_shared, to_private, &regions);
+                            device.cmd_pipeline_barrier2(command, &dependency);
+                            device.cmd_copy_buffer(command, to_private, to_shared, &back);
+                        }
+                    })
+                    .expect("the copies");
+                command_buffer.commit().expect("a commit");
+                command_buffer.wait_until_completed();
+                assert_eq!(
+                    command_buffer.status(),
+                    CommandBufferStatus::Completed,
+                    "{name}"
+                );
+                for (index, &byte) in host[..SPAN as usize].iter().enumerate() {
+                    let expected = match (index as u64).checked_sub(AT).filter(|&at| at < LEN) {
+                        None => 0xFF,
+                        Some(at)
+                            if copies
+                                .iter()
+                                .any(|&(start, end)| (start..end).contains(&at)) =>
+                        {
+                            (at % 251) as u8 + 1
+                        }
+                        Some(at) if at >= zero_from => 0,
+                        Some(_) => 0xFF,
+                    };
+                    assert_eq!(
+                        byte, expected,
+                        "{name}: from {zero_from}, copies {copies:?}, byte {index}"
+                    );
+                }
+                drop(buffer);
+            }
+
+            // A texture placed in a block zeroes nothing.
+            let before = counters.metrics().bytes_zeroed;
+            let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 64, 64);
+            let texture = (device.new_texture(&d, None))
+                .unwrap_or_else(|error| panic!("{name}: a texture: {error}"));
+            assert_eq!(
+                counters.metrics().bytes_zeroed,
+                before,
+                "{name}: a texture placed in a block"
+            );
+            drop((texture, gpu, queue, private, shared));
+            drop(device);
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: gauges after teardown"
+            );
+            println!(
+                "memory: {name}: zeroed Private buffers filled before copies into them; metrics {:?}",
+                counters.metrics()
+            );
         }
     }
 }

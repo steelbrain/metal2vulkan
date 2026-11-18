@@ -156,9 +156,11 @@ entry:
             let block = device
                 .take_block(MemoryClass::Shared, 2 * out_len)
                 .expect("a Shared block");
-            let input = device.new_buffer(block.id, 0, 64, true).expect("the input");
+            let input = device
+                .new_buffer(block.id, 0, 64, Some(0))
+                .expect("the input");
             let output = device
-                .new_buffer(block.id, out_len, out_len, true)
+                .new_buffer(block.id, out_len, out_len, Some(0))
                 .expect("the output");
             let edges: Vec<u8> = EDGES.iter().flat_map(|w| w.to_le_bytes()).collect();
             let contents = input.contents().expect("a Shared buffer");

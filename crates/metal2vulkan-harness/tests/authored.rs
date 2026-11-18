@@ -44,7 +44,7 @@ fn every_workload(session: &mut dyn Session) {
         let report =
             (session.create(create.makes, runs)).unwrap_or_else(|why| panic!("{name}: {why}"));
         match create.makes {
-            authored::Makes::Buffers { .. } => {
+            authored::Makes::Buffers { .. } | authored::Makes::PrivateBuffers { .. } => {
                 assert_eq!(report.create_us.len(), 1, "{name}");
             }
             authored::Makes::States { .. } | authored::Makes::RenderStates { .. } => {

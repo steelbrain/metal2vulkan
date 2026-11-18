@@ -94,11 +94,16 @@ impl Device {
     /// holds. The consumer chooses the range; it reuses a range only once the work that named the
     /// buffer there before has completed, as Metal frees a buffer's memory only then.
     ///
-    /// `zeroed` zeroes the range, as `newBufferWithLength:options:` does in Metal: in a Shared
-    /// block through the mapping, before the call returns; in a Private block by a GPU fill in the
-    /// upload, which is submitted ahead of every command buffer committed after this call and
-    /// holds the block until it completes. A buffer placed in a heap passes false: Metal does not
-    /// zero heap memory.
+    /// A block's bytes are undefined ([`Device::take_block`]). `zero_from` zeroes the buffer's
+    /// bytes from that offset in it to its end: `Some(0)` all of them, as
+    /// `newBufferWithLength:options:` zeroes a new buffer in Metal, and `None` none, for a buffer
+    /// placed in a heap, whose memory Metal does not zero, or one whose bytes the consumer writes
+    /// itself. An offset at or past the length zeroes nothing. In a Shared block the bytes are
+    /// zeroed through the mapping, before the call returns; in a Private block by a GPU fill in the
+    /// upload, which is submitted ahead of every command buffer committed after this call and ends
+    /// with a barrier that orders the fill before every later command (a copy into the buffer
+    /// among them), and which holds the block until it completes. The bytes zeroed are counted in
+    /// [`Metrics::bytes_zeroed`](crate::Metrics::bytes_zeroed).
     ///
     /// Err: [`Refusal::EmptyBuffer`] for a length of 0, [`Refusal::BufferTooLong`] for a length
     /// past [`MAX_BUFFER_LENGTH`] and [`Refusal::BufferPastBlock`] for a range that leaves the
@@ -110,7 +115,7 @@ impl Device {
         block: BlockId,
         offset: u64,
         length: u64,
-        zeroed: bool,
+        zero_from: Option<u64>,
     ) -> Result<Buffer, Error> {
         if length == 0 {
             return Err(Error::Refused(Refusal::EmptyBuffer));
@@ -135,14 +140,17 @@ impl Device {
             // SAFETY: `offset` is inside the block.
             Mapping::new(unsafe { mapping.at(offset) })
         });
-        if zeroed {
+        if let Some(from) = zero_from.filter(|&from| from < length) {
             match contents {
-                // SAFETY: `offset..end` lies in the block, and the range is the new buffer's.
+                // SAFETY: `from..length` lies in the new buffer, whose range is in the block.
                 Some(contents) => unsafe {
-                    contents.get().as_ptr().write_bytes(0, length as usize)
+                    (contents.get().as_ptr())
+                        .add(from as usize)
+                        .write_bytes(0, (length - from) as usize)
                 },
-                None => self.core().work.zero(self.core(), &block, offset, end)?,
+                None => (self.core().work).zero(self.core(), &block, offset + from, end)?,
             }
+            self.core().counters.zeroed(length - from);
         }
         Ok(self.buffer(block, offset, length, contents, None))
     }
@@ -242,6 +250,7 @@ impl Device {
                     )
                 },
             )?;
+            core.counters.zeroed(length - copied);
         }
         if copied > 0 {
             core.work.modify(core, &copy, &block, offset, 0, copied)?;

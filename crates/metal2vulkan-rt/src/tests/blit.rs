@@ -1385,7 +1385,7 @@ pub(crate) mod on_device {
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
             let mut next = 0;
             let mut buffer = |len: u64, seed: u8| {
-                let buffer = (device.new_buffer(block.id, next, len, true)).expect("a buffer");
+                let buffer = (device.new_buffer(block.id, next, len, Some(0))).expect("a buffer");
                 next += len.next_multiple_of(256);
                 let bytes = pattern(len as usize, seed);
                 write(&buffer, &bytes);
@@ -1571,7 +1571,7 @@ pub(crate) mod on_device {
     fn every_device_fills_a_range_of_a_buffer() {
         each_device("blit_fill", |name, _, device| {
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
-            let buffer = (device.new_buffer(block.id, 256, 64, true)).expect("a buffer");
+            let buffer = (device.new_buffer(block.id, 256, 64, Some(0))).expect("a buffer");
             let before = pattern(64, 21);
             write(&buffer, &before);
             let queue = device.new_command_queue(4).expect("a queue");
@@ -1691,8 +1691,7 @@ pub(crate) mod on_device {
     }
 
     /// Returns once the block-maker thread has nothing to make: it makes an allocation of a
-    /// class whose free bytes run low, a Private one zeroed in a submission of its own, which a
-    /// count of a test's own work must not take in.
+    /// class whose free bytes run low, which a count of a test's own work must not take in.
     pub(crate) fn settled(device: &Device) {
         within("8 MiB free in each class", || {
             let pool = &device.core().pool;
@@ -1719,7 +1718,7 @@ pub(crate) mod on_device {
             let copied = !device.core().shared_is_device_local();
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
             let before = pattern(64, 21);
-            let start = (device.new_buffer(block.id, 256, 64, false)).expect("a buffer");
+            let start = (device.new_buffer(block.id, 256, 64, None)).expect("a buffer");
             write(&start, &before);
             drop(start);
             let managed = (device.new_managed_buffer(block.id, 256, 64, 64))
@@ -1847,8 +1846,9 @@ pub(crate) mod on_device {
                 .expect("a grant");
             let shared = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
             let private = (device.take_block(MemoryClass::Private, 4096)).expect("a Private block");
-            let shared = (device.new_buffer(shared.id, 0, 256, true)).expect("a Shared buffer");
-            let private = (device.new_buffer(private.id, 0, 256, true)).expect("a Private buffer");
+            let shared = (device.new_buffer(shared.id, 0, 256, Some(0))).expect("a Shared buffer");
+            let private =
+                (device.new_buffer(private.id, 0, 256, Some(0))).expect("a Private buffer");
             let texture = texture(
                 &device,
                 TextureType::Type2D,
@@ -1904,8 +1904,8 @@ pub(crate) mod on_device {
     fn every_device_synchronizes_a_managed_texture_into_its_named_bytes() {
         each_device("blit_synchronize_texture", |name, _, device| {
             let block = (device.take_block(MemoryClass::Shared, 8192)).expect("a Shared block");
-            let named = (device.new_buffer(block.id, 0, 2048, true)).expect("a buffer");
-            let source = (device.new_buffer(block.id, 4096, 128, true)).expect("a buffer");
+            let named = (device.new_buffer(block.id, 0, 2048, Some(0))).expect("a buffer");
+            let source = (device.new_buffer(block.id, 4096, 128, Some(0))).expect("a buffer");
             let (level0, level1) = (pattern(64, 21), pattern(16, 99));
             write(&source, &[level0.clone(), level1.clone()].concat());
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);

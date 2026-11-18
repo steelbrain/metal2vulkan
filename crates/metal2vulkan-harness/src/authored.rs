@@ -126,6 +126,11 @@ pub struct Create {
 pub enum Makes {
     /// `Shared` buffers of `length` bytes, each taking the range the last one left.
     Buffers { length: u64 },
+    /// `Private` buffers of `length` bytes, each with its first use: one command buffer that
+    /// copies its first and last 16 bytes into a `Shared` buffer, through to completion, the copy
+    /// checked zero. The time holds the buffer's zeroing wherever the runtime does it: in the
+    /// creation, or ahead of the first command buffer that uses it.
+    PrivateBuffers { length: u64 },
     /// Compute pipeline states of one content: `function` of the authored library with the
     /// `float` function constants `constants` (index, value), values no other workload gives it,
     /// so the first creation is of a content the device has not seen and each later one of a
@@ -150,7 +155,7 @@ pub enum Makes {
 pub const STATE_CREATIONS: u32 = 1000;
 
 /// The creation workloads.
-pub const CREATES: [Create; 5] = [
+pub const CREATES: [Create; 6] = [
     Create {
         name: "create_4KiB",
         makes: Makes::Buffers { length: 4 << 10 },
@@ -162,6 +167,10 @@ pub const CREATES: [Create; 5] = [
     Create {
         name: "create_64MiB",
         makes: Makes::Buffers { length: 64 << 20 },
+    },
+    Create {
+        name: "create_private_16MiB",
+        makes: Makes::PrivateBuffers { length: 16 << 20 },
     },
     Create {
         name: "create_state",

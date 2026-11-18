@@ -935,6 +935,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
     fn create(&mut self, makes: Makes, runs: Runs) -> Result<CreateReport> {
         match makes {
             Makes::Buffers { length } => create(&self.device, length, runs),
+            Makes::PrivateBuffers { length } => self.create_private(length, runs),
             Makes::States {
                 function,
                 constants,
@@ -999,6 +1000,51 @@ pub(crate) fn parts(range: Range<usize>, per: Option<usize>) -> impl Iterator<It
 }
 
 impl<D: ComputeDevice> Harness<D> {
+    /// [`Session::create`] of `Private` buffers of `length` bytes (at least 32): each made, then
+    /// used once by the copy kernel, which moves its first and last 16 bytes into a `Shared`
+    /// buffer, through to completion, the copy checked zero; timed from the creation to the
+    /// completion.
+    fn create_private(&self, length: u64, runs: Runs) -> Result<CreateReport> {
+        let out = self.device.new_buffer(32, Storage::Shared)?;
+        let once = || -> Result<f64> {
+            scribble(&out, 32)?;
+            let started = Instant::now();
+            let buffer = self.device.new_buffer(length, Storage::Private)?;
+            let command_buffer = self.queue.command_buffer()?;
+            let mut encoder = command_buffer.compute_command_encoder()?;
+            encoder.set_compute_pipeline_state(&self.copy)?;
+            for (from, to) in [(0, 0), (length - 16, 16)] {
+                encoder.set_buffer(&buffer, from, 0)?;
+                encoder.set_buffer(&out, to, 1)?;
+                encoder.dispatch_threadgroups([1, 1, 1], [1, 1, 1])?;
+            }
+            encoder.end_encoding()?;
+            command_buffer.commit()?;
+            command_buffer.wait_until_completed()?;
+            let used = started.elapsed();
+            zeroed(&out, 32, 4)?;
+            Ok(used.as_secs_f64() * 1e6)
+        };
+        let before = self.device.allocations();
+        let first = once()?;
+        let first_allocations = since(before, self.device.allocations());
+        let again = once()?;
+        let mut report = CreateReport {
+            first_create_us: Some(first),
+            again_us: Some(again),
+            first_allocations,
+            warmup: warm_up(runs, &once)?,
+            ..CreateReport::default()
+        };
+        for run in 1..=runs.timed {
+            report.create_us.push(once()?);
+            if run == 100 || run == 200 {
+                report.gauges.push((run, self.device.gauges()));
+            }
+        }
+        Ok(report)
+    }
+
     /// [`Session::create`] of pipeline states of `function` with the `float` constants
     /// `constants`: each made, timed, and released. The first, of a content the device has not
     /// seen, is timed with one dispatch of it through to completion, its output checked.

@@ -84,7 +84,7 @@ pub(crate) mod on_device {
         pub(crate) fn buffer(&mut self) -> Buffer {
             let buffer = self
                 .device
-                .new_buffer(self.block.id, self.next, 256, true)
+                .new_buffer(self.block.id, self.next, 256, Some(0))
                 .expect("a buffer");
             self.next += 256;
             buffer
@@ -361,7 +361,7 @@ pub(crate) mod on_device {
             let id = block.id;
             device.release_block(block).expect("a release");
             assert!(
-                matches!(device.new_buffer(id, 0, 256, true), Err(Error::NoSuchBlock(gone)) if gone == id),
+                matches!(device.new_buffer(id, 0, 256, Some(0)), Err(Error::NoSuchBlock(gone)) if gone == id),
                 "{name}: a released block's number"
             );
             assert_eq!(
@@ -914,18 +914,13 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A Private buffer of a whole block, for work that keeps the GPU busy. It returns once the
-    /// block-maker thread has made any Private allocation the take set off, whose zero fill is a
-    /// submission of its own, so the submissions a test counts after it are its command buffers'.
+    /// A Private buffer of a whole block, for work that keeps the GPU busy.
     fn private(device: &Device) -> Buffer {
         let block = device
             .take_block(MemoryClass::Private, MemoryClass::Private.block_len())
             .expect("a Private block");
-        within("8 MiB of Private memory free", || {
-            device.core().pool.stocked(MemoryClass::Private)
-        });
         device
-            .new_buffer(block.id, 0, MemoryClass::Private.block_len(), false)
+            .new_buffer(block.id, 0, MemoryClass::Private.block_len(), None)
             .expect("a buffer")
     }
 
@@ -1479,7 +1474,7 @@ pub(crate) mod on_device {
                 Err(Error::Quiesced)
             ));
             assert!(matches!(
-                device.new_buffer(private.id, 0, 64, true),
+                device.new_buffer(private.id, 0, 64, Some(0)),
                 Err(Error::Quiesced)
             ));
             assert!(matches!(open.enqueue(), Err(Error::Quiesced)));
@@ -1633,7 +1628,7 @@ pub(crate) mod on_device {
                 .take_block(MemoryClass::Private, 1)
                 .expect("a Private block");
             let buffer = device
-                .new_buffer(block.id, 0, 4096, false)
+                .new_buffer(block.id, 0, 4096, None)
                 .expect("a buffer");
             let f = shared_event(&device);
             let queue = queue(&device);
@@ -1664,14 +1659,14 @@ pub(crate) mod on_device {
             let queue = queue(&device);
             let block = (device.take_block(MemoryClass::Shared, 1)).expect("a Shared block");
             let id = block.id;
-            let buffer = (device.new_buffer(id, 0, 4096, false)).expect("a buffer");
+            let buffer = (device.new_buffer(id, 0, 4096, None)).expect("a buffer");
             let held = queue.command_buffer().expect("a command buffer");
             fill(&held, &buffer, 5);
             held.encode_wait_for_event(f.as_event(), 1).expect("a wait");
             held.commit().expect("a commit");
             drop((buffer, block));
             assert!(
-                matches!(device.new_buffer(id, 0, 256, false), Err(Error::NoSuchBlock(gone)) if gone == id),
+                matches!(device.new_buffer(id, 0, 256, None), Err(Error::NoSuchBlock(gone)) if gone == id),
                 "{name}: the dropped block's number"
             );
             thread::sleep(Duration::from_millis(50));
@@ -1702,7 +1697,7 @@ pub(crate) mod on_device {
                 !pool.holds(id),
                 "{name}: back with one of two clones dropped"
             );
-            let buffer = (device.new_buffer(clone.id, 0, 256, false))
+            let buffer = (device.new_buffer(clone.id, 0, 256, None))
                 .unwrap_or_else(|error| panic!("{name}: the clone's number: {error}"));
             drop(buffer);
             device.release_block(clone).expect("a release");
@@ -1769,7 +1764,7 @@ pub(crate) mod on_device {
         if mode == "after-device" {
             register_exit_handler();
         }
-        // Blocks stay taken; a reader thread reads one; the block-maker zeroes released ones; a
+        // Blocks stay taken; a reader thread reads one; the block-maker keeps released ones; a
         // command buffer is held.
         let block = device
             .take_block(MemoryClass::Shared, MemoryClass::Shared.block_len())

@@ -449,7 +449,7 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
         "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}{}",
         create.name,
         match create.makes {
-            Makes::Buffers { length } => length.to_string(),
+            Makes::Buffers { length } | Makes::PrivateBuffers { length } => length.to_string(),
             Makes::States { .. } | Makes::RenderStates { .. } => "state".to_owned(),
         },
         warmup(&report.warmup),

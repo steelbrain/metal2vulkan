@@ -1,14 +1,10 @@
 //! Zero fills of memory the host does not map: fill and copy commands, recorded into the
-//! upload that goes ahead of later commits, or into a command buffer of the fill's own, submitted
-//! on the runtime's queue and waited for.
+//! upload that goes ahead of later commits.
 
 use crate::counters::{Counters, Gauge, Metric};
-use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::memory;
-use crate::record::{barrier, Reach};
 use ash::vk;
-use std::sync::{Mutex, PoisonError};
 
 /// Bytes in the zero source: at least the 6 of a range with no whole 4-byte word inside it.
 const ZEROS: u64 = 16;
@@ -80,49 +76,34 @@ pub(crate) unsafe fn record(
     }
 }
 
-/// The zero source, and the objects of a fill submitted and waited for, behind a lock: such fills
-/// run one at a time.
-pub(crate) struct Filler {
-    /// The zero source, [`ZEROS`] bytes that read zero; `state` owns it.
-    zeros: vk::Buffer,
-    state: Mutex<Objects>,
-}
-
+/// The zero source of the copies [`record`] makes: [`ZEROS`] bytes that read zero.
 #[derive(Default)]
-struct Objects {
-    pool: vk::CommandPool,
-    command: vk::CommandBuffer,
-    fence: vk::Fence,
-    /// [`ZEROS`] bytes of zero, the source of the copies.
+pub(crate) struct Filler {
     zeros: vk::Buffer,
     zeros_memory: vk::DeviceMemory,
 }
 
 impl Filler {
-    /// Makes the command pool, command buffer, fence and zero source, whose allocation counts
-    /// against `max_allocations`, the device's `maxMemoryAllocationCount` ([`memory::allocate`]).
+    /// Makes the zero source, whose allocation counts against `max_allocations`, the device's
+    /// `maxMemoryAllocationCount` ([`memory::allocate`]).
     ///
     /// # Safety
     ///
-    /// `device` is live; `family` is the family of its runtime queue; `host_type` is a
-    /// host-visible, host-coherent memory type that buffers of every usage can use.
+    /// `device` is live; `host_type` is a host-visible, host-coherent memory type that buffers of
+    /// every usage can use.
     pub(crate) unsafe fn new(
         device: &ash::Device,
-        family: u32,
         host_type: u32,
         counters: &Counters,
         max_allocations: u32,
     ) -> Result<Filler, Error> {
-        let mut objects = Objects::default();
+        let mut filler = Filler::default();
         // SAFETY: the caller's contract.
-        match unsafe { objects.make(device, family, host_type, counters, max_allocations) } {
-            Ok(()) => Ok(Filler {
-                zeros: objects.zeros,
-                state: Mutex::new(objects),
-            }),
+        match unsafe { filler.make(device, host_type, counters, max_allocations) } {
+            Ok(()) => Ok(filler),
             Err(error) => {
                 // SAFETY: nothing made is in use.
-                if unsafe { objects.destroy(device) } {
+                if unsafe { filler.destroy(device) } {
                     counters.fall(Gauge::Blocks);
                 }
                 Err(error)
@@ -135,100 +116,43 @@ impl Filler {
         self.zeros
     }
 
-    /// Zeroes `offset..end` of `buffer` and waits for it.
-    pub(crate) fn zero(
-        &self,
-        core: &Core,
-        buffer: vk::Buffer,
-        offset: u64,
-        end: u64,
-    ) -> Result<(), Error> {
-        let objects = lock(&self.state);
-        let device = &core.device;
-        let command = objects.command;
-        let begin = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        let commands = [vk::CommandBufferSubmitInfo::default().command_buffer(command)];
-        let submit = vk::SubmitInfo2::default().command_buffer_infos(&commands);
-        // SAFETY: the lock gives this call the pool, command buffer and fence, and the previous
-        // fill completed before its call returned; `buffer` has transfer-destination usage and
-        // `offset..end` lies in it; the runtime queue is held while it is used.
-        unsafe {
-            device
-                .reset_command_pool(objects.pool, vk::CommandPoolResetFlags::empty())
-                .map_err(Error::vulkan("vkResetCommandPool"))?;
-            device
-                .begin_command_buffer(command, &begin)
-                .map_err(Error::vulkan("vkBeginCommandBuffer"))?;
-            record(device, command, objects.zeros, buffer, offset, end);
-            barrier(device, command, Reach::Commands);
-            device
-                .end_command_buffer(command)
-                .map_err(Error::vulkan("vkEndCommandBuffer"))?;
-            {
-                let queue = lock(&core.queues.runtime);
-                device
-                    .queue_submit2(*queue, &[submit], objects.fence)
-                    .map_err(Error::vulkan("vkQueueSubmit2"))?;
-            }
-            core.counters.count(Metric::Submissions);
-            device
-                .wait_for_fences(&[objects.fence], true, u64::MAX)
-                .map_err(Error::vulkan("vkWaitForFences"))?;
-            device
-                .reset_fences(&[objects.fence])
-                .map_err(Error::vulkan("vkResetFences"))?;
-        }
-        Ok(())
-    }
-
-    /// Destroys the fill's objects. True where it freed the zero source's allocation, whose
-    /// gauge the caller lowers.
+    /// Destroys the zero source. True where it freed its allocation, whose gauge the caller
+    /// lowers.
     ///
     /// # Safety
     ///
-    /// `device` is the one they were made on, and no fill is pending.
+    /// `device` is the one it was made on, and no command that reads it is pending. A null handle
+    /// is skipped.
     pub(crate) unsafe fn destroy(&mut self, device: &ash::Device) -> bool {
-        let objects = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
-        // SAFETY: the caller's contract.
-        unsafe { objects.destroy(device) }
+        let allocated = self.zeros_memory != vk::DeviceMemory::null();
+        // SAFETY: the caller's contract; destroying a null handle does nothing.
+        unsafe {
+            device.destroy_buffer(self.zeros, None);
+            if allocated {
+                device.free_memory(self.zeros_memory, None);
+            }
+        }
+        allocated
     }
-}
 
-impl Objects {
     /// # Safety
     ///
-    /// As [`Filler::new`]. What it made before an error stays in `self`, for [`Objects::destroy`].
+    /// As [`Filler::new`]. What it made before an error stays in `self`, for
+    /// [`Filler::destroy`].
     unsafe fn make(
         &mut self,
         device: &ash::Device,
-        family: u32,
         host_type: u32,
         counters: &Counters,
         max_allocations: u32,
     ) -> Result<(), Error> {
-        let pool = vk::CommandPoolCreateInfo::default().queue_family_index(family);
-        let fence = vk::FenceCreateInfo::default();
         let zeros = vk::BufferCreateInfo::default()
             .size(ZEROS)
             .usage(vk::BufferUsageFlags::TRANSFER_SRC)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        // SAFETY: the caller's contract; each object is made before it is used, and the zero
-        // source's memory is mapped only here.
+        // SAFETY: the caller's contract; the buffer is made before it is bound, and the memory is
+        // mapped only here.
         unsafe {
-            self.pool = device
-                .create_command_pool(&pool, None)
-                .map_err(Error::vulkan("vkCreateCommandPool"))?;
-            let command = vk::CommandBufferAllocateInfo::default()
-                .command_pool(self.pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1);
-            self.command = device
-                .allocate_command_buffers(&command)
-                .map_err(Error::vulkan("vkAllocateCommandBuffers"))?[0];
-            self.fence = device
-                .create_fence(&fence, None)
-                .map_err(Error::vulkan("vkCreateFence"))?;
             self.zeros = device
                 .create_buffer(&zeros, None)
                 .map_err(Error::vulkan("vkCreateBuffer"))?;
@@ -250,23 +174,5 @@ impl Objects {
             device.unmap_memory(self.zeros_memory);
         }
         Ok(())
-    }
-
-    /// # Safety
-    ///
-    /// As [`Filler::destroy`]. A null handle is skipped.
-    unsafe fn destroy(&mut self, device: &ash::Device) -> bool {
-        let allocated = self.zeros_memory != vk::DeviceMemory::null();
-        // SAFETY: the caller's contract; destroying a null handle does nothing, and freeing a
-        // command pool frees its command buffer.
-        unsafe {
-            device.destroy_buffer(self.zeros, None);
-            if allocated {
-                device.free_memory(self.zeros_memory, None);
-            }
-            device.destroy_fence(self.fence, None);
-            device.destroy_command_pool(self.pool, None);
-        }
-        allocated
     }
 }

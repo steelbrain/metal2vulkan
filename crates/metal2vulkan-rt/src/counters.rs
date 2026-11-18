@@ -95,6 +95,7 @@ struct Atomics {
     passes: AtomicU64,
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
+    bytes_zeroed: AtomicU64,
     cache_bytes_written: AtomicU64,
     pipelines_created: AtomicU64,
     first_use_waits: AtomicU64,
@@ -220,6 +221,11 @@ impl Counters {
         self.atomics.bytes_copied.fetch_add(bytes, Relaxed);
     }
 
+    /// `bytes` more of a new buffer zeroed ([`Metrics::bytes_zeroed`]).
+    pub(crate) fn zeroed(&self, bytes: u64) {
+        self.atomics.bytes_zeroed.fetch_add(bytes, Relaxed);
+    }
+
     /// `bytes` more written to the cache directory ([`Metrics::cache_bytes_written`]).
     pub(crate) fn cache_written(&self, bytes: u64) {
         self.atomics.cache_bytes_written.fetch_add(bytes, Relaxed);
@@ -308,6 +314,7 @@ impl Counters {
             passes: a.passes.load(Relaxed),
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
+            bytes_zeroed: a.bytes_zeroed.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
             first_use_waits: a.first_use_waits.load(Relaxed),
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
@@ -375,14 +382,18 @@ pub struct Metrics {
     /// segment with commands and of each upload, one before a dispatch at a hazard, one owed by
     /// an encoder that wrote or a memory barrier call, recorded before the next command, two
     /// around each blit copy, fill and synchronize copy, and two around each render pass, the
-    /// first of each pair paying what is owed. A block's zero fill, made apart from any command
-    /// buffer, is not counted.
+    /// first of each pair paying what is owed.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
     /// copies between a texture over a buffer and its image of its own
     /// ([`over_copies`](Self::over_copies)). A blit's own copy, and a synchronize's, is the
     /// program's and is not counted.
     pub bytes_copied: u64,
+    /// Bytes of new buffers zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s from its
+    /// `zero_from` to the buffer's end, and a Managed buffer's device copy's past its copied bytes
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)). Nothing else the
+    /// runtime makes is zeroed.
+    pub bytes_zeroed: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,

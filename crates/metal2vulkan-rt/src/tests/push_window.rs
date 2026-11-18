@@ -103,7 +103,7 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
                 let bound: Vec<_> = (0..u64::from(buffers))
                     .map(|k| {
                         device
-                            .new_buffer(block.id, k * len, len, true)
+                            .new_buffer(block.id, k * len, len, Some(0))
                             .expect("a buffer")
                     })
                     .collect();

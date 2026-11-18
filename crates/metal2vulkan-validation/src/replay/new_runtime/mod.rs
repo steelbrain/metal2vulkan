@@ -574,7 +574,7 @@ impl NewRuntime {
         let buffer = match mode {
             rt::StorageMode::Managed => {
                 // The consumer's bytes first: the place may hold a released buffer's.
-                let shared = self.device.new_buffer(block, start, length, true);
+                let shared = self.device.new_buffer(block, start, length, Some(0));
                 let shared = shared.map_err(failed(call))?;
                 write_into(&shared, 0, bytes)?;
                 let copied = bytes.len() as u64;
@@ -582,7 +582,7 @@ impl NewRuntime {
                 managed.map_err(failed(call))?
             }
             _ => {
-                let buffer = self.device.new_buffer(block, start, length, true);
+                let buffer = self.device.new_buffer(block, start, length, Some(0));
                 let buffer = buffer.map_err(failed(call))?;
                 write_into(&buffer, 0, bytes)?;
                 buffer
@@ -1086,7 +1086,7 @@ impl NewRuntime {
                         }
                     }
                 }
-                _ => device.new_buffer(range.block, at, length, false),
+                _ => device.new_buffer(range.block, at, length, None),
             };
             addressed(buffer.map_err(failed(call))?, None)
         };
@@ -1397,7 +1397,7 @@ impl Backend for NewRuntime {
             Some(Object::Block(range, rt::MemoryClass::Shared, _)) => {
                 let whole = self
                     .device
-                    .new_buffer(range.block, range.offset, range.len, false);
+                    .new_buffer(range.block, range.offset, range.len, None);
                 let whole = whole.map_err(|error| PlayError::Runtime {
                     selector: "m2v.write".into(),
                     error: error.to_string(),
@@ -1486,6 +1486,7 @@ impl Backend for NewRuntime {
             ("passes", metrics.passes),
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),
+            ("bytes_zeroed", metrics.bytes_zeroed),
             ("pipelines_created", metrics.pipelines_created),
             ("first_use_waits", metrics.first_use_waits),
             ("first_use_wait_nanos", metrics.first_use_wait_nanos),

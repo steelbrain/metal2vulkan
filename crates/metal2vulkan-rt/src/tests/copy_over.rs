@@ -159,8 +159,8 @@ mod on_device {
             let pitch = pitch(&device);
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|e| panic!("{name}: {e}"));
-            let buffer =
-                (device.new_buffer(cpu.id, 0, LEN, true)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let buffer = (device.new_buffer(cpu.id, 0, LEN, Some(0)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
             let mut now: Vec<u8> = (0..LEN).map(|i| (i % 251) as u8).collect();
             write(&buffer, &now);
             let texture = (buffer.new_texture(&descriptor(), None, 0, pitch))

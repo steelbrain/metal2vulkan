@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 /// Clones share one claim. Dropping the last handle gives the block back, as
 /// [`Device::release_block`](crate::Device::release_block) does: the block's memory lives until
 /// the last handle and the last buffer, command buffer or upload using it are gone, and is then
-/// zeroed and kept idle, or freed. While a handle lives, the block's number names it to
+/// kept idle, or freed. While a handle lives, the block's number names it to
 /// [`Device::new_buffer`](crate::Device::new_buffer) and the other calls that take one; once the
 /// last is gone, they answer [`Error::NoSuchBlock`](crate::Error::NoSuchBlock). The device's
 /// teardown frees every block still claimed, after the consumer's

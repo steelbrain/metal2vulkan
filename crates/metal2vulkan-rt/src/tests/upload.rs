@@ -70,7 +70,7 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let submissions = || counters.metrics().submissions;
             // The first texture's texture block takes the first Private allocation whole, and the
-            // block-maker thread makes the next, zeroing it in a submission of its own.
+            // block-maker thread makes the next.
             drop(
                 (device.new_texture(&square(256), Some(4096)))
                     .unwrap_or_else(|error| panic!("{name}: {error}")),
@@ -225,7 +225,7 @@ mod on_device {
                 .take_block(MemoryClass::Private, UPLOAD_BYTES)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = device
-                .new_buffer(released.id, 0, 256, true)
+                .new_buffer(released.id, 0, 256, Some(0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
             let released_id = released.id;
@@ -243,7 +243,7 @@ mod on_device {
                 .take_block(MemoryClass::Private, UPLOAD_BYTES)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let buffer = device
-                .new_buffer(fills.id, 0, 256, true)
+                .new_buffer(fills.id, 0, 256, Some(0))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
             let (_, bytes, _) = core.work.pending();
@@ -275,7 +275,7 @@ mod on_device {
             let before = submissions();
             for fill in 0..UPLOAD_ENTRIES as u64 + 8 {
                 let buffer = device
-                    .new_buffer(fills.id, fill * 256, 4, true)
+                    .new_buffer(fills.id, fill * 256, 4, Some(0))
                     .unwrap_or_else(|error| panic!("{name}: fill {fill}: {error}"));
                 drop(buffer);
                 let (entries, _, _) = core.work.pending();

@@ -119,13 +119,16 @@ in its memory.
   refused before the driver is called; `Gauges::blocks` counts those live. The limit is about 4.29
   billion on RADV, NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD
   Graphics 630, and 4,096 at Vulkan's minimum.
-- Every block reads zero when it is handed out, new or taken again, as Metal's new buffers do. A
-  Shared block is zeroed through its mapping, which also makes every page resident before anyone
-  holds it; a Private block by a GPU fill.
+- A taken block's bytes are undefined, new or taken again: the runtime zeroes no block, and a
+  Shared block's pages become resident as they are first written. A buffer reads zero because
+  `Device::new_buffer` zeroes its range (below), as Metal zeroes a buffer from
+  `newBufferWithLength:options:`. The bytes a texture placed in a block sees are undefined, as
+  Metal is silent on them. The consumer passes `zero_from` for a buffer Metal zeroes, or zeroes
+  the range at its own carve, once.
 - Dropping a block's last handle gives the block back; `Device::release_block` consumes a handle,
   that drop made explicit. Clones of a handle share one claim, so dropping one of two gives nothing
   back. It takes effect once no buffer, command buffer or upload using the block remains. The
-  block-maker thread then zeroes it and keeps it, with the same number, address and mapping, for a
+  block-maker thread then keeps it, with the same number, address, mapping and bytes, for a
   later take of its length (`Metrics::blocks_reused`). A take that no free range fits while the
   class keeps blocks of other lengths makes its allocation at once, and the block-maker thread then
   gives those blocks' bytes back to their allocations, after `BlockMappings::unmap` of each; only
@@ -142,14 +145,17 @@ in its memory.
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's
   teardown frees every block still claimed, after the consumer's `BlockMappings::unmap` returned
   for it; a handle dropped after that does nothing.
-- `Device::new_buffer(block, offset, length, zeroed)` makes a `Buffer`: a view of the range, with
-  no Vulkan object of its own. Its `gpu_address` is the block's address plus the offset, and its
-  `contents` the block's mapping plus the offset, or `None` in a Private block. `zeroed` zeroes the
-  range, as `newBufferWithLength:options:` does: through the mapping for Shared, before the call
-  returns; in Private by a GPU fill of exactly the range, recorded into the upload, which goes
-  ahead of every command buffer committed after the call and ends with a barrier that makes the
-  fills visible to every later command, and holds the block until it completes. A buffer
-  placed in a heap passes false, since Metal does not zero heap memory. A length of 0, a length
+- `Device::new_buffer(block, offset, length, zero_from)` makes a `Buffer`: a view of the range,
+  with no Vulkan object of its own. Its `gpu_address` is the block's address plus the offset, and
+  its `contents` the block's mapping plus the offset, or `None` in a Private block. `zero_from`
+  zeroes the buffer's bytes from that offset in it to its end: `Some(0)` all of them, as
+  `newBufferWithLength:options:` does, and `None` none, for a buffer placed in a heap (Metal does
+  not zero heap memory) or one whose bytes the consumer writes itself; an offset at or past the
+  length zeroes nothing. A Shared range is zeroed through the mapping, before the call returns; a
+  Private one by a GPU fill of exactly the range, recorded into the upload, which goes ahead of
+  every command buffer committed after the call and ends with a barrier that orders the fill
+  before every later command (a copy into the buffer among them), and holds the block until it
+  completes. `Metrics::bytes_zeroed` counts the bytes. A length of 0, a length
   past `MAX_BUFFER_LENGTH` (2 GiB) and a range past the block are refused, as Metal answers nil for
   each.
 - A shader reaches a buffer argument's bytes by 32-bit offsets from its bind address, which the
