@@ -7,7 +7,7 @@
 //! its threads, so every workgroup is within the floor's `maxComputeWorkGroupSize`, whatever the
 //! threadgroup size.
 
-use crate::encoder::{choose, Choice, Direct, Module};
+use crate::encoder::{choose, image_tile, Choice, Direct, Module};
 use crate::floor::{WORKGROUP_INVOCATIONS, WORKGROUP_SIZE};
 use crate::pipeline::{Form, SQUARE};
 use metal2vulkan::pipeline::{grid_tile, DEEP_THREADGROUP, GRID_TILE_THREADS};
@@ -59,12 +59,12 @@ fn an_image_only_kernels_grid_one_deep_runs_in_square_workgroups() {
     }
 }
 
-/// An image-only kernel's grid more than one deep runs its whole module in workgroups of the
-/// grid's tile at `MultiRegion` 0, its regions carrying them: one pipeline per tile.
+/// An image-only kernel's grid more than one deep runs its whole module in workgroups of its tile
+/// at `MultiRegion` 0, its regions carrying them: one pipeline per tile.
 #[test]
 fn an_image_only_kernels_deeper_grid_runs_in_workgroups_of_its_tile() {
     for threads in [[4, 16, 312], [24, 24, 252], [256, 256, 8], [7, 5, 3]] {
-        let tile = grid_tile(threads);
+        let tile = image_tile(threads, [4, 4, 4]);
         let choice = choose(
             &Form::Square,
             Some(threads_of(threads, [4, 4, 4])),
@@ -80,6 +80,53 @@ fn an_image_only_kernels_deeper_grid_runs_in_workgroups_of_its_tile() {
             },
             "{threads:?}"
         );
+    }
+}
+
+/// An image-only kernel's tile over a deeper grid: of the 256-thread tiles, those launching the
+/// fewest threads, then with the fewest tiles partly past the grid, then the depth nearest the
+/// threadgroup's (the shallower of two as near), then the most square, then the wider. Over a grid
+/// every such tile divides, the threadgroup's depth decides: 8x8x4 for 8x8x4 and 4x4x4, the square
+/// 16x16x1 for any one deep, as deep as the grid for a deeper one. Fewer threads launched comes
+/// first: a column runs in one tile of its own, and a grid four wide in tiles four wide.
+#[test]
+fn an_image_only_kernels_tile_follows_the_threadgroups_depth() {
+    for (threads, size, tile) in [
+        ([512, 512, 16], [8, 8, 4], [8, 8, 4]),
+        ([512, 512, 16], [4, 4, 4], [8, 8, 4]),
+        ([512, 512, 16], [8, 8, 1], [16, 16, 1]),
+        ([512, 512, 16], [16, 16, 1], [16, 16, 1]),
+        ([512, 512, 16], [32, 32, 1], [16, 16, 1]),
+        ([512, 512, 16], [8, 8, 2], [16, 8, 2]),
+        ([512, 512, 16], [8, 8, 3], [16, 8, 2]),
+        ([512, 512, 16], [1, 1, 64], [4, 4, 16]),
+        ([64, 64, 16], [8, 8, 4], [8, 8, 4]),
+        ([1, 1, 192], [8, 8, 4], [1, 1, 256]),
+        ([4, 16, 252], [8, 8, 4], [4, 16, 4]),
+        ([4, 16, 252], [8, 8, 1], [4, 16, 4]),
+    ] {
+        assert_eq!(image_tile(threads, size), tile, "{threads:?} at {size:?}");
+    }
+    // Every tile is 256 threads, whatever the grid and threadgroup.
+    for threads in [
+        [152, 152, 6],
+        [40, 40, 90],
+        [7, 5, 3],
+        [1, 1, 2],
+        [1000, 3, 7],
+    ] {
+        for size in [[8, 8, 4], [1, 1, 1], [32, 1, 32], [4, 4, 64]] {
+            let tile = image_tile(threads, size);
+            assert_eq!(
+                tile.iter().product::<u32>(),
+                GRID_TILE_THREADS,
+                "{threads:?}"
+            );
+            assert!(
+                tile.iter().all(|side| side.is_power_of_two()),
+                "{threads:?}"
+            );
+        }
     }
 }
 

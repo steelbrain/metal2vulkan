@@ -236,8 +236,8 @@ pub(crate) struct Choice {
 /// indirect, the same on every device:
 /// - indirect: the whole module at its own size;
 /// - an image-only kernel ([`Form::Square`]): the whole module at `MultiRegion` 0 in workgroups
-///   of [`SQUARE`] over a grid one deep, and of the grid's `grid_tile` tile over a deeper one,
-///   the region carrying them, flagged where they do not divide the grid;
+///   of [`SQUARE`] over a grid one deep, and of its [`image_tile`] over a deeper one, the region
+///   carrying them, flagged where they do not divide the grid;
 /// - a tiling kernel ([`Form::Tiled`]): its tiles, workgroups of `GRID_TILE_THREADS`, each one
 ///   `grid_tile` tile of the grid, which its region carries;
 /// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
@@ -273,7 +273,7 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3]) -> Cho
     };
     match form {
         Form::Square if threads[2] == 1 => whole(SQUARE),
-        Form::Square => whole(grid_tile(threads)),
+        Form::Square => whole(image_tile(threads, size)),
         Form::Tiled => {
             let tile = grid_tile(threads);
             Choice {
@@ -293,6 +293,41 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3]) -> Cho
             direct: Some((threads, groups, ragged)),
         },
     }
+}
+
+/// The tile an image-only kernel's grid of `threads`, more than one deep, runs in at threadgroup
+/// size `size` ([`Form::Square`]): sides `2^a, 2^b, 2^c` with `a + b + c = 8`, so that one
+/// workgroup of [`GRID_TILE_THREADS`] is one tile. Of every such tile it is the first in one total
+/// order: the fewest threads launched, `∏ ⌈threads_i / side_i⌉ · side_i`; then the fewest tiles
+/// partly past the grid; then the depth nearest the threadgroup's, `|2^c − size[2]|` smallest,
+/// the shallower of two as near; then the most square in `x` and `y`, `|a − b|` smallest; then
+/// the wider. A pure function of the grid and the threadgroup size: threadgroups of 8x8x4 over a
+/// grid that 8x8x4 tiles divide run in 8x8x4, and threadgroups one deep in 16x16x1 where 16x16x1
+/// tiles divide the grid. Each tile is one of 45, a `VkPipeline` of the state's each.
+pub(crate) fn image_tile(threads: [u32; 3], size: [u32; 3]) -> [u32; 3] {
+    const BITS: u32 = GRID_TILE_THREADS.trailing_zeros();
+    // The tiles of side `2^k` an extent of `n` takes, and those of them it fills.
+    let counts = |n: u32, k: u32| ((u64::from(n) + (1 << k) - 1) >> k, u64::from(n) >> k);
+    let depth = u64::from(size[2].max(1));
+    let mut best = (
+        [0; 3],
+        (u128::MAX, u128::MAX, u64::MAX, u32::MAX, u32::MAX, u32::MAX),
+    );
+    for c in 0..=BITS {
+        let (tz, wz) = counts(threads[2], c);
+        let near = (1u64 << c).abs_diff(depth);
+        for b in 0..=BITS - c {
+            let a = BITS - c - b;
+            let ((tx, wx), (ty, wy)) = (counts(threads[0], a), counts(threads[1], b));
+            let tiles = u128::from(tx) * u128::from(ty) * u128::from(tz);
+            let partly = tiles - u128::from(wx) * u128::from(wy) * u128::from(wz);
+            let key = (tiles, partly, near, c, a.abs_diff(b), b);
+            if key < best.1 {
+                best = ([a, b, c], key);
+            }
+        }
+    }
+    best.0.map(|k| 1 << k)
 }
 
 // A workgroup one deep at most `DEEP_THREADGROUP`, or one row of at most Metal's 1,024

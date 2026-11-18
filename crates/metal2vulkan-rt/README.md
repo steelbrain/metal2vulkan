@@ -926,15 +926,21 @@ that touch blocks first.
     with the state, each one tile of the grid, which its region carries. A thread's position is
     the tile's origin plus its index masked and shifted by the tile's sides, with no division.
 
-  The translator's `pipeline::grid_tile` picks the tile from the grid's extents alone:
-  power-of-two sides whose product is 256, launching the fewest threads past the grid, then with
-  the fewest tiles partly past it, then the shallowest, then (where the grid has two rows or more)
-  the height nearest 2, then the widest. Where the workgroups do not divide the grid, an
-  invocation past the grid returns before the kernel's body. An indirect dispatch runs at its own
-  threadgroup size. A kernel that observes its partition is lowered plainly: its whole grids,
-  `dispatch_threadgroups` and indirect dispatches run that module at their own size, and a
-  `dispatch_threads` grid that is not a whole number of threadgroups runs its partial-threadgroups
-  variant, which the reaper lowers for the first such grid, which waits for it (a first-use wait).
+  A tile has power-of-two sides whose product is 256. The translator's `pipeline::grid_tile`
+  picks a tiling kernel's from the grid's extents alone: launching the fewest threads past the
+  grid, then with the fewest tiles partly past it, then the shallowest, then (where the grid has
+  two rows or more) the height nearest 2, then the widest. An image-only kernel's tile is picked
+  from the grid and the call's threadgroup size: the fewest threads launched past the grid, then
+  the fewest tiles partly past it, then the depth nearest the threadgroup's (the shallower of two
+  as near), then the most square in `x` and `y`, then the wider. So threadgroups of 8x8x4 over a
+  grid that 8x8x4 tiles divide run in 8x8x4, and threadgroups one deep in the square 16x16x1,
+  the pipeline made with the state, wherever 16x16x1 tiles divide the grid. Where the workgroups
+  do not divide the grid, an invocation past the grid returns before the kernel's body. An
+  indirect dispatch runs at its own threadgroup size. A kernel that observes its partition is
+  lowered plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
+  module at their own size, and a `dispatch_threads` grid that is not a whole number of
+  threadgroups runs its partial-threadgroups variant, which the reaper lowers for the first such
+  grid, which waits for it (a first-use wait).
 - A threadgroup deeper than 64, the floor's `maxComputeWorkGroupSize[2]`, runs as one row of its
   threads, a workgroup of `x·y·z` by 1 by 1, each thread's position its index unflattened in
   Metal's order (the translator's `SpecKey::DeepThreadgroup`), on every device alike; any other

@@ -7,8 +7,9 @@
 //! every direct dispatch runs in workgroups of 256 threads, each one tile of the grid whose sides
 //! the translator's rule picks from the grid's extents (`grid_tile`) and its region carries, on
 //! one `VkPipeline` made with the state. An image-only kernel's (`CompiledFunction::is_image_only`)
-//! runs instead in workgroups of 16x16x1 over a grid one deep, on that one, and of the grid's tile
-//! over a deeper one, on one `VkPipeline` per tile made at its first dispatch. An indirect
+//! runs instead in workgroups of 16x16x1 over a grid one deep, on that one, and of a tile the
+//! grid and the threadgroup size pick (`encoder::image_tile`) over a deeper one, on one
+//! `VkPipeline` per tile made at its first dispatch. An indirect
 //! dispatch runs at its own threadgroup size. A kernel that observes its partition is lowered
 //! once, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that module
 //! at their own threadgroup size, and a `dispatchThreads` grid that is not a whole number of
@@ -250,9 +251,9 @@ pub(crate) enum Form {
     Tiled,
     /// The kernel does not observe its partition and is image-only
     /// (`CompiledFunction::is_image_only`): `whole` runs a direct dispatch at `MultiRegion` 0,
-    /// whatever the threadgroup size, in workgroups of [`SQUARE`] over a grid one deep and of the
-    /// grid's `grid_tile` tile over a deeper one, a tile deeper than `DEEP_THREADGROUP` as one
-    /// row ([`Constant::Deep`]).
+    /// whatever the threadgroup size, in workgroups of [`SQUARE`] over a grid one deep and of its
+    /// `encoder::image_tile` over a deeper one, a tile deeper than `DEEP_THREADGROUP` as one row
+    /// ([`Constant::Deep`]).
     Square,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, and a
     /// `dispatchThreads` grid that is not a whole number of threadgroups on the
