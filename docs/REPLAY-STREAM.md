@@ -16,7 +16,13 @@ hold guest data and is never committed. Tests write their own streams.
 ## 1. Container
 
 - **File:** a 16-byte header, then records. The header is ASCII `M2VRSTRM`, a u32 version (`2`)
-  and a u32 of flags (`0`). Fixed-width values are little-endian.
+  and a u32 of flags. Fixed-width values are little-endian.
+- **Flags.** Bytes 12-15 are the flags, a little-endian u32, the same in every segment's header.
+  Bit 0, `ANNOUNCED_BYTES_RECORDED` (`FLAG_ANNOUNCED_BYTES_RECORDED`), says the stream keeps the
+  announce invariant of section 6; streams recorded before it carry flags 0. Other bits are 0. The
+  version stays 2: a reader that checks only the magic and the version reads a stream with the bit
+  as before. This crate's reader refuses a segment whose flags hold another bit or differ from the
+  first segment's.
 - **Record:** a kind (u8), the payload's length (varint), the payload. Varints are unsigned LEB128
   of at most 10 bytes; signed values are zigzag-encoded.
 - **Append-only.** A recorder only appends whole records and flushes at least at every commit. A
@@ -212,6 +218,14 @@ and the (name id, value) answer pairs.
   wait, so they change nothing.
 - Private memory never appears in a write. A Managed buffer's changed range is a write on the
   buffer, immediately before its `didModifyRange:`.
+- **The announce invariant.** In a stream whose header has bit 0 set, at each `didModifyRange:`
+  record on a buffer, for every 4 KiB chunk the range touches (of the target its `m2v.write`
+  records name: the buffer, or the block it lies in), the last `m2v.write` record before it that
+  carries the chunk holds the bytes the program's CPU copy of the buffer held at the call, bytes the
+  GPU wrote there (a blit's, a pass's, `synchronizeResource:`'s read-back) that the recorder took as
+  the stream's without a write included, however late it took them. A player may push its recorded
+  bytes of the range at the announce. A stream without the bit gives no such promise where the GPU
+  wrote the chunk, and a player pushes its own read-back there.
 - Granularity is the recorder's: whole pages or changed runs. Data of 64 bytes or more is best a
   blob, so a repeated page is stored once.
 
@@ -399,6 +413,16 @@ counted from 0), completes the work committed so far, reports as at the stream's
   unified memory the runtime keeps one copy anyway. The report's `managed` line says which form
   played and from what, counts the Managed buffers and the no-copy ones whose contents came from
   first use, not from create, and says where a two-copy recording played as one copy.
+- **Announced bytes** (both runtimes' backends). On a stream whose header has bit 0 set (section
+  6), a `synchronizeResource:` of a buffer played with two copies leaves the CPU's copy as the
+  stream's writes made it, so the next `didModifyRange:` puts the stream's bytes into the GPU's
+  copy: on the new runtime it copies the GPU's copy into an aside buffer of the player's own, which
+  a check of the buffer reads from the read-back to its next `didModifyRange:`; on the old runtime
+  it moves nothing, and a check reads the GPU's copy as it always does. A stream without the bit
+  plays its read-backs into the CPU's copy, as Metal does. A Managed buffer played as one copy (in
+  the stream's block, or on the old runtime on a device with unified memory) holds the GPU's bytes
+  either way. The report's `announced bytes` line says which rule played and counts the read-backs
+  it kept out of the CPU's copies.
 - **Unwritten buffers** (the new runtime): its report's `unwritten` line counts the Shared
   buffers made without bytes that a compute encoder bound or used and whose command buffer
   committed before any recorded write, upload or GPU pass reached their bytes since their making,

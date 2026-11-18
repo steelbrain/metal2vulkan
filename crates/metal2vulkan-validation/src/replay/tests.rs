@@ -188,6 +188,37 @@ fn unknown_kinds_and_versions_are_refused() {
     ));
 }
 
+/// The header's flags, the same in every segment, are the stream's; a segment with another bit,
+/// or with flags unlike the first segment's, is refused.
+#[test]
+fn header_flags_are_read_alike_in_every_segment() {
+    let dir = ScratchDir::new("replay-flags").unwrap();
+    let mark = super::FLAG_ANNOUNCED_BYTES_RECORDED;
+    let segment = |name: &str, flags: u32| {
+        let path = dir.path().join(name);
+        let mut writer = StreamWriter::with_flags(File::create(&path).unwrap(), flags).unwrap();
+        writer.call("commit", 1, 0, &[], &[]).unwrap();
+        writer.finish().unwrap();
+        path
+    };
+    let first = segment("s.0000.m2vr", mark);
+    let second = segment("s.0001.m2vr", mark);
+    let reader = StreamReader::open(&[first.clone(), second], None).unwrap();
+    assert_eq!(reader.flags(), mark);
+    let unmarked = segment("u.m2vr", 0);
+    assert_eq!(StreamReader::open(&[unmarked], None).unwrap().flags(), 0);
+    let other = segment("s.0001.m2vr", 0);
+    assert!(matches!(
+        StreamReader::open(&[first.clone(), other], None),
+        Err(StreamError::Flags(_, 0))
+    ));
+    let unknown = segment("o.m2vr", mark | 2);
+    assert!(matches!(
+        StreamReader::open(&[unknown], None),
+        Err(StreamError::Flags(_, 3))
+    ));
+}
+
 /// A blob no record holds is read from the blob directory, by its hex hash, and only where its
 /// bytes hash to it; one neither holds is an error naming it.
 #[test]

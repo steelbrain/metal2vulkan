@@ -321,10 +321,17 @@ impl OldRuntime {
                     .map_err(|_| refuse(call, "a fill value past a byte"))?;
                 self.blit(id).fill_buffer(&buffer, range, value)
             }
-            "synchronizeResource:" => {
-                let resource = self.resource(call, 0)?;
-                self.blit(id).synchronize_resource(resource.as_ref())
-            }
+            "synchronizeResource:" => match self.resource(call, 0)? {
+                // A stream that records its announced bytes: the GPU's bytes stay out of a
+                // buffer's CPU copy, which keeps the stream's for the next `didModifyRange:` to
+                // put into the GPU's copy. A check reads the GPU's copy either way
+                // (`read_buffer`).
+                Resource::Buffer(_) if self.marked => {
+                    self.read_backs_left_out += 1;
+                    Ok(())
+                }
+                resource => self.blit(id).synchronize_resource(resource.as_ref()),
+            },
             "updateFence:" => {
                 let fence = self.fence(call, 0)?;
                 self.blit(id).update_fence(&fence)

@@ -9,6 +9,7 @@
 //! (`Report::first_skip`). A selector, an argument or a descriptor key this module does not name
 //! is refused.
 
+mod aside;
 mod encoders;
 pub(super) mod indices;
 pub(super) mod places;
@@ -249,6 +250,9 @@ pub struct NewRuntime {
     /// The CPU copies of a two-copy stream's Managed buffers on a one-copy device
     /// (`second`).
     seconds: second::Seconds,
+    /// The read-backs of a stream that records its announced bytes, kept out of the CPU copies
+    /// (`aside`).
+    asides: aside::Asides,
     /// The queue each command buffer was made on.
     queue_of: HashMap<u64, u64>,
     /// The bytes those copies staged.
@@ -511,6 +515,7 @@ impl NewRuntime {
             staging: HashMap::new(),
             users: HashMap::new(),
             seconds: second::Seconds::default(),
+            asides: aside::Asides::default(),
             queue_of: HashMap::new(),
             staged_bytes: 0,
             unanswered_pipeline_ids: 0,
@@ -630,6 +635,14 @@ impl NewRuntime {
         }
     }
 
+    /// The command buffers not yet committed whose encoders named `object`.
+    fn users_of(&self, object: u64) -> Vec<u64> {
+        (self.users.iter())
+            .filter(|(_, named)| named.contains(&object))
+            .map(|(&command_buffer, _)| command_buffer)
+            .collect()
+    }
+
     /// The commits that have completed, every earlier one with them.
     fn completed(&mut self) -> u64 {
         while let Some((at, front)) = self.in_flight.front() {
@@ -726,6 +739,7 @@ impl NewRuntime {
                 write_into(&cpu, 0, bytes)?;
                 self.seconds
                     .insert(call.result, cpu, cpu_place, gpu.clone());
+                self.asides.two_copies(call.result);
                 gpu
             }
             rt::StorageMode::Managed => {
@@ -735,6 +749,7 @@ impl NewRuntime {
                 write_into(&shared, 0, bytes)?;
                 let copied = bytes.len() as u64;
                 let managed = self.device.new_managed_buffer(block, start, length, copied);
+                self.asides.two_copies(call.result);
                 managed.map_err(failed(call))?
             }
             _ => {
@@ -1380,6 +1395,7 @@ impl NewRuntime {
         match &*call.selector {
             "didModifyRange:" => {
                 let range = super::args::range(call, arg(call, 0)?)?;
+                self.asides.announced(call.receiver);
                 if self.seconds.name(call.receiver, range.start, range.end) {
                     return Ok(None);
                 }
@@ -1507,14 +1523,17 @@ impl Backend for NewRuntime {
             if let Some(place) = self.seconds.remove(call.receiver) {
                 self.places.give(place, self.commits, Vec::new());
             }
+            // An aside: the commits so far and the command buffers that named its buffer copied
+            // into it.
+            if let Some(place) = self.asides.remove(call.receiver) {
+                let users = self.users_of(call.receiver);
+                self.places.give(place, self.commits, users);
+            }
             self.indices.give(call.receiver);
             self.resource_indices.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => {
-                    let users = (self.users.iter())
-                        .filter(|(_, named)| named.contains(&call.receiver))
-                        .map(|(&command_buffer, _)| command_buffer)
-                        .collect();
+                    let users = self.users_of(call.receiver);
                     self.places.give(place, self.commits, users);
                 }
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a
@@ -1761,8 +1780,11 @@ impl Backend for NewRuntime {
             selector: "m2v.check".into(),
             why: why.into(),
         };
-        // The CPU's bytes of a buffer with a second copy, as Metal's `contents` answers them.
-        let buffer = match (self.seconds.cpu(object), self.objects.get(&object)) {
+        // The CPU's bytes of a buffer with a second copy, as Metal's `contents` answers them: its
+        // aside from a read-back of a stream that records its announced bytes to its next
+        // announcement (`aside`).
+        let cpu = self.asides.read(object).or(self.seconds.cpu(object));
+        let buffer = match (cpu, self.objects.get(&object)) {
             (Some(cpu), _) => Some(cpu),
             (None, Some(Object::Buffer(buffer, _))) => Some(buffer),
             _ => None,
@@ -1941,6 +1963,7 @@ impl Backend for NewRuntime {
         if self.managed == Some(ManagedCopies::Two) && self.device.has_unified_memory() {
             lines.push(self.seconds.line());
         }
+        lines.push(self.asides.line());
         lines.push(self.unwritten.line());
         lines.push(self.indices.line());
         lines
@@ -1952,6 +1975,10 @@ impl Backend for NewRuntime {
 
     fn locate(&mut self, frame: u64, call: u64) {
         self.at = (frame, call);
+    }
+
+    fn announced_bytes_recorded(&mut self) {
+        self.asides.mark();
     }
 
     fn recorded_unified_memory(&mut self, unified: bool) {

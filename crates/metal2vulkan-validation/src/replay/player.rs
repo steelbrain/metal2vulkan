@@ -119,6 +119,13 @@ pub trait Backend {
     /// a backend that says where it skipped something.
     fn locate(&mut self, _frame: u64, _call: u64) {}
 
+    /// The stream's header marks its announced bytes recorded
+    /// ([`FLAG_ANNOUNCED_BYTES_RECORDED`](super::FLAG_ANNOUNCED_BYTES_RECORDED)), told before its
+    /// first call: a `synchronizeResource:` of a buffer the backend plays with two copies then
+    /// leaves the CPU's copy as the stream's writes made it, for the next `didModifyRange:` to put
+    /// into the GPU's. A backend with one form of Managed buffer ignores it.
+    fn announced_bytes_recorded(&mut self) {}
+
     /// The recording device's `hasUnifiedMemory`, from the stream's `m2v.deviceIdentity` record:
     /// how it kept Managed buffers. A backend with one form of Managed buffer ignores it.
     fn recorded_unified_memory(&mut self, _unified: bool) {}
@@ -1057,6 +1064,9 @@ impl<'b, B: Backend> Player<'b, B> {
     pub fn play(mut self, stream: &mut StreamReader) -> (Report, Result<(), PlayError>) {
         let start = self.baseline.clone();
         let mut left_out = Counters::new();
+        if stream.flags() & super::FLAG_ANNOUNCED_BYTES_RECORDED != 0 {
+            self.backend.announced_bytes_recorded();
+        }
         let result = self.read_ahead(stream);
         let result = result.and_then(|()| self.all(stream, &mut left_out));
         let ended = result.and_then(|()| self.finish());

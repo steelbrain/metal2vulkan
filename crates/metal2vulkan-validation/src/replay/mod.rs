@@ -18,7 +18,9 @@ pub use player::{
     Backend, Check, Counters, Counts, End, IdDiffers, Made, PlayError, Player, PrivateBytes,
     Relaid, Report, TextureWrites,
 };
-pub use stream::{segments, Call, StreamError, StreamReader, StreamWriter};
+pub use stream::{
+    segments, Call, StreamError, StreamReader, StreamWriter, FLAG_ANNOUNCED_BYTES_RECORDED,
+};
 pub use value::{Hash, Name, Value};
 
 #[cfg(test)]

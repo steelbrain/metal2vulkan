@@ -15,6 +15,12 @@ use std::sync::Arc;
 pub const MAGIC: &[u8; 8] = b"M2VRSTRM";
 /// The format version this crate reads and writes.
 pub const VERSION: u32 = 2;
+/// Header flag bit 0 (sections 1 and 6 of `docs/REPLAY-STREAM.md`): at each `didModifyRange:`,
+/// the last write before it that carries each 4 KiB chunk of the range holds the bytes the
+/// program's CPU copy held there, the GPU's that it read back included.
+pub const FLAG_ANNOUNCED_BYTES_RECORDED: u32 = 1;
+/// The header flags this crate reads.
+const FLAGS: u32 = FLAG_ANNOUNCED_BYTES_RECORDED;
 const HEADER_LEN: u64 = 16;
 
 const KIND_NAME: u8 = 1;
@@ -70,11 +76,16 @@ pub struct StreamWriter<W: Write> {
 }
 
 impl<W: Write> StreamWriter<W> {
-    /// A stream on `out`, its header written.
-    pub fn new(mut out: W) -> io::Result<Self> {
+    /// A stream on `out`, its header written with no flags.
+    pub fn new(out: W) -> io::Result<Self> {
+        StreamWriter::with_flags(out, 0)
+    }
+
+    /// A stream on `out`, its header written with `flags`.
+    pub fn with_flags(mut out: W, flags: u32) -> io::Result<Self> {
         out.write_all(MAGIC)?;
         out.write_all(&VERSION.to_le_bytes())?;
-        out.write_all(&0u32.to_le_bytes())?;
+        out.write_all(&flags.to_le_bytes())?;
         Ok(StreamWriter {
             out,
             names: HashMap::new(),
@@ -150,6 +161,9 @@ pub enum StreamError {
     Io(PathBuf, io::Error),
     /// A segment whose header is not this version's.
     Header(PathBuf),
+    /// A segment whose header flags hold a bit this crate does not read, or differ from the
+    /// first segment's.
+    Flags(PathBuf, u32),
     /// A record cut short in a segment that is not the last.
     Cut {
         segment: PathBuf,
@@ -179,6 +193,12 @@ impl fmt::Display for StreamError {
             StreamError::Header(path) => {
                 write!(f, "{}: not a version {VERSION} stream", path.display())
             }
+            StreamError::Flags(path, flags) => write!(
+                f,
+                "{}: header flags {flags:#x}, a bit this reader does not read or not the first \
+                 segment's flags",
+                path.display()
+            ),
             StreamError::Cut { segment, offset } => write!(
                 f,
                 "{}: a record cut short at {offset}, in a segment a later one follows",
@@ -231,6 +251,7 @@ pub struct StreamReader {
     blobs: HashMap<Hash, BlobAt>,
     blob_dir: Option<PathBuf>,
     truncated: Option<(PathBuf, u64)>,
+    flags: u32,
 }
 
 /// The segments of the stream whose first file is `first`: `first` alone, or, where it is named
@@ -252,10 +273,11 @@ pub fn segments(first: &Path) -> Vec<PathBuf> {
 }
 
 impl StreamReader {
-    /// A reader of `segments`, in order, with each header checked; a blob none of them holds is
-    /// read from `blob_dir`.
+    /// A reader of `segments`, in order, with each header checked (every segment's flags the
+    /// first's); a blob none of them holds is read from `blob_dir`.
     pub fn open(segments: &[PathBuf], blob_dir: Option<PathBuf>) -> Result<Self, StreamError> {
         let mut opened = Vec::new();
+        let mut first = None;
         for path in segments {
             let io = |error| StreamError::Io(path.clone(), error);
             let file = File::open(path).map_err(io)?;
@@ -267,6 +289,10 @@ impl StreamReader {
                 || header[8..12] != VERSION.to_le_bytes()
             {
                 return Err(StreamError::Header(path.clone()));
+            }
+            let flags = u32::from_le_bytes([header[12], header[13], header[14], header[15]]);
+            if flags & !FLAGS != 0 || *first.get_or_insert(flags) != flags {
+                return Err(StreamError::Flags(path.clone(), flags));
             }
             opened.push(Segment {
                 path: path.clone(),
@@ -282,7 +308,13 @@ impl StreamReader {
             blobs: HashMap::new(),
             blob_dir,
             truncated: None,
+            flags: first.unwrap_or(0),
         })
+    }
+
+    /// The header flags of the stream's segments ([`FLAG_ANNOUNCED_BYTES_RECORDED`]).
+    pub fn flags(&self) -> u32 {
+        self.flags
     }
 
     /// A second reader of the same segments and blob directory, from the stream's start.

@@ -378,6 +378,19 @@ impl NewRuntime {
         result.map_err(failed(call))
     }
 
+    /// Buffer `object`'s aside (`aside`): `length` bytes in a Shared place of the play's own,
+    /// zeroed, made at its first read-back.
+    fn aside(&mut self, call: &Call, object: u64, length: u64) -> Result<rt::Buffer, PlayError> {
+        let completed = self.completed();
+        let (places, device) = (&mut self.places, &self.device);
+        self.asides.read_back(object, length, |length| {
+            let place = places.take(rt::MemoryClass::Shared, length, completed);
+            let place = place.map_err(failed(call))?;
+            let buffer = device.new_buffer(place.block, place.range.start, length, Some(0));
+            Ok((buffer.map_err(failed(call))?, place))
+        })
+    }
+
     /// A copy from the guest's RAM into a buffer, the recording's own plumbing: each piece's bytes
     /// in a Shared staging place of the play's own, then copied into the buffer by the blit
     /// encoder, so the GPU's order holds. A buffer copy takes whole 4-byte words at 4-byte
@@ -515,29 +528,39 @@ impl NewRuntime {
                     .copy_from_texture(&from, place, region, &to, to_place)
             }
             // A skipped resource is counted above, with the blits that name a skipped object.
-            "synchronizeResource:" => match self.resource(call, 0)? {
-                // A buffer with a second copy: the GPU's copy into the CPU's, its whole words.
-                Held::Buffer(buffer) => {
-                    let (_, object) = variant(call, arg(call, 0)?)?;
-                    let second = object
-                        .as_object()
-                        .and_then(|object| self.seconds.cpu(object));
-                    match second.cloned() {
-                        Some(cpu) => {
-                            let words = buffer.length() / 4 * 4;
-                            self.blit(id)
-                                .copy_from_buffer_to_buffer(&buffer, 0, &cpu, 0, words)
-                        }
-                        None => self
-                            .blit(id)
-                            .synchronize_resource(rt::Resource::Buffer(&buffer)),
+            "synchronizeResource:" => {
+                let object = variant(call, arg(call, 0)?)?.1.as_object();
+                match self.resource(call, 0)? {
+                    // A buffer with two copies of a stream that records its announced bytes:
+                    // the GPU's copy into the buffer's aside, its whole words (`aside`).
+                    Held::Buffer(buffer) if object.is_some_and(|o| self.asides.takes(o)) => {
+                        let object = object.unwrap_or_default();
+                        let aside = self.aside(call, object, buffer.length())?;
+                        let words = buffer.length() / 4 * 4;
+                        self.blit(id)
+                            .copy_from_buffer_to_buffer(&buffer, 0, &aside, 0, words)
                     }
+                    // A buffer with a second copy: the GPU's copy into the CPU's, its whole
+                    // words.
+                    Held::Buffer(buffer) => {
+                        let second = object.and_then(|object| self.seconds.cpu(object));
+                        match second.cloned() {
+                            Some(cpu) => {
+                                let words = buffer.length() / 4 * 4;
+                                self.blit(id)
+                                    .copy_from_buffer_to_buffer(&buffer, 0, &cpu, 0, words)
+                            }
+                            None => self
+                                .blit(id)
+                                .synchronize_resource(rt::Resource::Buffer(&buffer)),
+                        }
+                    }
+                    Held::Texture(texture) => self
+                        .blit(id)
+                        .synchronize_resource(rt::Resource::Texture(&texture)),
+                    Held::Skipped => unreachable!("a blit naming a skipped object is skipped"),
                 }
-                Held::Texture(texture) => self
-                    .blit(id)
-                    .synchronize_resource(rt::Resource::Texture(&texture)),
-                Held::Skipped => unreachable!("a blit naming a skipped object is skipped"),
-            },
+            }
             "updateFence:" => {
                 let fence = self.fence_of(call, 0)?;
                 self.blit(id).update_fence(&fence)

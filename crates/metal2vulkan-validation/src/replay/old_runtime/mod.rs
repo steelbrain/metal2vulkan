@@ -77,6 +77,10 @@ pub struct OldRuntime {
     skips: Skips,
     /// The render encoders whose pipeline state is a skipped one: their draws are skipped.
     unpiped: HashSet<u64>,
+    /// Whether the stream's header marks its announced bytes recorded, and the buffers'
+    /// `synchronizeResource:` left out of their CPU copies for it.
+    marked: bool,
+    read_backs_left_out: u64,
 }
 
 /// A made object with no address.
@@ -116,6 +120,8 @@ impl OldRuntime {
             host: None,
             skips: Skips::default(),
             unpiped: HashSet::new(),
+            marked: false,
+            read_backs_left_out: 0,
         }
     }
 
@@ -935,7 +941,18 @@ impl Backend for OldRuntime {
 
     /// None: the old runtime's backend adds no lines.
     fn lines(&self) -> Vec<String> {
-        Vec::new()
+        let rule = match self.marked {
+            true => "the stream's (header flag bit 0)",
+            false => "the CPU copy's, read-backs included (no header flag)",
+        };
+        vec![format!(
+            "announced bytes: {rule}; {} buffer read-backs left out of the CPU copies",
+            self.read_backs_left_out
+        )]
+    }
+
+    fn announced_bytes_recorded(&mut self) {
+        self.marked = true;
     }
 
     /// The runtime's live memory blocks: pooled ones with a placement, empty ones kept (pooled or

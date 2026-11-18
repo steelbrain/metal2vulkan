@@ -11,6 +11,9 @@
 //!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
 //!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
 //!   commit, and a synchronize brings the GPU's bytes into the CPU's copy.
+//! - In a stream whose header marks its announced bytes recorded, an announcement after a
+//!   read-back puts the stream's bytes into the GPU's copy, not the bytes read back, which a check
+//!   reads until then; without the mark it puts the bytes read back.
 //! - Sampler states take the lowest index of their class that no live object holds and the
 //!   program did not reserve: made and released past the class's 3,999 indices, they reuse the
 //!   released ones. A reserved index is taken only where the stream names it, by a descriptor's
@@ -66,8 +69,18 @@ fn written(
     dir: &ScratchDir,
     build: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
 ) -> PathBuf {
+    flagged(dir, 0, build)
+}
+
+/// A stream `build` writes in `dir`, its header's flags `flags`.
+fn flagged(
+    dir: &ScratchDir,
+    flags: u32,
+    build: impl FnOnce(&mut StreamWriter<File>) -> std::io::Result<()>,
+) -> PathBuf {
     let path = dir.path().join("stream.m2vr");
-    let mut writer = StreamWriter::new(File::create(&path).unwrap()).unwrap();
+    let file = File::create(&path).unwrap();
+    let mut writer = StreamWriter::with_flags(file, flags).unwrap();
     build(&mut writer).unwrap();
     writer.finish().unwrap();
     path
@@ -369,6 +382,101 @@ fn a_two_copy_stream_s_managed_buffer_keeps_both_copies() {
         let object = check.object;
         assert_eq!(Some(check.sha256), check.recorded, "#{object}: {lines:?}");
     }
+}
+
+/// A two-copy stream's Managed buffer #3 of 4 bytes, its header's flags `flags`: the program
+/// writes 5s into its CPU copy and announces them; a fill of 9s reaches the GPU's copy, and a
+/// synchronize reads it back, which the program's check of #3 sees; the program then puts its 5s
+/// back without the stream writing them again (the stream's last write of the bytes holds them, as
+/// the announce invariant promises where the header marks it) and announces; a copy of #3 into
+/// Shared #4 follows, and checks of #4 and #3 the 5s the program held. The play's checks, in
+/// order: #3, #4, #3.
+fn read_back_then_announced(test: &str, flags: u32) -> Vec<crate::replay::Check> {
+    let dir = ScratchDir::new(test).unwrap();
+    let sum = |bytes: [u8; 4]| Value::List(vec![Value::Bytes(Sha256::digest(bytes).to_vec())]);
+    let path = flagged(&dir, flags, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let identity = [("hasUnifiedMemory", Value::Bool(false))];
+        w.call("m2v.deviceIdentity", 1, 0, &[], &identity)?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // #3 Managed (MTLResourceStorageModeManaged, 1 << 4), #4 Shared, 4 bytes each.
+        let made = "newBufferWithLength:options:";
+        for (id, options) in [(3, 16), (4, 0)] {
+            w.call(made, 1, id, &[Value::Uint(4), Value::Uint(options)], &[])?;
+        }
+        let range = uints(&[("location", 0), ("length", 4)]);
+        let announce = |w: &mut StreamWriter<File>| {
+            w.call("didModifyRange:", 3, 0, std::slice::from_ref(&range), &[])
+        };
+        let check = |w: &mut StreamWriter<File>, id, bytes| {
+            w.call(
+                "m2v.check",
+                0,
+                0,
+                &[Value::Object(id)],
+                &[("sha256", sum(bytes))],
+            )
+        };
+        // Each blit command in an encoder of its own, the encoders in command buffer `cb`.
+        let blits = |w: &mut StreamWriter<File>, cb, commands: &[(&str, Vec<Value>)]| {
+            w.call("commandBuffer", 2, cb, &[], &[])?;
+            for (at, (selector, args)) in commands.iter().enumerate() {
+                let encoder = cb + 1 + at as u64;
+                w.call("blitCommandEncoder", cb, encoder, &[], &[])?;
+                w.call(selector, encoder, 0, args, &[])?;
+                w.call("endEncoding", encoder, 0, &[], &[])?;
+            }
+            w.call("commit", cb, 0, &[], &[])?;
+            w.call(WAIT_COMPLETED, cb, 0, &[], &[])
+        };
+        let write = [Value::Uint(0), Value::Bytes(vec![5; 4])];
+        w.call("m2v.write", 3, 0, &write, &[])?;
+        announce(w)?;
+        let fill = vec![Value::Object(3), range.clone(), Value::Uint(9)];
+        let buffer = Value::Map(vec![("Buffer".into(), Value::Object(3))]);
+        let read_back = [
+            ("fillBuffer:range:value:", fill),
+            ("synchronizeResource:", vec![buffer]),
+        ];
+        blits(w, 10, &read_back)?;
+        check(w, 3, [9; 4])?;
+        announce(w)?;
+        let (zero, four) = (Value::Uint(0), Value::Uint(4));
+        let copy = vec![Value::Object(3), zero.clone(), Value::Object(4), zero, four];
+        let copy_from = "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:";
+        blits(w, 20, &[(copy_from, copy)])?;
+        check(w, 4, [5; 4])?;
+        check(w, 3, [5; 4])
+    });
+    let (report, lines) = play(test, &path);
+    assert_eq!(report.checks.len(), 3, "{lines:?}");
+    let rule = match flags {
+        0 => "announced bytes: the CPU copy's, read-backs included (no header flag); 0 read-backs",
+        _ => "announced bytes: the stream's (header flag bit 0); 1 read-backs into 1 asides",
+    };
+    assert!(lines.iter().any(|line| line.starts_with(rule)), "{lines:?}");
+    report.checks
+}
+
+#[test]
+fn a_marked_stream_s_announcement_after_a_read_back_puts_the_stream_s_bytes() {
+    let flags = crate::replay::FLAG_ANNOUNCED_BYTES_RECORDED;
+    for check in read_back_then_announced("rt-replay-marked", flags) {
+        let object = check.object;
+        assert_eq!(Some(check.sha256), check.recorded, "#{object}");
+    }
+}
+
+#[test]
+fn an_unmarked_stream_s_announcement_after_a_read_back_puts_the_bytes_read_back() {
+    let checks = read_back_then_announced("rt-replay-unmarked", 0);
+    let held: Vec<_> = checks
+        .iter()
+        .map(|c| c.recorded == Some(c.sha256))
+        .collect();
+    // The read-back's 9s, which the program's check saw, then 9s where it held 5s.
+    assert_eq!(held, [true, false, false]);
+    assert_eq!(checks[1].sha256[..], Sha256::digest([9u8; 4])[..]);
 }
 
 #[test]
