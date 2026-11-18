@@ -380,6 +380,12 @@ made, with no lock, and never rewritten for layouts.
   image's memory alignment, takes them: NVIDIA lays a linear image's rows at the row
   rounded to 128 bytes, AMD to 256, so a pitch rounded to 256 is copied on NVIDIA. A render
   target over a buffer is copied on NVIDIA, whose linear tiling does not take it in place.
+- Such a texture over a Managed buffer's device copy takes its copy in only from the upload
+  that leads a submission. A command that writes the buffer, or another texture over a range
+  that meets its, reaches it from the next submission: a later command of the same command
+  buffer, or of a command buffer submitted with it, reads the texture's older texels, where a
+  discrete Mac's GPU reads the written ones. A command buffer that wrote such a texture and is
+  never committed leaves the texture's entry with the buffer until the buffer is released.
 - Texture views that change what the replay streams' views keep are not built
   (`Gap::TextureView`, naming the kind): another pixel format, another texture type (but a 2D
   view of one slice of a 2D array), some of a cube's faces or a cube array's cubes, and any view
