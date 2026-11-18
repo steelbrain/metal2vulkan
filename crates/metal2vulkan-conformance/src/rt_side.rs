@@ -664,6 +664,20 @@ impl Side for RtSide<'_> {
             .map_err(|error| Failure::of_rt(&error))
     }
 
+    /// The consumer's own: the runtime's `RenderPassDescriptor` is a value its consumer fills, so
+    /// what Metal's descriptor object answers of its fields after its setters is the consumer's to
+    /// keep, as the runtime's README says.
+    fn pass_descriptor_facts(
+        &mut self,
+        _spec: &crate::pass_descriptors::PassSpec,
+    ) -> Answer<crate::pass_descriptors::PassDescriptorFacts> {
+        Err(Failure::named(
+            "TheConsumers",
+            "metal2vulkan-rt's RenderPassDescriptor is a value its consumer fills: what Metal's \
+             MTLRenderPassDescriptor answers of its fields is the consumer's",
+        ))
+    }
+
     fn minimum_linear_texture_alignment(&mut self, format: PixelFormat) -> Answer<u64> {
         (self.on.device.minimum_linear_texture_alignment(format))
             .map_err(|error| Failure::of_rt(&error))
