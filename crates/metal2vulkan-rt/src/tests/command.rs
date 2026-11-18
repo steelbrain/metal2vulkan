@@ -11,9 +11,25 @@ pub(crate) mod on_device {
     use crate::device::lock;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        host_time, Block, BlockId, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
-        CommandBufferStatus, CommandQueue, Device, DeviceOptions, DispatchType, Error, Gauges,
-        Instance, MemoryClass, Refusal, SharedEvent,
+    Block,
+    BlockId,
+    BlockMappings,
+    Buffer,
+    CommandBuffer,
+    CommandBufferError,
+    CommandBufferStatus,
+    CommandQueue,
+    Device,
+    DeviceOptions,
+    DispatchType,
+    Error,
+    Fence,
+    Gauges,
+    Instance,
+    MemoryClass,
+    Refusal,
+    SharedEvent,
+    host_time,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -378,6 +394,196 @@ pub(crate) mod on_device {
 
     fn queue(device: &Device) -> CommandQueue {
         device.new_command_queue(64).expect("a queue")
+    }
+
+    /// Waits for each of `command_buffers` with `wait_until_completed` on a thread of its own, and
+    /// fails the test where they have not all returned within [`PATIENCE`]: a completion that never
+    /// comes fails the case instead of stalling the run.
+    fn waits_return(name: &str, case: &str, command_buffers: Vec<CommandBuffer>) {
+        let (returned, waited) = mpsc::channel();
+        thread::spawn(move || {
+            for command_buffer in &command_buffers {
+                command_buffer.wait_until_completed();
+            }
+            let _ = returned.send(command_buffers);
+        });
+        let command_buffers = (waited.recv_timeout(PATIENCE))
+            .unwrap_or_else(|_| panic!("{name}: {case}: a wait_until_completed did not return"));
+        for command_buffer in &command_buffers {
+            // The GPU times, as a consumer reads them once it completed: one that ran has both,
+            // in order; one ended before it ran has none.
+            let (start, end) = (
+                command_buffer.gpu_start_time(),
+                command_buffer.gpu_end_time(),
+            );
+            match command_buffer.error() {
+                None => assert!(0 < start && start <= end, "{name}: {case}: {start}..{end}"),
+                Some(_) => assert_eq!((start, end), (0, 0), "{name}: {case}"),
+            }
+        }
+    }
+
+    /// Every chain of command buffers with nothing for the GPU, with fence updates alone, or with
+    /// an event's signal or wait alone retires: each one's completed handler runs and its
+    /// `wait_until_completed` returns, and its GPU times read back, whatever comes before it on its
+    /// queue or on another. The cases: an empty one committed while a group is held; an empty one
+    /// as the last commit before a wait; a fence-only one between two that fill; an empty one
+    /// behind another, nothing submitted behind either, and the same after work that completed;
+    /// those with a second queue's commits between them; a command buffer ended `NotRun` after
+    /// its first segment was submitted; and one whose only segment signals an event, then one whose
+    /// only segment waits on it.
+    #[test]
+    fn every_device_retires_every_chain_of_empty_fence_only_and_event_only_command_buffers() {
+        each_device("command_chain", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (a, b) = (arena.buffer(), arena.buffer());
+            let ran = Arc::new(AtomicUsize::new(0));
+            let mut committed = 0;
+            let mut commit = |command_buffer: &CommandBuffer| {
+                let ran = Arc::clone(&ran);
+                (command_buffer.add_completed_handler(move |_| {
+                    ran.fetch_add(1, Ordering::SeqCst);
+                }))
+                .expect("a handler");
+                command_buffer.commit().expect("a commit");
+                committed += 1;
+            };
+            let empty = |queue: &CommandQueue| queue.command_buffer().expect("a command buffer");
+            let filled = |queue: &CommandQueue, buffer: &Buffer, word: u32| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                fill(&command_buffer, buffer, word);
+                command_buffer
+            };
+            let fence_only = |queue: &CommandQueue, fence: &Fence, wait: bool| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                match wait {
+                    true => encoder.wait_for_fence(fence).expect("a fence wait"),
+                    false => encoder.update_fence(fence).expect("a fence update"),
+                }
+                encoder.end_encoding();
+                command_buffer
+            };
+
+            // An empty command buffer committed while its queue holds a group, waited for alone.
+            let queue = self::queue(&device);
+            let mut held = Vec::new();
+            behind_two(name, &device, &queue, |running, _| {
+                let work = filled(&queue, &a, 1);
+                commit(&work);
+                let nothing = empty(&queue);
+                commit(&nothing);
+                let ran = (running.iter()).all(|command_buffer| {
+                    command_buffer.status() != CommandBufferStatus::Completed
+                });
+                waits_return(name, "an empty one in a held group", vec![nothing.clone()]);
+                held.extend([work, nothing]);
+                ran
+            });
+            waits_return(name, "the held group's work", held);
+
+            // An empty command buffer as the last commit before a wait.
+            let work = filled(&queue, &a, 2);
+            commit(&work);
+            let nothing = empty(&queue);
+            commit(&nothing);
+            waits_return(name, "an empty one last", vec![nothing, work]);
+
+            // A fence-only command buffer between two that fill.
+            let fence = device.new_fence();
+            let before = filled(&queue, &a, 3);
+            commit(&before);
+            let update = fence_only(&queue, &fence, false);
+            commit(&update);
+            let wait = fence_only(&queue, &fence, true);
+            fill(&wait, &b, 3);
+            commit(&wait);
+            waits_return(
+                name,
+                "a fence-only one between two",
+                vec![update, wait, before],
+            );
+            assert_eq!((word(&a), word(&b)), (3, 3), "{name}");
+
+            // An empty command buffer behind another, on a queue that never submitted, then the
+            // same behind work that completed.
+            let fresh = self::queue(&device);
+            let (first, second) = (empty(&fresh), empty(&fresh));
+            commit(&first);
+            commit(&second);
+            waits_return(name, "two empty ones, nothing before", vec![second, first]);
+            let work = filled(&fresh, &a, 4);
+            commit(&work);
+            waits_return(name, "work alone", vec![work]);
+            let (first, second) = (empty(&fresh), empty(&fresh));
+            commit(&first);
+            commit(&second);
+            waits_return(name, "two empty ones behind work", vec![second, first]);
+
+            // The same with a second queue's commits between them.
+            let other = self::queue(&device);
+            let other_fence = device.new_fence();
+            let one = empty(&fresh);
+            commit(&one);
+            let work = filled(&other, &b, 5);
+            commit(&work);
+            let two = empty(&fresh);
+            commit(&two);
+            let update = fence_only(&other, &other_fence, false);
+            commit(&update);
+            let three = empty(&other);
+            commit(&three);
+            waits_return(
+                name,
+                "empty ones between two queues",
+                vec![three, two, update, one, work],
+            );
+
+            // Ended `NotRun` after its first segment was submitted: the part after an event wait
+            // the host never meets.
+            let event = shared_event(&device);
+            let partial = filled(&queue, &a, 6);
+            partial
+                .encode_wait_for_event(event.as_event(), 1)
+                .expect("a wait");
+            fill(&partial, &b, 6);
+            commit(&partial);
+            within("the part before the wait", || word(&a) == 6);
+            queue.abandon();
+            waits_return(
+                name,
+                "NotRun after a submitted segment",
+                vec![partial.clone()],
+            );
+            assert_eq!(partial.error(), Some(CommandBufferError::NotRun), "{name}");
+
+            // One whose only segment signals an event, then one whose only segment waits on it.
+            let signal = empty(&queue);
+            (signal.encode_signal_event(event.as_event(), 2)).expect("a signal");
+            commit(&signal);
+            let waits = empty(&queue);
+            (waits.encode_wait_for_event(event.as_event(), 2)).expect("a wait");
+            commit(&waits);
+            waits_return(name, "event-only ones", vec![waits, signal]);
+
+            within("every completed handler", || {
+                ran.load(Ordering::SeqCst) == committed
+            });
+            println!("{name}: {committed} command buffers retired in every chain");
+            drop((
+                a,
+                b,
+                arena,
+                event,
+                fence,
+                other_fence,
+                queue,
+                fresh,
+                other,
+                device,
+            ));
+        });
     }
 
     /// A wait the host's value meets is submitted with no semaphore wait (the semaphore never
