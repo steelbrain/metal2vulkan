@@ -79,7 +79,16 @@ fn every_device_reports_a_short_command_buffer_while_a_long_one_after_it_runs() 
         probe.commit().expect("a commit");
         finished(name, &probe);
         let eight = probe.gpu_end_time().saturating_sub(probe.gpu_start_time());
-        assert!(eight > 0, "{name}: the probe's GPU times");
+        assert!(
+            eight > 0,
+            "{name}: the probe's GPU times {}..{}, its kernel times {}..{}, its status {:?}, its error {:?}",
+            probe.gpu_start_time(),
+            probe.gpu_end_time(),
+            probe.kernel_start_time(),
+            probe.kernel_end_time(),
+            probe.status(),
+            probe.error()
+        );
         let count = (LONG_NS * 8).div_ceil(eight).clamp(8, MOST);
 
         // Both command buffers are made before the batch that holds the queue's work, so
