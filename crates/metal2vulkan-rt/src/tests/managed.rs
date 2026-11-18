@@ -284,7 +284,7 @@ mod on_device {
                 return;
             }
             let counters = device.counters();
-            let len = CAPTURE_LEN + (16 << 20);
+            let len = CAPTURE_LEN / 2 * 3;
             let cpu = (device.take_block(MemoryClass::Shared, len))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let side = (device.take_block(MemoryClass::Shared, len))

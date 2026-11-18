@@ -2671,8 +2671,8 @@ impl Texture {
     }
 
     /// The image's bytes of `region` of `level` and `slice`, as [`Texture::get_bytes`] reads them
-    /// from a texture without named bytes, once the pending upload has run (it copies a Managed
-    /// buffer's changed ranges at its end): for the tests of one with them.
+    /// from a texture without named bytes, once a commit has taken the Managed buffers' named
+    /// ranges (`crate::capture`) and the pending upload has run: for the tests of one with them.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn image_bytes(
         &self,
@@ -2684,6 +2684,12 @@ impl Texture {
     ) -> Result<(), Error> {
         let len = bytes.len() as u64;
         let core = self.inner.device.core();
+        let queue = self.inner.device.new_command_queue(1)?;
+        let command_buffer = queue.command_buffer()?;
+        command_buffer.record_for_test(&[], |_, _| {})?;
+        command_buffer.commit()?;
+        command_buffer.wait_until_completed();
+        drop((command_buffer, queue));
         let value = core.work.flush();
         core.done.wait(core, value)?;
         match (self.inner).copy(region, level, slice, len, bytes_per_row, len)? {
