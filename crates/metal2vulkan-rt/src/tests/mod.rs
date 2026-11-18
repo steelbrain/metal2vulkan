@@ -13,6 +13,7 @@ mod heap;
 mod kernel_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kernels;
+mod large;
 mod managed;
 mod memory;
 mod narrow;
