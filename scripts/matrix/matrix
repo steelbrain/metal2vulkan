@@ -512,7 +512,11 @@ class Run:
             args += ["--exclusive"]
         if key:
             args += ["--hold", "24h"]
-        cmd = ["--", "bash", "-c", script]
+        # The script travels in the job's environment, never on its command line: Windows starts a
+        # job's command through a command line cut at 8,191 characters, and the harness legs'
+        # scripts are longer (their per-row limits), so bash read a truncated script there.
+        args += ["--env", f"M2V_JOB={script}"]
+        cmd = ["--", "bash", "-c", 's=$M2V_JOB; unset M2V_JOB; eval "$s"']
         r = potluck(*args, *(["--workspace", ws, "--advance"] if ws else []), *cmd)
         if ws and "job" not in dispatched(r):
             log(f"{name}: workspace {ws} refused ({dispatched(r).get('error', '')[:200]}); a fresh one")
