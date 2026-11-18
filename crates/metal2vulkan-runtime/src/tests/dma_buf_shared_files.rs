@@ -76,10 +76,17 @@ pub(super) fn on_device(test: &str) -> Option<(Scratch, Device)> {
         eprintln!("{test}: {} lists no dma-buf route: not run", device.name());
         return None;
     }
-    if refuses_shared_dma_bufs(test, &device) {
-        return None;
-    }
     Some((scratch, device))
+}
+
+/// [`on_device`]'s device for a test that imports a `Shared` dma-buf; `None` where the device's
+/// types refuse such an import, which [`refuses_shared_dma_bufs`] checks there.
+pub(super) fn importing(test: &str) -> Option<(Scratch, Device)> {
+    let (scratch, device) = on_device(test)?;
+    match refuses_shared_dma_bufs(test, &device) {
+        true => None,
+        false => Some((scratch, device)),
+    }
 }
 
 /// A source that answers each request with one piece of `file`, a dma-buf of `ram`'s file from
@@ -160,7 +167,7 @@ fn timed(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64) {
 #[test]
 fn pieces_of_one_shared_file_lie_in_one_import() {
     const NAME: &str = "pieces_of_one_shared_file_lie_in_one_import";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
@@ -269,7 +276,7 @@ fn pieces_of_one_shared_file_lie_in_one_import() {
 #[test]
 fn chunks_of_their_own_are_an_import_each() {
     const NAME: &str = "chunks_of_their_own_are_an_import_each";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
@@ -320,7 +327,7 @@ fn chunks_of_their_own_are_an_import_each() {
 #[test]
 fn a_buffer_over_two_pieces_of_one_file_binds_each_at_its_offset() {
     const NAME: &str = "a_buffer_over_two_pieces_of_one_file_binds_each_at_its_offset";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
@@ -583,7 +590,7 @@ fn two_pieces_off_the_granule_are_refused() {
 #[test]
 fn released_pieces_import_their_file_again() {
     const NAME: &str = "released_pieces_import_their_file_again";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
@@ -700,7 +707,7 @@ fn residency_moved(before: &WorkCounts, after: &WorkCounts) -> (u64, u64, u64, u
 #[test]
 fn pieces_of_one_file_past_the_most_stay_while_read() {
     const NAME: &str = "pieces_of_one_file_past_the_most_stay_while_read";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
@@ -752,7 +759,7 @@ fn pieces_of_one_file_past_the_most_stay_while_read() {
 #[test]
 fn chunks_of_their_own_past_the_most_are_released() {
     const NAME: &str = "chunks_of_their_own_past_the_most_are_released";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
@@ -801,7 +808,7 @@ fn chunks_of_their_own_past_the_most_are_released() {
 #[test]
 fn a_file_s_buffers_are_released_together_and_only_whole() {
     const NAME: &str = "a_file_s_buffers_are_released_together_and_only_whole";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();

@@ -21,7 +21,7 @@
 //! under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux. Where `/dev/udmabuf` cannot be
 //! opened, or the device lists no dma-buf route, it says so and passes without running.
 
-use super::dma_buf_shared_files::{moved, no_copy, on_device, shared_source};
+use super::dma_buf_shared_files::{importing, moved, no_copy, on_device, shared_source};
 use super::host_residency::{counting, counts_once, host_page, read, udmabuf, Ram};
 use crate::{Buffer, Error, Invalid, Problem, ResourceOptions, WorkCounts};
 use std::sync::atomic::AtomicU64;
@@ -42,7 +42,7 @@ fn kept(counts: &WorkCounts) -> u64 {
 #[test]
 fn a_kept_file_is_imported_once_across_buffers_that_come_and_go() {
     const NAME: &str = "a_kept_file_is_imported_once_across_buffers_that_come_and_go";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
@@ -123,7 +123,7 @@ fn a_kept_file_is_imported_once_across_buffers_that_come_and_go() {
 #[test]
 fn a_handle_keeps_a_live_import_and_leaves_it_to_its_buffer() {
     const NAME: &str = "a_handle_keeps_a_live_import_and_leaves_it_to_its_buffer";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
@@ -191,7 +191,7 @@ fn a_handle_keeps_a_live_import_and_leaves_it_to_its_buffer() {
 #[test]
 fn a_recovery_keeps_the_file_and_imports_it_at_the_next_buffer() {
     const NAME: &str = "a_recovery_keeps_the_file_and_imports_it_at_the_next_buffer";
-    let Some((_scratch, device)) = on_device(NAME) else {
+    let Some((_scratch, device)) = importing(NAME) else {
         return;
     };
     let page = host_page();
