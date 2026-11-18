@@ -465,29 +465,39 @@ class Run:
         return self.cfg.get("setup", {}).get(node, "")
 
     def size(self, kind, node):
-        """RAM and timeout from this kind's last measured runs on NODE: 1.3x the peak (a run that
-        peaked at its reservation keeps it; one that ended for want of RAM gets 2x), and 1.5x the
-        longest, never below the kind's default: an incremental run's minutes say nothing of a full
-        rebuild's."""
+        """RAM and timeout from this kind's last measured runs on NODE. RAM: 1.3x the largest
+        peak of the last three that started in a fresh workspace (a run that peaked at its
+        reservation keeps it; one that ended for want of RAM gets 2x), else the kind's default. For
+        a kind that keeps a workspace that is a whole build: an incremental build's peak says
+        nothing of one, and a kept workspace can rebuild most of the tree; every run of a kind that
+        keeps none starts fresh. Minutes: 1.5x the longest of the last three, never below the
+        kind's default: an incremental run's minutes say nothing of a full rebuild's."""
         ram, minutes = DEFAULTS[kind]
-        runs = self.stats.get(f"{kind}@{node}", [])[-3:]
-        if runs:
+        runs = self.stats.get(f"{kind}@{node}", [])
+        whole = [r for r in runs if r.get("full")][-3:]
+        if whole:
             ram = max(2 * r["ram"] if r["killed"] else
                       r["ram"] if r["peak"] >= 0.95 * r["ram"] else math.ceil(r["peak"] * 1.3 + 0.5)
-                      for r in runs)
-            minutes = max(minutes, math.ceil(1.5 * max(r["minutes"] for r in runs)))
+                      for r in whole)
+        if runs:
+            minutes = max(minutes, math.ceil(1.5 * max(r["minutes"] for r in runs[-3:])))
         return max(ram, 2), minutes
 
-    def job(self, kind, node, script, name, gpus=(), carry=None, space=None, exclusive=False, again=True):
+    def job(self, kind, node, script, name, gpus=(), carry=None, space=None, exclusive=False, room=None):
         """Dispatch SCRIPT on NODE, wait for it, and return (exit code, output, job record).
         SPACE names a workspace kept for this kind on this node across runs (incremental builds,
-        and no fresh checkout of the tree). A job that times anything is EXCLUSIVE. A job that
-        ended for want of RAM runs once more, sized from that run: a fresh workspace can need more
-        than the incremental runs it was sized from, and the leg is not the job's to lose. Wanting
-        RAM is a peak at the reservation and either a kill over it or a failed allocation in the
-        output: a driver that pins host memory for a device allocation can answer the job's limit
-        with an out-of-memory error rather than the kill."""
+        and no fresh checkout of the tree). A job that times anything is EXCLUSIVE. It is sized as
+        a whole build (size). A job that ended for want of RAM runs again with twice its room, up
+        to the kind's default (ROOM, the room of that run again): the leg is not the job's to
+        lose. Wanting RAM is a peak at the reservation and either a kill over it or a failed
+        allocation in the output: a driver that pins host memory for a device allocation can
+        answer the job's limit with an out-of-memory error rather than the kill."""
+        key = f"{space}@{node}" if space else None
+        with self.lock:
+            ws = self.spaces.get(key) if key else None
         ram, minutes = self.size(kind, node)
+        if room:
+            ram = room
         args = ["dispatch", "--json", "--priority", "5", "--kill-on-stall", "--label", "agent=matrix",
                 "--label", f"matrix={self.short}", "--on", f"node={node}", "--ram", str(ram),
                 "--timeout", f"{minutes}m"]
@@ -499,18 +509,16 @@ class Run:
             args += ["--carry", carry]
         if exclusive:
             args += ["--exclusive"]
-        key = f"{space}@{node}" if space else None
         if key:
             args += ["--hold", "24h"]
         cmd = ["--", "bash", "-c", script]
-        with self.lock:
-            ws = self.spaces.get(key) if key else None
         r = potluck(*args, *(["--workspace", ws, "--advance"] if ws else []), *cmd)
         if ws and "job" not in dispatched(r):
             log(f"{name}: workspace {ws} refused ({dispatched(r).get('error', '')[:200]}); a fresh one")
             potluck("release", ws)
             with self.lock:
                 self.spaces.pop(key, None)
+            ws = None
             r = potluck(*args, *cmd)
         reply = dispatched(r)
         if "job" not in reply:
@@ -531,14 +539,17 @@ class Run:
             killed = peak >= 0.95 * ram and (code == 137 or (code != 0 and bool(STARVED.search(out))))
             with self.lock:
                 self.stats.setdefault(f"{kind}@{node}", []).append(
-                    dict(ram=ram, peak=round(peak, 2), minutes=round(took, 2), killed=killed))
+                    dict(ram=ram, peak=round(peak, 2), minutes=round(took, 2), killed=killed,
+                         full=ws is None))
                 self.stats[f"{kind}@{node}"] = self.stats[f"{kind}@{node}"][-6:]
                 if key and rec.get("workspace"):
                     self.spaces[key] = rec["workspace"]
         log(f"{name}: job {jid} ended {w.returncode}")
-        if killed and again:
-            log(f"{name}: wanted more than its {ram} GiB; once more with room from that run")
-            return self.job(kind, node, script, name, gpus, carry, space, exclusive, again=False)
+        cap = max(DEFAULTS[kind][0], ram)
+        if killed and ram < cap:
+            log(f"{name}: wanted more than its {ram} GiB; again with {min(2 * ram, cap)} GiB")
+            return self.job(kind, node, script, name, gpus, carry, space, exclusive,
+                            room=min(2 * ram, cap))
         return w.returncode, out, rec
 
     def record(self, jid):

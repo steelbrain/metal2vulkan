@@ -380,7 +380,7 @@ may open at `perf_event_paranoid` 2. On a hybrid x86 CPU it sums the event over 
 unit, since the generic event counts on one of them only. Off Linux it opens nothing, so the
 Windows leg records no `instructions`.
 
-The rules have their own tests, which need no cluster:
+The rules and the sizing of the matrix's jobs have their own tests, which need no cluster:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/matrix
