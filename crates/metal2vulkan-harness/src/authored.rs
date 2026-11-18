@@ -21,7 +21,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 36] = [
+pub const WORKLOADS: [Workload; 37] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
