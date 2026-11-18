@@ -286,7 +286,7 @@ impl NewRuntime {
                     None => None,
                 };
                 let a = &mut self.pass(call.receiver).descriptor.color_attachments[at];
-                set_attachment!(set, a);
+                set_attachment!(set, &mut *a);
                 if let Some(clear) = clear {
                     a.clear_color = clear;
                 }
@@ -297,7 +297,7 @@ impl NewRuntime {
                 let set = self.attachment_set(call, &f, rt::MAX_COLOR_ATTACHMENTS)?;
                 let clear = f.float("clearDepth")?;
                 let a = &mut self.pass(call.receiver).descriptor.depth_attachment;
-                set_attachment!(set, a);
+                set_attachment!(set, &mut *a);
                 if let Some(clear) = clear {
                     a.clear_depth = clear;
                 }
@@ -308,7 +308,7 @@ impl NewRuntime {
                 let set = self.attachment_set(call, &f, rt::MAX_COLOR_ATTACHMENTS + 1)?;
                 let clear = f.count("clearStencil")?;
                 let a = &mut self.pass(call.receiver).descriptor.stencil_attachment;
-                set_attachment!(set, a);
+                set_attachment!(set, &mut *a);
                 if let Some(clear) = clear {
                     a.clear_stencil = clear;
                 }
