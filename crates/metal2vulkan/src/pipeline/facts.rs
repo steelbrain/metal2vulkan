@@ -888,8 +888,10 @@ pub enum RuntimeFact {
     /// region's `MultiRegion` is 1, its workgroup of `pipeline::GRID_TILE_THREADS` threads is one
     /// tile of the grid, whose power-of-two sides the region's nominal size gives
     /// (`pipeline::grid_tile`); where it is 0, the kernel runs at its pipeline's size. Under
-    /// either, an invocation past the region's grid returns before the body, whatever the region's
-    /// flags. Its plans run a `dispatchThreads` grid in such tiles.
+    /// either, where the region is flagged `lower::dispatch::NONUNIFORM`, which a runtime sets for
+    /// a grid its workgroups do not divide, an invocation past the region's grid returns before the
+    /// body; an unflagged region runs no test of the grid's edge. Its plans run a `dispatchThreads`
+    /// grid in such tiles, flagged where the tile does not divide it.
     GridTiles,
 }
 

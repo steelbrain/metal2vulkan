@@ -1913,11 +1913,13 @@ instead (`RuntimeFact::GridTiles`): its plans run a direct dispatch's threads in
 `pipeline::grid_tile`'s tiles, one workgroup of `pipeline::GRID_TILE_THREADS` each with the tile
 as the region's nominal size (`MultiRegion` 1), the region flagged `NONUNIFORM` where the tile
 does not divide the grid, and a range of threadgroups at its own size (`MultiRegion` 0); the
-kernel runs the same positions with the same answers: every invocation compares its position
-with the region's grid and one past it returns before the body, whatever the region's flags. At
-`MultiRegion` 0 a runtime may run a direct dispatch of the variant in workgroups of a size it
-picks, whose invocations past the grid return before the body as a tile's do; an indirect
-dispatch's region states no grid, and all of its invocations run.
+kernel runs the same positions with the same answers: where the region is flagged `NONUNIFORM`,
+every invocation compares its position with the region's grid and one past it returns before the
+body, a test inside one branch on the flag; an unflagged region runs no such test, so a runtime
+flags every region of a grid its workgroups do not divide. At `MultiRegion` 0 a runtime may run a
+direct dispatch of the variant in workgroups of a size it picks, flagged where they do not divide
+the grid, whose invocations past it return before the body as a tile's do; an indirect dispatch's
+region states no grid and is unflagged, and all of its invocations run.
 `Device::kernel_observes_partition(&kernel, &inputs, &budget, &entries)` answers, before any
 lowering, what `CompiledFunction::observes_threadgroup_partition` answers for the compile under the
 same inputs (from the specialized entry `entries` holds, ordered for the device), so a runtime

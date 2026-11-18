@@ -971,8 +971,11 @@ that touch blocks first.
   as near), then the most square in `x` and `y`, then the wider. So threadgroups of 8x8x4 over a
   grid that 8x8x4 tiles divide run in 8x8x4, and threadgroups one deep in the square 16x16x1,
   the pipeline made with the state, wherever 16x16x1 tiles divide the grid. Where the workgroups
-  do not divide the grid, an invocation past the grid returns before the kernel's body. An
-  indirect dispatch runs at its own threadgroup size. A kernel that observes its partition is
+  do not divide the grid, the dispatch's regions are flagged ragged (the translator's
+  `NONUNIFORM`), and an invocation past the grid returns before the kernel's body: only there does
+  a thread compare its position with the grid's last thread, inside one branch on the flag. Every
+  other dispatch, on the same pipeline, branches past that test. An indirect dispatch runs at its
+  own threadgroup size, unflagged. A kernel that observes its partition is
   lowered plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
   module at their own size, and a `dispatch_threads` grid that is not a whole number of
   threadgroups runs its partial-threadgroups variant, which the reaper lowers for the first such
