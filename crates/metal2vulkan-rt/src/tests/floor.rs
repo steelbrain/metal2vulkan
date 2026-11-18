@@ -718,6 +718,7 @@ fn every_missing_item_is_named_at_once() {
             Missing::Extension(ash::khr::swapchain::NAME),
             Missing::Extension(ash::khr::workgroup_memory_explicit_layout::NAME),
             Missing::Extension(ash::ext::robustness2::NAME),
+            Missing::Extension(ash::ext::calibrated_timestamps::NAME),
             feature("VkPhysicalDeviceFeatures", "shaderInt64"),
             feature("VkPhysicalDeviceVulkan13Features", "dynamicRendering"),
             Missing::Limit {
@@ -735,7 +736,7 @@ fn every_missing_item_is_named_at_once() {
         below.to_string(),
         "the device is below the runtime's floor: it lacks VK_KHR_swapchain; \
          VK_KHR_workgroup_memory_explicit_layout; VK_EXT_robustness2; \
-         VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
+         VK_EXT_calibrated_timestamps; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
          maxPushConstantsSize 64, below 256; a queue family with graphics and compute; a memory \
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers"
