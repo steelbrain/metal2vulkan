@@ -718,7 +718,12 @@ that touch blocks first.
 - GPU start and end times are the device's timestamps. On Mesa's Apple-GPU driver a command
   buffer with no render pass reports `gpu_start_time` equal to its `gpu_end_time`: the driver
   writes both timestamps with Metal's relaxed timestamp granularity, which gives two writes in one
-  compute pass one value. Vulkan allows it: a later timestamp is never lower.
+  compute pass one value. Vulkan allows it: a later timestamp is never lower. The two timestamps
+  also cost each committed command buffer about 93 µs there: on an M3 Max with Mesa 26.3.1, a
+  burst of command buffers of two dispatches each took 122-124 µs a command buffer with them and
+  29.5-29.8 µs without. The driver writes a timestamp outside a render pass with a one-thread
+  dispatch in a compute encoder, making the encoder where none is open, and resolves each on the
+  GPU as the encoder ends.
 - A command buffer that finds every pair of the device's timestamp pools taken, where the device
   then refuses a new pool, runs untimed: its `gpu_start_time` and `gpu_end_time` are 0, and
   `Metrics::untimed_command_buffers` counts it. Once the device refuses a pool it asks for none
