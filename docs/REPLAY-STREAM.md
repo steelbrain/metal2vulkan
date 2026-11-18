@@ -419,15 +419,25 @@ their times and memory compare. `command-replay dump --stream FILE` prints the c
 - The new runtime's backend plays compute, blits, `synchronizeResource:`, fences, events and
   queues. What the new runtime does not build yet it skips and counts, and never fakes:
   - objects: render pipelines, depth-stencil states, render pass descriptors, libraries from
-    source, textures over a buffer (`bytesPerRow`, tiled and surface textures), texture views,
-    and whatever a call makes of a skipped object (`skipped_objects`);
+    source, and whatever a call makes of a skipped object (`skipped_objects`);
   - render and parallel render encoders (`skipped_encoders`), and every call of a skipped object
     (`skipped_calls`, with `useResource:usage:` of one and a compute encoder's `useHeap:`);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
     (`skipped_dispatches`);
-  - blit commands that name a skipped object, and buffer-to-buffer copies,
-    `synchronizeTexture:slice:level:`, mipmaps, `optimizeContentsForGPUAccess:` and the host's
-    copies to and from the guest's RAM (`skipped_blits`).
+  - blit commands that name a skipped object (`skipped_blits`), and by kind: buffer-to-buffer
+    copies (`skipped_buffer_copies`), the host's copies from the guest's RAM
+    (`skipped_guest_ram_writes`) and back to it, which nothing in a play reads
+    (`skipped_guest_ram_reads`), `synchronizeTexture:slice:level:` (`skipped_texture_syncs`) and
+    mipmaps (`skipped_mipmaps`). `optimizeContentsForGPUAccess:`, a layout hint, plays as nothing.
+
+  Textures over a buffer play as the runtime's (`Buffer::new_texture`) and texture views as its
+  views (`Texture::new_texture_view`). Where the runtime cannot make a texture the program made,
+  the backend makes an ordinary texture of the same descriptor in its place, so that the IDs and
+  addresses the program wrote name a live texture, and counts it: a texture over an IOSurface,
+  which is its host's import (`substituted_surface_textures`), a tiled texture over a buffer
+  (`substituted_tiled_textures`), and a texture over a buffer or a view the runtime answers with
+  a typed gap (`substituted_gap_textures`). A substitute is the recording's artefact, never the
+  runtime's.
 
   The counts are among its executed counters. A play with any of them above zero is no gate
   result: `report.txt` says so on a `skipped` line. It places buffers of their own in the
@@ -439,7 +449,14 @@ their times and memory compare. `command-replay dump --stream FILE` prints the c
   compute pipeline state no `gpuResourceID`, so each one the program saw is reported on an `id`
   line as `none` and counted (`gap_pipeline_ids`).
 
-`report.txt` holds one line per item: `device NAME runtime old|rt snapshots yes|no` first, `completed IDS COUNTS`, `frame N COUNTS`,
+`report.txt` holds one line per item: `device NAME runtime old|rt snapshots yes|no` first, then
+`relocation relocated_words=N misaligned_address_words=N address_arguments=N unrelocated_writes=N
+differing_ids=N` (the play's address words relocated and those left at 4 past a multiple of 8,
+the address arguments beside which a data word that only looks like an address stands out, the
+writes and uploads into objects with no recorded range, which nothing relocates, and the objects
+whose ID differs from the recording's, the compute pipeline states' typed gap aside: any such
+object makes the play an error, as a word that names it names something else in the play),
+`completed IDS COUNTS`, `frame N COUNTS`,
 `end N wall_nanos=NANOS resident_bytes=BYTES times KEY=NANOS ... live KEY=VALUE ...` for each
 frame (the nanoseconds from the frame before's end, or the first call played, to this frame's,
 the wait for its work included; the process's resident memory then where the system tells it,

@@ -414,16 +414,28 @@ impl NewRuntime {
                     .map_err(|_| refuse(call, "a fill value past a byte"))?;
                 self.blit(id).fill_buffer(&buffer, span, value)
             }
-            // Not built by the runtime yet: buffer-to-buffer copies, a texture slice's and level's
-            // synchronization, mipmaps and the host's guest-RAM copies.
-            "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:"
-            | "synchronizeTexture:slice:level:"
-            | "generateMipmapsForTexture:"
-            | "optimizeContentsForGPUAccess:"
-            | "m2v.copyFromGuestRam"
-            | "m2v.copyFromGuestRamAt"
-            | "m2v.copyToGuestRam" => {
-                self.skips.blits += 1;
+            // A layout hint: the contents stay as they are.
+            "optimizeContentsForGPUAccess:" => Ok(()),
+            // Not built yet: each skipped and counted by its kind.
+            "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:" => {
+                self.skips.buffer_copies += 1;
+                Ok(())
+            }
+            "m2v.copyFromGuestRam" | "m2v.copyFromGuestRamAt" => {
+                self.skips.guest_ram_writes += 1;
+                Ok(())
+            }
+            // Nothing in a play reads the guest's RAM.
+            "m2v.copyToGuestRam" => {
+                self.skips.guest_ram_reads += 1;
+                Ok(())
+            }
+            "synchronizeTexture:slice:level:" => {
+                self.skips.texture_syncs += 1;
+                Ok(())
+            }
+            "generateMipmapsForTexture:" => {
+                self.skips.mipmaps += 1;
                 Ok(())
             }
             _ => return Err(refuse(call, "not played on a blit encoder")),

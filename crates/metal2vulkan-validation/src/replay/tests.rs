@@ -537,6 +537,10 @@ fn uploads_are_relocated_and_counted() {
     assert_eq!(report.total.stream["relocated_words"], 2);
     assert_eq!(report.total.stream["misaligned_address_words"], 1);
     assert_eq!(report.total.stream["written_bytes"], 8 + 16 + 8);
+    assert_eq!(
+        report.total.stream["unrelocated_writes"], 1,
+        "the write of no address"
+    );
 }
 
 /// A copy from the guest's RAM lands each piece at its byte: into a block, an address is
@@ -607,6 +611,10 @@ fn guest_ram_copies_are_relocated_where_their_buffer_has_an_address() {
     assert_eq!(report.total.stream["relocated_words"], 2);
     assert_eq!(report.total.stream["misaligned_address_words"], 1);
     assert_eq!(report.total.stream["written_bytes"], 16 + 16 + 8);
+    assert_eq!(
+        report.total.stream["unrelocated_writes"], 1,
+        "the copy of no address"
+    );
 
     let (_, ended) = played(&mut Kept::default(), |w| {
         let runs = Value::List(vec![Value::List(vec![
@@ -778,6 +786,8 @@ fn frames_releases_and_splits() {
         ("misaligned_address_words", 0),
         ("relocated_words", 0),
         ("written_bytes", 0),
+        ("address_arguments", 0),
+        ("unrelocated_writes", 0),
     ]);
     let executed = Counters::from([("submissions", 2)]);
     assert_eq!(report.frames, [Counts { stream, executed }]);
@@ -839,6 +849,8 @@ fn the_stream_fixes_its_calls_commits_encoders_draws_and_dispatches() {
             ("misaligned_address_words", 0),
             ("relocated_words", 0),
             ("written_bytes", 0),
+            ("address_arguments", 0),
+            ("unrelocated_writes", 0),
         ])
     };
     let executed = Counters::from([("submissions", 1)]);

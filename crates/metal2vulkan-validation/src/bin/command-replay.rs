@@ -5,11 +5,14 @@
 //! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no]` plays the stream whose first segment is
 //! `FILE` through the old runtime (the default) or the new one (`rt`), with `--snapshots no`
 //! taking no `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), and
-//! writes `DIR/report.txt`: `device NAME runtime old|rt snapshots yes|no`,
-//! the player's report lines, the backend's own lines, `cut SEGMENT OFFSET` where the last
+//! writes `DIR/report.txt`: `device NAME runtime old|rt snapshots yes|no`, `relocation ...` (the
+//! words relocated, the address arguments, the writes into objects with no recorded range, and
+//! the objects whose ID differs from the recording's), the player's report lines, the backend's
+//! own lines, `cut SEGMENT OFFSET` where the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
-//! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`. The exit
+//! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`; a play
+//! where an object's ID differs, the compute pipeline states' typed gap aside, is an error. The exit
 //! status is 0 for `ok`, 1 for a play that stopped and 2 for a harness failure (a bad command line, no device, an unreadable stream).
 //!
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
@@ -313,6 +316,22 @@ fn run<B: Backend>(
         false => player.without_snapshots(),
     };
     let (played, ended) = player.play(reader);
+    let counters = backend.counters();
+    // The objects whose ID the program saw that the runtime gives otherwise, the typed gap of the
+    // compute pipeline states' IDs aside: a word that names one in the program's memory names
+    // something else in the play.
+    let gap_ids = counters.get("gap_pipeline_ids").copied().unwrap_or(0);
+    let differing_ids = (played.ids.len() as u64).saturating_sub(gap_ids);
+    let stream = &played.total.stream;
+    let fixed = |key: &str| stream.get(key).copied().unwrap_or(0);
+    report.line(&format!(
+        "relocation relocated_words={} misaligned_address_words={} address_arguments={} \
+         unrelocated_writes={} differing_ids={differing_ids}",
+        fixed("relocated_words"),
+        fixed("misaligned_address_words"),
+        fixed("address_arguments"),
+        fixed("unrelocated_writes"),
+    ));
     for line in played.lines() {
         report.line(&line);
     }
@@ -322,7 +341,6 @@ fn run<B: Backend>(
     if let Some((segment, offset)) = reader.truncated() {
         report.line(&format!("cut {} {offset}", segment.display()));
     }
-    let counters = backend.counters();
     let counted = |prefix: &str| -> Vec<String> {
         (counters.iter())
             .filter(|(name, count)| name.starts_with(prefix) && **count > 0)
@@ -338,6 +356,12 @@ fn run<B: Backend>(
         report.line(&format!("gaps {}", gaps.join(" ")));
     }
     match ended {
+        Ok(()) if differing_ids > 0 => {
+            report.line(&format!(
+                "error ids: {differing_ids} objects' gpuResourceID differ from the recording's"
+            ));
+            1
+        }
         Ok(()) => {
             report.line("ok");
             0

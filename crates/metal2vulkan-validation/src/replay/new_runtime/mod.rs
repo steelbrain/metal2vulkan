@@ -19,6 +19,7 @@ use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions};
 use metal2vulkan_rt as rt;
 use places::{class_index, Place, Places};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ops::Range;
 use std::sync::Arc;
 
 /// What the play skipped because the runtime does not build it yet.
@@ -26,15 +27,38 @@ use std::sync::Arc;
 struct Skips {
     /// Encoders the runtime does not build: render encoders.
     encoders: u64,
-    /// Objects it does not build: textures over buffers, texture views, render pipeline and
-    /// depth-stencil states, render pass descriptors and libraries from source.
+    /// Objects it does not build: render pipeline and depth-stencil states, render pass
+    /// descriptors and libraries from source.
     objects: u64,
     /// Dispatches that bind a skipped object.
     dispatches: u64,
-    /// Blit commands the runtime does not build, or that name a skipped object.
+    /// Blit commands that name a skipped object.
     blits: u64,
+    /// Buffer-to-buffer blit copies, which the runtime does not build yet.
+    buffer_copies: u64,
+    /// The host's copies from the guest's RAM into a buffer, not played yet.
+    guest_ram_writes: u64,
+    /// The host's copies back to the guest's RAM: nothing in a play reads that RAM.
+    guest_ram_reads: u64,
+    /// `synchronizeTexture:slice:level:` and `generateMipmapsForTexture:`, which the runtime
+    /// does not build yet.
+    texture_syncs: u64,
+    mipmaps: u64,
     /// Every other call on a skipped object or naming one, a skipped encoder's among them.
     calls: u64,
+}
+
+/// Textures the play made in place of what the runtime cannot make: an ordinary texture of the
+/// same descriptor, so that the IDs and addresses the program wrote name a live texture. The
+/// recording's artefact, never the runtime's: a guest's surface texture is its host's import.
+#[derive(Default)]
+struct Substitutes {
+    /// Textures over an IOSurface (`newTextureWithDescriptor:iosurface:plane:`).
+    surfaces: u64,
+    /// Tiled textures over a buffer (`newTiledTextureWithDescriptor:offset:bytesPerRow:`).
+    tiled: u64,
+    /// Textures over a buffer and views the runtime answers with a typed gap.
+    gaps: u64,
 }
 
 /// One object of the stream, as the runtime holds it.
@@ -103,6 +127,7 @@ pub struct NewRuntime {
     /// The commits that have completed, every earlier one with them.
     completed: u64,
     skips: Skips,
+    substitutes: Substitutes,
     /// The compute pipeline states whose `gpuResourceID` the player asked, which the runtime does
     /// not give: a typed gap, counted.
     unanswered_pipeline_ids: u64,
@@ -266,6 +291,18 @@ fn set_texture_descriptor(call: &Call, d: &mut rt::TextureDescriptor) -> Result<
 }
 
 /// The class of a texture's index: none where no shader reaches it.
+/// Every slice of a texture of `d`, as a view counts them: a cube's six faces each one.
+fn whole_slices(d: &rt::TextureDescriptor) -> Range<u32> {
+    let faces = match d.texture_type {
+        rt::TextureType::Cube | rt::TextureType::CubeArray => 6,
+        _ => 1,
+    };
+    match d.texture_type {
+        rt::TextureType::Type3D => 0..1,
+        _ => 0..d.array_length.max(1) * faces,
+    }
+}
+
 fn texture_class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
     if usage.is_empty() || usage.contains(rt::TextureUsage::SHADER_WRITE) {
         Some(rt::IndexClass::StorageTexture)
@@ -297,6 +334,7 @@ impl NewRuntime {
             in_flight: VecDeque::new(),
             completed: 0,
             skips: Skips::default(),
+            substitutes: Substitutes::default(),
             unanswered_pipeline_ids: 0,
             block_bytes: [0; 2],
             creations: Vec::new(),
@@ -800,21 +838,8 @@ impl NewRuntime {
                 unaddressed(Object::Sampler(state))
             }
             "newTextureWithDescriptor:" => {
-                let descriptor = match arg(call, 0)? {
-                    // A drawable the stream never saw made: a texture of its descriptor.
-                    map @ Value::Map(_) => {
-                        let f = Fields::of(call, map, &TEXTURE_KEYS)?;
-                        let mut d = rt::TextureDescriptor::new(
-                            rt::TextureType::Type2D,
-                            rt::PixelFormat::Invalid,
-                            1,
-                            1,
-                        );
-                        texture_fields(call, &f, &mut d)?;
-                        d
-                    }
-                    _ => self.texture_descriptor(call, 0)?,
-                };
+                // A drawable the stream never saw made comes as a map: a texture of it.
+                let descriptor = self.descriptor_or_map(call, 0)?;
                 let texture = self.new_texture(call, &descriptor, None)?;
                 unaddressed(Object::Texture(texture))
             }
@@ -846,6 +871,94 @@ impl NewRuntime {
     }
 
     /// The texture descriptor object argument `at` names, as it is now.
+    /// The texture descriptor argument `at` names, or the descriptor it is where it is a map.
+    fn descriptor_or_map(
+        &self,
+        call: &Call,
+        at: usize,
+    ) -> Result<rt::TextureDescriptor, PlayError> {
+        match arg(call, at)? {
+            map @ Value::Map(_) => {
+                let f = Fields::of(call, map, &TEXTURE_KEYS)?;
+                let mut d = rt::TextureDescriptor::new(
+                    rt::TextureType::Type2D,
+                    rt::PixelFormat::Invalid,
+                    1,
+                    1,
+                );
+                texture_fields(call, &f, &mut d)?;
+                Ok(d)
+            }
+            _ => self.texture_descriptor(call, at),
+        }
+    }
+
+    /// An ordinary texture of `descriptor` in place of one the runtime cannot make, counted in
+    /// `count` (`Substitutes`).
+    fn substitute(
+        &mut self,
+        call: &Call,
+        descriptor: &rt::TextureDescriptor,
+        count: fn(&mut Substitutes) -> &mut u64,
+    ) -> Result<Option<(Object, Made)>, PlayError> {
+        let texture = self.new_texture(call, descriptor, None)?;
+        *count(&mut self.substitutes) += 1;
+        unaddressed(Object::Texture(texture))
+    }
+
+    /// A texture `make` makes at an index of the class `usage` picks, where shaders reach it; an
+    /// ordinary texture of `descriptor` in its place where the runtime answers a typed gap.
+    fn texture_or_substitute(
+        &mut self,
+        call: &Call,
+        usage: rt::TextureUsage,
+        descriptor: &rt::TextureDescriptor,
+        make: impl Fn(Option<u32>) -> Result<rt::Texture, rt::Error>,
+    ) -> Result<Option<(Object, Made)>, PlayError> {
+        let gap = std::cell::Cell::new(false);
+        let noted = |index| {
+            let made = make(index);
+            gap.set(matches!(made, Err(rt::Error::Unsupported(_))));
+            made
+        };
+        let made = match texture_class(usage) {
+            Some(class) => self.place(call, class, |index| noted(Some(index))),
+            None => noted(None).map_err(failed(call)),
+        };
+        match made {
+            Ok(texture) => unaddressed(Object::Texture(texture)),
+            Err(_) if gap.get() => self.substitute(call, descriptor, |s| &mut s.gaps),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// A view of `texture`: `format` and `kind` over its `levels` and `slices`.
+    fn view(
+        &mut self,
+        call: &Call,
+        texture: &rt::Texture,
+        format: rt::PixelFormat,
+        kind: rt::TextureType,
+        levels: Range<u32>,
+        slices: Range<u32>,
+    ) -> Result<Option<(Object, Made)>, PlayError> {
+        let parent = *texture.descriptor();
+        // A substitute's descriptor: the view's own, at its first level.
+        let mut own = parent;
+        own.pixel_format = format;
+        own.texture_type = kind;
+        own.width = (parent.width >> levels.start).max(1);
+        own.height = (parent.height >> levels.start).max(1);
+        own.mipmap_level_count = levels.len() as u32;
+        own.array_length = match kind {
+            rt::TextureType::Cube | rt::TextureType::CubeArray => (slices.len() as u32 / 6).max(1),
+            _ => (slices.len() as u32).max(1),
+        };
+        let make =
+            |index| texture.new_texture_view(format, kind, levels.clone(), slices.clone(), index);
+        self.texture_or_substitute(call, parent.usage, &own, make)
+    }
+
     fn texture_descriptor(
         &self,
         call: &Call,
@@ -909,9 +1022,20 @@ impl NewRuntime {
                 did.map_err(failed(call))?;
                 Ok(None)
             }
-            "newTextureWithDescriptor:offset:bytesPerRow:"
-            | "newTiledTextureWithDescriptor:offset:bytesPerRow:"
-            | "newTextureWithDescriptor:iosurface:plane:" => self.skip_object(),
+            "newTextureWithDescriptor:offset:bytesPerRow:" => {
+                let descriptor = self.texture_descriptor(call, 0)?;
+                let (offset, bytes_per_row) = (uint(call, 1)?, uint(call, 2)?);
+                let make = |index| buffer.new_texture(&descriptor, index, offset, bytes_per_row);
+                self.texture_or_substitute(call, descriptor.usage, &descriptor, make)
+            }
+            "newTiledTextureWithDescriptor:offset:bytesPerRow:" => {
+                let descriptor = self.texture_descriptor(call, 0)?;
+                self.substitute(call, &descriptor, |s| &mut s.tiled)
+            }
+            "newTextureWithDescriptor:iosurface:plane:" => {
+                let descriptor = self.descriptor_or_map(call, 0)?;
+                self.substitute(call, &descriptor, |s| &mut s.surfaces)
+            }
             _ => Err(refuse(call, "not played on a buffer")),
         }
     }
@@ -941,12 +1065,40 @@ impl NewRuntime {
                 uint(call, 3)?,
                 0,
             ),
-            // The runtime makes no texture views yet.
-            "newTextureViewWithPixelFormat:"
-            | "newTextureViewWithPixelFormat:resourceIndex:"
-            | "newTextureViewWithPixelFormat:textureType:levels:slices:"
+            // The resource index is the guest's, which the player relocates the IDs of.
+            "newTextureViewWithPixelFormat:" | "newTextureViewWithPixelFormat:resourceIndex:" => {
+                let d = *texture.descriptor();
+                let format = metal(call, uint(call, 0)?)?;
+                let slices = whole_slices(&d);
+                return self.view(
+                    call,
+                    texture,
+                    format,
+                    d.texture_type,
+                    0..d.mipmap_level_count,
+                    slices,
+                );
+            }
+            "newTextureViewWithPixelFormat:textureType:levels:slices:"
             | "newTextureViewWithPixelFormat:textureType:levels:slices:resourceIndex:" => {
-                return self.skip_object()
+                let format = metal(call, uint(call, 0)?)?;
+                let kind = metal(call, uint(call, 1)?)?;
+                let levels = super::args::range(call, arg(call, 2)?)?;
+                let slices = super::args::range(call, arg(call, 3)?)?;
+                let narrow = |r: std::ops::Range<u64>| -> Result<std::ops::Range<u32>, PlayError> {
+                    let start =
+                        u32::try_from(r.start).map_err(|_| refuse(call, "a range past u32"))?;
+                    let end = u32::try_from(r.end).map_err(|_| refuse(call, "a range past u32"))?;
+                    Ok(start..end)
+                };
+                return self.view(
+                    call,
+                    texture,
+                    format,
+                    kind,
+                    narrow(levels)?,
+                    narrow(slices)?,
+                );
             }
             _ => return Err(refuse(call, "not played on a texture")),
         };
@@ -1217,6 +1369,14 @@ impl Backend for NewRuntime {
             ("skipped_objects", self.skips.objects),
             ("skipped_dispatches", self.skips.dispatches),
             ("skipped_blits", self.skips.blits),
+            ("skipped_buffer_copies", self.skips.buffer_copies),
+            ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
+            ("skipped_guest_ram_reads", self.skips.guest_ram_reads),
+            ("skipped_texture_syncs", self.skips.texture_syncs),
+            ("skipped_mipmaps", self.skips.mipmaps),
+            ("substituted_surface_textures", self.substitutes.surfaces),
+            ("substituted_tiled_textures", self.substitutes.tiled),
+            ("substituted_gap_textures", self.substitutes.gaps),
             ("skipped_calls", self.skips.calls),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
         ])

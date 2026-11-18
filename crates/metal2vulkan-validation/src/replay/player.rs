@@ -28,7 +28,12 @@ const DISPATCHES: &str = "dispatches";
 const RELOCATED_WORDS: &str = "relocated_words";
 const MISALIGNED_WORDS: &str = "misaligned_address_words";
 const WRITTEN_BYTES: &str = "written_bytes";
-const FIXED: [&str; 8] = [
+/// The address arguments of the calls played, beside which `relocated_words` shows a data word
+/// that only looks like an address.
+const ADDRESS_ARGUMENTS: &str = "address_arguments";
+/// Writes and uploads into an object with no recorded range, whose words are not relocated.
+const UNRELOCATED_WRITES: &str = "unrelocated_writes";
+const FIXED: [&str; 10] = [
     CALLS,
     COMMITS,
     ENCODERS,
@@ -37,6 +42,8 @@ const FIXED: [&str; 8] = [
     RELOCATED_WORDS,
     MISALIGNED_WORDS,
     WRITTEN_BYTES,
+    ADDRESS_ARGUMENTS,
+    UNRELOCATED_WRITES,
 ];
 
 /// The host's record of a Private buffer range's bytes around one dispatch
@@ -325,6 +332,16 @@ impl Cost {
         } else {
             Cost::Other
         }
+    }
+}
+
+/// The address arguments `value` holds, at any depth.
+fn addresses(value: &Value) -> u64 {
+    match value {
+        Value::Address(_) => 1,
+        Value::List(items) => items.iter().map(addresses).sum(),
+        Value::Map(entries) => entries.iter().map(|(_, item)| addresses(item)).sum(),
+        _ => 0,
     }
 }
 
@@ -1242,6 +1259,8 @@ impl<'b, B: Backend> Player<'b, B> {
             args.push(arg);
         }
         *self.fixed.entry(RELOCATED_WORDS).or_default() += relocated;
+        *self.fixed.entry(ADDRESS_ARGUMENTS).or_default() +=
+            args.iter().map(addresses).sum::<u64>();
         if sets_bytes(&call.selector) {
             if let Some(Value::Bytes(data)) = args.first_mut() {
                 self.relocate(data, 0);
@@ -1290,6 +1309,9 @@ impl<'b, B: Backend> Player<'b, B> {
             return Ok(call);
         };
         let relocated = self.addresses.holds(upload.target);
+        if !relocated {
+            *self.fixed.entry(UNRELOCATED_WRITES).or_default() += 1;
+        }
         let Some(Value::List(entries)) = call.args.get_mut(PIECES) else {
             unreachable!("an upload's pieces");
         };
@@ -1402,8 +1424,9 @@ impl<'b, B: Backend> Player<'b, B> {
     /// Put `data` at `offset` of `target`, relocated where the target answered a `gpuAddress`, and
     /// count it.
     fn put(&mut self, target: u64, offset: u64, mut data: Vec<u8>) -> Result<(), PlayError> {
-        if self.addresses.holds(target) {
-            self.relocate(&mut data, offset);
+        match self.addresses.holds(target) {
+            true => self.relocate(&mut data, offset),
+            false => *self.fixed.entry(UNRELOCATED_WRITES).or_default() += 1,
         }
         *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
         self.write_bytes(target, offset, &data)
