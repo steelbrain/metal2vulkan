@@ -7955,11 +7955,42 @@ fn a_refusal_of_what_the_device_offers_is_the_runtime_s() {
     )));
 }
 
-/// The ledger's two typed reasons parse from a row's waiting-on head with the lane or census run
-/// they name, a head without its name is refused, and the count line sums each by name.
+/// Every object of the consumer's own ([`crate::known_gaps::ConsumerObject`]) is named in
+/// metal2vulkan-rt's README, in its section of what the consumer implements: a row may say the
+/// consumer implements an object only where the runtime's contract says so.
+#[test]
+fn every_object_of_the_consumer_s_own_is_named_in_rt_s_readme() {
+    use crate::known_gaps::ConsumerObject;
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-rt/README.md");
+    let readme = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    let section: String = (readme.lines())
+        .skip_while(|line| *line != "## What the consumer implements")
+        .skip(1)
+        .take_while(|line| !line.starts_with("## "))
+        .collect::<Vec<&str>>()
+        .join(" ");
+    assert!(
+        !section.is_empty(),
+        "rt's README has no section of what the consumer implements"
+    );
+    for object in ConsumerObject::ALL {
+        for named in object.name().split(", ") {
+            assert!(
+                section.contains(&format!("`{named}`")),
+                "rt's README does not name {named} as the consumer's ({object:?})"
+            );
+        }
+    }
+}
+
+/// The ledger's three typed reasons parse from a row's waiting-on head with the lane, census run
+/// or object they name, a head without its name or with an object off the closed list is refused,
+/// and the count lines sum each by name.
 #[test]
 fn the_ledger_s_typed_reasons_parse_and_count() {
-    use crate::known_gaps::{open_work, parse, Reason};
+    use crate::known_gaps::{open_work, parse, ConsumerObject, Reason};
     let row = |waiting_on: &str| format!("a-case\t*\trefused\tcase/site\tErr(X)\t{waiting_on}\n");
     let text = [
         row("refused: not built yet (render). The pipeline's multisample state."),
@@ -7988,7 +8019,7 @@ fn the_ledger_s_typed_reasons_parse_and_count() {
                 census: "census-1".to_owned()
             },
             Reason::TheConsumers {
-                object: "MTLHeap".to_owned()
+                object: ConsumerObject::Heap
             },
             Reason::Words,
         ]
@@ -7996,9 +8027,16 @@ fn the_ledger_s_typed_reasons_parse_and_count() {
     assert_eq!(
         open_work(&ledger, "known-gaps-rt.tsv"),
         "known-gaps-rt.tsv: 3 row(s) not built yet (identity 1, render 2), the cutover's \
-         remaining work; 1 row(s) no stream uses yet (census-1 1); 1 row(s) the consumer's own \
-         (MTLHeap 1)"
+         remaining work; 1 row(s) no stream uses yet (census-1 1)\nknown-gaps-rt.tsv: 1 row(s) \
+         the consumer's own (MTLHeap 1), which its consumer implements and the cutover does not count"
     );
+    for object in ConsumerObject::ALL {
+        let named = format!("refused: the consumer's own ({}). Words.", object.name());
+        let ledger = parse(&row(&named)).expect("a listed object parses");
+        assert_eq!(ledger[0].reason(), Reason::TheConsumers { object });
+    }
+    let unlisted = parse(&row("refused: the consumer's own (MTLDevice)")).expect_err("unlisted");
+    assert!(unlisted.contains("closed list"), "{unlisted}");
     for malformed in [
         "refused: not built yet",
         "refused: no stream uses it yet ()",

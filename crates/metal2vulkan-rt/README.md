@@ -8,6 +8,21 @@ grants of texture and sampler indices, textures, sampler states, command queues,
 and events, compute and blit encoders, the device's counters, and `floor`, the check of a Vulkan
 device against the floor below.
 
+## What the consumer implements
+
+Four of Metal's objects and getters have no counterpart here by design. The consumer implements
+them over this crate's items:
+
+- `MTLRenderPassDescriptor`'s read-back of its own fields. `RenderPassDescriptor` is a value the
+  consumer fills, so what Metal's descriptor answers after its setters is the consumer's to keep.
+- `MTLHeap` and its getters. A heap is a range of a block the consumer took (`HeapRange`); the
+  device's size and alignment of a resource placed in a heap
+  (`Device::heap_texture_size_and_align`) is this crate's.
+- `MTLComputeCommandEncoder`'s `dispatchType`. `CommandBuffer::compute_command_encoder` takes it
+  as its argument and keeps no getter.
+- `MTLTexture`'s `cpuCacheMode`, `hazardTrackingMode` and `allowGPUOptimizedContents`.
+  `TextureDescriptor` states none of them.
+
 ## Instance and device
 
 - `Instance::new` loads the Vulkan loader and creates the instance at the floor's version, with

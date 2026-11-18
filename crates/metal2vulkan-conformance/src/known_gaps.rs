@@ -52,9 +52,12 @@
 //! Three reasons are the ledger's own vocabulary ([`Reason`]), stated at the head of a row's last
 //! field: `refused: not built yet (<lane>)`, a feature the streams use that a lane is building;
 //! `refused: no stream uses it yet (<census run>)`, a call replay's census found no stream using;
-//! and `refused: the consumer's own (<object>)`, a Metal object or getter the runtime keeps no
-//! counterpart of by design, which its consumer implements. Every replay prints their counts
-//! apart ([`open_work`]): the rows not built yet are the cutover's remaining work.
+//! and `refused: the consumer's own (<object>)`, one of a closed list of Metal objects and getters
+//! the runtime keeps no counterpart of by design, which its consumer implements
+//! ([`ConsumerObject`]). A row takes that reason only where the runtime's public API has no item
+//! that could answer it, and leaves it the day the runtime grows one. Every replay prints their
+//! counts ([`open_work`]): the rows not built yet are the cutover's remaining work, and the
+//! consumer's own are counted on a line of their own, outside it.
 
 use crate::case::Venue;
 use crate::replay::Replayed;
@@ -182,8 +185,62 @@ const NOT_BUILT_YET: &str = "refused: not built yet";
 const NO_STREAM_USES_IT: &str = "refused: no stream uses it yet";
 
 /// The head of a row of a Metal object or getter the runtime keeps no counterpart of, which its
-/// consumer implements: the object follows in parentheses.
+/// consumer implements: the object's name ([`ConsumerObject::name`]) follows in parentheses.
 const THE_CONSUMERS: &str = "refused: the consumer's own";
+
+/// A Metal object or getter family the runtime keeps no counterpart of by design, which its
+/// consumer implements ([`Reason::TheConsumers`]), each named in the runtime's README as the
+/// consumer's. The list is closed: a new one is the planner's ruling, not an edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConsumerObject {
+    /// `MTLRenderPassDescriptor`'s read-back of its own fields: the runtime's
+    /// `RenderPassDescriptor` is a value its consumer fills.
+    RenderPassDescriptor,
+    /// `MTLHeap` and its getters: the runtime's blocks are memory its consumer places resources
+    /// in, and no heap. A heap's size and alignment for a buffer or a texture is the device's
+    /// query, the runtime's own, and not this.
+    Heap,
+    /// `MTLComputeCommandEncoder`'s `dispatchType`: the runtime takes it as the encoder's
+    /// argument and keeps no getter.
+    DispatchType,
+    /// `MTLTexture`'s `cpuCacheMode`, `hazardTrackingMode` and `allowGPUOptimizedContents`: the
+    /// runtime's `TextureDescriptor` states none of them.
+    TextureDescriptorFields,
+}
+
+impl ConsumerObject {
+    /// Every object, in the order the count line names them.
+    pub const ALL: [ConsumerObject; 4] = [
+        ConsumerObject::RenderPassDescriptor,
+        ConsumerObject::Heap,
+        ConsumerObject::DispatchType,
+        ConsumerObject::TextureDescriptorFields,
+    ];
+
+    /// The name a row states in its parentheses.
+    pub const fn name(self) -> &'static str {
+        match self {
+            ConsumerObject::RenderPassDescriptor => "MTLRenderPassDescriptor",
+            ConsumerObject::Heap => "MTLHeap",
+            ConsumerObject::DispatchType => "dispatchType",
+            ConsumerObject::TextureDescriptorFields => {
+                "cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents"
+            }
+        }
+    }
+
+    /// The object a row's parenthesis names, or why it names none of the list.
+    fn named(name: &str) -> Result<ConsumerObject, String> {
+        (Self::ALL.into_iter().find(|object| object.name() == name)).ok_or_else(|| {
+            let names: Vec<&str> = Self::ALL.iter().map(|object| object.name()).collect();
+            format!(
+                "a row of the consumer's own names one of the closed list ({}), and \"{name}\" is \
+                 none: a new one is the planner's ruling",
+                names.join("; ")
+            )
+        })
+    }
+}
 
 /// Why a row is open, where the ledger's vocabulary names it: the head of its waiting-on field,
 /// which the replay counts ([`open_work`]). Every other row's reason is its own words.
@@ -197,11 +254,11 @@ pub enum Reason {
     /// streams found no stream using. The day a census finds a use, the row's reason becomes
     /// [`Reason::NotBuiltYet`] with its lane.
     NoStreamUsesIt { census: String },
-    /// `refused: the consumer's own (<object>)`: Metal's `object`, or a getter of it, of which the
-    /// runtime keeps no counterpart by design, as its `RenderPassDescriptor` is a value the
-    /// consumer fills and its memory blocks are no `MTLHeap`. The consumer implements what Metal's
-    /// object answers, so this side has nothing of the runtime's to compare.
-    TheConsumers { object: String },
+    /// `refused: the consumer's own (<object>)`: one of the closed list of Metal objects and getters
+    /// the runtime keeps no counterpart of by design ([`ConsumerObject`]). The consumer implements
+    /// what Metal's object answers, so this side has nothing of the runtime's to compare. It is
+    /// outside the cutover's count.
+    TheConsumers { object: ConsumerObject },
     /// The row's own words: a device's own answer, what Metal does not document, and the like.
     Words,
 }
@@ -216,7 +273,8 @@ impl Reason {
         if let Some(census) = named_after(waiting_on, NO_STREAM_USES_IT)? {
             return Ok(Reason::NoStreamUsesIt { census });
         }
-        if let Some(object) = named_after(waiting_on, THE_CONSUMERS)? {
+        if let Some(name) = named_after(waiting_on, THE_CONSUMERS)? {
+            let object = ConsumerObject::named(&name)?;
             return Ok(Reason::TheConsumers { object });
         }
         Ok(Reason::Words)
@@ -237,40 +295,44 @@ fn named_after(waiting_on: &str, head: &str) -> Result<Option<String>, String> {
         .ok_or_else(|| format!("a row waiting on \"{head}\" names who: \"{head} (<name>)\""))
 }
 
-/// What `ledger`'s typed reasons count, as one line of a replay's report: its rows not built yet
-/// by lane, which is the cutover's remaining work, its rows no stream uses by census run, and its
-/// rows of the consumer's own by object.
+/// What `ledger`'s typed reasons count, as two lines of a replay's report: its rows not built yet
+/// by lane, which is the cutover's remaining work, and its rows no stream uses by census run; then,
+/// on a line of their own and outside the cutover's count, its rows of the consumer's own by
+/// object.
 pub fn open_work(ledger: &[KnownGap], file: &str) -> String {
     let mut lanes = BTreeMap::<String, usize>::new();
     let mut censuses = BTreeMap::<String, usize>::new();
-    let mut objects = BTreeMap::<String, usize>::new();
+    let mut objects = BTreeMap::<&'static str, usize>::new();
     for row in ledger {
         match row.reason() {
             Reason::NotBuiltYet { lane } => *lanes.entry(lane).or_default() += 1,
             Reason::NoStreamUsesIt { census } => *censuses.entry(census).or_default() += 1,
-            Reason::TheConsumers { object } => *objects.entry(object).or_default() += 1,
+            Reason::TheConsumers { object } => *objects.entry(object.name()).or_default() += 1,
             Reason::Words => {}
         }
     }
-    let each = |counted: &BTreeMap<String, usize>| match counted.is_empty() {
-        true => String::new(),
-        false => {
-            let named: Vec<String> = counted
-                .iter()
-                .map(|(name, n)| format!("{name} {n}"))
-                .collect();
-            format!(" ({})", named.join(", "))
+    fn each<K: std::fmt::Display>(counted: &BTreeMap<K, usize>, apart: &str) -> String {
+        match counted.is_empty() {
+            true => String::new(),
+            false => {
+                let named: Vec<String> = counted
+                    .iter()
+                    .map(|(name, n)| format!("{name} {n}"))
+                    .collect();
+                format!(" ({})", named.join(apart))
+            }
         }
-    };
+    }
     format!(
         "{file}: {} row(s) not built yet{}, the cutover's remaining work; {} row(s) no stream \
-         uses yet{}; {} row(s) the consumer's own{}",
+         uses yet{}\n{file}: {} row(s) the consumer's own{}, which its consumer implements and the \
+         cutover does not count",
         lanes.values().sum::<usize>(),
-        each(&lanes),
+        each(&lanes, ", "),
         censuses.values().sum::<usize>(),
-        each(&censuses),
+        each(&censuses, ", "),
         objects.values().sum::<usize>(),
-        each(&objects),
+        each(&objects, "; "),
     )
 }
 
