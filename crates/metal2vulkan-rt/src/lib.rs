@@ -31,6 +31,7 @@ mod reaper;
 mod record;
 mod ring;
 mod sampler;
+mod staging;
 mod submit;
 #[cfg(test)]
 mod tests;

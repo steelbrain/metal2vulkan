@@ -4,9 +4,10 @@
 //!
 //! - textures made and released are freed at once: their moves to a home layout wait for a
 //!   submission, and hold nothing until one;
-//! - `replace_region` calls past [`UPLOAD_BYTES`] of staging submit the upload and wait for it:
-//!   what it alone keeps stays within the bound, the live allocations come back down, and the
-//!   texture reads the last call's bytes;
+//! - `replace_region` calls of twice the staging region's bytes into four textures stage every
+//!   copy in the region: no call allocates, the ring wraps, calls wait for the upload where it
+//!   has no room ([`Metrics::upload_waits`](crate::Metrics::upload_waits)), and each texture
+//!   reads its last call's bytes;
 //! - textures released while the upload holds them for a copy, and a block released while it
 //!   holds it for a zero fill, count against the bound, so the upload goes and frees them;
 //! - zero fills past [`UPLOAD_ENTRIES`] submit it;
@@ -65,7 +66,7 @@ mod on_device {
             });
             let base = counters.gauges().blocks;
             device
-                .grant_indices(IndexClass::Texture, 4096, 4)
+                .grant_indices(IndexClass::Texture, 4096, 8)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let submissions = || counters.metrics().submissions;
 
@@ -88,44 +89,59 @@ mod on_device {
             });
             assert_eq!(submissions(), before, "{name}: textures made and released");
 
-            // Whole-texture copies of 1 MiB, three bounds' worth.
-            let side = 512;
+            // Whole-texture copies of 4,000,000 bytes, twice the staging region's length, into four
+            // textures in turn: the region's block, its replacement in the pool and the textures
+            // are the only allocations.
+            let side = 1000;
             let call = u64::from(side * side * 4);
-            assert_eq!(call, MIB);
-            let calls = 3 * UPLOAD_BYTES / call;
-            let target = device
-                .new_texture(&square(side), Some(4097))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let calls = 2 * BLOCK_LEN / call + 3;
+            let targets: Vec<_> = (0..4)
+                .map(|index| {
+                    device
+                        .new_texture(&square(side), Some(4097 + index))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"))
+                })
+                .collect();
+            let ceiling = base + targets.len() as u64 + 2;
             let pattern = |seed: u64| -> Vec<u8> {
                 (0..call)
                     .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed as u8))
                     .collect()
             };
-            let before = submissions();
+            let waits = counters.metrics().upload_waits;
             for seed in 0..calls {
+                let target = &targets[(seed % 4) as usize];
                 target
                     .replace_region(whole(side), 0, 0, &pattern(seed), u64::from(side * 4), call)
                     .unwrap_or_else(|error| panic!("{name}: copy {seed}: {error}"));
-                let (entries, bytes, _) = core.work.pending();
+                let blocks = counters.gauges().blocks;
                 assert!(
-                    bytes <= UPLOAD_BYTES,
-                    "{name}: copy {seed}: the upload keeps {bytes} bytes in {entries} calls"
+                    blocks <= ceiling,
+                    "{name}: copy {seed}: {blocks} allocations live, at most {ceiling} expected"
+                );
+                let (_, bytes, _) = core.work.pending();
+                assert_eq!(bytes, 0, "{name}: copy {seed}: staging of its own");
+            }
+            let waited = counters.metrics().upload_waits - waits;
+            assert!(
+                waited >= 1,
+                "{name}: {calls} copies of {call} bytes never waited"
+            );
+            for (index, target) in targets.iter().enumerate() {
+                let last = calls - 1 - (calls - 1 - index as u64) % 4;
+                let mut read = vec![0; call as usize];
+                target
+                    .get_bytes(&mut read, u64::from(side * 4), call, whole(side), 0, 0)
+                    .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
+                assert!(
+                    read == pattern(last),
+                    "{name}: texture {index}: copy {last}'s bytes"
                 );
             }
             assert!(
-                submissions() >= before + 2,
-                "{name}: {calls} copies of {call} bytes submitted {} times",
-                submissions() - before
+                counters.gauges().blocks <= ceiling,
+                "{name}: after the reads"
             );
-            let staging = UPLOAD_BYTES / call;
-            wait_until("the copies' staging freed down to one upload's", || {
-                counters.gauges().blocks <= base + 1 + staging
-            });
-            let mut read = vec![0; call as usize];
-            target
-                .get_bytes(&mut read, u64::from(side * 4), call, whole(side), 0, 0)
-                .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
-            assert!(read == pattern(calls - 1), "{name}: the last copy's bytes");
 
             // Textures of 4 MiB released after a copy of 64 bytes: the upload holds them alone.
             let big = 1024;
@@ -133,7 +149,7 @@ mod on_device {
             let before = submissions();
             for round in 0..rounds {
                 let texture = device
-                    .new_texture(&square(big), Some(4098))
+                    .new_texture(&square(big), Some(4101))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 texture
                     .replace_region(whole(4), 0, 0, &[round as u8; 64], 16, 64)
@@ -150,8 +166,8 @@ mod on_device {
                 "{name}: {rounds} released textures submitted {} times",
                 submissions() - before
             );
-            // The copy target, and at most one bound's worth of released textures.
-            let kept = 1 + UPLOAD_BYTES / (4 * MIB);
+            // The copy targets, and at most one bound's worth of released textures.
+            let kept = targets.len() as u64 + UPLOAD_BYTES / (4 * MIB);
             wait_until("the released textures freed down to one upload's", || {
                 counters.gauges().textures <= kept
             });
@@ -196,14 +212,15 @@ mod on_device {
             }
             assert!(submissions() > before, "{name}: the fills went");
 
-            drop(target);
+            drop(targets);
             device
                 .release_block(fills.id)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             wait_until("the teardown", || counters.gauges() == Gauges::default());
             println!(
-                "upload: {name}: {calls} copies, {rounds} released textures; metrics {:?}",
+                "upload: {name}: {calls} copies waited {waited} times, {rounds} released textures; \
+                 metrics {:?}",
                 counters.metrics()
             );
         }

@@ -2267,6 +2267,7 @@ field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
 field	metal2vulkan-rt::Metrics.submissions	pub submissions: u64
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64
 field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
+field	metal2vulkan-rt::Metrics.upload_waits	pub upload_waits: u64
 field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device
 field	metal2vulkan-rt::RawDevice.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice

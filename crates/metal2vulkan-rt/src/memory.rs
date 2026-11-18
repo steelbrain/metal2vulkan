@@ -294,7 +294,7 @@ impl Pool {
         }
     }
 
-    fn give_back(&self, memory: Memory) {
+    pub(crate) fn give_back(&self, memory: Memory) {
         self.lock().returned.push(memory);
         self.changed.notify_all();
     }

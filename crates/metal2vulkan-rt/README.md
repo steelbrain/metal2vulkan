@@ -68,7 +68,7 @@ by `Device::new`.
 
 `Device::counters` returns a handle that stays readable after the device is gone. `metrics()` are
 cumulative counts (submissions, passes, barriers, bytes copied, pipelines created, blocks made,
-first-use waits, kernels lowered and kernels read from the cache directory);
+first-use waits, kernels lowered, kernels read from the cache directory, and upload waits);
 `gauges()` are live counts per kind of resource, every one zero after teardown. They are relaxed
 atomics, always on.
 
@@ -87,9 +87,9 @@ in its memory.
   `BLOCK_LEN` a block is dedicated: the length rounded up to 64 KiB, made in the call, up to the
   device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
 - Every `VkDeviceMemory` the runtime holds counts against the device's
-  `maxMemoryAllocationCount`: each block, each texture's own allocation, the staging buffer of
-  each `Texture::replace_region` and `Texture::get_bytes` while its copy runs, the parameter ring's
-  blocks and the zero source. One more past it is `Limit::MemoryAllocations`, refused before the
+  `maxMemoryAllocationCount`: each block, each texture's own allocation, the staging region
+  (one Shared block of the pool, from the first texture copy on), the staging buffer of a copy
+  larger than the region while it runs, the parameter ring's blocks and the zero source. One more past it is `Limit::MemoryAllocations`, refused before the
   driver is called; `Gauges::blocks` counts those live. The limit is about 4.29 billion on RADV,
   NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD Graphics 630, and
   4,096 at Vulkan's minimum.
@@ -198,11 +198,18 @@ made, with no lock, and never rewritten for layouts.
   (`Refusal::TextureBytesPrivate` otherwise), a region inside a level and slice on the format's
   block grid (`Refusal::TextureRegion`), and rows and images apart as Metal's calls take them,
   a compressed format's rows being rows of blocks (`Refusal::TextureBytesLayout` where they
-  overlap or the bytes are too few). `replace_region` copies the bytes into a staging buffer
+  overlap or the bytes are too few). `replace_region` copies the bytes into the staging region
   before it returns, and the upload copies them into the image, leaving home for the transfer
   layout and coming back, ahead of every command buffer committed after the call. `get_bytes`
   records the copy out into the upload, submits it at once, waits for it and copies the bytes
   out; as in Metal, the program has waited for the work that writes the texture.
+- The staging region is a Shared block of the pool, taken at the first copy and kept for the
+  device's life, so no copy allocates memory and the host writes resident pages. It is a ring:
+  each copy takes a span at a multiple of 256 bytes, free again once the submission that carries
+  the copy completes and no `get_bytes` reads it. Where the ring has no room, the call waits for
+  its oldest span's submission, submitting the upload first where the span is in it
+  (`Metrics::upload_waits`). A copy larger than the region's 256 MiB has a staging buffer of its
+  own, which counts against the upload's 64 MiB.
 - A texture holds the device. Once its last handle and the last command buffer that used it are
   gone, its elements read null and its index is free at once; the reaper frees its image once the
   last upload that moves or copies it has retired. `Gauges::textures` counts images until then,
@@ -210,8 +217,8 @@ made, with no lock, and never rewritten for layouts.
 
 ### Known gaps of textures
 
-- `replace_region` and `get_bytes` go through a staging buffer: a copy Metal does not make, in
-  memory of its own for each call, counted in `Metrics::bytes_copied`.
+- `replace_region` and `get_bytes` go through the staging region: a copy Metal does not make,
+  counted in `Metrics::bytes_copied`.
 - A texture whose format the device does not store through a storage image without a format has
   no storage element, so a shader write through its index is dropped, as a write to a nil
   texture is.
@@ -269,9 +276,10 @@ made, with no lock, and never rewritten for layouts.
   queue's command buffers in groups: a submission holds at most four command buffers of one
   queue, ahead of them the upload (zero fills, texture copies and new textures' moves to their
   home layouts), and only its last submit info signals the progress semaphore. The upload records
-  at most 4,096 calls and keeps at most 64 MiB on its own account: its staging buffers, and the
-  textures and blocks released while it held them. A call that finds it past either submits it
-  and waits for it to complete before recording, so nothing grows without a commit. While fewer than two of a queue's submissions are not yet seen complete,
+  at most 4,096 calls and keeps at most 64 MiB on its own account: the staging buffers of copies
+  larger than the staging region, and the textures and blocks released while it held them. A call
+  that finds it past either submits it and waits for it to complete before recording, so nothing
+  grows without a commit. While fewer than two of a queue's submissions are not yet seen complete,
   each of its command buffers goes at once, alone. While two are, the ones committed meanwhile
   are held in one group, each scheduled as it joins, and the group goes when it holds four, when
   a completion leaves fewer than two in flight (the completion thread wakes the submit thread as
@@ -357,7 +365,7 @@ that touch blocks first.
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through
   arithmetic defined for every value and never later than its `gpu_end_time`; and
-  `Texture::get_bytes`'s copy out of its staging buffer, whose bytes reach only the caller's
+  `Texture::get_bytes`'s copy out of its staging span, whose bytes reach only the caller's
   buffer, at offsets and lengths from the call's checked region. The parameter ring
   and an indirect dispatch's arguments are read only by the GPU: the runtime writes the ring and
   never reads it back, and never reads the arguments.

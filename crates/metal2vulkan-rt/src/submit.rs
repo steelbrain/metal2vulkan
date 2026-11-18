@@ -14,7 +14,8 @@
 //! The upload is bounded: a call that finds it holding [`UPLOAD_ENTRIES`] calls, or
 //! [`UPLOAD_BYTES`] of memory it alone keeps, has it submitted and waits for it to complete before
 //! it records. A new texture's move to its home layout holds nothing until the next submission,
-//! whose upload records it where the texture still lives.
+//! whose upload records it where the texture still lives. Copies stage their bytes in the
+//! device's staging region ([`crate::staging`]), which the work lock guards with the upload.
 
 use crate::command::{CbInner, CommandBufferError, Handler, Pending, Segment};
 use crate::complete;
@@ -23,10 +24,11 @@ use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
 use crate::fill;
-use crate::memory::Block;
+use crate::memory::{Block, Mapping, Memory, MemoryClass};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
-use crate::texture::{Image, Staging};
+use crate::staging::{At, Oldest, Region, Stage, Staging};
+use crate::texture::Image;
 use crate::times;
 use ash::vk;
 use std::collections::VecDeque;
@@ -79,6 +81,8 @@ pub(crate) struct WorkState {
     homes: Vec<Weak<Image>>,
     /// The length of `homes` at which the dead are dropped from it.
     prune_at: usize,
+    /// The staging region, from the first copy on.
+    region: Option<Region>,
     /// Something changed that may let a held segment or group go.
     dirty: bool,
     /// The upload is to go at once, alone where no group goes ([`Work::flush`]).
@@ -125,8 +129,10 @@ pub(crate) struct Upload {
     held: Vec<Held>,
     /// The calls recorded, and one for the home layouts recorded as it is submitted.
     entries: usize,
-    /// The bytes of the staging buffers it holds.
+    /// The bytes of the staging buffers of its own it holds.
     staging: u64,
+    /// The staging region's spans its copies use.
+    spans: Vec<u64>,
 }
 
 /// What an upload keeps until it retires.
@@ -164,6 +170,7 @@ impl Upload {
                 held: Vec::new(),
                 entries: 0,
                 staging: 0,
+                spans: Vec::new(),
             }),
             Err(error) => {
                 core.recorders.give_back(core, recorder);
@@ -252,6 +259,7 @@ impl Work {
                 upload: None,
                 homes: Vec::new(),
                 prune_at: HOMES_PRUNE,
+                region: None,
                 dirty: false,
                 flush: false,
                 stop: false,
@@ -318,22 +326,45 @@ impl Work {
 
     /// Records into the pending upload with `record`, which is given the device and the upload's
     /// command buffer, recording, under the work lock: commands that go ahead of every later
-    /// commit, on every queue. The upload keeps each of `held` until it retires; `staging` is the
-    /// bytes of the staging buffer among them. A texture of `held` not yet in its home layout is
-    /// moved there first.
+    /// commit, on every queue. The upload keeps each of `held` until it retires, and `stage`, the
+    /// staging of a copy [`stage`](Self::stage) gave: its span of the region until the
+    /// submission completes, or its own staging buffer. A texture of `held` not yet in its home
+    /// layout is moved there first.
     ///
     /// Where the upload is full ([`UPLOAD_ENTRIES`], [`UPLOAD_BYTES`]), it is submitted and the
-    /// call waits for it to complete first, without the lock.
+    /// call waits for it to complete first, without the lock. Where the call fails, `stage`'s
+    /// span is given up.
     ///
     /// Err: [`Error::Quiesced`]; [`Error::Vulkan`] where a command pool or buffer cannot be made,
     /// and with `VK_ERROR_DEVICE_LOST` where the device is lost while the call waits.
     pub(crate) fn upload<const N: usize>(
         &self,
         core: &Core,
-        staging: u64,
+        stage: Option<&Stage>,
         held: [Held; N],
         record: impl FnOnce(&ash::Device, vk::CommandBuffer),
     ) -> Result<(), Error> {
+        let recorded = self.record_upload(core, stage, held, record);
+        if recorded.is_err() {
+            if let Some(Stage::Region { number, .. }) = stage {
+                self.give_up(*number);
+            }
+        }
+        recorded
+    }
+
+    /// [`upload`](Self::upload) up to the span's give-up on a failure.
+    fn record_upload<const N: usize>(
+        &self,
+        core: &Core,
+        stage: Option<&Stage>,
+        held: [Held; N],
+        record: impl FnOnce(&ash::Device, vk::CommandBuffer),
+    ) -> Result<(), Error> {
+        let staging = match stage {
+            Some(Stage::Own(staging)) => staging.len,
+            _ => 0,
+        };
         let mut state = self.lock();
         loop {
             if state.closed {
@@ -346,6 +377,7 @@ impl Work {
             let value = state.flush();
             drop(state);
             self.wake();
+            core.counters.count(Metric::UploadWaits);
             core.done.wait(core, value)?;
             state = self.lock();
         }
@@ -370,7 +402,107 @@ impl Work {
                 upload.held.push(item);
             }
         }
+        match stage {
+            Some(Stage::Region { number, .. }) => {
+                upload.spans.push(*number);
+                if let Some(region) = &mut state.region {
+                    region.ring.set(*number, At::Recorded);
+                }
+            }
+            Some(Stage::Own(staging)) => upload.held.push(Held::Staging(Arc::clone(staging))),
+            None => {}
+        }
         Ok(())
+    }
+
+    /// Staging for a copy of `len` bytes: a span of the device's staging region, made from a
+    /// Shared block of the pool at the first copy; a staging buffer of its own for a copy larger
+    /// than the region. Where the region has no room, the call waits, without the lock, for what
+    /// frees its oldest span: the submission that carries it, after submitting the pending upload
+    /// where it is in that. `read` keeps the span until [`unread`](Self::unread), for a copy the
+    /// host reads once it completed. The caller passes the stage to [`upload`](Self::upload).
+    ///
+    /// Err: [`Error::Quiesced`]; what taking the block or making the staging buffer can return;
+    /// [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` where the device is lost while the call
+    /// waits.
+    pub(crate) fn stage(&self, core: &Arc<Core>, len: u64, read: bool) -> Result<Stage, Error> {
+        let mut state = self.lock();
+        if state.region.is_none() {
+            drop(state);
+            let memory = core.pool.take(MemoryClass::Shared)?;
+            state = self.lock();
+            match (&state.region, memory.mapping) {
+                (None, Some(host)) => state.region = Some(Region::new(memory, host)),
+                _ => core.pool.give_back(memory),
+            }
+        }
+        // The progress value known complete: what the completion thread has seen, or what this
+        // call waited for.
+        let mut completed = core.done.completed();
+        loop {
+            if state.closed {
+                return Err(Error::Quiesced);
+            }
+            // A Shared block is always mapped.
+            let Some(region) = &mut state.region else {
+                return Err(Error::Vulkan {
+                    call: "vkMapMemory",
+                    result: vk::Result::ERROR_MEMORY_MAP_FAILED,
+                });
+            };
+            if len > region.ring.len() {
+                drop(state);
+                return Ok(Stage::Own(Arc::new(Staging::new(core, len)?)));
+            }
+            region.ring.reclaim(completed.max(core.done.completed()));
+            if let Some((number, offset)) = region.ring.take(len, read) {
+                return Ok(Stage::Region {
+                    number,
+                    buffer: region.memory.buffer,
+                    offset,
+                    // SAFETY: the span lies in the block, which the mapping spans.
+                    host: Mapping::new(unsafe { region.host.at(offset) }),
+                });
+            }
+            let value = match region.ring.oldest() {
+                Some(Oldest::Submitted(value)) => value,
+                Some(Oldest::Pending) => state.flush(),
+                // Another call finishes writing or reading its span.
+                Some(Oldest::Busy) | None => {
+                    drop(state);
+                    std::thread::yield_now();
+                    state = self.lock();
+                    continue;
+                }
+            };
+            drop(state);
+            self.wake();
+            core.counters.count(Metric::UploadWaits);
+            core.done.wait(core, value)?;
+            completed = completed.max(value);
+            state = self.lock();
+        }
+    }
+
+    /// The host no longer reads span `number` of the staging region.
+    pub(crate) fn unread(&self, number: u64) {
+        if let Some(region) = &mut self.lock().region {
+            region.ring.unread(number);
+        }
+    }
+
+    /// Gives up span `number` of the staging region, with no copy recorded.
+    fn give_up(&self, number: u64) {
+        if let Some(region) = &mut self.lock().region {
+            region.ring.set(number, At::Done);
+            region.ring.unread(number);
+        }
+    }
+
+    /// At teardown: the staging region's block, for the core to free.
+    pub(crate) fn take_region(&mut self) -> Option<Memory> {
+        let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
+        state.region.take().map(|region| region.memory)
     }
 
     /// A new texture's `image`: the next submission's upload moves it to its home layout where it
@@ -437,7 +569,7 @@ impl Work {
     ) -> Result<(), Error> {
         self.upload(
             core,
-            0,
+            None,
             [Held::Block(Arc::clone(block))],
             |device, command| {
                 // SAFETY: the upload's command buffer is recording, under the lock; the block's
@@ -536,12 +668,23 @@ impl WorkState {
         self.progress + 1
     }
 
-    /// Takes the pending upload for a submission, with the moves to their home layouts of the
-    /// textures made since the last that still live, which it holds from then. `released` starts
+    /// Takes the pending upload for the submission of progress `value`, with the moves to their
+    /// home layouts of the textures made since the last that still live, which it holds from
+    /// then; its spans of the staging region are free once `value` completes. `released` starts
     /// again for the next upload.
-    fn take_upload(&mut self, device: &ash::Device, released: &AtomicU64) -> Option<Upload> {
+    fn take_upload(
+        &mut self,
+        device: &ash::Device,
+        released: &AtomicU64,
+        value: u64,
+    ) -> Option<Upload> {
         let mut upload = self.upload.take()?;
         released.store(0, Ordering::Relaxed);
+        if let Some(region) = &mut self.region {
+            for &number in &upload.spans {
+                region.ring.set(number, At::Submitted(value));
+            }
+        }
         self.prune_at = HOMES_PRUNE;
         let mut moves = Vec::new();
         for image in self.homes.drain(..).filter_map(|home| home.upgrade()) {
@@ -554,6 +697,19 @@ impl WorkState {
         if !moves.is_empty() {
             upload.home(device, &moves);
             upload.entries += 1;
+        }
+        Some(upload)
+    }
+
+    /// Takes the pending upload where it will never be submitted: its spans of the staging region
+    /// are given up, and the textures awaiting their home layout need none.
+    fn drop_upload(&mut self) -> Option<Upload> {
+        self.homes.clear();
+        let upload = self.upload.take()?;
+        if let Some(region) = &mut self.region {
+            for &number in &upload.spans {
+                region.ring.set(number, At::Done);
+            }
         }
         Some(upload)
     }
@@ -752,7 +908,7 @@ impl WorkState {
             pending.value = value;
         }
         self.flush = false;
-        Some((value, self.take_upload(device, released), batch))
+        Some((value, self.take_upload(device, released, value), batch))
     }
 
     /// The first FIFO whose group goes at the end of a pass: unless its queue has [`IN_FLIGHT`]
@@ -891,8 +1047,7 @@ pub(crate) fn run(core: Arc<Core>) {
                 ended.extend(end(fifo.entries, error));
             }
             // Nothing more runs: the textures awaiting their home layout need none.
-            let upload = state.upload.take();
-            state.homes.clear();
+            let upload = state.drop_upload();
             drop(state);
             if let Some(upload) = upload {
                 upload.retire(&core);
@@ -906,7 +1061,7 @@ pub(crate) fn run(core: Arc<Core>) {
             let ended: Vec<Ended> = (state.fifos.drain(..))
                 .flat_map(|fifo| end(fifo.entries, |_| CommandBufferError::NotRun))
                 .collect();
-            let upload = state.upload.take();
+            let upload = state.drop_upload();
             drop(state);
             if let Some(upload) = upload {
                 upload.retire(&core);
@@ -956,10 +1111,10 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
         state = work.lock();
     }
     if state.flush && !sent {
-        if let Some(upload) = state.take_upload(&core.device, &work.released) {
+        let value = state.progress + 1;
+        if let Some(upload) = state.take_upload(&core.device, &work.released, value) {
             state.flush = false;
-            state.progress += 1;
-            let value = state.progress;
+            state.progress = value;
             drop(state);
             submit(core, value, Some(upload), Batch::empty());
             state = work.lock();

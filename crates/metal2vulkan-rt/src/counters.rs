@@ -23,6 +23,8 @@ pub(crate) enum Metric {
     TranslationsLoaded,
     /// [`Metrics::ring_writes`].
     RingWrites,
+    /// [`Metrics::upload_waits`].
+    UploadWaits,
 }
 
 /// A gauge the runtime moves.
@@ -72,6 +74,7 @@ struct Atomics {
     translations: AtomicU64,
     translations_loaded: AtomicU64,
     ring_writes: AtomicU64,
+    upload_waits: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -106,6 +109,7 @@ impl Counters {
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
             Metric::RingWrites => &a.ring_writes,
+            Metric::UploadWaits => &a.upload_waits,
         };
         atomic.fetch_add(1, Relaxed);
     }
@@ -185,6 +189,7 @@ impl Counters {
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
             ring_writes: a.ring_writes.load(Relaxed),
+            upload_waits: a.upload_waits.load(Relaxed),
         }
     }
 
@@ -243,6 +248,9 @@ pub struct Metrics {
     /// Writes into the parameter ring: a dispatch's parameter block, its fields past the push
     /// window (a kernel with more than 28 buffers), and each `set_bytes` copy.
     pub ring_writes: u64,
+    /// Calls that waited for an upload to complete before they recorded: the upload at its
+    /// bound of calls or bytes, or the staging region with no room for a copy.
+    pub upload_waits: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the

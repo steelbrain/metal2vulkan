@@ -1007,6 +1007,9 @@ impl Drop for Core {
         // The runtime's threads have ended: the core is dropped only once none holds it, and with
         // it every command buffer and upload, each of which held what it used. The teardown ran
         // the consumer's unmap hook, so freeing runs none.
+        if let Some(memory) = self.work.take_region() {
+            memory::free(self, memory);
+        }
         for memory in self.pool.remaining() {
             memory::free(self, memory);
         }

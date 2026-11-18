@@ -18,8 +18,9 @@ use crate::arrays::{IndexClass, ResourceId};
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal};
-use crate::memory::{self, Mapping, MemoryClass};
+use crate::memory;
 use crate::reaper::{Free, Job};
+use crate::staging::Stage;
 use crate::submit::Held;
 use ash::vk;
 use metal2vulkan::device::FormatUsage;
@@ -816,9 +817,9 @@ impl Transfer {
         })
     }
 
-    fn buffer_image_copy(&self) -> vk::BufferImageCopy {
+    fn buffer_image_copy(&self, offset: u64) -> vk::BufferImageCopy {
         vk::BufferImageCopy {
-            buffer_offset: 0,
+            buffer_offset: offset,
             buffer_row_length: 0,
             buffer_image_height: 0,
             image_subresource: vk::ImageSubresourceLayers {
@@ -927,19 +928,19 @@ impl TextureInner {
         }))
     }
 
-    /// Records `copy` between the staging buffer and the image, `to_image` for a replace: the
+    /// Records `copy` between its staging and the image, `to_image` for a replace: the
     /// subresource leaves home for the transfer layout and comes back, and a read's bytes are
     /// made visible to the host.
     ///
     /// # Safety
     ///
-    /// `command` is recording under the work lock, and the upload holds the image and `staging`.
+    /// `command` is recording under the work lock, and the upload holds the image and `stage`.
     unsafe fn record(
         &self,
         device: &ash::Device,
         command: vk::CommandBuffer,
         copy: &Transfer,
-        staging: vk::Buffer,
+        stage: &Stage,
         to_image: bool,
     ) {
         use vk::AccessFlags2 as Access;
@@ -1001,7 +1002,7 @@ impl TextureInner {
             true => back,
             false => back.memory_barriers(&host),
         };
-        let regions = [copy.buffer_image_copy()];
+        let regions = [copy.buffer_image_copy(stage.offset())];
         // SAFETY: the caller's contract; the subresource is in `layout` between the barriers.
         unsafe {
             device.cmd_pipeline_barrier2(
@@ -1011,7 +1012,7 @@ impl TextureInner {
             match to_image {
                 true => device.cmd_copy_buffer_to_image(
                     command,
-                    staging,
+                    stage.buffer(),
                     self.image.image,
                     layout,
                     &regions,
@@ -1020,7 +1021,7 @@ impl TextureInner {
                     command,
                     self.image.image,
                     layout,
-                    staging,
+                    stage.buffer(),
                     &regions,
                 ),
             }
@@ -1057,17 +1058,19 @@ impl Texture {
     /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:`: the bytes of
     /// `region` of `level` and `slice` (a 3D texture's slice is 0), rows `bytes_per_row` and
     /// images `bytes_per_image` apart in `bytes`, a compressed format's rows being rows of
-    /// blocks. The bytes go to a staging buffer before the call returns, and the upload copies
-    /// them into the image ahead of every command buffer committed after it, so the call is
-    /// ordered as Metal's CPU write is. Counted in [`Metrics::bytes_copied`]. An empty region
-    /// copies nothing.
+    /// blocks. The bytes go to the device's staging region before the call returns (a staging
+    /// buffer of their own past the region's 256 MiB), and the upload copies them into the image
+    /// ahead of every command buffer committed after it, so the call is ordered as Metal's CPU
+    /// write is. Where the region has no room, the call first waits for the oldest copy in it to
+    /// complete. Counted in [`Metrics::bytes_copied`]. An empty region copies nothing.
     ///
     /// Err: [`Refusal::TextureBytesPrivate`]; [`Refusal::TextureRegion`] for a level, slice or
     /// region outside the texture or off its format's block grid;
     /// [`Refusal::TextureBytesLayout`]; [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`] for a
-    /// 32-bit float depth; [`Limit::MemoryAllocations`] where the staging buffer's memory would
-    /// take the device past its count; [`Error::Vulkan`] where the staging buffer cannot be made;
-    /// [`Error::Quiesced`].
+    /// 32-bit float depth; [`Limit::MemoryAllocations`] where the region's block or a staging
+    /// buffer's memory would take the device past its count; [`Error::Vulkan`] where either
+    /// cannot be made, and with `VK_ERROR_DEVICE_LOST` where the device is lost while the call
+    /// waits; [`Error::Quiesced`].
     ///
     /// [`Metrics::bytes_copied`]: crate::Metrics::bytes_copied
     pub fn replace_region(
@@ -1091,38 +1094,34 @@ impl Texture {
             }));
         }
         let core = inner.device.core();
-        let staging = Arc::new(Staging::new(core, copy.len())?);
+        let stage = core.work.stage(core, copy.len(), false)?;
         let row = copy.row as usize;
+        let host = stage.host().as_ptr();
         for (from, to) in copy.rows() {
-            // SAFETY: `copy` checked that each row lies in `bytes`, and the staging buffer holds
-            // every row packed; no one else has the staging buffer yet.
+            // SAFETY: `copy` checked that each row lies in `bytes`, and the stage holds every row
+            // packed; it is this call's alone until its copy is recorded.
             unsafe {
                 bytes
                     .as_ptr()
                     .add(from)
-                    .copy_to_nonoverlapping(staging.mapping.get().as_ptr().add(to), row)
+                    .copy_to_nonoverlapping(host.add(to), row)
             };
         }
         core.counters.copied(copy.len());
-        let buffer = staging.buffer;
         core.work.upload(
             core,
-            copy.len(),
-            [
-                Held::Texture(Arc::clone(&inner.image)),
-                Held::Staging(staging),
-            ],
-            // SAFETY: recording under the work lock, the upload holding the image and the
-            // staging buffer.
-            |device, command| unsafe { inner.record(device, command, &copy, buffer, true) },
+            Some(&stage),
+            [Held::Texture(Arc::clone(&inner.image))],
+            // SAFETY: recording under the work lock, the upload holding the image and the stage.
+            |device, command| unsafe { inner.record(device, command, &copy, &stage, true) },
         )
     }
 
     /// `getBytes:bytesPerRow:bytesPerImage:fromRegion:mipmapLevel:slice:`: the image's bytes of
     /// `region` of `level` and `slice`, laid out in `bytes` as [`Texture::replace_region`] takes
-    /// them. The upload copies them to a staging buffer, the call submits it at once and waits
-    /// for it, and copies them out. Metal's contract holds: the program has waited for the work
-    /// that writes the texture. Counted in [`Metrics::bytes_copied`].
+    /// them. The upload copies them to the device's staging region, the call submits it at once
+    /// and waits for it, and copies them out. Metal's contract holds: the program has waited for
+    /// the work that writes the texture. Counted in [`Metrics::bytes_copied`].
     ///
     /// Err: as [`Texture::replace_region`]; [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` where
     /// the device is lost first.
@@ -1144,123 +1143,33 @@ impl Texture {
             return Ok(());
         };
         let core = inner.device.core();
-        let staging = Arc::new(Staging::new(core, copy.len())?);
-        let buffer = staging.buffer;
+        let stage = core.work.stage(core, copy.len(), true)?;
         core.work.upload(
             core,
-            copy.len(),
-            [
-                Held::Texture(Arc::clone(&inner.image)),
-                Held::Staging(Arc::clone(&staging)),
-            ],
+            Some(&stage),
+            [Held::Texture(Arc::clone(&inner.image))],
             // SAFETY: as in `replace_region`.
-            |device, command| unsafe { inner.record(device, command, &copy, buffer, false) },
+            |device, command| unsafe { inner.record(device, command, &copy, &stage, false) },
         )?;
         let value = core.work.flush();
-        core.done.wait(core, value)?;
-        // SAFETY: the staging buffer holds every row packed, the copy into it completed and its
-        // writes are visible to the host; `copy` checked that each row lies in `bytes`.
-        unsafe {
-            crate::readback::texels(
-                staging.mapping.get().as_ptr(),
-                bytes,
-                copy.rows(),
-                copy.row as usize,
-            )
-        };
-        core.counters.copied(copy.len());
-        Ok(())
-    }
-}
-
-/// A host-visible buffer of a copy's bytes, in memory of its own of the Shared type, mapped for
-/// its life. The reaper frees it once its last holder, the upload that copies through it among
-/// them, is gone.
-pub(crate) struct Staging {
-    core: Arc<Core>,
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
-    mapping: Mapping,
-}
-
-impl Staging {
-    /// A staging buffer of `len` bytes.
-    fn new(core: &Arc<Core>, len: u64) -> Result<Staging, Error> {
-        let device = &core.device;
-        let info = vk::BufferCreateInfo::default()
-            .size(len)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        // SAFETY: the device is live.
-        let buffer = unsafe { device.create_buffer(&info, None) }
-            .map_err(Error::vulkan("vkCreateBuffer"))?;
-        // SAFETY: the buffer is the device's.
-        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-        let allocate = vk::MemoryAllocateInfo::default()
-            .allocation_size(requirements.size)
-            .memory_type_index(core.memory_type(MemoryClass::Shared));
-        // SAFETY: the Shared type serves a buffer of every usage, so one of fewer too.
-        let allocated =
-            unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) };
-        let memory = match allocated {
-            Ok(memory) => memory,
-            Err(error) => {
-                // SAFETY: the buffer is unused.
-                unsafe { device.destroy_buffer(buffer, None) };
-                return Err(error);
-            }
-        };
-        // SAFETY: the allocation is the buffer's size, of a type it allows; the memory is
-        // host-visible and not mapped.
-        let mapped = unsafe {
-            device
-                .bind_buffer_memory(buffer, memory, 0)
-                .map_err(Error::vulkan("vkBindBufferMemory"))
-                .and_then(|()| {
-                    device
-                        .map_memory(memory, 0, vk::WHOLE_SIZE, vk::MemoryMapFlags::empty())
-                        .map_err(Error::vulkan("vkMapMemory"))
-                })
-        };
-        let pointer = match mapped {
-            Ok(pointer) => pointer,
-            Err(error) => {
-                // SAFETY: nothing uses them.
-                unsafe {
-                    device.destroy_buffer(buffer, None);
-                    device.free_memory(memory, None);
-                }
-                core.counters.fall(Gauge::Blocks);
-                return Err(error);
-            }
-        };
-        // A successful map gives a non-null address.
-        let Some(pointer) = std::ptr::NonNull::new(pointer.cast::<u8>()) else {
-            // SAFETY: nothing uses them.
+        let waited = core.done.wait(core, value);
+        if waited.is_ok() {
+            // SAFETY: the stage holds every row packed, the copy into it completed and its writes
+            // are visible to the host, and no other call takes its span while this one reads it;
+            // `copy` checked that each row lies in `bytes`.
             unsafe {
-                device.destroy_buffer(buffer, None);
-                device.free_memory(memory, None);
-            }
-            core.counters.fall(Gauge::Blocks);
-            return Err(Error::Vulkan {
-                call: "vkMapMemory",
-                result: vk::Result::ERROR_MEMORY_MAP_FAILED,
-            });
-        };
-        Ok(Staging {
-            core: Arc::clone(core),
-            buffer,
-            memory,
-            mapping: Mapping::new(pointer),
-        })
-    }
-}
-
-impl Drop for Staging {
-    fn drop(&mut self) {
-        self.core.reaper.give(Job::Free(Free::Staging {
-            buffer: self.buffer,
-            memory: self.memory,
-        }));
+                crate::readback::texels(
+                    stage.host().as_ptr(),
+                    bytes,
+                    copy.rows(),
+                    copy.row as usize,
+                )
+            };
+            core.counters.copied(copy.len());
+        }
+        if let Stage::Region { number, .. } = stage {
+            core.work.unread(number);
+        }
+        waited
     }
 }
