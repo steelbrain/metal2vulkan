@@ -953,7 +953,7 @@ form: without it, shaders reach a device copy in Private memory (Memory blocks a
 On a discrete GPU the Shared type is system memory, as Metal keeps a shared resource on a discrete
 Mac's GPU: shaders read a Shared buffer across the host link, and Private and Managed storage put
 the GPU's bytes in device-local memory. A kernel reading 64 MiB of a buffer once, in order, took
-this GPU time (median of 20 runs):
+this GPU time (the median of 10 runs, in each of two passes):
 
 | GPU | Shared | Private |
 |---|---|---|
