@@ -1583,7 +1583,8 @@ mod on_device {
                 "{name}: the synchronized fill (device copy: {copied})"
             );
 
-            // A synchronize of a texture without named bytes records nothing.
+            // A synchronize of a texture without named bytes records nothing: the command buffer
+            // has its segment's end barrier alone.
             settled(&device);
             let metrics = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -1599,7 +1600,7 @@ mod on_device {
                     after.barriers - metrics.barriers,
                     after.synchronizations - metrics.synchronizations,
                 ),
-                (0, 1),
+                (1, 1),
                 "{name}: a texture's barriers and synchronizations"
             );
         });
