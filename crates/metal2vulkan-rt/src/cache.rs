@@ -572,6 +572,18 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// The pipeline cache header `data` begins with, the device's `vkGetPipelineCacheData` of an empty
+/// cache: its first 32 bytes, where they are a `VkPipelineCacheHeaderVersionOne`, whose size field
+/// says 32 or more and whose version field says one (both least significant byte first, whatever
+/// the host's byte order). None otherwise: a driver may cache nothing, and lavapipe (Mesa 26.2.4)
+/// gives 20 bytes for an empty cache, shorter than a header. A device whose data begins with no
+/// header keeps no blob; its cache lives with the device.
+pub(crate) fn usable_header(data: &[u8]) -> Option<[u8; 32]> {
+    let header = data.first_chunk::<32>()?;
+    let field = |at: usize| u32::from_le_bytes([0, 1, 2, 3].map(|i| header[at + i]));
+    (field(0) >= 32 && field(4) == 1).then_some(*header)
+}
+
 /// The name of the blob of a device whose driver writes the pipeline cache header `header`: the
 /// whole header in hex, opaque bytes.
 pub(crate) fn blob_name(header: &[u8; 32]) -> String {
@@ -979,6 +991,18 @@ impl Caches {
         lock(&self.pipelines).current.clone()
     }
 
+    /// The current cache's data as the driver gives it, for a test; none where it made no cache.
+    ///
+    /// # Safety
+    ///
+    /// `device` is the device of the caches.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) unsafe fn data(&self, device: &ash::Device) -> Option<Vec<u8>> {
+        let current = self.hold()?;
+        // SAFETY: the caller's contract; the cache is internally synchronized.
+        unsafe { device.get_pipeline_cache_data(current.0) }.ok()
+    }
+
     /// The reaper's looks at the cache, and the blob writes of its looks and of the drop.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn looks_and_writes(&self) -> (usize, usize) {
@@ -1047,7 +1071,8 @@ impl Caches {
     /// merge has begun is not in this run's blob, and the next start compiles it again.
     ///
     /// The blob is named by the whole header in hex ([`blob_name`]); before its read, the blobs
-    /// past the [`BLOBS_KEPT`] most recently written are removed.
+    /// past the [`BLOBS_KEPT`] most recently written are removed. A device whose cache data
+    /// begins with no header ([`usable_header`]) keeps no blob: it reads none and writes none.
     ///
     /// # Safety
     ///
@@ -1058,7 +1083,7 @@ impl Caches {
         let header = empty.and_then(|empty| {
             // SAFETY: the cache is the device's.
             let data = unsafe { device.get_pipeline_cache_data(empty) }.ok()?;
-            data.first_chunk::<32>().copied()
+            usable_header(&data)
         });
         // SAFETY: the cache is the device's.
         let size = empty.map_or(0, |cache| unsafe { data_size(device, cache) });

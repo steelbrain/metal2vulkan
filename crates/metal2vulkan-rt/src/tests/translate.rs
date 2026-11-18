@@ -15,7 +15,7 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished, within};
-    use crate::tests::devices_of_the_cfgs_kind;
+    use crate::tests::{devices_of_the_cfgs_kind, keeps_a_blob};
     use crate::{
         host_time, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
         DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Instance, Library, Limit,
@@ -1099,8 +1099,9 @@ mod on_device {
     /// tiling kernel's lowering and the observing kernel's two are read from the directory, and
     /// the tile's `VkPipeline` is made through a pipeline cache started from the device's blob.
     /// The first device's writes (`Metrics::cache_bytes_written`) are at least the files' bytes,
-    /// the blob among them (written once creation was quiet, and again at the drop where the
-    /// cache grew since); the second writes nothing and leaves every file as it was.
+    /// the blob among them where the device keeps one (written once creation was quiet, and again
+    /// at the drop where the cache grew since); the second writes nothing and leaves every file as
+    /// it was.
     #[test]
     fn every_device_takes_the_kernels_a_device_before_it_lowered_from_the_cache_directory() {
         let (Some(tiled), Some(observing)) = (
@@ -1118,6 +1119,7 @@ mod on_device {
             let mut first = Vec::new();
             for round in 0..2 {
                 let device = on_directory(name, physical, &dir);
+                let kept = keeps_a_blob(name, &device);
                 let counters = device.counters();
                 let states = [
                     state(name, &device, &tiled),
@@ -1140,7 +1142,8 @@ mod on_device {
                         written >= bytes,
                         "{name}: {written} written, {bytes} in files"
                     );
-                    assert_eq!(blobs(&files).len(), 1, "{name}: the device's blob");
+                    let want = usize::from(kept);
+                    assert_eq!(blobs(&files).len(), want, "{name}: the device's blob");
                     first = files;
                 } else {
                     assert_eq!(written, 0, "{name}: the second device writes nothing");
@@ -1159,7 +1162,8 @@ mod on_device {
 
     /// A second process on a cache directory: its device takes the kernel the first process's
     /// device left there and writes none of its lowerings again; the kernel of its own adds its
-    /// lowering, and its `VkPipeline`'s data grows the blob, which the second process replaces.
+    /// lowering, and its `VkPipeline`'s data grows the blob, which the second process replaces,
+    /// where the device keeps one.
     #[test]
     fn every_device_shares_the_cache_directory_with_a_second_process() {
         let Some(tiled) = descriptor("a1_bool_from_float") else {
@@ -1172,6 +1176,7 @@ mod on_device {
             let dir = std::env::temp_dir().join(format!("m2v-rt-cache2-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let device = on_directory(name, physical, &dir);
+            let kept = usize::from(keeps_a_blob(name, &device));
             let counters = device.counters();
             drop(state(name, &device, &tiled));
             drop(device);
@@ -1188,8 +1193,14 @@ mod on_device {
             let after = files(&dir);
             let _ = std::fs::remove_dir_all(&dir);
             let (blob, blob_after) = (blobs(&before), blobs(&after));
-            assert_eq!((blob.len(), blob_after.len()), (1, 1), "{name}: one blob");
-            assert!(blob_after[0].1 > blob[0].1, "{name}: the blob grew");
+            assert_eq!(
+                (blob.len(), blob_after.len()),
+                (kept, kept),
+                "{name}: its blobs"
+            );
+            if let (Some(blob), Some(blob_after)) = (blob.first(), blob_after.first()) {
+                assert!(blob_after.1 > blob.1, "{name}: the blob grew");
+            }
             for file in before.iter().filter(|file| !blob.contains(file)) {
                 assert!(
                     after.contains(file),
@@ -1294,8 +1305,13 @@ mod on_device {
             let dir = std::env::temp_dir().join(format!("m2v-rt-bound-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let device = on_directory(name, physical, &dir);
+            // A cache whose data holds no header holds nothing to bound.
+            if !keeps_a_blob(name, &device) {
+                drop(device);
+                let _ = std::fs::remove_dir_all(&dir);
+                continue;
+            }
             let caches = &device.core().caches;
-            within("the seed", || caches.is_seeded());
             let counters = device.counters();
             let a = state_and_look(name, &device, &first);
             let full = counters.gauges().pipeline_cache_bytes;
@@ -1438,7 +1454,11 @@ mod on_device {
                     std::env::temp_dir().join(format!("m2v-rt-refuse-{}", std::process::id()));
                 let _ = std::fs::remove_dir_all(&dir);
                 let device = on_directory(name, physical, &dir);
-                within("the pipeline cache", || device.core().caches.is_seeded());
+                if !keeps_a_blob(name, &device) {
+                    drop(device);
+                    let _ = std::fs::remove_dir_all(&dir);
+                    break;
+                }
                 let blob = device.core().caches.blob().expect("a blob").to_owned();
                 drop(device);
                 assert!(!blob.exists(), "{name}: no creation, no blob");
@@ -1471,6 +1491,58 @@ mod on_device {
         }
     }
 
+    /// A device keeps a blob only where its driver's data of an empty cache begins with a header
+    /// (`cache::usable_header`): then it names one and its drop writes it, and a device after it
+    /// on the directory takes it. Else (lavapipe's 20 bytes) it names none, and neither it nor a
+    /// device after it reads or writes one; its creations go through its cache all the same.
+    #[test]
+    fn every_device_keeps_a_blob_only_where_its_cache_data_begins_with_a_header() {
+        let Some(tiled) = descriptor("a1_bool_from_float") else {
+            return;
+        };
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-header-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            for round in 0..2 {
+                let device = on_directory(name, physical, &dir);
+                let caches = &device.core().caches;
+                within("the seed", || caches.is_seeded());
+                // SAFETY: the caches are the device's.
+                let data = unsafe { caches.data(&device.core().device) }.expect("the cache's data");
+                let header = crate::cache::usable_header(&data);
+                assert_eq!(
+                    caches.blob().is_some(),
+                    header.is_some(),
+                    "{name}: device {round}, {} bytes of data",
+                    data.len()
+                );
+                let counters = device.counters();
+                drop(state(name, &device, &tiled));
+                assert_eq!(
+                    counters.metrics().pipelines_created,
+                    1,
+                    "{name}: device {round}"
+                );
+                drop(device);
+                within("the teardown", || counters.gauges() == Gauges::default());
+                let kept = blobs(&files(&dir)).len();
+                assert_eq!(
+                    kept,
+                    usize::from(header.is_some()),
+                    "{name}: device {round}'s blobs"
+                );
+                println!(
+                    "{name}: device {round}, {} bytes of an empty cache's data, {kept} blob",
+                    data.len()
+                );
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     /// A creation while the seed merges the empty cache into the cache made from the blob goes
     /// through the empty cache and never waits for the merge, which takes hundreds of
     /// milliseconds on some drivers; it counts as a creation before the seed.
@@ -1489,7 +1561,12 @@ mod on_device {
             let dir = std::env::temp_dir().join(format!("m2v-rt-merge-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             let device = on_directory(name, physical, &dir);
-            within("the pipeline cache", || device.core().caches.is_seeded());
+            // With no blob there is no merge.
+            if !keeps_a_blob(name, &device) {
+                drop(device);
+                let _ = std::fs::remove_dir_all(&dir);
+                continue;
+            }
             let blob = device.core().caches.blob().expect("a blob").to_owned();
             drop(state(name, &device, &first));
             drop(device);

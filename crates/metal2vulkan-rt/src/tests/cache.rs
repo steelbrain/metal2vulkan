@@ -7,7 +7,8 @@
 //! or reading a file another was writing.
 
 use crate::cache::{
-    blob_name, checksum, frame, prune_blobs, unframe, Pending, State, Store, BLOBS_KEPT,
+    blob_name, checksum, frame, prune_blobs, unframe, usable_header, Pending, State, Store,
+    BLOBS_KEPT,
 };
 use crate::counters::Counters;
 use std::fs;
@@ -451,6 +452,25 @@ fn header(vendor: u32, device: u32, uuid: [u8; 16]) -> [u8; 32] {
     header[12..16].copy_from_slice(&device.to_le_bytes());
     header[16..].copy_from_slice(&uuid);
     header
+}
+
+#[test]
+fn only_a_version_one_header_names_a_blob() {
+    let whole = header(1, 2, [3; 16]);
+    // A header and the count of a cache with nothing in it, as most drivers give.
+    let empty = [&whole[..], &0u32.to_le_bytes()].concat();
+    assert_eq!(usable_header(&empty), Some(whole));
+    assert_eq!(usable_header(&whole), Some(whole));
+    // Shorter than a header: lavapipe's 20 bytes, and none.
+    assert_eq!(usable_header(&empty[..20]), None);
+    assert_eq!(usable_header(&[]), None);
+    // A header that says it is shorter than one, or of another version.
+    let mut short = whole;
+    short[..4].copy_from_slice(&16u32.to_le_bytes());
+    assert_eq!(usable_header(&short), None);
+    let mut other = whole;
+    other[4..8].copy_from_slice(&2u32.to_le_bytes());
+    assert_eq!(usable_header(&other), None);
 }
 
 #[test]

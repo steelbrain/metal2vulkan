@@ -20,7 +20,7 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, within};
-    use crate::tests::devices_of_the_cfgs_kind;
+    use crate::tests::{devices_of_the_cfgs_kind, keeps_a_blob};
     use crate::{
         ColorAttachmentDescriptor, Device, DeviceOptions, Error, FunctionDescriptor, Gap, Gauges,
         Instance, Library, Metrics, PixelFormat, RenderPipelineDescriptor, RenderPipelineKind,
@@ -287,6 +287,7 @@ mod on_device {
                 };
                 let device = Device::new(physical, options)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let kept = keeps_a_blob(name, &device);
                 let counters = device.counters();
                 let made = state(name, &device, &d);
                 let metrics = counters.metrics();
@@ -303,7 +304,12 @@ mod on_device {
                 within("the teardown", || counters.gauges() == Gauges::default());
                 let files = blobs(&dir);
                 if round == 0 {
-                    assert_eq!(files.len(), 1, "{name}: the device's pipeline cache blob");
+                    let want = usize::from(kept);
+                    assert_eq!(
+                        files.len(),
+                        want,
+                        "{name}: the device's pipeline cache blob"
+                    );
                     first = files;
                 } else {
                     let written = counters.metrics().cache_bytes_written;

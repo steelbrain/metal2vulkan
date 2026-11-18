@@ -941,7 +941,10 @@ the lowerings from one device to the next:
   differs in any byte, its `pipelineCacheUUID` included, has a blob of its own. Devices with one
   header, in one process or several, start from it, and each replaces it. The directory keeps at
   most four blobs: a device's seed removes the oldest past that, by last write, its own counted
-  among the four. Taking a blob writes nothing to it.
+  among the four. Taking a blob writes nothing to it. A device whose driver's data of an empty
+  cache does not begin with a version-one header (a driver may cache nothing; lavapipe in
+  Mesa 26.2.4 gives 20 bytes) keeps no blob: it reads none and writes none, and its cache lives
+  with the device.
 - `translations/`: each function's lowering, a kernel's or a render pipeline's vertex or fragment
   function's, named by its `FunctionCompileKey`, which covers everything that changes the
   lowering: the function's AIR, entry, constants and linked functions, its lowering inputs (a

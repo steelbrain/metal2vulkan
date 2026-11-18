@@ -102,6 +102,20 @@ pub(crate) fn no_constexpr_samplers(
     }
 }
 
+/// Whether `device`'s pipeline cache keeps a blob, once the reaper has seeded it: none where its
+/// driver's data of an empty cache begins with no header (`cache::usable_header`), as lavapipe's
+/// does, which is printed.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+pub(crate) fn keeps_a_blob(name: &str, device: &crate::Device) -> bool {
+    let caches = &device.core().caches;
+    crate::tests::command::on_device::within("the seed", || caches.is_seeded());
+    let kept = caches.blob().is_some();
+    if !kept {
+        println!("{name}: its pipeline cache data begins with no header, so it keeps no blob");
+    }
+    kept
+}
+
 /// Each physical device of the device cfg's kind the loader lists, with its name: CPU devices
 /// under `m2v_cpu_icd`, the others under `m2v_gpu`. The legs pick one with `VK_DRIVER_FILES` and
 /// `MESA_VK_DEVICE_SELECT`.
