@@ -92,11 +92,11 @@ fn a_block_starts_at_its_length_rounded_to_a_power_of_two_up_to_2_mib() {
     }
 }
 
-/// The window holds the most live bytes of each second with a take or a give-back for 10
-/// seconds: the peak falls as the clock passes it, and the idle rule frees the oldest idle
-/// allocations while the rest pass the peak less the live bytes, or the cap.
+/// The window holds the most live bytes of each second with a take or a give-back for 3 seconds:
+/// the peak falls as the clock passes it, and the idle rule frees the oldest idle allocations while
+/// the rest pass the peak less the live bytes.
 #[test]
-fn the_idle_rule_keeps_idle_allocations_under_the_window_s_peak_and_the_cap() {
+fn the_idle_rule_keeps_idle_allocations_under_the_window_s_peak() {
     const MIB: u64 = 1 << 20;
     let mut peaks = Peaks::default();
     // Four blocks of 16 MiB live in second 0, then given back.
@@ -105,34 +105,26 @@ fn the_idle_rule_keeps_idle_allocations_under_the_window_s_peak_and_the_cap() {
     peaks.note(0, 0);
     assert_eq!(peaks.most(), 64 * MIB);
     let idle = [16 * MIB; 4];
-    let cap = u64::MAX;
-    assert_eq!(
-        surplus(&idle, peaks.most(), 0, cap),
-        0,
-        "all within the peak"
-    );
-    // Five seconds on, the peak stands.
-    peaks.note(5, 0);
-    assert_eq!(surplus(&idle, peaks.most(), 0, cap), 0, "within the window");
-    // A block of 16 MiB live in second 9: the peak of second 0 still stands.
-    peaks.note(9, 16 * MIB);
-    assert_eq!(surplus(&idle, peaks.most(), 16 * MIB, cap), 1);
-    // Second 10 forgets second 0: the peak is second 9's.
-    peaks.note(10, 16 * MIB);
+    assert_eq!(surplus(&idle, peaks.most(), 0), 0, "all within the peak");
+    // A second on, the peak stands.
+    peaks.note(1, 0);
+    assert_eq!(surplus(&idle, peaks.most(), 0), 0, "within the window");
+    // A block of 16 MiB live in second 2: the peak of second 0 still stands.
+    peaks.note(2, 16 * MIB);
+    assert_eq!(surplus(&idle, peaks.most(), 16 * MIB), 1);
+    // Second 3 forgets second 0: the peak is second 2's.
+    peaks.note(3, 16 * MIB);
     assert_eq!(peaks.most(), 16 * MIB);
-    assert_eq!(surplus(&idle, peaks.most(), 16 * MIB, cap), 4);
-    assert_eq!(surplus(&idle, peaks.most(), 0, cap), 3);
-    // Second 20 forgets second 9 and 10: only what is live now.
-    peaks.note(20, 0);
+    assert_eq!(surplus(&idle, peaks.most(), 16 * MIB), 4);
+    assert_eq!(surplus(&idle, peaks.most(), 0), 3);
+    // Second 6 forgets seconds 2 and 3: only what is live now.
+    peaks.note(6, 0);
     assert_eq!(peaks.most(), 0);
-    assert_eq!(surplus(&idle, peaks.most(), 0, cap), 4);
-    // The cap bounds the idle bytes whatever the peak.
-    assert_eq!(surplus(&idle, 64 * MIB, 0, 16 * MIB), 3);
-    assert_eq!(surplus(&idle, 64 * MIB, 0, 15 * MIB), 4);
-    assert_eq!(surplus(&[], 64 * MIB, 0, 0), 0);
+    assert_eq!(surplus(&idle, peaks.most(), 0), 4);
+    assert_eq!(surplus(&[], 64 * MIB, 0), 0);
     // Oldest first: allocations of other lengths are counted by their bytes.
-    assert_eq!(surplus(&[48 * MIB, 16 * MIB], 20 * MIB, 0, cap), 1);
-    assert_eq!(surplus(&[16 * MIB, 48 * MIB], 20 * MIB, 0, cap), 2);
+    assert_eq!(surplus(&[48 * MIB, 16 * MIB], 20 * MIB, 0), 1);
+    assert_eq!(surplus(&[16 * MIB, 48 * MIB], 20 * MIB, 0), 2);
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -1096,12 +1088,12 @@ mod on_device {
 
     /// Idle allocations follow the window's peak down: four Shared blocks of 16 MiB taken beside
     /// a small one, each with an allocation of its own, and given back are kept, their
-    /// allocations idle, while the most bytes in use over the last 10 seconds hold them, through a
-    /// Private take and give-back and the small block's give-back 5 seconds on. Once the clock has
-    /// moved 11 seconds, the small block's allocation is the reserve that keeps 8 MiB free, and the
+    /// allocations idle, while the most bytes in use over the last 3 seconds hold them, through a
+    /// Private take and give-back and the small block's give-back 2 seconds on. Once the clock has
+    /// moved 4 seconds, the small block's allocation is the reserve that keeps 8 MiB free, and the
     /// window holds one allocation more than the bytes in use: the three oldest idle allocations
     /// are freed, one at a time, after the hook of the block kept in each, on the block-maker
-    /// thread. Five seconds later, with no take or give-back, the window's peak falls to nothing
+    /// thread. Two seconds later, with no take or give-back, the window's peak falls to nothing
     /// and the fourth is freed; the reserve stays. Nothing commits, so the device is quiet
     /// throughout.
     #[test]
@@ -1136,9 +1128,9 @@ mod on_device {
                 "{name}: four idle allocations"
             );
 
-            // Five seconds on, a Private take and give-back, and the small block's give-back: the
+            // Two seconds on, a Private take and give-back, and the small block's give-back: the
             // window still holds the four.
-            core.pool.advance_clock(Duration::from_secs(5));
+            core.pool.advance_clock(Duration::from_secs(2));
             let nudge = (device.take_block(MemoryClass::Private, 1))
                 .unwrap_or_else(|error| panic!("{name}: a Private block: {error}"));
             handed.push(nudge.id);
@@ -1154,11 +1146,11 @@ mod on_device {
                 "{name}: the four and the small block's within the window"
             );
 
-            // Eleven seconds on: the three oldest are freed. The gauge of allocations falls after
+            // Four seconds on: the three oldest are freed. The gauge of allocations falls after
             // each one's free, which follows its kept block's hook and the idle gauge's fall: once
             // it reads the zero source, the reserve, the fourth and the Private allocation, the
             // three hooks and the idle gauge are final.
-            core.pool.advance_clock(Duration::from_secs(6));
+            core.pool.advance_clock(Duration::from_secs(2));
             wait_until("three idle Shared allocations freed", || {
                 counters.gauges().blocks == ZERO_SOURCE + 3
             });
@@ -1173,9 +1165,9 @@ mod on_device {
                 assert_eq!(unmapped.first, None, "{name}: no block recorded");
             }
 
-            // Five seconds later, with no take or give-back: the window's peak is gone, and the
+            // Two seconds later, with no take or give-back: the window's peak is gone, and the
             // fourth is freed.
-            core.pool.advance_clock(Duration::from_secs(5));
+            core.pool.advance_clock(Duration::from_secs(2));
             wait_until("the fourth freed", || {
                 counters.gauges().blocks == ZERO_SOURCE + 2
             });

@@ -47,9 +47,9 @@ impl Peaks {
 
 /// How many of a class's idle allocations of `idle` bytes, the oldest first, the idle rule frees:
 /// the oldest, while the rest pass `peak`, the most bytes in use in the window, less `live`, the
-/// bytes in use now, or `cap`.
-pub(crate) fn surplus(idle: &[u64], peak: u64, live: u64, cap: u64) -> usize {
-    let room = peak.saturating_sub(live).min(cap);
+/// bytes in use now.
+pub(crate) fn surplus(idle: &[u64], peak: u64, live: u64) -> usize {
+    let room = peak.saturating_sub(live);
     let mut left: u64 = idle.iter().sum();
     idle.iter()
         .take_while(|&&len| {
@@ -93,8 +93,10 @@ const BASE_ALIGN: u64 = 2 << 20;
 /// of the class's allocations in use stay at or under the most bytes the class had in use over the
 /// last this many seconds. An allocation is in use while it holds a live block; weighing whole
 /// allocations, not the blocks' bytes, keeps an allocation that serves the same blocks each frame,
-/// whatever room they leave in it.
-const WINDOW_SECS: u64 = 10;
+/// whatever room they leave in it. Three seconds: the harness's workloads, and the compute,
+/// blits and syncs of a replayed desktop session, made no more allocations on the consumer's
+/// threads than under a 10 s window, and one second made more.
+const WINDOW_SECS: u64 = 3;
 
 /// How long the device stays quiet, with no commit and no submission on any of its queues, before
 /// the block-maker thread frees an idle allocation, in nanoseconds of
@@ -105,10 +107,6 @@ const WINDOW_SECS: u64 = 10;
 /// time, only in such a gap, and looks again after each; a submission that arrives during a free
 /// waits for the rest of it.
 const QUIET_NANOS: u64 = 20_000_000;
-
-/// The share of the heap of a class's memory type its idle allocations stay within, whatever the
-/// window holds: an eighth.
-const IDLE_SHARE: u64 = 8;
 
 /// `MTLStorageMode` of a block, as the buffers in it see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -364,8 +362,6 @@ pub(crate) struct Pool {
     mappings: Option<Arc<dyn BlockMappings>>,
     /// The device's counters: the idle bytes, the allocations made and the blocks taken again.
     counters: Counters,
-    /// Per class, the most bytes of idle allocations: [`IDLE_SHARE`] of its memory type's heap.
-    caps: [u64; 2],
     /// A block's length and its first byte's offset are multiples of this: [`GRANULE`], or the
     /// device's `bufferImageGranularity` where that is larger.
     granule: u64,
@@ -426,8 +422,8 @@ enum Rule {
     /// Idle allocations that the window's peak holds, until the pool's clock reads this second
     /// at the latest.
     KeepUntil(u64),
-    /// The allocation to free next: a retiring one, else the oldest idle one past the
-    /// window's peak or the class's cap.
+    /// The allocation to free next: a retiring one, else the oldest idle one past the window's
+    /// peak.
     Free(vk::DeviceMemory),
 }
 
@@ -478,12 +474,10 @@ struct Carve {
 }
 
 impl Pool {
-    /// The pool of a device whose classes' memory types are in heaps of `heaps` bytes (Private,
-    /// Shared) and whose `bufferImageGranularity` is `granularity`.
+    /// The pool of a device whose `bufferImageGranularity` is `granularity`.
     pub(crate) fn new(
         mappings: Option<Arc<dyn BlockMappings>>,
         counters: Counters,
-        heaps: [u64; 2],
         granularity: u64,
     ) -> Pool {
         Pool {
@@ -504,7 +498,6 @@ impl Pool {
             changed: Condvar::new(),
             mappings,
             counters,
-            caps: heaps.map(|heap| heap / IDLE_SHARE),
             granule: GRANULE.max(granularity.next_power_of_two()),
             clock: Clock::new(),
             worked: AtomicU64::new(0),
@@ -800,9 +793,9 @@ impl Pool {
     /// The idle rule for `class`: its next allocation to free is a retiring one, a spilled one that
     /// emptied, so the next allocation tries device-local memory again; else the oldest idle one
     /// while the idle allocations' bytes pass the most bytes the class had in use over the last
-    /// [`WINDOW_SECS`] seconds less its bytes in use now, or the class's cap. The newest idle
-    /// allocations with free bytes that the class's free bytes need to reach [`MAKE_BELOW`] are
-    /// its reserve: the rule neither counts nor frees them.
+    /// [`WINDOW_SECS`] seconds less its bytes in use now. The newest idle allocations with free
+    /// bytes that the class's free bytes need to reach [`MAKE_BELOW`] are its reserve: the rule
+    /// neither counts nor frees them.
     fn rule(&self, state: &mut State, class: MemoryClass) -> Rule {
         let index = class.index();
         state.note(class, self.clock.seconds());
@@ -833,9 +826,7 @@ impl Pool {
         let lens: Vec<u64> = idle.iter().map(|&(_, _, len, _)| len).collect();
         let peaks = &state.peaks[index];
         match idle.first() {
-            Some(&(_, memory, ..))
-                if surplus(&lens, peaks.most(), state.in_use(class), self.caps[index]) > 0 =>
-            {
+            Some(&(_, memory, ..)) if surplus(&lens, peaks.most(), state.in_use(class)) > 0 => {
                 Rule::Free(memory)
             }
             Some(_) => peaks.falls().map_or(Rule::Keep, Rule::KeepUntil),

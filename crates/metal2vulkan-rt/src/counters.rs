@@ -599,9 +599,8 @@ pub struct Gauges {
     /// textures' allocations of their own.
     pub spilled_bytes: u64,
     /// Bytes of idle Shared allocations, which hold no block anyone holds: those the idle rule
-    /// keeps (at most the most bytes of Shared allocations in use over the last 10 seconds less
-    /// those in use now, and an eighth of the heap), and the reserve that keeps the free bytes at
-    /// 8 MiB or more.
+    /// keeps (at most the most bytes of Shared allocations in use over the last 3 seconds less
+    /// those in use now), and the reserve that keeps the free bytes at 8 MiB or more.
     pub shared_idle_bytes: u64,
     /// Bytes of idle Private allocations, as [`shared_idle_bytes`](Self::shared_idle_bytes) for
     /// Shared ones.

@@ -432,13 +432,7 @@ impl Device {
             .fold(0, |bits, (index, _)| bits | 1 << index);
 
         let work = Work::new(counters.clone());
-        let heap = |memory_type: u32| {
-            let memory = &capabilities.memory;
-            let heap = memory.memory_types_as_slice()[memory_type as usize].heap_index;
-            memory.memory_heaps_as_slice()[heap as usize].size
-        };
-        let heaps = [heap(memory_types.private), heap(memory_types.shared)];
-        let pool = Pool::new(options.block_mappings, counters.clone(), heaps, granularity);
+        let pool = Pool::new(options.block_mappings, counters.clone(), granularity);
         let core = Arc::new(Core {
             instance,
             physical: raw,
@@ -641,12 +635,11 @@ impl Device {
     /// number, address, mapping and bytes, for a later [`take_block`](Device::take_block) of its
     /// length. An allocation none of whose blocks is held is idle, and one that holds a block is
     /// in use: the device keeps a class's idle allocations while their bytes and those of its
-    /// allocations in use stay at or under the most bytes it had in use over the last 10 seconds,
-    /// and within an eighth of its memory type's heap, and frees the oldest past that, after
-    /// [`BlockMappings::unmap`] of each block kept in it. It frees them one at a time, on the
-    /// block-maker thread, and only once no commit or submission has come on any of the device's
-    /// queues for 20 ms: a program that goes quiet gives its idle allocations back without a call
-    /// of its own.
+    /// allocations in use stay at or under the most bytes it had in use over the last 3 seconds,
+    /// and frees the oldest past that, after [`BlockMappings::unmap`] of each block kept in it. It
+    /// frees them one at a time, on the block-maker thread, and only once no commit or submission
+    /// has come on any of the device's queues for 20 ms: a program that goes quiet gives its idle
+    /// allocations back without a call of its own.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's block, whose handle is dropped all the
     /// same.

@@ -135,13 +135,13 @@ in its memory.
   class keeps blocks of other lengths makes its allocation at once, and the block-maker thread then
   gives those blocks' bytes back to their allocations, after `BlockMappings::unmap` of each; only
   where the take's allocation fails does it wait for those bytes and take a range of them. An
-  allocation that holds no block anyone holds is idle. The device keeps a class's idle allocations
-  while their bytes and those of its allocations in use stay at or under the most bytes it had in
-  use over the last 10 seconds, and within an eighth of the heap of the class's memory type; past
-  that it frees the oldest, after `BlockMappings::unmap` of each block kept in them, except those
-  the class's free bytes need to stay at 8 MiB or more. The block-maker thread frees them one at a
-  time, and only once no commit or submission has come on any of the device's queues for 20 ms,
-  looking again after each free: a program that goes quiet gives its idle allocations back
+  allocation that holds no block anyone holds is idle. The idle window is 3 seconds: the device
+  keeps a class's idle allocations while their bytes and those of its allocations in use stay at
+  or under the most bytes it had in use over the last 3 seconds, and frees the oldest past that,
+  after `BlockMappings::unmap` of each block kept in them, except those the class's free bytes
+  need to stay at 8 MiB or more. The quiet test is 20 ms: the block-maker thread frees them one at
+  a time, only once no commit or submission has come on any of the device's queues for 20 ms, and
+  looks again after each free, so a program that goes quiet gives its idle allocations back
   without a call of its own, and a busy one at its next quiet gap. `Metrics::allocations_freed`
   counts the frees. `Gauges::shared_idle_bytes` and `Gauges::private_idle_bytes` count the idle
   bytes. Once the last handle is gone the block's
