@@ -124,6 +124,10 @@ pub(crate) enum Gauge {
     StageEntryBytes,
     /// [`Gauges::pipeline_cache_bytes`].
     PipelineCacheBytes,
+    /// [`Gauges::shadows`].
+    Shadows,
+    /// [`Gauges::shadow_bytes`].
+    ShadowBytes,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -174,6 +178,8 @@ struct Atomics {
     lone_submissions_across_queues: AtomicU64,
     forced_flushes_across_queues: AtomicU64,
     over_copies: AtomicU64,
+    attachment_read_copies: AtomicU64,
+    attachment_read_copy_bytes: AtomicU64,
     allocations_freed: AtomicU64,
     submissions_during_frees: AtomicU64,
     idle_frees_by_age: [AtomicU64; FREE_AGES_MS.len() + 1],
@@ -212,6 +218,8 @@ struct Atomics {
     stage_entries: AtomicU64,
     stage_entry_bytes: AtomicU64,
     pipeline_cache_bytes: AtomicU64,
+    shadows: AtomicU64,
+    shadow_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -331,6 +339,16 @@ impl Counters {
         self.atomics.bytes_copied.fetch_add(bytes, Relaxed);
     }
 
+    /// `copies` more copies of attachments' images into their shadows, of `bytes`
+    /// ([`Metrics::attachment_read_copies`], [`Metrics::attachment_read_copy_bytes`]), which
+    /// count in [`Metrics::bytes_copied`] too.
+    pub(crate) fn attachment_read_copied(&self, copies: u64, bytes: u64) {
+        let a = &self.atomics;
+        a.attachment_read_copies.fetch_add(copies, Relaxed);
+        a.attachment_read_copy_bytes.fetch_add(bytes, Relaxed);
+        a.bytes_copied.fetch_add(bytes, Relaxed);
+    }
+
     /// `bytes` more of a new buffer zeroed ([`Metrics::bytes_zeroed`]).
     pub(crate) fn zeroed(&self, bytes: u64) {
         self.atomics.bytes_zeroed.fetch_add(bytes, Relaxed);
@@ -448,6 +466,8 @@ impl Counters {
             Gauge::StageEntries => &a.stage_entries,
             Gauge::StageEntryBytes => &a.stage_entry_bytes,
             Gauge::PipelineCacheBytes => &a.pipeline_cache_bytes,
+            Gauge::Shadows => &a.shadows,
+            Gauge::ShadowBytes => &a.shadow_bytes,
         }
     }
 
@@ -489,6 +509,8 @@ impl Counters {
             lone_submissions_across_queues: a.lone_submissions_across_queues.load(Relaxed),
             forced_flushes_across_queues: a.forced_flushes_across_queues.load(Relaxed),
             over_copies: a.over_copies.load(Relaxed),
+            attachment_read_copies: a.attachment_read_copies.load(Relaxed),
+            attachment_read_copy_bytes: a.attachment_read_copy_bytes.load(Relaxed),
             allocations_freed: a.allocations_freed.load(Relaxed),
             submissions_during_frees: a.submissions_during_frees.load(Relaxed),
             idle_frees_by_age: std::array::from_fn(|at| a.idle_frees_by_age[at].load(Relaxed)),
@@ -549,6 +571,8 @@ impl Counters {
             stage_entries: a.stage_entries.load(Relaxed),
             stage_entry_bytes: a.stage_entry_bytes.load(Relaxed),
             pipeline_cache_bytes: a.pipeline_cache_bytes.load(Relaxed),
+            shadows: a.shadows.load(Relaxed),
+            shadow_bytes: a.shadow_bytes.load(Relaxed),
         }
     }
 }
@@ -571,13 +595,15 @@ pub struct Metrics {
     /// around each blit copy, fill and synchronize copy, and two around each render pass, the
     /// first of each pair paying what is owed, with one inside a render pass at a memory barrier
     /// after a draw that wrote memory, one at a draw that moves an attachment's image to the
-    /// feedback layout, and one at a draw that reads an attachment after a memory barrier owed to
-    /// it. Any other draw takes none.
+    /// feedback layout, one at a draw that reads an attachment after a memory barrier owed to it,
+    /// and two around the copies a draw that reads an attachment makes into its image's shadow
+    /// ([`attachment_read_copies`](Self::attachment_read_copies)). Any other draw takes none.
     pub barriers: u64,
-    /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, and the
-    /// copies between a texture over a buffer and its image of its own
-    /// ([`over_copies`](Self::over_copies)). A blit's own copy, and a synchronize's, is the
-    /// program's and is not counted.
+    /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
+    /// between a texture over a buffer and its image of its own
+    /// ([`over_copies`](Self::over_copies)), and the copies of attachments' images into their
+    /// shadows ([`attachment_read_copy_bytes`](Self::attachment_read_copy_bytes)). A blit's own
+    /// copy, and a synchronize's, is the program's and is not counted.
     pub bytes_copied: u64,
     /// Bytes of new buffers zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s from its
     /// `zero_from` to the buffer's end, and a Managed buffer's device copy's past its copied bytes
@@ -684,6 +710,15 @@ pub struct Metrics {
     /// wait or the end. No path of the submit thread sends one, so this stays 0; it is counted to
     /// show it.
     pub forced_flushes_across_queues: u64,
+    /// Copies a draw that reads an attachment of its own pass through a texture makes into the
+    /// image's shadow first, on a device without the attachment feedback loop, which Metal does
+    /// not make: one for each area of a level, a range of its layers and a rectangle, at the
+    /// pass's first draw that reads the image and at a draw after a memory barrier after draws,
+    /// of what the draw reads, and at another draw, of what it reads that the shadow does not
+    /// hold yet.
+    pub attachment_read_copies: u64,
+    /// The bytes of those copies, which count in [`bytes_copied`](Self::bytes_copied) too.
+    pub attachment_read_copy_bytes: u64,
     /// Copies between a texture over a buffer the device's linear image does not hold in place
     /// and its image of its own ([`Buffer::new_texture`](crate::Buffer::new_texture)): the
     /// buffer's bytes into the image, in the upload that leads a submission or after a command
@@ -857,4 +892,10 @@ pub struct Gauges {
     /// it when the reaper last looked, once creation was quiet: at most 32 MiB at a look, past
     /// which the reaper replaces the cache with a fresh one, and this falls to the fresh one's.
     pub pipeline_cache_bytes: u64,
+    /// Shadows, on a device without the attachment feedback loop: one image for each image a
+    /// draw read as an attachment of its own pass through a texture, made at the first such draw
+    /// and freed with the image.
+    pub shadows: u64,
+    /// The bytes of the shadows' memory.
+    pub shadow_bytes: u64,
 }

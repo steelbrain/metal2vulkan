@@ -29,6 +29,7 @@ use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::memory::{self, Block, BlockId, MemoryClass};
 use crate::places::Place;
 use crate::reaper::{Free, Job};
+use crate::shadow::{self, Area};
 use crate::staging::Stage;
 use crate::submit::Held;
 use ash::vk;
@@ -199,6 +200,41 @@ struct TextureInner {
     /// (`Texture::attachment`), kept until the texture is gone: at most its levels times its
     /// slices.
     attachments: Mutex<Vec<AttachmentView>>,
+    /// Its view of its image's shadow, where a draw may read an attachment through it on a device
+    /// without the attachment feedback loop (`crate::shadow`): the sampled view's own type,
+    /// mapping and range, and the view once a draw read through it, which its second element
+    /// names.
+    shadow: Option<ShadowView>,
+}
+
+/// A texture's view of its image's shadow (`TextureInner::shadow`).
+struct ShadowView {
+    view_type: vk::ImageViewType,
+    components: vk::ComponentMapping,
+    range: vk::ImageSubresourceRange,
+    /// Made at the first draw that reads through it, and freed with the texture.
+    view: Mutex<Option<vk::ImageView>>,
+}
+
+impl ShadowView {
+    /// The view of `image`'s shadow a texture of `plan` and `index` takes, of `view_type` and
+    /// `range` (the sampled view's): where its image has a shadow, the texture is read and shaders
+    /// reach it.
+    fn of(
+        image: &Image,
+        plan: &Plan,
+        index: Option<u32>,
+        view_type: vk::ImageViewType,
+        range: impl FnOnce(vk::ImageAspectFlags) -> vk::ImageSubresourceRange,
+    ) -> Option<ShadowView> {
+        let (components, aspect) = plan.sampled?;
+        (image.shadowing.is_some() && index.is_some()).then(|| ShadowView {
+            view_type,
+            components,
+            range: range(aspect),
+            view: Mutex::new(None),
+        })
+    }
 }
 
 /// An image view of one level and layer of a texture's image, for render passes.
@@ -286,12 +322,20 @@ pub(crate) struct Image {
     storage: Option<vk::ImageView>,
     /// The layout the image is in outside a copy, which its elements name.
     home: vk::ImageLayout,
-    /// The image has the feedback usage (a shader-read colour render target of no storage view,
-    /// its home shader-read-only, on a device that reads attachments so): each texture over it
-    /// has a second element of the sampled-texture array, at its index plus
-    /// [`TEXTURES`](crate::floor::TEXTURES), naming the feedback layout, which a pass
-    /// moves the whole image to for a draw that reads an attachment of the pass through it.
-    feedback: bool,
+    /// A draw may read an attachment of its own pass through a texture over the image (a
+    /// shader-read colour render target of no storage view, its home shader-read-only, on a
+    /// device that reads attachments): each such texture has a second element of the
+    /// sampled-texture array, at its index plus [`TEXTURES`](crate::floor::TEXTURES). Through the
+    /// attachment feedback loop the image has the feedback usage and the element names the
+    /// feedback layout, which a pass moves the whole image to for a draw that reads it; on a
+    /// device without the loop the element names the texture's view of the image's shadow
+    /// (`shadowing`).
+    attachment_reads: bool,
+    /// Where a draw reads the image as an attachment on a device without the feedback loop: what
+    /// its shadow is made of, and the shadow once made (`crate::shadow`).
+    shadowing: Option<Box<Shadowing>>,
+    /// The image is another's shadow: its drop lowers the shadow gauges, not the textures gauge.
+    shadow: bool,
     /// Every aspect of the image's format, which a change of layout names.
     aspects: vk::ImageAspectFlags,
     /// The layout the image is made in: undefined, or preinitialized for a texture over a buffer
@@ -302,6 +346,18 @@ pub(crate) struct Image {
     /// What holds the memory the image lies in, where it is not the image's own, while anything
     /// holds the image.
     _under: Option<Under>,
+}
+
+/// The usage of an image's shadow: sampled through its textures' views of it, and copied into.
+const SHADOW_USAGE: vk::ImageUsageFlags = vk::ImageUsageFlags::from_raw(
+    vk::ImageUsageFlags::SAMPLED.as_raw() | vk::ImageUsageFlags::TRANSFER_DST.as_raw(),
+);
+
+/// What an image's shadow is made of, and the shadow once a draw made it (`crate::shadow`).
+struct Shadowing {
+    /// The texture's descriptor and shape, and its plan with the shadow's usage and no view.
+    made: (TextureDescriptor, Shape, Plan),
+    shadow: Mutex<Option<Arc<Image>>>,
 }
 
 /// What holds the memory an image lies in that is not its own.
@@ -333,15 +389,71 @@ impl Image {
                 .subresource_range(whole(self.aspects)),
         )
     }
+
+    /// Whether its textures read it as an attachment through the attachment feedback loop: it has
+    /// the feedback usage, and each texture's second element names the feedback layout.
+    fn looped(&self) -> bool {
+        self.attachment_reads && self.shadowing.is_none()
+    }
+
+    /// Its shadow, made where it has none yet: an image of its format, extent, levels and layers,
+    /// in device-local memory, whose move from undefined to its home layout, shader-read-only, the
+    /// upload of the next submission records, ahead of every command buffer committed after this
+    /// returns. The shadow gauges rise with it. `None` for an image of no shadow.
+    ///
+    /// Err: [`Error::Vulkan`] where the image cannot be made or bound; [`Error::Quiesced`].
+    fn shadow(&self) -> Result<Option<vk::Image>, Error> {
+        let Some(shadowing) = &self.shadowing else {
+            return Ok(None);
+        };
+        let mut shadow = lock(&shadowing.shadow);
+        if let Some(made) = &*shadow {
+            return Ok(Some(made.image));
+        }
+        let core = &self.core;
+        let (d, shape, plan) = &shadowing.made;
+        // SAFETY: the device is live, and the texture's plan checked the shadow's usage against
+        // its image format query for the shape (`plan`).
+        let (image, backing, bytes, _, _) = unsafe { make(core, d, shape, plan, Bind::Pooled) }?;
+        core.counters.rise(Gauge::Shadows);
+        core.counters.rise_by(Gauge::ShadowBytes, bytes);
+        let made = Arc::new(Image {
+            core: Arc::clone(core),
+            image,
+            backing,
+            bytes,
+            sampled: None,
+            storage: None,
+            home: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            attachment_reads: false,
+            shadowing: None,
+            shadow: true,
+            aspects: self.aspects,
+            first: vk::ImageLayout::UNDEFINED,
+            homed: AtomicBool::new(false),
+            _under: None,
+        });
+        core.work.home(core, &made)?;
+        *shadow = Some(made);
+        Ok(Some(image))
+    }
 }
 
 impl Drop for Image {
     fn drop(&mut self) {
-        self.core.reaper.give(Job::Free(Free::Texture {
-            views: [self.sampled, self.storage],
-            image: self.image,
-            backing: self.backing,
-        }));
+        let free = match self.shadow {
+            true => Free::Shadow {
+                image: self.image,
+                backing: self.backing,
+                bytes: self.bytes,
+            },
+            false => Free::Texture {
+                views: [self.sampled, self.storage],
+                image: self.image,
+                backing: self.backing,
+            },
+        };
+        self.core.reaper.give(Job::Free(free));
     }
 }
 
@@ -385,6 +497,7 @@ impl CopyUnit {
 }
 
 /// The texture's shape, from its descriptor.
+#[derive(Clone, Copy)]
 pub(crate) struct Shape {
     image_type: vk::ImageType,
     flags: vk::ImageCreateFlags,
@@ -428,9 +541,19 @@ impl Drop for TextureInner {
                     &core.device,
                     &core.counters,
                     (index, owner),
-                    self.image.feedback,
+                    self.image.attachment_reads,
                 )
             };
+        }
+        // Its element is null, or another texture's: its view of the shadow goes before the
+        // shadow, which its image holds.
+        let shadow = (self.shadow.as_mut()).and_then(|shadow| {
+            (shadow.view.get_mut())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        });
+        if let Some(view) = shadow {
+            core.reaper.give(Job::Free(Free::ShadowView(view)));
         }
     }
 }
@@ -755,6 +878,15 @@ impl Device {
         }
         let (image, backing, bytes, sampled, storage) = made?;
         core.counters.rise(Gauge::Textures);
+        let attachment_reads =
+            plan.attachment_reads && home == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+        // On a device without the feedback loop, a draw reads such an image through its shadow.
+        let shadowing = (attachment_reads && core.feedback.is_none()).then(|| {
+            Box::new(Shadowing {
+                made: (d, shape, plan.shadow()),
+                shadow: Mutex::new(None),
+            })
+        });
         let image = Arc::new(Image {
             core: Arc::clone(core),
             image,
@@ -763,12 +895,15 @@ impl Device {
             sampled,
             storage,
             home,
-            feedback: plan.feedback && home == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            attachment_reads,
+            shadowing,
+            shadow: false,
             aspects: plan.aspects,
             first,
             homed: AtomicBool::new(false),
             _under: block,
         });
+        let shadow = ShadowView::of(&image, &plan, index, shape.view_type, whole);
         // The texture's elements of set 1, written as it takes its index; a refusal frees the
         // image as `image` drops.
         let index = match index {
@@ -782,7 +917,7 @@ impl Device {
                         &core.counters,
                         index,
                         (sampled, storage),
-                        image.feedback,
+                        image.looped(),
                     )
                 }?;
                 Some((index, owner))
@@ -802,6 +937,7 @@ impl Device {
             view: None,
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
+            shadow,
         };
         // Over a buffer of no device copy, the commands track what they write while it lives
         // (`crate::over`).
@@ -843,8 +979,10 @@ struct Plan {
     /// Whether the texture has a storage view.
     storage: bool,
     home: vk::ImageLayout,
-    /// The image has the feedback usage, and each sampled view a second element ([`Image`]).
-    feedback: bool,
+    /// A draw may read an attachment of its own pass through the texture, and each sampled view
+    /// has a second element ([`Image`]'s `attachment_reads`): the image has the feedback usage on
+    /// a device with the attachment feedback loop, and a shadow on one without it.
+    attachment_reads: bool,
     aspects: vk::ImageAspectFlags,
     unit: Option<CopyUnit>,
     word: u32,
@@ -856,6 +994,18 @@ impl Plan {
     /// usage, as its home is general and no pass moves it to the feedback layout.
     fn linear_usage(&self) -> vk::ImageUsageFlags {
         self.usage & !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT
+    }
+
+    /// The plan of the image's shadow (`crate::shadow`): its format, samples and aspects, with
+    /// the shadow's usage and no view of its own.
+    fn shadow(&self) -> Plan {
+        Plan {
+            usage: SHADOW_USAGE,
+            sampled: None,
+            storage: false,
+            attachment_reads: false,
+            ..*self
+        }
     }
 }
 
@@ -1186,14 +1336,16 @@ fn plan(
             false => vk::ImageUsageFlags::COLOR_ATTACHMENT,
         };
     }
-    // A draw may read an attachment of its own pass through such a texture, in the feedback
-    // layout (`crate::render_encoder`), where the device reads attachments so.
-    let mut feedback = core.feedback.is_some()
+    // A draw may read an attachment of its own pass through such a texture
+    // (`crate::render_encoder`), where the device reads attachments: in the feedback layout where
+    // it has the attachment feedback loop, else through a copy into the image's shadow.
+    let mut attachment_reads = core.attachment_reads
         && read
         && render
         && !storage
         && aspects == vk::ImageAspectFlags::COLOR;
-    if feedback {
+    let looped = attachment_reads && core.feedback.is_some();
+    if looped {
         image_usage |= vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
     }
     let home = match (storage, read, render) {
@@ -1212,12 +1364,18 @@ fn plan(
     let mut properties = core.image_format_properties(&info);
     // A format the device makes without the feedback usage alone is made so, and its draws read
     // no attachment of their own pass through it.
-    if properties.is_none() && feedback {
-        feedback = false;
+    if properties.is_none() && looped {
+        attachment_reads = false;
         image_usage &= !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
         properties = core.image_format_properties(&info.usage(image_usage));
     }
     let properties = properties.ok_or_else(gap)?;
+    // Likewise a format the device makes no shadow of.
+    if attachment_reads && !looped {
+        attachment_reads = core
+            .image_format_properties(&info.usage(SHADOW_USAGE))
+            .is_some();
+    }
     let max = properties.max_extent;
     let max_extent = [max.width, max.height, max.depth];
     if shape.extent.iter().zip(max_extent).any(|(&e, m)| e > m)
@@ -1259,7 +1417,7 @@ fn plan(
         sampled,
         storage,
         home,
-        feedback,
+        attachment_reads,
         aspects,
         unit,
         word,
@@ -2223,6 +2381,7 @@ impl Texture {
         // A failed view's image views go to the reaper as `views` drops, and so do they where the
         // view is refused its index.
         made?;
+        let shadow = ShadowView::of(&inner.image, &plan, index, shape.view_type, range);
         let index = match index {
             Some(index) => {
                 let sampled = sampled.map(|view| (view, inner.image.home));
@@ -2234,7 +2393,7 @@ impl Texture {
                         &core.counters,
                         index,
                         (sampled, storage),
-                        inner.image.feedback,
+                        inner.image.looped(),
                     )
                 }?;
                 Some((index, owner))
@@ -2274,6 +2433,7 @@ impl Texture {
             }),
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
+            shadow,
         };
         Ok(Texture {
             inner: Arc::new(view),
@@ -2299,16 +2459,18 @@ impl Texture {
             && (first_layer..first_layer + slices(d)).contains(&layer)
     }
 
-    /// Whether a draw may read an attachment of its own pass through it, its image in the
-    /// feedback layout ([`Image`]'s `feedback`).
-    pub(crate) fn feedback(&self) -> bool {
-        self.inner.image.feedback
+    /// Whether a draw may read an attachment of its own pass through it ([`Image`]'s
+    /// `attachment_reads`): its image in the feedback layout, or, on a device without the
+    /// attachment feedback loop, its view of its image's shadow.
+    pub(crate) fn attachment_reads(&self) -> bool {
+        let image = &self.inner.image;
+        image.attachment_reads && (image.looped() || self.inner.shadow.is_some())
     }
 
-    /// Its resource id while its image is in the feedback layout: its second element's, at its
+    /// Its resource id while a draw reads an attachment through it: its second element's, at its
     /// index plus [`TEXTURES`](crate::floor::TEXTURES), with its own word. Nil for a
     /// texture no shader reaches.
-    pub(crate) fn feedback_resource_id(&self) -> ResourceId {
+    pub(crate) fn second_resource_id(&self) -> ResourceId {
         match self.inner.index {
             Some((index, _)) => ResourceId {
                 index: index + crate::floor::TEXTURES,
@@ -2316,6 +2478,72 @@ impl Texture {
             },
             None => ResourceId::default(),
         }
+    }
+
+    /// Its image's shadow, and its own view of it at its second element, each made where it has
+    /// none yet (`crate::shadow`): what a draw reads an attachment through on a device without
+    /// the attachment feedback loop. The element is written where the texture still owns its
+    /// index. `None` for a texture with no view of a shadow.
+    ///
+    /// Err: [`Error::Vulkan`] where the shadow or the view cannot be made; [`Error::Quiesced`].
+    pub(crate) fn shadow(&self) -> Result<Option<vk::Image>, Error> {
+        let (Some(at), Some(index)) = (&self.inner.shadow, self.inner.index) else {
+            return Ok(None);
+        };
+        let Some(shadow) = self.inner.image.shadow()? else {
+            return Ok(None);
+        };
+        let mut view = lock(&at.view);
+        if view.is_none() {
+            let core = self.inner.device.core();
+            // SAFETY: the shadow is bound, of the image's format, levels and layers, which hold
+            // the sampled view's range, and of the sampled usage.
+            let made = unsafe {
+                image_view(
+                    &core.device,
+                    shadow,
+                    at.view_type,
+                    self.inner.format,
+                    at.components,
+                    at.range,
+                )
+            }?;
+            *view = Some(made);
+            // SAFETY: the set has the second elements (the device reads attachments); the view
+            // lives until the texture's elements are vacated, and the shadow is at home,
+            // shader-read-only, whenever work reads it.
+            unsafe { (core.arrays).place_shadow(&core.device, index, made) };
+        }
+        Ok(Some(shadow))
+    }
+
+    /// What a draw reads of its image through it (`crate::shadow`): with `own_pixel`, the draw's
+    /// scissor (per axis `[first, end)`), the rectangle a fragment function that reads only at its
+    /// own pixel reads of its first level and layer; else every level and layer it reaches.
+    pub(crate) fn read_areas(&self, own_pixel: Option<[[u32; 2]; 2]>) -> Vec<Area> {
+        let d = &self.inner.descriptor;
+        let [level, layer] = self.inner.base();
+        match own_pixel {
+            Some(scissor) => vec![shadow::own_pixel(
+                level,
+                layer,
+                [d.width, d.height],
+                scissor,
+            )],
+            None => {
+                let root = match &self.inner.view {
+                    Some(view) => &view.parent.inner.descriptor,
+                    None => d,
+                };
+                let size = [root.width, root.height];
+                shadow::whole(level, d.mipmap_level_count, layer, slices(d), size)
+            }
+        }
+    }
+
+    /// The bytes of a texel of its image, which its copies move; 0 where no copy is built.
+    pub(crate) fn texel_bytes(&self) -> u64 {
+        self.inner.unit.map_or(0, |unit| u64::from(unit.bytes))
     }
 
     /// Every level and layer of its image, every aspect.

@@ -148,9 +148,13 @@ pub(crate) struct Core {
     /// `VK_EXT_calibrated_timestamps`, the floor's: the GPU's clock read with the host's.
     pub(crate) calibrated: ash::ext::calibrated_timestamps::Device,
     /// `VK_EXT_attachment_feedback_loop_dynamic_state`'s command, where device creation enabled
-    /// the attachment reads (`floor::Capabilities::attachment_reads`): every render pipeline takes
-    /// the feedback loop's enable as dynamic state, which each draw sets.
+    /// the attachment feedback loop (`floor::Capabilities::feedback_loop`): every render pipeline
+    /// takes the feedback loop's enable as dynamic state, which each draw sets.
     pub(crate) feedback: Option<ash::ext::attachment_feedback_loop_dynamic_state::Device>,
+    /// A draw may read an attachment of its own pass through a texture
+    /// (`floor::Capabilities::attachment_reads`): through the feedback loop where `feedback` is
+    /// set, else through a copy of the image into its shadow (`crate::shadow`).
+    pub(crate) attachment_reads: bool,
     /// The longest block: the device's `maxMemoryAllocationSize` or `maxBufferSize`, whichever is
     /// less.
     max_block_len: u64,
@@ -359,7 +363,7 @@ impl Device {
         if enabled(ash::khr::portability_subset::NAME) {
             features = features.push_next(&mut portability);
         }
-        if capabilities.attachment_reads {
+        if capabilities.feedback_loop {
             features = features
                 .push_next(&mut feedback_loop)
                 .push_next(&mut feedback_loop_dynamic);
@@ -440,7 +444,7 @@ impl Device {
             families[family as usize].timestamp_valid_bits,
         );
         let calibrated = ash::ext::calibrated_timestamps::Device::new(vk_instance, &device);
-        let feedback = (capabilities.attachment_reads).then(|| {
+        let feedback = (capabilities.feedback_loop).then(|| {
             ash::ext::attachment_feedback_loop_dynamic_state::Device::new(vk_instance, &device)
         });
         let limits = &properties.properties.limits;
@@ -480,6 +484,7 @@ impl Device {
             ticks,
             calibrated,
             feedback,
+            attachment_reads: capabilities.attachment_reads,
             max_block_len,
             max_allocations,
             granularity,

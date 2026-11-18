@@ -28,6 +28,7 @@ mod readback;
 mod render;
 mod sampler;
 mod sampling;
+mod shadow;
 mod spill;
 mod staging;
 mod submit_infos;

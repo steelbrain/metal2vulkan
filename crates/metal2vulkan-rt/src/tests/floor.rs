@@ -951,6 +951,75 @@ fn the_step_rate_feature_is_enabled_where_reported() {
         .contains(&VkExtension::ExtVertexAttributeDivisor));
 }
 
+/// A device reads attachments where its descriptor limits hold the sampled-texture array's second
+/// elements: through the attachment feedback loop where it lists both extensions and reports both
+/// features, which device creation then enables, and through a copy of the image where it does
+/// not, enabling neither. A device without the room reads no attachment, whatever it reports.
+#[test]
+fn the_attachment_reads_take_the_feedback_loop_where_reported_and_a_copy_elsewhere() {
+    let roomy = |device: &mut Queried| {
+        let descriptors = &mut device.vulkan12;
+        descriptors.max_per_stage_descriptor_update_after_bind_sampled_images = 2 * 65_536;
+        descriptors.max_descriptor_set_update_after_bind_sampled_images = 2 * 65_536;
+        descriptors.max_per_stage_update_after_bind_resources = 3 * 65_536 + 8;
+        descriptors.max_update_after_bind_descriptors_in_all_pools = 3 * 65_536 + 3 * 4000;
+    };
+    let looped = |device: &mut Queried| {
+        (device.extensions).extend(
+            ATTACHMENT_READ_EXTENSIONS
+                .iter()
+                .map(|&name| name.to_owned()),
+        );
+        device
+            .features
+            .feedback_loop
+            .attachment_feedback_loop_layout = vk::TRUE;
+        (device.features.feedback_loop_dynamic).attachment_feedback_loop_dynamic_state = vk::TRUE;
+    };
+    let answer = |device: &Queried| {
+        let capabilities = decide(device).unwrap_or_else(|below| panic!("{below}"));
+        let enabled = (ATTACHMENT_READ_EXTENSIONS.iter())
+            .filter(|name| capabilities.extensions.contains(name))
+            .count();
+        let features = (ATTACHMENT_READS.iter())
+            .filter(|feature| holds(&capabilities.features, feature))
+            .count();
+        (
+            capabilities.attachment_reads,
+            capabilities.feedback_loop,
+            enabled,
+            features,
+        )
+    };
+    let mut device = at_the_floor();
+    assert_eq!(answer(&device), (false, false, 0, 0), "at the floor");
+    looped(&mut device);
+    assert_eq!(
+        answer(&device),
+        (false, false, 0, 0),
+        "no room, the loop reported"
+    );
+    let mut device = at_the_floor();
+    roomy(&mut device);
+    assert_eq!(
+        answer(&device),
+        (true, false, 0, 0),
+        "room, no loop: the copy"
+    );
+    device
+        .extensions
+        .extend((ATTACHMENT_READ_EXTENSIONS.iter()).map(|&name| name.to_owned()));
+    assert_eq!(
+        answer(&device),
+        (true, false, 0, 0),
+        "room, the extensions listed and the features unreported: the copy"
+    );
+    let mut device = at_the_floor();
+    roomy(&mut device);
+    looped(&mut device);
+    assert_eq!(answer(&device), (true, true, 2, 2), "room and the loop");
+}
+
 /// A set layout the created device does not support is named by its set.
 #[test]
 fn a_set_layout_the_device_does_not_support_is_named() {
@@ -1097,7 +1166,7 @@ fn the_readme_states_the_floor() {
         .chain(
             ATTACHMENT_READ_EXTENSIONS
                 .iter()
-                .map(|name| (name, "device, with the attachment reads")),
+                .map(|name| (name, "device, with the feedback loop")),
         )
         .map(|(name, place)| (name.to_string_lossy().into_owned(), place.to_string()))
         .collect();
@@ -1225,7 +1294,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         if enabled(ash::khr::portability_subset::NAME) {
             features = features.push_next(&mut portability);
         }
-        if capabilities.attachment_reads {
+        if capabilities.feedback_loop {
             features = features
                 .push_next(&mut feedback_loop)
                 .push_next(&mut feedback_loop_dynamic);
@@ -1333,6 +1402,10 @@ fn every_device_the_loader_lists_is_above_the_floor() {
                 .portability
                 .mutable_comparison_samplers,
             capabilities.features.portability.multisample_array_image
+        );
+        println!(
+            "floor: {name}: attachment reads {}, through the feedback loop {}",
+            capabilities.attachment_reads, capabilities.feedback_loop
         );
     }
     drop(runtime);

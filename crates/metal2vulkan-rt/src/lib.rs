@@ -42,6 +42,7 @@ mod render;
 mod render_encoder;
 mod ring;
 mod sampler;
+mod shadow;
 mod staging;
 mod submit;
 #[cfg(test)]

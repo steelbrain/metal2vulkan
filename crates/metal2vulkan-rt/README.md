@@ -266,10 +266,13 @@ updated while unused elements are pending, so an object's element is written onc
 made, with no lock, and never rewritten for layouts.
 
 - Where the device reads attachments (Floor, Attachment reads), binding 0 holds 131,072
-  elements: element `i + 65,536` is texture `i`'s in the attachment feedback layout, written with
+  elements: element `i + 65,536` is texture `i`'s second element, which a draw pushes in place of
+  the texture's own index while it reads an attachment of its pass through the texture. Through
+  the attachment feedback loop it is the texture's view in the feedback layout, written with
   element `i` for a texture whose image a pass may move there (a shader-read colour render target
-  with no storage view), and a null descriptor otherwise. No grant reaches it; a draw pushes it
-  in place of the texture's own index while the texture's image is in that layout.
+  with no storage view); on a device without the loop it is the texture's view of its image's
+  shadow (Render encoders), written at the first draw that reads through it where the texture
+  still owns index `i`. It is a null descriptor otherwise, and no grant reaches it.
 - Every element no object owns is defined. A texture element is a null descriptor
   (`nullDescriptor`): it reads zeros, sizes 0 and drops writes, as Metal's nil texture does. A
   sampler element is its array's default sampler, nearest and clamped to the edge; the
@@ -1334,24 +1337,39 @@ or does not check is rebuilt from the generations' names, with young counted ful
   saturates at 255, as Metal stores it.
 - A draw may read an attachment of its own pass through a texture, as Metal reads a render
   target, where the device reads attachments (Floor, Attachment reads): through the attachment
-  feedback loop. The texture reaches the attachment's level and layer, the fragment function
-  reads it and nothing writes it, and its image is a shader-read colour render target with no
-  storage view, which one attachment of the pass renders. At the pass's first such draw the
-  rendering ends, one barrier moves the whole image to the feedback layout (the attachment's
-  level and layer from the attachment layout, the rest from home), and the rendering begins
-  again with the attachment in that layout; the pass's second barrier moves the whole image
-  home. Until then every draw of the pass reads the image's textures through their feedback
-  elements (Set 1), a texture that reaches no rendered level among them. Every render pipeline
-  takes the feedback loop's enable as dynamic state, which the encoder sets at its first draw and
-  where it changes: colour for a draw that reads an attachment, none otherwise, so a pass of no
-  such draw sets it once.
+  feedback loop where the device has it, else through a copy. The texture reaches the
+  attachment's level and layer, the fragment function reads it and nothing writes it, and its
+  image is a shader-read colour render target with no storage view, which one attachment of the
+  pass renders. Through the feedback loop, at the pass's first such draw the rendering ends, one
+  barrier moves the whole image to the feedback layout (the attachment's level and layer from the
+  attachment layout, the rest from home), and the rendering begins again with the attachment in
+  that layout; the pass's second barrier moves the whole image home. Until then every draw of the
+  pass reads the image's textures through their second elements (Set 1), a texture that reaches
+  no rendered level among them. Every render pipeline takes the feedback loop's enable as dynamic
+  state, which the encoder sets at its first draw and where it changes: colour for a draw that
+  reads an attachment, none otherwise, so a pass of no such draw sets it once.
+- Through a copy, on a device without the feedback loop, the draw reads the image's shadow: an
+  image of the same format, extent, levels and layers, made at the first draw that reads the
+  image and freed with it (`Gauges::shadows` and `shadow_bytes`). A texture that reaches the
+  attachment's level and layer reads the shadow through its second element; one that reaches
+  neither reads the image at home. Where the draw reads what the shadow does not hold, the
+  rendering ends, one barrier orders every earlier command before the copies and moves what they
+  copy to the transfer layouts, the copies are recorded (`Metrics::attachment_read_copies` and
+  `attachment_read_copy_bytes`), one barrier moves it all back, and the rendering begins again.
+  A slot the fragment function reads only at its own pixel reads the draw's scissor, a pixel
+  wider each way, clamped into its level; any other slot reads every level and layer its texture
+  reaches. What is new to the shadow is copied as one area where it is one (a wider scissor's
+  band), else as the whole read, with no look-ahead.
 - `memory_barrier` after a draw of the encoder that wrote memory ends the rendering, records one
   barrier and begins the rendering again, loading what it stored. After draws that only rendered,
   in a pass that moved an image to the feedback layout, the barrier is owed to the next draw that
   reads an attachment: the rendering ends, one global barrier is recorded and it begins again,
   which orders every pixel the draw reads, its own and any other. Elsewhere it records nothing:
   everything before the pass is ordered before it, and a move orders everything before it.
-  A draw that needs a copy first, of a texture over a buffer in an image of its own or over a
+  On a device without the feedback loop it records nothing either, and after draws every shadow
+  holds nothing from then: the next draw that reads an attachment copies what it reads again,
+  after what the earlier draws rendered. A draw that needs a copy first, of a texture over a
+  buffer in an image of its own or over a
   Managed buffer's device copy, records it the same way, between the rendering's end and its new
   beginning. Fences record nothing, as in a compute encoder.
 - Refused, as Metal's validation stops them: a draw with no pipeline state
@@ -1368,8 +1386,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   tests or writes depth (no pass has a depth attachment yet), a viewport Vulkan's is not (a
   negative width, a depth range past `[0, 1]`, bounds past the device's viewport limits), a
   pipeline state whose formats are not the pass's attachments', a draw that binds a texture
-  whose image the pass renders, where the feedback loop does not read it: on a device without the
-  attachment reads, from the vertex function at the rendered level and layer, written, of a
+  whose image the pass renders, where neither the feedback loop nor a copy reads it: on a device
+  without the attachment reads, from the vertex function at the rendered level and layer, written, of a
   depth or stencil attachment, of an image with a storage view or over a buffer in place, or of
   an image two attachments of the pass render; and, on a device that does not report
   `supportsNonZeroFirstInstance` (lavapipe and the UHD 630 among the lab's), a draw at a base
@@ -1382,7 +1400,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   their stepped draws (a WebGL stream's, at rates 2 and 3) are all at base instance 0.
 - A draw that reaches an attachment of its own pass through an argument buffer's texture is not
   seen: it reads through the texture's own element, in its home layout, while the pass may have
-  moved the image to the feedback layout.
+  moved the image to the feedback layout, or, without the feedback loop, while the pass renders
+  the level and layer it reads.
 - A vertex fetch outside its buffer returns what the device gives: the floor enables no buffer
   robustness, so there is no bounds guarantee beyond the device's.
 - Not built, and so not methods: indirect draws, several viewports or scissor rectangles, the
@@ -1436,6 +1455,21 @@ or does not check is rebuilt from the generations' names, with young counted ful
   A pass that reads its target takes no longer here than on the old runtime, on either card at
   either size. On the RX 550 the difference from the plain pass is larger here, because the old
   runtime's plain pass is 2.2 times slower.
+- On a device that does not report `attachmentFeedbackLoopLayout` and
+  `attachmentFeedbackLoopDynamicState` (the UHD 630 among the lab's, Windows driver 101.2145), a
+  draw reads an attachment through a copy into the image's shadow, which Metal does not make: at
+  the pass's first draw that reads the image, at the first after a memory barrier after draws,
+  and where a draw reads what the shadow does not hold, the rendering ended and begun again
+  around the copies and their two barriers. Its cost, measured on the UHD 630 in the harness
+  (release; GPU time a pass, the median over four rounds of each round's median) by a pass that
+  ends for a copy of its whole `BGRA8Unorm` target and begins again, against the same pass
+  without the copy: 39.0 µs a MiB at 1920 × 1080 and 53.5 µs a MiB at 3648 × 2038, and about 3
+  to 8 µs a copy beyond its bytes. Two replay streams, counted as this form copies them, make
+  68.7 copies and 298.0 MiB a frame (r3) and 65.5 copies and 93.4 MiB a frame (b3): about 12 to
+  16.5 ms a frame on the UHD 630 for r3 and 4 to 5.5 ms for b3. In the same runs the old runtime
+  reads the same target more slowly at 3648 × 2038: 5,431.1 µs after a barrier, against
+  4,766.4 µs for the pass with the copy, and 4,181.9 µs at the pass's first read, against
+  3,889.6 µs.
 
 ## One path for every device
 
@@ -1477,8 +1511,8 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
 | `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |
 | `VK_KHR_portability_subset` | device, where listed | Vulkan requires it enabled where a device lists it; the device is asked for the portability features below |
-| `VK_EXT_attachment_feedback_loop_layout` | device, with the attachment reads | a draw's read of an attachment of its own pass through a texture, in the feedback layout (below) |
-| `VK_EXT_attachment_feedback_loop_dynamic_state` | device, with the attachment reads | the feedback loop's enable as dynamic state of every render pipeline |
+| `VK_EXT_attachment_feedback_loop_layout` | device, with the feedback loop | a draw's read of an attachment of its own pass through a texture, in the feedback layout (below) |
+| `VK_EXT_attachment_feedback_loop_dynamic_state` | device, with the feedback loop | the feedback loop's enable as dynamic state of every render pipeline |
 | `VK_KHR_vertex_attribute_divisor` | device, where listed | a vertex layout stepped per instance at a rate above 1, through the step-rate feature below |
 | `VK_EXT_vertex_attribute_divisor` | device, where listed | the same, on a device that lists only this extension, which the KHR was promoted from with the same feature and pipeline structures |
 
@@ -1618,10 +1652,12 @@ is a 246 MiB heap (both NVIDIA boards above).
 
 ### Chosen by a query
 
-Five features choose between two forms by the device's answer, and no other feature does: 16-bit
-floats, storage-image reads without a format, 64-bit atomics, 64-bit floats and SIMD groups.
-`floor::Capabilities` holds each answer the floor reads, and the features and extensions to
-enable: the floor's, and each optional one the device has.
+Five features choose between two forms by the device's answer: 16-bit floats, storage-image reads
+without a format, 64-bit atomics, 64-bit floats and SIMD groups. Beside them, a device without the
+attachment feedback loop reads attachments through a copy, the one form left there, which is a
+known gap (Known gaps of render encoders). `floor::Capabilities` holds each answer the floor
+reads, and the features and extensions to enable: the floor's, and each optional one the device
+has.
 
 | Feature | Queries | Used for |
 |---|---|---|
@@ -1642,14 +1678,17 @@ The other four are one feature each:
 ### Attachment reads
 
 A draw that reads, through a texture, an attachment its own pass renders (Metal's read of a
-render target) is built where the device lists the two extensions marked "with the attachment
-reads" above, reports each feature below, and its descriptor limits hold the sampled-texture
-array's feedback elements beside the floor's arrays: 131,072 sampled textures where the limits
-above name 65,536 (`maxPerStageDescriptorUpdateAfterBindSampledImages`,
+render target) is built where the device's descriptor limits hold the sampled-texture array's
+second elements beside the floor's arrays: 131,072 sampled textures where the limits above name
+65,536 (`maxPerStageDescriptorUpdateAfterBindSampledImages`,
 `maxDescriptorSetUpdateAfterBindSampledImages`, `maxPerStageUpdateAfterBindResources` and
-`maxUpdateAfterBindDescriptorsInAllPools`). Device creation then enables all of them, and none
-otherwise; a device without them refuses such a draw (`Gap::Draw` of `DrawKind::AttachmentRead`),
-and is otherwise the same. `floor::Capabilities::attachment_reads` holds the answer.
+`maxUpdateAfterBindDescriptorsInAllPools`); a device without them refuses such a draw
+(`Gap::Draw` of `DrawKind::AttachmentRead`), and is otherwise the same
+(`floor::Capabilities::attachment_reads`). The draw reads through the attachment feedback loop
+where the device also lists the two extensions marked "with the feedback loop" above and reports
+each feature below, which device creation then enables, and none otherwise
+(`floor::Capabilities::feedback_loop`). A device that reads attachments without them reads
+through a copy of the image into its shadow (Render encoders), a known gap.
 
 | Attachment-read feature | Structure | Used for |
 |---|---|---|

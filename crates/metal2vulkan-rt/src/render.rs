@@ -89,6 +89,10 @@ pub(crate) struct Draws {
     pub(crate) buffers: Vec<(usize, u32, Access)>,
     /// Each texture slot a function uses, likewise.
     pub(crate) textures: Vec<(usize, u32, Access)>,
+    /// The fragment function's texture slots it reads only at the fragment's own pixel
+    /// (`StageModule::own_pixel_textures`), sorted: what a draw copies of an attachment it reads
+    /// through one on a device without the attachment feedback loop (`crate::shadow`).
+    pub(crate) own_pixel: Vec<u32>,
     /// Each fixed-function vertex binding: its binding and the vertex buffer index it reads.
     pub(crate) bindings: Vec<(u32, u32)>,
     /// Whether a function reads through an address that is not one of its slots.
@@ -406,9 +410,16 @@ fn draws(
         .map(|binding| (binding.binding, binding.buffer_index))
         .collect();
     let divided = (pipeline.vertex_input.bindings.iter()).any(|binding| binding.divisor != 1);
+    // Only a fragment stage states them.
+    let mut own_pixel: Vec<u32> = (pipeline.stages.iter())
+        .flat_map(|stage| stage.own_pixel_textures.iter().copied())
+        .collect();
+    own_pixel.sort_unstable();
+    own_pixel.dedup();
     let draws = Draws {
         buffers,
         textures,
+        own_pixel,
         bindings,
         reads_unbound: translated.reads_unbound_resources,
         writes_unbound: translated.writes_unbound_resources,

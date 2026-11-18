@@ -51,11 +51,12 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::ext::vertex_attribute_divisor::NAME,
 ];
 
-/// The device extensions of a draw that reads, through a texture, an attachment its own pass
-/// renders (Metal's texture read of a render target): device creation enables both, with their
-/// features, where the device lists both, reports both features and its descriptor limits hold the
-/// sampled-texture array's feedback elements, and neither otherwise. The read is the feedback
-/// loop's (`VK_EXT_attachment_feedback_loop_layout` and its dynamic state).
+/// The device extensions of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`
+/// and its dynamic state), through which a draw reads, through a texture, an attachment its own
+/// pass renders (Metal's texture read of a render target): device creation enables both, with
+/// their features, where the device reads attachments (`Capabilities::attachment_reads`), lists
+/// both and reports both features, and neither otherwise. A device that reads attachments without
+/// them reads through a copy of the image (`Capabilities::feedback_loop`).
 pub const ATTACHMENT_READ_EXTENSIONS: &[&CStr] = &[
     ash::ext::attachment_feedback_loop_layout::NAME,
     ash::ext::attachment_feedback_loop_dynamic_state::NAME,
@@ -355,9 +356,9 @@ pub(crate) const OPTIONAL: &[Feature] = &[
     feature!(subgroup_uniform_control_flow.shader_subgroup_uniform_control_flow => ShaderSubgroupUniformControlFlow),
 ];
 
-/// The features of a draw that reads an attachment of its own pass through a texture
-/// ([`ATTACHMENT_READ_EXTENSIONS`]): enabled together where the device reports both, and neither
-/// otherwise; a device without them refuses such a draw.
+/// The features of the attachment feedback loop ([`ATTACHMENT_READ_EXTENSIONS`]): enabled together
+/// where the device reads attachments and reports both, and neither otherwise; a device that reads
+/// attachments without them reads through a copy of the image.
 pub(crate) const ATTACHMENT_READS: &[Feature] = &[
     feature!(feedback_loop.attachment_feedback_loop_layout),
     feature!(feedback_loop_dynamic.attachment_feedback_loop_dynamic_state),
@@ -544,15 +545,21 @@ pub struct Capabilities {
     /// `shaderSubgroupUniformControlFlow`: SIMD groups reconverge where control flow is uniform,
     /// the mode where maximal reconvergence is not offered.
     pub subgroup_uniform_control_flow: bool,
-    /// Every attachment-read feature, with [`ATTACHMENT_READ_EXTENSIONS`]: a draw may read,
-    /// through a texture, an attachment its own pass renders, as Metal reads a render target.
+    /// The device's descriptor limits hold the sampled-texture array's second elements beside the
+    /// floor's arrays: a draw may read, through a texture, an attachment its own pass renders, as
+    /// Metal reads a render target. It reads through the attachment feedback loop where
+    /// [`feedback_loop`](Self::feedback_loop) holds, and through a copy of the image otherwise.
     pub attachment_reads: bool,
+    /// The attachment reads hold, and so does every attachment-read feature, with
+    /// [`ATTACHMENT_READ_EXTENSIONS`]: a draw reads an attachment through the attachment feedback
+    /// loop.
+    pub feedback_loop: bool,
     /// The features device creation enables: every one the floor requires, and each of the
     /// optional and step-rate ones the device reports.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
-    /// [`attachment_reads`](Self::attachment_reads) holds.
+    /// [`feedback_loop`](Self::feedback_loop) holds.
     pub extensions: Vec<&'static CStr>,
     /// The first queue family with graphics and compute, whose timestamps the floor checked.
     pub queue_family: u32,
@@ -797,10 +804,11 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     }
     let listed =
         |extension: &CStr| (device.extensions.iter()).any(|name| name.as_c_str() == extension);
-    let attachment_reads = ATTACHMENT_READ_EXTENSIONS.iter().all(|&name| listed(name))
-        && (ATTACHMENT_READS.iter()).all(|feature| *(feature.field)(&mut reported) == vk::TRUE)
-        && feedback_room(device);
-    if attachment_reads {
+    let attachment_reads = second_elements_fit(device);
+    let feedback_loop = attachment_reads
+        && ATTACHMENT_READ_EXTENSIONS.iter().all(|&name| listed(name))
+        && (ATTACHMENT_READS.iter()).all(|feature| *(feature.field)(&mut reported) == vk::TRUE);
+    if feedback_loop {
         for feature in ATTACHMENT_READS {
             *(feature.field)(&mut features) = vk::TRUE;
         }
@@ -819,6 +827,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             .shader_subgroup_uniform_control_flow
             == vk::TRUE,
         attachment_reads,
+        feedback_loop,
         features,
         extensions: DEVICE_EXTENSIONS
             .iter()
@@ -827,11 +836,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
                     .iter()
                     .filter(|&&extension| listed(extension)),
             )
-            .chain(
-                ATTACHMENT_READ_EXTENSIONS
-                    .iter()
-                    .filter(|_| attachment_reads),
-            )
+            .chain(ATTACHMENT_READ_EXTENSIONS.iter().filter(|_| feedback_loop))
             .copied()
             .collect(),
         queue_family,
@@ -920,10 +925,10 @@ pub(crate) fn flag_names(flags: vk::MemoryPropertyFlags) -> String {
         .join(" | ")
 }
 
-/// Whether the device's descriptor limits hold the sampled-texture array's feedback elements
+/// Whether the device's descriptor limits hold the sampled-texture array's second elements
 /// (`arrays::sampled_images`) beside the floor's arrays: what the attachment reads take beyond
 /// [`limits`].
-fn feedback_room(device: &Queried) -> bool {
+fn second_elements_fit(device: &Queried) -> bool {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
     let sampled = 2 * TEXTURES;

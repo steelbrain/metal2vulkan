@@ -60,6 +60,15 @@ pub(crate) enum Free {
     },
     /// A dropped texture view's image views; the textures gauge falls with them.
     Views([Option<vk::ImageView>; 2]),
+    /// A dropped image's shadow (`crate::shadow`), its image and memory of `bytes`, freed as a
+    /// texture's are; the shadow gauges fall with it.
+    Shadow {
+        image: vk::Image,
+        backing: Backing,
+        bytes: u64,
+    },
+    /// A dropped texture's view of its image's shadow.
+    ShadowView(vk::ImageView),
     /// A dropped texture's attachment views; the attachment views gauge falls with each.
     AttachmentViews(Vec<vk::ImageView>),
     /// A device sampler no sampler state holds; the device samplers gauge falls with it.
@@ -131,6 +140,25 @@ impl Reaper {
     }
 }
 
+/// Frees an image's memory: its place in a texture block, or its allocation of its own with the
+/// blocks gauge and its spilled bytes.
+///
+/// # Safety
+///
+/// The image bound to it is destroyed.
+unsafe fn free_backing(core: &Core, backing: Backing) {
+    match backing {
+        Backing::Own(memory, spilled) => {
+            // SAFETY: the caller's contract.
+            unsafe { core.device.free_memory(memory, None) };
+            core.counters.fall(Gauge::Blocks);
+            core.counters.fall_by(Gauge::SpilledBytes, spilled);
+        }
+        Backing::Placed(place) => core.places.release(core, place),
+        Backing::InBlock => {}
+    }
+}
+
 /// Frees one object.
 fn free(core: &Core, object: Free) {
     let device = &core.device;
@@ -167,16 +195,8 @@ fn free(core: &Core, object: Free) {
                     device.destroy_image_view(view, None);
                 }
                 device.destroy_image(image, None);
-            }
-            match backing {
-                Backing::Own(memory, spilled) => {
-                    // SAFETY: the image bound to it is destroyed.
-                    unsafe { device.free_memory(memory, None) };
-                    core.counters.fall(Gauge::Blocks);
-                    core.counters.fall_by(Gauge::SpilledBytes, spilled);
-                }
-                Backing::Placed(place) => core.places.release(core, place),
-                Backing::InBlock => {}
+                // SAFETY: the image bound to it is destroyed.
+                free_backing(core, backing);
             }
             core.counters.fall(Gauge::Textures);
         }
@@ -190,6 +210,24 @@ fn free(core: &Core, object: Free) {
             }
             core.counters.fall(Gauge::Textures);
         }
+        Free::Shadow {
+            image,
+            backing,
+            bytes,
+        } => {
+            // SAFETY: no pending work uses it: every command buffer and upload that used it held
+            // its image until it retired, and every view of it went before it (each texture's
+            // goes before the image its texture holds).
+            unsafe {
+                device.destroy_image(image, None);
+                free_backing(core, backing);
+            }
+            core.counters.fall(Gauge::Shadows);
+            core.counters.fall_by(Gauge::ShadowBytes, bytes);
+        }
+        // SAFETY: no pending work uses it: every command buffer that read through it held its
+        // texture until it retired, and its element of set 1 is null or another texture's.
+        Free::ShadowView(view) => unsafe { device.destroy_image_view(view, None) },
         Free::AttachmentViews(views) => {
             // SAFETY: no pending work uses them: every command buffer whose pass rendered into
             // the texture held it until it retired.

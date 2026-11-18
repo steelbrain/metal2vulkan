@@ -1041,10 +1041,14 @@ mod on_device {
 
     /// A draw reads, through a texture, the attachment its own pass renders, as Metal reads a
     /// render target: after a memory barrier, what an earlier draw of the pass rendered, at the
-    /// fragment's own pixel and at another pixel, the rendering ended and begun again around one
-    /// barrier. The pass's first such draw moves the image to the feedback layout, a barrier of
-    /// its own. A device without the attachment reads refuses the draw,
-    /// `Gap::Draw { AttachmentRead }`, and records nothing for it.
+    /// fragment's own pixel and at another pixel. Through the feedback loop, the rendering is
+    /// ended and begun again around one barrier, and the pass's first such draw moves the image to
+    /// the feedback layout, a barrier of its own. Through a copy, on a device without the loop,
+    /// the pass's first such draw and the one after the memory barrier each copy what they read
+    /// into the image's shadow, between two barriers of their own, and the memory barrier records
+    /// nothing; the copies, their bytes and the live shadows are printed. A device without the
+    /// attachment reads refuses the draw, `Gap::Draw { AttachmentRead }`, and records nothing for
+    /// it.
     #[test]
     fn every_device_reads_its_attachment_through_a_texture_after_a_memory_barrier() {
         let Some(library) = examples() else {
@@ -1056,7 +1060,8 @@ mod on_device {
         each_device("attachment_reads", |name, _, device| {
             (device.grant_indices(IndexClass::Texture, 4096, 4))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let reads = device.core().feedback.is_some();
+            let reads = device.core().attachment_reads;
+            let looped = device.core().feedback.is_some();
             let plain = state(name, &device, &plain);
             let mut buffers = Buffers::new(&device);
             // Three triangles over the whole target, their colors none, blue and green.
@@ -1117,10 +1122,47 @@ mod on_device {
                 encoder.end_encoding();
                 run(name, &command_buffer);
                 let after = counters.metrics();
+                let shadows = counters.gauges();
+                // Through the loop: the pass's two, the move, the memory barrier's, the segment's
+                // end. Through a copy: the pass's two, two around each of the two copies, the
+                // segment's end.
+                let barriers = match looped {
+                    true => 5,
+                    false => 7,
+                };
                 assert_eq!(
-                    (after.barriers - before.barriers, after.passes - before.passes),
-                    (5, 1),
-                    "{name} {case}: barriers (the pass's two, the move, the memory barrier's, the segment's end), passes"
+                    (
+                        after.barriers - before.barriers,
+                        after.passes - before.passes
+                    ),
+                    (barriers, 1),
+                    "{name} {case}: barriers, passes"
+                );
+                // The whole target each time: its own pixels under a scissor over it, or the
+                // texture's one level and layer.
+                let bytes = u64::from(SIDE * SIDE * 4);
+                let copies = (
+                    after.attachment_read_copies - before.attachment_read_copies,
+                    after.attachment_read_copy_bytes - before.attachment_read_copy_bytes,
+                    after.bytes_copied - before.bytes_copied,
+                );
+                let want = match looped {
+                    true => (0, 0, 0),
+                    false => (2, 2 * bytes, 2 * bytes),
+                };
+                assert_eq!(
+                    copies, want,
+                    "{name} {case}: copies into the shadow and their bytes, all bytes copied"
+                );
+                assert_eq!(
+                    shadows.shadows > 0,
+                    !looped,
+                    "{name} {case}: the target's shadow, live with it"
+                );
+                println!(
+                    "{name} {case}: attachment_read_copies {}, attachment_read_copy_bytes {}; \
+                     live shadows {} of {} bytes",
+                    copies.0, copies.1, shadows.shadows, shadows.shadow_bytes
                 );
                 let want = texels(|_, _| [0.0, 1.0, 1.0, 1.0]);
                 assert_eq!(
@@ -1129,16 +1171,24 @@ mod on_device {
                     "{name} {case}: every pixel blue read plus green"
                 );
             }
-            match reads {
-                true => println!("{name}: an attachment read after a memory barrier, at its own pixel and at another"),
-                false => println!("{name}: no attachment reads; the reading draw refused"),
+            match (reads, looped) {
+                (true, true) => println!(
+                    "{name}: an attachment read after a memory barrier, at its own pixel and at \
+                     another, through the feedback loop"
+                ),
+                (true, false) => println!(
+                    "{name}: an attachment read after a memory barrier, at its own pixel and at \
+                     another, through copies into its shadow"
+                ),
+                (false, _) => println!("{name}: no attachment reads; the reading draw refused"),
             }
         });
     }
 
     /// A pass that renders a texture's second level reads its first through a view of both
-    /// levels, which reaches the rendered one: the draw reads through the feedback loop, its
-    /// whole image moved, and samples the level an earlier pass rendered.
+    /// levels, which reaches the rendered one, and samples the level an earlier pass rendered:
+    /// through the feedback loop, its whole image moved, or through a copy of both levels into
+    /// its shadow, one copy a level.
     #[test]
     fn every_device_samples_a_lower_level_while_its_pass_renders_the_next() {
         let Some(library) = examples() else {
@@ -1146,10 +1196,13 @@ mod on_device {
         };
         let d = descriptor(&library, "first_level_fragment", PixelFormat::RGBA8Unorm);
         each_device("attachment_levels", |name, _, device| {
-            if device.core().feedback.is_none() {
+            if !device.core().attachment_reads {
                 println!("{name}: no attachment reads");
                 return;
             }
+            let looped = device.core().feedback.is_some();
+            let counters = device.counters();
+            let before = counters.metrics();
             for (class, first) in [(IndexClass::Texture, 4096), (IndexClass::Sampler, 1)] {
                 (device.grant_indices(class, first, 4))
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -1179,6 +1232,17 @@ mod on_device {
             draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
             encoder.end_encoding();
             run(name, &command_buffer);
+            let after = counters.metrics();
+            let copies = after.attachment_read_copies - before.attachment_read_copies;
+            assert_eq!(
+                copies,
+                match looped {
+                    true => 0,
+                    false => 2,
+                },
+                "{name}: copies into the shadow, one a level"
+            );
+            println!("{name}: attachment_read_copies {copies}");
             let side = SIDE / 2;
             let mut bytes = vec![0; (side * side * 4) as usize];
             let region = Region {

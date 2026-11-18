@@ -2307,6 +2307,8 @@ field	metal2vulkan-rt::Gauges.private_idle_age_nanos	pub private_idle_age_nanos:
 field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
+field	metal2vulkan-rt::Gauges.shadow_bytes	pub shadow_bytes: u64
+field	metal2vulkan-rt::Gauges.shadows	pub shadows: u64
 field	metal2vulkan-rt::Gauges.shared_idle_age_nanos	pub shared_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
@@ -2325,6 +2327,8 @@ field	metal2vulkan-rt::IndexGrant.class	pub class: IndexClass
 field	metal2vulkan-rt::IndexGrant.count	pub count: u32
 field	metal2vulkan-rt::IndexGrant.first	pub first: u32
 field	metal2vulkan-rt::Metrics.allocations_freed	pub allocations_freed: u64
+field	metal2vulkan-rt::Metrics.attachment_read_copies	pub attachment_read_copies: u64
+field	metal2vulkan-rt::Metrics.attachment_read_copy_bytes	pub attachment_read_copy_bytes: u64
 field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
 field	metal2vulkan-rt::Metrics.block_bytes_made	pub block_bytes_made: u64
 field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
@@ -2480,6 +2484,7 @@ field	metal2vulkan-rt::floor::Capabilities.attachment_reads	pub attachment_reads
 field	metal2vulkan-rt::floor::Capabilities.buffer_int64_atomics	pub buffer_int64_atomics: bool
 field	metal2vulkan-rt::floor::Capabilities.extensions	pub extensions: Vec<&'static CStr>
 field	metal2vulkan-rt::floor::Capabilities.features	pub features: Features
+field	metal2vulkan-rt::floor::Capabilities.feedback_loop	pub feedback_loop: bool
 field	metal2vulkan-rt::floor::Capabilities.float16	pub float16: bool
 field	metal2vulkan-rt::floor::Capabilities.float64	pub float64: bool
 field	metal2vulkan-rt::floor::Capabilities.maximal_reconvergence	pub maximal_reconvergence: bool

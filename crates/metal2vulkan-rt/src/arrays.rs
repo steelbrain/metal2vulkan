@@ -20,10 +20,13 @@
 //! every element once at creation ([`Arrays::new`]).
 //!
 //! Where the device reads attachments through textures (`floor::Capabilities::attachment_reads`),
-//! the sampled-texture array is twice as long: element `i + 65,536` is texture `i`'s in the
-//! attachment feedback layout, written with element `i` for a texture whose image a pass may move
-//! there (`crate::render_encoder`), and a null descriptor otherwise. No index of a grant reaches
-//! it; a draw pushes it in place of the texture's own while its image is in that layout.
+//! the sampled-texture array is twice as long: element `i + 65,536` is texture `i`'s second
+//! element, which a draw pushes in place of the texture's own while it reads an attachment of its
+//! pass through the texture (`crate::render_encoder`). Through the attachment feedback loop it is
+//! the texture's sampled view in the feedback layout, written with element `i` for a texture whose
+//! image a pass may move there; on a device without the loop it is the texture's view of its
+//! image's shadow, written at the first draw that reads through it where the texture still owns
+//! the index (`crate::shadow`). It is a null descriptor otherwise. No index of a grant reaches it.
 //!
 //! The consumer names each range of indices it takes ([`Device::grant_indices`]), so resource IDs
 //! are chosen on the guest's side and reproduce in replay. Two classes: textures of every usage
@@ -298,14 +301,14 @@ pub(crate) struct Arrays {
     pub(crate) plain: vk::Sampler,
     /// The default sampler of the comparison array.
     pub(crate) compare: vk::Sampler,
-    /// Whether the sampled-texture array holds the feedback elements.
-    feedback: bool,
+    /// Whether the sampled-texture array holds the second elements.
+    seconds: bool,
     pub(crate) grants: Mutex<Grants>,
 }
 
 impl Arrays {
-    /// Makes set 1 and writes every element its default; with `feedback`, the sampled-texture
-    /// array holds the feedback elements too.
+    /// Makes set 1 and writes every element its default; with `seconds`, the sampled-texture
+    /// array holds the second elements too.
     ///
     /// # Safety
     ///
@@ -314,11 +317,11 @@ impl Arrays {
     pub(crate) unsafe fn new(
         device: &ash::Device,
         counters: &Counters,
-        feedback: bool,
+        seconds: bool,
     ) -> Result<Arrays, Error> {
         let mut made = Made::default();
         // SAFETY: the caller's contract; what was made is destroyed where a later step fails.
-        let arrays = unsafe { made.make(device, counters, feedback) };
+        let arrays = unsafe { made.make(device, counters, seconds) };
         if arrays.is_err() {
             // SAFETY: nothing else holds what was made.
             unsafe { made.destroy(device, counters) };
@@ -339,19 +342,19 @@ impl Arrays {
     /// Places a texture at `index` ([`Grants::place`]) and writes its elements before another
     /// object can be placed there: the sampled-texture array's with `sampled` and its layout, a
     /// null descriptor where it is `None`, the storage-texture array's with `storage`, and with
-    /// `feedback` the feedback element (`index` plus [`TEXTURES`]) with the sampled view in the
-    /// attachment feedback layout. A texture without a storage view, or without the feedback
-    /// element, leaves that element null, as every element starts, unless it displaced a
+    /// `looped` the second element (`index` plus [`TEXTURES`]) with the sampled view in the
+    /// attachment feedback layout. A texture without a storage view, or without a second element
+    /// written here, leaves that element null, as every element starts, unless it displaced a
     /// texture, which may have had one: then it writes that element null, so nothing stale
     /// answers there. The descriptor-slot gauge rises where no object held the index. Its owner
-    /// word, which [`Arrays::vacate_texture`] takes.
+    /// word, which [`Arrays::vacate_texture`] and [`Arrays::place_shadow`] take.
     ///
     /// Err: [`Refusal::IndicesNotGranted`].
     ///
     /// # Safety
     ///
     /// Each view is live and of the device, of an image in that layout whenever work uses it,
-    /// `feedback` only where the set was made with the feedback elements and the image has the
+    /// `looped` only where the set was made with the second elements and the image has the
     /// feedback usage, and no work in flight reads a displaced texture through the index (the
     /// program's duty, as it is Metal's).
     pub(crate) unsafe fn place_texture(
@@ -363,7 +366,7 @@ impl Arrays {
             Option<(vk::ImageView, vk::ImageLayout)>,
             Option<vk::ImageView>,
         ),
-        feedback: bool,
+        looped: bool,
     ) -> Result<Owner, Error> {
         let mut grants = lock(&self.grants);
         let Placed { owner, displaced } = grants.place(IndexClass::Texture, index)?;
@@ -371,60 +374,83 @@ impl Arrays {
             counters.rise(Gauge::DescriptorSlots);
         }
         let storage = storage.or(displaced.then(vk::ImageView::null));
-        let looped = match feedback {
-            true => sampled.map(|(view, _)| view),
-            false => (displaced && self.feedback).then(vk::ImageView::null),
+        let feedback = vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+        let second = match looped {
+            true => sampled.map(|(view, _)| (view, feedback)),
+            false => (displaced && self.seconds).then(|| (vk::ImageView::null(), feedback)),
         };
         // SAFETY: the caller's contract; the texture owns the index, and the lock is held.
-        unsafe { self.write_texture(device, index, sampled, storage, looped) };
+        unsafe { self.write_texture(device, index, sampled, storage, second) };
         Ok(owner)
     }
 
-    /// The texture of `owner` goes from `index`: where it still owns the index, the index is free
-    /// and its elements are null again (the feedback element too, where it has one), and the
-    /// descriptor-slot gauge falls. A displaced texture's going touches nothing.
+    /// Writes the second element of the texture of `owner` at `index` with `view`, its view of its
+    /// image's shadow, in the shadow's home layout, shader-read-only, where the texture still owns
+    /// the index: a draw reads an attachment through it on a device without the attachment
+    /// feedback loop (`crate::shadow`). A displaced texture writes nothing: the element is its
+    /// displacer's, which wrote it null.
     ///
     /// # Safety
     ///
-    /// No work in flight reads the texture's elements.
+    /// The set was made with the second elements, and `view` is live and of the device, of an
+    /// image in that layout whenever work uses it, until the texture's elements are vacated.
+    pub(crate) unsafe fn place_shadow(
+        &self,
+        device: &ash::Device,
+        (index, owner): (u32, Owner),
+        view: vk::ImageView,
+    ) {
+        let grants = lock(&self.grants);
+        if grants.owns(IndexClass::Texture, index, owner) {
+            let second = (view, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+            // SAFETY: the caller's contract; the texture owns the index, and the lock is held.
+            unsafe { self.write_second(device, index, second) };
+        }
+    }
+
+    /// The texture of `owner` goes from `index`: where it still owns the index, the index is free
+    /// and its elements are null again (the second element too, where `second` says it may hold
+    /// one), and the descriptor-slot gauge falls. A displaced texture's going touches nothing.
+    ///
+    /// # Safety
+    ///
+    /// No work in flight reads the texture's elements, and `second` holds only where the set was
+    /// made with the second elements.
     pub(crate) unsafe fn vacate_texture(
         &self,
         device: &ash::Device,
         counters: &Counters,
         (index, owner): (u32, Owner),
-        feedback: bool,
+        second: bool,
     ) {
         let mut grants = lock(&self.grants);
         if grants.vacate(IndexClass::Texture, index, owner) {
-            let (storage, looped) = (
-                Some(vk::ImageView::null()),
-                feedback.then(vk::ImageView::null),
-            );
+            let null = vk::ImageView::null();
+            let second = second.then_some((null, vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL));
             // SAFETY: the caller's contract; the lock is held, so no object is placed there
             // before its elements are null.
-            unsafe { self.write_texture(device, index, None, storage, looped) };
+            unsafe { self.write_texture(device, index, None, Some(null), second) };
             counters.fall(Gauge::DescriptorSlots);
         }
     }
 
     /// Writes a texture's elements at `index`: the sampled-texture array's with `sampled` and its
     /// layout, a null descriptor where it is `None`; the storage-texture array's with `storage`
-    /// where it is `Some`, a null descriptor where that view is null; and the feedback element,
-    /// the sampled-texture array's at `index` plus [`TEXTURES`], in the attachment feedback
-    /// layout, with `looped` where it is `Some`, a null descriptor where that view is null.
+    /// where it is `Some`, a null descriptor where that view is null; and the second element with
+    /// `second` where it is `Some` ([`Arrays::write_second`]).
     ///
     /// # Safety
     ///
     /// The grants' lock is held by a placement or a vacating of the index, each view is live and
-    /// of the device, of an image in that layout whenever work uses it, and `looped` is `Some`
-    /// only where the set was made with the feedback elements.
+    /// of the device, of an image in that layout whenever work uses it, and `second` is `Some`
+    /// only where the set was made with the second elements.
     unsafe fn write_texture(
         &self,
         device: &ash::Device,
         index: u32,
         sampled: Option<(vk::ImageView, vk::ImageLayout)>,
         storage: Option<vk::ImageView>,
-        looped: Option<vk::ImageView>,
+        second: Option<(vk::ImageView, vk::ImageLayout)>,
     ) {
         let (view, layout) = sampled.unwrap_or((
             vk::ImageView::null(),
@@ -437,19 +463,9 @@ impl Arrays {
         let storage = [vk::DescriptorImageInfo::default()
             .image_view(storage.unwrap_or_default())
             .image_layout(vk::ImageLayout::GENERAL)];
-        if let Some(looped) = looped {
-            let looped = [vk::DescriptorImageInfo::default()
-                .image_view(looped)
-                .image_layout(vk::ImageLayout::ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT)];
-            let write = write(
-                self.set,
-                SAMPLED_BINDING,
-                vk::DescriptorType::SAMPLED_IMAGE,
-                &looped,
-            )
-            .dst_array_element(index + TEXTURES);
-            // SAFETY: as below; the element is the index's owner's alone.
-            unsafe { device.update_descriptor_sets(&[write], &[]) };
+        if let Some(second) = second {
+            // SAFETY: the caller's contract.
+            unsafe { self.write_second(device, index, second) };
         }
         let writes = [
             write(
@@ -471,6 +487,34 @@ impl Arrays {
         // update-unused-while-pending, so elements of other owners may be written meanwhile, and
         // a null image view is a null descriptor under `nullDescriptor`.
         unsafe { device.update_descriptor_sets(&writes[..count], &[]) };
+    }
+
+    /// Writes texture `index`'s second element, the sampled-texture array's at `index` plus
+    /// [`TEXTURES`], with `(view, layout)`: a null descriptor where the view is null.
+    ///
+    /// # Safety
+    ///
+    /// As [`Arrays::write_texture`]'s, the grants' lock held for the index's owner.
+    unsafe fn write_second(
+        &self,
+        device: &ash::Device,
+        index: u32,
+        (view, layout): (vk::ImageView, vk::ImageLayout),
+    ) {
+        let second = [vk::DescriptorImageInfo::default()
+            .image_view(view)
+            .image_layout(layout)];
+        let write = write(
+            self.set,
+            SAMPLED_BINDING,
+            vk::DescriptorType::SAMPLED_IMAGE,
+            &second,
+        )
+        .dst_array_element(index + TEXTURES);
+        // SAFETY: the caller's contract; the binding is update-after-bind and
+        // update-unused-while-pending, the element is the index's owner's alone, and a null image
+        // view is a null descriptor under `nullDescriptor`.
+        unsafe { device.update_descriptor_sets(&[write], &[]) };
     }
 
     /// Places a sampler state or a constexpr sampler at `index` ([`Grants::place`]) and writes its
@@ -659,9 +703,9 @@ impl Made {
         &mut self,
         device: &ash::Device,
         counters: &Counters,
-        feedback: bool,
+        seconds: bool,
     ) -> Result<Arrays, Error> {
-        let sampled = sampled_images(feedback);
+        let sampled = sampled_images(seconds);
         let empty = vk::DescriptorSetLayoutCreateInfo::default();
         // SAFETY: the device is live.
         unsafe { supported(device, &empty, 0) }?;
@@ -740,7 +784,7 @@ impl Made {
             set,
             plain,
             compare,
-            feedback,
+            seconds,
             grants: Mutex::new(Grants::new()),
         })
     }
@@ -813,10 +857,9 @@ pub(crate) unsafe fn supported(
     }
 }
 
-/// The elements of the sampled-texture array: [`TEXTURES`], twice that with the feedback
-/// elements.
-pub(crate) fn sampled_images(feedback: bool) -> u32 {
-    match feedback {
+/// The elements of the sampled-texture array: [`TEXTURES`], twice that with the second elements.
+pub(crate) fn sampled_images(seconds: bool) -> u32 {
+    match seconds {
         true => 2 * TEXTURES,
         false => TEXTURES,
     }
