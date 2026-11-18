@@ -468,7 +468,7 @@ fn gauges(gauges: &[(u32, Vec<(&'static str, u64)>)]) -> String {
 fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &str) {
     let us = |p| percentile(&report.create_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     println!(
-        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}{}",
+        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}{}{}",
         create.name,
         match create.makes {
             Makes::Buffers { length } | Makes::PrivateBuffers { length } => length.to_string(),
@@ -497,6 +497,9 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
             }
             _ => String::new(),
         },
+        report
+            .device_first_us
+            .map_or(String::new(), |us| format!("; its warm-up {us:.1} us")),
     );
     if let Some(waits) = report.first_allocations {
         println!(
@@ -522,6 +525,12 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
         steady(&report.create_us),
         &report.gauges,
     );
+    if let Some(us) = report.device_first_us {
+        println!(
+            "M2V-MATRIX time harness-{runtime}/{}/device_first {us:.3}",
+            create.name
+        );
+    }
     if let Some(us) = report.first_us {
         println!(
             "M2V-MATRIX time harness-{runtime}/{}/first {us:.3}",

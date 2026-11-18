@@ -523,6 +523,22 @@ class HarnessBudgetTests(unittest.TestCase):
             one = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 5000.0}
             self.assertEqual(self.budget("a", one), ([], []))
 
+    def test_a_warm_up_is_shown_beside_the_first_it_comes_before_and_never_judged(self):
+        row = "create_private_16MiB/device_first"
+        times = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 3000.0}
+        for n in range(2, results.FIRST_RUNS + 1):
+            times[f"{results.HARNESS_FIRST}{row}/{n}/old"] = 1000.0 + n
+            times[f"{results.HARNESS_FIRST}{row}/{n}/new"] = 3000.0 + n
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(self.budget("a", times), ([], [
+                f"harness budget {row}: median of 5 processes, new 3003.0 us over old 1003.0 us is 2.994: "
+                "shown, not judged: the warm-up, the first object of its kind on the device"]))
+            # The first it comes before is judged.
+            first = {key.replace("/device_first", "/first_take"): us for key, us in times.items()}
+            self.assertEqual(self.budget("a", first), ([
+                "harness budget create_private_16MiB/first_take: median of 5 processes, new 3003.0 us over "
+                "old 1003.0 us is 2.994, past 1.03"], []))
+
     def test_the_creation_processes_record_each_key_once_beside_the_other_rows(self):
         others = ["M2V-MATRIX time harness-new/alu 10.000", "M2V-MATRIX gauge harness-new/device/blocks@drop 0"]
         creates = ["M2V-MATRIX time harness-new/create_64MiB 700.000",

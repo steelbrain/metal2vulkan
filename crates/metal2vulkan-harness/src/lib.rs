@@ -41,7 +41,10 @@
 //! alone), then 1,000 of a content it has, each made and released in turn; and render pipeline
 //! states of one content the same way, the first's creation alone (`create_render_state`: a
 //! vertex and a fragment function of the public fixture `examples/runtime_examples.ll`, into one
-//! `BGRA8Unorm` attachment).
+//! `BGRA8Unorm` attachment). Each row's first is a fresh object's on a device that has gone that
+//! way once: a warm-up of the row's kind comes first, made and used as the first is and kept
+//! until the first is done (a buffer of the same length, a state of another kernel or fragment
+//! function), timed as the row's `device_first` ([`run::CreateReport::device_first_us`]).
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \

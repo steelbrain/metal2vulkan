@@ -43,6 +43,7 @@ fn every_workload(session: &mut dyn Session) {
         let made = session.pipelines_created();
         let report =
             (session.create(create.makes, runs)).unwrap_or_else(|why| panic!("{name}: {why}"));
+        assert!(report.device_first_us.is_some(), "{name}: no warm-up");
         match create.makes {
             authored::Makes::Buffers { .. } | authored::Makes::PrivateBuffers { .. } => {
                 assert_eq!(report.create_us.len(), 1, "{name}");
@@ -52,7 +53,8 @@ fn every_workload(session: &mut dyn Session) {
                 assert_eq!(report.create_us.len(), timed, "{name}");
                 assert!(report.first_us.is_some(), "{name}");
                 // The first state's timed work holds its VkPipeline's compile on either runtime:
-                // in the creation, or at its one dispatch.
+                // in the creation, or at its one dispatch. (The warm-up's kernel is one the
+                // authored workloads made already here.)
                 assert!(
                     session.pipelines_created() > made,
                     "{name}: the first state made no VkPipeline"

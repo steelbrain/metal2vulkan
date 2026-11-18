@@ -1,6 +1,6 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
-use crate::authored::{Makes, STATE_CREATIONS};
+use crate::authored::{Makes, STATE_CREATIONS, WARM_FRAGMENT, WARM_KERNEL};
 use crate::plan::{
     Binding, Blit, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
     TextureSource,
@@ -290,7 +290,8 @@ pub trait Session {
     /// takes the range the last one left: one checked whole, then `runs`, each checked to start
     /// zero (every 4 KiB), then written all over before its release. Compute pipeline states of
     /// one content: the first, of a content the device has not seen, timed apart, then `runs`'
-    /// warm-up and [`crate::authored::STATE_CREATIONS`] timed ones.
+    /// warm-up and [`crate::authored::STATE_CREATIONS`] timed ones. Each kind's first sample
+    /// follows a warm-up of its kind ([`CreateReport::device_first_us`]).
     fn create(&mut self, makes: Makes, runs: Runs) -> Result<CreateReport>;
 
     /// Drops the session, its device last; the device's gauges after that, where the runtime's
@@ -417,12 +418,19 @@ pub struct CreateReport {
     /// buffer the dispatch writes, the guest's take of memory beside it; a render pipeline state's
     /// is its creation alone.
     pub first_us: Option<f64>,
+    /// The warm-up ahead of the first creation, in microseconds: an object of the row's kind made
+    /// and used as the first is, and kept until the first is done, so that the first is a fresh
+    /// object's on a device that has gone that way once. A buffer of the same length; a compute
+    /// pipeline state of another kernel ([`WARM_KERNEL`]), with its dispatch; a render pipeline
+    /// state of another fragment function ([`WARM_FRAGMENT`]). Where the row is the first of its
+    /// kind on the device, it holds what the device pays once, beside the object's own costs.
+    pub device_first_us: Option<f64>,
     /// The first creation's wall time alone, in microseconds: for a pipeline state, the part of
     /// [`first_us`](Self::first_us) the creation call paid, all of it for a render pipeline
     /// state; for a buffer, the device's first take of memory for a buffer of its length.
     pub first_create_us: Option<f64>,
-    /// For a buffer, the second creation's wall time, in microseconds: the first after the first
-    /// buffer was released, which a runtime may serve from the memory that buffer gave back.
+    /// For a buffer, the wall time of the creation after the first's release, in microseconds,
+    /// which a runtime may serve from the memory that buffer gave back.
     pub again_us: Option<f64>,
     /// The runtime's memory allocations on the caller's thread during the first creation (with
     /// its dispatch and its buffer, for a compute pipeline state): their count and time, and the
@@ -1100,11 +1108,19 @@ impl<D: ComputeDevice> Session for Harness<D> {
                     .new_library(Code::Air(&crate::authored::render_library_air()?))?;
                 let vertex = library.new_function(vertex, &[])?;
                 let fragment = library.new_function(fragment, &[])?;
-                self.time_states(
-                    || (self.device).new_render_pipeline_state(&vertex, &fragment, color),
-                    None,
-                    runs,
-                )
+                let warm = library.new_function(WARM_FRAGMENT, &[])?;
+                let started = Instant::now();
+                let warm = (self.device).new_render_pipeline_state(&vertex, &warm, color)?;
+                let device_first = started.elapsed().as_secs_f64() * 1e6;
+                let make = || (self.device).new_render_pipeline_state(&vertex, &fragment, color);
+                let started = Instant::now();
+                let state = make()?;
+                let first = started.elapsed().as_secs_f64() * 1e6;
+                drop((state, warm));
+                let mut report = self.time_states(make, first, runs)?;
+                report.device_first_us = Some(device_first);
+                report.first_create_us = Some(first);
+                Ok(report)
             }
         }
     }
@@ -1154,10 +1170,11 @@ impl<D: ComputeDevice> Harness<D> {
     /// [`Session::create`] of `Private` buffers of `length` bytes (at least 32): each made, then
     /// used once by the copy kernel, which moves its first and last 16 bytes into a `Shared`
     /// buffer, through to completion, the copy checked zero; timed from the creation to the
-    /// completion.
+    /// completion. The first is made while the warm-up's buffer is kept
+    /// ([`CreateReport::device_first_us`]), so it takes memory the warm-up did not give back.
     fn create_private(&self, length: u64, runs: Runs) -> Result<CreateReport> {
         let out = self.device.new_buffer(32, Storage::Shared)?;
-        let once = || -> Result<f64> {
+        let take = || -> Result<(f64, D::Buffer)> {
             scribble(&out, 32)?;
             let started = Instant::now();
             let buffer = self.device.new_buffer(length, Storage::Private)?;
@@ -1174,13 +1191,17 @@ impl<D: ComputeDevice> Harness<D> {
             command_buffer.wait_until_completed()?;
             let used = started.elapsed();
             zeroed(&out, 32, 4)?;
-            Ok(used.as_secs_f64() * 1e6)
+            Ok((used.as_secs_f64() * 1e6, buffer))
         };
+        let once = || take().map(|(us, _)| us);
+        let (device_first, warm) = take()?;
         let before = self.device.allocations();
         let first = once()?;
         let first_allocations = since(before, self.device.allocations());
         let again = once()?;
+        drop(warm);
         let mut report = CreateReport {
+            device_first_us: Some(device_first),
             first_create_us: Some(first),
             again_us: Some(again),
             first_allocations,
@@ -1198,7 +1219,9 @@ impl<D: ComputeDevice> Harness<D> {
 
     /// [`Session::create`] of pipeline states of `function` with the `float` constants
     /// `constants`: each made, timed, and released. The first, of a content the device has not
-    /// seen, is timed with one dispatch of it through to completion, its output checked.
+    /// seen, is timed with one dispatch of it through to completion, its output checked; the
+    /// warm-up ahead of it is a state of [`WARM_KERNEL`] made and dispatched the same way, kept
+    /// until the first is done ([`CreateReport::device_first_us`]).
     fn create_states(
         &self,
         function: &str,
@@ -1214,27 +1237,41 @@ impl<D: ComputeDevice> Harness<D> {
             })
             .collect();
         let function = self.authored.new_function(function, &values)?;
+        let warm = self.authored.new_function(WARM_KERNEL, &[])?;
+        // Word 0 stepped once from zero with an increment of 1.
+        let (_, device_first, warm) = self.first_state(&warm, [1, 0, 0, 0])?;
+        // Thread 0's start (0, -0, 0.5, -0.25), one round: the FMA step plus the products'
+        // difference, a * positive - a * negative, of the start.
+        let factor = |index| {
+            (constants.iter())
+                .find(|&&(at, _)| at == index)
+                .map_or(0.0, |&(_, value)| value)
+        };
+        let want = [0.0f32, -0.0, 0.5, -0.25].map(|a| {
+            (a.mul_add(0.96875, 0.03125) + (0.0 + a * factor(0) - a * factor(1))).to_bits()
+        });
         let before = self.device.allocations();
-        let (first_create, first) = self.first_state(&function, constants)?;
+        let (first_create, first, _) = self.first_state(&function, want)?;
         let allocations = since(before, self.device.allocations());
+        drop(warm);
         let mut report = self.time_states(
             || self.device.new_compute_pipeline_state(&function, &[]),
-            Some(first),
+            first,
             runs,
         )?;
+        report.device_first_us = Some(device_first);
         report.first_create_us = Some(first_create);
         report.first_allocations = allocations;
         Ok(report)
     }
 
-    /// [`Session::create`] of the states `make` makes: the first timed apart (`first`, where the
-    /// caller timed it with more than its creation; else its creation here, which is then its
-    /// [`first_create_us`](CreateReport::first_create_us) too), then `runs`' warm-up and
-    /// [`STATE_CREATIONS`] timed ones, each released before the next.
+    /// [`Session::create`] of the states `make` makes, after the first, which the caller timed
+    /// (`first`): `runs`' warm-up and [`STATE_CREATIONS`] timed ones, each released before the
+    /// next.
     fn time_states<S>(
         &self,
         make: impl Fn() -> Result<S>,
-        first: Option<f64>,
+        first: f64,
         runs: Runs,
     ) -> Result<CreateReport> {
         let once = || -> Result<f64> {
@@ -1244,16 +1281,8 @@ impl<D: ComputeDevice> Harness<D> {
             drop(state);
             Ok(made.as_secs_f64() * 1e6)
         };
-        let (first, first_create_us) = match first {
-            Some(first) => (first, None),
-            None => {
-                let first = once()?;
-                (first, Some(first))
-            }
-        };
         let mut report = CreateReport {
             first_us: Some(first),
-            first_create_us,
             warmup: warm_up(runs, &once)?,
             ..CreateReport::default()
         };
@@ -1266,11 +1295,15 @@ impl<D: ComputeDevice> Harness<D> {
         Ok(report)
     }
 
-    /// The first state of `function` (`signed_zero_products`, with the `float` constants
-    /// `constants` as its two products' factors) made, then dispatched once, one thread of one
-    /// round, through to completion: the creation's wall time and the whole's, in microseconds.
-    /// The thread's `float4` is checked against the kernel's arithmetic.
-    fn first_state(&self, function: &D::Function, constants: &[(u32, f32)]) -> Result<(f64, f64)> {
+    /// A first state of `function`, a kernel that writes up to 16 bytes at buffer 0 and reads a
+    /// `uint` at buffer 1, made, then dispatched once, one thread with 1 at buffer 1, through to
+    /// completion: the creation's wall time and the whole's, in microseconds, and the state. The
+    /// 16 bytes are checked against `want`, four little-endian words.
+    fn first_state(
+        &self,
+        function: &D::Function,
+        want: [u32; 4],
+    ) -> Result<(f64, f64, D::ComputePipelineState)> {
         let started = Instant::now();
         let destination = self.device.new_buffer(16, Storage::Shared)?;
         let creating = Instant::now();
@@ -1286,28 +1319,21 @@ impl<D: ComputeDevice> Harness<D> {
         command_buffer.commit()?;
         command_buffer.wait_until_completed()?;
         let whole = started.elapsed();
-        // Thread 0's start (0, -0, 0.5, -0.25), one round: the FMA step plus the products'
-        // difference, a * positive - a * negative, of the start.
-        let factor = |index| {
-            (constants.iter())
-                .find(|&&(at, _)| at == index)
-                .map_or(0.0, |&(_, value)| value)
-        };
-        let want = [0.0f32, -0.0, 0.5, -0.25]
-            .map(|a| a.mul_add(0.96875, 0.03125) + (0.0 + a * factor(0) - a * factor(1)));
         let contents = destination
             .contents()
             .ok_or("the first state's destination has no contents")?;
-        let mut got = [0f32; 4];
+        let mut got = [0u32; 4];
         for (at, value) in got.iter_mut().enumerate() {
             // SAFETY: the buffer holds 16 bytes and its command buffer has completed.
             let bytes = unsafe { contents.as_ptr().add(4 * at).cast::<[u8; 4]>().read() };
-            *value = f32::from_le_bytes(bytes);
+            *value = u32::from_le_bytes(bytes);
         }
         if got != want {
-            return Err(format!("the first state's dispatch wrote {got:?}, not {want:?}").into());
+            return Err(
+                format!("the first state's dispatch wrote {got:#x?}, not {want:#x?}").into(),
+            );
         }
-        Ok((made.as_secs_f64() * 1e6, whole.as_secs_f64() * 1e6))
+        Ok((made.as_secs_f64() * 1e6, whole.as_secs_f64() * 1e6, state))
     }
 }
 
@@ -1323,23 +1349,29 @@ fn since(before: Option<Waits>, after: Option<Waits>) -> Option<Waits> {
 }
 
 /// [`Session::create`] of buffers on `device`.
-fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport> {
-    // A creation's time, its buffer checked zero at every `stride`th byte, then written all over
-    // and released.
-    let once = |stride| -> Result<f64> {
+pub(crate) fn create<D: Device>(device: &D, length: u64, runs: Runs) -> Result<CreateReport> {
+    // A creation's time and its buffer, checked zero at every `stride`th byte, then written all
+    // over.
+    let take = |stride| -> Result<(f64, D::Buffer)> {
         let started = Instant::now();
         let buffer = device.new_buffer(length, Storage::Shared)?;
         let created = started.elapsed();
         zeroed(&buffer, length, stride)?;
         scribble(&buffer, length)?;
-        Ok(created.as_secs_f64() * 1e6)
+        Ok((created.as_secs_f64() * 1e6, buffer))
     };
-    // The first take of memory for a buffer of the length, then the first after its release.
+    // A creation, its buffer then released.
+    let once = |stride| take(stride).map(|(us, _)| us);
+    // The warm-up's buffer, kept; the first take of memory for a buffer of the length beside it,
+    // then the first after its release.
+    let (device_first, warm) = take(4)?;
     let before = device.allocations();
     let first = once(4)?;
     let first_allocations = since(before, device.allocations());
     let again = once(4)?;
+    drop(warm);
     let mut report = CreateReport {
+        device_first_us: Some(device_first),
         first_create_us: Some(first),
         again_us: Some(again),
         first_allocations,

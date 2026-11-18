@@ -211,6 +211,18 @@ pub enum Makes {
     },
 }
 
+/// The kernel of a compute pipeline state row's warm-up
+/// ([`CreateReport::device_first_us`](crate::run::CreateReport::device_first_us)): another of the
+/// authored library's, bound as the row's own is (16 bytes it writes at buffer 0, a `uint` at
+/// buffer 1). Some authored workloads make it too, so its state is the device's first only where
+/// the creation rows run alone, as the matrix runs them.
+pub const WARM_KERNEL: &str = "lcg_step";
+
+/// The fragment function of a render pipeline state row's warm-up
+/// ([`CreateReport::device_first_us`](crate::run::CreateReport::device_first_us)), with the row's
+/// vertex function and attachment: another of the render library's.
+pub const WARM_FRAGMENT: &str = "sampled_fragment";
+
 /// The timed creations of a pipeline-state workload.
 pub const STATE_CREATIONS: u32 = 1000;
 

@@ -371,7 +371,8 @@ Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run 
 store, so no row before them moves their times. The first process's records are kept whole, its
 device's gauges at drop as `harness-<runtime>/creates/device/...`; of each later process, only the
 creation rows' first samples (`<row>/first`, `/first_call`, `/first_take`, `/next_take`,
-`/first_allocation_total`, one sample per process), as `harness-first/<row>/<n>/<runtime>`,
+`/first_allocation_total`, `/device_first`, one sample per process), as
+`harness-first/<row>/<n>/<runtime>`,
 parked for the `time` rule.
 
 The harness budget compares the two runtimes rather than two commits, apart from the `time` rule
@@ -411,7 +412,12 @@ the medians of its five processes, the new runtime's over the old's; a first sam
 never past its limit. A compute pipeline state row's `/first` is its creation and one dispatch
 through to completion, since Metal compiles at the creation and a runtime may compile at the
 first dispatch instead, as the old runtime does; its `/first_call`, the creation call alone, is
-shown beside it with the ratio of its medians and never judged. A row whose time
+shown beside it with the ratio of its medians and never judged. Each creation row's first sample
+is a fresh object's on a device that has gone that way once: the harness makes a warm-up of the
+row's kind first (a buffer of the same length, kept; a compute state of another kernel, with its
+dispatch; a render state of another fragment function), so what a device pays once, which a guest
+that keeps its device pays once in its life, stays out of the judged sample. The warm-up's own
+time, `/device_first`, is shown the same way and never judged. A row whose time
 either runtime recorded more than once fails, uncompared. A row whose size follows the device
 (`long_4cb`) is sized by the first runtime's run, and the later runs, warm and re-timed ones
 included, are given that size (the harness's `--size`); each run records it as

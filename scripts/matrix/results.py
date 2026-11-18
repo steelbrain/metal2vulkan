@@ -644,16 +644,23 @@ def past_limit(leg_id, row, gpu=False):
 #: store, so no row before them moves their times.
 HARNESS_CREATES = "create_"
 #: A creation row's first samples (`<row>/first`, `/first_take`, `/next_take`,
-#: `/first_allocation_total`) are one sample per process, so harness_budget judges each by the
-#: median of FIRST_RUNS processes per runtime: the first process's own record and the later
-#: processes' `harness-first/<row>/<n>/<runtime>`. A first sample alone is never past its limit.
+#: `/first_allocation_total`, `/device_first`) are one sample per process, so harness_budget judges
+#: each by the median of FIRST_RUNS processes per runtime: the first process's own record and the
+#: later processes' `harness-first/<row>/<n>/<runtime>`. A first sample alone is never past its
+#: limit.
 FIRST_RUNS = 5
 HARNESS_FIRST = "harness-first/"
 #: A compute creation row's `/first` sample is its creation and one dispatch through to completion,
 #: as Metal compiles at the creation and a runtime may compile at the dispatch instead (the old
-#: runtime does); its `/first_call` sample, the creation call alone, is shown beside it with the
-#: ratio of its medians, and never judged.
-SHOWN_FIRST = "/first_call"
+#: runtime does). A creation row's first sample is a fresh object's on a device that has made one of
+#: its kind: the harness makes a warm-up of the row's kind first. The first samples SHOWN_FIRST
+#: names are shown with the ratio of their medians, and never judged, each for its reason: the
+#: creation call alone (`/first_call`), and the warm-up (`/device_first`), which holds what the
+#: device pays once, which a guest that keeps its device pays once in its life.
+SHOWN_FIRST = {
+    "/first_call": "the creation call alone, which old returns from before it makes its pipeline",
+    "/device_first": "the warm-up, the first object of its kind on the device",
+}
 #: The sed program the first creation process's output goes through: its device's gauges at drop
 #: become `harness-<runtime>/creates/device/...`, apart from the other rows' process's, so each
 #: key is recorded once.
@@ -796,13 +803,13 @@ def harness_budget(leg_id, leg):
         gated, named = instruction_gate(leg_id, row, records)
         problems += gated
         parked += named
-        if first_row(row) and row.endswith(SHOWN_FIRST):
+        shown = next((why for end, why in SHOWN_FIRST.items() if row.endswith(end)), None)
+        if first_row(row) and shown:
             samples = first_samples(times, row)
             if samples is not None:
                 old, new = (statistics.median(values) for values in samples)
                 parked.append(f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us "
-                              f"over old {old:.1f} us is {new / old:.3f}: shown, not judged: the creation "
-                              "call alone, which old returns from before it makes its pipeline")
+                              f"over old {old:.1f} us is {new / old:.3f}: shown, not judged: {shown}")
             continue
         if first_row(row):
             samples = first_samples(times, row)

@@ -8,14 +8,16 @@ use crate::plan::{
 };
 use crate::rt::{self, Ranges};
 use crate::run::{
-    compare_outputs, copy_dispatches, matrix_time, parts, percentile, run_each, settled, steady,
-    warm_up, zeroed, CreateReport, Report, Runs, Session,
+    compare_outputs, copy_dispatches, create, matrix_time, parts, percentile, run_each, settled,
+    steady, warm_up, zeroed, CreateReport, Report, Runs, Session,
 };
-use crate::{Buffer, Failed, Refused, Result, Storage, Waits};
+use crate::{Buffer, Device, Failed, GaugeReader, Refused, Result, Storage, Waits};
 use metal2vulkan::metal::TextureUsage;
 use metal2vulkan_rt::{Error as RtError, Gap, Limit};
+use std::cell::{Cell, RefCell};
 use std::path::Path;
 use std::ptr::NonNull;
+use std::rc::Rc;
 
 #[test]
 fn percentiles_take_the_nearest_rank() {
@@ -848,6 +850,106 @@ fn a_new_buffer_is_zero_only_where_every_word_read_is() {
     buffer.0[2048] = 1;
     assert!(zeroed(&buffer, 16384, 4096).is_err());
     assert!(zeroed(&HostBuffer(vec![9; 4]), 16, 4).is_err());
+}
+
+/// A host buffer that counts the live ones of its device.
+struct Counted {
+    words: Vec<u32>,
+    live: Rc<Cell<usize>>,
+}
+
+impl Buffer for Counted {
+    fn contents(&self) -> Option<NonNull<u8>> {
+        NonNull::new(self.words.as_ptr().cast_mut().cast())
+    }
+
+    fn did_modify_range(&self, _: u64, _: u64) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.live.set(self.live.get() - 1);
+    }
+}
+
+/// A device of host buffers that keeps, at each creation, how many of its buffers lived.
+#[derive(Default)]
+struct HostDevice {
+    live: Rc<Cell<usize>>,
+    beside: RefCell<Vec<usize>>,
+}
+
+impl Device for HostDevice {
+    type Buffer = Counted;
+
+    fn name(&self) -> String {
+        "host".to_owned()
+    }
+
+    fn new_buffer(&self, length: u64, _: Storage) -> Result<Counted> {
+        self.beside.borrow_mut().push(self.live.get());
+        self.live.set(self.live.get() + 1);
+        Ok(Counted {
+            words: vec![0; length.div_ceil(4) as usize],
+            live: Rc::clone(&self.live),
+        })
+    }
+
+    fn gauges(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
+    }
+
+    fn gauges_after_drop(&self) -> Option<GaugeReader> {
+        None
+    }
+
+    fn threads(&self) -> Vec<u64> {
+        Vec::new()
+    }
+
+    fn pipelines_created(&self) -> u64 {
+        0
+    }
+
+    fn counts(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
+    }
+
+    fn submissions(&self) -> u64 {
+        0
+    }
+
+    fn submit_infos(&self) -> Option<u64> {
+        None
+    }
+
+    fn first_use_waits(&self) -> Option<Waits> {
+        None
+    }
+
+    fn allocations(&self) -> Option<Waits> {
+        None
+    }
+}
+
+#[test]
+fn a_buffer_row_s_first_is_made_beside_its_kept_warm_up() {
+    let device = HostDevice::default();
+    let runs = Runs {
+        warmup: 0,
+        settle: false,
+        timed: 2,
+    };
+    let report = create(&device, 4096, runs).unwrap();
+    // The warm-up alone; the first, then the next after its release, each beside the warm-up;
+    // the timed ones alone once the warm-up is released.
+    assert_eq!(*device.beside.borrow(), [0, 1, 1, 0, 0]);
+    assert_eq!(device.live.get(), 0);
+    assert!(report.device_first_us.is_some());
+    assert!(report.first_create_us.is_some() && report.again_us.is_some());
+    assert_eq!(report.create_us.len(), 2);
 }
 
 #[test]
