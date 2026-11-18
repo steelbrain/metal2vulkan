@@ -5,7 +5,7 @@
 //! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no]` plays the stream whose first segment is
 //! `FILE` through the old runtime (the default) or the new one (`rt`), with `--snapshots no`
 //! taking no `m2v.privateBytes` snapshot on either (so two runtimes' plays do the same work), and
-//! writes `DIR/report.txt`: `device NAME`,
+//! writes `DIR/report.txt`: `device NAME runtime old|rt snapshots yes|no`,
 //! the player's report lines, the backend's own lines, `cut SEGMENT OFFSET` where the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
@@ -212,6 +212,12 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    // The first line says which mode ran: a timing table never comes from a snapshotting play
+    // unnoticed.
+    let mode = match snapshots {
+        true => "snapshots yes",
+        false => "snapshots no",
+    };
     let cache = PathBuf::from(&options["shader-cache"]);
     match options.get("runtime").map(String::as_str) {
         None | Some("old") => {
@@ -225,14 +231,14 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                     return 2;
                 }
             };
-            report.line(&format!("device {}", device.name()));
+            report.line(&format!("device {} runtime old {mode}", device.name()));
             let mut backend = OldRuntime::new(device, device_type);
             run(&mut backend, &mut reader, &mut report, snapshots)
         }
         Some("rt") => {
             let mut backend = match open_rt(device_type, cache) {
                 Ok((backend, name)) => {
-                    report.line(&format!("device {name} runtime rt"));
+                    report.line(&format!("device {name} runtime rt {mode}"));
                     backend
                 }
                 Err(error) => {

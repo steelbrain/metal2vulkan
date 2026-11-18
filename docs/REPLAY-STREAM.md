@@ -439,7 +439,7 @@ their times and memory compare. `command-replay dump --stream FILE` prints the c
   compute pipeline state no `gpuResourceID`, so each one the program saw is reported on an `id`
   line as `none` and counted (`gap_pipeline_ids`).
 
-`report.txt` holds one line per item: `device NAME`, `completed IDS COUNTS`, `frame N COUNTS`,
+`report.txt` holds one line per item: `device NAME runtime old|rt snapshots yes|no` first, `completed IDS COUNTS`, `frame N COUNTS`,
 `end N wall_nanos=NANOS resident_bytes=BYTES live KEY=VALUE ...` for each frame (the
 nanoseconds from the frame before's end, or the first call played, to this frame's, the wait for
 its work included; the process's resident memory then where the system tells it, `VmRSS` on
