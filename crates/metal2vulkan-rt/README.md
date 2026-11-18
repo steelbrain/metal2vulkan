@@ -492,7 +492,9 @@ made, with no lock, and never rewritten for layouts.
   free again once the submission that carries the copy completes and no `get_bytes` reads it. The
   upload is submitted, without a wait, once its copies' spans take 8 MiB, so the GPU copies while
   the host writes the next. Where the ring has no room, the call waits for its oldest span's
-  submission, submitting the upload first where the span is in it (`Metrics::upload_waits`). A
+  submission, submitting the upload first where the span is in it (`Metrics::upload_waits`); where
+  another call still writes that span's bytes, or holds them for a `get_bytes` to read, it sleeps
+  until that call releases the span (`Metrics::staging_sleeps`). A
   copy larger than 16 MiB has a staging buffer of its own, which counts against the upload's
   64 MiB. `Gauges::staging_bytes` counts the region once made and each such buffer until the
   upload that copies through it is gone.

@@ -55,6 +55,8 @@ pub(crate) enum Metric {
     PushesHeld,
     /// [`Metrics::upload_waits`].
     UploadWaits,
+    /// [`Metrics::staging_sleeps`].
+    StagingSleeps,
     /// [`Metrics::synchronizations`].
     Synchronizations,
     /// [`Metrics::groups_beside_another_queue`].
@@ -99,6 +101,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::Pushes,
     Metric::PushesHeld,
     Metric::UploadWaits,
+    Metric::StagingSleeps,
     Metric::Synchronizations,
     Metric::GroupsBesideAnotherQueue,
     Metric::LoneSubmissionsAcrossQueues,
@@ -248,6 +251,7 @@ struct Atomics {
     pushes: AtomicU64,
     pushes_held: AtomicU64,
     upload_waits: AtomicU64,
+    staging_sleeps: AtomicU64,
     synchronizations: AtomicU64,
     commit_lock_wait_nanos: AtomicU64,
     commit_lock_wait_max_nanos: AtomicU64,
@@ -351,6 +355,7 @@ impl Counters {
             Metric::Pushes => &a.pushes,
             Metric::PushesHeld => &a.pushes_held,
             Metric::UploadWaits => &a.upload_waits,
+            Metric::StagingSleeps => &a.staging_sleeps,
             Metric::Synchronizations => &a.synchronizations,
             Metric::GroupsBesideAnotherQueue => &a.groups_beside_another_queue,
             Metric::LoneSubmissionsAcrossQueues => &a.lone_submissions_across_queues,
@@ -639,6 +644,7 @@ impl Counters {
             pushes: a.pushes.load(Relaxed),
             pushes_held: a.pushes_held.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
+            staging_sleeps: a.staging_sleeps.load(Relaxed),
             synchronizations: a.synchronizations.load(Relaxed),
             commit_lock_wait_nanos: a.commit_lock_wait_nanos.load(Relaxed),
             commit_lock_wait_max_nanos: a.commit_lock_wait_max_nanos.load(Relaxed),
@@ -854,6 +860,10 @@ pub struct Metrics {
     /// Calls that waited for an upload to complete before they recorded: the upload at its
     /// bound of calls or bytes, or the staging region with no room for a copy.
     pub upload_waits: u64,
+    /// Sleeps of `replace_region` and `get_bytes` calls whose copy found the staging region with
+    /// no room while its oldest span was another call's, still writing its bytes or holding them
+    /// for a `get_bytes` to read: each a sleep, with no spin, until that call released the span.
+    pub staging_sleeps: u64,
     /// `synchronizeResource:` calls: each a copy into the host's bytes of a Managed buffer with a
     /// device copy or of a Managed texture with named bytes, and nothing for any other resource;
     /// none a submission of its own.

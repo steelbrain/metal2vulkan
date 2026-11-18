@@ -1980,6 +1980,7 @@ impl Backend for NewRuntime {
             ("translations_loaded", metrics.translations_loaded),
             ("ring_writes", metrics.ring_writes),
             ("upload_waits", metrics.upload_waits),
+            ("staging_sleeps", metrics.staging_sleeps),
             ("synchronizations", metrics.synchronizations),
             ("managed_bytes_captured", metrics.managed_bytes_captured),
             ("capture_waits", metrics.capture_waits),

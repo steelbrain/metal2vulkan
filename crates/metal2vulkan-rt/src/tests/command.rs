@@ -1020,7 +1020,7 @@ pub(crate) mod on_device {
     /// pending is not: `VUID-vkSetEvent-event-09543`). Dropped, it opens the work and waits for
     /// each busy command buffer and for its own batch, so a failed check does not leave the
     /// device's work waiting forever.
-    struct Busy {
+    pub(crate) struct Busy {
         device: Device,
         semaphore: vk::Semaphore,
         /// Signalled as the test's own batch completes.
@@ -1030,7 +1030,7 @@ pub(crate) mod on_device {
     }
 
     impl Busy {
-        fn new(device: &Device) -> Busy {
+        pub(crate) fn new(device: &Device) -> Busy {
             let core = device.core();
             let mut timeline = vk::SemaphoreTypeCreateInfo::default()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -1095,7 +1095,7 @@ pub(crate) mod on_device {
 
         /// Lets the busy work end: the host signals the semaphore to 1. A second call changes
         /// nothing.
-        fn open(&self) {
+        pub(crate) fn open(&self) {
             let device = &self.device.core().device;
             // SAFETY: the semaphore is the device's timeline semaphore.
             let value = unsafe { device.get_semaphore_counter_value(self.semaphore) }

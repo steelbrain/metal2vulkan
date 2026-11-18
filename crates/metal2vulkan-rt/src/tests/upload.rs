@@ -14,6 +14,8 @@
 //! - zero fills past [`UPLOAD_ENTRIES`] submit it;
 //! - the staging gauge counts the region once a copy made it, and a copy larger than the region's
 //!   staging buffer of its own until the upload that copies through it is gone;
+//! - a copy that finds the region full behind a `get_bytes`'s span sleeps until the read ends:
+//!   once, with no spin, waking at the read's end, and a quiesce ends the sleep;
 //!
 //! and every gauge reads zero after teardown.
 
@@ -21,10 +23,11 @@
 mod on_device {
     use crate::staging::REGION_LEN;
     use crate::submit::{HOMES_PRUNE, UPLOAD_BYTES, UPLOAD_ENTRIES};
+    use crate::tests::command::on_device::Busy;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        Device, DeviceOptions, Gauges, IndexClass, MemoryClass, PixelFormat, Region, StorageMode,
-        TextureDescriptor, TextureType,
+        Device, DeviceOptions, Error, Gauges, IndexClass, MemoryClass, PixelFormat, Region,
+        StorageMode, TextureDescriptor, TextureType,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -297,6 +300,93 @@ mod on_device {
                  metrics {:?}",
                 counters.metrics()
             );
+        }
+    }
+
+    /// A `get_bytes` of the region's whole 16 MiB holds the ring's one span, read, while its copy
+    /// waits behind busy work the host holds ([`Busy`]); a `replace_region` on another thread then
+    /// finds no room behind it. The write sleeps once (`staging_sleeps` rises by one and no more,
+    /// so the loop turned once to sleep and once on waking) and returns only after the read ends.
+    /// In the second round a quiesce ends the sleep instead: the write is refused.
+    #[test]
+    fn every_device_sleeps_a_staging_call_behind_a_read_until_it_ends() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        let side = 2048;
+        let len = u64::from(side) * u64::from(side) * 4;
+        assert_eq!(len, REGION_LEN, "the read's span takes the region");
+        for (name, physical) in &devices {
+            for quiesce in [false, true] {
+                let device = Device::new(physical, DeviceOptions::default())
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let counters = device.counters();
+                device
+                    .grant_indices(IndexClass::Texture, 4096, 2)
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let read = (device.new_texture(&square(side), Some(4096)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let write = (device.new_texture(&square(4), Some(4097)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                // What the device and the textures' making left pending goes and completes, so
+                // the next submission is the read's.
+                let core = device.core();
+                let value = core.work.flush();
+                (core.done.wait(core, value)).unwrap_or_else(|error| panic!("{name}: {error}"));
+                let submitted = counters.metrics().submissions;
+                let busy = Busy::new(&device);
+                let reader = thread::spawn(move || {
+                    let mut bytes = vec![0; len as usize];
+                    read.get_bytes(&mut bytes, u64::from(side * 4), len, whole(side), 0, 0)
+                });
+                // Submitted behind the busy work: the read's span stays the ring's front, read,
+                // until the read ends.
+                wait_until("the read's submission", || {
+                    counters.metrics().submissions > submitted
+                });
+                let sleeps = counters.metrics().staging_sleeps;
+                let writer =
+                    thread::spawn(move || write.replace_region(whole(4), 0, 0, &[7; 64], 16, 64));
+                wait_until("the write's sleep", || {
+                    counters.metrics().staging_sleeps > sleeps
+                });
+                thread::sleep(Duration::from_millis(50));
+                assert!(
+                    !writer.is_finished(),
+                    "{name}: the write returned while the read held the region"
+                );
+                assert_eq!(
+                    counters.metrics().staging_sleeps - sleeps,
+                    1,
+                    "{name}: the write slept once, with no spin"
+                );
+                if quiesce {
+                    let _ = device.quiesce(Duration::from_millis(100));
+                    let written = writer.join().expect("the writer");
+                    assert!(
+                        matches!(written, Err(Error::Quiesced)),
+                        "{name}: the quiesce ended the sleep with {written:?}"
+                    );
+                    busy.open();
+                    let _ = reader.join().expect("the reader");
+                    drop(busy);
+                    drop(device);
+                    continue;
+                }
+                busy.open();
+                (reader.join().expect("the reader"))
+                    .unwrap_or_else(|error| panic!("{name}: get_bytes: {error}"));
+                (writer.join().expect("the writer"))
+                    .unwrap_or_else(|error| panic!("{name}: replace_region: {error}"));
+                assert_eq!(
+                    counters.metrics().staging_sleeps - sleeps,
+                    1,
+                    "{name}: the write woke at the read's end and slept no more"
+                );
+                drop(busy);
+                drop(device);
+                wait_until("the teardown", || counters.gauges() == Gauges::default());
+            }
         }
     }
 

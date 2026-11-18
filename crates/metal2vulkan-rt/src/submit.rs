@@ -85,6 +85,10 @@ pub(crate) struct Work {
     /// The submit thread ended a pass, or the device closed or was lost: a capture waiting for
     /// the command buffers committed before it to go looks again ([`Work::capture`]).
     passed: Condvar,
+    /// A span of the staging region another call held was released, or the device closed or was
+    /// lost: a staging call asleep for it looks again ([`Work::stage`]). Signalled only while one
+    /// sleeps ([`WorkState::span_sleepers`]).
+    spans: Condvar,
     /// A queue holds a group: the completion thread wakes the thread as submissions complete.
     keeping: AtomicBool,
     /// Bytes of textures and blocks released while an upload held them, since the pending upload
@@ -122,6 +126,9 @@ pub(crate) struct WorkState {
     /// Quiesced or torn down: commits and uploads are refused.
     closed: bool,
     lost: bool,
+    /// The staging calls asleep for a span of the region another call holds ([`Work::stage`]): a
+    /// release signals [`Work::spans`] only while there are any, so with none it makes no call.
+    span_sleepers: u32,
     /// The device's counters: the groups and submissions one queue would not have made.
     counters: Counters,
 }
@@ -366,11 +373,13 @@ impl Work {
                 stop: false,
                 closed: false,
                 lost: false,
+                span_sleepers: 0,
                 counters,
             }),
             changed: Condvar::new(),
             turn: Mutex::new(()),
             passed: Condvar::new(),
+            spans: Condvar::new(),
             keeping: AtomicBool::new(false),
             released: AtomicU64::new(0),
         }
@@ -835,6 +844,7 @@ impl Work {
                 if let Some(region) = &mut state.region {
                     region.ring.set(*number, At::Recorded);
                 }
+                self.release_spans(&state);
             }
             Some(Stage::Own(staging)) => upload.held.push(Held::Staging(Arc::clone(staging))),
             None => {}
@@ -849,9 +859,13 @@ impl Work {
 
     /// Staging for a copy of `len` bytes: a span of the device's staging region, made at the first
     /// copy; a staging buffer of its own for a copy larger than the region. Where the region has
-    /// no room, the call waits, without the lock, for what frees its oldest span: the submission that carries it, after submitting the pending upload
-    /// where it is in that. `read` keeps the span until [`unread`](Self::unread), for a copy the
-    /// host reads once it completed. The caller passes the stage to [`upload`](Self::upload).
+    /// no room, the call waits, without the lock, for what frees its oldest span: the submission
+    /// that carries it, after submitting the pending upload where it is in that. Where another
+    /// call holds that span, still writing its bytes or reading them, the call sleeps on
+    /// [`spans`](Work::spans) until that call releases it ([`release_spans`](Self::release_spans)),
+    /// counted in [`Metrics::staging_sleeps`](crate::Metrics::staging_sleeps). `read` keeps the
+    /// span until [`unread`](Self::unread), for a copy the host reads once it completed. The
+    /// caller passes the stage to [`upload`](Self::upload).
     ///
     /// Err: [`Error::Quiesced`]; what making the region or the staging buffer can return;
     /// [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` where the device is lost while the call
@@ -897,14 +911,24 @@ impl Work {
                     host: region.host(offset),
                 });
             }
-            let value = match region.ring.oldest() {
-                Some(Oldest::Submitted(value)) => value,
-                Some(Oldest::Pending) => state.flush(),
-                // Another call finishes writing or reading its span.
-                Some(Oldest::Busy) | None => {
-                    drop(state);
-                    std::thread::yield_now();
-                    state = self.lock();
+            let Some(oldest) = region.ring.oldest() else {
+                unreachable!("a ring with no live span takes any span of at most its length");
+            };
+            let value = match oldest {
+                Oldest::Submitted(value) => value,
+                Oldest::Pending => state.flush(),
+                // Another call finishes writing or reading its span: its release wakes this one.
+                Oldest::Busy => {
+                    if state.lost {
+                        return Err(Error::Vulkan {
+                            call: "vkWaitSemaphores",
+                            result: vk::Result::ERROR_DEVICE_LOST,
+                        });
+                    }
+                    core.counters.count(Metric::StagingSleeps);
+                    state.span_sleepers += 1;
+                    state = (self.spans.wait(state)).unwrap_or_else(PoisonError::into_inner);
+                    state.span_sleepers -= 1;
                     continue;
                 }
             };
@@ -919,16 +943,32 @@ impl Work {
 
     /// The host no longer reads span `number` of the staging region.
     pub(crate) fn unread(&self, number: u64) {
-        if let Some(region) = &mut self.lock().region {
+        let mut state = self.lock();
+        if let Some(region) = &mut state.region {
             region.ring.unread(number);
         }
+        self.release_spans(&state);
     }
 
     /// Gives up span `number` of the staging region, with no copy recorded.
     fn give_up(&self, number: u64) {
-        if let Some(region) = &mut self.lock().region {
+        let mut state = self.lock();
+        if let Some(region) = &mut state.region {
             region.ring.set(number, At::Done);
             region.ring.unread(number);
+        }
+        self.release_spans(&state);
+    }
+
+    /// Wakes the staging calls asleep for a span another call holds ([`stage`](Self::stage)), where
+    /// any sleep: after a change, under the work lock `state`, that can release the region's
+    /// oldest span, or end the wait. Three changes release a span a call sleeps for: its copy
+    /// recorded, its give-up, and its read's end. A span's later moves, to its submission or given
+    /// up with the pending upload, are of recorded spans, for which no call sleeps: one finding
+    /// its oldest span recorded submits the upload and waits for the GPU instead.
+    fn release_spans(&self, state: &WorkState) {
+        if state.span_sleepers > 0 {
+            self.spans.notify_all();
         }
     }
 
@@ -1086,6 +1126,7 @@ impl Work {
         state.dirty = true;
         self.wake();
         self.passed.notify_all();
+        self.release_spans(&state);
     }
 
     /// At a loss: the submit thread ends everything it holds.
@@ -1095,6 +1136,7 @@ impl Work {
         state.dirty = true;
         self.wake();
         self.passed.notify_all();
+        self.release_spans(&state);
     }
 
     /// The progress value of the last submission.
