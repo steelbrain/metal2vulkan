@@ -3,6 +3,7 @@
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
+use crate::device::Core;
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::floor;
@@ -763,8 +764,8 @@ impl ComputeCommandEncoder {
         }
         // Every module of a state is the same function, with the same arguments and alignments,
         // so the whole module answers this check and the next.
-        self.check_alignments(&inner.whole.interface)?;
         let core = Arc::clone(self.building().device.core());
+        let nil = self.check_alignments(&core, &inner.whole.interface)?;
         let limits = &core.limits;
         // A kernel that writes no memory has no effect a program can observe: once checked as
         // Metal checks it, the dispatch records nothing, binds nothing and reads no indirect
@@ -971,7 +972,7 @@ impl ComputeCommandEncoder {
                             });
                             self.fill_parameters(
                                 kernel,
-                                &state.numbered.ids,
+                                (&state.numbered.ids, nil),
                                 &region(base, threads, ragged)?,
                             );
                             self.record(vk_pipeline, Launch::Direct(count))?;
@@ -981,7 +982,8 @@ impl ComputeCommandEncoder {
                 Ok(())
             }
             (None, Grid::Indirect(buffer, offset)) => {
-                self.fill_parameters(kernel, &state.numbered.ids, &region([0; 3], [0; 3], false)?);
+                let region = region([0; 3], [0; 3], false)?;
+                self.fill_parameters(kernel, (&state.numbered.ids, nil), &region);
                 self.record(vk_pipeline, Launch::Indirect(buffer, offset))
             }
             (None, Grid::Direct { .. }) => Ok(()),
@@ -997,18 +999,24 @@ impl ComputeCommandEncoder {
         building.record_dispatch(pipeline, &mut self.parameters, &launch)
     }
 
-    /// [`check_alignment`] of each buffer `interface` reaches. A `set_bytes` copy is at a
-    /// multiple of 16 in the ring, which every mask divides.
-    fn check_alignments(&self, interface: &Interface) -> Result<(), Error> {
+    /// [`check_alignment`] of each buffer `interface` reaches, and the nil buffer's address
+    /// where one it reaches is bound to nothing (`Ring::nil`), else 0. A `set_bytes` copy is at a
+    /// multiple of 16 in the ring, which every mask divides, and so is the nil buffer.
+    fn check_alignments(&self, core: &Core, interface: &Interface) -> Result<u64, Error> {
+        let mut nil = 0;
         for field in &interface.fields {
             let FieldValue::BufferAddress { slot, mask } = field.value else {
                 continue;
             };
-            if let Some(Slot::Buffer { buffer, offset }) = self.slots.get(slot as usize) {
-                check_alignment(slot, mask, buffer, *offset)?;
+            match self.slots.get(slot as usize) {
+                Some(Slot::Buffer { buffer, offset }) => {
+                    check_alignment(slot, mask, buffer, *offset)?
+                }
+                Some(Slot::Bytes(_)) => {}
+                Some(Slot::Empty) | None => nil = core.ring.nil(core)?,
             }
         }
-        Ok(())
+        Ok(nil)
     }
 
     /// The length set for threadgroup memory index `index`, 0 where none was.
@@ -1022,11 +1030,17 @@ impl ComputeCommandEncoder {
     /// Fills the push window and the ring block of one launch of `kernel` whose region is
     /// `region`, the `DispatchRegion` push field's bytes, and whose state gave its numbered
     /// samplers `sampler_ids`. The block's address is written by [`Building::record_dispatch`]
-    /// once the block is in the ring.
+    /// once the block is in the ring. A buffer argument bound to nothing takes `nil`, the nil
+    /// buffer's address.
     ///
     /// Every buffer address is a multiple of the alignment the module takes it to have, which the
-    /// dispatch checked first (`check_alignments`).
-    fn fill_parameters(&mut self, kernel: &Kernel, sampler_ids: &[u32], region: &[u8; 32]) {
+    /// dispatch checked first (`check_alignments`, which gave `nil`).
+    fn fill_parameters(
+        &mut self,
+        kernel: &Kernel,
+        (sampler_ids, nil): (&[u32], u64),
+        region: &[u8; 32],
+    ) {
         let interface: &Interface = &kernel.interface;
         let parameters = &mut self.parameters;
         parameters.push.clear();
@@ -1047,7 +1061,7 @@ impl ComputeCommandEncoder {
                             buffer.gpu_address().wrapping_add(*offset)
                         }
                         Some(Slot::Bytes(address)) => *address,
-                        Some(Slot::Empty) | None => 0,
+                        Some(Slot::Empty) | None => nil,
                     };
                     bytes[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }

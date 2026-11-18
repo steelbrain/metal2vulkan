@@ -755,6 +755,10 @@ that touch blocks first.
   dispatch past it is split into dispatches of at most that many, each told its first
   threadgroup.
 - `setBytes` takes up to 64 KiB, one ring chunk (`Limit::BytesLength`).
+- A buffer argument bound to nothing reads the nil buffer: 64 KiB of zeros, one ring chunk the
+  device keeps from its first such dispatch or draw, its address the argument's pushed value, as
+  Metal's nil buffer reads zeros. Reads past the 64 KiB and writes through a nil argument aren't
+  covered.
 - A dispatch's threadgroup memory, the kernel's own and the lengths set, each rounded up to 16
   bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
   Metal's is its `maxThreadgroupMemoryLength`. A kernel's access past its threadgroup memory is

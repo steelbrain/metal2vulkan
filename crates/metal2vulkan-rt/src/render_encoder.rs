@@ -226,11 +226,11 @@ impl Tables {
 
     /// The address of buffer slot `slot`: the buffer's plus its offset, or the bytes' copy; 0
     /// where none is bound.
-    fn address(&self, slot: u32) -> u64 {
+    fn address(&self, slot: u32, nil: u64) -> u64 {
         match self.buffers.get(slot as usize) {
             Some(Bound::Buffer { buffer, offset }) => buffer.gpu_address().wrapping_add(*offset),
             Some(Bound::Bytes(placed)) => placed.address,
-            Some(Bound::Empty) | None => 0,
+            Some(Bound::Empty) | None => nil,
         }
     }
 }
@@ -1238,12 +1238,16 @@ impl RenderCommandEncoder {
                 });
             }
         }
+        // A buffer argument bound to nothing reads the nil buffer (`Ring::nil`).
+        let mut nil = 0;
         for &(_, table, value) in &draws.fields {
             if let FieldValue::BufferAddress { slot, mask } = value {
-                if let Some(Bound::Buffer { buffer, offset }) =
-                    tables[table].buffers.get(slot as usize)
-                {
-                    check_alignment(slot, mask, buffer, *offset)?;
+                match tables[table].buffers.get(slot as usize) {
+                    Some(Bound::Buffer { buffer, offset }) => {
+                        check_alignment(slot, mask, buffer, *offset)?
+                    }
+                    Some(Bound::Bytes(_)) => {}
+                    Some(Bound::Empty) | None => nil = core.ring.nil(&core)?,
                 }
             }
         }
@@ -1354,7 +1358,7 @@ impl RenderCommandEncoder {
         self.wrote |= draws.writes_memory;
         (self.drew, self.pass_drew) = (true, true);
         let (bind, first) = building.bind_graphics(pipeline);
-        self.fill_push(&state);
+        self.fill_push(&state, nil);
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
         let push = !self.push.is_empty() && building.push_needed(&self.push);
@@ -1424,8 +1428,9 @@ impl RenderCommandEncoder {
         Ok(())
     }
 
-    /// Fills the push bytes of a draw of `state` from the tables.
-    fn fill_push(&mut self, state: &RenderPipelineState) {
+    /// Fills the push bytes of a draw of `state` from the tables, a buffer argument bound to
+    /// nothing taking `nil`, the nil buffer's address.
+    fn fill_push(&mut self, state: &RenderPipelineState, nil: u64) {
         let draws = &state.inner.compiled.draws;
         let ids = &state.inner.numbered.ids;
         let push = &mut self.push;
@@ -1437,7 +1442,7 @@ impl RenderCommandEncoder {
             match value {
                 // At a multiple of the argument's alignment, which the draw checked first.
                 FieldValue::BufferAddress { slot, .. } => {
-                    let address = tables.address(slot);
+                    let address = tables.address(slot, nil);
                     push[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }
                 // A texture whose image the pass moved to the feedback layout reads through its

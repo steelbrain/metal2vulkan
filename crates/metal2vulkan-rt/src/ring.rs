@@ -8,6 +8,11 @@
 //! reads a chunk the host is writing. A block is made when no chunk is free and kept for the
 //! device's life: the ring holds what the command buffers in flight at once have needed. The
 //! runtime never reads the ring back.
+//!
+//! One chunk, taken at the first ask and kept for the device's life, is the nil buffer
+//! ([`Ring::nil`]): 64 KiB of zeros, at a multiple of 16 like every chunk, so it meets any buffer
+//! argument's alignment. A buffer argument nothing is bound to reads it, as Metal's nil buffer
+//! reads zeros. A read past its 64 KiB, and a write through it, are not covered.
 
 use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
@@ -33,6 +38,8 @@ pub(crate) struct Ring {
 struct State {
     blocks: Vec<RingBlock>,
     free: Vec<Chunk>,
+    /// The nil buffer's address, once asked ([`Ring::nil`]).
+    nil: Option<u64>,
 }
 
 struct RingBlock {
@@ -64,6 +71,7 @@ impl Ring {
             state: Mutex::new(State {
                 blocks: Vec::new(),
                 free: Vec::new(),
+                nil: None,
             }),
         }
     }
@@ -94,6 +102,30 @@ impl Ring {
         })
     }
 
+    /// The nil buffer's address (the module docs): a chunk of zeros, taken and zeroed at the
+    /// first ask and never given back, so no command buffer writes it.
+    pub(crate) fn nil(&self, core: &Core) -> Result<u64, Error> {
+        if let Some(address) = lock(&self.state).nil {
+            return Ok(address);
+        }
+        let chunk = self.take(core)?;
+        // SAFETY: the chunk is out of every command buffer's hands and no pending work reads it:
+        // the host alone writes it, once.
+        unsafe { std::ptr::write_bytes(chunk.host.at(0).as_ptr(), 0, CHUNK as usize) };
+        let mut state = lock(&self.state);
+        match state.nil {
+            // Another thread's ask made it first: the chunk goes back.
+            Some(address) => {
+                state.free.push(chunk);
+                Ok(address)
+            }
+            None => {
+                state.nil = Some(chunk.address);
+                Ok(chunk.address)
+            }
+        }
+    }
+
     /// Takes back a retired command buffer's chunks.
     fn give_back(&self, chunks: Vec<Chunk>) {
         lock(&self.state).free.extend(chunks);
@@ -118,6 +150,7 @@ impl Ring {
             }
         }
         state.free.clear();
+        state.nil = None;
         freed
     }
 }
