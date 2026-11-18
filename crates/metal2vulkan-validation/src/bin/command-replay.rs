@@ -2,16 +2,20 @@
 //! or the new one, or print its records.
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-//! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]` plays the
-//! stream whose first segment is `FILE` through the old runtime (the default) or the new one
-//! (`rt`), with `--snapshots no` taking no `m2v.privateBytes` snapshot on either (so two
-//! runtimes' plays do the same work), and `--managed` telling the new runtime how the recording
-//! device kept Managed buffers where the stream has no `m2v.deviceIdentity` record (one copy:
-//! unified memory; two copies: a GPU copy; with neither, a Managed buffer stops the play), and
-//! writes `DIR/report.txt`: `device NAME runtime old|rt snapshots yes|no`, `relocation ...` (the
+//! [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
+//! [--until-frame F]` plays the stream whose first segment is `FILE` through the old runtime (the
+//! default) or the new one (`rt`), with `--snapshots no` taking no `m2v.privateBytes` snapshot on
+//! either (so two runtimes' plays do the same work), `--managed` telling the new runtime how the
+//! recording device kept Managed buffers where the stream has no `m2v.deviceIdentity` record (one
+//! copy: unified memory; two copies: a GPU copy; with neither, a Managed buffer stops the play),
+//! and `--until-frame` stopping the play after frame `F`'s present (frames counted from 0), and
+//! writes `DIR/report.txt`: `device NAME runtime old|rt snapshots yes|no`, each frame's `frame`
+//! and `end` lines as the frame ends (flushed, so a play that never ends leaves the frames it
+//! finished), `relocation ...` (the
 //! words relocated, the address arguments, the writes into objects with no recorded range, and
-//! the objects whose ID differs from the recording's), the player's report lines, the backend's
-//! own lines, `cut SEGMENT OFFSET` where the last
+//! the objects whose ID differs from the recording's), the player's other report lines, the
+//! backend's own lines, `until-frame F` where the play stopped there, `cut SEGMENT OFFSET` where
+//! the last
 //! segment ends in a record cut
 //! short, `skipped ...` where the backend skipped what its runtime does not build (such a play is
 //! no gate result), `gaps ...` where it met a typed gap, then `ok` or `error WHAT`; a play
@@ -41,8 +45,8 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] [--runtime old|rt] [--snapshots yes|no] \
-                     [--managed one-copy|two-copy]\n       command-replay dump --stream FILE\n       \
-                     command-replay shapes --stream FILE";
+                     [--managed one-copy|two-copy] [--until-frame F]\n       command-replay dump \
+                     --stream FILE\n       command-replay shapes --stream FILE";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -231,6 +235,17 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    let until = match options.get("until-frame").map(|f| f.parse::<usize>()) {
+        None => None,
+        Some(Ok(last)) => Some(last),
+        Some(Err(_)) => {
+            report.line(&format!(
+                "error until-frame: {} is no frame number",
+                options["until-frame"]
+            ));
+            return 2;
+        }
+    };
     // The first line says which mode ran: a timing table never comes from a snapshotting play
     // unnoticed.
     let mode = match snapshots {
@@ -252,7 +267,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             };
             report.line(&format!("device {} runtime old {mode}", device.name()));
             let mut backend = OldRuntime::new(device, device_type);
-            run(&mut backend, &mut reader, &mut report, snapshots)
+            run(&mut backend, &mut reader, &mut report, snapshots, until)
         }
         Some("rt") => {
             let mut backend = match open_rt(device_type, cache) {
@@ -268,7 +283,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
                     return 2;
                 }
             };
-            run(&mut backend, &mut reader, &mut report, snapshots)
+            run(&mut backend, &mut reader, &mut report, snapshots, until)
         }
         Some(other) => {
             report.line(&format!("error runtime: {other} is neither old nor rt"));
@@ -328,11 +343,16 @@ fn run<B: Backend>(
     reader: &mut StreamReader,
     report: &mut ReportFile,
     snapshots: bool,
+    until: Option<usize>,
 ) -> i32 {
-    let player = Player::new(backend);
+    let player = Player::new(backend).with_frame_lines(&mut report.file);
     let player = match snapshots {
         true => player,
         false => player.without_snapshots(),
+    };
+    let player = match until {
+        Some(last) => player.until_frame(last),
+        None => player,
     };
     let (played, ended) = player.play(reader);
     let counters = backend.counters();
@@ -351,11 +371,14 @@ fn run<B: Backend>(
         fixed("address_arguments"),
         fixed("unrelocated_writes"),
     ));
-    for line in played.lines() {
+    for line in played.lines_but_frames() {
         report.line(&line);
     }
     for line in backend.lines() {
         report.line(&line);
+    }
+    if let Some(last) = until.filter(|&last| played.frames.len() > last) {
+        report.line(&format!("until-frame {last}"));
     }
     if let Some((segment, offset)) = reader.truncated() {
         report.line(&format!("cut {} {offset}", segment.display()));

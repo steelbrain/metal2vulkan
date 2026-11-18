@@ -353,12 +353,15 @@ and the (name id, value) answer pairs.
 ## 10. The player
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-[--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]` plays a
-stream (its first segment) on one device through the old runtime (the default) or the new one
-(`rt`), and writes `DIR/report.txt`.
+[--blobs DIR] [--runtime old|rt] [--snapshots yes|no] [--managed one-copy|two-copy]
+[--until-frame F]` plays a stream (its first segment) on one device through the old runtime (the
+default) or the new one (`rt`), and writes `DIR/report.txt`. It writes each frame's `frame` and
+`end` lines as the frame ends, flushed, so a play that never ends leaves every frame it finished.
 With `--snapshots no` it takes no `m2v.privateBytes` snapshot on either runtime: each such dispatch
 plays as it is, counted on the `unsnapshotted` line, so two runtimes' plays do the same work and
-their times and memory compare. `command-replay dump --stream FILE` prints the call records as text, and
+their times and memory compare. With `--until-frame F` it stops after frame `F`'s present (frames
+counted from 0), completes the work committed so far, reports as at the stream's end and says
+`until-frame F`. `command-replay dump --stream FILE` prints the call records as text, and
 `command-replay shapes --stream FILE` each selector's argument shapes, with no data.
 
 - It relocates (section 5) and plays the host's plumbing as the plain calls it stands for
@@ -375,6 +378,16 @@ their times and memory compare. `command-replay dump --stream FILE` prints the c
   unified memory the runtime keeps one copy anyway. The report's `managed` line says which form
   played and from what, counts the Managed buffers and the no-copy ones whose contents came from
   first use, not from create, and says where a two-copy recording played as one copy.
+- **Unwritten buffers** (the new runtime): its report's `unwritten` line counts the Shared
+  buffers made without bytes that a compute encoder bound or used and whose command buffer
+  committed before any recorded write, upload or GPU pass reached their bytes since their making,
+  and names the first few with the command buffer that read each. Such a buffer plays with
+  whatever its memory held, which is where a recording that missed the program's writes shows.
+  What reaches a buffer's bytes: an `m2v.write` into it, into its block over them or into another
+  buffer of the block over them; a blit or render encoder's call that names it or such another
+  buffer; and the commit of a dispatch that binds it, which may write it. A dispatch that writes
+  such a buffer before it reads it is counted too, and a texture over a buffer is not followed.
+  The line counts; it stops nothing.
 - After each commit, before each write, check and present, and where the program waited, it waits
   for every committed command buffer that can complete: one whose event waits are met by values the
   CPU set or by signals of command buffers that can complete. It never waits on a command buffer

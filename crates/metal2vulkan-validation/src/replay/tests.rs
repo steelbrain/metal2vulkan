@@ -2,6 +2,7 @@
 //! is asked (no device). The runtime backends' tests are device tests (`runtime_lane`).
 
 use super::addresses::AddressMap;
+use super::new_runtime::unwritten::Unwritten;
 use super::player::{
     Backend, Counters, Counts, IdDiffers, Made, PlayError, Player, PrivateBytes, Relaid, Report,
     WAIT_COMPLETED,
@@ -1218,6 +1219,94 @@ fn a_frame_end_reports_the_gauges_as_they_stand() {
         .collect();
     assert_eq!(ends.len(), 2, "{lines:?}");
     assert!(ends[1].ends_with(" live calls=3"), "{lines:?}");
+}
+
+/// The new runtime's `unwritten` line counts, once, a Shared buffer a committed dispatch read
+/// before anything recorded reached its bytes: not one written through its block, one a blit
+/// names, one written before the commit, one an earlier commit's dispatch bound or one released
+/// before the commit.
+#[test]
+fn a_dispatch_reading_a_buffer_nothing_recorded_reached_is_counted_once() {
+    let call = |selector: &str, receiver: u64, args: Vec<Value>| Call {
+        selector: selector.into(),
+        receiver,
+        result: 0,
+        args,
+        answers: Vec::new(),
+    };
+    let bind = |encoder: u64, id: u64| {
+        let args = vec![Value::Object(id), Value::Uint(0), Value::Uint(0)];
+        call("setBuffer:offset:atIndex:", encoder, args)
+    };
+    let dispatch = |encoder: u64| call("dispatchThreads:threadsPerThreadgroup:", encoder, vec![]);
+    let mut unwritten = Unwritten::default();
+    // Block 1 holds buffers 2, 3 and 4; buffers 5, 6 and 7 lie in none.
+    for (id, range) in [(2, 0..256), (3, 256..512), (4, 512..768)] {
+        unwritten.made(id, Some((1, range)));
+    }
+    for id in [5, 6, 7] {
+        unwritten.made(id, None);
+    }
+    unwritten.written(1, 300..304);
+    let fill = call("fillBuffer:range:value:", 11, vec![Value::Object(5)]);
+    unwritten.encoded(&fill, 10, false);
+    for id in [2, 3, 4, 5, 6, 7] {
+        unwritten.encoded(&bind(12, id), 10, true);
+    }
+    unwritten.encoded(&dispatch(12), 10, true);
+    unwritten.encoded(&dispatch(12), 10, true);
+    unwritten.written(6, 0..4);
+    unwritten.released(7);
+    unwritten.committed(10);
+    // Buffer 8 lies over buffer 2's bytes, made after the commit: its own making starts it over.
+    unwritten.made(8, Some((1, 0..128)));
+    for id in [2, 8] {
+        unwritten.encoded(&bind(13, id), 14, true);
+    }
+    unwritten.encoded(&dispatch(13), 14, true);
+    unwritten.committed(14);
+    assert_eq!(
+        unwritten.line(),
+        "unwritten 3: Shared buffers a dispatch read before any recorded write, upload or GPU \
+         pass reached their bytes since their making; first #2 in #10, #4 in #10, #8 in #14"
+    );
+}
+
+/// A player told its last frame stops after that frame's present, and one given an output writes
+/// each frame's lines there as the frame ends: the report's other lines leave them out.
+#[test]
+fn a_play_stops_after_its_last_frame_and_writes_each_frame_as_it_ends() {
+    let mut kept = Kept::default();
+    let dir = ScratchDir::new("replay-until").unwrap();
+    let path = written(&dir, "s.m2vr", |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        w.call("newCommandQueue", 1, 3, &[], &[])
+    });
+    let mut reader = StreamReader::open(&[path], None).unwrap();
+    let mut out = Vec::new();
+    let player = Player::new(&mut kept).with_frame_lines(&mut out);
+    let (report, ended) = player.until_frame(1).play(&mut reader);
+    ended.unwrap();
+    assert_eq!(report.frames.len(), 2);
+    assert_eq!(
+        kept.calls,
+        [
+            "#1 = MTLCreateSystemDefaultDevice",
+            "#2 = #1 newCommandQueue"
+        ]
+    );
+    let out = String::from_utf8(out).unwrap();
+    let frames: Vec<String> = (0..2).flat_map(|at| report.frame_lines(at)).collect();
+    assert_eq!(out.lines().collect::<Vec<_>>(), frames, "{out}");
+    assert_eq!(frames.len(), 4);
+    let rest = report.lines_but_frames();
+    assert!(
+        !(rest.iter()).any(|line| line.starts_with("frame ") || line.starts_with("end ")),
+        "{rest:?}"
+    );
 }
 
 /// A frame's end counts the GPU's busy time as the union of the intervals of the command buffers

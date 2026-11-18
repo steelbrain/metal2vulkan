@@ -9,6 +9,7 @@
 
 mod encoders;
 mod places;
+pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
 use super::player::{Backend, Counters, Made, PlayError};
@@ -158,6 +159,8 @@ pub struct NewRuntime {
     /// Whether the stream told the form itself (`m2v.deviceIdentity`): its no-copy Managed
     /// buffers then carry their bytes at creation.
     identity: bool,
+    /// The Shared buffers a dispatch read before anything recorded reached their bytes.
+    unwritten: unwritten::Unwritten,
     /// The staging places of each command buffer not yet committed, which hold the bytes of its
     /// guest-RAM copies: given back at its commit, free once it completes.
     staging: HashMap<u64, Vec<Place>>,
@@ -387,6 +390,7 @@ impl NewRuntime {
             fresh: HashMap::new(),
             from_first_use: HashSet::new(),
             identity: false,
+            unwritten: unwritten::Unwritten::default(),
             staging: HashMap::new(),
             staged_bytes: 0,
             unanswered_pipeline_ids: 0,
@@ -568,6 +572,9 @@ impl NewRuntime {
             rt::StorageMode::Shared | rt::StorageMode::Managed => rt::MemoryClass::Shared,
             _ => return Err(refuse(call, format!("a {mode:?} buffer of this call"))),
         };
+        if class == rt::MemoryClass::Shared && bytes.is_empty() {
+            self.unwritten.made(call.result, None);
+        }
         let completed = self.completed();
         let place = (self.places.take(class, length, completed)).map_err(failed(call))?;
         let (start, block) = (place.range.start, place.block);
@@ -1088,7 +1095,12 @@ impl NewRuntime {
                 }
                 _ => device.new_buffer(range.block, at, length, None),
             };
-            addressed(buffer.map_err(failed(call))?, None)
+            let buffer = buffer.map_err(failed(call))?;
+            if class == rt::MemoryClass::Shared {
+                let placed = (call.receiver, offset..offset + length);
+                self.unwritten.made(call.result, Some(placed));
+            }
+            addressed(buffer, None)
         };
         match &*call.selector {
             "newBufferWithLength:options:offset:" => {
@@ -1234,6 +1246,7 @@ impl Backend for NewRuntime {
         if &*call.selector == "release" {
             self.owners.remove(&call.receiver);
             self.fresh.remove(&call.receiver);
+            self.unwritten.released(call.receiver);
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => self.places.give(place, self.commits),
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a
@@ -1251,6 +1264,11 @@ impl Backend for NewRuntime {
                 _ => {}
             }
             return Ok(Made::default());
+        }
+        if let Some(&command_buffer) = self.owners.get(&call.receiver) {
+            // Skipped encoders too: what the program's GPU passes reach is the stream's.
+            let compute = matches!(self.objects.get(&call.receiver), Some(Object::Compute(_)));
+            self.unwritten.encoded(call, command_buffer, compute);
         }
         if call.receiver != 0 && self.skipped(call.receiver) {
             // A call on a skipped object; what it makes is skipped too.
@@ -1378,6 +1396,8 @@ impl Backend for NewRuntime {
     }
 
     fn write(&mut self, target: u64, offset: u64, bytes: &[u8]) -> Result<(), PlayError> {
+        let end = offset + bytes.len() as u64;
+        self.unwritten.written(target, offset..end);
         match self.objects.get(&target) {
             Some(Object::Buffer(buffer, _)) => {
                 write_into(buffer, offset, bytes)?;
@@ -1581,6 +1601,7 @@ impl Backend for NewRuntime {
             }
             lines.push(line);
         }
+        lines.push(self.unwritten.line());
         lines
     }
 

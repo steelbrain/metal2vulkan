@@ -11,6 +11,7 @@ use super::value::{Hash, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::io::Write;
 use std::sync::Arc;
 
 /// A runtime's counters, cumulative, by name.
@@ -423,15 +424,21 @@ fn counted(counts: &Counts) -> String {
 impl Report {
     /// The report's lines (`docs/REPLAY-STREAM.md`, section 10).
     pub fn lines(&self) -> Vec<String> {
+        let mut lines = self.lines_but_frames();
+        // The frames' lines follow the completed groups' (one line each).
+        let at = self.completed.len();
+        let frames = (0..self.frames.len()).flat_map(|frame| self.frame_lines(frame));
+        lines.splice(at..at, frames);
+        lines
+    }
+
+    /// Frame `at`'s lines: its counts (`frame`) and its end (`end`).
+    pub fn frame_lines(&self, at: usize) -> Vec<String> {
         let mut lines = Vec::new();
-        for (ids, counters) in &self.completed {
-            let ids: String = ids.iter().map(|id| format!(" #{id}")).collect();
-            lines.push(format!("completed{ids}{}", counted(counters)));
-        }
-        for (at, counters) in self.frames.iter().enumerate() {
+        if let Some(counters) = self.frames.get(at) {
             lines.push(format!("frame {at}{}", counted(counters)));
         }
-        for (at, end) in self.ends.iter().enumerate() {
+        if let Some(end) = self.ends.get(at) {
             let resident =
                 (end.resident_bytes).map_or(String::new(), |r| format!(" resident_bytes={r}"));
             let live: String = (end.live.iter())
@@ -457,6 +464,17 @@ impl Report {
                 t.player(end.wall_nanos),
                 t.gpu_busy,
             ));
+        }
+        lines
+    }
+
+    /// The lines but the frames' (`frame_lines`): for a report that wrote each frame's as it
+    /// ended (`Player::with_frame_lines`).
+    pub fn lines_but_frames(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for (ids, counters) in &self.completed {
+            let ids: String = ids.iter().map(|id| format!(" #{id}")).collect();
+            lines.push(format!("completed{ids}{}", counted(counters)));
         }
         for check in &self.checks {
             let verdict = match check.recorded {
@@ -697,6 +715,10 @@ pub struct Player<'b, B: Backend> {
     /// The live objects that calls of `Cost::Resource` made, whose release costs as theirs.
     resources: HashSet<u64>,
     report: Report,
+    /// The last frame to play (`until_frame`), counted from 0 as `Report::frames` counts them.
+    last_frame: Option<usize>,
+    /// Where each frame's lines go as it ends (`with_frame_lines`).
+    frame_out: Option<&'b mut dyn Write>,
 }
 
 /// `now` past `base`, key by key.
@@ -893,7 +915,24 @@ impl<'b, B: Backend> Player<'b, B> {
             intervals: Vec::new(),
             resources: HashSet::new(),
             report: Report::default(),
+            last_frame: None,
+            frame_out: None,
         }
+    }
+
+    /// The player that stops after frame `last`'s `m2v.present`, counted from 0 as
+    /// `Report::frames` counts them: it completes the work committed so far and reports as at the
+    /// stream's end.
+    pub fn until_frame(mut self, last: usize) -> Self {
+        self.last_frame = Some(last);
+        self
+    }
+
+    /// The player that writes each frame's lines (`Report::frame_lines`) to `out` as the frame
+    /// ends, flushed, so that a play that never ends leaves the frames it finished.
+    pub fn with_frame_lines(mut self, out: &'b mut dyn Write) -> Self {
+        self.frame_out = Some(out);
+        self
     }
 
     /// The player that takes no `m2v.privateBytes` snapshots on any backend: every dispatch plays as
@@ -952,6 +991,9 @@ impl<'b, B: Backend> Player<'b, B> {
                 *self.fixed.entry(key).or_default() += 1;
             }
             self.compare(stream, left_out)?;
+            if (self.last_frame).is_some_and(|last| self.report.frames.len() > last) {
+                break;
+            }
         }
         Ok(())
     }
@@ -1110,6 +1152,14 @@ impl<'b, B: Backend> Player<'b, B> {
                     live: self.backend.live(),
                     times,
                 });
+                if let Some(out) = &mut self.frame_out {
+                    // A report line lost to a full disk loses only itself, as in the report file.
+                    let at = self.report.frames.len() - 1;
+                    for line in self.report.frame_lines(at) {
+                        let _ = writeln!(out, "{line}");
+                    }
+                    let _ = out.flush();
+                }
                 Ok(())
             }
             "commit" => self.commit(call.receiver),

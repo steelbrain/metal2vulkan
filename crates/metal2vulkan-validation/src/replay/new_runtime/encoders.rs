@@ -147,6 +147,7 @@ impl NewRuntime {
                 // Its first use committed, a no-copy Managed buffer's GPU copy changes only by
                 // `didModifyRange:` from here.
                 self.fresh.retain(|_, user| *user != Some(call.receiver));
+                self.unwritten.committed(call.receiver);
                 self.in_flight.push_back((self.commits, command_buffer));
                 for place in self.staging.remove(&call.receiver).unwrap_or_default() {
                     self.places.give(place, self.commits);
