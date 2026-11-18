@@ -1402,6 +1402,18 @@ or does not check is rebuilt from the generations' names, with young counted ful
   feedback layout with no draw between, 370.6 and 19.6 µs after the pass's clear (the table's),
   and 477.3 and 22.7 µs after a draw over the image in the pass.
 
+  The same passes on the old runtime (`metal2vulkan-runtime`), timed in the same runs, reading
+  the target / another texture, with the difference:
+
+  | Device | 3648 × 2038, this runtime | 3648 × 2038, the old runtime | 1920 × 1080, this runtime | 1920 × 1080, the old runtime |
+  |---|---|---|---|---|
+  | RX 550 (RADV) | 1,122.9 / 516.5 µs (+606.4) | 1,553.0 / 1,135.7 µs (+417.3) | 320.3 / 150.2 µs (+170.1) | 452.2 / 320.8 µs (+131.4) |
+  | RX 7900 XTX (RADV) | 54.3 / 19.1 µs (+35.2) | 54.4 / 37.6 µs (+16.8) | 20.4 / 13.1 µs (+7.2) | 31.6 / 20.1 µs (+11.5) |
+
+  A pass that reads its target takes no longer here than on the old runtime, on either card at
+  either size. On the RX 550 the difference from the plain pass is larger here, because the old
+  runtime's plain pass is 2.2 times slower.
+
 ## One path for every device
 
 Every difference between devices comes from a Vulkan query: a feature, a property, a format, a
