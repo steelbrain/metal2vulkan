@@ -1,7 +1,8 @@
 //! Render pipeline states, render pass descriptors and render encoders on the new runtime.
 //!
 //! What the runtime does not build yet is skipped and counted: a render pipeline state it answers
-//! with a typed gap or the translator refuses (`render_states`); a render encoder whose pass the
+//! with a typed gap or the translator refuses (`render_states`, by the gap, with the first state
+//! and the runtime's answer of each); a render encoder whose pass the
 //! runtime's descriptor cannot hold (a resolve texture, a depth plane, store action options, a
 //! visibility result buffer, layered or tile rendering, a skipped texture) or that it answers with
 //! a typed gap (`encoders`); a draw whose pipeline state, or a buffer or texture bound to either
@@ -133,8 +134,12 @@ impl NewRuntime {
         match made {
             Ok(state) => unaddressed(Object::RenderPipeline(state)),
             Err(error @ (rt::Error::Unsupported(_) | rt::Error::Translation(_))) => {
-                self.skips.render_states += 1;
-                (self.skips.first_render_state).get_or_insert((call.result, error.to_string()));
+                let gap = match &error {
+                    rt::Error::Unsupported(gap) => format!("{gap:?}"),
+                    _ => "Translation".to_owned(),
+                };
+                let kind = self.skips.render_states.entry(gap);
+                kind.or_insert((0, call.result, error.to_string())).0 += 1;
                 unaddressed(Object::Skipped)
             }
             Err(error) => Err(failed(call)(error)),

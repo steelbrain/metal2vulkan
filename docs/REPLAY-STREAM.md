@@ -692,8 +692,10 @@ calls played: where
 the play stopped, the stopping call is the next), the new runtime's backend's
 `pipeline I wall_nanos=N kernel=new|again` for each compute pipeline state it made, in order (the
 making's wall time, and whether no state of another specialization of the kernel, a library's
-function by name, was made before), its `skipped render states N, the first #ID: WHY` where it
-skipped any (`ID` the first one's object and `WHY` the runtime's answer), its
+function by name, was made before), its `skipped render states GAP N, the first #ID: WHY` for each
+typed gap a render pipeline state met (`GAP` the runtime's gap as Rust prints it for debugging, such
+as `RenderPipeline { kind: DepthAttachment }`, or `Translation` where the translator refused it, `N`
+the states skipped, `ID` the first one's object and `WHY` the runtime's answer), its
 `skipped render commands GAP N, the first at frame F, call C` for each typed gap a render command
 met, a draw the runtime does not build among them (`GAP` the runtime's gap as Rust prints it for
 debugging, such as `Draw { kind: Points }`, `N` the commands skipped, `F`

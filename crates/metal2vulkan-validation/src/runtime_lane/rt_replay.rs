@@ -331,6 +331,35 @@ fn a_draw_the_runtime_does_not_build_is_skipped_and_ends_the_verdict() {
 }
 
 #[test]
+fn a_render_state_the_runtime_does_not_build_is_counted_by_its_gap() {
+    let dir = ScratchDir::new("rt-replay-state-gap").unwrap();
+    let path = written(&dir, |w| {
+        let library = w.blob(&render_library(&dir))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let library = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
+        let vertex = [Value::Str("colored_vertex".into())];
+        w.call("newFunctionWithName:", 3, 4, &vertex, &[])?;
+        let fragment = [Value::Str("colored_fragment".into())];
+        w.call("newFunctionWithName:", 3, 5, &fragment, &[])?;
+        // Colour 0 RGBA8Unorm and a Depth32Float depth attachment, which the runtime refuses.
+        let color = Value::List(vec![Value::Uint(0), uints(&[("pixelFormat", 70)])]);
+        let pipeline = Value::Map(vec![
+            ("vertex".into(), Value::Object(4)),
+            ("fragment".into(), Value::Object(5)),
+            ("colors".into(), Value::List(vec![color])),
+            ("depthPixelFormat".into(), Value::Uint(252)),
+        ]);
+        let made = "newRenderPipelineStateWithDescriptor:error:";
+        w.call(made, 1, 6, &[pipeline], &[])
+    });
+    let (report, lines) = play("state-gap", &path);
+    assert_eq!(report.total.executed["skipped_render_states"], 1);
+    let line = "skipped render states RenderPipeline { kind: DepthAttachment } 1, the first #6: ";
+    assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
+}
+
+#[test]
 fn a_two_copy_stream_s_managed_buffer_keeps_both_copies() {
     let dir = ScratchDir::new("rt-replay-two-copies").unwrap();
     let sum = |bytes: &[u8]| Value::List(vec![Value::Bytes(Sha256::digest(bytes).to_vec())]);

@@ -40,10 +40,10 @@ struct Skips {
     encoders: u64,
     /// Objects it does not build: libraries from source.
     objects: u64,
-    /// Render pipeline states the runtime answers with a typed gap or the translator refuses.
-    render_states: u64,
-    /// The first such state's object id and the runtime's answer, for the report's lines.
-    first_render_state: Option<(u64, String)>,
+    /// Render pipeline states the runtime answers with a typed gap or the translator refuses, by
+    /// the gap (`Translation` for the translator's refusals): how many, and the first one's object
+    /// id and the runtime's answer.
+    render_states: BTreeMap<String, (u64, u64, String)>,
     /// Dispatches that bind a skipped object.
     dispatches: u64,
     /// Draws whose pipeline state, or a buffer or texture bound to either stage, is a skipped
@@ -77,13 +77,17 @@ impl Skips {
             .sum()
     }
 
+    /// The render pipeline states skipped, of every gap.
+    fn render_state_count(&self) -> u64 {
+        self.render_states.values().map(|&(count, ..)| count).sum()
+    }
+
     /// Everything skipped, in one count (`Backend::skips`).
     fn total(&self) -> u64 {
         let Skips {
             encoders,
             objects,
-            render_states,
-            first_render_state: _,
+            render_states: _,
             dispatches,
             draws,
             render_commands: _,
@@ -97,7 +101,6 @@ impl Skips {
         let counted = [
             encoders,
             objects,
-            render_states,
             dispatches,
             draws,
             blits,
@@ -107,7 +110,7 @@ impl Skips {
             calls,
             resource_ids,
         ];
-        counted.into_iter().sum::<u64>() + self.render_command_count()
+        counted.into_iter().sum::<u64>() + self.render_state_count() + self.render_command_count()
     }
 }
 
@@ -2139,7 +2142,7 @@ impl Backend for NewRuntime {
             ("stamps_not_available", metrics.stamps_not_available),
             ("skipped_encoders", self.skips.encoders),
             ("skipped_objects", self.skips.objects),
-            ("skipped_render_states", self.skips.render_states),
+            ("skipped_render_states", self.skips.render_state_count()),
             ("skipped_dispatches", self.skips.dispatches),
             ("skipped_draws", self.skips.draws),
             ("skipped_render_commands", self.skips.render_command_count()),
@@ -2223,10 +2226,9 @@ impl Backend for NewRuntime {
             }
             lines.push(line);
         }
-        if let Some((at, why)) = &self.skips.first_render_state {
+        for (gap, (count, at, why)) in &self.skips.render_states {
             lines.push(format!(
-                "skipped render states {}, the first #{at}: {why}",
-                self.skips.render_states
+                "skipped render states {gap} {count}, the first #{at}: {why}"
             ));
         }
         for (gap, (count, frame, at)) in &self.skips.render_commands {
