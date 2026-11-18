@@ -185,8 +185,9 @@ in its memory.
   The next commit of a command buffer with commands, on any queue, takes the bytes of every range
   named since: on the committing thread, before `commit` returns, it copies each once into a
   64 MiB staging ring of the Shared type, and the copies from the ring into the device copies go
-  ahead of that command buffer's commands, after every earlier command on the device. So the
-  bytes are taken at the commit; Metal takes them shortly after, before the command buffer is
+  ahead of that command buffer's commands, after every earlier command on the device, which the
+  barrier ending each earlier command buffer orders; the copies record one barrier, after them. So
+  the bytes are taken at the commit; Metal takes them shortly after, before the command buffer is
   scheduled. A write or a `did_modify_range` made while a command buffer runs does not reach it.
   Commits take turns while they copy, so command buffers keep the order of their captures. A
   commit that finds the ring full waits for its oldest copy's submission to complete. Where that

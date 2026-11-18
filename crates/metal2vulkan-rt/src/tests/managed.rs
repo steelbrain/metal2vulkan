@@ -2,8 +2,8 @@
 //! every device of the cfg's kind, in the form Vulkan's device type picks: with a device copy
 //! where the device is neither integrated nor a CPU, the copy holds the consumer's first bytes and
 //! zeros after them, a changed range reaches it at the next commit and a range not marked changed
-//! does not, and a change submits nothing; without one, shaders read the consumer's bytes as they
-//! are. A command buffer reads the bytes of its commit, not those written and named after it
+//! does not, a change submits nothing, and the copy-in at a commit adds one barrier; without one,
+//! shaders read the consumer's bytes as they are. A command buffer reads the bytes of its commit, not those written and named after it
 //! while it waits, where there is a device copy; a write after the range is named and before the
 //! commit is seen. Three rings' worth named with nothing held streams through the ring alone;
 //! more than a ring behind a command buffer held on the host takes staging of its own, which it
@@ -146,9 +146,22 @@ pub(crate) mod on_device {
             if !copied {
                 expected[20_000..20_100].fill(0x5A);
             }
+            let before = counters.metrics().barriers;
             assert!(
                 device_bytes(&device, &managed, &into, LEN) == expected,
                 "{name}: the bytes after the changes (device copy: {copied})"
+            );
+            let named = counters.metrics().barriers - before;
+            assert!(
+                device_bytes(&device, &managed, &into, LEN) == expected,
+                "{name}: the bytes with nothing named (device copy: {copied})"
+            );
+            // The copy-in adds one barrier, after its copies: the one ending each earlier command
+            // buffer on the queue orders it after them.
+            assert_eq!(
+                named - (counters.metrics().barriers - before - named),
+                u64::from(copied),
+                "{name}: the barriers a copy-in adds (device copy: {copied})"
             );
 
             // A change only names its range: nothing is submitted until a commit.

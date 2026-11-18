@@ -7,8 +7,10 @@
 //! the command buffers keep the order of their captures. The copies into the device copies, and
 //! then into the images of the textures over the ranges in images of their own
 //! (`crate::over::ManagedOvers`), are recorded into command buffers of their own, [`CopyIn`]s,
-//! which go ahead of the command buffer's own commands in queue order, each after a barrier that
-//! puts every earlier command on the queue first. So a command buffer reads the bytes as they were
+//! which go ahead of the command buffer's own commands in queue order. A copy-in records no barrier
+//! before its copies: the one that ends every earlier segment, upload, fill and copy-in on the queue
+//! puts every earlier command first, as it does for a segment (`record::end`). So a command buffer
+//! reads the bytes as they were
 //! at its commit, and a write after the commit reaches none committed before it. Metal takes them
 //! shortly after the commit, before the command buffer is scheduled, and a write or a
 //! `didModifyRange:` made while the command buffer runs does not reach it.
@@ -207,7 +209,8 @@ pub(crate) struct Chunk {
 
 impl Chunk {
     /// A copy-in's command buffer, recording, after the copies back `backs` (the first of a
-    /// capture's), or a barrier that puts every earlier command first.
+    /// capture's). It begins with no barrier of its own: the one ending each earlier command
+    /// buffer on the queue puts every earlier command first (`record::end`).
     ///
     /// Err: [`Error::Vulkan`] where a command pool or buffer cannot be made.
     pub(crate) fn begin(core: &Core, backs: Vec<Back>) -> Result<Chunk, Error> {
@@ -223,14 +226,8 @@ impl Chunk {
         let copies: Vec<OverCopy> = backs.iter().map(|(_, copy, _)| *copy).collect();
         // SAFETY: the command buffer is recording, and only this thread has it; each image is in
         // its home layout between commands, and the copy-in holds it.
-        unsafe {
-            match copies.is_empty() {
-                true => {
-                    record::barrier(device, command, Reach::Commands);
-                    core.counters.count(Metric::Barriers);
-                }
-                false => over::record_side(device, command, &copies, false, &core.counters),
-            }
+        if !copies.is_empty() {
+            unsafe { over::record_side(device, command, &copies, false, &core.counters) };
         }
         Ok(Chunk {
             recorder,
