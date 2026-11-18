@@ -167,10 +167,12 @@ impl QueueInner {
     }
 
     /// The command buffer holding `slot` retired, or was dropped uncommitted: the slot goes back.
+    /// Its gauge falls first, so a command buffer made in the freed slot never reads one more
+    /// live than the queue holds.
     pub(crate) fn release(&self, slot: u32) {
+        self.counters.fall(Gauge::CommandBuffers);
         lock(&self.slots).free.push(slot);
         self.room.notify_one();
-        self.counters.fall(Gauge::CommandBuffers);
     }
 }
 
