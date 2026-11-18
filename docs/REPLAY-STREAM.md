@@ -216,8 +216,22 @@ and the (name id, value) answer pairs.
   and argument buffers; its `useResource:` and `useHeap:` resources; its attachments, blit operands
   and executed indirect command buffers. Memory reached only through pointers the command buffer
   did not declare is undefined in Metal and outside this format.
-- **The comparison point** is the bytes as last recorded. It is not refreshed when a command buffer
-  completes, except for ranges only the GPU writes (attachments, blit destinations).
+- **The comparison point** is the bytes as last recorded. When a command buffer completes, the
+  4 KiB chunks wholly inside ranges only the GPU writes (attachments, blit destinations) take the
+  GPU's bytes as the stream's without a write: the player's own run writes them again.
+- **Writes at a completion.** A recorder may also record what a command buffer's GPU work stored in
+  memory the CPU shares. When the command buffer completes, each chunk that work could have stored
+  to is compared with the comparison point, and each one that differs is an `m2v.write` after the
+  command buffer's `commit` record, holding the bytes the run left. The chunks compared are those a
+  blit wrote only part of, and everything the command buffer's compute and render encoders reach:
+  each buffer, texture and heap they bind or use, and what an indirect command buffer they execute
+  binds, except a resource `useResources:usage:` names for reading alone. A `Managed` buffer is
+  compared only on a device that keeps one copy of it; where there are two, the GPU never writes
+  the CPU's copy. A player waits before each write (section 10), so it puts back what its own run
+  wrote and changes nothing. The write moves the comparison point: when the CPU later restores the
+  earlier bytes (a program resetting counters a kernel adds to), the restore differs from it and is
+  recorded before the next commit that reaches those bytes. A stream without these writes misses
+  such a restore. The header has no bit for them, and a player reads both kinds alike.
 - **No half-written bytes.** Before capturing, a recorder waits for every earlier command buffer
   that can run: one not held on an event wait that a later record satisfies. The bytes may then
   include final bytes the GPU wrote; the player puts them back at the same point, after its own
