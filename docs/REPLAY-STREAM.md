@@ -479,14 +479,22 @@ counted from 0), completes the work committed so far, reports as at the stream's
   skipped object (`skipped_objects`), every call of one (`skipped_calls`, with a render encoder's
   `setRenderPipelineState:` of one) and the draws of a render encoder whose pipeline state is one
   (`skipped_draws`).
-- The new runtime's backend plays compute, blits, `synchronizeResource:`, fences, events and
-  queues. What the new runtime does not build yet it skips and counts, and never fakes:
-  - objects: render pipelines, depth-stencil states, render pass descriptors, libraries from
-    source, and whatever a call makes of a skipped object (`skipped_objects`);
-  - render and parallel render encoders (`skipped_encoders`), and every call of a skipped object
-    (`skipped_calls`, with `useResource:usage:` and `useHeap:` of one);
+- The new runtime's backend plays compute, render, blits, `synchronizeResource:`, fences, events
+  and queues. What the new runtime does not build yet it skips and counts, and never fakes:
+  - objects: libraries from source, and whatever a call makes of a skipped object
+    (`skipped_objects`);
+  - render pipeline states the runtime answers with a typed gap or the translator refuses
+    (`skipped_render_states`);
+  - parallel render encoders, and render encoders of a pass the runtime does not build
+    (`skipped_encoders`): a pass whose setter records leave in it what the runtime's render pass
+    descriptor does not hold (a resolve texture, a depth plane other than 0, store action
+    options, a visibility result buffer, a render target array length above 1, tile or
+    imageblock sizes, or a skipped texture), or one the runtime answers with a typed gap; and
+    every call of a skipped object (`skipped_calls`, with `useResource:usage:` and `useHeap:` of
+    one);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
-    (`skipped_dispatches`);
+    (`skipped_dispatches`), and draws whose pipeline state, or a buffer or texture bound to
+    either stage, or whose index buffer is one (`skipped_draws`);
   - blit commands that name a skipped object (`skipped_blits`), and by kind: the host's copies
     back to the guest's RAM, which nothing in a play reads (`skipped_guest_ram_reads`),
     `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), mipmaps (`skipped_mipmaps`), and
@@ -517,10 +525,17 @@ counted from 0), completes the work committed so far, reports as at the stream's
   the runtime back a block or heap of the stream at its release (`release_block`), and gives
   textures and sampler states indices from the whole of each index class. Its readback serves
   Shared and Managed buffers only; a check of anything else is a refusal. The runtime gives a
-  compute pipeline state no `gpuResourceID`, so each one the program saw is reported on an `id`
-  line as `none` and counted (`gap_pipeline_ids`); each skipped object's the program saw is
-  reported so too and counted (`skipped_resource_ids`). Nothing in the play reads either, so
-  neither counts among the differing IDs.
+  compute or render pipeline state no `gpuResourceID`, so each one the program saw is reported on
+  an `id` line as `none` and counted (`gap_pipeline_ids`); each skipped object's the program saw
+  is reported so too and counted (`skipped_resource_ids`). Nothing in the play reads either, so
+  neither counts among the differing IDs. A render pipeline state takes no label and no
+  `resourceIndex`, and `defaultColorSampleCount` and `defaultRasterSampleCount` are not played:
+  the runtime refuses a pass with no attachment, the one kind they would change. Render encoders
+  play `setRenderPipelineState:`, `setDepthStencilState:`, the vertex and fragment stages'
+  buffers, offsets, bytes, textures and sampler states, the viewport, scissor, cull mode, winding,
+  blend color and stencil references, the draws (indexed or not, with instance counts, base
+  vertex and base instance), fences and memory barriers (their stages are the runtime's to
+  order).
 
 `report.txt` holds one line per item: `device NAME runtime old|rt snapshots yes|no` first, then
 `relocation relocated_words=N misaligned_address_words=N address_arguments=N unrelocated_writes=N

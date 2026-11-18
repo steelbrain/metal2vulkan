@@ -2,13 +2,14 @@
 //! device. The backend is the runtime's consumer: it takes the blocks the stream's own buffers lie
 //! in (`places`) and every texture and sampler index, granted at the start. A block of the stream
 //! is a block of the runtime, and a heap is a block of its own. What the runtime does not build
-//! yet is skipped and counted, never stood in for (`Skips`): render encoders and the states and
-//! descriptors only they take, textures over buffers, and the blit commands it lacks; a
-//! dispatch or blit that names a skipped object is skipped too. A play with any skip is no gate
+//! yet is skipped and counted, never stood in for (`Skips`): the render pipeline states, render
+//! encoders and draws it does not build (`render`), and the blit commands it lacks; a dispatch,
+//! draw or blit that names a skipped object is skipped too. A play with any skip is no gate
 //! result. A selector, an argument or a descriptor key this module does not name is refused.
 
 mod encoders;
 mod places;
+mod render;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
@@ -26,13 +27,18 @@ use std::sync::Arc;
 /// What the play skipped because the runtime does not build it yet.
 #[derive(Default)]
 struct Skips {
-    /// Encoders the runtime does not build: render encoders.
+    /// Encoders the runtime does not build: parallel render encoders, and render encoders of a
+    /// pass it does not build (`render`).
     encoders: u64,
-    /// Objects it does not build: render pipeline and depth-stencil states, render pass
-    /// descriptors and libraries from source.
+    /// Objects it does not build: libraries from source.
     objects: u64,
+    /// Render pipeline states the runtime answers with a typed gap or the translator refuses.
+    render_states: u64,
     /// Dispatches that bind a skipped object.
     dispatches: u64,
+    /// Draws whose pipeline state, or a buffer or texture bound to either stage, is a skipped
+    /// object.
+    draws: u64,
     /// Blit commands that name a skipped object.
     blits: u64,
     /// Pieces of the host's copies from the guest's RAM that the play cannot copy: a piece not of
@@ -71,6 +77,7 @@ enum Object {
     CommandBuffer(rt::CommandBuffer),
     Compute(Box<encoders::Compute>),
     Blit(Box<rt::BlitCommandEncoder>),
+    Render(Box<render::Render>),
     /// A buffer, and its place where the backend placed it.
     Buffer(rt::Buffer, Option<Place>),
     /// A block of the stream (`m2v.newBlockWithLength:storageMode:`) or a heap: its range, and
@@ -81,6 +88,9 @@ enum Object {
     Library(rt::Library),
     Function(Box<Function>),
     ComputePipeline(rt::ComputePipelineState),
+    RenderPipeline(rt::RenderPipelineState),
+    DepthStencil(rt::DepthStencilState),
+    Pass(Box<render::Pass>),
     Sampler(rt::SamplerState),
     Event(rt::Event),
     SharedEvent(rt::SharedEvent),
@@ -726,10 +736,25 @@ impl NewRuntime {
         call: &Call,
         descriptor: &rt::ComputePipelineDescriptor,
     ) -> Result<rt::ComputePipelineState, PlayError> {
+        self.numbered(|device, ids| {
+            device.new_compute_pipeline_state(descriptor, |samplers| Ok(ids(samplers)))
+        })
+        .map_err(failed(call))
+    }
+
+    /// The pipeline state `make` makes on the device with `ids`, which gives each numbered
+    /// constexpr sampler an index of its own, the same words one index.
+    fn numbered<T>(
+        &mut self,
+        make: impl FnOnce(
+            &rt::Device,
+            &mut dyn FnMut(&[rt::NumberedSampler]) -> Vec<u32>,
+        ) -> Result<T, rt::Error>,
+    ) -> Result<T, rt::Error> {
         let mut taken = Vec::new();
         let made = {
             let (constexprs, last) = (&self.constexprs, self.last[2]);
-            let sampler_ids = |samplers: &[rt::NumberedSampler]| {
+            let mut sampler_ids = |samplers: &[rt::NumberedSampler]| {
                 let mut next = last;
                 let ids = samplers.iter().map(|sampler| match sampler {
                     rt::NumberedSampler::Constexpr(words) => match constexprs
@@ -751,16 +776,15 @@ impl NewRuntime {
                     },
                     _ => 0,
                 });
-                Ok(ids.collect())
+                ids.collect()
             };
-            self.device
-                .new_compute_pipeline_state(descriptor, sampler_ids)
+            make(&self.device, &mut sampler_ids)
         };
         for (words, index) in taken {
             self.constexprs.insert(words, index);
             self.last[2] = index;
         }
-        made.map_err(failed(call))
+        made
     }
 
     /// A compute pipeline state of `descriptor`, of `kernel`'s, timed and counted (`creations`).
@@ -945,13 +969,17 @@ impl NewRuntime {
                 let state = self.timed_state(call, &d, kernel)?;
                 unaddressed(Object::ComputePipeline(state))
             }
-            // Render pipeline and depth-stencil states, render pass descriptors and libraries from
-            // source: the runtime builds none yet.
-            "newRenderPipelineStateWithDescriptor:error:"
-            | "newDepthStencilStateWithDescriptor:"
-            | "MTLRenderPassDescriptor.new"
-            | "MTLRenderPassDescriptor.renderPassDescriptor"
-            | "newLibraryWithSource:options:error:" => self.skip_object(),
+            "newRenderPipelineStateWithDescriptor:error:" => self.render_pipeline_state(call),
+            "newDepthStencilStateWithDescriptor:" => {
+                let descriptor = translator::depth_stencil(call)?;
+                let state = self.device.new_depth_stencil_state(&descriptor);
+                unaddressed(Object::DepthStencil(state))
+            }
+            "MTLRenderPassDescriptor.new" | "MTLRenderPassDescriptor.renderPassDescriptor" => {
+                unaddressed(Object::Pass(Box::default()))
+            }
+            // Libraries from source: no device here compiles Metal source.
+            "newLibraryWithSource:options:error:" => self.skip_object(),
             "newFence" => unaddressed(Object::Fence(self.device.new_fence())),
             "newSamplerStateWithDescriptor:" => {
                 let (mut descriptor, f) = translator::sampler(call)?;
@@ -1375,7 +1403,9 @@ impl Backend for NewRuntime {
         }
         let encodes = matches!(
             self.objects.get(&call.receiver),
-            Some(Object::CommandBuffer(_) | Object::Compute(_) | Object::Blit(_))
+            Some(
+                Object::CommandBuffer(_) | Object::Compute(_) | Object::Blit(_) | Object::Render(_)
+            )
         );
         if call.result != 0 && !encodes && self.names_skipped(call) {
             // What a call makes of a skipped object is skipped too.
@@ -1419,6 +1449,14 @@ impl Backend for NewRuntime {
                 }
                 Object::Blit(_) => {
                     self.blit_call(call)?;
+                    None
+                }
+                Object::Render(_) => {
+                    self.render_call(call)?;
+                    None
+                }
+                Object::Pass(_) => {
+                    self.pass_call(call)?;
                     None
                 }
                 Object::Buffer(buffer, _) => {
@@ -1577,9 +1615,9 @@ impl Backend for NewRuntime {
         let id = match self.objects.get(&object) {
             Some(Object::Texture(texture)) => texture.gpu_resource_id(),
             Some(Object::Sampler(sampler)) => sampler.gpu_resource_id(),
-            // The runtime gives a compute pipeline state no resource ID: it builds no indirect
-            // command buffers. The player reports the ID as differing, and the gap is counted.
-            Some(Object::ComputePipeline(_)) => {
+            // The runtime gives a pipeline state no resource ID: it builds no indirect command
+            // buffers. The player reports the ID as differing, and the gap is counted.
+            Some(Object::ComputePipeline(_) | Object::RenderPipeline(_)) => {
                 self.unanswered_pipeline_ids += 1;
                 return Ok(None);
             }
@@ -1637,7 +1675,9 @@ impl Backend for NewRuntime {
             ("capture_wait_nanos", metrics.capture_wait_nanos),
             ("skipped_encoders", self.skips.encoders),
             ("skipped_objects", self.skips.objects),
+            ("skipped_render_states", self.skips.render_states),
             ("skipped_dispatches", self.skips.dispatches),
+            ("skipped_draws", self.skips.draws),
             ("skipped_blits", self.skips.blits),
             ("staged_guest_ram_bytes", self.staged_bytes),
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),

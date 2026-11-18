@@ -332,7 +332,7 @@ impl OldRuntime {
                 unaddressed(Object::RenderPipeline(state.map_err(failed(call))?))
             }
             "newDepthStencilStateWithDescriptor:" => {
-                let descriptor = descriptors::depth_stencil(call)?;
+                let descriptor = super::translator::depth_stencil(call)?;
                 let state = device.new_depth_stencil_state(&descriptor);
                 unaddressed(Object::DepthStencil(state.map_err(failed(call))?))
             }

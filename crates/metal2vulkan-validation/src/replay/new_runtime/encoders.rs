@@ -1,7 +1,7 @@
-//! The calls of command buffers and of their compute and blit encoders. A render encoder is
-//! skipped whole, each of its calls counted; a dispatch whose bindings hold a skipped object, and
-//! a blit command the runtime does not build or that names a skipped object, are skipped and
-//! counted.
+//! The calls of command buffers and of their compute and blit encoders (a render encoder's are
+//! `render`'s). A parallel render encoder is skipped whole, each of its calls counted; a dispatch
+//! whose bindings hold a skipped object, and a blit command the runtime does not build or that
+//! names a skipped object, are skipped and counted.
 
 use super::super::args::{arg, data, index, list, range, refuse, uint, Fields};
 use super::{failed, Held, NewRuntime, Object};
@@ -50,7 +50,7 @@ pub(super) fn region(call: &Call, value: &Value) -> Result<rt::Region, PlayError
 }
 
 /// The first index of a `withRange:` call's range, which covers each of its `count` objects.
-fn first(call: &Call, at: usize, count: usize) -> Result<u32, PlayError> {
+pub(super) fn first(call: &Call, at: usize, count: usize) -> Result<u32, PlayError> {
     let span = range(call, arg(call, at)?)?;
     if span.end - span.start != count as u64 {
         return Err(refuse(
@@ -136,11 +136,8 @@ impl NewRuntime {
                 let encoder = encoder.map_err(failed(call))?;
                 super::unaddressed(Object::Blit(Box::new(encoder)))
             }
-            "renderCommandEncoderWithDescriptor:"
-            | "parallelRenderCommandEncoderWithDescriptor:" => {
-                self.skips.encoders += 1;
-                super::unaddressed(Object::Skipped)
-            }
+            "renderCommandEncoderWithDescriptor:" => self.render_encoder(call, &command_buffer),
+            "parallelRenderCommandEncoderWithDescriptor:" => self.skip_encoder(),
             "commit" => {
                 command_buffer.commit().map_err(failed(call))?;
                 self.commits += 1;
