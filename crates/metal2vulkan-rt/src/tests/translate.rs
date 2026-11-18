@@ -24,6 +24,8 @@ mod on_device {
     use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
     use metal2vulkan::Budget;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
+    use std::path::{Path, PathBuf};
+    use std::time::SystemTime;
 
     /// `float` patterns none of which is a NaN or a denormal (the fixture compiles with fast math).
     const FLOATS: [f32; 6] = [0.0, -0.0, 0.5, 2.0, 1.0, -3.0];
@@ -1031,9 +1033,49 @@ mod on_device {
         });
     }
 
+    /// Every file under `dir`: its path under it, its length and its time on disk, in order.
+    fn files(dir: &Path) -> Vec<(String, u64, SystemTime)> {
+        fn under(root: &Path, dir: &Path, all: &mut Vec<(String, u64, SystemTime)>) {
+            for entry in std::fs::read_dir(dir).expect("the directory").flatten() {
+                let meta = entry.metadata().expect("its metadata");
+                if meta.is_dir() {
+                    under(root, &entry.path(), all);
+                } else {
+                    let path = entry.path();
+                    let file = path.strip_prefix(root).expect("under the root");
+                    let file = file.to_string_lossy().replace('\\', "/");
+                    all.push((file, meta.len(), meta.modified().expect("its time")));
+                }
+            }
+        }
+        let mut all = Vec::new();
+        under(dir, dir, &mut all);
+        all.sort();
+        all
+    }
+
+    /// The pipelines' files among `files`.
+    fn pipeline_files(files: &[(String, u64, SystemTime)]) -> usize {
+        files
+            .iter()
+            .filter(|(file, ..)| file.starts_with("pipelines/"))
+            .count()
+    }
+
+    /// A device on `dir`.
+    fn on_directory(name: &str, physical: &crate::PhysicalDevice, dir: &Path) -> Device {
+        let options = DeviceOptions {
+            pipeline_cache_dir: Some(dir.to_owned()),
+            ..DeviceOptions::default()
+        };
+        Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"))
+    }
+
     /// A device on a cache directory a device before it used lowers nothing at creation: the
     /// tiling kernel's lowering and the observing kernel's two are read from the directory, and
-    /// the pipeline data the first device wrote at its end is there.
+    /// the tile's `VkPipeline` is made from its file. The first device's writes
+    /// (`Metrics::cache_bytes_written`) are the files' bytes, one file for each `VkPipeline` it
+    /// made; the second writes nothing and leaves every file as it was.
     #[test]
     fn every_device_takes_the_kernels_a_device_before_it_lowered_from_the_cache_directory() {
         let (Some(tiled), Some(observing)) = (
@@ -1048,13 +1090,9 @@ mod on_device {
         for (name, physical) in &devices {
             let dir = std::env::temp_dir().join(format!("m2v-rt-cache-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
+            let mut first = Vec::new();
             for round in 0..2 {
-                let options = DeviceOptions {
-                    pipeline_cache_dir: Some(dir.clone()),
-                    ..DeviceOptions::default()
-                };
-                let device = Device::new(physical, options)
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let device = on_directory(name, physical, &dir);
                 let counters = device.counters();
                 let states = [
                     state(name, &device, &tiled),
@@ -1067,21 +1105,122 @@ mod on_device {
                 assert_eq!(counted, want, "{name}: device {round} on the directory");
                 drop(states);
                 drop(device);
+                // The teardown ends once the reaper wrote what it was given.
                 within("the teardown", || counters.gauges() == Gauges::default());
+                let written = counters.metrics().cache_bytes_written;
+                let files = files(&dir);
+                if round == 0 {
+                    let bytes: u64 = files.iter().map(|&(_, len, _)| len).sum();
+                    assert_eq!(written, bytes, "{name}: the bytes written are the files'");
+                    let made = counters.metrics().pipelines_created;
+                    assert_eq!(
+                        pipeline_files(&files) as u64,
+                        made,
+                        "{name}: a file a pipeline"
+                    );
+                    first = files;
+                } else {
+                    assert_eq!(written, 0, "{name}: the second device writes nothing");
+                    assert_eq!(files, first, "{name}: every file as it was");
+                }
             }
-            let written = std::fs::read_dir(&dir)
-                .expect("the cache directory")
-                .flatten()
-                .any(|entry| {
-                    entry
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with("pipelines-")
-                });
             let _ = std::fs::remove_dir_all(&dir);
-            assert!(written, "{name}: the pipeline data");
-            println!("{name}: 3 lowerings, none on a second device on the directory");
+            println!(
+                "{name}: 3 lowerings and {} pipeline file(s) written, none by a second device",
+                pipeline_files(&first)
+            );
         }
+    }
+
+    /// The second process's part of
+    /// `every_device_shares_the_cache_directory_with_a_second_process`: on the device and
+    /// directory it names, the first process's kernel, then a kernel of its own.
+    const SECOND: &str = "tests::translate::on_device::second_process_on_a_cache_directory";
+
+    /// A second process on a cache directory: its device takes the kernel the first process's
+    /// device left there and writes none of its files again; the kernel of its own adds its
+    /// lowering and one file for its one `VkPipeline`.
+    #[test]
+    fn every_device_shares_the_cache_directory_with_a_second_process() {
+        let Some(tiled) = descriptor("a1_bool_from_float") else {
+            return;
+        };
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-cache2-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let device = on_directory(name, physical, &dir);
+            let counters = device.counters();
+            drop(state(name, &device, &tiled));
+            drop(device);
+            within("the teardown", || counters.gauges() == Gauges::default());
+            let before = files(&dir);
+            let test = std::env::current_exe().expect("the test binary");
+            let status = std::process::Command::new(test)
+                .args(["--exact", SECOND, "--ignored", "--nocapture"])
+                .env("M2V_TEST_CACHE_DIR", &dir)
+                .env("M2V_TEST_DEVICE", name)
+                .status()
+                .expect("the second process");
+            assert!(status.success(), "{name}: the second process");
+            let after = files(&dir);
+            let _ = std::fs::remove_dir_all(&dir);
+            for file in &before {
+                assert!(
+                    after.contains(file),
+                    "{name}: {} written again or gone",
+                    file.0
+                );
+            }
+            let added: Vec<&String> = (after.iter())
+                .filter(|file| !before.contains(file))
+                .map(|(file, ..)| file)
+                .collect();
+            let pipelines = added.iter().filter(|file| file.starts_with("pipelines/"));
+            assert_eq!(pipelines.count(), 1, "{name}: added {added:?}");
+            println!("{name}: the second process added {added:?}, rewrote nothing");
+        }
+    }
+
+    /// Run only by `every_device_shares_the_cache_directory_with_a_second_process`, in a process
+    /// of its own: on the device `M2V_TEST_DEVICE` names, a device on the directory
+    /// `M2V_TEST_CACHE_DIR` names makes the first process's kernel, lowering nothing and writing
+    /// nothing, then a kernel of its own.
+    #[test]
+    #[ignore = "the second process of every_device_shares_the_cache_directory_with_a_second_process"]
+    fn second_process_on_a_cache_directory() {
+        let dir = PathBuf::from(std::env::var_os("M2V_TEST_CACHE_DIR").expect("the directory"));
+        let wanted = std::env::var("M2V_TEST_DEVICE").expect("the device");
+        let (Some(tiled), Some(own)) = (
+            descriptor("a1_bool_from_float"),
+            descriptor("a1_sign_and_division"),
+        ) else {
+            panic!("the kernels");
+        };
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        let (name, physical) = (devices.iter())
+            .find(|(name, _)| *name == wanted)
+            .expect("the first process's device");
+        let device = on_directory(name, physical, &dir);
+        let counters = device.counters();
+        let first = state(name, &device, &tiled);
+        let metrics = counters.metrics();
+        assert_eq!(
+            metrics.translations, 0,
+            "{name}: the first process's kernel"
+        );
+        let own = state(name, &device, &own);
+        drop((first, own));
+        drop(device);
+        within("the teardown", || counters.gauges() == Gauges::default());
+        assert_eq!(
+            counters.metrics().pipelines_created,
+            2,
+            "{name}: two pipelines made"
+        );
     }
 
     /// `vector_word_phases`'s kernels (`metal2vulkan_devtools::vector_word_phases`): with

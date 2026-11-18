@@ -80,6 +80,7 @@ struct Atomics {
     passes: AtomicU64,
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
+    cache_bytes_written: AtomicU64,
     pipelines_created: AtomicU64,
     first_use_waits: AtomicU64,
     first_use_wait_nanos: AtomicU64,
@@ -164,6 +165,11 @@ impl Counters {
     /// `bytes` more copied for a call ([`Metrics::bytes_copied`]).
     pub(crate) fn copied(&self, bytes: u64) {
         self.atomics.bytes_copied.fetch_add(bytes, Relaxed);
+    }
+
+    /// `bytes` more written to the cache directory ([`Metrics::cache_bytes_written`]).
+    pub(crate) fn cache_written(&self, bytes: u64) {
+        self.atomics.cache_bytes_written.fetch_add(bytes, Relaxed);
     }
 
     /// One more segment end whose barrier reaches the host.
@@ -251,6 +257,7 @@ impl Counters {
             blocks_made: a.blocks_made.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
+            cache_bytes_written: a.cache_bytes_written.load(Relaxed),
             ring_writes: a.ring_writes.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
             synchronizations: a.synchronizations.load(Relaxed),
@@ -321,6 +328,11 @@ pub struct Metrics {
     pub translations: u64,
     /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
     pub translations_loaded: u64,
+    /// Bytes written to the cache directory ([`DeviceOptions::pipeline_cache_dir`]): lowered
+    /// kernels, and each `VkPipeline`'s data where it did not come from its file.
+    ///
+    /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
+    pub cache_bytes_written: u64,
     /// Writes into the parameter ring: a dispatch's parameter block, its fields past the push
     /// window (a kernel with more than 28 buffers), and each `set_bytes` copy.
     pub ring_writes: u64,

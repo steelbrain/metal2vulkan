@@ -36,6 +36,7 @@
 //! encoding thread.
 
 use crate::arrays::BINDINGS;
+use crate::cache::{module_digest, pipeline_key, KeepPipeline};
 use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::{Error, Gap, Refusal};
@@ -235,6 +236,8 @@ pub(crate) struct Kernel {
     module: vk::ShaderModule,
     /// The module's entry point.
     entry: CString,
+    /// The digest of the module's part of its pipelines' keys in the cache directory.
+    digest: [u8; 32],
     pub(crate) interface: Interface,
     /// The `VkPipeline`s made so far, by their specialization.
     variants: Mutex<Vec<(Variant, vk::Pipeline)>>,
@@ -405,8 +408,8 @@ impl crate::Device {
     /// `VkPipeline` is made here too, and twice for one that does (its partial-threadgroups
     /// variant and its plain module). Where the device has a cache directory
     /// ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made before is read from it
-    /// in place of lowering again, and every `VkPipeline` is made through the pipeline data it
-    /// keeps. The content's other `VkPipeline`s are made later, each by the first encoding call
+    /// in place of lowering again, and every `VkPipeline` is made from its file there where it
+    /// has one. The content's other `VkPipeline`s are made later, each by the first encoding call
     /// of any of its states that needs it ([`ComputePipelineState`]). For a kernel whose tier runs
     /// only whole SIMD groups, the reaper lowers its emulated-SIMD-group variant after this
     /// returns, through the cache directory too.
@@ -502,7 +505,7 @@ impl Compiled {
                         Err(TranslationError::Unsupported(refused))
                             if refused.feature == Feature::GpuEncodedIndirectCommands =>
                         {
-                            core.caches.keep_refusal(&variant_key);
+                            core.caches.keep_refusal(&variant_key, &core.counters);
                             None
                         }
                         Err(error) => return Err(Error::Translation(error)),
@@ -654,7 +657,7 @@ fn lower(
     core.counters.count(Metric::Translations);
     let lowered = translator.compile_function_from_entries(function, inputs, budget, entries)?;
     core.caches
-        .keep_translation(key.digest(), &lowered.to_bytes());
+        .keep_translation(key.digest(), &lowered.to_bytes(), &core.counters);
     Ok(lowered)
 }
 
@@ -1079,7 +1082,7 @@ impl Emulated {
         let compiled = match lower(core, &self.function, &self.inputs, &budget, &entries) {
             Ok(compiled) => compiled,
             Err(TranslationError::Unsupported(_)) => {
-                core.caches.keep_refusal(&key);
+                core.caches.keep_refusal(&key, &core.counters);
                 return Lowered::Refused;
             }
             Err(_) => return Lowered::Refused,
@@ -1115,11 +1118,30 @@ impl Kernel {
         let stage = pipeline.stage;
         // The translator's entry points hold no NUL; one that did would name no entry point.
         let entry = CString::new(stage.entry_point).map_err(|_| gap())?;
+        let digest = core.caches.on_disk().then(|| {
+            let ids: Vec<u32> = interface.constants.iter().map(|&(id, _)| id).collect();
+            let layout: Vec<u32> = std::iter::once(PUSH_BYTES)
+                .chain(
+                    BINDINGS
+                        .iter()
+                        .flat_map(|&(binding, kind, count)| [binding, kind.as_raw() as u32, count]),
+                )
+                .collect();
+            module_digest(
+                &stage.spirv,
+                entry.as_bytes(),
+                interface.stage_flags,
+                interface.required_subgroup_size,
+                &ids,
+                &layout,
+            )
+        });
         // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
         let module = unsafe { Kernel::module(core, &stage.spirv) }?;
         Ok(Kernel {
             module,
             entry,
+            digest: digest.unwrap_or_default(),
             interface,
             variants: Mutex::new(Vec::new()),
         })
@@ -1196,19 +1218,43 @@ impl Kernel {
             .stage(stage)
             .layout(core.layout);
         let device = &core.device;
-        let cache = core.caches.pipeline_cache;
+        // With a cache directory, a cache of the pipeline's own, started from its file.
+        let mut kept = None;
+        if core.caches.on_disk() {
+            let key = pipeline_key(&self.digest, &values);
+            let seed = core.caches.pipeline_data(&key).unwrap_or_default();
+            let cache_info = vk::PipelineCacheCreateInfo::default().initial_data(&seed);
+            // SAFETY: the data is empty or what `vkGetPipelineCacheData` gave for this device's
+            // `pipelineCacheUUID`, whole, as its checksum shows. A cache the driver refuses is a
+            // miss: the pipeline is made without one.
+            if let Ok(cache) = unsafe { device.create_pipeline_cache(&cache_info, None) } {
+                kept = Some(KeepPipeline {
+                    cache,
+                    key,
+                    seeded: seed.len(),
+                });
+            }
+        }
+        let cache = kept
+            .as_ref()
+            .map_or(vk::PipelineCache::null(), |kept| kept.cache);
         // SAFETY: the module, the layout and the cache are the device's, and the specialization
         // gives each of the kernel's constants a 4-byte value.
         let made = unsafe { device.create_compute_pipelines(cache, &[info], None) };
+        if let Some(kept) = kept {
+            if made.is_ok() && core.caches.take_pending() {
+                core.reaper.give(Job::KeepPipeline(kept));
+            } else {
+                // SAFETY: no pipeline is being made from the cache.
+                unsafe { device.destroy_pipeline_cache(kept.cache, None) };
+            }
+        }
         let pipeline = made.map_err(|(_, result)| Error::Vulkan {
             call: "vkCreateComputePipelines",
             result,
         })?[0];
         core.counters.count(Metric::PipelinesCreated);
         core.counters.rise(Gauge::Pipelines);
-        if core.caches.made() {
-            core.reaper.wake();
-        }
         Ok(pipeline)
     }
 

@@ -2255,6 +2255,7 @@ field	metal2vulkan-rt::ComputePipelineDescriptor.threadgroup_size_is_multiple_of
 field	metal2vulkan-rt::DeviceOptions.block_mappings	pub block_mappings: Option<Arc<dyn BlockMappings>>
 field	metal2vulkan-rt::DeviceOptions.extensions	pub extensions: Vec<DeviceExtension>
 field	metal2vulkan-rt::DeviceOptions.features	pub features: Vec<ConsumerFeature>
+field	metal2vulkan-rt::DeviceOptions.pipeline_cache_cap	pub pipeline_cache_cap: Option<u64>
 field	metal2vulkan-rt::DeviceOptions.pipeline_cache_dir	pub pipeline_cache_dir: Option<PathBuf>
 field	metal2vulkan-rt::FunctionDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan-rt::FunctionDescriptor.function	pub function: Function
@@ -2282,6 +2283,7 @@ field	metal2vulkan-rt::IndexGrant.first	pub first: u32
 field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
 field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
 field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
+field	metal2vulkan-rt::Metrics.cache_bytes_written	pub cache_bytes_written: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_max_nanos	pub commit_lock_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.commit_lock_wait_nanos	pub commit_lock_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_nanos: u64

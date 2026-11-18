@@ -28,8 +28,9 @@ device against the floor below.
   floor's first. The consumer names an extension's dependencies too. It names the core Vulkan
   features its own work needs as `ConsumerFeature`s (`SamplerYcbcrConversion` for now): the device
   enables each one it reports, once, and `Device::features` lists those enabled. It names the
-  directory the device keeps its compiled kernels in, `pipeline_cache_dir` (see "The cache
-  directory").
+  directory the device keeps its compiled kernels in, `pipeline_cache_dir`, and the most bytes
+  they take, `pipeline_cache_cap` (see "The cache directory"). With `None`, every boot lowers every
+  kernel and compiles every pipeline cold, so a consumer should pass a directory.
 - `Device::raw` gives the instance, physical device, device and queue family handles, and
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock.
   The runtime keeps owning every handle.
@@ -41,7 +42,7 @@ The runtime runs four threads per device: the block-maker, the submit thread, th
 thread, and the reaper, which frees the semaphores and command pools the others give up, one at a
 time, so no driver free runs on the completion thread and a submission waits behind at most one,
 lowers the compute pipeline states' emulated-SIMD-group variants after their creation returned,
-and writes the pipeline data to the cache directory when it is due.
+and writes each new `VkPipeline`'s data to the cache directory.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
@@ -696,25 +697,35 @@ keeps two things in, for compute pipeline states:
   its lowering inputs (the variant), the device profile's fingerprint and the translator's
   semantics version. A state whose lowering is there reads it in place of lowering
   (`Metrics::translations_loaded`, beside `Metrics::translations`); a variant the translator
-  refused is kept too. The files take at most 256 MiB; past it the least recently used go.
-- `pipelines-<pipelineCacheUUID>`: the `VkPipelineCache` data, which the driver keys by each
-  pipeline's module and specialization. Every `VkPipeline` is made through the device's
-  `VkPipelineCache`, which starts from this file. The reaper writes it once a `VkPipeline` was
-  made and 10 seconds have passed since the last write, and the device's end writes it a last
-  time. Data past 256 MiB is not written, and a file past it is not read: the cache starts empty.
+  refused is kept too.
+- `pipelines/<pipelineCacheUUID>/`: one file per `VkPipeline`, named by a SHA-256 over everything
+  its creation takes (the module's SPIR-V and entry point, its stage's flags and required subgroup
+  size, its specialization and the runtime's pipeline layout). A `VkPipeline` is made through a
+  `VkPipelineCache` of its own, started from its file where there is one. The reaper then reads
+  the cache's data and writes it as the file, unless the data is no longer than the file's (the
+  pipeline came from it), and destroys the cache, so a pipeline's creation writes nothing on the
+  calling thread. At most 64 caches wait for the reaper; past that a pipeline's data is not
+  written, and its next creation is a miss.
+
+The files of both kinds take at most `DeviceOptions::pipeline_cache_cap` bytes together (512 MiB
+where it is `None`); past it the least recently used go first. A file's use is its time on disk,
+moved forward when a use finds it more than an hour old, so the order holds across runs.
+`Metrics::cache_bytes_written` counts the bytes the device wrote there.
 
 Each write is a temporary file renamed over its name, and each file checks itself (the
 translator's self-checking encoding, the pipeline data's checksum), so a file cut short is a
-miss. A failed read or write is a miss too, and never fails a call. Devices open on one directory
-share its files, each keeping the cap over the files it knows. With no directory, nothing is kept
-on disk; the `VkPipelineCache` still serves the device's own pipelines.
+miss. A failed read or write is a miss too, and never fails a call. Devices open on one
+directory, in one process or several, share its files, each keeping the cap over the files it
+knows: those there when it was made, and those it wrote or read since; a file another removed is
+a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is made without a
+`VkPipelineCache`.
 
 ### Known gaps of pipeline states
 
 - No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it, but
   the emulated-SIMD-group variant's lowering on the reaper: a state reads only its lowerings from
   the cache directory, and each `VkPipeline` past the first tile is made at its first dispatch,
-  through the pipeline data.
+  from its file where there is one.
 - A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
   its plain module). For the observing kernel the device tests run, a grid template over
   threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole creation 2.7 to
