@@ -251,8 +251,8 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(robustness2.null_descriptor => NullDescriptor),
     // The translator's shaders: 8-, 16- and 64-bit integers, 8- and 16-bit values in buffers,
     // scalar and std430 layout of buffer, uniform and push-constant blocks, and the Vulkan memory
-    // model with device scope for atomics and barriers. Threadgroup memory is a plain array the
-    // shader addresses by byte offset, which needs no feature.
+    // model with device scope for atomics and barriers. Threadgroup memory is implicitly laid
+    // out (plain arrays and scalars), which needs no feature.
     feature!(core.shader_int16 => ShaderInt16),
     feature!(vulkan12.shader_int8 => ShaderInt8),
     feature!(vulkan11.storage_buffer16_bit_access => StorageBuffer16BitAccess),
