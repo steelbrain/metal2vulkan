@@ -12,7 +12,7 @@
 use super::ScratchCache;
 use crate::gpu::{self, DeviceType};
 use crate::replay::{
-    NewRuntime, Player, Report, StreamReader, StreamWriter, Value, WAIT_COMPLETED,
+    Backend, NewRuntime, Player, Report, StreamReader, StreamWriter, Value, WAIT_COMPLETED,
 };
 use crate::ScratchDir;
 use metal2vulkan_devtools::metallib::{metallib, wrap, MtlbFunction};
@@ -65,7 +65,7 @@ fn play(test: &str, path: &Path) -> Report {
     let mut backend = NewRuntime::new(rt_device(cache.path())).unwrap();
     let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
     let (report, ended) = Player::new(&mut backend).play(&mut reader);
-    for line in report.lines() {
+    for line in report.lines().into_iter().chain(backend.lines()) {
         eprintln!("REPLAY {test} {line}");
     }
     ended.unwrap();

@@ -579,7 +579,8 @@ calls played: where
 the play stopped, the stopping call is the next), the new runtime's backend's
 `pipeline I wall_nanos=N kernel=new|again` for each compute pipeline state it made, in order (the
 making's wall time, and whether no state of another specialization of the kernel, a library's
-function by name, was made before), `cut SEGMENT OFFSET` where the last segment ends
+function by name, was made before), its `skipped render states N, the first #ID: WHY` where it
+skipped any (`ID` the first one's object and `WHY` the runtime's answer), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute
 pipeline states whose `gpuResourceID` the player asked, which the new runtime does not give),

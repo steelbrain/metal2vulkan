@@ -130,8 +130,9 @@ impl NewRuntime {
         });
         match made {
             Ok(state) => unaddressed(Object::RenderPipeline(state)),
-            Err(rt::Error::Unsupported(_) | rt::Error::Translation(_)) => {
+            Err(error @ (rt::Error::Unsupported(_) | rt::Error::Translation(_))) => {
                 self.skips.render_states += 1;
+                (self.skips.first_render_state).get_or_insert((call.result, error.to_string()));
                 unaddressed(Object::Skipped)
             }
             Err(error) => Err(failed(call)(error)),

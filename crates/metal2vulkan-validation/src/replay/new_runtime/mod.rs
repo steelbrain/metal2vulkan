@@ -34,6 +34,8 @@ struct Skips {
     objects: u64,
     /// Render pipeline states the runtime answers with a typed gap or the translator refuses.
     render_states: u64,
+    /// The first such state's object id and the runtime's answer, for the report's lines.
+    first_render_state: Option<(u64, String)>,
     /// Dispatches that bind a skipped object.
     dispatches: u64,
     /// Draws whose pipeline state, or a buffer or texture bound to either stage, is a skipped
@@ -1752,6 +1754,12 @@ impl Backend for NewRuntime {
                 );
             }
             lines.push(line);
+        }
+        if let Some((at, why)) = &self.skips.first_render_state {
+            lines.push(format!(
+                "skipped render states {}, the first #{at}: {why}",
+                self.skips.render_states
+            ));
         }
         lines.push(self.unwritten.line());
         lines
