@@ -789,6 +789,35 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A command buffer dropped before its commit leaves its slot's queries as it found them,
+    /// reset, and the next command buffer takes the slot again while two others of the queue run,
+    /// with no second reset (the validation layer reports a reset of a query not available while
+    /// work naming its pool runs), and has its own GPU times.
+    #[test]
+    fn every_device_takes_again_the_slot_of_a_command_buffer_that_never_ran() {
+        each_device("command_slot_again", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queue = queue(&device);
+            behind_two(name, &device, &queue, |running, _| {
+                drop(queue.command_buffer().expect("a command buffer"));
+                let again = queue.command_buffer().expect("a command buffer");
+                let checked = running.iter().all(|command_buffer| {
+                    command_buffer.status() == CommandBufferStatus::Scheduled
+                });
+                fill(&again, &buffer, 5);
+                again.commit().expect("a commit");
+                finished(name, &again);
+                assert_eq!(again.status(), CommandBufferStatus::Completed, "{name}");
+                assert_eq!(word(&buffer), 5, "{name}");
+                let (start, end) = (again.gpu_start_time(), again.gpu_end_time());
+                assert!(0 < start && start < end, "{name}: {start} {end}");
+                checked
+            });
+            drop((buffer, arena, queue, device));
+        });
+    }
+
     /// `send_now`, the wait hint, from another thread: a command buffer held in a group behind two
     /// running submissions goes at once, and the call returns while they still run. A call for a
     /// command buffer already submitted or completed, one not committed, or another queue's makes

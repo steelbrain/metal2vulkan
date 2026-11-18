@@ -181,11 +181,22 @@ pub(crate) struct Pending {
     pub(crate) handlers: Handlers,
 }
 
+impl Pending {
+    /// How many of its slot's two queries the segments it has passed to the GPU write, the start
+    /// first: the start in the first segment with commands, the end in the last segment, which
+    /// its commit gave commands.
+    pub(crate) fn stamps_written(&self) -> u32 {
+        let start =
+            (self.gpu.segments[..self.next].iter()).any(|segment| segment.command.is_some());
+        let end = self.next == self.gpu.segments.len();
+        u32::from(start) + u32::from(end)
+    }
+}
+
 impl CommandBuffer {
-    /// A new command buffer of `queue`, which gave it `slot`, whose queries it resets.
+    /// A new command buffer of `queue`, which gave it `slot`, whose two queries are reset.
     pub(crate) fn new(queue: Arc<QueueInner>, device: Device, slot: u32) -> CommandBuffer {
         let stamps = (queue.stamps.pool, Stamps::first(slot));
-        times::reset(&device.core().device, stamps.0, stamps.1);
         CommandBuffer {
             inner: Arc::new(CbInner {
                 queue,
@@ -777,7 +788,7 @@ pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
 
 /// On the completion thread: retires a command buffer that completed (`error` None), with its GPU
 /// times where they were read, or ended, recycling its recorder and giving up its blocks and its
-/// place in the queue, then runs its handlers.
+/// place in the queue with the `written` of its two queries reset, then runs its handlers.
 pub(crate) fn retire(
     core: &Core,
     inner: Arc<CbInner>,
@@ -785,6 +796,7 @@ pub(crate) fn retire(
     handlers: Handlers,
     error: Option<CommandBufferError>,
     gpu_times: Option<(u64, u64)>,
+    written: u32,
 ) {
     {
         let mut state = lock(&inner.state);
@@ -813,6 +825,12 @@ pub(crate) fn retire(
     }
     ring.give_back(core);
     drop((segments, blocks, pipelines, textures, samplers));
+    times::reset(
+        &core.device,
+        inner.queue.stamps.pool,
+        Stamps::first(inner.slot),
+        written,
+    );
     inner.queue.release(inner.slot);
     let handle = CommandBuffer { inner };
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {
@@ -826,8 +844,9 @@ pub(crate) fn retire(
 impl Drop for CbInner {
     fn drop(&mut self) {
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
-        // A command buffer never committed gives back its recorder and its place in the queue; a
-        // committed one did so when it retired.
+        // A command buffer never committed gives back its recorder and its place in the queue,
+        // whose queries no submission wrote, so they stay reset; a committed one did so when it
+        // retired.
         if let Some(Building { device, gpu, .. }) = state.building.take() {
             let core = device.core();
             if let Some(recorder) = gpu.recorder {

@@ -259,8 +259,8 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan13.robust_image_access => RobustImageAccess),
     // Submission, barriers and render passes.
     feature!(vulkan12.timeline_semaphore),
-    // GPU times: a command buffer's two timestamp queries reset on the host as it takes its slot,
-    // so no command buffer the GPU runs resets a query. Vulkan 1.2 requires it.
+    // GPU times: a command buffer's two timestamp queries reset on the host as it retires, so no
+    // command buffer the GPU runs resets a query. Vulkan 1.2 requires it.
     feature!(vulkan12.host_query_reset),
     feature!(vulkan13.synchronization2 => Synchronization2),
     feature!(vulkan13.dynamic_rendering),

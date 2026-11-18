@@ -190,6 +190,7 @@ impl Stamps {
         let pool = unsafe { core.device.create_query_pool(&info, None) }
             .map_err(Error::vulkan("vkCreateQueryPool"))?;
         lock(&core.query_pools).push(pool);
+        reset(&core.device, pool, 0, slots.saturating_mul(2));
         Ok(Stamps { pool })
     }
 
@@ -199,19 +200,26 @@ impl Stamps {
     }
 }
 
-/// Resets a slot's two queries on the host (`hostQueryReset`, in the floor), as a command buffer
-/// takes the slot: before any submission that names them, which a host reset happens before
-/// ("anything that happened-before" `vkQueueSubmit2` is in its first synchronization scope), so no
-/// command buffer the GPU runs resets a query.
-pub(crate) fn reset(device: &ash::Device, pool: vk::QueryPool, first: u32) {
-    // SAFETY: the device enables `hostQueryReset`; both queries are in the pool; the slot's
-    // previous command buffer retired, so no submitted command that names them is pending, and
-    // its readback finished before it gave the slot back.
-    unsafe { device.reset_query_pool(pool, first, 2) };
+/// Resets `count` queries from `first` on the host (`hostQueryReset`, in the floor): every query
+/// as the pool is made, and as a command buffer retires, those of its slot's two that a
+/// submission wrote, so a free slot's queries are always reset. A reset happens before any later
+/// submission that names them ("anything that happened-before" `vkQueueSubmit2` is in its first
+/// synchronization scope), so no command buffer the GPU runs resets a query. A query no
+/// submission wrote (its command buffer ended or was dropped before its commands went) is still
+/// reset, so it is not reset again: the validation layer (Vulkan SDK 1.4.363) reports a reset of
+/// a query not available while other work naming the pool is pending.
+pub(crate) fn reset(device: &ash::Device, pool: vk::QueryPool, first: u32, count: u32) {
+    if count == 0 {
+        return;
+    }
+    // SAFETY: the device enables `hostQueryReset`; the queries are in the pool; no submitted
+    // command that names them is pending (the pool is new, or the command buffer that wrote them
+    // retired), and their readback, on the thread that resets them, finished first.
+    unsafe { device.reset_query_pool(pool, first, count) };
 }
 
 /// Records, at the start of a command buffer's first `VkCommandBuffer`, its start timestamp. Its
-/// two queries were reset on the host as it took its slot ([`reset`]).
+/// two queries are reset: a free slot's always are ([`reset`]).
 pub(crate) fn write_start(
     device: &ash::Device,
     command: vk::CommandBuffer,

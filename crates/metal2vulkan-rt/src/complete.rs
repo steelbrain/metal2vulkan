@@ -75,6 +75,8 @@ enum Item {
         gpu: Gpu,
         handlers: Handlers,
         error: Option<CommandBufferError>,
+        /// How many of its two queries a submission wrote.
+        written: u32,
     },
     Upload(Upload),
 }
@@ -220,6 +222,7 @@ impl Done {
             });
         }
         for (cb, pending, error) in finished {
+            let written = pending.stamps_written();
             let Pending { gpu, handlers, .. } = pending;
             state.flight.push_back(Retiree {
                 value,
@@ -228,6 +231,7 @@ impl Done {
                     gpu,
                     handlers,
                     error,
+                    written,
                 },
             });
         }
@@ -243,6 +247,7 @@ impl Done {
         }
         let mut state = self.lock();
         for (cb, pending, error) in ended {
+            let written = pending.stamps_written();
             let Pending {
                 value,
                 gpu,
@@ -256,6 +261,7 @@ impl Done {
                     gpu,
                     handlers,
                     error: Some(error),
+                    written,
                 },
             };
             if value == 0 {
@@ -308,7 +314,8 @@ impl Retiree {
                 gpu,
                 handlers,
                 error,
-            } => command::retire(core, cb, gpu, handlers, error, times),
+                written,
+            } => command::retire(core, cb, gpu, handlers, error, times, written),
             Item::Upload(upload) => upload.retire(core),
         }
     }
