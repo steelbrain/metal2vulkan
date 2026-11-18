@@ -87,11 +87,9 @@ mod on_device {
             }
             println!("over: {name}: minimum linear texture alignments {answers:?}");
             let align = answers[1].1;
-            assert_eq!(
-                device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm),
-                Ok(align),
-                "{name}: asked again"
-            );
+            let again = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(again, align, "{name}: asked again");
 
             let counters = device.counters();
             let core = device.core();

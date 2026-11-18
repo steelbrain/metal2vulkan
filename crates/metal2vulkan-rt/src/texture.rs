@@ -258,9 +258,9 @@ pub(crate) struct Image {
 /// What holds the memory an image lies in that is not its own.
 enum Under {
     /// A heap texture's block.
-    Heap(Arc<Block>),
+    Heap { _block: Arc<Block> },
     /// The buffer a texture over a buffer lies over: its block, or its device copy.
-    Buffer(Buffer),
+    Buffer { _buffer: Buffer },
 }
 
 impl Image {
@@ -638,7 +638,7 @@ impl Device {
                     heap,
                     offset,
                 };
-                (bind, Some(Under::Heap(block)))
+                (bind, Some(Under::Heap { _block: block }))
             }
             Source::Over(buffer, offset, bytes_per_row) => {
                 // The bytes shaders reach: a Managed buffer's device copy, where it has one.
@@ -653,7 +653,10 @@ impl Device {
                     at: at + offset,
                     bytes_per_row,
                 };
-                (bind, Some(Under::Buffer(buffer.clone())))
+                let under = Under::Buffer {
+                    _buffer: buffer.clone(),
+                };
+                (bind, Some(under))
             }
         };
         // SAFETY: the device is live, and `plan` was checked against its image format query; a
