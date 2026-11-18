@@ -1207,7 +1207,7 @@ const-value	metal2vulkan-rt::floor::ATTACHMENT_READ_EXTENSIONS	&[ash::ext::attac
 const-value	metal2vulkan-rt::floor::BUFFER_USAGE	vk::BufferUsageFlags::from_raw(vk::BufferUsageFlags::TRANSFER_SRC.as_raw() | vk::BufferUsageFlags::TRANSFER_DST.as_raw() | vk::BufferUsageFlags::UNIFORM_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_TEXEL_BUFFER.as_raw() | vk::BufferUsageFlags::UNIFORM_BUFFER.as_raw() | vk::BufferUsageFlags::STORAGE_BUFFER.as_raw() | vk::BufferUsageFlags::INDEX_BUFFER.as_raw() | vk::BufferUsageFlags::VERTEX_BUFFER.as_raw() | vk::BufferUsageFlags::INDIRECT_BUFFER.as_raw() | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS.as_raw())
 const-value	metal2vulkan-rt::floor::DEVICE_EXTENSIONS	&[ash::khr::swapchain::NAME, ash::ext::robustness2::NAME, ash::ext::calibrated_timestamps::NAME]
 const-value	metal2vulkan-rt::floor::INSTANCE_EXTENSIONS	&[ash::khr::surface::NAME]
-const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME]
+const-value	metal2vulkan-rt::floor::OPTIONAL_EXTENSIONS	&[ash::khr::shader_maximal_reconvergence::NAME, ash::khr::shader_subgroup_uniform_control_flow::NAME, ash::khr::portability_subset::NAME, ash::khr::vertex_attribute_divisor::NAME, ash::ext::vertex_attribute_divisor::NAME]
 const-value	metal2vulkan-rt::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr::portability_enumeration::NAME]
 const-value	metal2vulkan-rt::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-rt::floor::VERSION	vk::API_VERSION_1_3
@@ -2489,6 +2489,7 @@ field	metal2vulkan-rt::floor::Capabilities.shared_int64_atomics	pub shared_int64
 field	metal2vulkan-rt::floor::Capabilities.storage_read_without_format	pub storage_read_without_format: bool
 field	metal2vulkan-rt::floor::Capabilities.subgroup_uniform_control_flow	pub subgroup_uniform_control_flow: bool
 field	metal2vulkan-rt::floor::Features.core	pub core: vk::PhysicalDeviceFeatures
+field	metal2vulkan-rt::floor::Features.divisor	pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>
 field	metal2vulkan-rt::floor::Features.feedback_loop	pub feedback_loop: vk::PhysicalDeviceAttachmentFeedbackLoopLayoutFeaturesEXT<'static>
 field	metal2vulkan-rt::floor::Features.feedback_loop_dynamic	pub feedback_loop_dynamic: vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>
 field	metal2vulkan-rt::floor::Features.maximal_reconvergence	pub maximal_reconvergence: vk::PhysicalDeviceShaderMaximalReconvergenceFeaturesKHR<'static>
@@ -13570,6 +13571,7 @@ variant	metal2vulkan-rt::DispatchType::Serial	Serial
 variant	metal2vulkan-rt::DrawKind::AttachmentFormats	AttachmentFormats
 variant	metal2vulkan-rt::DrawKind::AttachmentRead	AttachmentRead
 variant	metal2vulkan-rt::DrawKind::DepthTest	DepthTest
+variant	metal2vulkan-rt::DrawKind::DividedBaseInstance	DividedBaseInstance
 variant	metal2vulkan-rt::DrawKind::Points	Points
 variant	metal2vulkan-rt::DrawKind::Viewport	Viewport
 variant	metal2vulkan-rt::Error::BelowFloor	BelowFloor(BelowFloor)
