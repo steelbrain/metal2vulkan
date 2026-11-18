@@ -280,6 +280,13 @@ after a quiesce.
   at its idle age, whatever the queues are doing, so a submit can meet a free and wait for the
   rest of it. `Metrics::allocations_freed` counts the frees, and
   `Metrics::submissions_during_frees` the submits made while one was in progress.
+- NVIDIA's Linux driver allocates host-visible memory at about 0.14 ms per MiB on an RTX 3090 and
+  0.2 ms per MiB on an RTX 2080, in every form we tried (plain, with a device address, dedicated,
+  cached or not), against about 0.03 ms per MiB for device-local memory on the 3090. A take longer
+  than the pool's 16 MiB allocations allocates on the calling thread and pays it there: in one
+  consumer's replay stream on the 3090, six Shared takes of 547 MiB took about 70 ms each, and its
+  Shared takes past 16 MiB took 1.46 s of the stream's 210 s. The pool keeps no memory to avoid
+  it; `Metrics::consumer_allocation_nanos` counts it.
 - On a full discrete card a Private block the consumer takes goes to another memory type, host
   memory where the card has no other device-local type, and the kernels that read a Managed
   buffer's device copy placed there read it across the host link:
