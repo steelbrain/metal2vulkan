@@ -40,12 +40,15 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// The device extensions device creation enables where the device lists them: the SIMD groups'
 /// reconvergence modes, each for the optional features of its own, the portability subset, which
 /// Vulkan requires enabled where a device lists it, with the portability features the floor asks
-/// of such a device, and the vertex attribute divisor, for the step-rate feature of its own.
+/// of such a device, and the vertex attribute divisor's two extensions, for the step-rate feature
+/// of their own: the KHR, and the EXT it was promoted from, whose feature and pipeline structures
+/// are the same and which a device may list alone.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
     ash::khr::portability_subset::NAME,
     ash::khr::vertex_attribute_divisor::NAME,
+    ash::ext::vertex_attribute_divisor::NAME,
 ];
 
 /// The device extensions of a draw that reads, through a texture, an attachment its own pass
@@ -72,6 +75,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::KhrPortabilitySubset)
     } else if name == ash::khr::vertex_attribute_divisor::NAME {
         Some(VkExtension::KhrVertexAttributeDivisor)
+    } else if name == ash::ext::vertex_attribute_divisor::NAME {
+        Some(VkExtension::ExtVertexAttributeDivisor)
     } else {
         None
     }
@@ -196,8 +201,9 @@ pub struct Features {
     /// `VK_EXT_attachment_feedback_loop_dynamic_state`: likewise.
     pub feedback_loop_dynamic:
         vk::PhysicalDeviceAttachmentFeedbackLoopDynamicStateFeaturesEXT<'static>,
-    /// `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR`, of `VK_KHR_vertex_attribute_divisor`:
-    /// read and enabled only where the device lists it, and then only the step-rate feature.
+    /// `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR`, of `VK_KHR_vertex_attribute_divisor`
+    /// and `VK_EXT_vertex_attribute_divisor` (the same structure): read and enabled only where the
+    /// device lists one of them, and then only the step-rate feature.
     pub divisor: vk::PhysicalDeviceVertexAttributeDivisorFeaturesKHR<'static>,
 }
 
@@ -650,7 +656,8 @@ unsafe fn query(
         let feedback_loop_listed = listed(ash::ext::attachment_feedback_loop_layout::NAME);
         let feedback_loop_dynamic_listed =
             listed(ash::ext::attachment_feedback_loop_dynamic_state::NAME);
-        let divisor_listed = listed(ash::khr::vertex_attribute_divisor::NAME);
+        let divisor_listed = listed(ash::khr::vertex_attribute_divisor::NAME)
+            || listed(ash::ext::vertex_attribute_divisor::NAME);
 
         let Features {
             core,

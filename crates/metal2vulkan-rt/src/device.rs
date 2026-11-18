@@ -364,7 +364,9 @@ impl Device {
                 .push_next(&mut feedback_loop)
                 .push_next(&mut feedback_loop_dynamic);
         }
-        if enabled(ash::khr::vertex_attribute_divisor::NAME) {
+        if enabled(ash::khr::vertex_attribute_divisor::NAME)
+            || enabled(ash::ext::vertex_attribute_divisor::NAME)
+        {
             features = features.push_next(&mut divisor);
         }
         // SAFETY: as for the floor check.

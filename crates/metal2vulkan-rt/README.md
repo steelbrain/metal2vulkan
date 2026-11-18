@@ -1433,6 +1433,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_attachment_feedback_loop_layout` | device, with the attachment reads | a draw's read of an attachment of its own pass through a texture, in the feedback layout (below) |
 | `VK_EXT_attachment_feedback_loop_dynamic_state` | device, with the attachment reads | the feedback loop's enable as dynamic state of every render pipeline |
 | `VK_KHR_vertex_attribute_divisor` | device, where listed | a vertex layout stepped per instance at a rate above 1, through the step-rate feature below |
+| `VK_EXT_vertex_attribute_divisor` | device, where listed | the same, on a device that lists only this extension, which the KHR was promoted from with the same feature and pipeline structures |
 
 ### Features
 
@@ -1490,10 +1491,11 @@ extension offers each of them by Vulkan's definition and is not asked.
 ### Step rates
 
 Metal's per-instance step at a rate above 1 has one form, a vertex binding's divisor. Where the
-device lists `VK_KHR_vertex_attribute_divisor` and reports the feature below, device creation
-enables both, and the translator builds the step where the rate is within
+device lists `VK_KHR_vertex_attribute_divisor` or `VK_EXT_vertex_attribute_divisor` and reports
+the feature below, device creation enables them, and the translator builds the step where the rate is within
 `maxVertexAttribDivisor`. Elsewhere it refuses the step at creation (`VertexStepRate`). Where
-the device does not report `supportsNonZeroFirstInstance`, a draw through such a state at a base
+the device does not report `supportsNonZeroFirstInstance` (the EXT has no such property, and
+its devices take `firstInstance` 0 alone), a draw through such a state at a base
 instance other than 0 is refused (render encoders' known gaps); no other feature or answer
 changes.
 

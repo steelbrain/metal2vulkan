@@ -887,9 +887,10 @@ fn the_translator_sees_the_portability_subset_device_creation_enables() {
         .contains(&VkFeature::ImageViewFormatSwizzle));
 }
 
-/// A device that lists the vertex attribute divisor and reports the step-rate feature is given it,
-/// and the translator sees both; the zero divisor beside it is not enabled, and a device that
-/// lists the extension without the feature is given the extension alone.
+/// A device that lists a vertex attribute divisor extension, the KHR or only the EXT, and reports
+/// the step-rate feature is given it, and the translator sees both; the zero divisor beside it is
+/// not enabled, and a device that lists the extension without the feature is given the extension
+/// alone.
 #[test]
 fn the_step_rate_feature_is_enabled_where_reported() {
     use crate::floor::shader_enables;
@@ -923,6 +924,31 @@ fn the_step_rate_feature_is_enabled_where_reported() {
     assert!(enables
         .extensions
         .contains(&VkExtension::KhrVertexAttributeDivisor));
+
+    let older = ash::ext::vertex_attribute_divisor::NAME;
+    let mut device = at_the_floor();
+    device.extensions.push(older.to_owned());
+    device
+        .features
+        .divisor
+        .vertex_attribute_instance_rate_divisor = vk::TRUE;
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert!(capabilities.extensions.contains(&older));
+    assert!(!capabilities.extensions.contains(&divisor));
+    assert_eq!(
+        capabilities
+            .features
+            .divisor
+            .vertex_attribute_instance_rate_divisor,
+        vk::TRUE
+    );
+    let enables = shader_enables(&capabilities);
+    assert!(enables
+        .features
+        .contains(&VkFeature::VertexAttributeInstanceRateDivisor));
+    assert!(enables
+        .extensions
+        .contains(&VkExtension::ExtVertexAttributeDivisor));
 }
 
 /// A set layout the created device does not support is named by its set.
@@ -1204,7 +1230,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
                 .push_next(&mut feedback_loop)
                 .push_next(&mut feedback_loop_dynamic);
         }
-        if enabled(ash::khr::vertex_attribute_divisor::NAME) {
+        if enabled(ash::khr::vertex_attribute_divisor::NAME)
+            || enabled(ash::ext::vertex_attribute_divisor::NAME)
+        {
             features = features.push_next(&mut divisor);
         }
         let extensions: Vec<*const c_char> = capabilities
