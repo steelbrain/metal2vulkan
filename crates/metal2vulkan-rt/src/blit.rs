@@ -135,6 +135,11 @@ impl BlitCommandEncoder {
         building.keep_texture(source);
         building.keep_texture(destination);
         let command = building.ordered_command()?;
+        // Marked after `ordered_command`, as in `buffer_copy`: the host reads a texture over a
+        // Shared buffer's bytes in the buffer.
+        if destination.host_reads() {
+            building.wrote_host();
+        }
         let (read, write) = (
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -274,7 +279,11 @@ impl BlitCommandEncoder {
         let command = building.ordered_command()?;
         // Marked after `ordered_command`, which may have split the recording at a signal: the
         // mark is the copy's own segment's.
-        if !into_image && buffer.is_shared() {
+        let host = match into_image {
+            true => texture.host_reads(),
+            false => buffer.is_shared(),
+        };
+        if host {
             building.wrote_host();
         }
         use vk::AccessFlags2 as Access;

@@ -250,9 +250,17 @@ pub(crate) struct Image {
     first: vk::ImageLayout,
     /// An upload recorded its move from `first` to `home`. Read and set under the work lock.
     homed: AtomicBool,
-    /// The block the image's memory is in, held while anything holds the image: a heap
-    /// texture's, or the buffer's a texture over it lies in in place.
-    _block: Option<Arc<Block>>,
+    /// What holds the memory the image lies in, where it is not the image's own, while anything
+    /// holds the image.
+    _under: Option<Under>,
+}
+
+/// What holds the memory an image lies in that is not its own.
+enum Under {
+    /// A heap texture's block.
+    Heap(Arc<Block>),
+    /// The buffer a texture over a buffer lies over: its block, or its device copy.
+    Buffer(Buffer),
 }
 
 impl Image {
@@ -630,18 +638,22 @@ impl Device {
                     heap,
                     offset,
                 };
-                (bind, Some(block))
+                (bind, Some(Under::Heap(block)))
             }
             Source::Over(buffer, offset, bytes_per_row) => {
-                let block = Arc::clone(buffer.held().0);
+                // The bytes shaders reach: a Managed buffer's device copy, where it has one.
+                let (memory, class, at) = match buffer.held() {
+                    (_, Some(copy)) => (copy.memory(), MemoryClass::Private, copy.offset()),
+                    (block, None) => (&block.memory, block.memory.class, buffer.offset()),
+                };
                 let bind = Bind::InPlace {
-                    memory: block.memory.device_memory(),
-                    memory_type: core.memory_type(block.memory.class),
-                    block_len: block.memory.len,
-                    at: buffer.offset() + offset,
+                    memory: memory.device_memory(),
+                    memory_type: core.memory_type(class),
+                    block_len: memory.len,
+                    at: at + offset,
                     bytes_per_row,
                 };
-                (bind, Some(block))
+                (bind, Some(Under::Buffer(buffer.clone())))
             }
         };
         // SAFETY: the device is live, and `plan` was checked against its image format query; a
@@ -669,7 +681,7 @@ impl Device {
             aspects: plan.aspects,
             first,
             homed: AtomicBool::new(false),
-            _block: block,
+            _under: block,
         });
         let inner = TextureInner {
             device: self.clone(),
@@ -781,8 +793,8 @@ fn check_places(
 /// Checks a texture over `buffer` at `offset`, rows `bytes_per_row` apart: rows a whole number of
 /// texels apart and at least a row, an offset a whole number of texels in, and every texel
 /// inside the buffer; and that it is a texture the runtime holds in place: 2D of one level,
-/// sample and slice, of a color format of one texel an element, over a buffer of no device copy
-/// in memory that did not spill, of a format and usage the device makes linear images of, with
+/// sample and slice, of a color format of one texel an element, in memory that did not spill,
+/// of a format and usage the device makes linear images of, with
 /// every format feature its optimal image has that the usage uses.
 fn check_over(
     core: &Core,
@@ -823,7 +835,7 @@ fn check_over(
         }));
     }
     let (block, copy) = buffer.held();
-    if copy.is_some() || block.memory.spilled() {
+    if copy.is_none() && block.memory.spilled() {
         return Err(gap());
     }
     let max = linear_extent(core, shape, plan).ok_or_else(gap)?;
@@ -2193,7 +2205,9 @@ impl Texture {
     ///
     /// A Managed texture with named bytes ([`Device::new_managed_texture`]) takes them there
     /// instead, as Metal writes a Managed texture's CPU copy, and then
-    /// [`Texture::upload_region`] copies them into the image; nothing is staged or counted.
+    /// [`Texture::upload_region`] copies them into the image; nothing is staged or counted. A
+    /// texture over a buffer ([`Buffer::new_texture`]) takes them in the buffer, which is its
+    /// image's memory; nothing is staged, copied or counted.
     ///
     /// Err: [`Refusal::TextureBytesPrivate`]; [`Refusal::TextureRegion`] for a level, slice or
     /// region outside the texture or off its format's block grid;
@@ -2235,11 +2249,17 @@ impl Texture {
                         .copy_to_nonoverlapping(host.add(to), len)
                 }
             }
-            return match inner.over() {
-                None => self.upload_region(region, level, slice),
-                // The image's memory is the bytes.
-                Some(_) => Ok(()),
+            let Some(buffer) = inner.over() else {
+                return self.upload_region(region, level, slice);
             };
+            // The image lies in the bytes shaders reach: a Managed buffer's device copy takes the
+            // rows' span, as `did_modify_range` copies it; any other buffer is the bytes.
+            let [x, y, _] = region.origin.map(u64::from);
+            let [width, height, _] = region.size.map(u64::from);
+            let texel = u64::from(copy.unit.bytes);
+            let start = place.offset + y * place.bytes_per_row + x * texel;
+            let span = (height - 1) * place.bytes_per_row + width * texel;
+            return buffer.did_modify_range(start, span);
         }
         let core = inner.device.core();
         let stage = core.work.stage(core, copy.len(), false)?;
@@ -2333,7 +2353,9 @@ impl Texture {
     ///
     /// A Managed texture with named bytes ([`Device::new_managed_texture`]) reads them there, as
     /// Metal reads a Managed texture's CPU copy, with no submission or wait; the GPU's writes reach
-    /// them only by a synchronize.
+    /// them only by a synchronize. A texture over a buffer ([`Buffer::new_texture`]) reads them in
+    /// the buffer, with no submission or wait: the GPU's writes are there once the work that
+    /// wrote them completed.
     ///
     /// Err: as [`Texture::replace_region`]; [`Error::Vulkan`] with `VK_ERROR_DEVICE_LOST` where
     /// the device is lost first.
@@ -2418,20 +2440,24 @@ impl Buffer {
     /// `newTextureWithDescriptor:offset:bytesPerRow:`, at `index` as for
     /// [`Device::new_texture`]: a texture whose texels are the buffer's bytes from `offset`,
     /// rows `bytes_per_row` apart, with the buffer's storage mode whatever the descriptor's. Its
-    /// image is a linear image on the buffer's own memory, made preinitialized so that its move
-    /// home keeps the bytes, in the general layout, where the device lays such an image's rows at
-    /// `bytes_per_row` and the place meets its memory alignment: the GPU and the host then reach
-    /// the same bytes, and nothing is copied. [`Device::minimum_linear_texture_alignment`]
-    /// answers the offset and pitch at which a texture is so. [`Texture::replace_region`] and
-    /// [`Texture::get_bytes`] write and read the buffer's bytes. The texture holds the buffer.
+    /// image is a linear image in the bytes shaders reach (a Managed buffer's device copy, where
+    /// it has one), made preinitialized so that its move home keeps the bytes, in the general
+    /// layout, where the device lays such an image's rows at `bytes_per_row` and the place meets
+    /// its memory alignment: the GPU reaches the buffer's bytes, and nothing is copied that the
+    /// buffer does not copy. [`Device::minimum_linear_texture_alignment`] answers the offset and
+    /// pitch at which a texture is so. [`Texture::replace_region`] writes the buffer's bytes, and
+    /// of a Managed buffer's device copy copies the rows' span into it as
+    /// [`Buffer::did_modify_range`] does; [`Texture::get_bytes`] reads the buffer's bytes, of a
+    /// Managed buffer the consumer's, as Metal reads a Managed texture's CPU copy. The texture
+    /// holds the buffer.
     ///
     /// Err: as [`Device::new_texture`]; [`Refusal::BufferTextureLayout`] for rows that are not a
     /// whole number of texels apart or are closer than a row, an offset that is not a whole
     /// number of texels, or texels past the buffer; [`Gap::TextureOverBuffer`] for a texture the
     /// runtime does not hold in place: other than 2D of one level, sample and slice, of a format
-    /// of other than one color texel an element, over a Managed buffer's device copy or memory
-    /// that spilled, of a format and usage the device makes no linear image of, or where the
-    /// device's linear image lays its rows at another pitch or needs another alignment.
+    /// of other than one color texel an element, over memory that spilled, of a format and usage
+    /// the device makes no linear image of, or where the device's linear image lays its rows at
+    /// another pitch or needs another alignment.
     pub fn new_texture(
         &self,
         descriptor: &TextureDescriptor,
@@ -2440,9 +2466,12 @@ impl Buffer {
         bytes_per_row: u64,
     ) -> Result<Texture, Error> {
         let mut d = *descriptor;
-        d.storage_mode = match self.held().0.memory.class {
-            MemoryClass::Shared => StorageMode::Shared,
-            MemoryClass::Private => StorageMode::Private,
+        d.storage_mode = match self.held() {
+            (_, Some(_)) => StorageMode::Managed,
+            (block, None) => match block.memory.class {
+                MemoryClass::Shared => StorageMode::Shared,
+                MemoryClass::Private => StorageMode::Private,
+            },
         };
         let over = Source::Over(self, offset, bytes_per_row);
         self.device().texture(&d, index, over)

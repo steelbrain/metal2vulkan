@@ -602,8 +602,8 @@ pub enum Gap {
     },
     /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) the runtime
     /// does not hold in place: other than 2D of one level, sample and slice; of a format of
-    /// other than one color texel an element; over a Managed buffer's device copy or a block
-    /// that spilled; of a format and usage the device makes no linear image of; or where the
+    /// other than one color texel an element; over a block that spilled; of a format and usage
+    /// the device makes no linear image of; or where the
     /// device's linear image lays its rows at another pitch than the texture's, or needs an
     /// alignment its place misses. The copy form for those is not built yet.
     ///

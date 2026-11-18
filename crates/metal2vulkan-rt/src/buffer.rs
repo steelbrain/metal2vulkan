@@ -60,6 +60,11 @@ impl DeviceCopy {
         self.block.buffer
     }
 
+    /// The copy block's memory.
+    pub(crate) fn memory(&self) -> &Memory {
+        &self.block
+    }
+
     /// The copy's offset in [`buffer`](Self::buffer).
     pub(crate) fn offset(&self) -> u64 {
         self.place.offset

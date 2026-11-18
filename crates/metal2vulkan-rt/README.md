@@ -257,6 +257,32 @@ made, with no lock, and never rewritten for layouts.
   block off the image's alignment, or a heap range past its block is refused
   (`Refusal::HeapTexturePlace`); the image is never bound outside its heap. The texture holds
   the block, so a released block goes back to the pool only once its textures' images are gone.
+- `Buffer::new_texture(descriptor, index, offset, bytes_per_row)` is
+  `newTextureWithDescriptor:offset:bytesPerRow:`: a texture whose texels are the buffer's bytes
+  from `offset`, rows `bytes_per_row` apart, of the buffer's storage mode. Any pitch of whole texels at least a row long is taken; rows closer than a row or not a
+  whole number of texels apart, an offset that is not a whole number of texels, or texels past
+  the buffer are refused (`Refusal::BufferTextureLayout`). Its image is the device's own linear
+  image, bound at the texture's place in the bytes shaders reach (a Managed buffer's device copy,
+  where it has one), made preinitialized so its move home keeps the bytes, and kept in the general
+  layout: nothing is copied that the buffer does not copy. It is made so where the device's linear image of the texture's extent,
+  format and usage lays its rows at `bytes_per_row` from the image's start
+  (`vkGetImageSubresourceLayout`), the place meets the image's memory alignment and memory type,
+  and the format's linear tiling has every feature of its optimal tiling that the usage uses
+  (copies and blits, sampling and linear filtering, a shader's reads, writes and atomics without
+  a format, rendering and blending). `replace_region` writes the buffer's bytes, and copies the
+  rows' span into a Managed buffer's device copy as `did_modify_range` does; `get_bytes` reads
+  the buffer's bytes, with no submission; a dispatch's use of the texture is a use of the buffer in the
+  hazard sets, and a write to it reaches the host as a write to a Shared buffer does. The texture
+  holds the buffer.
+- `Device::minimum_linear_texture_alignment(pixel_format)` answers
+  `minimumLinearTextureAlignmentForPixelFormat:` from the device's own linear images: the
+  smallest power of two from 16 to 4,096 at which the device lays the rows of a 3-row linear
+  image of each width of 1, 3, 17, 64, 65, 100, 129, 1,000 and 1,920 texels at the row rounded up
+  to it, and of which the image's memory alignment is a factor; the largest over shader read,
+  read and render, and read and write, where the device makes such images; 16 where no
+  candidate holds. Each image is made, read and destroyed, never bound, once per format for the
+  device's life. A texture at an offset in its block and a pitch that are multiples of the
+  answer is in place at the widths tried; the answer promises nothing for other widths.
 - The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
   copy, its pages written then, and kept for the device's life, so no copy allocates memory and
   the host writes resident pages. It is a ring: each copy takes a span at a multiple of 256 bytes,
@@ -300,6 +326,11 @@ made, with no lock, and never rewritten for layouts.
   (`Gap::TextureBytes`).
 - A texture's memory is device-local; where the device has none left, the call fails
   (`Error::Vulkan`).
+- A texture over a buffer that the device's linear image does not hold in place is not made
+  (`Gap::TextureOverBuffer`): one other than 2D of one level, sample and slice; of a depth,
+  stencil or compressed format; over a spilled block; or whose
+  pitch, place, memory type or format features the device's linear image does not meet. The
+  copy form for those is not built yet.
 - Texture views that change what the replay streams' views keep are not built
   (`Gap::TextureView`, naming the kind): another pixel format, another texture type (but a 2D
   view of one slice of a 2D array), some of a cube's faces or a cube array's cubes, and any view

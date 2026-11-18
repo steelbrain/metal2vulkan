@@ -9256,6 +9256,7 @@ method	metal2vulkan-rt::Buffer::contents	pub fn contents(&self) -> Option<NonNul
 method	metal2vulkan-rt::Buffer::did_modify_range	pub fn did_modify_range(&self, start: u64, length: u64) -> Result<(), Error>
 method	metal2vulkan-rt::Buffer::gpu_address	pub fn gpu_address(&self) -> u64
 method	metal2vulkan-rt::Buffer::length	pub fn length(&self) -> u64
+method	metal2vulkan-rt::Buffer::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>, offset: u64, bytes_per_row: u64) -> Result<Texture, Error>
 method	metal2vulkan-rt::Buffer::offset	pub fn offset(&self) -> u64
 method	metal2vulkan-rt::CommandBuffer::add_completed_handler	pub fn add_completed_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::CommandBuffer::add_scheduled_handler	pub fn add_scheduled_handler(&self, handler: impl FnOnce(&CommandBuffer) + Send + 'static) -> Result<(), Error>
@@ -9306,6 +9307,7 @@ method	metal2vulkan-rt::Device::grant_indices	pub fn grant_indices(&self, class:
 method	metal2vulkan-rt::Device::has_unified_memory	pub fn has_unified_memory(&self) -> bool
 method	metal2vulkan-rt::Device::heap_texture_size_and_align	pub fn heap_texture_size_and_align(&self, descriptor: &TextureDescriptor) -> Result<SizeAndAlign, Error>
 method	metal2vulkan-rt::Device::memory_types	pub fn memory_types(&self) -> floor::MemoryTypes
+method	metal2vulkan-rt::Device::minimum_linear_texture_alignment	pub fn minimum_linear_texture_alignment(&self, pixel_format: PixelFormat) -> Result<u64, Error>
 method	metal2vulkan-rt::Device::new	pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error>
 method	metal2vulkan-rt::Device::new_buffer	pub fn new_buffer(&self, block: BlockId, offset: u64, length: u64, zeroed: bool) -> Result<Buffer, Error>
 method	metal2vulkan-rt::Device::new_command_queue	pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error>
@@ -13328,6 +13330,7 @@ variant	metal2vulkan-rt::Gap::TextureBuffer	TextureBuffer
 variant	metal2vulkan-rt::Gap::TextureBytes	TextureBytes { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureCopy	TextureCopy { source: PixelFormat, destination: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureFormat	TextureFormat { pixel_format: PixelFormat }
+variant	metal2vulkan-rt::Gap::TextureOverBuffer	TextureOverBuffer { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Gap::TextureView	TextureView { kind: TextureViewKind }
 variant	metal2vulkan-rt::IndexClass::Sampler	Sampler
 variant	metal2vulkan-rt::IndexClass::StorageTexture	StorageTexture
@@ -13429,6 +13432,7 @@ variant	metal2vulkan-rt::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan-rt::Refusal::BufferCopyLayout	BufferCopyLayout { offset: u64, bytes_per_row: u64, bytes_per_image: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferIndex	BufferIndex { index: u32 }
 variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64, length: u64, block_len: u64 }
+variant	metal2vulkan-rt::Refusal::BufferTextureLayout	BufferTextureLayout { offset: u64, bytes_per_row: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferTooLong	BufferTooLong { length: u64, max: u64 }
 variant	metal2vulkan-rt::Refusal::Committed	Committed
 variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
