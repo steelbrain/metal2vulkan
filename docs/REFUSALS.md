@@ -39,7 +39,7 @@ Columns:
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 40 | 40 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 16 | 16 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -57,7 +57,7 @@ Columns:
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 14 | 8 | 0 | 0 | 18 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
-| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 16 | 0 | 0 | 0 |
+| The new runtime's `Gap` | 0 | 0 | 0 | 0 | 17 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
