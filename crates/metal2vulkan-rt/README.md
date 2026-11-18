@@ -1464,20 +1464,21 @@ or does not check is rebuilt from the generations' names, with young counted ful
   draw reads an attachment through a copy into the image's shadow, which Metal does not make: at
   the pass's first draw that reads the image, at the first after a memory barrier after draws,
   and where a draw reads what the shadow does not hold, the rendering ended and begun again
-  around the copies and their two barriers. Its cost, measured on the UHD 630 in the harness
-  (release; GPU time a pass, the median over four rounds of each round's median) by a pass that
-  loads its `BGRA8Unorm` target, ends for a copy of all of it and begins again, against the same
-  pass without the copy: 39.0 µs a MiB at 1920 × 1080 and 53.5 µs a MiB at 3648 × 2038, and
-  about 3 to 8 µs a copy beyond its bytes. Two replay streams, counted as this form copies them,
-  make 68.7 copies and 298.0 MiB a frame (r3) and 65.5 copies and 93.4 MiB a frame (b3): about 12 to
-  16.5 ms a frame on the UHD 630 for r3 and 4 to 5.5 ms for b3, where no copied target was
-  cleared by its pass. A copy of a target its pass cleared costs more: a pass that clears its
-  target and reads it at its first draw takes 1,118.8 µs at 1920 × 1080 and 4,635.1 µs at
-  3648 × 2038, against 668.5 µs and 2,341.0 µs for the same pass reading another texture, about
-  57 and 81 µs a MiB. Against the old runtime at 3648 × 2038, this form reads the target faster
-  after a barrier (4,652.6 µs against 5,438.8 µs) and at the first read of a pass that loads it
-  (3,750.9 µs against 4,247.8 µs), and more slowly at the first read of a pass that clears it
-  (4,635.1 µs against 4,195.7 µs; at 1920 × 1080, 1,118.8 µs against 1,099.2 µs).
+  around the copies and their two barriers; where the draw is the pass's first and reads only
+  what its pass cleared, a clear of the shadow takes the copies' place. Its cost, measured on the
+  UHD 630 in the harness (release; GPU time a pass, the median over four rounds of each round's
+  median) by a pass that loads its `BGRA8Unorm` target, ends for a copy of all of it and begins
+  again, against the same pass without the copy: 39.0 µs a MiB at 1920 × 1080 and 53.5 µs a MiB
+  at 3648 × 2038, and about 3 to 8 µs a copy beyond its bytes. Two replay streams, counted before
+  a first read of what its pass cleared became a clear (so at most this many copies), make 68.7
+  copies and 298.0 MiB a frame (r3) and 65.5 copies and 93.4 MiB a frame (b3): about 12 to 16.5
+  ms a frame on the UHD 630 for r3 and 4 to 5.5 ms for b3. A pass that clears its target and
+  reads it at its first draw, through the shadow's clear, takes 1,095.3 µs at 1920 × 1080
+  and 4,200.8 µs at 3648 × 2038, against 644.2 µs and 2,341.2 µs for the same pass reading
+  another texture. Against the old runtime in the same runs, at 3648 × 2038, this form reads the
+  target faster after a barrier (4,836.4 µs against 5,429.4 µs) and at the first read of a pass
+  that loads it (3,849.6 µs against 4,218.2 µs), and within 1% at the first read of a pass that
+  clears it (4,200.8 µs against 4,159.4 µs; at 1920 × 1080, 1,095.3 µs against 1,109.1 µs).
 
 ## One path for every device
 
