@@ -928,11 +928,15 @@ mod on_device {
             let shared_len = MemoryClass::Shared.block_len();
             let dedicated = (device.take_block(MemoryClass::Shared, 2 * shared_len))
                 .unwrap_or_else(|error| panic!("{name}: a dedicated block: {error}"));
-            device.release_block(dedicated.id).expect("a release");
+            let dedicated_id = dedicated.id;
+            device.release_block(dedicated).expect("a release");
             wait_until("the dedicated block kept beside the ready one", || {
                 counters.gauges().shared_idle_bytes == 3 * shared_len
             });
-            let mut handed = vec![dedicated.id];
+            let mut handed = vec![dedicated_id];
+            // Each pooled block's handle is held to the end, so the second take cannot take the
+            // first's block back.
+            let mut held = Vec::new();
             for take in 0..2 {
                 let (sender, receiver) = std::sync::mpsc::channel();
                 let taker = device.clone();
@@ -946,13 +950,15 @@ mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: pooled take {take}: {error}"));
                 assert_eq!(block.len, shared_len, "{name}: a pooled block");
                 assert_ne!(
-                    block.id, dedicated.id,
+                    block.id, dedicated_id,
                     "{name}: the dedicated block as pooled"
                 );
                 handed.push(block.id);
+                held.push(block);
             }
             assert_eq!(counters.metrics().dedicated_blocks_reused, 0, "{name}");
             drop(device);
+            drop(held);
             assert_eq!(
                 counters.gauges(),
                 Gauges::default(),
