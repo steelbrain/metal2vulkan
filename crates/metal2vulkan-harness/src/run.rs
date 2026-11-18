@@ -149,7 +149,8 @@ pub struct Report {
     /// Each timed run's host wall time, from the start of its encoding until the wait for the run
     /// before it returned, in microseconds: with two runs in flight, the time each run adds. The
     /// 100th and 200th runs' times leave out the wait for the device to go idle that reads the
-    /// gauges.
+    /// gauges, and an untimed run follows that wait, so the next timed run waits for a run in
+    /// flight, as every other does.
     pub wall_us: Vec<f64>,
     /// The runtime's counts of its work ([`Device::counts`]) over one run after the timed ones,
     /// committed alone and waited for, so nothing else is in flight.
@@ -916,6 +917,12 @@ impl<D: ComputeDevice> Session for Harness<D> {
                 // work in flight at that moment, which moves with completion timing.
                 wait_run::<D>(&in_flight)?;
                 report.gauges.push((run, self.device.gauges()));
+                // An untimed run, so two are in flight again: the next timed run's wait is then
+                // for a run the GPU was running, not for this idle device's last one, whose wait
+                // returns at once and would time the encoding alone.
+                if run < runs.timed {
+                    self.next(plan, &made, &mut in_flight, None)?;
+                }
             }
         }
         wait_run::<D>(&in_flight)?;
