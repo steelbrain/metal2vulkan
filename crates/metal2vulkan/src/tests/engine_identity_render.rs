@@ -160,7 +160,7 @@ fn from_queries_pushes_a_render_pipeline_dense_by_link() {
         .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
         assert_eq!(vertex.fragment_push_base(), 16, "{stem}");
         let mut inputs = keys.fragment_inputs.clone().expect("fragment inputs");
-        let compiled = |inputs| {
+        let compiled = |inputs: &crate::pipeline::lower_inputs::LoweringInputs| {
             (device.compile_function(&function(&d.fragment), inputs, &budget))
                 .unwrap_or_else(|e| panic!("{stem}: {e:?}"))
         };

@@ -501,6 +501,7 @@ mod serde_round_trips {
             region_viewports: true,
             region_copies: true,
             unit_axes: 2,
+            push_base: 24,
         });
     }
 
