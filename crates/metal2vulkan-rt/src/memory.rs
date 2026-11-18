@@ -303,11 +303,11 @@ impl Pool {
         lock(&self.state)
     }
 
-    /// The zeroed blocks of `class` no one holds: the tests wait for the block-maker thread to
-    /// have made its ready ones, and with them its fills' submissions.
+    /// The zeroed pooled blocks of `class` no one holds: the tests wait for the block-maker thread
+    /// to have made its ready ones, and with them its fills' submissions.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn idle(&self, class: MemoryClass) -> usize {
-        self.lock().idle[class.index()].len()
+        self.lock().ready(class)
     }
 
     fn wait<'a>(&self, state: MutexGuard<'a, State>) -> MutexGuard<'a, State> {
@@ -446,6 +446,17 @@ impl Pool {
     }
 }
 
+impl State {
+    /// The idle pooled blocks of `class`: those [`Pool::take`] hands out. The idle dedicated
+    /// blocks beside them serve only [`Pool::take_held`].
+    fn ready(&self, class: MemoryClass) -> usize {
+        self.idle[class.index()]
+            .iter()
+            .filter(|memory| memory.pooled)
+            .count()
+    }
+}
+
 fn number(state: &mut State) -> Result<BlockId, Error> {
     let id = state.next_id;
     state.next_id = id.checked_add(1).ok_or(Error::Limit(Limit::BlockIds))?;
@@ -484,7 +495,8 @@ pub(crate) fn stock(core: &Core) {
 /// zeroes each block given back, pooled or dedicated, and keeps it as its class's latest idle
 /// block, freeing through the hook the oldest kept blocks past the class's
 /// [`MemoryClass::idle_bound`], the ready block aside (and at once a block longer than the bound,
-/// or spilled); then it makes pooled blocks until each class has [`READY`] idle.
+/// or spilled); then it makes pooled blocks until each class has [`READY`] pooled ones idle,
+/// whatever dedicated ones it keeps.
 pub(crate) fn run(core: Arc<Core>) {
     let pool = &core.pool;
     let mut state = pool.lock();
@@ -512,9 +524,9 @@ pub(crate) fn run(core: Arc<Core>) {
             state = pool.lock();
             continue;
         }
-        let wanted = MemoryClass::ALL.into_iter().find(|class| {
-            state.idle[class.index()].len() < READY && state.failed[class.index()].is_none()
-        });
+        let wanted = MemoryClass::ALL
+            .into_iter()
+            .find(|class| state.ready(*class) < READY && state.failed[class.index()].is_none());
         if let Some(class) = wanted {
             let id = number(&mut state);
             drop(state);

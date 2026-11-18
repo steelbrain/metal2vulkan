@@ -911,6 +911,62 @@ mod on_device {
             );
         }
     }
+    /// A take of a pooled block while the class keeps only dedicated blocks idle: the block-maker
+    /// thread makes the class's next pooled block whatever dedicated blocks it keeps, so the take
+    /// returns. A Shared block of twice the pooled length is given back and kept beside the ready
+    /// block; the first pooled take takes the ready block, and the second waits only for the
+    /// block-maker thread to make the next.
+    #[test]
+    fn every_device_makes_pooled_blocks_while_it_keeps_dedicated_ones() {
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let counters = device.counters();
+            let shared_len = MemoryClass::Shared.block_len();
+            let dedicated = (device.take_block(MemoryClass::Shared, 2 * shared_len))
+                .unwrap_or_else(|error| panic!("{name}: a dedicated block: {error}"));
+            device.release_block(dedicated.id).expect("a release");
+            wait_until("the dedicated block kept beside the ready one", || {
+                counters.gauges().shared_idle_bytes == 3 * shared_len
+            });
+            let mut handed = vec![dedicated.id];
+            for take in 0..2 {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let taker = device.clone();
+                thread::spawn(move || {
+                    let taken = taker.take_block(MemoryClass::Shared, 1);
+                    drop(taker);
+                    let _ = sender.send(taken);
+                });
+                let block = (receiver.recv_timeout(Duration::from_secs(30)))
+                    .unwrap_or_else(|_| panic!("{name}: pooled take {take} waited 30 s"))
+                    .unwrap_or_else(|error| panic!("{name}: pooled take {take}: {error}"));
+                assert_eq!(block.len, shared_len, "{name}: a pooled block");
+                assert_ne!(
+                    block.id, dedicated.id,
+                    "{name}: the dedicated block as pooled"
+                );
+                handed.push(block.id);
+            }
+            assert_eq!(counters.metrics().dedicated_blocks_reused, 0, "{name}");
+            drop(device);
+            assert_eq!(
+                counters.gauges(),
+                Gauges::default(),
+                "{name}: gauges after teardown"
+            );
+            handed.sort_unstable();
+            assert_each_unmapped_once(name, &hook, &handed);
+            println!(
+                "memory: {name}: two pooled takes beside a kept dedicated block; metrics {:?}",
+                counters.metrics()
+            );
+        }
+    }
+
     /// With the device's `maxMemoryAllocationCount` answered as the zero source's, the two ready
     /// blocks' and one more (`Device::open`), the count is reached once a texture takes the ready
     /// Private block and the pool makes it again. Past it, a texture larger than a block, which has
