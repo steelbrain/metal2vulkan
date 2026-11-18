@@ -13,13 +13,12 @@ use crate::memory::Block;
 use crate::over::{self, Overs};
 use crate::pipeline::ComputePipelineState;
 use crate::queue::QueueInner;
-use crate::readback;
 use crate::record::{self, Reach, Recorder};
 use crate::render::RenderPipelineState;
 use crate::ring::{Placed, Writes};
 use crate::sampler::SamplerState;
 use crate::texture::{Image, OverCopy, Texture};
-use crate::times::{self, Stamps, Times};
+use crate::times::{self, Pair, Times};
 use ash::vk;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
@@ -35,8 +34,11 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 /// barrier that makes their writes visible to every later command and to the host.
 ///
 /// Its GPU times come from two timestamps, written where its first commands begin and where its
-/// last segment ends, and read once it completes. A command buffer with no commands, or whose
-/// last segment has none, records a `VkCommandBuffer` for them.
+/// last segment ends, and read once it completes. Their pair of queries comes from the device's
+/// timestamp pools at its first record and goes back as they are read, or as it drops. A command
+/// buffer with no commands, or whose last segment has none, records a `VkCommandBuffer` for them.
+/// Where every pair is taken and the device makes no new pool, it runs untimed, its GPU times 0
+/// ([`Metrics::untimed_command_buffers`](crate::Metrics::untimed_command_buffers)).
 ///
 /// A cheap handle: clones share one command buffer. It holds the device until it is committed and
 /// nothing of it after, so a command buffer held forever on an event does not keep the device
@@ -88,8 +90,6 @@ pub(crate) type Handler = Box<dyn FnOnce(&CommandBuffer) + Send>;
 /// The command buffer itself: what its handles, its queue's FIFO and the completion thread hold.
 pub(crate) struct CbInner {
     pub(crate) queue: Arc<QueueInner>,
-    /// Its slot in the queue, and so its pair of timestamp queries.
-    slot: u32,
     state: Mutex<CbState>,
     /// Signalled at each status change and once the handlers have run.
     changed: Condvar,
@@ -127,9 +127,8 @@ pub(crate) struct Building {
     pub(crate) device: Device,
     gpu: Gpu,
     handlers: Handlers,
-    /// The queue's timestamp pool and the first of the command buffer's two queries.
-    stamps: (vk::QueryPool, u32),
-    /// Whether the start timestamp is recorded.
+    /// Whether the first command buffer began: the pair was taken, and where one was, the start
+    /// timestamp recorded.
     started: bool,
     /// A barrier owed before the next command: an encoder that wrote ended, a memory barrier was
     /// asked for, a dispatch wrote through an address outside its resources, or a render pass
@@ -204,6 +203,9 @@ pub(crate) struct Gpu {
     /// The images of released textures whose copies back the commands make, kept until the
     /// command buffer retires.
     pub(crate) images: Vec<Arc<Image>>,
+    /// Its pair of timestamp queries, from its first record; None before it and where it runs
+    /// untimed.
+    pub(crate) stamps: Option<Pair>,
 }
 
 impl Gpu {
@@ -256,15 +258,18 @@ pub(crate) struct Pending {
 }
 
 impl Pending {
-    /// How many of its slot's two queries the segments it has passed to the GPU write, the start
-    /// first: the start in the first segment with commands, the end in the last segment, which
-    /// its commit gave commands unless the command buffer has nothing for the GPU. A segment is
-    /// passed once the submit thread stages it into its queue's group, which is always submitted:
-    /// it goes before any later one, and at a loss or a failed submission the command buffer ends
-    /// `DeviceLost`, whose timestamps are never read. So the completion thread's read, which waits
-    /// and which it makes only for a command buffer that completed with both counted, waits only
-    /// on queries a submission it saw complete wrote.
+    /// How many of its pair's two queries the segments it has passed to the GPU write, the start
+    /// first, none where it runs untimed: the start in the first segment with commands, the end
+    /// in the last segment, which its commit gave commands unless the command buffer has nothing
+    /// for the GPU. A segment is passed once the submit thread stages it into its queue's group,
+    /// which is always submitted: it goes before any later one, and at a loss or a failed
+    /// submission the command buffer ends `DeviceLost`, whose timestamps are never read. So the
+    /// completion thread's read, which waits and which it makes only for a command buffer that
+    /// completed with both counted, waits only on queries a submission it saw complete wrote.
     pub(crate) fn stamps_written(&self) -> u32 {
+        if self.gpu.stamps.is_none() {
+            return 0;
+        }
         let segments = &self.gpu.segments;
         let start = (segments[..self.next].iter()).any(|segment| segment.command.is_some());
         let end = self.next == segments.len()
@@ -276,19 +281,12 @@ impl Pending {
 }
 
 impl CommandBuffer {
-    /// A new command buffer of `queue`, which gave it `slot`, whose two queries are reset, keeping
-    /// its objects in `kept`, empty, the lists of a retired one where the queue had them.
-    pub(crate) fn new(
-        queue: Arc<QueueInner>,
-        device: Device,
-        slot: u32,
-        kept: Box<Objects>,
-    ) -> CommandBuffer {
-        let stamps = (queue.stamps.pool, Stamps::first(slot));
+    /// A new command buffer of `queue`, which counted it live, keeping its objects in `kept`,
+    /// empty, the lists of a retired one where the queue had them.
+    pub(crate) fn new(queue: Arc<QueueInner>, device: Device, kept: Box<Objects>) -> CommandBuffer {
         CommandBuffer {
             inner: Arc::new(CbInner {
                 queue,
-                slot,
                 state: Mutex::new(CbState {
                     status: CommandBufferStatus::NotEnqueued,
                     error: None,
@@ -303,12 +301,12 @@ impl CommandBuffer {
                             ring: Writes::default(),
                             managed: false,
                             images: Vec::new(),
+                            stamps: None,
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
                             completed: Vec::new(),
                         },
-                        stamps,
                         started: false,
                         owed: false,
                         owed_pass: false,
@@ -663,22 +661,25 @@ impl Building {
 
     /// At commit: records the end timestamp into the last segment, beginning a command buffer for
     /// it where the segment has none, and ends it; nothing where the command buffer has nothing
-    /// for the GPU.
+    /// for the GPU, and no timestamp where it runs untimed.
     fn finish(&mut self) -> Result<(), Error> {
         if self.gpu.is_empty() {
             return Ok(());
         }
         let command = match self.last().command {
             Some(command) => command,
+            None if self.started && self.gpu.stamps.is_none() => return self.close(),
             None => self.begin()?,
         };
-        let (pool, first) = self.stamps;
-        times::write_end(&self.device.core().device, command, pool, first);
+        if let Some(pair) = self.gpu.stamps {
+            times::write_end(&self.device.core().device, command, pair.pool, pair.first);
+        }
         self.close()
     }
 
-    /// Begins the last segment's command buffer. The command buffer's first begins with the
-    /// start timestamp.
+    /// Begins the last segment's command buffer. The command buffer's first takes its pair of
+    /// timestamp queries from the device's pools and begins with the start timestamp, or, where
+    /// it gets none, counts it untimed.
     fn begin(&mut self) -> Result<vk::CommandBuffer, Error> {
         let core = Arc::clone(self.device.core());
         let recorder = match self.gpu.recorder.take() {
@@ -688,9 +689,12 @@ impl Building {
         let recorder = self.gpu.recorder.insert(recorder);
         let command = recorder.next(&core.device)?;
         if !self.started {
-            let (pool, first) = self.stamps;
-            times::write_start(&core.device, command, pool, first);
             self.started = true;
+            self.gpu.stamps = core.stamps.take(&core.device, &core.counters);
+            match self.gpu.stamps {
+                Some(pair) => times::write_start(&core.device, command, pair.pool, pair.first),
+                None => core.counters.count(Metric::UntimedCommandBuffers),
+            }
         }
         self.last().command = Some(command);
         self.bound = None;
@@ -1166,18 +1170,6 @@ impl CbInner {
     pub(crate) fn end_uncommitted(&self, error: CommandBufferError) {
         lock(&self.state).ended = Some(error);
     }
-
-    /// Its start and end timestamps, once it completed.
-    pub(crate) fn stamps(&self, core: &Core) -> Option<(u64, u64)> {
-        // SAFETY: the queue's pool holds the command buffer's two queries.
-        unsafe {
-            readback::timestamps(
-                &core.device,
-                self.queue.stamps.pool,
-                Stamps::first(self.slot),
-            )
-        }
-    }
 }
 
 /// On the completion thread: runs the scheduled handlers of a command buffer just submitted.
@@ -1189,8 +1181,9 @@ pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
 }
 
 /// On the completion thread: retires a command buffer that completed (`error` None), with its GPU
-/// times where they were read, or ended, recycling its recorder and giving up its blocks and its
-/// place in the queue with the `written` of its two queries reset, then runs its handlers.
+/// times where they were read, or ended, recycling its recorder and giving up its blocks, its pair
+/// of timestamp queries with the `written` of them reset, and its place in the queue, then runs
+/// its handlers.
 pub(crate) fn retire(
     core: &Core,
     inner: Arc<CbInner>,
@@ -1230,6 +1223,7 @@ pub(crate) fn retire(
         ring,
         managed: _,
         images,
+        stamps,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
@@ -1240,13 +1234,11 @@ pub(crate) fn retire(
     ring.give_back(core);
     drop((blocks, images));
     kept.clear();
-    times::reset(
-        &core.device,
-        inner.queue.stamps.pool,
-        Stamps::first(inner.slot),
-        written,
-    );
-    inner.queue.release(inner.slot, kept);
+    if let Some(pair) = stamps {
+        times::reset(&core.device, pair.pool, pair.first, written);
+        core.stamps.give_back(pair);
+    }
+    inner.queue.release(kept);
     let handle = CommandBuffer { inner };
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {
         handler(&handle);
@@ -1259,23 +1251,27 @@ pub(crate) fn retire(
 impl Drop for CbInner {
     fn drop(&mut self) {
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
-        // A command buffer never committed gives back its recorder and its place in the queue,
-        // whose queries no submission wrote, so they stay reset; a committed one did so when it
-        // retired.
+        // A command buffer never committed gives back its recorder, its pair of timestamp
+        // queries, which no submission wrote, so they stay reset, and its place in the queue; a
+        // committed one did so when it retired.
         if let Some(Building { device, gpu, .. }) = state.building.take() {
             let core = device.core();
             let Gpu {
                 recorder,
                 mut kept,
                 ring,
+                stamps,
                 ..
             } = gpu;
             if let Some(recorder) = recorder {
                 core.recorders.give_back(core, recorder);
             }
             ring.give_back(core);
+            if let Some(pair) = stamps {
+                core.stamps.give_back(pair);
+            }
             kept.clear();
-            self.queue.release(self.slot, kept);
+            self.queue.release(kept);
         }
     }
 }

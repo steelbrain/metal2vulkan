@@ -2318,6 +2318,7 @@ field	metal2vulkan-rt::Gauges.stage_entry_bytes	pub stage_entry_bytes: u64
 field	metal2vulkan-rt::Gauges.staging_bytes	pub staging_bytes: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::Gauges.threads	pub threads: [u64; THREADS]
+field	metal2vulkan-rt::Gauges.timestamp_pools	pub timestamp_pools: u64
 field	metal2vulkan-rt::HeapRange.block	pub block: BlockId
 field	metal2vulkan-rt::HeapRange.len	pub len: u64
 field	metal2vulkan-rt::HeapRange.offset	pub offset: u64
@@ -2379,6 +2380,7 @@ field	metal2vulkan-rt::Metrics.submit_infos	pub submit_infos: u64
 field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64
 field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
+field	metal2vulkan-rt::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
 field	metal2vulkan-rt::Metrics.upload_waits	pub upload_waits: u64
 field	metal2vulkan-rt::Metrics.zeroed_bytes_freed	pub zeroed_bytes_freed: u64
 field	metal2vulkan-rt::Metrics.zeroed_bytes_taken	pub zeroed_bytes_taken: u64

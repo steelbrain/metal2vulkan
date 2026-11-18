@@ -5,8 +5,6 @@ use crate::counters::{Counters, Gauge};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::kept::Objects;
-use crate::reaper::{Free, Job};
-use crate::times::Stamps;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 
@@ -23,12 +21,10 @@ pub struct CommandQueue {
 /// The queue itself: what its command buffers and the submit thread hold.
 pub(crate) struct QueueInner {
     max: u32,
-    /// The slots of the command buffers made and not yet retired.
-    slots: Mutex<Slots>,
+    /// The command buffers made and not yet retired, and the lists retired ones left.
+    live: Mutex<Live>,
     /// Signalled when one retires.
     room: Condvar,
-    /// Two timestamp queries per slot.
-    pub(crate) stamps: Stamps,
     /// The latest GPU end time of its command buffers retired, in host nanoseconds: where a
     /// command buffer with nothing for the GPU places its times.
     pub(crate) last_end: AtomicU64,
@@ -38,32 +34,22 @@ pub(crate) struct QueueInner {
     core: Weak<Core>,
 }
 
-/// A queue's slots: each command buffer made and not yet retired holds one, and with it its pair
-/// of timestamp queries.
-struct Slots {
-    /// Slots below it have been taken at least once.
-    next: u32,
-    /// Slots given back.
-    free: Vec<u32>,
-    /// The kept-object lists of retired command buffers, empty, with their capacity
-    /// (`crate::kept`): at most one per slot.
+/// A queue's live command buffers: those made and not yet retired, and the kept-object lists
+/// of retired ones, empty, with their capacity (`crate::kept`): together at most the queue's
+/// maximum, since each list is a live command buffer's or one retired since.
+struct Live {
+    count: u32,
     objects: Vec<Objects>,
-}
-
-impl Slots {
-    fn taken(&self) -> u32 {
-        self.next - self.free.len() as u32
-    }
 }
 
 impl Device {
     /// `newCommandQueueWithMaxCommandBufferCount:`; `newCommandQueue` is this call with 64.
     ///
-    /// The queue holds a pool of two timestamp queries per command buffer it may have made at
-    /// once, for their GPU times.
+    /// The queue makes no Vulkan object: its command buffers take their pairs of timestamp
+    /// queries from the device's pools
+    /// ([`Gauges::timestamp_pools`](crate::Gauges::timestamp_pools)).
     ///
-    /// Err: [`Refusal::NoCommandBuffers`] for a count of 0; [`Error::Vulkan`] where the pool
-    /// cannot be made.
+    /// Err: [`Refusal::NoCommandBuffers`] for a count of 0.
     pub fn new_command_queue(&self, max_command_buffer_count: u32) -> Result<CommandQueue, Error> {
         if max_command_buffer_count == 0 {
             return Err(Error::Refused(Refusal::NoCommandBuffers));
@@ -72,13 +58,11 @@ impl Device {
         Ok(CommandQueue {
             inner: Arc::new(QueueInner {
                 max: max_command_buffer_count,
-                slots: Mutex::new(Slots {
-                    next: 0,
-                    free: Vec::new(),
+                live: Mutex::new(Live {
+                    count: 0,
                     objects: Vec::new(),
                 }),
                 room: Condvar::new(),
-                stamps: Stamps::new(core, max_command_buffer_count)?,
                 last_end: AtomicU64::new(0),
                 counters: core.counters.clone(),
                 core: Arc::downgrade(core),
@@ -96,34 +80,27 @@ impl CommandQueue {
     /// Err: [`Error::Quiesced`].
     pub fn command_buffer(&self) -> Result<CommandBuffer, Error> {
         let core = self.device.core();
-        let mut slots = lock(&self.inner.slots);
+        let mut live = lock(&self.inner.live);
         loop {
             if core.closed() {
                 return Err(Error::Quiesced);
             }
-            if slots.taken() < self.inner.max {
+            if live.count < self.inner.max {
                 break;
             }
-            slots = self
+            live = self
                 .inner
                 .room
-                .wait(slots)
+                .wait(live)
                 .unwrap_or_else(PoisonError::into_inner);
         }
-        let slot = match slots.free.pop() {
-            Some(slot) => slot,
-            None => {
-                slots.next += 1;
-                slots.next - 1
-            }
-        };
-        let kept = slots.objects.pop().unwrap_or_default();
-        drop(slots);
+        live.count += 1;
+        let kept = live.objects.pop().unwrap_or_default();
+        drop(live);
         core.counters.rise(Gauge::CommandBuffers);
         Ok(CommandBuffer::new(
             Arc::clone(&self.inner),
             self.device.clone(),
-            slot,
             Box::new(kept),
         ))
     }
@@ -173,28 +150,17 @@ impl QueueInner {
         self.core.upgrade()
     }
 
-    /// The command buffer holding `slot` retired, or was dropped uncommitted: the slot goes back,
-    /// and `kept`, its kept-object lists emptied, for the next command buffer made. Its gauge falls
-    /// first, so a command buffer made in the freed slot never reads one more live than the queue
-    /// holds.
-    pub(crate) fn release(&self, slot: u32, kept: Box<Objects>) {
+    /// A command buffer of the queue retired, or was dropped uncommitted: its place goes back,
+    /// and `kept`, its kept-object lists emptied, for the next command buffer made. Its gauge
+    /// falls first, so a command buffer made in the freed place never reads one more live than
+    /// the queue holds.
+    pub(crate) fn release(&self, kept: Box<Objects>) {
         self.counters.fall(Gauge::CommandBuffers);
         let kept = *kept;
-        let mut slots = lock(&self.slots);
-        slots.free.push(slot);
-        slots.objects.push(kept);
-        drop(slots);
+        let mut live = lock(&self.live);
+        live.count -= 1;
+        live.objects.push(kept);
+        drop(live);
         self.room.notify_one();
-    }
-}
-
-impl Drop for QueueInner {
-    fn drop(&mut self) {
-        // No command buffer of the queue is left, so no work names the pool. Where the device is
-        // already gone, its teardown destroyed the pool.
-        if let Some(core) = self.core.upgrade() {
-            core.reaper
-                .give(Job::Free(Free::QueryPool(self.stamps.pool)));
-        }
     }
 }

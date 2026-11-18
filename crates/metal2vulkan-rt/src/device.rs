@@ -21,7 +21,7 @@ use crate::record::Recorders;
 use crate::ring::Ring;
 use crate::sampler::{Constexpr, SamplerTable};
 use crate::submit::{self, Work};
-use crate::times::Ticks;
+use crate::times::{StampPools, Ticks};
 use ash::vk;
 use metal2vulkan::device::{
     ApiVersion, DeviceDescription, DevicePolicy, HandleDomain, PointerDomain,
@@ -183,9 +183,8 @@ pub(crate) struct Core {
     pub(crate) work: Work,
     pub(crate) done: Done,
     pub(crate) reaper: Reaper,
-    /// Every queue's timestamp pool not yet destroyed: one whose queue outlives the device is
-    /// destroyed with it.
-    pub(crate) query_pools: Mutex<Vec<vk::QueryPool>>,
+    /// The timestamp pools every command buffer takes its pair of queries from.
+    pub(crate) stamps: StampPools,
     /// The one pipeline layout of every pipeline: the empty set 0, set 1, and the push window
     /// over every stage.
     pub(crate) layout: vk::PipelineLayout,
@@ -504,7 +503,7 @@ impl Device {
             work,
             done,
             reaper: Reaper::new(),
-            query_pools: Mutex::new(Vec::new()),
+            stamps: StampPools::new(),
             layout,
             arrays,
             samplers: Mutex::new(SamplerTable::new(sampler_cap)),
@@ -1216,15 +1215,7 @@ impl Drop for Core {
         }
         let placed = self.places.remaining();
         memory::free_all(self, placed);
-        let pools = std::mem::take(
-            self.query_pools
-                .get_mut()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-        for pool in pools {
-            // SAFETY: the device is idle.
-            unsafe { self.device.destroy_query_pool(pool, None) };
-        }
+        self.stamps.destroy(&self.device, &self.counters);
         // SAFETY: the device is idle; nothing reads the ring.
         let ring_blocks = unsafe { self.ring.destroy(&self.device) };
         for _ in 0..ring_blocks {

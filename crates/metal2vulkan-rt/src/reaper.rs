@@ -45,8 +45,6 @@ pub(crate) enum Free {
     Semaphore(vk::Semaphore),
     /// A command pool past the idle ones the device keeps, or one whose reset failed.
     CommandPool(vk::CommandPool),
-    /// A dropped queue's timestamp queries.
-    QueryPool(vk::QueryPool),
     /// A pipeline of a dropped pipeline state; the pipelines gauge falls with it.
     Pipeline(vk::Pipeline),
     /// The shader module of a dropped pipeline state.
@@ -171,11 +169,6 @@ fn free(core: &Core, object: Free) {
         }
         // SAFETY: no command buffer of the pool is pending: its work retired, or never ran.
         Free::CommandPool(pool) => unsafe { device.destroy_command_pool(pool, None) },
-        Free::QueryPool(pool) => {
-            lock(&core.query_pools).retain(|&live| live != pool);
-            // SAFETY: every command buffer of the queue retired or never ran.
-            unsafe { device.destroy_query_pool(pool, None) };
-        }
         Free::Pipeline(pipeline) => {
             // SAFETY: every command buffer that used it retired: each kept its state until then.
             unsafe { device.destroy_pipeline(pipeline, None) };

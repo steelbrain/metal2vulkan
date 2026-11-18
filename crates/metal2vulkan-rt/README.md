@@ -649,12 +649,16 @@ made, with no lock, and never rewritten for layouts.
   of its queue's command buffers before it, or its commit where that is later, the shape Metal
   reports for a command buffer that does no work. A command buffer's GPU times so fall between
   `host_time()` before its commit and after its completion, within the calibration's deviation
-  and the clocks' drift over 100 ms. Each queue has a pool of two queries per command buffer it
-  may have made at once, all reset on the host as it is made (`hostQueryReset`); a command
-  buffer's pair is reset on the host as it retires, those of the two its submissions wrote, so no
-  command buffer the GPU runs resets a query. A command buffer with no commands, or whose last
-  segment has none, records a `VkCommandBuffer` for its timestamps. One that ends with an error
-  has GPU times of 0.
+  and the clocks' drift over 100 ms. The two queries are a pair from the device's timestamp
+  pools, which a command buffer takes as it records its first commands and gives back as they are
+  read at its completion, or as it is dropped uncommitted. A pool holds 4,096 queries, the pairs
+  of 2,048 command buffers; the device makes one only once every pair of its pools is taken, and
+  keeps it until the device drops (`Gauges::timestamp_pools`), so a queue makes no Vulkan object
+  and `new_command_queue` fails on nothing but a count of 0. Each pool is reset on the host as it
+  is made (`hostQueryReset`), and a pair as its command buffer retires, those of the two its
+  submissions wrote, so no command buffer the GPU runs resets a query. A command buffer with no
+  commands, or whose last segment has none, records a `VkCommandBuffer` for its timestamps. One
+  that ends with an error has GPU times of 0.
 - `Event` and `SharedEvent` are timeline semaphores whose values are Metal's values. A host set
   (`SharedEvent::set_signaled_value`) raises a floor and never signals the semaphore; a wait the
   floor meets is submitted with no semaphore wait, and a GPU signal not above the highest value
@@ -715,6 +719,14 @@ that touch blocks first.
   buffer with no render pass reports `gpu_start_time` equal to its `gpu_end_time`: the driver
   writes both timestamps with Metal's relaxed timestamp granularity, which gives two writes in one
   compute pass one value. Vulkan allows it: a later timestamp is never lower.
+- A command buffer that finds every pair of the device's timestamp pools taken, where the device
+  then refuses a new pool, runs untimed: its `gpu_start_time` and `gpu_end_time` are 0, and
+  `Metrics::untimed_command_buffers` counts it. Once the device refuses a pool it asks for none
+  again. Vulkan states no most queries a pool may hold or most pools a device may make; the
+  runtime's 4,096 a pool is the smallest met: Mesa's Apple-GPU driver makes each pool a Metal
+  counter heap, of at most 4,096 entries and at most 32 live in a process, so there at most
+  65,536 command buffers of a process are timed at once, fewer where other devices of the
+  process hold heaps.
 - Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through

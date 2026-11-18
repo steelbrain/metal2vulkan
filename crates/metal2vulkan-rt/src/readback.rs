@@ -6,8 +6,8 @@
 
 use ash::vk;
 
-/// A completed command buffer's two timestamps, from its queue's pool; None where the driver does
-/// not report both, so the command buffer's GPU times stay 0.
+/// A completed command buffer's two timestamps, from its pair in the device's pools; None where
+/// the driver does not report both, so the command buffer's GPU times stay 0.
 ///
 /// The read waits for the two values (`VK_QUERY_RESULT_WAIT_BIT`): a driver may make a timestamp
 /// available only after the submission's signal (MoltenVK 1.4.2 on an M3 Max did for most

@@ -75,10 +75,12 @@ pub(crate) enum Metric {
     CaptureStreams,
     /// [`Metrics::capture_overflows`].
     CaptureOverflows,
+    /// [`Metrics::untimed_command_buffers`].
+    UntimedCommandBuffers,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::CaptureOverflows as usize + 1;
+const METRICS: usize = Metric::UntimedCommandBuffers as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -107,6 +109,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::CaptureWaits,
     Metric::CaptureStreams,
     Metric::CaptureOverflows,
+    Metric::UntimedCommandBuffers,
 ];
 
 // Each metric of the order is at its own index.
@@ -190,6 +193,8 @@ pub(crate) enum Gauge {
     Shadows,
     /// [`Gauges::shadow_bytes`].
     ShadowBytes,
+    /// [`Gauges::timestamp_pools`].
+    TimestampPools,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -260,6 +265,7 @@ struct Atomics {
     capture_waits: AtomicU64,
     capture_streams: AtomicU64,
     capture_overflows: AtomicU64,
+    untimed_command_buffers: AtomicU64,
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
     capture_wait_nanos: AtomicU64,
@@ -292,6 +298,7 @@ struct Atomics {
     pipeline_cache_bytes: AtomicU64,
     shadows: AtomicU64,
     shadow_bytes: AtomicU64,
+    timestamp_pools: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -354,6 +361,7 @@ impl Counters {
             Metric::CaptureWaits => &a.capture_waits,
             Metric::CaptureStreams => &a.capture_streams,
             Metric::CaptureOverflows => &a.capture_overflows,
+            Metric::UntimedCommandBuffers => &a.untimed_command_buffers,
         }
     }
 
@@ -588,6 +596,7 @@ impl Counters {
             Gauge::PipelineCacheBytes => &a.pipeline_cache_bytes,
             Gauge::Shadows => &a.shadows,
             Gauge::ShadowBytes => &a.shadow_bytes,
+            Gauge::TimestampPools => &a.timestamp_pools,
         }
     }
 
@@ -647,6 +656,7 @@ impl Counters {
             capture_waits: a.capture_waits.load(Relaxed),
             capture_streams: a.capture_streams.load(Relaxed),
             capture_overflows: a.capture_overflows.load(Relaxed),
+            untimed_command_buffers: a.untimed_command_buffers.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
             capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
             capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
@@ -701,6 +711,7 @@ impl Counters {
             pipeline_cache_bytes: a.pipeline_cache_bytes.load(Relaxed),
             shadows: a.shadows.load(Relaxed),
             shadow_bytes: a.shadow_bytes.load(Relaxed),
+            timestamp_pools: a.timestamp_pools.load(Relaxed),
         }
     }
 }
@@ -919,6 +930,11 @@ pub struct Metrics {
     /// ring-full sent ahead, from its flush to its completion), and for command buffers committed
     /// before to be submitted.
     pub capture_wait_nanos: u64,
+    /// Command buffers that ran untimed, their GPU start and end times 0
+    /// ([`CommandBuffer::gpu_start_time`](crate::CommandBuffer::gpu_start_time)): at their first
+    /// record, every pair of the device's timestamp pools was taken and the device made no new
+    /// pool ([`Gauges::timestamp_pools`]).
+    pub untimed_command_buffers: u64,
 }
 
 /// A thread's slot in [`Gauges::threads`], given back as it drops.
@@ -1054,4 +1070,8 @@ pub struct Gauges {
     pub shadows: u64,
     /// The bytes of the shadows' memory.
     pub shadow_bytes: u64,
+    /// The device's timestamp query pools, each of 4096 queries, a pair for each command buffer
+    /// from its first record until its times are read at its completion: made as command buffers
+    /// need them, and kept until the device drops.
+    pub timestamp_pools: u64,
 }

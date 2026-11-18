@@ -1,17 +1,19 @@
 //! A command buffer's times: Metal's `kernelStartTime`, `kernelEndTime`, `GPUStartTime` and
 //! `GPUEndTime`, all in nanoseconds of one host clock, [`host_time`].
 //!
-//! Each command buffer owns two timestamp queries in its queue's pool. Its first command buffer
-//! writes the first where its commands begin; its last segment writes the second where it ends.
+//! Each command buffer takes a pair of timestamp queries from the device's pools ([`StampPools`])
+//! as it records its first commands. Its first command buffer writes the first where its commands
+//! begin; its last segment writes the second where it ends. One that finds no pair runs untimed.
 //! The GPU times are the two timestamps placed on the host clock by the device's last calibration
 //! (`VK_EXT_calibrated_timestamps`, one reading of the GPU's clock and the host's together): one
 //! as the device starts, then one at a completion once [`CALIBRATION_PERIOD`] has passed since
 //! the last. The kernel times are the host time at commit and when the submit call that passed the
 //! last segment returned.
 
+use crate::counters::{Counters, Gauge};
 use crate::device::{lock, Core};
-use crate::error::Error;
 use ash::vk;
+use std::sync::{Mutex, PoisonError};
 
 /// No Metal counterpart: the host clock every time of a command buffer counts, its GPU times
 /// included, in nanoseconds: `CLOCK_MONOTONIC` on Linux and other Unix systems,
@@ -180,35 +182,111 @@ impl Calibration {
     }
 }
 
-/// A queue's timestamp pool: two queries per command buffer the queue may have made and not yet
-/// retired.
-pub(crate) struct Stamps {
+/// The queries of one of the device's timestamp pools: the pairs of 2,048 command buffers. Neither
+/// a pool's most queries nor the most pools a device makes is a Vulkan query; the smallest met is
+/// this many a pool (Mesa's Apple-GPU driver, whose pools are Metal counter heaps of at most 4,096
+/// entries, at most 32 of them live in a process).
+pub(crate) const POOL_QUERIES: u32 = 4096;
+
+/// A command buffer's two timestamp queries: its start at `first`, its end at the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Pair {
     pub(crate) pool: vk::QueryPool,
+    pub(crate) first: u32,
 }
 
-impl Stamps {
-    /// A pool for `slots` command buffers.
-    pub(crate) fn new(core: &Core, slots: u32) -> Result<Stamps, Error> {
-        let info = vk::QueryPoolCreateInfo::default()
-            .query_type(vk::QueryType::TIMESTAMP)
-            .query_count(slots.saturating_mul(2));
-        // SAFETY: the info is complete.
-        let pool = unsafe { core.device.create_query_pool(&info, None) }
-            .map_err(Error::vulkan("vkCreateQueryPool"))?;
-        lock(&core.query_pools).push(pool);
-        reset(&core.device, pool, 0, slots.saturating_mul(2));
-        Ok(Stamps { pool })
+/// The device's timestamp pools, which every queue's command buffers take their pairs from: made
+/// on demand, [`POOL_QUERIES`] queries each, kept until the device's teardown, so their count is
+/// the most command buffers ever timed at once over 2,048. A pair given back is taken again before
+/// any of a pool not yet taken, and a new pool is made only once every pair is taken. Once the
+/// device refuses a pool, none is asked for again: a command buffer that then finds no pair free
+/// runs untimed (`Metrics::untimed_command_buffers`).
+pub(crate) struct StampPools {
+    state: Mutex<PoolsState>,
+}
+
+#[derive(Default)]
+struct PoolsState {
+    pools: Vec<vk::QueryPool>,
+    /// The pairs given back, every query of each reset.
+    free: Vec<Pair>,
+    /// The pairs of the newest pool below it have been taken.
+    next: u32,
+    /// The device refused a pool.
+    refused: bool,
+}
+
+impl StampPools {
+    pub(crate) fn new() -> StampPools {
+        StampPools {
+            state: Mutex::new(PoolsState::default()),
+        }
     }
 
-    /// The first of `slot`'s two queries.
-    pub(crate) fn first(slot: u32) -> u32 {
-        slot * 2
+    /// A free pair, both its queries reset: one given back, else the next of the newest pool, else
+    /// the first of a new pool; `None` where every pair is taken and the device refuses a pool, or
+    /// refused one before. A new pool is counted ([`Gauge::TimestampPools`]).
+    pub(crate) fn take(&self, device: &ash::Device, counters: &Counters) -> Option<Pair> {
+        let mut state = lock(&self.state);
+        if let Some(pair) = state.free.pop() {
+            return Some(pair);
+        }
+        if let Some(&pool) = state.pools.last() {
+            if state.next < POOL_QUERIES / 2 {
+                let first = state.next * 2;
+                state.next += 1;
+                return Some(Pair { pool, first });
+            }
+        }
+        if state.refused {
+            return None;
+        }
+        let info = vk::QueryPoolCreateInfo::default()
+            .query_type(vk::QueryType::TIMESTAMP)
+            .query_count(POOL_QUERIES);
+        // SAFETY: the info is complete.
+        let Ok(pool) = (unsafe { device.create_query_pool(&info, None) }) else {
+            state.refused = true;
+            return None;
+        };
+        reset(device, pool, 0, POOL_QUERIES);
+        counters.rise(Gauge::TimestampPools);
+        state.pools.push(pool);
+        state.next = 1;
+        Some(Pair { pool, first: 0 })
+    }
+
+    /// Gives back `pair`, both its queries reset.
+    pub(crate) fn give_back(&self, pair: Pair) {
+        lock(&self.state).free.push(pair);
+    }
+
+    /// How many pairs are free and how many pools there are.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn held(&self) -> (usize, usize) {
+        let state = lock(&self.state);
+        let unused = state
+            .pools
+            .last()
+            .map_or(0, |_| POOL_QUERIES / 2 - state.next);
+        (state.free.len() + unused as usize, state.pools.len())
+    }
+
+    /// At the device's teardown, once it is idle: destroys every pool.
+    pub(crate) fn destroy(&mut self, device: &ash::Device, counters: &Counters) {
+        let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
+        for pool in state.pools.drain(..) {
+            // SAFETY: the device is idle, and no call reads the pool.
+            unsafe { device.destroy_query_pool(pool, None) };
+            counters.fall(Gauge::TimestampPools);
+        }
+        state.free.clear();
     }
 }
 
 /// Resets `count` queries from `first` on the host (`hostQueryReset`, in the floor): every query
-/// as the pool is made, and as a command buffer retires, those of its slot's two that a
-/// submission wrote, so a free slot's queries are always reset. A reset happens before any later
+/// as the pool is made, and as a command buffer retires, those of its pair that a submission
+/// wrote, so a free pair's queries are always reset. A reset happens before any later
 /// submission that names them ("anything that happened-before" `vkQueueSubmit2` is in its first
 /// synchronization scope), so no command buffer the GPU runs resets a query. A query no
 /// submission wrote (its command buffer ended or was dropped before its commands went) is still
@@ -225,7 +303,7 @@ pub(crate) fn reset(device: &ash::Device, pool: vk::QueryPool, first: u32, count
 }
 
 /// Records, at the start of a command buffer's first `VkCommandBuffer`, its start timestamp. Its
-/// two queries are reset: a free slot's always are ([`reset`]).
+/// two queries are reset: a free pair's always are ([`reset`]).
 pub(crate) fn write_start(
     device: &ash::Device,
     command: vk::CommandBuffer,

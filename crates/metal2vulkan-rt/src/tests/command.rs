@@ -835,15 +835,15 @@ pub(crate) mod on_device {
 
     /// Times, on the host clock: the kernel start at commit precedes the kernel end at scheduling;
     /// each GPU start and end fall between `host_time` read before its commit and the host time
-    /// its completed handler reads, through slots its command buffers reuse, with or without
-    /// commands. (Each command buffer of one submission starting no earlier than the one before
-    /// ends is the group test's.)
+    /// its completed handler reads, through pairs of timestamp queries its command buffers reuse,
+    /// with or without commands. (Each command buffer of one submission starting no earlier than
+    /// the one before ends is the group test's.)
     #[test]
     fn every_device_times_command_buffers_on_the_host_clock() {
         each_device("command_times", |name, _, device| {
             let mut arena = Arena::new(&device);
             let buffer = arena.buffer();
-            // Fewer slots than command buffers, so slots and their queries are reused.
+            // Fewer places than command buffers, so pairs of queries are reused.
             let queue = device.new_command_queue(4).expect("a queue");
             // Each command buffer's index, GPU start and end, and the host time its completed
             // handler read.
@@ -1415,13 +1415,13 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A command buffer dropped before its commit leaves its slot's queries as it found them,
-    /// reset, and the next command buffer takes the slot again while three others of the queue run,
-    /// with no second reset (the validation layer reports a reset of a query not available while
-    /// work naming its pool runs), and has its own GPU times.
+    /// A command buffer recorded and dropped before its commit leaves its pair's queries as it
+    /// found them, reset, and the next command buffer takes the pair again while three others of
+    /// the queue run, with no second reset (the validation layer reports a reset of a query not
+    /// available while work naming its pool runs), and has its own GPU times.
     #[test]
-    fn every_device_takes_again_the_slot_of_a_command_buffer_that_never_ran() {
-        each_device("command_slot_again", |name, _, device| {
+    fn every_device_takes_again_the_pair_of_a_command_buffer_that_never_ran() {
+        each_device("command_pair_again", |name, _, device| {
             let mut arena = Arena::new(&device);
             let buffer = arena.buffer();
             let queue = queue(&device);
@@ -1432,9 +1432,17 @@ pub(crate) mod on_device {
                         command_buffer.status() != CommandBufferStatus::Committed
                     })
                 });
-                drop(queue.command_buffer().expect("a command buffer"));
+                let dropped = queue.command_buffer().expect("a command buffer");
+                fill(&dropped, &buffer, 4);
+                let free = device.core().stamps.held();
+                drop(dropped);
+                assert_eq!(
+                    device.core().stamps.held().0,
+                    free.0 + 1,
+                    "{name}: the dropped command buffer's pair is free"
+                );
                 let again = queue.command_buffer().expect("a command buffer");
-                // Each was submitted and none had completed when the slot was taken again.
+                // Each was submitted and none had completed when the pair was taken again.
                 let statuses: Vec<_> = running.iter().map(CommandBuffer::status).collect();
                 assert!(
                     statuses
@@ -1452,6 +1460,184 @@ pub(crate) mod on_device {
                 assert!(0 < start && start <= end, "{name}: {start} {end}");
             });
             drop((buffer, arena, queue, device));
+        });
+    }
+
+    /// The device's timestamp pools, made as command buffers need them: a command buffer takes
+    /// none before its first record; 2,049 command buffers in flight at once, held behind the
+    /// first's event wait, take the 2,048 pairs of a first pool and one of a second; once they
+    /// retire, each timed, every pair is free, and 2,049 more take pairs given back with no third
+    /// pool. The pools live until the device drops, when the gauge falls to zero.
+    #[test]
+    fn every_device_takes_pairs_from_timestamp_pools_it_makes_on_demand() {
+        each_device("command_pools", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let held = || device.core().stamps.held();
+            let pools = || device.counters().gauges().timestamp_pools;
+            let queue = device.new_command_queue(4096).expect("a queue");
+            let empty = queue.command_buffer().expect("a command buffer");
+            assert_eq!(held(), (0, 0), "{name}: no pool before a record");
+            for round in 0..2 {
+                let gate = shared_event(&device);
+                let burst: Vec<CommandBuffer> = (0..2049)
+                    .map(|index| {
+                        let command_buffer = queue.command_buffer().expect("a command buffer");
+                        if index == 0 {
+                            command_buffer
+                                .encode_wait_for_event(gate.as_event(), 1)
+                                .expect("a wait");
+                        }
+                        fill(&command_buffer, &buffer, index);
+                        command_buffer.commit().expect("a commit");
+                        command_buffer
+                    })
+                    .collect();
+                let (free, made) = held();
+                println!(
+                    "{name}: round {round}: 2049 in flight, {free} pairs free in {made} pools"
+                );
+                assert_eq!((free, made), (4096 - 2049, 2), "{name}: round {round}");
+                assert_eq!(pools(), 2, "{name}: round {round}");
+                gate.set_signaled_value(1);
+                for command_buffer in &burst {
+                    finished(name, command_buffer);
+                    assert_eq!(
+                        command_buffer.status(),
+                        CommandBufferStatus::Completed,
+                        "{name}"
+                    );
+                    let (start, end) = (
+                        command_buffer.gpu_start_time(),
+                        command_buffer.gpu_end_time(),
+                    );
+                    assert!(0 < start && start <= end, "{name}: {start} {end}");
+                }
+                assert_eq!(word(&buffer), 2048, "{name}");
+                assert_eq!(held(), (4096, 2), "{name}: every pair back");
+            }
+            assert_eq!(
+                device.counters().metrics().untimed_command_buffers,
+                0,
+                "{name}"
+            );
+            empty.commit().expect("a commit");
+            finished(name, &empty);
+            assert_eq!(held(), (4096, 2), "{name}");
+            drop((empty, queue, buffer, arena, device));
+        });
+    }
+
+    /// 300 queues live at once make no Vulkan object for their command buffers' times: each
+    /// queue's command buffer runs and is timed, and their pairs come from one pool.
+    #[test]
+    fn every_device_times_command_buffers_of_300_live_queues_from_one_pool() {
+        each_device("command_queues_300", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let buffer = arena.buffer();
+            let queues: Vec<CommandQueue> = (0..300).map(|_| queue(&device)).collect();
+            let committed: Vec<CommandBuffer> = (queues.iter().enumerate())
+                .map(|(index, queue)| {
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    fill(&command_buffer, &buffer, index as u32);
+                    command_buffer.commit().expect("a commit");
+                    command_buffer
+                })
+                .collect();
+            for command_buffer in &committed {
+                finished(name, command_buffer);
+                assert_eq!(
+                    command_buffer.status(),
+                    CommandBufferStatus::Completed,
+                    "{name}"
+                );
+                let (start, end) = (
+                    command_buffer.gpu_start_time(),
+                    command_buffer.gpu_end_time(),
+                );
+                assert!(0 < start && start <= end, "{name}: {start} {end}");
+            }
+            assert_eq!(device.core().stamps.held(), (2048, 1), "{name}");
+            assert_eq!(device.counters().gauges().timestamp_pools, 1, "{name}");
+            drop((committed, queues, buffer, arena, device));
+        });
+    }
+
+    /// A device that refuses a timestamp pool: with raw pools of 4,096 queries made until the
+    /// device refuses one (at most 64), a command buffer that finds no pair runs untimed, its GPU
+    /// times 0, and so does one whose last segment has no commands; each is counted. Where the
+    /// device makes all 64 raw pools, the untimed path does not run: the command buffers are
+    /// timed, and the test says which path ran.
+    #[test]
+    fn every_device_runs_a_command_buffer_untimed_where_no_pool_is_made() {
+        each_device("command_untimed", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (a, b) = (arena.buffer(), arena.buffer());
+            let raw = device.raw();
+            let info = vk::QueryPoolCreateInfo::default()
+                .query_type(vk::QueryType::TIMESTAMP)
+                .query_count(crate::times::POOL_QUERIES);
+            let mut held = Vec::new();
+            let mut refusal = None;
+            while held.len() < 64 {
+                // SAFETY: the info is complete; each pool is destroyed below.
+                match unsafe { raw.device.create_query_pool(&info, None) } {
+                    Ok(pool) => held.push(pool),
+                    Err(error) => {
+                        refusal = Some(error);
+                        break;
+                    }
+                }
+            }
+            let queue = queue(&device);
+            let before = device.counters().metrics().untimed_command_buffers;
+            let event = device.new_event().expect("an event");
+            let first = queue.command_buffer().expect("a command buffer");
+            fill(&first, &a, 7);
+            first.commit().expect("a commit");
+            let second = queue.command_buffer().expect("a command buffer");
+            fill(&second, &b, 8);
+            second.encode_signal_event(&event, 1).expect("a signal");
+            second.commit().expect("a commit");
+            for command_buffer in [&first, &second] {
+                finished(name, command_buffer);
+                assert_eq!(
+                    command_buffer.status(),
+                    CommandBufferStatus::Completed,
+                    "{name}"
+                );
+            }
+            assert_eq!((word(&a), word(&b)), (7, 8), "{name}");
+            let untimed = device.counters().metrics().untimed_command_buffers - before;
+            let times = [&first, &second].map(|cb| (cb.gpu_start_time(), cb.gpu_end_time()));
+            match refusal {
+                Some(error) => {
+                    println!(
+                        "{name}: the untimed path ran: the device refused raw pool {} ({error}); \
+                         {untimed} command buffers untimed, times {times:?}",
+                        held.len() + 1
+                    );
+                    assert_eq!(untimed, 2, "{name}");
+                    assert_eq!(times, [(0, 0), (0, 0)], "{name}");
+                    assert_eq!(device.core().stamps.held(), (0, 0), "{name}: no pool made");
+                }
+                None => {
+                    println!(
+                        "{name}: the untimed path did not run: the device made {} raw pools; \
+                         times {times:?}",
+                        held.len()
+                    );
+                    assert_eq!(untimed, 0, "{name}");
+                    for (start, end) in times {
+                        assert!(0 < start && start <= end, "{name}: {start} {end}");
+                    }
+                }
+            }
+            for pool in held {
+                // SAFETY: no submission names a raw pool.
+                unsafe { raw.device.destroy_query_pool(pool, None) };
+            }
+            drop((first, second, event, queue, a, b, arena, device));
         });
     }
 
