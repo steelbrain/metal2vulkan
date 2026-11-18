@@ -1,7 +1,7 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
 use crate::plan::{
-    Binding, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
+    Binding, Blit, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
 };
 use crate::{
     clocks, BlitCommandEncoder, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder,
