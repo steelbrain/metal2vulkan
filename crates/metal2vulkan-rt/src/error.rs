@@ -519,9 +519,10 @@ pub enum Gap {
     CubicSampler,
     /// [`Texture::replace_region`](crate::Texture::replace_region),
     /// [`Texture::get_bytes`](crate::Texture::get_bytes) or a blit copy between a buffer and a
-    /// texture ([`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer))
-    /// of a texture whose image is no plain copy of Metal's bytes in one aspect: a format of depth
-    /// and stencil both, or a multisample texture.
+    /// texture
+    /// ([`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer)) of a
+    /// texture whose image is no plain copy of Metal's bytes in one aspect: a format of depth and
+    /// stencil both, or a multisample texture.
     ///
     /// Basis: ours (no copy between such an image and bytes is built).
     TextureBytes {
@@ -530,9 +531,10 @@ pub enum Gap {
     },
     /// [`Texture::replace_region`](crate::Texture::replace_region) or
     /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) into a
-    /// 32-bit float depth (`Depth32Float`). Metal keeps any `float` there; Vulkan copies no depth outside `[0, 1]`
-    /// into a depth aspect without `VK_EXT_depth_range_unrestricted`, which the floor does not
-    /// require (the Intel devices measured lack it), and no recorded stream uploads one.
+    /// 32-bit float depth (`Depth32Float`). Metal keeps any `float` there; Vulkan copies no depth
+    /// outside `[0, 1]` into a depth aspect without `VK_EXT_depth_range_unrestricted`, which the
+    /// floor does not require (the Intel devices measured lack it), and no recorded stream uploads
+    /// one.
     ///
     /// Basis: ours (no upload of a 32-bit float depth is built).
     FloatDepthUpload {
@@ -585,9 +587,9 @@ pub enum Gap {
         bytes_per_image: u64,
     },
     /// [`BlitCommandEncoder::fill_buffer`](crate::BlitCommandEncoder::fill_buffer) of a range
-    /// that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal fills
-    /// byte by byte (probe `blit_fill_rules.m` in the conformance crate, an Apple M3 Max, macOS
-    /// 27.0.1, job m3-max-43571).
+    /// that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal
+    /// fills byte by byte (probe `blit_fill_rules.m` in the conformance crate, an Apple M3 Max,
+    /// macOS 27.0.1, job m3-max-43571).
     ///
     /// Basis: ours (`vkCmdFillBuffer` writes whole words; a byte fill is built when a replay
     /// stream makes one).
