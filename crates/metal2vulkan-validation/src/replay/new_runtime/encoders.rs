@@ -106,11 +106,8 @@ impl NewRuntime {
         if !self.seconds.named() {
             return Ok(());
         }
-        let queue = self.queue_of.get(&call.receiver).copied();
-        let command_buffer = match queue.and_then(|queue| self.objects.get(&queue)) {
-            Some(Object::Queue(queue)) => queue.command_buffer().map_err(failed(call))?,
-            _ => return Err(refuse(call, "a commit of a command buffer of no queue")),
-        };
+        let queue = self.queue_for(call)?;
+        let command_buffer = queue.command_buffer().map_err(failed(call))?;
         let mut blit = command_buffer
             .blit_command_encoder()
             .map_err(failed(call))?;
@@ -123,7 +120,8 @@ impl NewRuntime {
             }
         }
         blit.end_encoding();
-        self.commit(command_buffer, 0).map_err(failed(call))?;
+        self.commit(&queue, command_buffer, 0)
+            .map_err(failed(call))?;
         for place in places {
             self.places.give(place, self.commits, Vec::new());
         }
@@ -172,7 +170,8 @@ impl NewRuntime {
             "parallelRenderCommandEncoderWithDescriptor:" => self.skip_encoder(),
             "commit" => {
                 self.copy_named(call)?;
-                self.commit(command_buffer, call.receiver)
+                let queue = self.queue_for(call)?;
+                self.commit(&queue, command_buffer, call.receiver)
                     .map_err(failed(call))?;
                 // Its first use committed, a no-copy Managed buffer's GPU copy changes only by
                 // `didModifyRange:` from here.

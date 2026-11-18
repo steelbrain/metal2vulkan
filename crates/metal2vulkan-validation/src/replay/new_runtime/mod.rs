@@ -22,12 +22,14 @@ use super::player::{Backend, Counters, HeldBuffer, Made, PlayError};
 use super::stream::Call;
 use super::translator;
 use super::value::Value;
+use crate::gpu::wait::new_runtime::{wait_until_retired, Retired};
+use crate::gpu::wait::SubmissionBackend;
+use crate::gpu::DeviceType;
 use metal2vulkan::pipeline::{LinkedFunction, LinkedFunctions};
 use metal2vulkan_rt as rt;
 use places::{class_index, Place, Places};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Range;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// What the play skipped because the runtime does not build it yet.
@@ -196,6 +198,33 @@ pub enum ManagedCopies {
     Two,
 }
 
+/// A committed command buffer not yet seen retired ([`NewRuntime::commit`]).
+struct InFlight {
+    /// Its place in the commit order, from 1.
+    commit: u64,
+    /// Its stream id (0 for one of the play's own).
+    id: u64,
+    queue: rt::CommandQueue,
+    command_buffer: rt::CommandBuffer,
+    /// Set by its completed handler, which the runtime runs once it has let go of what the
+    /// command buffer held, the textures and samplers it named with their indices among them,
+    /// which its status alone does not say (the status changes first).
+    retired: Arc<Retired>,
+}
+
+impl InFlight {
+    /// Waits until it has retired, the wait bounded under the hang protocol (`gpu::wait`).
+    fn wait(&self, backend: SubmissionBackend, operation: &str) {
+        wait_until_retired(
+            &self.queue,
+            &self.command_buffer,
+            &self.retired,
+            backend,
+            operation,
+        );
+    }
+}
+
 /// The new runtime on one device.
 pub struct NewRuntime {
     device: rt::Device,
@@ -215,10 +244,12 @@ pub struct NewRuntime {
     outside: HashSet<u64>,
     /// Each constexpr sampler's index, by its state words.
     constexprs: HashMap<[u64; 2], u32>,
-    /// The commits so far, and the committed command buffers not yet seen retired, in order, each
-    /// with the flag its completed handler sets ([`commit`](Self::commit)).
+    /// The commits so far, and the committed command buffers not yet seen retired, in order
+    /// ([`commit`](Self::commit)).
     commits: u64,
-    in_flight: VecDeque<(u64, u64, rt::CommandBuffer, Arc<AtomicBool>)>,
+    in_flight: VecDeque<InFlight>,
+    /// The device's kind, which names the backend of every bounded wait (`gpu::wait`).
+    backend: SubmissionBackend,
     /// The committed command buffers no record played so far lets complete, by stream id, as the
     /// player last told them (`Backend::held`): a placement never waits for one.
     held: HashMap<u64, HeldBuffer>,
@@ -487,8 +518,9 @@ fn texture_class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
 }
 
 impl NewRuntime {
-    /// The backend on `device`: every texture and sampler index granted to it.
-    pub fn new(device: rt::Device) -> Result<Self, rt::Error> {
+    /// The backend on `device`, of `device_type`: every texture and sampler index granted to it,
+    /// and each wait for a command buffer bounded under the hang protocol (`gpu::wait`).
+    pub fn new(device: rt::Device, device_type: DeviceType) -> Result<Self, rt::Error> {
         for class in [rt::IndexClass::Texture, rt::IndexClass::Sampler] {
             let range = class.range();
             device.grant_indices(class, range.start, range.end - range.start)?;
@@ -505,6 +537,7 @@ impl NewRuntime {
             constexprs: HashMap::new(),
             commits: 0,
             in_flight: VecDeque::new(),
+            backend: SubmissionBackend::vulkan(device_type),
             held: HashMap::new(),
             sampler_descriptors: HashMap::new(),
             completed: 0,
@@ -665,51 +698,64 @@ impl NewRuntime {
         Ok(())
     }
 
-    /// Commits `command_buffer`, the stream's `id` (0 for one of the play's own), as the next
-    /// commit, in flight until its completed handler runs: the runtime runs it once it has let go
-    /// of what the command buffer held, the textures and samplers it named with their indices
-    /// among them, which its status alone does not say (the status changes first).
-    fn commit(&mut self, command_buffer: rt::CommandBuffer, id: u64) -> Result<(), rt::Error> {
-        let retired = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&retired);
-        command_buffer.add_completed_handler(move |_| flag.store(true, Ordering::Release))?;
+    /// Commits `command_buffer`, of `queue` and the stream's `id` (0 for one of the play's own), as
+    /// the next commit, in flight until its completed handler runs (`InFlight::retired`).
+    fn commit(
+        &mut self,
+        queue: &rt::CommandQueue,
+        command_buffer: rt::CommandBuffer,
+        id: u64,
+    ) -> Result<(), rt::Error> {
+        let retired = Retired::watch(&command_buffer)?;
         command_buffer.commit()?;
         self.commits += 1;
-        self.in_flight
-            .push_back((self.commits, id, command_buffer, retired));
+        self.in_flight.push_back(InFlight {
+            commit: self.commits,
+            id,
+            queue: queue.clone(),
+            command_buffer,
+            retired,
+        });
         Ok(())
+    }
+
+    /// The queue of `call`'s receiver, a command buffer of the stream.
+    fn queue_for(&self, call: &Call) -> Result<rt::CommandQueue, PlayError> {
+        let queue = self.queue_of.get(&call.receiver);
+        match queue.and_then(|queue| self.objects.get(queue)) {
+            Some(Object::Queue(queue)) => Ok(queue.clone()),
+            _ => Err(refuse(call, "a command buffer of no queue")),
+        }
     }
 
     /// The commits that have retired ([`commit`](Self::commit)), every earlier one with them.
     fn completed(&mut self) -> u64 {
-        while let Some((at, _, _, retired)) = self.in_flight.front() {
-            if !retired.load(Ordering::Acquire) {
+        while let Some(front) = self.in_flight.front() {
+            if !front.retired.is_set() {
                 break;
             }
-            self.completed = *at;
+            self.completed = front.commit;
             self.in_flight.pop_front();
         }
         self.completed
     }
 
-    /// Waits until the commits up to `commit` have retired: `wait_until_completed` returns once the
-    /// command buffer's handlers have run. Where one of them is held (`held`), no wait can end:
-    /// that one's stream id, unwaited.
+    /// Waits until the commits up to `commit` have retired, each wait bounded (`gpu::wait`): one
+    /// past the bound ends the process as a hang. Where one of them is held (`held`), no wait can
+    /// end: that one's stream id, unwaited.
     fn wait_for(&mut self, commit: u64) -> Result<(), u64> {
         let held = (self.in_flight.iter())
-            .take_while(|(at, ..)| *at <= commit)
-            .find(|(_, id, ..)| self.held.contains_key(id));
-        if let Some(&(_, id, ..)) = held {
-            return Err(id);
+            .take_while(|flight| flight.commit <= commit)
+            .find(|flight| self.held.contains_key(&flight.id));
+        if let Some(flight) = held {
+            return Err(flight.id);
         }
         while self.completed() < commit {
-            let Some((_, _, front, retired)) = self.in_flight.front() else {
+            let Some(front) = self.in_flight.front() else {
                 return Ok(());
             };
-            // Refused only in a scheduled handler, where the player never runs.
-            if front.wait_until_completed().is_err() || !retired.load(Ordering::Acquire) {
-                return Ok(());
-            }
+            let operation = "the replay's wait for an index's commits";
+            front.wait(self.backend, operation);
         }
         Ok(())
     }
@@ -1933,12 +1979,11 @@ impl Backend for NewRuntime {
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError> {
         match self.objects.get(&command_buffer) {
             Some(Object::CommandBuffer(waited)) => {
-                waited
-                    .wait_until_completed()
-                    .map_err(|error| PlayError::Runtime {
-                        selector: "waitUntilCompleted".into(),
-                        error: error.to_string(),
-                    })?;
+                // One not in flight has retired already.
+                let flight = (self.in_flight.iter()).find(|flight| flight.id == command_buffer);
+                if let Some(flight) = flight {
+                    flight.wait(self.backend, "the replay's wait for a command buffer");
+                }
                 match waited.error() {
                     None => Ok(()),
                     Some(error) => Err(PlayError::Runtime {

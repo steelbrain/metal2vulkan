@@ -104,7 +104,7 @@ fn play(test: &str, path: &Path) -> (Report, Vec<String>) {
 /// runtime then gives each of `objects`.
 fn played(test: &str, path: &Path, objects: &[u64]) -> (Report, Vec<String>, Vec<u32>) {
     let cache = ScratchCache::new().unwrap();
-    let mut backend = NewRuntime::new(rt_device(cache.path())).unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
     let mut reader = StreamReader::open(&[path.to_path_buf()], None).unwrap();
     let (report, ended) = Player::new(&mut backend).play(&mut reader);
     let lines = backend.lines();
@@ -642,7 +642,7 @@ fn a_placement_a_held_commit_owes_stops_the_play_naming_what_holds_it() {
     let other = uints(&[("minFilter", 1), ("magFilter", 1)]);
     let path = held_placement(&dir, other);
     let cache = ScratchCache::new().unwrap();
-    let mut backend = NewRuntime::new(rt_device(cache.path())).unwrap();
+    let mut backend = NewRuntime::new(rt_device(cache.path()), gpu::TEST_DEVICE).unwrap();
     let mut reader = StreamReader::open(&[path], None).unwrap();
     let (_, ended) = Player::new(&mut backend).play(&mut reader);
     match ended {

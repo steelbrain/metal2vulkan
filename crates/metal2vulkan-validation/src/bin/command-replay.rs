@@ -328,7 +328,8 @@ fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, Strin
     for (_, name, physical) in candidates {
         let mut options = metal2vulkan_rt::DeviceOptions::default();
         options.pipeline_cache_dir = Some(cache.clone());
-        let opened = metal2vulkan_rt::Device::new(&physical, options).and_then(NewRuntime::new);
+        let opened = metal2vulkan_rt::Device::new(&physical, options)
+            .and_then(|device| NewRuntime::new(device, device_type));
         match opened {
             Ok(backend) => return Ok((backend, name)),
             Err(why) => refused.push(format!("{name}: {why}")),

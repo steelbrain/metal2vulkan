@@ -19,7 +19,8 @@
 //! A submission that completes with a device-fault status (Vulkan `VK_ERROR_DEVICE_LOST`; Metal
 //! `MTLCommandBufferError` timeout, page fault, access revoked, or device removed) is a suspected
 //! GPU fault: it writes the tripwire too, then fails the operation normally, because nothing is
-//! in flight any more. A CPU implementation (lavapipe, SwiftShader) is an ordinary killable
+//! in flight any more; a wait on the new runtime's command buffers ([`new_runtime`]) leaves how
+//! the command buffer ended to its caller instead. A CPU implementation (lavapipe, SwiftShader) is an ordinary killable
 //! process: its timeouts and faults follow the same exit rules but never write the host GPU
 //! tripwire.
 
@@ -420,6 +421,80 @@ pub(crate) mod runtime {
         operation: &str,
     ) -> Result<(), String> {
         settle(&mut Committed(command_buffer), backend, operation)
+    }
+}
+
+/// Bounded waits on the new runtime's command buffers (`metal2vulkan_rt`): the replay player's
+/// backend over it. The runtime's own wait has no bound, so the wait is on the command buffer's
+/// completed handler, after the queue's wait hint has sent it. How the command buffer ended is the
+/// caller's to read (the player reads its error into the play's verdict): a wait here says only
+/// that its work is no longer in flight, so an ending with a device fault writes no tripwire.
+pub(crate) mod new_runtime {
+    use super::WaitOutcome;
+    use super::{hang, judge, wait_timeout, CompletionSource, SubmissionBackend, Verdict};
+    use metal2vulkan_rt::{CommandBuffer, CommandQueue, Error};
+    use std::sync::{Arc, Condvar, Mutex, PoisonError};
+    use std::time::Duration;
+
+    /// Whether a command buffer has retired: its completed handler ran, which the runtime runs
+    /// once it has let go of everything the command buffer held.
+    #[derive(Default)]
+    pub(crate) struct Retired {
+        done: Mutex<bool>,
+        condvar: Condvar,
+    }
+
+    impl Retired {
+        /// The flag of `command_buffer`, not yet committed, which its completed handler sets.
+        pub(crate) fn watch(command_buffer: &CommandBuffer) -> Result<Arc<Self>, Error> {
+            let retired = Arc::new(Self::default());
+            let flag = Arc::clone(&retired);
+            command_buffer.add_completed_handler(move |_| {
+                *flag.done.lock().unwrap_or_else(PoisonError::into_inner) = true;
+                flag.condvar.notify_all();
+            })?;
+            Ok(retired)
+        }
+
+        /// Whether the command buffer has retired.
+        pub(crate) fn is_set(&self) -> bool {
+            *self.done.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+    }
+
+    struct Waited<'a>(&'a Retired);
+
+    impl CompletionSource for Waited<'_> {
+        fn wait(&mut self, timeout: Duration) -> WaitOutcome {
+            let done = self.0.done.lock().unwrap_or_else(PoisonError::into_inner);
+            let (done, _) = (self.0.condvar)
+                .wait_timeout_while(done, timeout, |done| !*done)
+                .unwrap_or_else(PoisonError::into_inner);
+            match *done {
+                true => WaitOutcome::Completed,
+                false => WaitOutcome::TimedOut,
+            }
+        }
+    }
+
+    /// Wait until `command_buffer`, committed on `queue`, has retired (`retired`), under the hang
+    /// protocol: a wait past the process's bound records the hang, named by `operation`, and ends
+    /// the process ([`HANG_EXIT_CODE`](super::HANG_EXIT_CODE)), so this returns only once it has
+    /// retired.
+    pub(crate) fn wait_until_retired(
+        queue: &CommandQueue,
+        command_buffer: &CommandBuffer,
+        retired: &Retired,
+        backend: SubmissionBackend,
+        operation: &str,
+    ) {
+        queue.send_now(command_buffer);
+        // The handler's flag is set or the bound elapsed: completed or a hang, nothing else.
+        if let Verdict::Hang(record) =
+            judge(&mut Waited(retired), backend, operation, wait_timeout())
+        {
+            hang(&record)
+        }
     }
 }
 
