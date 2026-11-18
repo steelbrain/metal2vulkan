@@ -982,8 +982,12 @@ pub(crate) mod on_device {
                 words1.write(7),
             ];
             let queue = device.new_command_queue(4).expect("a queue");
-            // The textures' uploads go with a command buffer of their own.
+            // The textures' uploads go with a command buffer of their own, one with commands: one
+            // with nothing for the GPU takes no submission.
             let first = queue.command_buffer().expect("a command buffer");
+            first
+                .record_for_test(&[], |_, _| {})
+                .expect("a command buffer's commands");
             first.commit().expect("a commit");
             finished(name, &first);
 
@@ -1280,7 +1284,12 @@ pub(crate) mod on_device {
                 origin,
             };
             let queue = device.new_command_queue(4).expect("a queue");
+            // The textures' uploads go with a command buffer of their own, one with commands: one
+            // with nothing for the GPU takes no submission.
             let first = queue.command_buffer().expect("a command buffer");
+            first
+                .record_for_test(&[], |_, _| {})
+                .expect("a command buffer's commands");
             first.commit().expect("a commit");
             finished(name, &first);
 
@@ -1585,7 +1594,7 @@ pub(crate) mod on_device {
             );
 
             // A synchronize of a texture without named bytes records nothing: the command buffer
-            // has its segment's end barrier alone.
+            // has nothing for the GPU, and takes no submission and no barrier.
             settled(&device);
             let metrics = counters.metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -1598,11 +1607,12 @@ pub(crate) mod on_device {
             let after = counters.metrics();
             assert_eq!(
                 (
+                    after.submissions - metrics.submissions,
                     after.barriers - metrics.barriers,
                     after.synchronizations - metrics.synchronizations,
                 ),
-                (1, 1),
-                "{name}: a texture's barriers and synchronizations"
+                (0, 0, 1),
+                "{name}: a texture's submissions, barriers and synchronizations"
             );
         });
     }

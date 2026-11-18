@@ -1560,6 +1560,8 @@ pub(crate) mod on_device {
         each_device("command_empty_stream", |name, _, device| {
             let queue = queue(&device);
             let counters = device.counters();
+            // The block-maker thread has made its ready blocks: the gauges hold still.
+            crate::tests::blit::on_device::settled(&device);
             let (gauges, submissions) = (counters.gauges(), counters.metrics().submissions);
             let mut last = None;
             for at in 0..10_000 {
@@ -1573,7 +1575,11 @@ pub(crate) mod on_device {
                 last = Some(command_buffer);
             }
             finished(name, &last.take().expect("the last"));
-            within("the stream's retirement", || counters.gauges() == gauges);
+            let deadline = Instant::now() + PATIENCE;
+            while counters.gauges() != gauges && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(counters.gauges(), gauges, "{name}: the gauges once retired");
             assert_eq!(
                 counters.metrics().submissions,
                 submissions,
