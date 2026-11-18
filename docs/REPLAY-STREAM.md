@@ -589,7 +589,8 @@ making's wall time, and whether no state of another specialization of the kernel
 function by name, was made before), its `skipped render states N, the first #ID: WHY` where it
 skipped any (`ID` the first one's object and `WHY` the runtime's answer), its
 `skipped render commands GAP N, the first at frame F, call C` for each typed gap a render command
-met, a draw the runtime does not build among them (`GAP` the gap, `N` the commands skipped, `F`
+met, a draw the runtime does not build among them (`GAP` the runtime's gap as Rust prints it for
+debugging, such as `Draw { kind: Points }`, `N` the commands skipped, `F`
 and `C` the first one's frame and stream position), `cut SEGMENT OFFSET` where the last segment ends
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute

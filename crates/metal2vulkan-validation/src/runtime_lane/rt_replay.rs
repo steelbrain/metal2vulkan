@@ -265,6 +265,6 @@ fn a_draw_the_runtime_does_not_build_is_skipped_and_ends_the_verdict() {
     assert_eq!(report.first_skip, Some((0, 19)));
     let note = report.verdict_note();
     assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 19"));
-    let line = "skipped render commands Draw(Points) 1, the first at frame 0, call 19";
+    let line = "skipped render commands Draw { kind: Points } 1, the first at frame 0, call 19";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
 }
