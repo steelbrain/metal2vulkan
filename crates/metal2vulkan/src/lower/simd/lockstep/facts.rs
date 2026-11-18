@@ -46,6 +46,17 @@ const PLACES: usize = 1024;
 const BLOCKS: usize = PLACES / 32;
 /// The most operations [`AddrFacts::lanes`] evaluates for one address at each place.
 const MAX_LANE_OPS: u32 = 64;
+/// The lane steps one ticked unit stands for: a step of [`Lanes::apart`]'s window or lane-step
+/// check, or one operation of an address's program at one place ([`run_lanes`]), and a place's
+/// share of making an address's lanes. A lane step takes about 2 ns in a release build where the
+/// pass's other units take 15 to 35 ns, so sixteen of them tick one unit, and the pass's one
+/// weight (`pipeline::compile::weights::LOCKSTEP`) holds for both.
+pub(super) const LANE_STEPS_PER_UNIT: u64 = 16;
+
+/// The whole work units of `steps` lane steps ([`LANE_STEPS_PER_UNIT`]).
+fn lane_units(steps: u64) -> u32 {
+    u32::try_from(steps / LANE_STEPS_PER_UNIT).unwrap_or(u32::MAX)
+}
 
 /// The memory one pass of the analysis orders: threadgroup memory, whose objects never overlap, or
 /// device memory, whose buffers the analysis takes as distinct objects too (see [`Root`]).
@@ -348,7 +359,7 @@ impl Lanes {
             lanes.sort_unstable_by_key(|&i| (block.get(usize::from(i)).copied(), i));
             order.push(lanes);
         }
-        m.tick(2 * PLACES as u32)?;
+        m.tick(lane_units(2 * PLACES as u64))?;
         Ok(Lanes {
             base,
             base_home,
@@ -1337,7 +1348,7 @@ impl<'a> AddrFacts<'a> {
             m.release(crate::budget::vec_bytes(&program));
             return Ok(None);
         }
-        m.tick(ops.saturating_mul(PLACES as u32))?;
+        m.tick(lane_units(u64::from(ops) * PLACES as u64))?;
         let mut offsets = Vec::new();
         m.reserve(&mut offsets, PLACES)?;
         for p in 0..PLACES as u64 {
@@ -1348,7 +1359,7 @@ impl<'a> AddrFacts<'a> {
             offsets.push(off & mask);
         }
         m.release(crate::budget::vec_bytes(&program));
-        m.tick(PLACES as u32)?;
+        m.tick(lane_units(PLACES as u64))?;
         Lanes::new((base, self.home_of(b), basis), bits, offsets, m).map(Some)
     }
 

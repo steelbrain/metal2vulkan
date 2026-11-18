@@ -154,8 +154,9 @@
 //! store to one location in one instruction, and the order in which a simdgroup runs the arms of
 //! a branch its threads diverge on; neither is visible in the IR, and Metal defines neither.
 //!
-//! The analysis is metered: work per instruction, per block reached, and per pair, and its tables
-//! are charged while they live. The pair search ([`search`]) does not try a pair whose barrier is
+//! The analysis is metered: work per instruction, per block reached, and per pair, the lane checks
+//! sixteen steps to a unit (their steps are that much cheaper), and its tables are charged while
+//! they live. The pair search ([`search`]) does not try a pair whose barrier is
 //! already wanted, and stops walking where every pair beyond has its barrier, so a long
 //! barrier-free body whose pairs conflict costs about linear work in its blocks.
 
@@ -182,7 +183,7 @@ use crate::graph::{LoopForest, PostDomTree};
 use crate::pipeline::sym::Stage;
 
 use super::uniform::{Among, Uniformity};
-use facts::{Access, Accesses, Addr, AddrFacts, Row, Space, Spread};
+use facts::{Access, Accesses, Addr, AddrFacts, Row, Space, Spread, LANE_STEPS_PER_UNIT};
 use search::Search;
 
 fn invariant(what: &'static str) -> Error {
@@ -231,11 +232,19 @@ struct Shape<'a> {
     us: &'a Uniformity,
     pdom: &'a PostDomTree<BlockId>,
     loops: &'a LoopForest<BlockId>,
-    /// The lane pairs `facts::Lanes::apart` compared since the search last charged them.
+    /// The lane steps `facts::Lanes::apart` took since the search last charged them.
     lanes_work: Cell<u64>,
 }
 
 impl Shape<'_> {
+    /// The whole work units of the lane steps counted since the last charge
+    /// ([`LANE_STEPS_PER_UNIT`] each), leaving the rest for the next.
+    fn lane_units(&self) -> u32 {
+        let steps = self.lanes_work.get();
+        self.lanes_work.set(steps % LANE_STEPS_PER_UNIT);
+        u32::try_from(steps / LANE_STEPS_PER_UNIT).unwrap_or(u32::MAX)
+    }
+
     /// Every thread of a simdgroup executes block `b` together.
     fn sg(&self, b: BlockId) -> bool {
         self.wg(b) || self.us.is_uniform(b)

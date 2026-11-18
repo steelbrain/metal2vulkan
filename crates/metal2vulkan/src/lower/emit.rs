@@ -1333,7 +1333,9 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
         .and_then(|f| f.body.as_ref())
         .ok_or_else(|| invariant("the entry function has no body"))?;
     let view = EntryView::new(e, body, plan);
-    let structured = crate::structurize::structurize(&view, m)?;
+    let structured = m.weighted(crate::pipeline::compile::weights::STRUCTURIZE, |m| {
+        crate::structurize::structurize(&view, m)
+    })?;
     let mut mb = ModuleBuilder::new();
     let emitted = (|| -> Result<(TypedModule, Vec<Offer>, BTreeSet<SlotRef>), Error> {
         let decl = declare(&mut mb, plan)?;

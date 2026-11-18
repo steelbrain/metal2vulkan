@@ -24,6 +24,7 @@ mod stage_bound;
 #[cfg(test)]
 mod tests;
 mod unbound;
+pub(crate) mod weights;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -1198,7 +1199,11 @@ impl StageEntries {
                 (&fd.linked, &fd.libraries),
                 InputsFrom::Given(&inputs),
                 Shared::Decode(self),
-                |r| specialize_one(r, m),
+                |r| {
+                    m.weighted(crate::pipeline::compile::weights::SPECIALIZE, |m| {
+                        specialize_one(r, m)
+                    })
+                },
             )
         })?;
         let specialized = Arc::new(specialized);
@@ -2814,8 +2819,12 @@ fn ordered_entry(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Sp
         entry,
         spec,
         before,
-    } = specialize_one(r, m)?;
-    let spec = crate::lower::simd::lockstep::order(spec, p, r.inputs.one_row(), m)?;
+    } = m.weighted(crate::pipeline::compile::weights::SPECIALIZE, |m| {
+        specialize_one(r, m)
+    })?;
+    let spec = m.weighted(crate::pipeline::compile::weights::LOCKSTEP, |m| {
+        crate::lower::simd::lockstep::order(spec, p, r.inputs.one_row(), m)
+    })?;
     Ok(Specialized {
         air_hash,
         entry,
@@ -2964,7 +2973,9 @@ fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Anal
         &inputs,
         (&linked, &r.dynamic.key()),
     );
-    let memory = crate::memory::plan::analyze_memory(&spec, p, m)?;
+    let memory = m.weighted(crate::pipeline::compile::weights::MEMORY, |m| {
+        crate::memory::plan::analyze_memory(&spec, p, m)
+    })?;
     let unbound = unbound::unbound(&spec, &memory);
     Ok(Analyzed {
         key,
@@ -3000,8 +3011,20 @@ fn compile_kept<K>(
 }
 
 /// [`compile_kept`] under the stage bounds `bounds` where the profile has their defects or bounds
-/// every stage (`stage_bound`; [`StageBounds::MEASURED`] in production).
+/// every stage (`stage_bound`; [`StageBounds::MEASURED`] in production). The work of no stage
+/// with a weight of its own weighs [`weights::REST`].
 fn compile_bounded<K>(
+    r: &Request<'_>,
+    p: &DeviceProfile,
+    m: &mut Meter,
+    bounds: (u64, StageBounds),
+    keep: impl FnOnce(&TypedModule) -> K,
+) -> Result<(Arc<FunctionArtifact>, Plan, K), Error> {
+    m.weighted(weights::REST, |m| lower_bounded(r, p, m, bounds, keep))
+}
+
+/// [`compile_bounded`]'s lowering.
+fn lower_bounded<K>(
     r: &Request<'_>,
     p: &DeviceProfile,
     m: &mut Meter,

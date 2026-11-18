@@ -1077,6 +1077,7 @@ const	metal2vulkan-air::budget::PRIVATE_ARENA_BYTES	pub const PRIVATE_ARENA_BYTE
 const	metal2vulkan-air::budget::SPIRV_WORDS	pub const SPIRV_WORDS: u64
 const	metal2vulkan-air::budget::STANDARD_DEADLINE	pub const STANDARD_DEADLINE: Duration
 const	metal2vulkan-air::budget::TYPE_COUNT	pub const TYPE_COUNT: u64
+const	metal2vulkan-air::budget::WHOLE_UNIT	pub const WHOLE_UNIT: u32
 const	metal2vulkan-air::budget::WORK_UNITS	pub const WORK_UNITS: u64
 const	metal2vulkan-air::container::BITCODE_MAGIC	pub const BITCODE_MAGIC: [u8; 4]
 const	metal2vulkan-air::container::FAT_MAGIC	pub const FAT_MAGIC: [u8; 4]
@@ -1182,6 +1183,7 @@ const-value	metal2vulkan-air::budget::PRIVATE_ARENA_BYTES	u32::MAX as u64
 const-value	metal2vulkan-air::budget::SPIRV_WORDS	1 <<24
 const-value	metal2vulkan-air::budget::STANDARD_DEADLINE	Duration::from_secs(20)
 const-value	metal2vulkan-air::budget::TYPE_COUNT	1 <<20
+const-value	metal2vulkan-air::budget::WHOLE_UNIT	16
 const-value	metal2vulkan-air::budget::WORK_UNITS	1 <<27
 const-value	metal2vulkan-air::container::BITCODE_MAGIC	[b'B', b'C', 0xC0, 0xDE]
 const-value	metal2vulkan-air::container::FAT_MAGIC	[0xCA, 0xFE, 0xBA, 0xBE]
@@ -9126,6 +9128,7 @@ method	metal2vulkan-air::budget::Meter::reserve	pub fn reserve<T>(&mut self, v: 
 method	metal2vulkan-air::budget::Meter::reserve_exact	pub fn reserve_exact<T>(&mut self, v: &mut Vec<T>, additional: usize) -> Result<(), Error>
 method	metal2vulkan-air::budget::Meter::spend	pub fn spend(&mut self, spent: Spent) -> Result<(), Error>
 method	metal2vulkan-air::budget::Meter::tick	pub fn tick(&mut self, units: u32) -> Result<(), Error>
+method	metal2vulkan-air::budget::Meter::weighted	pub fn weighted<T>(&mut self, sixteenths: u32, f: impl FnOnce(&mut Meter) -> T) -> T
 method	metal2vulkan-air::budget::Meter::with_caps	pub fn with_caps(budget: &Budget, work_cap: u64, byte_cap: u64) -> Meter
 method	metal2vulkan-air::budget::Meter::work	pub fn work(&self) -> u64
 method	metal2vulkan-air::budget::Spent::held	pub fn held(&self) -> u64

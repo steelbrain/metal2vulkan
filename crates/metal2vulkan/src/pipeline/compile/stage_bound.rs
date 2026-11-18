@@ -143,14 +143,22 @@ pub(super) fn emit(
     let mut widest = WidestPin::Weighed;
     loop {
         let before = m.ledger();
-        let (plan, kernel) = analyzed.select(p, widest, m)?;
+        let (plan, kernel) = m.weighted(crate::pipeline::compile::weights::SELECT, |m| {
+            analyzed.select(p, widest, m)
+        })?;
         plan.estimate.check(word_cap)?;
-        let mut emitted = crate::lower::emit::emit_module(&analyzed.spec, &plan, m)?;
+        let mut emitted = m.weighted(crate::pipeline::compile::weights::EMIT, |m| {
+            crate::lower::emit::emit_module(&analyzed.spec, &plan, m)
+        })?;
         // Every driver compiles each repeated region of the entry again; above the measured size,
         // repeated regions are written once, as a loop.
-        crate::spirv::roll::roll_entry(&mut emitted.module, m)?;
+        m.weighted(crate::pipeline::compile::weights::ROLL, |m| {
+            crate::spirv::roll::roll_entry(&mut emitted.module, m)
+        })?;
         // A load of a uniform view that every trip of its loop reads alike leaves the loop.
-        crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.containment(), m)?;
+        m.weighted(crate::pipeline::compile::weights::HOIST, |m| {
+            crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.containment(), m)
+        })?;
         let past = match bounded.is_empty() {
             true => None,
             false => {

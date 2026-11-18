@@ -111,6 +111,7 @@ budget SPIRV_WORDS const
 budget STANDARD_DEADLINE const
 budget Spent struct(O)
 budget TYPE_COUNT const
+budget WHOLE_UNIT const
 budget WORK_UNITS const
 budget map_bytes fn
 budget output_blocks_cap fn

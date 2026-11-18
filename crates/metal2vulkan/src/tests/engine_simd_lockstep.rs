@@ -3167,6 +3167,10 @@ fn a_long_barrier_free_kernel_s_work_grows_with_its_blocks() {
 /// instructions and 12,000 blocks), compiles inside the standard budget's work and ledger bounds,
 /// which stand for the 20 s and 500 MiB ceilings. The search that tried every reached pair
 /// refused it past the work cap, and the one before refused 2,048 steps past the ledger's bound.
+///
+/// Its work stands for its time: it takes 2.4 s in a release build on the slowest CPU measured,
+/// where the cap stands for about 16 s (`pipeline::compile::weights`), so it counts at most a
+/// fifth of the cap. Counted a whole unit a tick in every stage, it took 28% of the cap.
 #[test]
 fn the_authored_4096_step_kernel_compiles_inside_the_budget() {
     let Some((work, peak, compiled)) = steps_cost(4096, 16, true) else {
@@ -3174,6 +3178,10 @@ fn the_authored_4096_step_kernel_compiles_inside_the_budget() {
     };
     eprintln!("BARRIER-FREE-STEPS: 4096 steps: {work} work units, ledger peak {peak}");
     compiled.expect("4096 steps inside the standard budget");
+    assert!(
+        work.saturating_mul(5) <= crate::budget::WORK_UNITS,
+        "{work} work units for 2.4 s of the slowest CPU's lowering"
+    );
 }
 
 /// The metadata of kernel `name(device uint *out [[buffer(0)]], uint3 pos

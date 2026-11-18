@@ -5,8 +5,9 @@
 //! and threaded (`&mut`) through every input-scaled loop:
 //!
 //! - [`Meter::tick`] at poll points: counts deterministic work units, then checks cancellation and,
-//!   every 64 polls or 65,536 work units (`CLOCK_POLLS`, `CLOCK_UNITS`), the wall deadline. Only the
-//!   deadline outcome (`Budget{Time}`) is transient.
+//!   every 64 polls or 65,536 ticked units (`CLOCK_POLLS`, `CLOCK_UNITS`), the wall deadline. Only
+//!   the deadline outcome (`Budget{Time}`) is transient. A unit ticked weighs one work unit, or the
+//!   weight [`Meter::weighted`] gives the work it runs, fixed per kind of work.
 //! - [`Meter::charge`] (or [`Meter::reserve`]) **before** reserving any input-scaled container, so
 //!   the ledger is deterministic and refusal happens before allocation.
 //! - [`Meter::cap`] / [`Meter::bound`] for structural counts.
@@ -27,9 +28,10 @@ pub const IRREDUCIBLE_DEPTH: u64 = 8;
 /// stub estimate, so no entry the inline cap admits is refused on size alone; phase 6 re-sets it to
 /// 2x the old translator's maximum output.
 pub const SPIRV_WORDS: u64 = 1 << 24;
-/// Deterministic work units per attempt. Frozen by the spike: 13.6x the corpus peak, about 5 s of
-/// release work at the measured 25-32 M units/s, so it trips well before 20 s on the slowest
-/// supported host class.
+/// Deterministic work units per attempt. A unit is the weight its kind of work is given
+/// ([`Meter::weighted`]): `metal2vulkan`'s lowering stages weigh theirs from their release cost,
+/// so that the cap is about 16 s of lowering on the slowest CPU measured, under the 20 s ceiling;
+/// a tick outside them counts a whole unit.
 pub const WORK_UNITS: u64 = 1 << 27;
 /// Ledger bytes per attempt: 450 MiB, under the 500 MiB attempt budget. Frozen by the spike at 1.9x
 /// the corpus peak; since the ledger charges grown capacity and the SPIR-V builder the corpus peak
@@ -64,11 +66,11 @@ pub const STANDARD_DEADLINE: Duration = Duration::from_secs(20);
 /// The polls [`Meter::tick`] lets pass between two reads of the clock for its deadline, after the
 /// first poll, which reads it. Reading the clock at every poll was 15% of a render state's
 /// creation (an RTX 3080 host): a deadline passed is seen at most this many polls
-/// late, or [`CLOCK_UNITS`] work units, whichever comes first.
+/// late, or [`CLOCK_UNITS`] ticked units, whichever comes first.
 pub(crate) const CLOCK_POLLS: u32 = 64;
-/// The work units [`Meter::tick`] counts at most between two reads of the clock (about 2 ms of
-/// release work at the 25-32 M units/s [`WORK_UNITS`] was frozen at), so a poll that counts much
-/// work reads it at once.
+/// The units [`Meter::tick`] counts at most between two reads of the clock, whatever their weight
+/// (at most about 2 ms of release work, at the dearest stage's 35 ns a ticked unit), so a poll that
+/// counts much work reads it at once.
 pub(crate) const CLOCK_UNITS: u64 = 1 << 16;
 
 /// The structurizer output-block cap `4(n+e)+1024` for `n` blocks and `e` edges.
@@ -214,12 +216,17 @@ impl Budget {
     }
 }
 
+/// The sixteenths of a work unit one ticked unit weighs where no [`Meter::weighted`] gives another:
+/// a whole unit.
+pub const WHOLE_UNIT: u32 = 16;
+
 /// What one piece of work charged a [`Meter`] ([`Meter::measured`]): its work units, the most
 /// ledger bytes it held at once above the ledger it began at, and the bytes it still held when it
 /// ended. A result kept for later asks charges each of them this ([`Meter::spend`]), so what a
 /// meter answers never depends on whether the result was made or found.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Spent {
+    /// Sixteenths of a work unit.
     work: u64,
     peak: u64,
     held: u64,
@@ -238,14 +245,17 @@ impl Spent {
 pub struct Meter {
     deadline: Option<Instant>,
     cancel: Option<CancelToken>,
+    /// The work counted so far, in sixteenths of a work unit.
     work: u64,
+    /// The sixteenths of a work unit each ticked unit weighs ([`Meter::weighted`]).
+    weight: u32,
     bytes: u64,
     peak_bytes: u64,
     work_cap: u64,
     byte_cap: u64,
     /// The polls until the next read of the clock (0: the next poll reads it).
     clock_in: u32,
-    /// The work units counted since the last read of the clock.
+    /// The units ticked since the last read of the clock, whatever their weight.
     since_clock: u64,
 }
 
@@ -262,6 +272,7 @@ impl Meter {
             deadline: budget.deadline,
             cancel: budget.cancel.clone(),
             work: 0,
+            weight: WHOLE_UNIT,
             bytes: 0,
             peak_bytes: 0,
             work_cap,
@@ -271,22 +282,30 @@ impl Meter {
         }
     }
 
-    /// Count `units` of deterministic work, then poll cancellation and the deadline: the clock
-    /// at the first poll, then once every 64 polls or 65,536 work units (`CLOCK_POLLS`,
-    /// `CLOCK_UNITS`).
+    /// Count `units` of deterministic work, each of the weight the work runs under
+    /// ([`Meter::weighted`]; a whole work unit outside it), then poll cancellation and the
+    /// deadline: the clock at the first poll, then once every 64 polls or 65,536 ticked units
+    /// (`CLOCK_POLLS`, `CLOCK_UNITS`).
     ///
     /// The work cap is checked first so a deterministic refusal never depends on timing. Callers
     /// tick at poll points (per block, per batch of instructions), not per trivial operation.
     pub fn tick(&mut self, units: u32) -> Result<(), Error> {
-        self.work = self.work.saturating_add(u64::from(units));
-        if self.work > self.work_cap {
+        let sixteenths = u64::from(units).saturating_mul(u64::from(self.weight));
+        self.counted(sixteenths, u64::from(units))
+    }
+
+    /// Count `sixteenths` of a work unit against the cap, then poll as [`Meter::tick`] does for
+    /// `ticked` units.
+    fn counted(&mut self, sixteenths: u64, ticked: u64) -> Result<(), Error> {
+        self.work = self.work.saturating_add(sixteenths);
+        if self.work > self.work_cap.saturating_mul(u64::from(WHOLE_UNIT)) {
             return Err(Error::LimitExceeded(Limit::WorkUnits));
         }
         if self.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
             return Err(Error::Cancelled);
         }
         if let Some(deadline) = self.deadline {
-            self.since_clock = self.since_clock.saturating_add(u64::from(units));
+            self.since_clock = self.since_clock.saturating_add(ticked);
             if self.clock_in == 0 || self.since_clock >= CLOCK_UNITS {
                 self.clock_in = CLOCK_POLLS;
                 self.since_clock = 0;
@@ -415,9 +434,22 @@ impl Meter {
         }
     }
 
-    /// Work units counted so far.
+    /// `f` run on this meter with each unit it ticks weighing `sixteenths` sixteenths of a work
+    /// unit: the weight of a kind of work, a constant fixed from its release cost, so that the work
+    /// cap stands for about the same time whatever kind of work reaches it. A weighted scope inside
+    /// `f` gives its own work its own weight; the weight before is restored after.
+    pub fn weighted<T>(&mut self, sixteenths: u32, f: impl FnOnce(&mut Meter) -> T) -> T {
+        let before = self.weight;
+        self.weight = sixteenths;
+        let out = f(self);
+        self.weight = before;
+        out
+    }
+
+    /// Work units counted so far, rounded up to a whole unit: the least work cap that admits the
+    /// work.
     pub fn work(&self) -> u64 {
-        self.work
+        self.work.div_ceil(u64::from(WHOLE_UNIT))
     }
 
     /// Bytes currently charged.
@@ -454,11 +486,8 @@ impl Meter {
     /// held when it ended stay charged. The caps refuse it where they refused the work itself,
     /// counting its work units before its bytes.
     pub fn spend(&mut self, spent: Spent) -> Result<(), Error> {
-        let mut work = spent.work;
-        while work > 0 {
-            let units = u32::try_from(work).unwrap_or(u32::MAX);
-            self.tick(units)?;
-            work = work.saturating_sub(u64::from(units));
+        if spent.work > 0 {
+            self.counted(spent.work, spent.work / u64::from(WHOLE_UNIT))?;
         }
         self.charge(usize::try_from(spent.peak).unwrap_or(usize::MAX))?;
         let gone = spent.peak.saturating_sub(spent.held);

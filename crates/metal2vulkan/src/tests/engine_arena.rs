@@ -1205,8 +1205,9 @@ fn levels_work(
 
 /// The offset-shape walk of a typed access is metered by the definitions it reads. An access
 /// through the end of a 100-level chain reads its 200 pointer definitions, so it charges at least
-/// that much more work than the same kernel accessing through the chain's start (every level live
-/// in both). Previously the walk ticked nothing and the two charged the same.
+/// that many more units at selection's weight (`pipeline::compile::weights::SELECT`) than the same
+/// kernel accessing through the chain's start (every level live in both). Previously the walk
+/// ticked nothing and the two charged the same.
 #[test]
 fn a_typed_access_shape_walk_is_metered_by_the_definitions_it_reads() {
     const DEPTH: u32 = 100;
@@ -1216,7 +1217,9 @@ fn a_typed_access_shape_walk_is_metered_by_the_definitions_it_reads() {
     };
     let (end, start) = (end.expect("translates"), start.expect("translates"));
     assert!(
-        end >= start + u64::from(2 * DEPTH),
+        16 * end
+            >= 16 * start
+                + u64::from(2 * DEPTH) * u64::from(crate::pipeline::compile::weights::SELECT),
         "{end} work units through the end against {start} through the start: the walk over \
          {} pointer definitions is not charged",
         2 * DEPTH

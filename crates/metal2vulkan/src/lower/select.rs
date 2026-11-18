@@ -2011,7 +2011,9 @@ fn walk_construct_words(
     m: &mut Meter,
 ) -> Result<u64, Error> {
     let view = crate::lower::view::EntryView::new(entry, body, plan);
-    let s = crate::structurize::structurize(&view, m)?;
+    let s = m.weighted(crate::pipeline::compile::weights::STRUCTURIZE, |m| {
+        crate::structurize::structurize(&view, m)
+    })?;
     let words = crate::structurize::emit::construct_words(&s.tree, |b| p.syncs(b), m);
     s.release(m);
     words

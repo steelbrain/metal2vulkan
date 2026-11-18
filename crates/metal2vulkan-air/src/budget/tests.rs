@@ -71,6 +71,34 @@ fn work_cap_is_deterministic_and_permanent() {
 }
 
 #[test]
+fn a_weighted_tick_counts_its_sixteenths_of_a_unit() {
+    let mut meter = Meter::with_caps(&Budget::default(), 10, LEDGER_BYTES);
+    // Sixteen ticks at a quarter unit each, a nested scope at a half, then whole units again.
+    meter.weighted(4, |m| {
+        m.tick(8).unwrap();
+        m.weighted(8, |m| m.tick(2).unwrap());
+        m.tick(4).unwrap();
+    });
+    assert_eq!(meter.work(), 4);
+    meter.tick(6).unwrap();
+    assert_eq!(meter.work(), 10);
+    // A sixteenth past the cap refuses.
+    let err = meter.weighted(1, |m| m.tick(1)).unwrap_err();
+    assert_eq!(err, Error::LimitExceeded(Limit::WorkUnits));
+}
+
+#[test]
+fn spent_work_is_charged_at_the_weight_it_was_counted() {
+    let mut first = Meter::with_caps(&Budget::default(), 100, LEDGER_BYTES);
+    let ((), spent) = first.measured(|m| m.weighted(3, |m| m.tick(16))).unwrap();
+    assert_eq!(first.work(), 3);
+    // Spent under another weight, it charges the sixteenths it was counted in.
+    let mut second = Meter::with_caps(&Budget::default(), 100, LEDGER_BYTES);
+    second.weighted(1, |m| m.spend(spent)).unwrap();
+    assert_eq!(second.work(), 3);
+}
+
+#[test]
 fn work_cap_wins_over_cancel_and_deadline() {
     let token = CancelToken::new();
     token.cancel();
