@@ -10,7 +10,11 @@
 //! on every committed profile under `Device::new`'s default policy and under
 //! `Device::from_queries` with the identity domains (the new runtime's), and each module compiled
 //! is read: it declares none of the three capabilities, and each part compiles modules that
-//! declare `Workgroup` variables. A refusal is the fixture's on that profile and is counted.
+//! declare `Workgroup` variables. Each part counts the modules whose threadgroup arena is sized at
+//! run time (a `Workgroup` array whose length is a specialization constant: the
+//! `[[threadgroup(n)]]` regions the binder sizes from the encoder's threadgroup memory lengths)
+//! apart from those with only fixed-size `Workgroup` variables. A refusal is the fixture's on that
+//! profile and is counted.
 //!
 //! `llvm-as` assembles the fixtures, `xcrun metal-as` the typed-pointer `.air.ll` ones (skipped
 //! visibly off macOS); without `llvm-as` the parts skip visibly.
@@ -61,17 +65,47 @@ fn fixtures() -> Vec<PathBuf> {
     out
 }
 
-/// The capabilities module `words` declares, and whether it declares a `Workgroup` variable.
-fn read(words: &[u32]) -> (Vec<u32>, bool) {
+/// The `Workgroup` memory a module declares.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Workgroup {
+    /// None.
+    None,
+    /// Only variables of a fixed size.
+    Fixed,
+    /// An array whose length is a specialization constant: the arena sized at run time.
+    RunTime,
+}
+
+/// The capabilities module `words` declares, and the `Workgroup` memory it declares.
+fn read(words: &[u32]) -> (Vec<u32>, Workgroup) {
+    use std::collections::{HashMap, HashSet};
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     let module = parse_bytes(&bytes).expect("a module");
     let mut caps = Vec::new();
-    let mut workgroup = false;
+    let (mut spec, mut arrays, mut pointers) = (HashSet::new(), HashMap::new(), HashMap::new());
+    let mut workgroup = Workgroup::None;
     for i in &module.instructions {
-        match (i.opcode, i.operands.first()) {
-            (Op::Capability, Some(&Operand::Word(cap))) => caps.push(cap),
-            (Op::Variable, Some(&Operand::Word(class))) => {
-                workgroup |= class == StorageClass::Workgroup as u32
+        match (i.opcode, i.result_id, i.operands.as_slice()) {
+            (Op::Capability, _, &[Operand::Word(cap), ..]) => caps.push(cap),
+            (Op::SpecConstant | Op::SpecConstantOperation, Some(id), _) => {
+                spec.insert(id);
+            }
+            (Op::TypeArray, Some(id), &[_, Operand::IdRef(len)]) => {
+                arrays.insert(id, len);
+            }
+            (Op::TypePointer, Some(id), &[Operand::Word(_), Operand::IdRef(pointee)]) => {
+                pointers.insert(id, pointee);
+            }
+            (Op::Variable, _, &[Operand::Word(class), ..])
+                if class == StorageClass::Workgroup as u32 =>
+            {
+                let pointee = i.result_type.and_then(|t| pointers.get(&t));
+                let len = pointee.and_then(|p| arrays.get(p));
+                if len.is_some_and(|len| spec.contains(len)) {
+                    workgroup = Workgroup::RunTime;
+                } else if workgroup == Workgroup::None {
+                    workgroup = Workgroup::Fixed;
+                }
             }
             _ => {}
         }
@@ -106,7 +140,7 @@ fn check_part(part: usize, of: usize) {
             .into_iter()
             .map(|(stem, p)| (format!("{stem} (identity)"), p)),
     );
-    let (mut modules, mut workgroup, mut refused, mut skipped) = (0, 0, 0, 0);
+    let (mut modules, mut fixed, mut run_time, mut refused, mut skipped) = (0, 0, 0, 0, 0);
     let paths = fixtures();
     for path in paths.iter().skip(part).step_by(of) {
         let Some(bitcode) = assemble(path) else {
@@ -140,7 +174,8 @@ fn check_part(part: usize, of: usize) {
                 };
                 let (caps, wg) = read(&a.module.words);
                 modules += 1;
-                workgroup += usize::from(wg);
+                fixed += usize::from(wg == Workgroup::Fixed);
+                run_time += usize::from(wg == Workgroup::RunTime);
                 for cap in EXPLICIT_LAYOUT {
                     assert!(
                         !caps.contains(&(cap as u32)),
@@ -153,15 +188,16 @@ fn check_part(part: usize, of: usize) {
     }
     println!(
         "part {} of {of}: {} fixtures ({skipped} skipped), {} profiles ({committed} committed, the \
-         rest identity): {modules} modules, {workgroup} with Workgroup variables, none declaring \
-         the explicit layout's capabilities; {refused} refused",
+         rest identity): {modules} modules, {run_time} with a threadgroup arena sized at run time \
+         and {fixed} more with fixed-size Workgroup variables, none declaring the explicit \
+         layout's capabilities; {refused} refused",
         part + 1,
         paths.iter().skip(part).step_by(of).count(),
         profiles.len(),
     );
     if skipped < paths.iter().skip(part).step_by(of).count() {
         assert!(
-            workgroup > 0,
+            run_time + fixed > 0,
             "part {}: no module declared a Workgroup variable",
             part + 1
         );
