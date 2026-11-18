@@ -1061,6 +1061,45 @@ mod on_device {
     /// and the fourth is freed; the reserve stays. Nothing commits, so the device is quiet
     /// throughout.
     #[test]
+    fn every_device_takes_a_long_block_given_back_again_at_once() {
+        const LEN: u64 = 64 << 20;
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let counters = device.counters();
+            let mut made = Vec::new();
+            for round in 0..20 {
+                let before = counters.metrics();
+                let block = (device.take_block(MemoryClass::Shared, LEN))
+                    .unwrap_or_else(|error| panic!("{name}: round {round}: {error}"));
+                let buffer = (device.new_buffer(block.id, 0, LEN, Some(0)))
+                    .unwrap_or_else(|error| panic!("{name}: round {round}: {error}"));
+                drop(buffer);
+                device.release_block(block).expect("a release");
+                let after = counters.metrics();
+                println!(
+                    "long block: {name}: round {round}: consumer allocations +{}, made +{}, \
+                     reused +{}, freed +{}; gauges {:?}",
+                    after.consumer_allocations - before.consumer_allocations,
+                    after.blocks_made - before.blocks_made,
+                    after.blocks_reused - before.blocks_reused,
+                    after.allocations_freed - before.allocations_freed,
+                    counters.gauges()
+                );
+                made.push(after.consumer_allocations - before.consumer_allocations);
+            }
+            assert_eq!(
+                made.iter().skip(1).sum::<u64>(),
+                0,
+                "{name}: allocations a take made, by round: {made:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_device_frees_idle_allocations_as_the_window_s_peak_falls() {
         let instance = Instance::new(&[]).expect("an instance at the floor");
         let devices = devices_of_the_cfgs_kind(&instance);
