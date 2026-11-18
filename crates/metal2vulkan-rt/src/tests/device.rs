@@ -185,7 +185,8 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
 }
 
 /// The consumer's extensions: the instance and every device of the cfg's kind enable each one they
-/// offer, once, after the floor's, and pass over the rest. `VK_EXT_swapchain_maintenance1` goes
+/// offer, once, after the floor's (and the instance's after the portability listing, where the
+/// loader offers it), and pass over the rest. `VK_EXT_swapchain_maintenance1` goes
 /// with its feature structure, and only where the instance has its dependency.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
@@ -218,7 +219,12 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
             .any(|properties| properties.extension_name_as_c_str() == Ok(name))
     };
     let mut expected: Vec<&CStr> = floor::INSTANCE_EXTENSIONS.to_vec();
-    expected.extend(surface.iter().copied().filter(|&name| offers(name)));
+    expected.extend(
+        (floor::OPTIONAL_INSTANCE_EXTENSIONS.iter())
+            .chain(&surface)
+            .copied()
+            .filter(|&name| offers(name)),
+    );
     let enabled: Vec<&CStr> = instance.extensions().iter().map(|n| n.as_c_str()).collect();
     assert_eq!(enabled, expected, "the instance's extensions");
     let maintenance = enabled.contains(&ash::ext::surface_maintenance1::NAME);
