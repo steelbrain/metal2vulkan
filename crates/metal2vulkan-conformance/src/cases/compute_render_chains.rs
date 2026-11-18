@@ -810,7 +810,8 @@ mod tests {
         use crate::allowance::Justification;
         for case in all() {
             // Every allowance is a notice declaration on the notices site, so no row loosens a
-            // value, and the one notice declared is the venue's memory model.
+            // value: the venue's memory model, and pixel-sampler-scaling for the row whose
+            // fragment function samples through a runtime sampler slot.
             let codes: Vec<String> = case
                 .allowances()
                 .iter()
@@ -827,12 +828,11 @@ mod tests {
                     }
                 })
                 .collect();
-            assert_eq!(
-                codes,
-                [metal2vulkan_runtime::Degradation::SharedInSystemMemory.code()],
-                "{}",
-                case.name()
-            );
+            let mut wanted = vec![metal2vulkan_runtime::Degradation::SharedInSystemMemory.code()];
+            if case.subject.crossing == Crossing::KernelToFragment {
+                wanted.push(metal2vulkan_runtime::Degradation::PixelSamplerScaling.code());
+            }
+            assert_eq!(codes, wanted, "{}", case.name());
             assert_eq!(case.metal_source(), MetalSource::Run);
             case.shaders().unwrap();
             let inputs = case.inputs().unwrap();

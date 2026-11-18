@@ -791,7 +791,10 @@ mod tests {
             // The whole set, one declaration a code the row can announce: a code the row
             // announces and declares nowhere is a divergence, and a code it declares but cannot
             // announce is an allowance standing behind nothing, so the set is stated exactly.
-            let mut wanted = vec![Degradation::SharedInSystemMemory.code().to_owned()];
+            let mut wanted = vec![
+                Degradation::SharedInSystemMemory.code().to_owned(),
+                Degradation::PixelSamplerScaling.code().to_owned(),
+            ];
             if case.subject.sample.half_output {
                 wanted.push(Degradation::HalfOutputFastMathBlend.code().to_owned());
             }
