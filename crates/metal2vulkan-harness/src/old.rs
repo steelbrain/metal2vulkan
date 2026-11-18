@@ -6,6 +6,7 @@ use crate::plan::{self, Constant, Filter};
 use crate::{Code, Result, Size, Storage};
 use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{PixelFormat, SamplerMinMagFilter, TextureUsage};
+use metal2vulkan::pipeline::{ComputePipelineDescriptor, StageSource};
 use metal2vulkan_runtime as runtime;
 use runtime::{CommandBufferStatus, PipelineOptions, ResourceOptions, TextureDescriptor};
 use std::ptr::NonNull;
@@ -101,8 +102,23 @@ impl crate::ComputeDevice for runtime::Device {
     fn new_compute_pipeline_state(
         &self,
         function: &runtime::Function,
+        private: &[runtime::Function],
     ) -> Result<runtime::ComputePipelineState> {
-        Ok(self.new_compute_pipeline_state_with_function(function, &PipelineOptions::default())?)
+        let options = PipelineOptions::default();
+        if private.is_empty() {
+            return Ok(self.new_compute_pipeline_state_with_function(function, &options)?);
+        }
+        let private: Vec<_> = private
+            .iter()
+            .map(runtime::Function::function_descriptor)
+            .collect();
+        let function = plan::with_private(function.function_descriptor(), &private);
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(function));
+        Ok(runtime::Device::new_compute_pipeline_state(
+            self,
+            &descriptor,
+            &options,
+        )?)
     }
 
     fn new_command_queue(&self) -> Result<runtime::CommandQueue> {

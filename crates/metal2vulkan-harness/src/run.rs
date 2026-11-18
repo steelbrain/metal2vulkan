@@ -370,7 +370,7 @@ impl<D: ComputeDevice> Harness<D> {
     pub fn new(device: D, authored: &[u8]) -> Result<Self> {
         let authored = device.new_library(Code::Air(authored))?;
         let copy =
-            device.new_compute_pipeline_state(&authored.new_function(COPY_FUNCTION, &[])?)?;
+            device.new_compute_pipeline_state(&authored.new_function(COPY_FUNCTION, &[])?, &[])?;
         Ok(Harness {
             queue: device.new_command_queue()?,
             copy,
@@ -441,17 +441,27 @@ impl<D: ComputeDevice> Harness<D> {
             }
         }
         let library = self.library(&plan.library);
-        // Each function and its constants' values, made once.
-        let mut functions: Vec<(&str, &[Constant])> = Vec::new();
+        // Each function with its constants' values and its linked functions, made once.
+        let mut functions: Vec<(&str, &[Constant], &[String])> = Vec::new();
         let mut states = Vec::new();
         let mut state_of = Vec::with_capacity(plan.dispatches.len());
         for dispatch in &plan.dispatches {
-            let key = (dispatch.function.as_str(), dispatch.constants.as_slice());
+            let key = (
+                dispatch.function.as_str(),
+                dispatch.constants.as_slice(),
+                dispatch.linked.as_slice(),
+            );
             let at = match functions.iter().position(|known| *known == key) {
                 Some(at) => at,
                 None => {
                     let function = library.new_function(key.0, key.1)?;
-                    states.push(self.device.new_compute_pipeline_state(&function)?);
+                    let private = (key.2.iter())
+                        .map(|name| library.new_function(name, key.1))
+                        .collect::<Result<Vec<_>>>()?;
+                    states.push(
+                        self.device
+                            .new_compute_pipeline_state(&function, &private)?,
+                    );
                     functions.push(key);
                     functions.len() - 1
                 }
@@ -597,7 +607,7 @@ impl<D: ComputeDevice> Harness<D> {
     fn make_texels(&self) -> Result<[D::ComputePipelineState; 2]> {
         let [into, out] = TEXELS_FUNCTIONS.map(|name| {
             let function = self.authored.new_function(name, &[])?;
-            self.device.new_compute_pipeline_state(&function)
+            self.device.new_compute_pipeline_state(&function, &[])
         });
         Ok([into?, out?])
     }

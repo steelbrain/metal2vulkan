@@ -92,6 +92,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
         }],
         dispatches: vec![Dispatch {
             function: "copy_words".to_owned(),
+            linked: Vec::new(),
             constants: Vec::new(),
             bindings: vec![Binding::Buffer {
                 index: 0,
@@ -236,6 +237,7 @@ workload second other.metallib
 buffer 16 private zero
 set-buffer 0 0
 threadgroup-length 0 1024
+linked private f g
 dispatch m threadgroups 1 1 1 16 1 1
 check 0 exact
 ";
@@ -319,6 +321,8 @@ fn a_description_makes_its_plans() {
             length: 1024
         }
     ));
+    assert_eq!(second.dispatches[0].linked, ["f", "g"]);
+    assert!(first.dispatches.iter().all(|d| d.linked.is_empty()));
 }
 
 /// The error of the description `text`.
@@ -390,14 +394,22 @@ fn a_faulty_description_is_refused_naming_its_line() {
         refusal("threadgroup-length 0"),
         "line 3: threadgroup-length takes INDEX LENGTH"
     );
+    assert_eq!(
+        refusal("linked binary f"),
+        "line 3: linked takes private FUNCTION..."
+    );
+    assert_eq!(
+        refusal("linked private"),
+        "line 3: linked takes private FUNCTION..."
+    );
     assert_eq!(refusal("set-buffer 0 0"), "workload w has no dispatch");
     assert_eq!(
         refusal(&format!("{dispatch}\nset-buffer 1 0")),
-        "workload w sets a binding or a constant after its last dispatch"
+        "workload w sets a binding, a constant or a linked function after its last dispatch"
     );
     assert_eq!(
         refusal(&format!("{dispatch}\nconstant 0 53 01")),
-        "workload w sets a binding or a constant after its last dispatch"
+        "workload w sets a binding, a constant or a linked function after its last dispatch"
     );
     assert_eq!(
         refusal("constant 0 53 0x"),

@@ -393,9 +393,10 @@ impl crate::ComputeDevice for Device {
     fn new_compute_pipeline_state(
         &self,
         function: &rt::FunctionDescriptor,
+        private: &[rt::FunctionDescriptor],
     ) -> Result<rt::ComputePipelineState> {
-        let descriptor =
-            rt::ComputePipelineDescriptor::new(rt::StageSource::Function(function.clone()));
+        let function = plan::with_private(function.clone(), private);
+        let descriptor = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(function));
         // A constexpr sampler takes the index its state words took first; a read's or a write's
         // sampler takes nothing at its index.
         let sampler_ids = |samplers: &[rt::NumberedSampler]| {

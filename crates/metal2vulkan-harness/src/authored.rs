@@ -149,6 +149,7 @@ fn bandwidth() -> Plan {
         buffers: vec![private(float_bytes(&input)), unset(16 * VECTORS)],
         dispatches: vec![Dispatch {
             function: "scale_offset".to_owned(),
+            linked: Vec::new(),
             constants: Vec::new(),
             bindings: vec![
                 buffer(0, 0),
@@ -220,6 +221,7 @@ fn fma_chains(name: &str, rounds: u32, command_buffers: usize) -> Plan {
         .collect();
     let dispatch = Dispatch {
         function: "fma_chains".to_owned(),
+        linked: Vec::new(),
         constants: Vec::new(),
         bindings: vec![buffer(0, 0), bytes(1, rounds.to_le_bytes().to_vec())],
         grid: Grid::groups_of_256(THREADS as u64 / 256),
@@ -265,6 +267,7 @@ fn threadgroup_scan() -> Plan {
         buffers: vec![private(word_bytes(&input)), unset(4 * WORDS as u64)],
         dispatches: vec![Dispatch {
             function: "block_scan".to_owned(),
+            linked: Vec::new(),
             constants: Vec::new(),
             bindings: vec![buffer(0, 0), buffer(1, 1)],
             grid: Grid::groups_of_256(WORDS as u64 / 256),
@@ -309,12 +312,14 @@ fn simd_reduce() -> Plan {
         dispatches: vec![
             Dispatch {
                 function: "reduce_sum".to_owned(),
+                linked: Vec::new(),
                 constants: Vec::new(),
                 bindings: vec![buffer(0, 0), buffer(1, 1), bytes(2, shape(WORDS, CHUNK))],
                 grid: Grid::groups_of_256(GROUPS as u64),
             },
             Dispatch {
                 function: "reduce_sum".to_owned(),
+                linked: Vec::new(),
                 constants: Vec::new(),
                 bindings: vec![buffer(0, 1), buffer(1, 2), bytes(2, shape(GROUPS, GROUPS))],
                 grid: Grid::groups_of_256(1),
@@ -377,6 +382,7 @@ fn image_filter() -> Plan {
         buffers: vec![private(float_bytes(&input)), unset(4 * input.len() as u64)],
         dispatches: vec![Dispatch {
             function: "binomial3x3".to_owned(),
+            linked: Vec::new(),
             constants: Vec::new(),
             bindings: vec![buffer(0, 0), buffer(1, 1), bytes(2, size)],
             grid: Grid::Threads {
@@ -417,6 +423,7 @@ fn dispatch_chain() -> Plan {
             let set_bytes = bytes(1, increment(step).to_le_bytes().to_vec());
             Dispatch {
                 function: "lcg_step".to_owned(),
+                linked: Vec::new(),
                 constants: Vec::new(),
                 bindings: match step {
                     0 => vec![buffer(0, 0), set_bytes],
@@ -543,6 +550,7 @@ fn lcg_frame(
         .collect();
     let dispatch = Dispatch {
         function: "lcg_step".to_owned(),
+        linked: Vec::new(),
         constants: Vec::new(),
         bindings: vec![buffer(0, 0), buffer(1, 1)],
         grid: Grid::groups_of_256(1),
@@ -594,6 +602,7 @@ fn wide_bindings() -> Plan {
     buffers.push(unset(4 * WORDS as u64));
     let dispatch = Dispatch {
         function: "wide_bindings".to_owned(),
+        linked: Vec::new(),
         constants: Vec::new(),
         bindings: (0..=INPUTS).map(|k| buffer(k as u32, k)).collect(),
         grid: Grid::groups_of_256(1),
@@ -636,6 +645,7 @@ fn waves() -> Plan {
         buffers: vec![unset(4 * THREADS), private(word_bytes(&[BASE, 0, 0, 0]))],
         dispatches: vec![Dispatch {
             function: "wave_store".to_owned(),
+            linked: Vec::new(),
             constants: Vec::new(),
             bindings: vec![buffer(0, 0), buffer(1, 1)],
             grid: Grid::Threadgroups {
@@ -684,6 +694,7 @@ fn vote_loop() -> Plan {
         buffers: vec![private(word_bytes(&steps)), unset(8 * u64::from(THREADS))],
         dispatches: vec![Dispatch {
             function: "vote_loop".to_owned(),
+            linked: Vec::new(),
             constants: Vec::new(),
             bindings: vec![buffer(0, 0), buffer(1, 1)],
             grid: Grid::Threadgroups {
@@ -732,6 +743,7 @@ fn narrow_ints() -> Plan {
         buffers: vec![unset(4 * u64::from(THREADS))],
         dispatches: vec![Dispatch {
             function: "narrow_mix".to_owned(),
+            linked: Vec::new(),
             constants: Vec::new(),
             bindings: vec![buffer(0, 0), bytes(1, ROUNDS.to_le_bytes().to_vec())],
             grid: Grid::groups_of_256(u64::from(THREADS) / 256),
@@ -784,6 +796,7 @@ fn zero_products() -> Plan {
         buffers: vec![unset(16 * u64::from(THREADS))],
         dispatches: vec![Dispatch {
             function: "signed_zero_products".to_owned(),
+            linked: Vec::new(),
             constants: vec![float(0, 0.0), float(1, -0.0)],
             bindings: vec![buffer(0, 0), bytes(1, ROUNDS.to_le_bytes().to_vec())],
             grid: Grid::groups_of_256(u64::from(THREADS) / 256),
@@ -879,6 +892,7 @@ fn sampling_plan(
         ],
         dispatches: vec![Dispatch {
             function: function.to_owned(),
+            linked: Vec::new(),
             constants: Vec::new(),
             bindings,
             grid: texel_grid(to),

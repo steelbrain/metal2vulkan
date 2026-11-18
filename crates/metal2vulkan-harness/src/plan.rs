@@ -4,6 +4,7 @@
 use crate::{Result, Size, Storage};
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::DataType;
+use metal2vulkan::pipeline::{FunctionDescriptor, LinkedFunction, LinkedFunctions};
 use std::path::PathBuf;
 
 /// One workload.
@@ -104,6 +105,21 @@ pub struct BufferPlan {
     pub contents: Option<Vec<u8>>,
 }
 
+/// `function` with `private` linked as its private functions
+/// (`linkedFunctions.privateFunctions`), each with its constants and specialized as it was made.
+pub(crate) fn with_private(
+    function: FunctionDescriptor,
+    private: &[FunctionDescriptor],
+) -> FunctionDescriptor {
+    let linked = private.iter().fold(LinkedFunctions::new(), |linked, made| {
+        let mut function = LinkedFunction::new(made.function.clone());
+        function.constants = made.constants.clone();
+        function.specialized = made.specialized;
+        linked.with_private_function(function)
+    });
+    function.with_linked(linked)
+}
+
 /// One texture of a plan: 2D, `RGBA16Float`, one level, `Private`, of `ShaderRead | ShaderWrite`
 /// usage. Its width and height are multiples of 16, the harness's transfer kernels' threadgroups.
 #[derive(Clone, Debug)]
@@ -135,6 +151,9 @@ pub struct Dispatch {
     pub function: String,
     /// The values of the kernel's function constants, by index; none where it declares none.
     pub constants: Vec<Constant>,
+    /// The functions its pipeline links as private functions (`linkedFunctions.privateFunctions`),
+    /// by name in the plan's library, each made with `constants` as the kernel is.
+    pub linked: Vec<String>,
     /// The binding calls before the dispatch, in order.
     pub bindings: Vec<Binding>,
     /// The dispatch call.

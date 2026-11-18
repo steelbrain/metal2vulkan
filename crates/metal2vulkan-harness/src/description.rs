@@ -12,6 +12,9 @@
 //! set-bytes INDEX LENGTH FILL            setBytes:length:atIndex: before the next dispatch
 //! threadgroup-length INDEX LENGTH        setThreadgroupMemoryLength:atIndex: before the next
 //!                                        dispatch; LENGTH a multiple of 16, as Metal requires
+//! linked private FUNCTION...             the next dispatch's pipeline links FUNCTIONs, functions
+//!                                        of the metallib, as private functions, each made with
+//!                                        the dispatch's constants
 //! constant INDEX TYPE HEX                a function constant of the next dispatch's kernel: its
 //!                                        index, raw MTLDataType and value's bytes
 //! dispatch FUNCTION threadgroups GX GY GZ TX TY TZ [repeat N]
@@ -104,13 +107,14 @@ impl Described {
         });
         // A dispatch at a time: the lines up to it, its bindings and constants among them.
         loop {
-            let (mut bindings, mut constants) = (Vec::new(), Vec::new());
+            let (mut bindings, mut constants, mut linked) = (Vec::new(), Vec::new(), Vec::new());
             let dispatch = loop {
                 match lines.next().transpose()? {
                     None => break None,
                     Some(Line::Buffer(buffer)) => plan.buffers.push(buffer),
                     Some(Line::Binding(binding)) => bindings.push(binding),
                     Some(Line::Constant(constant)) => constants.push(constant),
+                    Some(Line::Linked(functions)) => linked.extend(functions),
                     Some(Line::Output(output)) => plan.outputs.push(output),
                     Some(Line::Dispatch {
                         function,
@@ -120,10 +124,13 @@ impl Described {
                 }
             };
             let Some((function, grid, repeat)) = dispatch else {
-                if !(bindings.is_empty() && constants.is_empty()) && !plan.dispatches.is_empty() {
+                if !(bindings.is_empty() && constants.is_empty() && linked.is_empty())
+                    && !plan.dispatches.is_empty()
+                {
                     let name = &self.name;
                     return Err(format!(
-                        "workload {name} sets a binding or a constant after its last dispatch"
+                        "workload {name} sets a binding, a constant or a linked function after \
+                         its last dispatch"
                     )
                     .into());
                 }
@@ -131,6 +138,7 @@ impl Described {
             };
             plan.dispatches.push(Dispatch {
                 function: function.clone(),
+                linked: linked.clone(),
                 constants: constants.clone(),
                 bindings,
                 grid,
@@ -138,6 +146,7 @@ impl Described {
             for _ in 1..repeat {
                 plan.dispatches.push(Dispatch {
                     function: function.clone(),
+                    linked: linked.clone(),
                     constants: constants.clone(),
                     bindings: Vec::new(),
                     grid,
@@ -158,6 +167,7 @@ enum Line {
     Buffer(BufferPlan),
     Binding(Binding),
     Constant(Constant),
+    Linked(Vec<String>),
     Dispatch {
         function: String,
         grid: Grid,
@@ -212,6 +222,13 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
                 }
             },
         }),
+        ["linked", "private", functions @ ..] if !functions.is_empty() => Line::Linked(
+            functions
+                .iter()
+                .map(|&function| function.to_owned())
+                .collect(),
+        ),
+        ["linked", ..] => return Err("linked takes private FUNCTION...".to_owned()),
         ["threadgroup-length", ..] => {
             return Err("threadgroup-length takes INDEX LENGTH".to_owned())
         }

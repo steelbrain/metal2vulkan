@@ -241,6 +241,7 @@ pub trait ComputeDevice: Device {
     fn new_compute_pipeline_state(
         &self,
         function: &Self::Function,
+        private: &[Self::Function],
     ) -> Result<Self::ComputePipelineState>;
 
     /// `newCommandQueue`.
