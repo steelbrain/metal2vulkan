@@ -1080,7 +1080,7 @@ impl NewRuntime {
             let buffer = match storage(call, raw)? {
                 rt::StorageMode::Managed if class == rt::MemoryClass::Shared => {
                     match self.managed_form(call)? {
-                        ManagedCopies::One => device.new_buffer(range.block, at, length, false),
+                        ManagedCopies::One => device.new_buffer(range.block, at, length, None),
                         ManagedCopies::Two => {
                             device.new_managed_buffer(range.block, at, length, length)
                         }
