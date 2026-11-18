@@ -239,8 +239,8 @@ in its memory.
   keeps each device copy it uses, and so the copy's block, until it retires.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
-the buffer there before has completed. A command buffer keeps each block it uses until it retires,
-so a block released meanwhile goes back to the pool only then. Placement is the consumer's, and so
+the buffer there before has completed. A command buffer keeps each buffer it uses, and so its
+block, until it retires, so a block released meanwhile goes back to the pool only then. Placement is the consumer's, and so
 is the slack past a buffer's length: the runtime writes no byte of a block outside the ranges of
 the buffers placed in it (a zero fill, a Managed buffer's copy-in and its device copy's zeroing
 each cover exactly the buffer's bytes), so what lies between and after them is as the consumer
@@ -832,9 +832,13 @@ that touch blocks first.
   blocks of the floor's ring memory type (device-local, host-visible, coherent), split into
   64 KiB chunks that a command buffer takes as it records and gives back when it retires; a block
   is made when no chunk is free and kept for the device's life.
-- The command buffer keeps each pipeline state it dispatches with, and each texture and sampler
-  state an encoder binds or declares, until it retires, so their elements of set 1 stay theirs
-  while work may read them.
+- The command buffer keeps each pipeline state, buffer, texture and sampler state an encoder
+  sets, binds, declares or copies, once, until it retires, as Metal's command buffer retains each
+  object once, so their memory and their elements of set 1 stay theirs while work may read them.
+  The first use of an object in a command buffer takes its one reference; a later bind of it, and
+  every binding slot that holds it, borrows that one and changes no count. The completion thread
+  releases them as the command buffer retires, and the lists keep their capacity for the queue's
+  next command buffer.
 
 ## Blit encoders
 

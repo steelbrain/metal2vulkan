@@ -269,8 +269,70 @@ pub(crate) struct Kernel {
     entry: CString,
     pub(crate) interface: Interface,
     /// The `VkPipeline`s made so far, by their specialization.
-    variants: Mutex<Vec<(Variant, vk::Pipeline)>>,
+    variants: Variants,
 }
+
+/// The variants of a kernel that each have a cell of their own.
+const VARIANT_CELLS: usize = 8;
+
+/// A kernel's `VkPipeline`s made so far, by their specialization. The first [`VARIANT_CELLS`]
+/// made each fill a cell of their own, which a dispatch reads with no lock; any made past them go
+/// in a list under the lock that every making takes, so that one variant is made once.
+#[derive(Default)]
+struct Variants {
+    cells: [OnceLock<(Variant, vk::Pipeline)>; VARIANT_CELLS],
+    more: Mutex<Vec<(Variant, vk::Pipeline)>>,
+}
+
+impl Variants {
+    /// The pipeline of the variant of `size`, threadgroup memory `lengths` and `tiles`, where its
+    /// cell holds it, read with no lock; `more`, the list past the cells, where they are all full.
+    fn in_cells(&self, (size, lengths, tiles): Key<'_>) -> Result<vk::Pipeline, bool> {
+        for cell in &self.cells {
+            match cell.get() {
+                Some((variant, pipeline)) if variant.is(size, lengths, tiles) => {
+                    return Ok(*pipeline)
+                }
+                Some(_) => {}
+                // Cells fill in order, under the lock: none after an empty one is full.
+                None => return Err(false),
+            }
+        }
+        Err(true)
+    }
+
+    /// Keeps `pipeline`, of `variant`, made under the lock `more` is: in the first empty cell,
+    /// else in `more`.
+    fn keep(
+        &self,
+        more: &mut Vec<(Variant, vk::Pipeline)>,
+        variant: Variant,
+        pipeline: vk::Pipeline,
+    ) {
+        match self.cells.iter().find(|cell| cell.get().is_none()) {
+            // Only a making fills a cell, under the lock: the empty one stays empty until this.
+            Some(cell) => {
+                let _ = cell.set((variant, pipeline));
+            }
+            None => more.push((variant, pipeline)),
+        }
+    }
+
+    /// Every pipeline, taken out to give back.
+    fn drain(&mut self) -> impl Iterator<Item = vk::Pipeline> + '_ {
+        let more = self
+            .more
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (self.cells.iter_mut())
+            .filter_map(|cell| cell.take().map(|(_, pipeline)| pipeline))
+            .chain(more.drain(..).map(|(_, pipeline)| pipeline))
+    }
+}
+
+/// A variant's key: its threadgroup size, its threadgroup memory lengths, whether it runs a
+/// kernel's grid tiles.
+pub(crate) type Key<'a> = ([u32; 3], &'a [u32], bool);
 
 /// What the runtime needs of a kernel, from the translator.
 pub(crate) struct Interface {
@@ -423,12 +485,18 @@ pub(crate) enum FieldValue {
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
 /// order of [`Interface::threadgroups`], and whether it runs a kernel's grid tiles.
-#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Variant {
     pub(crate) size: [u32; 3],
     pub(crate) threadgroup_lengths: Vec<u32>,
     /// The launches are a kernel's grid tiles (`MultiRegion` 1).
     pub(crate) tiles: bool,
+}
+
+impl Variant {
+    /// Whether this is the variant of `size`, threadgroup memory `lengths` and `tiles`.
+    fn is(&self, size: [u32; 3], lengths: &[u32], tiles: bool) -> bool {
+        self.size == size && self.threadgroup_lengths == lengths && self.tiles == tiles
+    }
 }
 
 /// The workgroup an image-only kernel that does not observe its threadgroup partition runs a grid
@@ -639,7 +707,8 @@ impl Compiled {
                 tiles,
             };
             let made = compiled.whole.make(&compiled.core, &variant)?;
-            lock(&compiled.whole.variants).push((variant, made));
+            let variants = &compiled.whole.variants;
+            variants.keep(&mut lock(&variants.more), variant, made);
         }
         Ok(compiled)
     }
@@ -1062,7 +1131,7 @@ impl ComputePipelineState {
             module,
             entry: c"main".to_owned(),
             interface,
-            variants: Mutex::new(Vec::new()),
+            variants: Variants::default(),
         };
         let compiled = Compiled::new(core, whole, Form::Sized { partial: None }, None, Vec::new());
         Ok(ComputePipelineState {
@@ -1205,7 +1274,7 @@ impl Kernel {
             module,
             entry,
             interface,
-            variants: Mutex::new(Vec::new()),
+            variants: Variants::default(),
         })
     }
 
@@ -1221,18 +1290,38 @@ impl Kernel {
             .map_err(Error::vulkan("vkCreateShaderModule"))
     }
 
-    /// The `VkPipeline` of `variant`, made now where it is not yet: the calling thread waits for
-    /// it, a first-use wait, so what is recorded never depends on when a compile finishes.
-    pub(crate) fn pipeline(&self, core: &Core, variant: &Variant) -> Result<vk::Pipeline, Error> {
-        let mut variants = lock(&self.variants);
-        if let Some((_, pipeline)) = variants.iter().find(|(made, _)| made == variant) {
-            return Ok(*pipeline);
+    /// The `VkPipeline` of the variant `key`, made now where it is not yet: the calling thread
+    /// waits for it, a first-use wait, so what is recorded never depends on when a compile
+    /// finishes. One of the kernel's first [`VARIANT_CELLS`] variants is found with no lock.
+    pub(crate) fn pipeline(&self, core: &Core, key: Key<'_>) -> Result<vk::Pipeline, Error> {
+        let variants = &self.variants;
+        let full = match variants.in_cells(key) {
+            Ok(pipeline) => return Ok(pipeline),
+            Err(full) => full,
+        };
+        let mut more = lock(&variants.more);
+        let (size, lengths, tiles) = key;
+        let found = match full {
+            true => (more.iter()).find(|(variant, _)| variant.is(size, lengths, tiles)),
+            false => None,
+        };
+        if let Some(&(_, pipeline)) = found {
+            return Ok(pipeline);
         }
+        // Another thread may have made it since the cells were read.
+        if let Ok(pipeline) = variants.in_cells(key) {
+            return Ok(pipeline);
+        }
+        let variant = Variant {
+            size,
+            threadgroup_lengths: lengths.to_vec(),
+            tiles,
+        };
         let began = host_time();
-        let pipeline = self.make(core, variant)?;
+        let pipeline = self.make(core, &variant)?;
         core.counters
             .first_use_wait(host_time().saturating_sub(began));
-        variants.push((variant.clone(), pipeline));
+        variants.keep(&mut more, variant, pipeline);
         Ok(pipeline)
     }
 
@@ -1289,11 +1378,7 @@ impl Kernel {
 
     /// Gives the module and its `VkPipeline`s to the reaper.
     fn release(&mut self, core: &Core) {
-        let variants = self
-            .variants
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for (_, pipeline) in variants.drain(..) {
+        for pipeline in self.variants.drain() {
             core.reaper.give(Job::Free(Free::Pipeline(pipeline)));
         }
         core.reaper.give(Job::Free(Free::ShaderModule(self.module)));
@@ -1321,5 +1406,12 @@ impl Drop for Compiled {
                 kernel.release(&self.core);
             }
         }
+    }
+}
+
+// SAFETY: the handle is its one `Arc` and nothing else, and its address is that `Arc`'s pointer.
+unsafe impl crate::kept::Handle for ComputePipelineState {
+    fn address(&self) -> usize {
+        Arc::as_ptr(&self.inner) as *const () as usize
     }
 }

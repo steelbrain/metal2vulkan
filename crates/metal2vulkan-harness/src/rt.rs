@@ -783,6 +783,10 @@ impl crate::RenderCommandEncoder<Device> for rt::RenderCommandEncoder {
             .map_err(error)
     }
 
+    fn set_fragment_texture(&mut self, texture: &rt::Texture, index: u32) -> Result<()> {
+        rt::RenderCommandEncoder::set_fragment_texture(self, Some(texture), index).map_err(error)
+    }
+
     fn draw_triangles(&mut self, vertex_start: u32, vertex_count: u32) -> Result<()> {
         let triangle = rt::PrimitiveType::Triangle;
         rt::RenderCommandEncoder::draw_primitives(self, triangle, vertex_start, vertex_count, 1, 0)

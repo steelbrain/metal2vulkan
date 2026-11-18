@@ -728,13 +728,16 @@ impl<D: ComputeDevice> Harness<D> {
                     *bound = Some(state);
                 }
                 for binding in &dispatch.bindings {
-                    if let Binding::Buffer {
-                        index,
-                        buffer,
-                        offset,
-                    } = binding
-                    {
-                        encoder.set_vertex_buffer(&made.buffers[*buffer], *offset, *index)?;
+                    match binding {
+                        Binding::Buffer {
+                            index,
+                            buffer,
+                            offset,
+                        } => encoder.set_vertex_buffer(&made.buffers[*buffer], *offset, *index)?,
+                        Binding::Texture { index, texture } => {
+                            encoder.set_fragment_texture(&made.textures[*texture], *index)?
+                        }
+                        _ => {}
                     }
                 }
                 encoder.draw_triangles(0, vertex_count)?;

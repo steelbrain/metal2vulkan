@@ -3110,3 +3110,10 @@ pub(crate) struct OverCopy {
     /// The buffer is Shared: the host reads what a copy back writes.
     pub(crate) shared: bool,
 }
+
+// SAFETY: the handle is its one `Arc` and nothing else, and its address is that `Arc`'s pointer.
+unsafe impl crate::kept::Handle for Texture {
+    fn address(&self) -> usize {
+        Arc::as_ptr(&self.inner) as *const () as usize
+    }
+}

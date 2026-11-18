@@ -8,10 +8,11 @@ use crate::error::{Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::floor;
 use crate::hazard::Access;
+use crate::kept::{Handle, Lent};
 use crate::memory::BlockId;
 use crate::over;
 use crate::pipeline::{
-    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, Which, PUSH_BYTES,
+    ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Which, PUSH_BYTES,
     PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
@@ -94,7 +95,7 @@ enum Slot {
     #[default]
     Empty,
     Buffer {
-        buffer: Buffer,
+        buffer: Lent<Buffer>,
         offset: u64,
     },
     /// The address of a `set_bytes` copy in the parameter ring.
@@ -174,14 +175,18 @@ pub struct ComputeCommandEncoder {
     /// What the command buffer records, held while the encoder is open.
     building: Option<Building>,
     serial: bool,
-    pipeline: Option<ComputePipelineState>,
+    /// The state set, and the objects of the argument tables below, borrowed from what the
+    /// command buffer keeps (`crate::kept`).
+    pipeline: Option<Lent<ComputePipelineState>>,
     slots: Vec<Slot>,
     /// The texture argument table.
-    textures: Vec<Option<Texture>>,
+    textures: Vec<Option<Lent<Texture>>>,
     /// The sampler argument table.
-    samplers: Vec<Option<SamplerState>>,
+    samplers: Vec<Option<Lent<SamplerState>>>,
     /// Threadgroup memory lengths by index, as set.
     threadgroup_lengths: Vec<(u32, u32)>,
+    /// The lengths of the last variant looked up, in its kernel's order, kept to reuse.
+    lengths: Vec<u32>,
     /// `use_resource` declarations, by resource id.
     declared: Vec<(u32, Access)>,
     /// A `use_resource` declaration writes a Shared buffer.
@@ -399,6 +404,7 @@ impl CommandBuffer {
             textures: vec![None; TEXTURE_SLOTS as usize],
             samplers: vec![None; SAMPLER_SLOTS as usize],
             threadgroup_lengths: Vec::new(),
+            lengths: Vec::new(),
             declared: Vec::new(),
             declared_shared_write: false,
             last: None,
@@ -433,15 +439,15 @@ impl ComputeCommandEncoder {
         if self.pipeline.as_ref().is_some_and(|set| set.is(state)) {
             return Ok(());
         }
-        self.building().keep_pipeline(state);
-        self.pipeline = Some(state.clone());
+        // SAFETY: the encoder holds the borrow, and it ends before its command buffer commits.
+        self.pipeline = Some(unsafe { self.building().lend_pipeline(state) });
         self.last = None;
         self.changed();
         Ok(())
     }
 
     /// `setBuffer:offset:atIndex:` (`setBuffers:offsets:withRange:` is a loop of it). `None`
-    /// unbinds the slot. The command buffer keeps the buffer's block until it retires.
+    /// unbinds the slot. The command buffer keeps the buffer, and so its block, until it retires.
     ///
     /// Err: [`Refusal::BufferIndex`] for an index of 31 or more; [`Refusal::OtherDevice`] for
     /// another device's buffer.
@@ -454,13 +460,23 @@ impl ComputeCommandEncoder {
         let slot = self.slot(index)?;
         let bound = match buffer {
             Some(buffer) => {
+                if let Slot::Buffer {
+                    buffer: held,
+                    offset: at,
+                } = &self.slots[slot]
+                {
+                    if held.address() == buffer.address() && *at == offset {
+                        return Ok(());
+                    }
+                }
                 let building = self.building();
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
-                building.keep(buffer);
                 Slot::Buffer {
-                    buffer: buffer.clone(),
+                    // SAFETY: the encoder's slot holds the borrow, and it ends before its command
+                    // buffer commits.
+                    buffer: unsafe { building.lend_buffer(buffer) },
                     offset,
                 }
             }
@@ -482,14 +498,23 @@ impl ComputeCommandEncoder {
         if index >= TEXTURE_SLOTS {
             return Err(Error::Refused(Refusal::TextureArgumentIndex { index }));
         }
-        if let Some(texture) = texture {
-            let building = self.building();
-            if !texture.is_of(building.device.core()) {
-                return Err(Error::Refused(Refusal::OtherDevice));
-            }
-            building.keep_texture(texture);
+        let held = &self.textures[index as usize];
+        if held.as_deref().map(Handle::address) == texture.map(Handle::address) {
+            return Ok(());
         }
-        self.textures[index as usize] = texture.cloned();
+        let lent = match texture {
+            Some(texture) => {
+                let building = self.building();
+                if !texture.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                // SAFETY: the encoder's slot holds the borrow, and it ends before its command
+                // buffer commits.
+                Some(unsafe { building.lend_texture(texture) })
+            }
+            None => None,
+        };
+        self.textures[index as usize] = lent;
         self.changed();
         Ok(())
     }
@@ -508,14 +533,23 @@ impl ComputeCommandEncoder {
         if index >= SAMPLER_SLOTS {
             return Err(Error::Refused(Refusal::SamplerArgumentIndex { index }));
         }
-        if let Some(sampler) = sampler {
-            let building = self.building();
-            if !sampler.is_of(building.device.core()) {
-                return Err(Error::Refused(Refusal::OtherDevice));
-            }
-            building.keep_sampler(sampler);
+        let held = &self.samplers[index as usize];
+        if held.as_deref().map(Handle::address) == sampler.map(Handle::address) {
+            return Ok(());
         }
-        self.samplers[index as usize] = sampler.cloned();
+        let lent = match sampler {
+            Some(sampler) => {
+                let building = self.building();
+                if !sampler.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                // SAFETY: the encoder's slot holds the borrow, and it ends before its command
+                // buffer commits.
+                Some(unsafe { building.lend_sampler(sampler) })
+            }
+            None => None,
+        };
+        self.samplers[index as usize] = lent;
         Ok(())
     }
 
@@ -578,8 +612,8 @@ impl ComputeCommandEncoder {
     }
 
     /// `useResource:usage:` (`useResources:count:usage:` is a loop of it): the resource joins every
-    /// later dispatch's accesses. The command buffer keeps a buffer's block, or a texture, until
-    /// it retires.
+    /// later dispatch's accesses. The command buffer keeps the buffer or the texture until it
+    /// retires.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's resource.
     pub fn use_resource(
@@ -624,8 +658,8 @@ impl ComputeCommandEncoder {
 
     /// `useHeap:` (`useHeaps:count:` is a loop of it), for the heap whose memory is block `heap`:
     /// a [`HeapRange`](crate::HeapRange)'s block, or the block a placement heap's buffers sit in.
-    /// The command buffer keeps the block until it retires, as it keeps a buffer's block for
-    /// [`use_resource`](Self::use_resource), so a heap the consumer gives back while the work
+    /// The command buffer keeps the block until it retires, as it keeps a buffer, and so its
+    /// block, for [`use_resource`](Self::use_resource), so a heap the consumer gives back while the work
     /// runs stays valid under it. Metal states no retention for `useHeap:`; keeping is the safe
     /// reading. It declares no access: a dispatch touches its bound slots and the `use_resource`
     /// declarations, and a kernel that reaches a heap's resources through addresses outside its
@@ -892,27 +926,20 @@ impl ComputeCommandEncoder {
         let vk_pipeline = match self.last {
             Some(last) if last.module == module && last.local == local => last.pipeline,
             _ => {
-                let variant = Variant {
-                    size: local,
-                    threadgroup_lengths: kernel
-                        .interface
-                        .threadgroups
-                        .iter()
-                        .map(|&index| self.threadgroup_length(index))
-                        .collect(),
-                    tiles: module == Module::Tiles,
-                };
-                let length = kernel
-                    .interface
-                    .memory
-                    .bytes(&variant.threadgroup_lengths, threads);
+                let lengths = &mut self.lengths;
+                lengths.clear();
+                lengths.extend(
+                    (kernel.interface.threadgroups.iter())
+                        .map(|&index| threadgroup_length(&self.threadgroup_lengths, index)),
+                );
+                let length = kernel.interface.memory.bytes(lengths, threads);
                 if length > u64::from(limits.max_shared_memory) {
                     return Err(Error::Limit(Limit::ThreadgroupMemory {
                         length,
                         max: limits.max_shared_memory,
                     }));
                 }
-                kernel.pipeline(core, &variant)?
+                kernel.pipeline(core, (local, lengths, module == Module::Tiles))?
             }
         };
         self.last = Some(Last {
@@ -1073,14 +1100,13 @@ impl ComputeCommandEncoder {
                     )
             })
     }
+}
 
-    /// The length set for threadgroup memory index `index`, 0 where none was.
-    fn threadgroup_length(&self, index: u32) -> u32 {
-        self.threadgroup_lengths
-            .iter()
-            .find(|(set, _)| *set == index)
-            .map_or(0, |(_, length)| *length)
-    }
+/// The length `set` gives threadgroup memory index `index`, 0 where it gives none.
+fn threadgroup_length(set: &[(u32, u32)], index: u32) -> u32 {
+    (set.iter())
+        .find(|(at, _)| *at == index)
+        .map_or(0, |(_, length)| *length)
 }
 
 /// The recording an open encoder holds.
@@ -1111,8 +1137,8 @@ fn check_alignments(core: &Core, slots: &[Slot], interface: &Interface) -> Resul
 /// A compute encoder's argument tables: buffer slots, textures and samplers.
 type Bound<'a> = (
     &'a [Slot],
-    &'a [Option<Texture>],
-    &'a [Option<SamplerState>],
+    &'a [Option<Lent<Texture>>],
+    &'a [Option<Lent<SamplerState>>],
 );
 
 impl Parameters {
@@ -1215,7 +1241,7 @@ fn merge(a: Access, b: Access) -> Access {
 /// What a dispatch touches besides its pipeline's own facts.
 pub(crate) struct Accesses<'a> {
     slots: &'a [Slot],
-    textures: &'a [Option<Texture>],
+    textures: &'a [Option<Lent<Texture>>],
     declared: &'a [(u32, Access)],
     indirect: Option<u32>,
 }

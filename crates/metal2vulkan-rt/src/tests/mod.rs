@@ -11,6 +11,7 @@ mod fence;
 mod floor;
 mod hazard;
 mod heap;
+mod kept;
 mod kernel_map;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kernels;

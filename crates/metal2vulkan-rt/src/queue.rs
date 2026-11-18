@@ -4,6 +4,7 @@ use crate::command::CommandBuffer;
 use crate::counters::{Counters, Gauge};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
+use crate::kept::Objects;
 use crate::reaper::{Free, Job};
 use crate::times::Stamps;
 use std::sync::atomic::AtomicU64;
@@ -44,6 +45,9 @@ struct Slots {
     next: u32,
     /// Slots given back.
     free: Vec<u32>,
+    /// The kept-object lists of retired command buffers, empty, with their capacity
+    /// (`crate::kept`): at most one per slot.
+    objects: Vec<Objects>,
 }
 
 impl Slots {
@@ -71,6 +75,7 @@ impl Device {
                 slots: Mutex::new(Slots {
                     next: 0,
                     free: Vec::new(),
+                    objects: Vec::new(),
                 }),
                 room: Condvar::new(),
                 stamps: Stamps::new(core, max_command_buffer_count)?,
@@ -86,7 +91,7 @@ impl Device {
 impl CommandQueue {
     /// `commandBuffer`: waits, as Metal does, while the queue's maximum count of its command
     /// buffers are made and not yet completed. `commandBufferWithUnretainedReferences` is the same
-    /// call: what a command buffer keeps is one reference per block it uses.
+    /// call: what a command buffer keeps is one reference per object it uses.
     ///
     /// Err: [`Error::Quiesced`].
     pub fn command_buffer(&self) -> Result<CommandBuffer, Error> {
@@ -112,12 +117,14 @@ impl CommandQueue {
                 slots.next - 1
             }
         };
+        let kept = slots.objects.pop().unwrap_or_default();
         drop(slots);
         core.counters.rise(Gauge::CommandBuffers);
         Ok(CommandBuffer::new(
             Arc::clone(&self.inner),
             self.device.clone(),
             slot,
+            kept,
         ))
     }
 
@@ -166,12 +173,16 @@ impl QueueInner {
         self.core.upgrade()
     }
 
-    /// The command buffer holding `slot` retired, or was dropped uncommitted: the slot goes back.
-    /// Its gauge falls first, so a command buffer made in the freed slot never reads one more
-    /// live than the queue holds.
-    pub(crate) fn release(&self, slot: u32) {
+    /// The command buffer holding `slot` retired, or was dropped uncommitted: the slot goes back,
+    /// and `kept`, its kept-object lists emptied, for the next command buffer made. Its gauge falls
+    /// first, so a command buffer made in the freed slot never reads one more live than the queue
+    /// holds.
+    pub(crate) fn release(&self, slot: u32, kept: Objects) {
         self.counters.fall(Gauge::CommandBuffers);
-        lock(&self.slots).free.push(slot);
+        let mut slots = lock(&self.slots);
+        slots.free.push(slot);
+        slots.objects.push(kept);
+        drop(slots);
         self.room.notify_one();
     }
 }

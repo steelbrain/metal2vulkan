@@ -291,9 +291,9 @@ fn parts_cut_a_range_in_order_the_last_one_shorter() {
 }
 
 /// A draw's target is a texture of the plan made with `RenderTarget` usage, and a draw binds
-/// vertex buffers alone.
+/// vertex buffers and fragment textures alone.
 #[test]
-fn a_draw_needs_a_render_target_and_binds_buffers_alone() {
+fn a_draw_needs_a_render_target_and_binds_buffers_and_textures_alone() {
     let plan = || {
         (WORKLOADS
             .iter()

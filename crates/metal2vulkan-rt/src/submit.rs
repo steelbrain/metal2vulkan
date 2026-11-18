@@ -1407,7 +1407,7 @@ impl WorkState {
         // Each texture over a Managed buffer's device copy the command buffer keeps that an event
         // owes its copy in (`crate::over::ManagedOvers`).
         if pending.gpu.managed {
-            for texture in &pending.gpu.textures {
+            for texture in pending.gpu.kept.textures.iter() {
                 let Some(buffer) = texture.managed_over() else {
                     continue;
                 };

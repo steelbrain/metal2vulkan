@@ -166,6 +166,10 @@ pub const WORKLOADS: [Workload; 36] = [
         name: "draw_2000",
         plan: draw_2000,
     },
+    Workload {
+        name: "bind_2000",
+        plan: bind_2000,
+    },
 ];
 
 /// A creation workload: objects of one kind made and released in turn (`Session::create`).
@@ -273,6 +277,27 @@ fn draw_full() -> Plan {
 /// each draw's own cost leads.
 fn draw_2000() -> Plan {
     draws("draw_2000", 16, 2000)
+}
+
+/// The binds a draw makes, timed: 2,000 draws in one pass, as [`draw_2000`]'s, each with its
+/// vertex function's positions (buffer 0) and a fragment texture (texture 0) set before it, both
+/// alternating between two objects, so every bind is of an object the slot does not hold. The
+/// fragment function reads no texture, so the draws' work is `draw_2000`'s; what the row adds is
+/// the binds.
+fn bind_2000() -> Plan {
+    let mut plan = draws("bind_2000", 16, 2000);
+    plan.buffers.push(plan.buffers[0].clone());
+    plan.textures.push(TexturePlan::rgba16_float(4, 4, None));
+    plan.textures.push(TexturePlan::rgba16_float(4, 4, None));
+    for (at, dispatch) in plan.dispatches.iter_mut().enumerate() {
+        let other = at % 2;
+        dispatch
+            .bindings
+            .retain(|binding| !matches!(binding, Binding::Buffer { index: 0, .. }));
+        dispatch.bindings.push(buffer(0, [0, 2][other]));
+        dispatch.bindings.push(texture(0, 1 + other));
+    }
+    plan
 }
 
 /// `count` draws in one pass into a `side` by `side` `RGBA16Float` target, each of

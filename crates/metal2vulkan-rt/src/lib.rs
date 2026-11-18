@@ -28,6 +28,7 @@ mod fill;
 pub mod floor;
 mod hazard;
 mod instance;
+mod kept;
 mod kernel_map;
 mod memory;
 mod over;

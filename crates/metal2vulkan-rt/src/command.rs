@@ -1,13 +1,14 @@
 //! Command buffers: recorded at once into segments that event waits and signals split, and their
 //! states from creation to retirement.
 
-use crate::buffer::{Buffer, DeviceCopy};
+use crate::buffer::Buffer;
 use crate::capture::CopyIn;
 use crate::counters::{Metric, Tally};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
 use crate::event::{Event, EventInner};
 use crate::hazard::{Access, Hazards};
+use crate::kept::{Lent, Objects};
 use crate::memory::Block;
 use crate::over::{self, Overs};
 use crate::pipeline::ComputePipelineState;
@@ -187,19 +188,14 @@ impl Pushed {
 pub(crate) struct Gpu {
     pub(crate) recorder: Option<Recorder>,
     pub(crate) segments: Vec<Segment>,
-    /// Each block the commands use, once: a block released meanwhile is reused only after the
-    /// command buffer retires.
+    /// Each heap's block the commands use (`useHeap:`), once: a block released meanwhile is
+    /// reused only after the command buffer retires.
     pub(crate) blocks: Vec<Arc<Block>>,
-    /// Each Managed buffer's device copy the commands use, once: its place is freed only after
-    /// the command buffer retires.
-    pub(crate) copies: Vec<Arc<DeviceCopy>>,
-    /// The pipeline states the commands use, once each, kept until the command buffer retires.
-    pub(crate) pipelines: Vec<ComputePipelineState>,
-    pub(crate) render_pipelines: Vec<RenderPipelineState>,
-    /// The textures and sampler states the encoders bound or declared, once each, kept until the
-    /// command buffer retires: their elements of set 1 stay theirs while work may read them.
-    pub(crate) textures: Vec<Texture>,
-    pub(crate) samplers: Vec<SamplerState>,
+    /// The buffers, textures, sampler states and pipeline states the encoders bound, declared or
+    /// copied, once each, kept until the command buffer retires: a buffer's block and device copy
+    /// with it, and a texture's and a sampler's elements of set 1 stay theirs while work may read
+    /// them (`crate::kept`).
+    pub(crate) kept: Objects,
     /// What the commands wrote into the parameter ring.
     pub(crate) ring: Writes,
     /// A texture over a Managed buffer's device copy in an image of its own is kept: the submit
@@ -280,8 +276,14 @@ impl Pending {
 }
 
 impl CommandBuffer {
-    /// A new command buffer of `queue`, which gave it `slot`, whose two queries are reset.
-    pub(crate) fn new(queue: Arc<QueueInner>, device: Device, slot: u32) -> CommandBuffer {
+    /// A new command buffer of `queue`, which gave it `slot`, whose two queries are reset, keeping
+    /// its objects in `kept`, empty, the lists of a retired one where the queue had them.
+    pub(crate) fn new(
+        queue: Arc<QueueInner>,
+        device: Device,
+        slot: u32,
+        kept: Objects,
+    ) -> CommandBuffer {
         let stamps = (queue.stamps.pool, Stamps::first(slot));
         CommandBuffer {
             inner: Arc::new(CbInner {
@@ -297,11 +299,7 @@ impl CommandBuffer {
                             recorder: None,
                             segments: vec![Segment::default()],
                             blocks: Vec::new(),
-                            copies: Vec::new(),
-                            pipelines: Vec::new(),
-                            render_pipelines: Vec::new(),
-                            textures: Vec::new(),
-                            samplers: Vec::new(),
+                            kept,
                             ring: Writes::default(),
                             managed: false,
                             images: Vec::new(),
@@ -945,17 +943,22 @@ impl Building {
         self.gpu.ring.write(self.device.core(), bytes)
     }
 
-    /// Keeps `buffer`'s block, and its device copy where it has one, until the command buffer
-    /// retires.
+    /// Keeps `buffer`, with its block and its device copy where it has one, until the command
+    /// buffer retires.
     pub(crate) fn keep(&mut self, buffer: &Buffer) {
-        let (block, copy) = buffer.held();
-        self.keep_block(block);
-        if let Some(copy) = copy {
-            let copies = &mut self.gpu.copies;
-            if !copies.iter().rev().any(|kept| Arc::ptr_eq(kept, copy)) {
-                copies.push(Arc::clone(copy));
-            }
-        }
+        self.gpu.kept.buffers.hold(buffer);
+    }
+
+    /// Keeps `buffer` as [`keep`](Self::keep) does, and lends it for a binding slot: no count
+    /// changes but at the recording's first use of it.
+    ///
+    /// # Safety
+    ///
+    /// The borrow is used only until the command buffer commits: in an encoder's tables.
+    pub(crate) unsafe fn lend_buffer(&mut self, buffer: &Buffer) -> Lent<Buffer> {
+        // SAFETY: the caller uses the borrow only before the commit, and the lists are cleared
+        // only once the command buffer retired.
+        unsafe { self.gpu.kept.buffers.keep(buffer) }
     }
 
     /// Keeps `block` until the command buffer retires.
@@ -966,30 +969,50 @@ impl Building {
         }
     }
 
-    /// Keeps `state` until the command buffer retires.
-    pub(crate) fn keep_pipeline(&mut self, state: &ComputePipelineState) {
-        let pipelines = &mut self.gpu.pipelines;
-        if !pipelines.iter().rev().any(|kept| kept.is(state)) {
-            pipelines.push(state.clone());
-        }
+    /// Keeps `state` until the command buffer retires, and lends it to the encoder that set it.
+    ///
+    /// # Safety
+    ///
+    /// As [`lend_buffer`](Self::lend_buffer).
+    pub(crate) unsafe fn lend_pipeline(
+        &mut self,
+        state: &ComputePipelineState,
+    ) -> Lent<ComputePipelineState> {
+        // SAFETY: as `lend_buffer`.
+        unsafe { self.gpu.kept.pipelines.keep(state) }
     }
 
-    /// Keeps `state` until the command buffer retires.
-    pub(crate) fn keep_render_pipeline(&mut self, state: &RenderPipelineState) {
-        let pipelines = &mut self.gpu.render_pipelines;
-        if !pipelines.iter().rev().any(|kept| kept.is(state)) {
-            pipelines.push(state.clone());
-        }
+    /// Keeps `state` until the command buffer retires, and lends it to the encoder that set it.
+    ///
+    /// # Safety
+    ///
+    /// As [`lend_buffer`](Self::lend_buffer).
+    pub(crate) unsafe fn lend_render_pipeline(
+        &mut self,
+        state: &RenderPipelineState,
+    ) -> Lent<RenderPipelineState> {
+        // SAFETY: as `lend_buffer`.
+        unsafe { self.gpu.kept.render_pipelines.keep(state) }
     }
 
     /// Keeps `texture` until the command buffer retires, as Metal's command buffer retains every
     /// object its encoders bind: each object once, a view apart from its parent.
     pub(crate) fn keep_texture(&mut self, texture: &Texture) {
-        let textures = &mut self.gpu.textures;
-        if !textures.iter().rev().any(|kept| kept.is(texture)) {
+        if self.gpu.kept.textures.hold(texture) {
             self.gpu.managed |= texture.managed_over().is_some();
-            textures.push(texture.clone());
         }
+    }
+
+    /// Keeps `texture` as [`keep_texture`](Self::keep_texture) does, and lends it for a binding
+    /// slot.
+    ///
+    /// # Safety
+    ///
+    /// As [`lend_buffer`](Self::lend_buffer).
+    pub(crate) unsafe fn lend_texture(&mut self, texture: &Texture) -> Lent<Texture> {
+        self.keep_texture(texture);
+        // SAFETY: as `lend_buffer`; the texture is kept now.
+        unsafe { self.gpu.kept.textures.keep(texture) }
     }
 
     /// Whether the commands track what they write for textures over a buffer in an image of
@@ -1032,7 +1055,7 @@ impl Building {
         let last = segments.len() - 1;
         segments[last]
             .overs
-            .before(accesses, &self.gpu.textures, unbound)
+            .before(accesses, self.gpu.kept.textures.as_slice(), unbound)
     }
 
     /// Records `copies`, ordered as a blit's copy is; nothing where there are none.
@@ -1118,12 +1141,14 @@ impl Building {
         self.last().overs.after(&[], true);
     }
 
-    /// Keeps `state` until the command buffer retires.
-    pub(crate) fn keep_sampler(&mut self, state: &SamplerState) {
-        let samplers = &mut self.gpu.samplers;
-        if !samplers.iter().rev().any(|kept| kept.is(state)) {
-            samplers.push(state.clone());
-        }
+    /// Keeps `state` until the command buffer retires, and lends it for a binding slot.
+    ///
+    /// # Safety
+    ///
+    /// As [`lend_buffer`](Self::lend_buffer).
+    pub(crate) unsafe fn lend_sampler(&mut self, state: &SamplerState) -> Lent<SamplerState> {
+        // SAFETY: as `lend_buffer`.
+        unsafe { self.gpu.kept.samplers.keep(state) }
     }
 }
 
@@ -1201,11 +1226,7 @@ pub(crate) fn retire(
         recorder,
         segments,
         blocks,
-        copies,
-        pipelines,
-        render_pipelines,
-        textures,
-        samplers,
+        mut kept,
         ring,
         managed: _,
         images,
@@ -1217,22 +1238,15 @@ pub(crate) fn retire(
         copy_in.retire(core);
     }
     ring.give_back(core);
-    drop((
-        blocks,
-        copies,
-        pipelines,
-        render_pipelines,
-        textures,
-        samplers,
-        images,
-    ));
+    drop((blocks, images));
+    kept.clear();
     times::reset(
         &core.device,
         inner.queue.stamps.pool,
         Stamps::first(inner.slot),
         written,
     );
-    inner.queue.release(inner.slot);
+    inner.queue.release(inner.slot, kept);
     let handle = CommandBuffer { inner };
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {
         handler(&handle);
@@ -1250,11 +1264,18 @@ impl Drop for CbInner {
         // retired.
         if let Some(Building { device, gpu, .. }) = state.building.take() {
             let core = device.core();
-            if let Some(recorder) = gpu.recorder {
+            let Gpu {
+                recorder,
+                mut kept,
+                ring,
+                ..
+            } = gpu;
+            if let Some(recorder) = recorder {
                 core.recorders.give_back(core, recorder);
             }
-            gpu.ring.give_back(core);
-            self.queue.release(self.slot);
+            ring.give_back(core);
+            kept.clear();
+            self.queue.release(self.slot, kept);
         }
     }
 }

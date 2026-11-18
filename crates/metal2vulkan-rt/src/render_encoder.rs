@@ -71,6 +71,7 @@ use crate::encoder::{check_alignment, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS
 use crate::error::{DrawKind, Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
+use crate::kept::{Handle, Lent};
 use crate::over;
 use crate::pass::{layout_barrier, Pass, RenderPassDescriptor};
 use crate::pipeline::{FieldValue, PUSH_STAGES};
@@ -288,18 +289,19 @@ enum Bound {
     #[default]
     Empty,
     Buffer {
-        buffer: Buffer,
+        buffer: Lent<Buffer>,
         offset: u64,
     },
     /// A `set_*_bytes` copy in the parameter ring.
     Bytes(Placed),
 }
 
-/// One function's argument tables.
+/// One function's argument tables: their objects borrowed from what the command buffer keeps
+/// (`crate::kept`).
 struct Tables {
     buffers: Vec<Bound>,
-    textures: Vec<Option<Texture>>,
-    samplers: Vec<Option<SamplerState>>,
+    textures: Vec<Option<Lent<Texture>>>,
+    samplers: Vec<Option<Lent<SamplerState>>>,
 }
 
 impl Tables {
@@ -321,7 +323,7 @@ impl Tables {
 
     /// The texture bound at `slot`, where one is.
     fn texture(&self, slot: u32) -> Option<&Texture> {
-        self.textures.get(slot as usize)?.as_ref()
+        self.textures.get(slot as usize)?.as_deref()
     }
 
     /// The address of buffer slot `slot`: the buffer's plus its offset, or the bytes' copy; `nil`
@@ -382,7 +384,8 @@ pub struct RenderCommandEncoder {
     command: vk::CommandBuffer,
     /// The vertex function's argument tables, then the fragment function's.
     tables: [Tables; 2],
-    pipeline: Option<RenderPipelineState>,
+    /// The state set, borrowed from what the command buffer keeps (`crate::kept`).
+    pipeline: Option<Lent<RenderPipelineState>>,
     /// Whether the pipeline state renders into the pass's attachments' formats.
     renders_into: bool,
     /// The depth-stencil state's tests, Metal's default state's where none is set.
@@ -573,17 +576,17 @@ impl RenderCommandEncoder {
         if self.pipeline.as_ref().is_some_and(|set| set.is(state)) {
             return Ok(());
         }
-        self.building().keep_render_pipeline(state);
         self.renders_into = state.inner.compiled.renders_into(&self.pass);
-        self.pipeline = Some(state.clone());
+        // SAFETY: the encoder holds the borrow, and it ends before its command buffer commits.
+        self.pipeline = Some(unsafe { self.building().lend_render_pipeline(state) });
         self.changed();
         Ok(())
     }
 
     /// `setVertexBuffer:offset:atIndex:` (`setVertexBuffers:offsets:withRange:` is a loop of it).
     /// `None` unbinds the slot. The slot serves the vertex function's buffer argument of its index
-    /// and the vertex descriptor's layout of its index alike. The command buffer keeps the buffer's
-    /// block until it retires.
+    /// and the vertex descriptor's layout of its index alike. The command buffer keeps the buffer,
+    /// and so its block, until it retires.
     ///
     /// Err: [`Refusal::BufferIndex`] for an index of 31 or more; [`Refusal::OtherDevice`] for
     /// another device's buffer.
@@ -619,13 +622,23 @@ impl RenderCommandEncoder {
         let slot = slot(index)?;
         let bound = match buffer {
             Some(buffer) => {
+                if let Bound::Buffer {
+                    buffer: held,
+                    offset: at,
+                } = &self.tables[table].buffers[slot]
+                {
+                    if held.address() == buffer.address() && *at == offset {
+                        return Ok(());
+                    }
+                }
                 let building = self.building();
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
-                building.keep(buffer);
                 Bound::Buffer {
-                    buffer: buffer.clone(),
+                    // SAFETY: the encoder's table holds the borrow, and it ends before its command
+                    // buffer commits.
+                    buffer: unsafe { building.lend_buffer(buffer) },
                     offset,
                 }
             }
@@ -732,14 +745,23 @@ impl RenderCommandEncoder {
         if index >= TEXTURE_SLOTS {
             return Err(Error::Refused(Refusal::TextureArgumentIndex { index }));
         }
-        if let Some(texture) = texture {
-            let building = self.building();
-            if !texture.is_of(building.device.core()) {
-                return Err(Error::Refused(Refusal::OtherDevice));
-            }
-            building.keep_texture(texture);
+        let held = &self.tables[table].textures[index as usize];
+        if held.as_deref().map(Handle::address) == texture.map(Handle::address) {
+            return Ok(());
         }
-        self.tables[table].textures[index as usize] = texture.cloned();
+        let lent = match texture {
+            Some(texture) => {
+                let building = self.building();
+                if !texture.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                // SAFETY: the encoder's table holds the borrow, and it ends before its command
+                // buffer commits.
+                Some(unsafe { building.lend_texture(texture) })
+            }
+            None => None,
+        };
+        self.tables[table].textures[index as usize] = lent;
         self.changed();
         Ok(())
     }
@@ -780,14 +802,23 @@ impl RenderCommandEncoder {
         if index >= SAMPLER_SLOTS {
             return Err(Error::Refused(Refusal::SamplerArgumentIndex { index }));
         }
-        if let Some(sampler) = sampler {
-            let building = self.building();
-            if !sampler.is_of(building.device.core()) {
-                return Err(Error::Refused(Refusal::OtherDevice));
-            }
-            building.keep_sampler(sampler);
+        let held = &self.tables[table].samplers[index as usize];
+        if held.as_deref().map(Handle::address) == sampler.map(Handle::address) {
+            return Ok(());
         }
-        self.tables[table].samplers[index as usize] = sampler.cloned();
+        let lent = match sampler {
+            Some(sampler) => {
+                let building = self.building();
+                if !sampler.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                // SAFETY: the encoder's table holds the borrow, and it ends before its command
+                // buffer commits.
+                Some(unsafe { building.lend_sampler(sampler) })
+            }
+            None => None,
+        };
+        self.tables[table].samplers[index as usize] = lent;
         self.push_filled = false;
         Ok(())
     }

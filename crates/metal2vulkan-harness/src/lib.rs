@@ -18,7 +18,9 @@
 //! again before each run (`plan::BufferPlan::modified`), and `constant_private` the same reads
 //! from a `Private` table, its reference. `draw_full` and `draw_2000` are draws of the render
 //! library's `colored_vertex` and `colored_fragment` (`plan::Grid::Draw`) in one pass: 64 that
-//! each cover a 512 by 512 target, and 2,000 that each cover a 16 by 16 one.
+//! each cover a 512 by 512 target, and 2,000 that each cover a 16 by 16 one; `bind_2000` is
+//! `draw_2000` with a vertex buffer and a fragment texture set before each draw, each alternating
+//! between two objects.
 //! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
 //! workloads ([`authored`]) are MSL kernels committed as public fixtures
 //! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
@@ -451,6 +453,9 @@ pub trait RenderCommandEncoder<D: ComputeDevice> {
 
     /// `setVertexBuffer:offset:atIndex:`.
     fn set_vertex_buffer(&mut self, buffer: &D::Buffer, offset: u64, index: u32) -> Result<()>;
+
+    /// `setFragmentTexture:atIndex:`.
+    fn set_fragment_texture(&mut self, texture: &D::Texture, index: u32) -> Result<()>;
 
     /// `drawPrimitives:vertexStart:vertexCount:` of triangles.
     fn draw_triangles(&mut self, vertex_start: u32, vertex_count: u32) -> Result<()>;

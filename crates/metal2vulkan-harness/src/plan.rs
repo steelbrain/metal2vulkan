@@ -682,7 +682,8 @@ pub enum Grid {
     /// starts: consecutive draws into one target share one pass. The step's function is the
     /// vertex function, its render pipeline state `fragment`'s too, drawing into `target`'s
     /// format with Metal's defaults otherwise; its bindings are the vertex function's buffers
-    /// (`setVertexBuffer:offset:atIndex:`), and a draw binds nothing else.
+    /// (`setVertexBuffer:offset:atIndex:`) and the fragment function's textures
+    /// (`setFragmentTexture:atIndex:`), and a draw binds nothing else.
     Draw {
         /// The fragment function's name in the plan's library.
         fragment: &'static str,
@@ -885,12 +886,13 @@ impl Plan {
                     )
                     .into());
                 }
-                let buffers_only = (dispatch.bindings.iter())
-                    .all(|binding| matches!(binding, Binding::Buffer { .. }));
-                if !dispatch.blits.is_empty() || !buffers_only {
+                let drawn = (dispatch.bindings.iter()).all(|binding| {
+                    matches!(binding, Binding::Buffer { .. } | Binding::Texture { .. })
+                });
+                if !dispatch.blits.is_empty() || !drawn {
                     return Err(format!(
-                        "{name}: dispatch {i} is a draw, which binds vertex buffers alone and \
-                         takes no blit"
+                        "{name}: dispatch {i} is a draw, which binds vertex buffers and fragment \
+                         textures alone and takes no blit"
                     )
                     .into());
                 }

@@ -367,6 +367,13 @@ impl Device {
     }
 }
 
+// SAFETY: the handle is its one `Arc` and nothing else, and its address is that `Arc`'s pointer.
+unsafe impl crate::kept::Handle for Buffer {
+    fn address(&self) -> usize {
+        Arc::as_ptr(&self.inner) as *const () as usize
+    }
+}
+
 impl Buffer {
     /// `gpuAddress`: the block's device address plus the buffer's offset; of a Managed buffer with
     /// a device copy, the copy block's device address plus the copy's offset.

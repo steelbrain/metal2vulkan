@@ -461,6 +461,14 @@ impl crate::RenderCommandEncoder<runtime::Device> for runtime::RenderCommandEnco
         )?)
     }
 
+    fn set_fragment_texture(&mut self, texture: &Texture, index: u32) -> Result<()> {
+        Ok(runtime::RenderCommandEncoder::set_fragment_texture(
+            self,
+            Some(&texture.texture),
+            index,
+        )?)
+    }
+
     fn draw_triangles(&mut self, vertex_start: u32, vertex_count: u32) -> Result<()> {
         let triangle = metal2vulkan::metal::PrimitiveType::Triangle;
         Ok(runtime::RenderCommandEncoder::draw_primitives(
