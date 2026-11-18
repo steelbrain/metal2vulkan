@@ -1126,9 +1126,11 @@ mod on_device {
         Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"))
     }
 
-    /// A device on a cache directory a device before it used lowers nothing at creation: the
-    /// tiling kernel's lowering and the observing kernel's two are read from the directory, and
-    /// the tile's `VkPipeline` is made through a pipeline cache started from the device's blob.
+    /// A device on a cache directory a device before it used lowers nothing at creation, and asks
+    /// the translator nothing: the tiling kernel's lowering and the observing kernel's plain one
+    /// are read from the directory with the answer that the latter observes its partition, so no
+    /// stage entry is decoded, and the tile's `VkPipeline` is made through a pipeline cache
+    /// started from the device's blob.
     /// The first device's writes (`Metrics::cache_bytes_written`) are at least the files' bytes,
     /// the blob among them where the device keeps one (written once creation was quiet, and again
     /// at the drop where the cache grew since); the second writes nothing and leaves every file as
@@ -1161,6 +1163,14 @@ mod on_device {
                 // One lowering for each kernel.
                 let want = [(2, 0), (0, 2)][round];
                 assert_eq!(counted, want, "{name}: device {round} on the directory");
+                if round == 1 {
+                    let decoded = device.core().entries.held();
+                    assert_eq!(
+                        decoded,
+                        (0, 0, 0),
+                        "{name}: the second device decodes nothing"
+                    );
+                }
                 drop(states);
                 drop(device);
                 // The teardown ends once the reaper wrote what it was given.

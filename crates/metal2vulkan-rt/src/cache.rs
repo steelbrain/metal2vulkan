@@ -37,7 +37,9 @@
 //! function's AIR, entry, constants and linked functions, its lowering inputs, the device
 //! profile's fingerprint and the translator's semantics version. The bytes are the translator's
 //! self-checking encoding (`CompiledFunction::to_bytes`), and bytes that do not decode for the key
-//! are a miss. A partial-threadgroups variant the translator refused is kept too, as a marker.
+//! are a miss. A partial-threadgroups variant the translator refused is kept too, as a marker, and
+//! so is the translator's answer that a kernel observes its threadgroup partition, under its
+//! variant's key, until that variant's lowering replaces it.
 //!
 //! The files live in two generations, `g<N>/` (young) and `g<N-1>/` (old), which the consumer's cap
 //! ([`DeviceOptions::pipeline_cache_cap`]) bounds at half of it each. A lookup tries young, then
@@ -106,6 +108,10 @@ pub(crate) const PENDING_BYTES: u64 = 8 << 20;
 /// What a translation file holds where the translator refused the lowering: bytes no lowering
 /// encodes to, and that a file cut short is not.
 const REFUSED: &[u8] = b"m2v-refused";
+/// What a partial-threadgroups variant's translation file holds where the translator answered
+/// that the kernel observes its threadgroup partition, until the variant is lowered over it:
+/// bytes no lowering encodes to, nor [`REFUSED`], and that a file cut short is not.
+const OBSERVES: &[u8] = b"m2v-observes";
 /// The translations' directory, under a generation.
 const TRANSLATIONS: &str = "translations";
 /// The directory, under a generation, an earlier version kept a file of pipeline data per
@@ -764,6 +770,13 @@ pub(crate) fn keep_refusal(core: &Core, key: &[u8]) {
     keep_translation(core, key, REFUSED.to_vec());
 }
 
+/// Hands the translator's answer that a kernel observes its threadgroup partition to the reaper,
+/// under the key digest `key` of its partial-threadgroups variant, as [`keep_translation`] does a
+/// lowering.
+pub(crate) fn keep_observer(core: &Core, key: &[u8]) {
+    keep_translation(core, key, OBSERVES.to_vec());
+}
+
 /// The files waiting for the reaper to write them, in order, at most `bound` bytes of them.
 pub(crate) struct Pending {
     files: VecDeque<(String, Vec<u8>)>,
@@ -1019,7 +1032,8 @@ impl Caches {
     }
 
     /// What `decode` makes of the bytes kept for a lowered kernel of key digest `key`, where they
-    /// decode. A file that holds the translator's refusal is no lowering, and stays.
+    /// decode. A file that holds the translator's refusal, or its answer that the kernel observes
+    /// its partition, is no lowering, and stays.
     pub(crate) fn translation<T>(
         &self,
         key: &[u8],
@@ -1027,7 +1041,7 @@ impl Caches {
     ) -> Option<T> {
         let file = Caches::translation_file(key);
         let kept = self.store.as_ref()?.get(&file, |bytes| match bytes {
-            REFUSED => Some(None),
+            REFUSED | OBSERVES => Some(None),
             lowering => decode(lowering).map(Some),
         });
         kept.flatten()
@@ -1060,6 +1074,14 @@ impl Caches {
         self.store
             .as_ref()
             .is_some_and(|store| store.holds(&Caches::translation_file(key), REFUSED))
+    }
+
+    /// Whether the translator answered on a device before that the kernel whose
+    /// partial-threadgroups variant has key digest `key` observes its threadgroup partition.
+    pub(crate) fn observed(&self, key: &[u8]) -> bool {
+        self.store
+            .as_ref()
+            .is_some_and(|store| store.holds(&Caches::translation_file(key), OBSERVES))
     }
 
     /// On the reaper, first: makes the device's `VkPipelineCache` empty, which creations waiting

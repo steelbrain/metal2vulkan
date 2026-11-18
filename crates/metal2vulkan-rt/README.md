@@ -1006,7 +1006,8 @@ that touch blocks first.
   (`Device::kernel_observes_partition`), whether it observes its threadgroup partition (it holds
   threadgroup memory, a barrier, fence or atomic of threadgroup or SIMD-group scope, a SIMD-group
   or quad function, or reads a builtin of the partition; the translator decides from its AIR),
-  unless the cache directory holds the kernel's partial-threadgroups variant, which answers it. A
+  unless the cache directory holds the kernel's partial-threadgroups variant or the answer a
+  device before it kept there, either of which answers it. A
   kernel that does not observe it is lowered as that variant, which runs a direct dispatch in
   workgroups of the runtime's, whatever its threadgroup size:
   - a grid of a kernel that is image-only (`CompiledFunction::is_image_only`: it samples,
@@ -1103,7 +1104,8 @@ the lowerings from one device to the next:
   kernel's variant, or what its use in the render pipeline gives), the device profile's
   fingerprint and the translator's semantics version. A state whose lowering is there reads it in
   place of lowering (`Metrics::translations_loaded`, beside `Metrics::translations`); a kernel
-  variant the translator refused is kept too.
+  variant the translator refused is kept too, and so is its answer that a kernel observes its
+  threadgroup partition, which a state on the directory reads in place of asking it again.
 
 **The pipeline cache.** The reaper makes an empty cache first when it starts, which a creation that
 comes before it waits for (microseconds). Then, off every guest thread, it reads the blob and makes

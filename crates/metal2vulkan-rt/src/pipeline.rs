@@ -1,8 +1,9 @@
 //! Compute pipeline states: the translator's kernel and its interface, and its `VkPipeline`s.
 //!
 //! The translator answers, lowering nothing, whether a kernel observes its threadgroup partition
-//! (`Device::kernel_observes_partition`), where the cache directory holds no lowering of its
-//! partial-threadgroups variant to answer it. A kernel that does not observe it is lowered once,
+//! (`Device::kernel_observes_partition`), where the cache directory holds neither a lowering of
+//! its partial-threadgroups variant nor the answer a device before kept there, either of which
+//! answers it. A kernel that does not observe it is lowered once,
 //! as that variant, which runs its grid in tiles (`RuntimeFact::GridTiles`):
 //! every direct dispatch runs in workgroups of 256 threads, each one tile of the grid whose sides
 //! the translator's rule picks from the grid's extents (`grid_tile`) and its region carries, on
@@ -605,19 +606,23 @@ impl Compiled {
                 // partition: what the cache directory holds, else lowered, unless the translator
                 // answers that the kernel observes it. The translator's refusal of the variant
                 // (emulated simdgroups, a vote word its workgroup memory cannot hold) is kept like
-                // a lowering.
+                // a lowering, and so is its answer that the kernel observes it, which a device
+                // on the directory then reads in place of asking.
                 let variant_key = *translator.function_compile_key(function, &inputs).digest();
                 let variant = if core.caches.refused(&variant_key) {
                     core.counters.count(Metric::TranslationsLoaded);
                     None
                 } else if let Some(kept) = kept(&core, function, &inputs) {
                     Some(kept)
+                } else if core.caches.observed(&variant_key) {
+                    None
                 } else {
                     let observes = (translator)
                         .kernel_observes_partition(function, &inputs, &budget, entries)
                         .map_err(Error::Translation);
                     core.note_entries();
                     if observes? {
+                        cache::keep_observer(&core, &variant_key);
                         None
                     } else {
                         match lower(&inputs) {
