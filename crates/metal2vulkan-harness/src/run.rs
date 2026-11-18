@@ -1454,7 +1454,7 @@ impl<D: ComputeDevice> Harness<D> {
         encoder.set_compute_pipeline_state(&state)?;
         encoder.set_buffer(&destination, 0, 0)?;
         encoder.set_bytes(&1u32.to_le_bytes(), 1)?;
-        encoder.dispatch_threadgroups([1, 1, 1], size)?;
+        encoder.dispatch_threadgroups([1, 1, 1], size.map(u64::from))?;
         encoder.end_encoding()?;
         command_buffer.commit()?;
         command_buffer.wait_until_completed()?;
