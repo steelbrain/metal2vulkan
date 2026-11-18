@@ -2390,7 +2390,8 @@ impl Texture {
     }
 
     /// The image's bytes of `region` of `level` and `slice`, as [`Texture::get_bytes`] reads them
-    /// from a texture without named bytes: for the tests of one with them.
+    /// from a texture without named bytes, once the pending upload has run (it copies a Managed
+    /// buffer's changed ranges at its end): for the tests of one with them.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn image_bytes(
         &self,
@@ -2401,6 +2402,9 @@ impl Texture {
         slice: u32,
     ) -> Result<(), Error> {
         let len = bytes.len() as u64;
+        let core = self.inner.device.core();
+        let value = core.work.flush();
+        core.done.wait(core, value)?;
         match (self.inner).copy(region, level, slice, len, bytes_per_row, len)? {
             Some(copy) => self.read_image(bytes, &copy),
             None => Ok(()),
