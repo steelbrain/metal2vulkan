@@ -87,7 +87,7 @@ mod on_device {
     fn every_device_views_levels_and_slices_of_a_texture() {
         each_device("texture_views", |name, _, device| {
             device
-                .grant_indices(IndexClass::Texture, 4096, 16)
+                .grant_indices(IndexClass::Texture, 4096, 32)
                 .expect("a grant");
             let flat = parent(&device, false, 4096);
             let array = parent(&device, true, 4097);
