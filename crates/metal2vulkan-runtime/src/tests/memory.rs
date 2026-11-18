@@ -5,7 +5,8 @@ use crate::memory::{
 };
 #[cfg(unix)]
 use crate::memory::{
-    dma_buf_attempts, dma_buf_candidates, dma_buf_class_order, fd_buffer_types, worked_first,
+    dma_buf_attempts, dma_buf_candidates, dma_buf_class_order, dma_buf_order, fd_buffer_types,
+    worked_first,
 };
 use ash::vk;
 use std::time::Instant;
@@ -63,7 +64,9 @@ fn classes_pick_their_memory_types_best_first() {
 /// An import of a dma-buf tries its class's order (the class's types first, then every other
 /// type the dma-buf and what is bound in it take that the runtime may allocate and that is
 /// neither protected nor lazily allocated, in Vulkan's order), but the system-memory types the
-/// host maps (host-visible, not device-local) last. With an RTX 3090's types (NVIDIA's
+/// host maps (host-visible, not device-local) last (`dma_buf_order`; a `Shared` import keeps the
+/// host-coherent types of it, `a_shared_dma_buf_import_takes_host_coherent_types_or_none`). With
+/// an RTX 3090's types (NVIDIA's
 /// 620.70.06), whose udmabuf lists types 0 and 4, a `Shared` import tries type 0, system memory
 /// with no property flag, which that driver imports a udmabuf as, before type 4, the class's,
 /// whose refused import breaks the device's exportable device-local allocations. Each form of an
@@ -88,7 +91,7 @@ fn dma_buf_imports_try_the_system_memory_types_the_host_maps_last() {
         [4, 0]
     );
     assert_eq!(
-        dma_buf_candidates(&nvidia, 0x11, MemoryClass::Shared, false),
+        dma_buf_order(&nvidia, 0x11, MemoryClass::Shared, false),
         [0, 4]
     );
     // The class's own order first, the others after it in Vulkan's; then the system-memory types
@@ -98,20 +101,20 @@ fn dma_buf_imports_try_the_system_memory_types_the_host_maps_last() {
         [4, 5, 3, 0, 1, 2]
     );
     assert_eq!(
-        dma_buf_candidates(&nvidia, 0x3f, MemoryClass::Shared, false),
+        dma_buf_order(&nvidia, 0x3f, MemoryClass::Shared, false),
         [5, 0, 1, 2, 4, 3]
     );
     let private = dma_buf_class_order(&nvidia, 0x3f, MemoryClass::Private, false);
     let (others, mapped): (Vec<u32>, Vec<u32>) =
         private.iter().partition(|&&index| index != 3 && index != 4);
     assert_eq!(
-        dma_buf_candidates(&nvidia, 0x3f, MemoryClass::Private, false),
+        dma_buf_order(&nvidia, 0x3f, MemoryClass::Private, false),
         [others, mapped].concat()
     );
-    assert!(dma_buf_candidates(&nvidia, 0, MemoryClass::Shared, false).is_empty());
+    assert!(dma_buf_order(&nvidia, 0, MemoryClass::Shared, false).is_empty());
     // A buffer's import, dedicated to nothing and then to the buffer: both forms as type 0
     // before either as type 4.
-    let ranked = dma_buf_candidates(&nvidia, 0x11, MemoryClass::Shared, false);
+    let ranked = dma_buf_order(&nvidia, 0x11, MemoryClass::Shared, false);
     assert_eq!(
         dma_buf_attempts(&nvidia, &ranked, &[false, true]),
         [(false, 0), (true, 0), (false, 4), (true, 4)]
@@ -137,7 +140,7 @@ fn dma_buf_imports_try_the_system_memory_types_the_host_maps_last() {
             MemoryClass::Private,
             MemoryClass::Managed,
         ] {
-            let ranked = dma_buf_candidates(types, allowed, class, unified);
+            let ranked = dma_buf_order(types, allowed, class, unified);
             assert_eq!(
                 ranked,
                 dma_buf_class_order(types, allowed, class, unified),
@@ -161,6 +164,104 @@ fn dma_buf_imports_try_the_system_memory_types_the_host_maps_last() {
         dma_buf_candidates(&others, 0b1111, MemoryClass::Shared, false),
         [3]
     );
+}
+
+/// A `Shared` import of a dma-buf takes the type its order ([`dma_buf_order`]) takes first where
+/// that type is host-coherent, trying the order's host-coherent types alone; where it is not, it
+/// tries nothing ([`dma_buf_candidates`]). Over each lab driver's memory types and the types it
+/// lists for a udmabuf among those a buffer takes, the type taken first before (the order whole)
+/// and after is the same everywhere but NVIDIA's, whose order takes type 0 (no property flag)
+/// first: refused there, with no import tried. Every other class's order is unchanged.
+#[cfg(unix)]
+#[test]
+fn a_shared_dma_buf_import_takes_host_coherent_types_or_none() {
+    use vk::MemoryPropertyFlags as P;
+    let host = P::HOST_VISIBLE | P::HOST_COHERENT;
+    // Each driver: its types, the udmabuf's among those a buffer takes, unified memory, and the
+    // first type a `Shared` import takes before and after.
+    let drivers = [
+        (
+            "NVIDIA 620.70.06 (RTX 3090, RTX 2080)",
+            vec![
+                ty(P::empty()),
+                ty(P::DEVICE_LOCAL),
+                ty(P::DEVICE_LOCAL),
+                ty(host),
+                ty(host | P::HOST_CACHED),
+                ty(P::DEVICE_LOCAL | host),
+            ],
+            0x11,
+            false,
+            (Some(0), None),
+        ),
+        (
+            "ANV, Mesa 26.2.x (Iris Xe)",
+            vec![
+                ty(P::DEVICE_LOCAL),
+                ty(P::DEVICE_LOCAL | host),
+                ty(P::DEVICE_LOCAL | host | P::HOST_CACHED),
+            ],
+            0b111,
+            true,
+            (Some(2), Some(2)),
+        ),
+        (
+            "RADV, a discrete GPU",
+            vec![
+                ty(P::DEVICE_LOCAL),
+                ty(host),
+                ty(P::DEVICE_LOCAL | host),
+                ty(host | P::HOST_CACHED),
+            ],
+            0b1010,
+            false,
+            (Some(3), Some(3)),
+        ),
+        (
+            "lavapipe",
+            vec![ty(P::DEVICE_LOCAL | host | P::HOST_CACHED)],
+            0b1,
+            true,
+            (Some(0), Some(0)),
+        ),
+    ];
+    for (driver, types, allowed, unified, (first_before, first_after)) in &drivers {
+        let before = dma_buf_order(types, *allowed, MemoryClass::Shared, *unified);
+        let after = dma_buf_candidates(types, *allowed, MemoryClass::Shared, *unified);
+        assert_eq!(
+            (before.first().copied(), after.first().copied()),
+            (*first_before, *first_after),
+            "{driver}"
+        );
+        let coherent =
+            |index: &u32| (types[*index as usize].property_flags).contains(P::HOST_COHERENT);
+        match after.is_empty() {
+            true => assert!(
+                dma_buf_attempts(types, &after, &[false, true]).is_empty(),
+                "{driver}: no import tried"
+            ),
+            false => assert_eq!(
+                after,
+                before
+                    .iter()
+                    .copied()
+                    .filter(coherent)
+                    .collect::<Vec<u32>>(),
+                "{driver}"
+            ),
+        }
+        for class in [
+            MemoryClass::WriteCombined,
+            MemoryClass::Private,
+            MemoryClass::Managed,
+        ] {
+            assert_eq!(
+                dma_buf_candidates(types, *allowed, class, *unified),
+                dma_buf_order(types, *allowed, class, *unified),
+                "{driver}, {class:?}"
+            );
+        }
+    }
 }
 
 /// The form and type the device's last import of a kind succeeded as go first, the others keep

@@ -693,7 +693,9 @@ enum Fit {
 /// Why [`import_host`] imported nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ImportFailure {
-    /// No memory type of the class is among the allowed ones.
+    /// No memory type of the class is among the allowed ones; for a `Shared` dma-buf import, none
+    /// the host and the device share coherently where its order's first type is not one
+    /// ([`dma_buf_candidates`]), no import tried.
     NoMemoryType,
     /// The allocation of the last type tried failed.
     Vulkan(vk::Result),
@@ -996,26 +998,66 @@ pub(super) fn placement_order(
 
 /// The memory types an import of a dma-buf takes among `types` (the bits of `allowed`, the types
 /// both the dma-buf and what is bound in it take), in the order they are tried:
-/// [`dma_buf_class_order`]'s, but the system-memory types the host maps (`HOST_VISIBLE` without
-/// `DEVICE_LOCAL`, [`mapped_system_memory`]) after every other. The runtime never maps such an
-/// import (the CPU reaches the pages through the caller's own mapping of them), so a
-/// system-memory type the host does not map serves it as well, and a driver's refused import as
-/// one it maps can break the device's later allocations: NVIDIA's 620.70.06 on an RTX 3090 lists
-/// a udmabuf's types as its type 0 (system memory, no property flag) and its type 4 (system
-/// memory, host-visible, coherent and cached), answers `ERROR_OUT_OF_DEVICE_MEMORY` for the import
-/// into type 4, with a dedicated allocation or without, and imports it as type 0; once it refused
-/// an import into type 4, it answers `ERROR_OUT_OF_DEVICE_MEMORY` to every allocation of its
-/// device-local type 1 exportable as an opaque file descriptor or a dma-buf, of 12,441,600 bytes
-/// and of 64 MiB, for the device's life, where it made each before (measured,
-/// `tests::export_after_dma_buf`), and the runtime's exportable buffers overflowed into system
-/// memory. A device-local type keeps the class's place whatever the host's flags on it: on a
-/// unified-memory GPU they may choose how the GPU caches its accesses to the pages (ANV's
-/// coherent cached type, which the class's order takes first for `Shared` memory on an Iris Xe,
-/// Mesa 26.2.x, where its type of `DEVICE_LOCAL` alone would come first otherwise). So ANV's,
-/// RADV's and lavapipe's imports, whose types are device-local or all host-mapped, take the
-/// class's order as before.
+/// [`dma_buf_order`]'s, but for `Shared` memory only the types the host and the device share
+/// coherently (`HOST_COHERENT`), and none where the order's first type is not one
+/// ([`coherent_shared`]). The CPU reaches an import's pages through the caller's own mapping of
+/// them, never the runtime's, and a type without `HOST_COHERENT` promises nothing of what that
+/// mapping and the device see of each other's writes, which `Shared` memory's bytes are: NVIDIA's
+/// 620.70.06 lists a udmabuf's types as its type 0 (system memory, no property flag) and its type
+/// 4 (host-visible, coherent and cached), so a `Shared` import there is refused, and type 4 is
+/// not tried, as a refused import into it breaks the device's later exportable allocations
+/// ([`dma_buf_order`]). A refused import's buffer is a copy of its pages, as where a driver
+/// refuses the dma-buf (`HostMemory::with_dma_buf`). Other classes take the order whole.
 #[cfg(unix)]
 pub(super) fn dma_buf_candidates(
+    types: &[vk::MemoryType],
+    allowed: u32,
+    class: MemoryClass,
+    unified: bool,
+) -> Vec<u32> {
+    let ranked = dma_buf_order(types, allowed, class, unified);
+    match class {
+        MemoryClass::Shared => coherent_shared(types, ranked),
+        _ => ranked,
+    }
+}
+
+/// The host-coherent types of `ranked` (a [`dma_buf_order`]), in its order, where its first type
+/// is host-coherent; none where it is not: what a `Shared` dma-buf import tries
+/// ([`dma_buf_candidates`]). Its first type is what the import would take, so where that one is
+/// not coherent the import is refused rather than tried as a later type, which a driver may
+/// refuse in a way that breaks the device (NVIDIA's type 4, [`dma_buf_order`]).
+#[cfg(unix)]
+fn coherent_shared(types: &[vk::MemoryType], ranked: Vec<u32>) -> Vec<u32> {
+    let coherent = |index: &u32| {
+        (types[*index as usize].property_flags).contains(vk::MemoryPropertyFlags::HOST_COHERENT)
+    };
+    match ranked.first() {
+        Some(first) if coherent(first) => ranked.into_iter().filter(coherent).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The memory types of `types` among `allowed` a dma-buf's import of `class` may take, in the
+/// order it would try them: [`dma_buf_class_order`]'s, but the system-memory types the host maps
+/// (`HOST_VISIBLE` without `DEVICE_LOCAL`, [`mapped_system_memory`]) after every other
+/// ([`dma_buf_candidates`] keeps the host-coherent ones of a `Shared` import's). The runtime never
+/// maps such an import, and a driver's refused import as one the host maps can break the
+/// device's later allocations: NVIDIA's 620.70.06 on an RTX 3090 lists a udmabuf's types as its
+/// type 0 (system memory, no property flag) and its type 4 (system memory, host-visible, coherent
+/// and cached), answers `ERROR_OUT_OF_DEVICE_MEMORY` for the import into type 4, with a dedicated
+/// allocation or without, and imports it as type 0; once it refused an import into type 4, it
+/// answers `ERROR_OUT_OF_DEVICE_MEMORY` to every allocation of its device-local type 1 exportable
+/// as an opaque file descriptor or a dma-buf, of 12,441,600 bytes and of 64 MiB, for the device's
+/// life, where it made each before (measured, `tests::export_after_dma_buf`), and the runtime's
+/// exportable buffers overflowed into system memory. A device-local type keeps the class's place
+/// whatever the host's flags on it: on a unified-memory GPU they may choose how the GPU caches
+/// its accesses to the pages (ANV's coherent cached type, which the class's order takes first for
+/// `Shared` memory on an Iris Xe, Mesa 26.2.x, where its type of `DEVICE_LOCAL` alone would come
+/// first otherwise). So ANV's, RADV's and lavapipe's imports, whose types are device-local or all
+/// host-mapped, take the class's order.
+#[cfg(unix)]
+pub(super) fn dma_buf_order(
     types: &[vk::MemoryType],
     allowed: u32,
     class: MemoryClass,
@@ -1030,7 +1072,7 @@ pub(super) fn dma_buf_candidates(
 /// The memory types of `types` among `allowed` a dma-buf's import takes, in its class's order:
 /// the [`candidates`] of `class` first, then every other type of `allowed` the runtime may
 /// allocate ([`allocatable`]) that is neither protected nor lazily allocated, in Vulkan's order
-/// ([`dma_buf_candidates`] tries the system-memory types the host maps among them last).
+/// ([`dma_buf_order`] puts the system-memory types the host maps among them last).
 #[cfg(unix)]
 pub(super) fn dma_buf_class_order(
     types: &[vk::MemoryType],
@@ -4856,7 +4898,8 @@ pub(super) enum DmaBufFor {
 
 /// Import the dma-buf `fd`, `size` bytes, as memory of `memory`'s best type among `allowed` (the
 /// types both the dma-buf and what is bound in it take) for `class`, in the class's order but the
-/// system-memory types the host maps last ([`dma_buf_candidates`]), in each form `purpose` takes
+/// system-memory types the host maps last, and for `Shared` memory host-coherent types alone
+/// ([`dma_buf_candidates`]), in each form `purpose` takes
 /// ([`DmaBufFor`]), every form of the other types before any of those ([`dma_buf_attempts`]),
 /// but the form and type the device's last import of the same kind (what it
 /// backs, and its class) succeeded as first ([`worked_first`]): the memory, its type and whether
@@ -4871,12 +4914,15 @@ pub(super) enum DmaBufFor {
 /// A driver's import of a dma-buf maps its pages for the device, which may take long (a consumer
 /// measured no-copy buffers over dma-bufs on the Radeon 780M taking 120 to 273 ms to make), and
 /// the device's other placements, imports and frees, all under that lock, would wait for it.
-/// Refused when no type is among `allowed`, else with the failure of the last import tried.
+/// Refused when no type is among `allowed`, or, for `Shared` memory, where the order's first type
+/// is not host-coherent ([`ImportFailure::NoMemoryType`], no import tried), else with the failure
+/// of the last import tried.
 ///
 /// The form and type that worked go first because a driver may list a type for the dma-buf that
 /// it then refuses, or refuse a form: NVIDIA lists a udmabuf of host pages as types 0 and 4
-/// (host-visible, coherent and cached, the class's first, tried after 0) and refuses 4 as out of
-/// device memory (620.70.06 on an RTX 2080 and an RTX 3090, measured), and 615.71.09 refuses most
+/// (host-visible, coherent and cached, tried after 0 by the classes but `Shared`, which tries
+/// neither) and refuses 4 as out of device memory (620.70.06 on an RTX 2080 and an RTX 3090,
+/// measured), and 615.71.09 refuses most
 /// udmabufs of scattered pages dedicated to nothing, of 16 KiB to 63 MiB, and imports them
 /// dedicated to their buffer (measured on an RTX 5080 Laptop GPU: 4346 of the leak probe's 6000
 /// imports). So an import may make a failed import first, and a failed import there is where the

@@ -2410,10 +2410,18 @@ driver's. Each is open work.
   before and makes them after a successful import as 0 (measured on an RTX 3090,
   `tests::export_after_dma_buf`): an exportable buffer then overflowed into system memory. So a
   dma-buf import tries the system-memory types the host maps (host-visible, not device-local)
-  after every other type, in every form (`memory.rs`'s `dma_buf_candidates`; the runtime maps no
+  after every other type, in every form (`memory.rs`'s `dma_buf_order`; the runtime maps no
   dma-buf import), and NVIDIA's udmabuf imports never try type 4 where type 0 takes them.
   Device-local types keep their class's order, so ANV's, RADV's and lavapipe's imports are as
-  before. 615.71.09 also refuses
+  before. A `Shared` import takes only the host-coherent types of that order, and none where its
+  first type is not one (`memory.rs`'s `dma_buf_candidates`): the CPU reaches the pages through
+  the caller's own mapping, and a type without `HOST_COHERENT` promises nothing of what that
+  mapping and the device see of each other's writes. So on NVIDIA, whose udmabuf order takes
+  type 0 (no property flag) first, a `Shared` dma-buf import is refused with no import tried, and
+  what it would back is a copy of its pages, as where a driver refuses the dma-buf
+  (`HostMemory::with_dma_buf`; `tests::export_after_dma_buf`'s
+  `a_shared_dma_buf_import_is_host_coherent_or_refused_untried`). Its `Private` imports take type
+  0 as before. 615.71.09 also refuses
   most udmabufs of scattered pages dedicated to nothing, of 16 KiB to 63 MiB, and takes them
   dedicated to their buffer (measured on an RTX 5080 Laptop GPU: 4346 of the leak probe's 6000
   imports). So an import tries first the form and type its kind (what it backs, and its class)

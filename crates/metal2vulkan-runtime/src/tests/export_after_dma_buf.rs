@@ -24,15 +24,19 @@
 //! `ERROR_OUT_OF_DEVICE_MEMORY`), answers `ERROR_OUT_OF_DEVICE_MEMORY` to every exportable
 //! allocation of its device-local type, for the device's life, where its successful import into
 //! type 0 leaves them made. So the runtime's imports try the system-memory types the host maps
-//! last (`memory::dma_buf_candidates`), and `DMA-BUF-IMPORT-TYPES` prints where that order puts
-//! each class's import on the device under test, against the class's order alone.
+//! last (`memory::dma_buf_order`), and `DMA-BUF-IMPORT-TYPES` prints where that order puts
+//! each class's import on the device under test, against the class's order alone. A `Shared`
+//! import takes only host-coherent types, and none where its order's first is not one
+//! (`memory::dma_buf_candidates`): on NVIDIA's udmabuf, whose order takes type 0 first, it is
+//! refused with no import tried, and the probe's buffer is a copy of its pages
+//! (`a_shared_dma_buf_import_is_host_coherent_or_refused_untried`).
 //!
 //! A device test: compiled only under the GPU safety cfgs (`m2v_gpu`, `m2v_cpu_icd`), on Linux.
 
 use super::host_residency::{device, udmabuf_list, udmabuf_openable, Scratch};
 use crate::{
     BufferContents, BufferDescriptor, Device, DmaBufChunk, DmaBufRequest, Error, HostMemory,
-    MemoryExport, ResourceOptions,
+    MemoryExport, ResourceOptions, VkBufferMemory,
 };
 use ash::vk;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -669,4 +673,198 @@ fn the_type_each_class_s_dma_buf_import_takes_against_the_class_s_order() {
         // SAFETY: the test's memory, which no import holds any more.
         unsafe { handles.device.free_memory(memory, None) };
     }
+}
+
+/// A `Shared` import of a udmabuf of scattered pages (`memory::import_dma_buf`, as a no-copy
+/// buffer's chunk is imported). Where the type its order takes first is not host-coherent
+/// (`memory::dma_buf_candidates`: NVIDIA's type 0, no property flag), it is refused with no import
+/// tried, and a `Private` buffer exportable as an opaque file descriptor and as a dma-buf made
+/// after it lies in device-local memory with no overflow counted, as on a device that imported
+/// nothing: an import tried as NVIDIA's type 4 breaks those for the device's life
+/// (`the_driver_s_answers_after_each_kind_of_dma_buf_import`). Elsewhere it is imported as a
+/// host-coherent type, and a `Shared` Metal buffer over it (`Device::new_buffer_with_vk_buffer`,
+/// its contents the test's own mapping of the udmabuf) shares its bytes both ways: a blit's fill
+/// reads back through that mapping, and the CPU's writes there reach a blit's copy, which the
+/// mapping reads back.
+#[test]
+fn a_shared_dma_buf_import_is_host_coherent_or_refused_untried() {
+    const SHARED: &str = "SHARED-DMA-BUF";
+    use crate::memory::{
+        dma_buf_candidates, import_dma_buf, DmaBufFor, ImportFailure, MemoryClass,
+    };
+    if !udmabuf_openable(SHARED) {
+        return;
+    }
+    let scratch = Scratch::new();
+    let device = device(&scratch.0);
+    let name = device.name().to_owned();
+    let page = device
+        .shared()
+        .host_import
+        .as_ref()
+        .map_or(4096, |import| import.page);
+    let bytes = PAGES * page;
+    let udmabuf = scattered_udmabuf(page);
+    // SAFETY: as in `budgets`.
+    let handles = unsafe { device.raw() };
+    // SAFETY: the physical device is the instance's.
+    let properties = unsafe {
+        handles
+            .instance
+            .get_physical_device_memory_properties(handles.physical_device)
+    };
+    let types = &properties.memory_types[..properties.memory_type_count as usize];
+    let listed = match dma_buf_types(&device, &udmabuf) {
+        Ok(listed) => listed,
+        Err(error) => {
+            eprintln!("{SHARED} on {name}: the udmabuf's types refused, {error:?}");
+            return;
+        }
+    };
+    let allowed = listed & dma_buf_buffer_types(&device, bytes);
+    let unified = device.properties().has_unified_memory;
+    let order = dma_buf_candidates(types, allowed, MemoryClass::Shared, unified);
+    let imported = import_dma_buf(
+        &device.shared().memory,
+        device.shared().vk(),
+        std::os::fd::AsFd::as_fd(&udmabuf),
+        bytes,
+        (allowed, MemoryClass::Shared),
+        DmaBufFor::Shared,
+    );
+    let flags = |index: u32| types[index as usize].property_flags;
+    if order.is_empty() {
+        assert_eq!(
+            imported,
+            Err(ImportFailure::NoMemoryType),
+            "{name}: allowed {allowed:#b}"
+        );
+        let local = vk::MemoryPropertyFlags::DEVICE_LOCAL.as_raw();
+        for export in [MemoryExport::OpaqueFd, MemoryExport::DmaBuf] {
+            let found = exported(&device, export);
+            eprintln!(
+                "{SHARED} on {name}: allowed {allowed:#b}, refused with no import tried; then \
+                 {export:?}: {found:?}"
+            );
+            let (_, found_flags, _, overflows) =
+                found.unwrap_or_else(|| panic!("{name}: {export:?}: no exportable buffer"));
+            assert_ne!(
+                found_flags & local,
+                0,
+                "{name}: {export:?}: a device-local type"
+            );
+            assert_eq!(overflows, 0, "{name}: {export:?}: no overflow");
+        }
+        return;
+    }
+    let (memory, type_index, _) = imported.unwrap_or_else(|failure| panic!("{name}: {failure:?}"));
+    assert!(
+        flags(type_index).contains(vk::MemoryPropertyFlags::HOST_COHERENT),
+        "{name}: type {type_index}, {:?}",
+        flags(type_index)
+    );
+    // A buffer over the whole import, made for dma-bufs, bound at 0.
+    let usage = vk::BufferUsageFlags::from(device.vk_buffer_usage());
+    let mut external = vk::ExternalMemoryBufferCreateInfo::default()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let info = vk::BufferCreateInfo::default()
+        .size(bytes)
+        .usage(usage)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    let chained = info.push_next(&mut external);
+    // SAFETY: a valid buffer of the device.
+    let raw = unsafe { handles.device.create_buffer(&chained, None) }.unwrap();
+    // SAFETY: the buffer just made.
+    let requirements = unsafe { handles.device.get_buffer_memory_requirements(raw) };
+    assert!(requirements.size <= bytes, "{name}: {requirements:?}");
+    // SAFETY: the import's type is among the buffer's (`dma_buf_buffer_types`), and it holds the
+    // buffer's size.
+    unsafe { handles.device.bind_buffer_memory(raw, memory, 0) }.unwrap();
+    // SAFETY: a shared mapping of the test's udmabuf, unmapped below once every buffer went.
+    let view = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            bytes as usize,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            udmabuf.as_raw_fd(),
+            0,
+        )
+    };
+    assert_ne!(view, libc::MAP_FAILED);
+    let contents = NonNull::new(view.cast::<u8>()).unwrap();
+    let info = vk::BufferCreateInfo::default()
+        .size(bytes)
+        .usage(usage)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    // SAFETY: made with `info` (its chain aside), bound whole at 0 of `memory`, which the import
+    // allocated with the device-address flag where the device enables it; `contents` maps the
+    // same pages, coherent with the device's view (the type is host-coherent); the buffer and
+    // memory outlive the Metal buffer, dropped below after its last command buffer completed.
+    let buffer = unsafe {
+        device.new_buffer_with_vk_buffer(
+            raw,
+            &info,
+            VkBufferMemory::new(memory, 0, type_index, Some(contents)),
+            bytes,
+            ResourceOptions::shared(),
+        )
+    }
+    .unwrap();
+    let half = bytes / 2;
+    // SAFETY: the mapping holds `bytes` bytes, and the GPU writes none while the test reads it.
+    let at = |range: std::ops::Range<u64>| unsafe {
+        std::slice::from_raw_parts(
+            contents.as_ptr().add(range.start as usize),
+            (range.end - range.start) as usize,
+        )
+    };
+    let queue = device.new_command_queue().unwrap();
+    let blit = |encode: &dyn Fn(&mut crate::BlitCommandEncoder)| {
+        let command_buffer = queue.command_buffer().unwrap();
+        let mut blit = command_buffer.blit_command_encoder().unwrap();
+        encode(&mut blit);
+        blit.end_encoding().unwrap();
+        command_buffer.commit().unwrap();
+        command_buffer
+            .wait_until_completed_for(std::time::Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(command_buffer.error(), None);
+    };
+    // The GPU writes, the CPU reads through its own mapping.
+    blit(&|blit| blit.fill_buffer(&buffer, 0..bytes, 0xa5).unwrap());
+    let gpu_written = at(0..bytes).iter().filter(|&&byte| byte != 0xa5).count();
+    // The CPU writes through its mapping, the GPU copies them, the CPU reads the copy.
+    let pattern: Vec<u8> = (0..half).map(|at| (at * 7 % 251) as u8).collect();
+    // SAFETY: the mapping holds the second half, which no command touches now.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            pattern.as_ptr(),
+            contents.as_ptr().add(half as usize),
+            pattern.len(),
+        )
+    };
+    blit(&|blit| {
+        blit.copy_from_buffer_to_buffer(&buffer, half, &buffer, 0, half)
+            .unwrap()
+    });
+    let copied_wrong = (at(0..half).iter().zip(&pattern))
+        .filter(|(read, wrote)| read != wrote)
+        .count();
+    eprintln!(
+        "{SHARED} on {name}: allowed {allowed:#b}, imported as type {type_index} ({:?}); bytes \
+         the GPU's fill left unseen through the mapping {gpu_written} of {bytes}; bytes of the \
+         CPU's writes the GPU's copy missed {copied_wrong} of {half}",
+        flags(type_index)
+    );
+    drop(buffer);
+    drop(queue);
+    // SAFETY: no command uses the buffer or the memory any more, and no Metal buffer lies over
+    // them.
+    unsafe {
+        handles.device.destroy_buffer(raw, None);
+        handles.device.free_memory(memory, None);
+        libc::munmap(view, bytes as usize);
+    }
+    assert_eq!((gpu_written, copied_wrong), (0, 0), "{name}");
 }
