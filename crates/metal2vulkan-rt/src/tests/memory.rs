@@ -739,7 +739,8 @@ mod on_device {
             large.array_length = 3;
             match device.new_texture(&large, Some(4097)) {
                 Err(Error::Limit(Limit::MemoryAllocations { max: MAX })) => {}
-                other => panic!("{name}: a texture of its own memory past the count: {other:?}"),
+                Err(error) => panic!("{name}: a texture of its own memory past the count: {error}"),
+                Ok(_) => panic!("{name}: a texture of its own memory past the count was made"),
             }
             let gauges = counters.gauges();
             assert_eq!(
