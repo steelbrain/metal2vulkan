@@ -670,6 +670,19 @@ class HarnessBudgetTests(unittest.TestCase):
             # No base, or a base without the row, voids nothing.
             self.assertEqual(len(self.budget("a", times)[0]), 4)
             self.assertEqual(len(results.harness_budget("a", leg_of(recs(time=times)), {"loop/gpu": 1.0})[0]), 4)
+            # A base of another harness or old runtime leaves the creation rows alone compared; one
+            # of another timing shape, none.
+            problems, parked = results.harness_budget("a", leg_of(recs(time=times)), base, results.REBASED_TREES)
+            self.assertEqual((len(problems), [line.split(":")[0] for line in parked]),
+                             (3, [f"harness budget {row}"]))
+            self.assertEqual([row for row, *_ in results.frozen_void(times, base, results.REBASED_TREES)], [row])
+            problems, parked = results.harness_budget("a", leg_of(recs(time=times)), base, results.REBASED_SHAPE)
+            self.assertEqual((len(problems), parked), (4, []))
+            self.assertEqual(results.frozen_void(times, base, results.REBASED_SHAPE), [])
+            self.assertEqual([line.split(" | ")[-1] for line in
+                              results.harness_rows(recs(time=times), base, results.REBASED_TREES)], [
+                "1.500, old rebased on the base", "2.000, old +11.1% on the base VOID",
+                "1.500, old rebased on the base", "1.000, old rebased on the base"])
         lines = results.harness_rows(recs(time=times), base)
         self.assertEqual([line.split(" | ")[-1] for line in lines], [
             "1.500, old +5.0% on the base", "2.000, old +11.1% on the base VOID",

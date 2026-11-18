@@ -388,7 +388,11 @@ median of five processes) is compared with the same time in the leg's base, the 
 and a row whose old time moved more than 10% either way is VOID for the round on that GPU: it is
 named on the leg's line and judged on nothing, and its comparison comes only from a re-time in
 one process with both runtimes interleaved. The report shows that move on every row the base has
-(`FROZEN_DRIFT` in `scripts/matrix/results.py`). On each GPU, a harness row timed on both runtimes in the leg
+(`FROZEN_DRIFT` in `scripts/matrix/results.py`). It measures noise only between rounds of one
+harness, one old runtime and one timing shape: where the trees of `crates/metal2vulkan-harness`
+or `crates/metal2vulkan-runtime` differ between the two commits, every row but the creation rows
+reads `rebased` and voids nothing, and where the base was timed in another shape (the note's
+`shape`), every row does. On each GPU, a harness row timed on both runtimes in the leg
 (`harness-new/<row>` and `harness-old/<row>`) holds the new runtime's time to at most 1.03 times
 the old's, times the row's floor on that GPU where it has one: the widest ratio between two of
 the old runtime's own runs of the row there (`scripts/matrix/floors.tsv`, measured again when the

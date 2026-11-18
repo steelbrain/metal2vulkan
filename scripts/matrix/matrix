@@ -71,6 +71,10 @@ HARNESS_SUITE = "harness"
 #: The runtimes whose first-use waits the harness also times warm (harness_runs): those that
 #: count first-use waits. The old runtime counts none.
 HARNESS_WARM = ("new",)
+#: The crates whose trees at two commits must be equal for the frozen arm to compare their legs'
+#: old runtime's times of the harness's command-buffer rows (frozen_rebase): the harness's and
+#: the old runtime's.
+FROZEN_CRATES = ("metal2vulkan-harness", "metal2vulkan-runtime")
 #: A node's Vulkan driver manifest by PCI vendor, and whether Mesa's device select picks the GPU.
 ICDS = {"1002": ("radeon", True), "10de": ("nvidia", False), "8086": ("intel", False)}
 #: (RAM GiB, minutes) of each job kind before a run of it was measured; the minutes stay its floor.
@@ -146,6 +150,18 @@ def harness_tree(sha):
     """The harness crate's tree at SHA. Its times measure through the harness's own warm-up and
     windows, so two commits' times compare only when one harness measured both."""
     return git("rev-parse", f"{sha}:crates/metal2vulkan-harness", check=False)
+
+
+def frozen_rebase(sha, shape, base_sha, base):
+    """How the leg at SHA, timed in SHAPE, differs from its base BASE (the leg at BASE_SHA) for the
+    frozen arm (results.frozen_rebased): results.REBASED_SHAPE where the base was timed in another
+    shape, results.REBASED_TREES where the harness's or the old runtime's crate tree differs
+    between the two commits, else None."""
+    if base.get("shape") != shape:
+        return results.REBASED_SHAPE
+    trees = [[git("rev-parse", f"{commit}:crates/{crate}", check=False) for crate in FROZEN_CRATES]
+             for commit in (sha, base_sha)]
+    return None if trees[0] == trees[1] else results.REBASED_TREES
 
 
 def base_times(sha, base_sha, base):
@@ -821,7 +837,8 @@ def leg_entry(run, leg):
     problems += results.old_path_moved(parsed, run.since_bless)
     if leg.id not in CPU_LEGS and run.lock_budget:
         problems += results.lock_budget_missing(records, results.names_lock_event(run.setup(leg.node)))
-    budget, budget_parked = results.harness_budget(leg.id, parsed, base and base["records"]["time"])
+    rebased = base and frozen_rebase(run.sha, results.HARNESS_SHAPE, base_sha, base)
+    budget, budget_parked = results.harness_budget(leg.id, parsed, base and base["records"]["time"], rebased)
     problems += budget
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
@@ -837,7 +854,8 @@ def leg_entry(run, leg):
         started=leg.started and datetime.fromtimestamp(leg.started, timezone.utc).isoformat(timespec="seconds"),
         minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},
-        records=records, base=base_sha, base_records=base and base["records"], problems=problems,
+        records=records, base=base_sha, base_records=base and base["records"], shape=results.HARNESS_SHAPE,
+        problems=problems,
         parked=results.leg_parked(parsed, records) + budget_parked)
 
 
@@ -906,24 +924,29 @@ def run_cmd(sha, only, dry):
     path.write_text(json.dumps(doc, indent=1, sort_keys=True) + "\n")
     git("notes", f"--ref={NOTES}", "add", "-f", "-F", str(path), sha)
     for leg_id in sorted(entries):
-        print_leg(leg_id, doc["legs"][leg_id])
+        print_leg(sha, leg_id, doc["legs"][leg_id])
     failed = sum(1 for e in entries.values() if e["verdict"] != "pass")
     print(f"matrix {sha[:12]}: {len(entries) - failed} of {len(entries)} legs pass, {wall} min wall; note {NOTES}")
     return 1 if failed else 0
 
 
-def print_leg(leg_id, leg):
-    """A leg's verdict line, then each of its harness rows' times and GPU times, with the frozen
-    arm's move on its base (results.frozen_move), and the rows the frozen arm voids."""
+def print_leg(sha, leg_id, leg):
+    """SHA's leg's verdict line, then each of its harness rows' times and GPU times, with the
+    frozen arm's move on its base (results.frozen_move, frozen_rebase), and the rows the frozen arm
+    voids."""
     print(results.verdict_line(leg_id, leg))
     base = leg.get("base") and (note(leg["base"]) or {}).get("legs", {}).get(leg_id)
+    rebased = base and frozen_rebase(sha, leg.get("shape"), leg["base"], base)
     base = base and base["records"]["time"]
-    for line in results.harness_rows(leg["records"], base):
+    for line in results.harness_rows(leg["records"], base, rebased):
         print(f"  {line}")
     if base:
-        void = results.frozen_void(leg["records"]["time"], base)
-        print(f"  frozen arm against {leg['base'][:10]}: {len(void)} row(s) VOID, old moved past "
-              f"{results.FROZEN_DRIFT:.0%}" + "".join(f"; {row} {move:+.1%}" for row, _, _, move in void))
+        void = results.frozen_void(leg["records"]["time"], base, rebased)
+        compared = {None: "every row", results.REBASED_SHAPE: "no row",
+                    results.REBASED_TREES: "the creation rows alone"}[rebased]
+        print(f"  frozen arm against {leg['base'][:10]}{f', {rebased}' if rebased else ''}: {compared} "
+              f"compared, {len(void)} VOID, old moved past {results.FROZEN_DRIFT:.0%}"
+              + "".join(f"; {row} {move:+.1%}" for row, _, _, move in void))
 
 
 def show_cmd(sha):
@@ -931,7 +954,7 @@ def show_cmd(sha):
     if not doc:
         sys.exit(f"no matrix note on {sha}")
     for leg_id in sorted(doc["legs"]):
-        print_leg(leg_id, doc["legs"][leg_id])
+        print_leg(sha, leg_id, doc["legs"][leg_id])
     last = doc["runs"][-1]
     print(f"matrix {sha[:12]}: last run {last['started']}, {last['minutes']} min wall, jobs {' '.join(last['jobs'])}")
 
