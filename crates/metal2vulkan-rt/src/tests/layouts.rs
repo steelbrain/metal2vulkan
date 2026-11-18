@@ -472,7 +472,7 @@ mod on_device {
             let buffer = (device.new_buffer(block.id, AT, LEN, Some(0)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let first = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
             let mut d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
             forget();
@@ -496,7 +496,7 @@ mod on_device {
             let mut plain_d = d;
             plain_d.usage = TextureUsage::SHADER_READ;
             plain_d.storage_mode = StorageMode::Shared;
-            let plain = (device.new_texture(&plain_d, None))
+            let plain = (device.new_texture(&plain_d, Some(first + 1)))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let other = (device.new_buffer(block.id, 0, ROW * u64::from(HEIGHT), None))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
