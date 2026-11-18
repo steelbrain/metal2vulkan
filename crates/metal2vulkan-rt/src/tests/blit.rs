@@ -33,8 +33,11 @@
 //!   a fill before it, to plain Metal's bytes (probe `blit_synchronize_rules.m`, job
 //!   m3-max-43632): by one copy between two barriers where the buffer has a device copy, which
 //!   the fill alone does not reach; by nothing where it has none. Each is counted and is no
-//!   submission of its own; one of a texture records nothing. A blit's segment ends reaching the
-//!   host exactly where it wrote Shared memory or synchronized a device copy.
+//!   submission of its own; one of a texture without named bytes records nothing. A synchronize
+//!   of a Managed texture copies each level of its image into its place in the named bytes,
+//!   level 0 plain Metal's getBytes after a synchronize (job m3-max-43667), between one pair of
+//!   barriers. A blit's segment ends reaching the host exactly where it wrote Shared memory or
+//!   synchronized a device copy or a Managed texture.
 
 use crate::blit::{
     buffer_copy, fill_range, texture_copy, BufferCopy, BufferLayout, ImageCopy, Lies, Side,
@@ -740,9 +743,9 @@ fn a_fill_takes_whole_words_of_a_range_inside_the_buffer() {
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        BlitCommandEncoder, Buffer, BufferLayout, CommandBuffer, Device, DispatchType, Error, Gap,
-        IndexClass, MemoryClass, PixelFormat, Refusal, Region, Resource, StorageMode, Texture,
-        TextureDescriptor, TexturePlace, TextureType, TextureUsage,
+        BlitCommandEncoder, Buffer, BufferLayout, BytesPlace, CommandBuffer, Device, DispatchType,
+        Error, Gap, IndexClass, MemoryClass, PixelFormat, Refusal, Region, Resource, StorageMode,
+        Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
 
     /// A byte pattern of `len` bytes, different at every offset of one call and between calls.
@@ -1482,7 +1485,7 @@ mod on_device {
     /// alone leaves the host's bytes as they were, and the synchronize is one copy between two
     /// barriers; where it has none the host reads the fill's bytes at once and the synchronize
     /// records nothing. Either way it is counted, is no submission of its own, and the segment's
-    /// end reaches the host. A synchronize of a texture records nothing.
+    /// end reaches the host. A synchronize of a texture without named bytes records nothing.
     #[test]
     fn every_device_synchronizes_a_managed_buffer() {
         each_device("blit_synchronize", |name, _, device| {
@@ -1551,7 +1554,7 @@ mod on_device {
                 "{name}: the synchronized fill (device copy: {copied})"
             );
 
-            // A texture's synchronize records nothing.
+            // A synchronize of a texture without named bytes records nothing.
             device
                 .grant_indices(IndexClass::Texture, 4096, 1)
                 .expect("a grant");
@@ -1647,6 +1650,98 @@ mod on_device {
             }
             // The copy out of the texture brought the Private buffer's fill to the host.
             assert_eq!(read(&shared), vec![1; 256], "{name}: the bytes");
+        });
+    }
+
+    /// A synchronize of a Managed texture copies each level of its image into its place in the
+    /// consumer's named bytes, rows 256 bytes apart, everything between them kept, level 0 plain
+    /// Metal's: one submission, two barriers and the segment's end reaching the host, no byte of
+    /// the runtime's own. Copies into the texture alone leave the named bytes as they were.
+    #[test]
+    fn every_device_synchronizes_a_managed_texture_into_its_named_bytes() {
+        each_device("blit_synchronize_texture", |name, _, device| {
+            let block = (device.take_block(MemoryClass::Shared, 8192))
+                .expect("a Shared block")
+                .id;
+            let named = (device.new_buffer(block, 0, 2048, true)).expect("a buffer");
+            let source = (device.new_buffer(block, 4096, 128, true)).expect("a buffer");
+            let (level0, level1) = (pattern(64, 21), pattern(16, 99));
+            write(&source, &[level0.clone(), level1.clone()].concat());
+            let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+            d.mipmap_level_count = 2;
+            d.usage = TextureUsage::RENDER_TARGET;
+            let place = |offset| BytesPlace {
+                offset,
+                bytes_per_row: 256,
+                bytes_per_image: 0,
+            };
+            let texture = (device.new_managed_texture(&d, None, &named, &[place(0), place(1024)]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+
+            // The copies into the image alone.
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            for (offset, bytes_per_row, side, level) in [(0, 16, 4, 0), (64, 8, 2, 1)] {
+                let layout = BufferLayout {
+                    offset,
+                    bytes_per_row,
+                    bytes_per_image: 0,
+                };
+                let at = TexturePlace {
+                    level,
+                    ..TexturePlace::default()
+                };
+                encoder
+                    .copy_from_buffer(&source, layout, [side, side, 1], &texture, at)
+                    .unwrap_or_else(|error| panic!("{name}: level {level}: {error}"));
+            }
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            assert_eq!(read(&named), vec![0; 2048], "{name}: the copies alone");
+
+            // The synchronize.
+            let metrics = counters.metrics();
+            let reaches = counters.host_reaches();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder
+                .synchronize_resource(Resource::Texture(&texture))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - metrics.submissions,
+                    after.barriers - metrics.barriers,
+                    after.bytes_copied - metrics.bytes_copied,
+                    after.synchronizations - metrics.synchronizations,
+                    counters.host_reaches() - reaches,
+                ),
+                (1, 3, 0, 1, 1),
+                "{name}: submissions, barriers, bytes copied, synchronizations, host reaches"
+            );
+            let got = read(&named);
+            let rows = |at: usize, row: usize, count: usize| -> Vec<u8> {
+                (0..count)
+                    .flat_map(|y| got[at + y * 256..at + y * 256 + row].to_vec())
+                    .collect()
+            };
+            assert_eq!(
+                rows(0, 16, 4),
+                metal(level0, 0xa918_a78f_c82c_bba5),
+                "{name}: level 0"
+            );
+            assert_eq!(rows(1024, 8, 2), level1, "{name}: level 1");
+            let mut between = got.clone();
+            for (at, row, count) in [(0, 16, 4), (1024, 8, 2)] {
+                for y in 0..count {
+                    between[at + y * 256..at + y * 256 + row].fill(0);
+                }
+            }
+            assert_eq!(between, vec![0; 2048], "{name}: the bytes between the rows");
         });
     }
 }

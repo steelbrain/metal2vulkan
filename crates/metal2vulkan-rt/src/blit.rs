@@ -17,8 +17,10 @@
 //! as a copy's, the second making its writes visible to every later command.
 //!
 //! A synchronize of a Managed buffer with a device copy is one `vkCmdCopyBuffer` of the copy into
-//! the consumer's bytes between the same two barriers, marking the segment so its end reaches the
-//! host; of any other resource it records nothing.
+//! the consumer's bytes between the same two barriers, and one of a Managed texture with named
+//! bytes a `vkCmdCopyImageToBuffer` of each level and slice into its place, between one pair of
+//! them; either marks the segment so its end reaches the host. Of any other resource it records
+//! nothing.
 
 use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
@@ -26,7 +28,7 @@ use crate::counters::Metric;
 use crate::encoder::Resource;
 use crate::error::{Error, Gap, Refusal};
 use crate::record::{memory_barrier, Reach};
-use crate::texture::{place, CopyUnit, Placed, Region, Texture, TextureDescriptor};
+use crate::texture::{place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor};
 use ash::vk;
 use metal2vulkan::metal::TextureType;
 use std::ops::Range;
@@ -237,13 +239,12 @@ impl BlitCommandEncoder {
         layout: BufferLayout,
         into_image: bool,
     ) -> Result<(), Error> {
-        let building = self.building();
-        let core = Arc::clone(building.device.core());
+        let core = Arc::clone(self.building().device.core());
         if !texture.is_of(&core) || !buffer.is_of(&core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
         // A Managed buffer's GPU side is its device copy, where it has one.
-        let (vk_buffer, base) = buffer.device_range();
+        let base = buffer.device_range().1;
         let lies = Lies {
             base,
             len: buffer.length(),
@@ -252,6 +253,22 @@ impl BlitCommandEncoder {
         let Some(copy) = buffer_copy(&Side::of(texture), at, size, lies, into_image)? else {
             return Ok(());
         };
+        self.record_buffer_copies(texture, buffer, &[copy], into_image)
+    }
+
+    /// Records `copies` between `texture` and `buffer`, checked, between two barriers: the first
+    /// after every earlier command, moving each copy's level and slice to a transfer layout; the
+    /// second moving them home, a write into the buffer visible to every later command.
+    fn record_buffer_copies(
+        &mut self,
+        texture: &Texture,
+        buffer: &Buffer,
+        copies: &[BufferCopy],
+        into_image: bool,
+    ) -> Result<(), Error> {
+        let building = self.building();
+        let core = Arc::clone(building.device.core());
+        let vk_buffer = buffer.device_range().0;
         building.keep_texture(texture);
         building.keep(buffer);
         let command = building.ordered_command()?;
@@ -269,8 +286,12 @@ impl BlitCommandEncoder {
             false => (vk::ImageLayout::TRANSFER_SRC_OPTIMAL, Access::TRANSFER_READ),
         };
         let earlier = [memory_barrier(Reach::Commands)];
-        let away = [texture.away(&copy.placed, layout, access)];
-        let back = [texture.back(&copy.placed, layout)];
+        let away: Vec<_> = (copies.iter())
+            .map(|copy| texture.away(&copy.placed, layout, access))
+            .collect();
+        let back: Vec<_> = (copies.iter())
+            .map(|copy| texture.back(&copy.placed, layout))
+            .collect();
         let written = [written()];
         let written = match into_image {
             true => &written[..0],
@@ -278,7 +299,7 @@ impl BlitCommandEncoder {
         };
         let device = &core.device;
         // SAFETY: the command buffer records outside any render pass and keeps the image and the
-        // buffer until it retires; the subresource is in its home layout between
+        // buffer until it retires; each copy's level and slice is in its home layout between
         // commands and in `layout` between the barriers; each region lies in the image and, by
         // `buffer_copy`, in the buffer's device range, its offset aligned as the command
         // requires.
@@ -289,7 +310,7 @@ impl BlitCommandEncoder {
                     .memory_barriers(&earlier)
                     .image_memory_barriers(&away),
             );
-            for region in copy.regions() {
+            for region in copies.iter().flat_map(BufferCopy::regions) {
                 match into_image {
                     true => device.cmd_copy_buffer_to_image(
                         command,
@@ -383,27 +404,81 @@ impl BlitCommandEncoder {
     /// A Managed buffer with a device copy
     /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer) on a device whose
     /// Shared memory is not device-local) is one `vkCmdCopyBuffer` of the copy into the
-    /// consumer's bytes, between a fill's two barriers, the segment marked so its end barrier
-    /// reaches the host; the command buffer keeps the buffer until it retires. A buffer with no
-    /// device copy is one the host reads where shaders write it, and a texture has no bytes the
-    /// host reads apart from its image: the call records nothing for either.
+    /// consumer's bytes, between a fill's two barriers. A Managed texture with named bytes
+    /// ([`Device::new_managed_texture`](crate::Device::new_managed_texture)), on every device, is
+    /// one `vkCmdCopyImageToBuffer` of each level and slice of its image into its place in them,
+    /// between one pair of a buffer copy's barriers, as
+    /// [`copy_from_texture_to_buffer`](Self::copy_from_texture_to_buffer) records. Either marks
+    /// the segment so its end barrier reaches the host, and the command buffer keeps the resource
+    /// until it retires. A buffer with no device copy is one the host reads where shaders write
+    /// it, and a texture without named bytes has none the host reads apart from its image: the
+    /// call records nothing for either.
     ///
     /// Metal's validation stops the call on a resource that is not Managed (probe
     /// `blit_synchronize_rules.m` in the conformance crate, an Apple M3 Max, macOS 27.0.1, job
     /// m3-max-43632); the runtime keeps no storage mode for a buffer without a device copy or for a
-    /// texture, and records nothing there.
+    /// texture without named bytes, and records nothing there.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's resource; [`Error::Vulkan`] where the
     /// command buffer cannot record.
     pub fn synchronize_resource(&mut self, resource: Resource<'_>) -> Result<(), Error> {
+        let core = Arc::clone(self.building().device.core());
+        match resource {
+            Resource::Buffer(buffer) if buffer.is_of(&core) => self.read_back(buffer)?,
+            Resource::Texture(texture) if texture.is_of(&core) => {
+                self.read_back_texture(texture)?
+            }
+            _ => return Err(Error::Refused(Refusal::OtherDevice)),
+        }
+        core.counters.count(Metric::Synchronizations);
+        Ok(())
+    }
+
+    /// A Managed texture's synchronize: each level and slice of its image into its place in the
+    /// named bytes, where it has them.
+    fn read_back_texture(&mut self, texture: &Texture) -> Result<(), Error> {
+        let Some((bytes, places)) = texture.named_bytes() else {
+            return Ok(());
+        };
+        let d = texture.descriptor();
+        let slices = places.len() as u32 / d.mipmap_level_count;
+        let side = Side::of(texture);
+        let base = bytes.device_range().1;
+        let mut copies = Vec::with_capacity(places.len());
+        for (at, &place) in (0..).zip(places) {
+            let BytesPlace {
+                offset,
+                bytes_per_row,
+                bytes_per_image,
+            } = place;
+            let layout = BufferLayout {
+                offset,
+                bytes_per_row,
+                bytes_per_image,
+            };
+            let lies = Lies {
+                base,
+                len: bytes.length(),
+                layout,
+            };
+            let level = at / slices;
+            let at = TexturePlace {
+                slice: at % slices,
+                level,
+                origin: [0; 3],
+            };
+            let size = [d.width, d.height, d.depth].map(|extent| (extent >> level).max(1));
+            copies.extend(buffer_copy(&side, at, size, lies, false)?);
+        }
+        self.record_buffer_copies(texture, bytes, &copies, false)
+    }
+
+    /// A Managed buffer's synchronize: its device copy into the consumer's bytes, where it has
+    /// one.
+    fn read_back(&mut self, buffer: &Buffer) -> Result<(), Error> {
         let building = self.building();
         let core = Arc::clone(building.device.core());
-        let buffer = match resource {
-            Resource::Buffer(buffer) if buffer.is_of(&core) => Some(buffer),
-            Resource::Texture(texture) if texture.is_of(&core) => None,
-            _ => return Err(Error::Refused(Refusal::OtherDevice)),
-        };
-        if let Some((buffer, (block, Some(copy)))) = buffer.map(|buffer| (buffer, buffer.held())) {
+        if let (block, Some(copy)) = buffer.held() {
             let (from, to) = (copy.buffer(), block.memory.buffer);
             let region = vk::BufferCopy {
                 src_offset: copy.offset(),
@@ -434,7 +509,6 @@ impl BlitCommandEncoder {
             core.counters.count(Metric::Barriers);
             core.counters.count(Metric::Barriers);
         }
-        core.counters.count(Metric::Synchronizations);
         Ok(())
     }
 

@@ -406,7 +406,9 @@ impl Device {
     /// consumer's bytes of the texture named in `bytes`, a buffer the host reaches, at `places`:
     /// one for each level and, within it, each slice in order (a cube's six faces each a slice, a
     /// 3D level one slice of several images). The consumer writes them; [`Texture::upload_region`]
-    /// copies a region of them into the image. The texture keeps the buffer.
+    /// copies a region of them into the image, and a blit encoder's
+    /// [`synchronize_resource`](crate::BlitCommandEncoder::synchronize_resource) copies the image
+    /// back into them. The texture keeps the buffer.
     ///
     /// Metal keeps a Managed texture's bytes beside its image itself; here the consumer lays them
     /// out, and the device copies straight from them, so each place's rows are a whole number of
@@ -1560,6 +1562,13 @@ impl Texture {
     /// The unit its copies move; `None` where no copy is built.
     pub(crate) fn unit(&self) -> Option<CopyUnit> {
         self.inner.unit
+    }
+
+    /// A Managed texture's named bytes ([`Device::new_managed_texture`]): the buffer and its
+    /// places, one for each level and, within it, each slice. `None` for any other texture.
+    pub(crate) fn named_bytes(&self) -> Option<(&Buffer, &[BytesPlace])> {
+        let (bytes, places) = self.inner.managed.as_ref()?;
+        Some((bytes, places))
     }
 
     /// The barrier that moves `placed` from home to the transfer `layout` for a copy's

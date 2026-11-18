@@ -436,7 +436,6 @@ that touch blocks first.
   resource IDs it made up, with no fault. The consumer treats every byte on the device as
   guest-writable and keeps nothing there that it parses or trusts.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
-- A Managed texture's `synchronizeResource` comes with blit encoders.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
   dispatch past it is split into dispatches of at most that many, each told its first
@@ -550,11 +549,13 @@ that touch blocks first.
   on whole 4-byte words of the bytes shaders reach, which Metal fills byte by byte.
 - `synchronize_resource` is `synchronizeResource:`, counted in `Metrics::synchronizations` and
   never a submission of its own. Of a Managed buffer with a device copy it records one
-  `vkCmdCopyBuffer` of the copy into the consumer's bytes between the same two barriers, marking
-  the segment so its end barrier reaches the host: the host reads the GPU's writes before the
-  call once the command buffer completes or it sees an event signaled after it. Of any other
-  buffer, which the host reads where shaders write it, and of a texture, which has no bytes the
-  host reads apart from its image, it records nothing. Metal's validation stops it on a resource
+  `vkCmdCopyBuffer` of the copy into the consumer's bytes between the same two barriers; of a
+  Managed texture with named bytes, on every device, one `vkCmdCopyImageToBuffer` of each level
+  and slice into its place in them, between one pair of barriers. Either marks the segment so its
+  end barrier reaches the host: the host reads the GPU's writes before the call once the command
+  buffer completes or it sees an event signaled after it. Of any other buffer, which the host
+  reads where shaders write it, and of a texture without named bytes, which has none the host
+  reads apart from its image, it records nothing. Metal's validation stops it on a resource
   that is not Managed; the runtime keeps no storage mode for those and does not refuse it.
 - The slice-and-level and whole-texture forms of `copyFromTexture`,
   `synchronizeTexture:slice:level:` (no recorded stream calls it), and the other blit commands

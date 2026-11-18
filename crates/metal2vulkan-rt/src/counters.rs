@@ -300,8 +300,9 @@ pub struct Metrics {
     /// Calls that waited for an upload to complete before they recorded: the upload at its
     /// bound of calls or bytes, or the staging region with no room for a copy.
     pub upload_waits: u64,
-    /// `synchronizeResource:` calls: each one copy into the host's bytes of a Managed buffer with
-    /// a device copy, and nothing for any other resource; none a submission of its own.
+    /// `synchronizeResource:` calls: each a copy into the host's bytes of a Managed buffer with a
+    /// device copy or of a Managed texture with named bytes, and nothing for any other resource;
+    /// none a submission of its own.
     pub synchronizations: u64,
 }
 
