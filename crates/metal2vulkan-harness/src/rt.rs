@@ -9,11 +9,10 @@
 //! buffer's memory only then. So a buffer made after one of the same length was dropped takes
 //! the same range, which the runtime zeroes as `newBufferWithLength:options:` does.
 //!
-//! The new runtime has no `Managed` storage, so a `Managed` buffer is a `Private` one here: the
-//! GPU's copy in device memory, which the harness writes as it writes a `Private` buffer, through
-//! a `Shared` buffer and its copy kernel, as `didModifyRange:` brings a `Managed` buffer's GPU copy
-//! up to date on a Mac with a discrete GPU. It has no CPU copy: its `contents` is `None`, and a
-//! plan whose CPU writes such a buffer before each run (`BufferPlan::modified`) is refused.
+//! A `Managed` buffer is the runtime's (`Device::new_managed_buffer`) over a range of a Shared
+//! block: its `contents` are the CPU's bytes, which the harness writes and names with
+//! `did_modify_range`, and where the device is neither integrated nor a CPU the runtime keeps a
+//! device copy, which the next commit brings up to date.
 //!
 //! Its known gaps and the device's limits (`Error::Unsupported`, `Error::Limit`) are typed
 //! refusals ([`Refused`]); its other errors are failures.
@@ -171,6 +170,19 @@ impl Indices {
 }
 
 impl Device {
+    /// A `Managed` buffer over `length` bytes at `start` of Shared block `block`: its bytes zeroed
+    /// as a zeroed Shared buffer over them zeroes them, and its device copy, where it has one,
+    /// zeroed with nothing copied.
+    fn new_managed_buffer(
+        &self,
+        block: rt::BlockId,
+        start: u64,
+        length: u64,
+    ) -> std::result::Result<rt::Buffer, rt::Error> {
+        drop(self.device.new_buffer(block, start, length, Some(0))?);
+        self.device.new_managed_buffer(block, start, length, 0)
+    }
+
     /// `make` at the next index of `class` that no earlier object still holds.
     fn place<T>(
         &self,
@@ -333,15 +345,22 @@ impl crate::Device for Device {
         self.name.clone()
     }
 
-    /// Placed as the module's docs say, and zeroed by the runtime.
+    /// Placed as the module's docs say, and zeroed by the runtime; a `Managed` buffer's bytes
+    /// zeroed by the harness, and its device copy, where it has one, by the runtime.
     fn new_buffer(&self, length: u64, storage: Storage) -> Result<Buffer> {
         let class = match storage {
-            Storage::Shared => rt::MemoryClass::Shared,
-            Storage::Private | Storage::Managed => rt::MemoryClass::Private,
+            Storage::Shared | Storage::Managed => rt::MemoryClass::Shared,
+            Storage::Private => rt::MemoryClass::Private,
         };
         let placed = self.heap.borrow_mut().place(class, length)?;
         let (block, start) = placed.at();
-        match self.device.new_buffer(block, start, length, Some(0)) {
+        let made = match storage {
+            Storage::Managed => self.new_managed_buffer(block, start, length),
+            Storage::Shared | Storage::Private => {
+                self.device.new_buffer(block, start, length, Some(0))
+            }
+        };
+        match made {
             Ok(buffer) => Ok(Buffer {
                 buffer,
                 placed,
@@ -709,8 +728,8 @@ impl crate::BlitCommandEncoder<Device> for rt::BlitCommandEncoder {
         rt::BlitCommandEncoder::fill_buffer(self, &buffer.buffer, range, value).map_err(error)
     }
 
-    /// Nothing for a `Managed` buffer, a `Private` one here (the module's docs), as for any buffer
-    /// without a device copy.
+    /// `synchronize_resource`: of a `Managed` buffer with a device copy, the copy into its CPU
+    /// bytes; of any other buffer, nothing.
     fn synchronize_resource(&mut self, buffer: &Buffer) -> Result<()> {
         let resource = rt::Resource::Buffer(&buffer.buffer);
         rt::BlitCommandEncoder::synchronize_resource(self, resource).map_err(error)
@@ -786,8 +805,9 @@ impl crate::Buffer for Buffer {
         self.buffer.contents()
     }
 
-    /// Nothing: a `Managed` buffer has no CPU copy here (the module's docs).
-    fn did_modify_range(&self, _: u64, _: u64) -> Result<()> {
-        Ok(())
+    /// `Buffer::did_modify_range`: the next commit takes the range's bytes into the device copy,
+    /// where the buffer has one.
+    fn did_modify_range(&self, offset: u64, length: u64) -> Result<()> {
+        self.buffer.did_modify_range(offset, length).map_err(error)
     }
 }
