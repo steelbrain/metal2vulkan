@@ -54,7 +54,8 @@ Teardown stops the submit thread, which submits what is ready and ends what it h
 `CommandBufferError::NotRun`; the completion thread retires the rest as the GPU completes it and
 runs the handlers; the threads are joined and the GPU goes idle; `BlockMappings::unmap` runs for
 each block the consumer was handed. Teardown runs on the thread that drops the last handle, or,
-where that is a handler or a listener, on the reaper once the handler returns. A call that holds a
+where that is a handler (scheduled or completed) or a listener, on the reaper once the handler
+returns. A call that holds a
 handle of its own gives it up before another thread can drop the last: `commit` gives up the
 command buffer's before the command buffer can complete. Then every block is freed and the
 `VkDevice` destroyed, once the runtime's last internal reference is gone: on the thread that tore
@@ -626,10 +627,23 @@ made, with no lock, and never rewritten for layouts.
   buffer before it, in flight, or at once where that one has completed. Where that one is in a
   group held, it joins the group, which goes at once, so its completion waits only on submitted
   work.
+- A command buffer's scheduled handlers run on the submit thread, once it is scheduled and before
+  its submission goes to the driver (one that ends without a submission: once it ends, before it
+  retires), with no lock of the runtime's held. In the handler its status is `Scheduled` and its
+  kernel times are set, and it runs before the command buffer's completed handlers. The queue's
+  later submissions wait while it runs, and it may run while another command buffer's completed
+  handler runs on the completion thread. A scheduled handler may read the command buffer's status
+  and times, enqueue command buffers, make objects that take no upload, and do the consumer's own
+  work. Each call that may wait for the submit thread is `Refusal::InScheduledHandler` in it, on
+  every device: `commit`, the waits (`wait_until_scheduled`, `wait_until_completed`,
+  `wait_until_signaled_value`), the uploads and readbacks (`replace_region`, `upload_region`,
+  `get_bytes`, `zero_block_range`), and the objects that take an upload (`new_managed_buffer`, and
+  `new_buffer` zeroing a buffer in a Private block). Metal runs a scheduled handler on a thread of
+  its own, where those calls run. The submit thread wakes no other thread for a scheduled handler.
 - The completion thread retires command buffers as the progress semaphore reaches them, a
   submission's in commit order: the status, the blocks they kept, their recorders and their place
-  in the queue, then the handlers. Scheduled and completed handlers run on it, every device's in
-  turn, so no handler waits for a command buffer. A command buffer of a group is seen complete
+  in the queue, then the completed handlers. Completed handlers and listeners run on it, every
+  device's in turn, so no completed handler waits for a command buffer. A command buffer of a group is seen complete
   with the group's last: up to the GPU time of the fifteen after it late. Only a queue already three
   submissions behind holds a group; one whose submissions have completed sends its next command
   buffer alone. Without a wait or a hint, the lateness is bounded only while three submissions are
@@ -695,8 +709,9 @@ bounded by the timeout, it stops the submit thread (ready work is submitted, hel
 completion thread retire it and end, and then runs `BlockMappings::unmap` on the calling thread for
 every block still handed out. It frees nothing: every block's memory and mapping stays valid until
 the process ends. After it, no runtime thread touches a block; later calls that need a thread
-return `Error::Quiesced`. It answers true once the GPU went idle and every thread ended in time. A
-second call returns at once.
+return `Error::Quiesced`. It answers true once the GPU went idle and every thread ended in time,
+and false at once in a handler or a listener, whose thread cannot wait for itself. A second call
+returns at once.
 
 The consumer quiesces before it calls `exit()`. Quiesce can also run in an `atexit` handler, on
 whichever thread calls `exit()`: it joins a thread only once that thread has ended, reads no

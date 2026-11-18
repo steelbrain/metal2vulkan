@@ -112,8 +112,9 @@ impl Device {
     /// Err: [`Refusal::EmptyBuffer`] for a length of 0, [`Refusal::BufferTooLong`] for a length
     /// past [`MAX_BUFFER_LENGTH`] and [`Refusal::BufferPastBlock`] for a range that leaves the
     /// block, where Metal answers nil; [`Error::NoSuchBlock`] for a block the
-    /// consumer does not hold; for a zeroed Private buffer, [`Error::Quiesced`], and
-    /// [`Error::Vulkan`] where the upload's command buffer cannot be made.
+    /// consumer does not hold; for a zeroed Private buffer, [`Refusal::InScheduledHandler`] in a
+    /// scheduled handler, [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command
+    /// buffer cannot be made.
     pub fn new_buffer(
         &self,
         block: BlockId,
@@ -131,6 +132,10 @@ impl Device {
             }));
         }
         let block = self.placed(block, offset, length)?;
+        if block.memory.class == MemoryClass::Private && zero_from.is_some_and(|from| from < length)
+        {
+            crate::command::not_in_scheduled_handler()?;
+        }
         let end = offset + length;
         let contents = block.memory.mapping.map(|mapping| {
             // SAFETY: `offset` is inside the block.
@@ -190,7 +195,8 @@ impl Device {
     /// counted in [`Gauges::managed_spilled_bytes`](crate::Gauges::managed_spilled_bytes) while the
     /// buffer lives.
     ///
-    /// Err: as [`Device::new_buffer`], for either range; [`Refusal::ManagedBlockNotShared`] for
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler, on every device; as
+    /// [`Device::new_buffer`], for either range; [`Refusal::ManagedBlockNotShared`] for
     /// bytes in a block the host does not map; [`Refusal::ManagedCopyMissing`] for no `copy` where
     /// the device keeps one, [`Refusal::ManagedCopyOnUnified`] for a `copy` where it keeps none
     /// and [`Refusal::ManagedCopyNotPrivate`] for a `copy` in a Shared block; for a device copy,
@@ -203,6 +209,7 @@ impl Device {
         length: u64,
         copied: u64,
     ) -> Result<Buffer, Error> {
+        crate::command::not_in_scheduled_handler()?;
         if length == 0 {
             return Err(Error::Refused(Refusal::EmptyBuffer));
         }
@@ -296,12 +303,14 @@ impl Device {
     /// [`Metrics::block_zero_fill_bytes`](crate::Metrics::block_zero_fill_bytes) count the fills
     /// and their bytes. A length of 0 zeroes nothing.
     ///
-    /// Err: [`Error::NoSuchBlock`] for a block the consumer does not hold;
-    /// [`Refusal::ZeroRangePastBlock`] for a range that leaves the block;
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::NoSuchBlock`] for a
+    /// block the consumer does not hold; [`Refusal::ZeroRangePastBlock`] for a range that leaves
+    /// the block;
     /// [`Refusal::ZeroRangeShared`] for a Shared block, whose bytes the consumer writes through
     /// the mapping; [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer
     /// cannot be made.
     pub fn zero_block_range(&self, block: BlockId, offset: u64, length: u64) -> Result<(), Error> {
+        crate::command::not_in_scheduled_handler()?;
         let block = self.block(block)?;
         let block_len = block.memory.len;
         let end = offset

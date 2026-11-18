@@ -657,7 +657,7 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
     }
 
     fn wait_until_completed(&self) -> Result<()> {
-        rt::CommandBuffer::wait_until_completed(self);
+        rt::CommandBuffer::wait_until_completed(self).map_err(error)?;
         match self.status() {
             rt::CommandBufferStatus::Completed => Ok(()),
             status => {

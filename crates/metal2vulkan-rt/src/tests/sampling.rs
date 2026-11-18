@@ -669,7 +669,12 @@ mod on_device {
             (pending.encode_signal_event(signaled.as_event(), 1)).expect("a signal");
             (pending.encode_wait_for_event(release.as_event(), 1)).expect("a wait");
             pending.commit().expect("a commit");
-            assert!(signaled.wait_until_signaled_value(1, PATIENCE), "{name}");
+            assert!(
+                signaled
+                    .wait_until_signaled_value(1, PATIENCE)
+                    .expect("a wait outside a scheduled handler"),
+                "{name}"
+            );
             drop((a, sa));
             let b = texture(&device, SIDE, read, AT);
             fill(name, &b);

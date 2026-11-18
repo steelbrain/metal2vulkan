@@ -2799,7 +2799,8 @@ impl Texture {
     /// texture over a buffer ([`Buffer::new_texture`]) takes them in the buffer, which is its
     /// image's memory; nothing is staged, copied or counted.
     ///
-    /// Err: [`Refusal::TextureBytesPrivate`]; [`Refusal::TextureRegion`] for a level, slice or
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler;
+    /// [`Refusal::TextureBytesPrivate`]; [`Refusal::TextureRegion`] for a level, slice or
     /// region outside the texture or off its format's block grid;
     /// [`Refusal::TextureBytesLayout`]; [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`] for a
     /// 32-bit float depth; [`Limit::MemoryAllocations`] where the region's block or a staging
@@ -2818,6 +2819,7 @@ impl Texture {
         bytes_per_row: u64,
         bytes_per_image: u64,
     ) -> Result<(), Error> {
+        crate::command::not_in_scheduled_handler()?;
         let inner = &self.inner;
         let len = bytes.len() as u64;
         let Some(copy) = inner.copy(region, level, slice, len, bytes_per_row, bytes_per_image)?
@@ -2886,13 +2888,15 @@ impl Texture {
     /// bytes when the GPU reaches it. [`Texture::replace_region`] on such a texture writes the named bytes,
     /// then calls this. An empty region copies nothing.
     ///
-    /// Err: [`Refusal::ManagedTextureBytes`] for a texture without named bytes, or a depth or
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler;
+    /// [`Refusal::ManagedTextureBytes`] for a texture without named bytes, or a depth or
     /// stencil region whose first byte is not a multiple of 4 in the buffer;
     /// [`Refusal::TextureRegion`] for a level, slice or region outside the texture or off its
     /// format's block grid; [`Gap::FloatDepthUpload`] for a 32-bit float depth;
     /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be
     /// made.
     pub fn upload_region(&self, region: Region, level: u32, slice: u32) -> Result<(), Error> {
+        crate::command::not_in_scheduled_handler()?;
         let inner = &self.inner;
         if inner
             .named
@@ -2964,6 +2968,7 @@ impl Texture {
         level: u32,
         slice: u32,
     ) -> Result<(), Error> {
+        crate::command::not_in_scheduled_handler()?;
         let inner = &self.inner;
         let len = bytes.len() as u64;
         let Some(copy) = inner.copy(region, level, slice, len, bytes_per_row, bytes_per_image)?
@@ -2998,7 +3003,7 @@ impl Texture {
         let command_buffer = queue.command_buffer()?;
         command_buffer.record_for_test(&[], |_, _| {})?;
         command_buffer.commit()?;
-        command_buffer.wait_until_completed();
+        command_buffer.wait_until_completed()?;
         drop((command_buffer, queue));
         let value = core.work.flush();
         core.done.wait(core, value)?;

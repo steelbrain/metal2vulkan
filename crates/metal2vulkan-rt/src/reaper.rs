@@ -32,7 +32,8 @@ struct State {
 
 pub(crate) enum Job {
     Free(Free),
-    /// The device's teardown, after its last handle dropped on the completion thread.
+    /// The device's teardown, after its last handle dropped on the completion thread or the
+    /// submit thread, in a handler or a listener.
     Teardown(Teardown),
 }
 

@@ -9478,8 +9478,8 @@ method	metal2vulkan-rt::CommandBuffer::kernel_end_time	pub fn kernel_end_time(&s
 method	metal2vulkan-rt::CommandBuffer::kernel_start_time	pub fn kernel_start_time(&self) -> u64
 method	metal2vulkan-rt::CommandBuffer::render_command_encoder	pub fn render_command_encoder(&self, descriptor: &RenderPassDescriptor) -> Result<RenderCommandEncoder, Error>
 method	metal2vulkan-rt::CommandBuffer::status	pub fn status(&self) -> CommandBufferStatus
-method	metal2vulkan-rt::CommandBuffer::wait_until_completed	pub fn wait_until_completed(&self)
-method	metal2vulkan-rt::CommandBuffer::wait_until_scheduled	pub fn wait_until_scheduled(&self)
+method	metal2vulkan-rt::CommandBuffer::wait_until_completed	pub fn wait_until_completed(&self) -> Result<(), Error>
+method	metal2vulkan-rt::CommandBuffer::wait_until_scheduled	pub fn wait_until_scheduled(&self) -> Result<(), Error>
 method	metal2vulkan-rt::CommandQueue::abandon	pub fn abandon(&self)
 method	metal2vulkan-rt::CommandQueue::command_buffer	pub fn command_buffer(&self) -> Result<CommandBuffer, Error>
 method	metal2vulkan-rt::CommandQueue::device	pub fn device(&self) -> &Device
@@ -9612,7 +9612,7 @@ method	metal2vulkan-rt::SharedEvent::as_event	pub fn as_event(&self) -> &Event
 method	metal2vulkan-rt::SharedEvent::notify_listener	pub fn notify_listener(&self, value: u64, listener: impl FnOnce(u64) + Send + 'static) -> Result<(), Error>
 method	metal2vulkan-rt::SharedEvent::set_signaled_value	pub fn set_signaled_value(&self, value: u64)
 method	metal2vulkan-rt::SharedEvent::signaled_value	pub fn signaled_value(&self) -> u64
-method	metal2vulkan-rt::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> bool
+method	metal2vulkan-rt::SharedEvent::wait_until_signaled_value	pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> Result<bool, Error>
 method	metal2vulkan-rt::Texture::descriptor	pub fn descriptor(&self) -> &TextureDescriptor
 method	metal2vulkan-rt::Texture::get_bytes	pub fn get_bytes(&self, bytes: &mut [u8], bytes_per_row: u64, bytes_per_image: u64, region: Region, level: u32, slice: u32) -> Result<(), Error>
 method	metal2vulkan-rt::Texture::gpu_resource_id	pub fn gpu_resource_id(&self) -> ResourceId
@@ -13744,6 +13744,7 @@ variant	metal2vulkan-rt::Refusal::EmptyBuffer	EmptyBuffer
 variant	metal2vulkan-rt::Refusal::EncoderOpen	EncoderOpen
 variant	metal2vulkan-rt::Refusal::FillRange	FillRange { start: u64, end: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::HeapTexturePlace	HeapTexturePlace { offset: u64, size: u64, align: u64, heap_len: u64 }
+variant	metal2vulkan-rt::Refusal::InScheduledHandler	InScheduledHandler
 variant	metal2vulkan-rt::Refusal::IndexBufferOffset	IndexBufferOffset { offset: u64, length: u64 }
 variant	metal2vulkan-rt::Refusal::IndicesGranted	IndicesGranted { class: IndexClass, index: u32 }
 variant	metal2vulkan-rt::Refusal::IndicesInUse	IndicesInUse { class: IndexClass, index: u32 }

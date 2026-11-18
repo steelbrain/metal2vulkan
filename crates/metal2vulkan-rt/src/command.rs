@@ -397,8 +397,20 @@ impl CommandBuffer {
         })
     }
 
-    /// `addScheduledHandler:`: runs on the completion thread once the last segment has passed
-    /// `vkQueueSubmit2`, or at once there for a command buffer that ends without running.
+    /// `addScheduledHandler:`: runs on the submit thread once the command buffer is scheduled,
+    /// before its submission goes to the driver, or for one that ends without running once it
+    /// ends, before it retires. In the handler the command buffer's status is
+    /// [`CommandBufferStatus::Scheduled`] and its kernel times are set, and it runs before the
+    /// command buffer's completed handlers. Its queue's later submissions wait while it runs, and
+    /// it may run while another command buffer's completed handler runs on the completion thread.
+    ///
+    /// A scheduled handler may read the command buffer's status and times, enqueue command
+    /// buffers, make objects that take no upload, and do the consumer's own work. Each call that
+    /// may wait for the submit thread is [`Refusal::InScheduledHandler`] in it, on every device:
+    /// [`commit`](Self::commit), the waits, the uploads and readbacks, and the objects that take
+    /// an upload. [`Device::quiesce`](crate::Device::quiesce) answers false in it, and a device
+    /// whose last handle drops in it ends once the handler returns, as in a completed handler.
+    /// Metal runs a scheduled handler on a thread of its own, where those calls run.
     ///
     /// Err: [`Refusal::Committed`].
     pub fn add_scheduled_handler(
@@ -412,8 +424,8 @@ impl CommandBuffer {
     }
 
     /// `addCompletedHandler:`: runs on the completion thread once the command buffer has
-    /// completed or ended, after its scheduled handlers. One thread runs every device's handlers
-    /// in turn, so a handler waits for no command buffer.
+    /// completed or ended, after its scheduled handlers. One thread runs every device's completed
+    /// handlers in turn, so a completed handler waits for no command buffer.
     ///
     /// Err: [`Refusal::Committed`].
     pub fn add_completed_handler(
@@ -452,9 +464,10 @@ impl CommandBuffer {
     /// `vkQueueSubmit2`. A commit after a loss ends at once with
     /// [`CommandBufferError::DeviceLost`].
     ///
-    /// Err: [`Refusal::Committed`]; [`Error::Quiesced`]; [`Error::Vulkan`] where ending the last
-    /// segment's commands fails.
+    /// Err: [`Refusal::Committed`]; [`Refusal::InScheduledHandler`] in a scheduled handler;
+    /// [`Error::Quiesced`]; [`Error::Vulkan`] where ending the last segment's commands fails.
     pub fn commit(&self) -> Result<(), Error> {
+        not_in_scheduled_handler()?;
         // The core, not a handle: the command buffer gives its handle up before another thread
         // can complete it, so a handler that drops the consumer's last handle ends the device on
         // the reaper, never in this call.
@@ -532,7 +545,10 @@ impl CommandBuffer {
 
     /// `waitUntilScheduled`: returns once the command buffer is scheduled, or has completed or
     /// ended. It sends nothing: a command buffer held in a group is scheduled already.
-    pub fn wait_until_scheduled(&self) {
+    ///
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler.
+    pub fn wait_until_scheduled(&self) -> Result<(), Error> {
+        not_in_scheduled_handler()?;
         let mut state = self.state();
         while !matches!(
             state.status,
@@ -542,17 +558,22 @@ impl CommandBuffer {
         ) {
             state = self.wait(state);
         }
+        Ok(())
     }
 
     /// `waitUntilCompleted`: returns once the command buffer has completed or ended and its
     /// handlers have run. A command buffer held in a group goes at once, as
     /// [`CommandQueue::send_now`](crate::CommandQueue::send_now) sends it.
-    pub fn wait_until_completed(&self) {
+    ///
+    /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler.
+    pub fn wait_until_completed(&self) -> Result<(), Error> {
+        not_in_scheduled_handler()?;
         self.send();
         let mut state = self.state();
         while !state.finished {
             state = self.wait(state);
         }
+        Ok(())
     }
 
     /// Before a host wait for it: where the command buffer is committed and not yet submitted,
@@ -1193,12 +1214,38 @@ impl CbInner {
     }
 }
 
-/// On the completion thread: runs the scheduled handlers of a command buffer just submitted.
+thread_local! {
+    /// Whether this thread runs a scheduled handler ([`run_scheduled`]).
+    static IN_SCHEDULED_HANDLER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`Refusal::InScheduledHandler`] where this thread runs a scheduled handler: the calls that may
+/// wait for the submit thread, which runs it, refuse there on every device.
+pub(crate) fn not_in_scheduled_handler() -> Result<(), Error> {
+    match IN_SCHEDULED_HANDLER.get() {
+        true => Err(Error::Refused(Refusal::InScheduledHandler)),
+        false => Ok(()),
+    }
+}
+
+/// On the submit thread, with no lock of the runtime's held: runs the scheduled handlers of a
+/// command buffer scheduled, before its submission goes to the driver and before it is handed
+/// on as ended.
 pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
+    /// Clears the mark as the handlers end, a panic among them too.
+    struct Running;
+    impl Drop for Running {
+        fn drop(&mut self) {
+            IN_SCHEDULED_HANDLER.set(false);
+        }
+    }
     let handle = CommandBuffer { inner };
+    IN_SCHEDULED_HANDLER.set(true);
+    let running = Running;
     for handler in handlers {
         handler(&handle);
     }
+    drop(running);
 }
 
 /// On the completion thread: retires a command buffer that completed (`error` None), with its GPU

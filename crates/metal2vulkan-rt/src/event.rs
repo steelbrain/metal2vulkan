@@ -154,7 +154,11 @@ impl SharedEvent {
     ///
     /// Also false once the device is lost while the signals the wait needs are pending. A wait
     /// that no submitted signal can meet is met only by the host.
-    pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> bool {
+    ///
+    /// Err: [`Refusal::InScheduledHandler`](crate::Refusal::InScheduledHandler) in a scheduled
+    /// handler.
+    pub fn wait_until_signaled_value(&self, value: u64, timeout: Duration) -> Result<bool, Error> {
+        crate::command::not_in_scheduled_handler()?;
         let inner = &self.event.inner;
         let deadline = Instant::now().checked_add(timeout);
         let mut state = lock(&inner.state);
@@ -162,10 +166,10 @@ impl SharedEvent {
             if state.floor.max(state.observed) >= value
                 || inner.counter().is_ok_and(|counter| counter >= value)
             {
-                return true;
+                return Ok(true);
             }
             if state.lost {
-                return false;
+                return Ok(false);
             }
             state = match deadline {
                 None => inner
@@ -174,7 +178,7 @@ impl SharedEvent {
                     .unwrap_or_else(PoisonError::into_inner),
                 Some(deadline) => {
                     let Some(left) = deadline.checked_duration_since(Instant::now()) else {
-                        return false;
+                        return Ok(false);
                     };
                     inner
                         .changed

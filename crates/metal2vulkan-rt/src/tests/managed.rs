@@ -778,7 +778,9 @@ pub(crate) mod on_device {
                     part as f64 / took.as_secs_f64() / 1e9,
                     counters.metrics().capture_waits
                 );
-                command_buffer.wait_until_scheduled();
+                command_buffer
+                    .wait_until_scheduled()
+                    .expect("a wait outside a scheduled handler");
                 commits.push(command_buffer);
             }
             for command_buffer in &commits {

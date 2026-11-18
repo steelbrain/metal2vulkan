@@ -145,7 +145,9 @@ pub(crate) mod on_device {
                 CommandBufferStatus::Completed | CommandBufferStatus::Error
             )
         });
-        command_buffer.wait_until_completed();
+        command_buffer
+            .wait_until_completed()
+            .expect("a wait outside a scheduled handler");
     }
 
     /// A log the handlers write to.
@@ -176,8 +178,9 @@ pub(crate) mod on_device {
         }
     }
 
-    /// A command buffer goes through Metal's states, runs its handlers in order on the completion
-    /// thread, and runs its commands; a queue keeps enqueue order and bounds its command buffers;
+    /// A command buffer goes through Metal's states, runs its handlers in order (its scheduled
+    /// handlers on the submit thread, its completed handlers on the completion thread), and runs
+    /// its commands; a queue keeps enqueue order and bounds its command buffers;
     /// Metal's refusals.
     #[test]
     fn every_device_runs_command_buffers_through_their_states_and_handlers() {
@@ -386,7 +389,8 @@ pub(crate) mod on_device {
             behind.commit().expect("a commit");
 
             assert!(
-                e.wait_until_signaled_value(1, PATIENCE),
+                e.wait_until_signaled_value(1, PATIENCE)
+                    .expect("a wait outside a scheduled handler"),
                 "{name}: E reached"
             );
             assert_eq!(e.signaled_value(), 1);
@@ -487,7 +491,9 @@ pub(crate) mod on_device {
         let (returned, waited) = mpsc::channel();
         thread::spawn(move || {
             for command_buffer in &command_buffers {
-                command_buffer.wait_until_completed();
+                command_buffer
+                    .wait_until_completed()
+                    .expect("a wait outside a scheduled handler");
             }
             let _ = returned.send(command_buffers);
         });
@@ -1123,7 +1129,9 @@ pub(crate) mod on_device {
         fn drop(&mut self) {
             self.open();
             for command_buffer in &self.running {
-                command_buffer.wait_until_completed();
+                command_buffer
+                    .wait_until_completed()
+                    .expect("a wait outside a scheduled handler");
             }
             let device = &self.device.core().device;
             // SAFETY: the gate's batch, the only one that names the semaphore, completed once the
@@ -1834,7 +1842,8 @@ pub(crate) mod on_device {
                 "{name}: at once"
             );
             assert_eq!(held.error(), Some(CommandBufferError::NotRun), "{name}");
-            held.wait_until_completed();
+            held.wait_until_completed()
+                .expect("a wait outside a scheduled handler");
 
             let mut unmapped = lock(&hook.0).clone();
             unmapped.sort();
@@ -1913,6 +1922,236 @@ pub(crate) mod on_device {
         }
     }
 
+    /// The last handle dropped in a scheduled handler, on the submit thread: the reaper runs the
+    /// teardown once the handler returns, the command buffer still completes, and every gauge
+    /// reads zero once the device is destroyed.
+    #[test]
+    fn every_device_tears_down_from_a_scheduled_handler() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let options = DeviceOptions {
+                block_mappings: Some(hook.clone() as Arc<dyn BlockMappings>),
+                ..DeviceOptions::default()
+            };
+            let device = Device::new(physical, options).expect("a device");
+            let counters = device.counters();
+            let block = device
+                .take_block(MemoryClass::Shared, 1)
+                .expect("a Shared block");
+            let queue = queue(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            drop(queue);
+            let handles = Arc::new(AtomicUsize::new(0));
+            let seen = Arc::clone(&handles);
+            command_buffer
+                .add_scheduled_handler(move |_| {
+                    seen.store(device.handles(), Ordering::SeqCst);
+                    drop(device);
+                })
+                .expect("a handler");
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(
+                handles.load(Ordering::SeqCst),
+                1,
+                "{name}: the handler held the last handle"
+            );
+            assert_eq!(command_buffer.error(), None, "{name}: it ran");
+            within("the teardown", || counters.gauges() == Gauges::default());
+            print_gauges_at_drop("scheduled_teardown", counters.gauges());
+            assert_eq!(
+                *lock(&hook.0),
+                [(block.id, Some("m2v-reaper".to_string()))],
+                "{name}: unmapped once, by the reaper"
+            );
+        }
+    }
+
+    /// Quiesce in a scheduled handler answers false at once: the submit thread, which runs the
+    /// handler, is not waited for, nor is the completion thread, which it stops as it ends. The
+    /// command buffer still completes, and the device then tears down.
+    #[test]
+    fn every_device_answers_false_to_a_quiesce_in_a_scheduled_handler() {
+        each_device("scheduled_quiesce", |name, _, device| {
+            let counters = device.counters();
+            let mut arena = Arena::new(&device);
+            let a = arena.buffer();
+            let queue = queue(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill(&command_buffer, &a, 9);
+            let (answered, answer) = mpsc::channel();
+            let quiescing = device.clone();
+            command_buffer
+                .add_scheduled_handler(move |_| {
+                    let began = Instant::now();
+                    let idle = quiescing.quiesce(PATIENCE);
+                    let _ = answered.send((idle, began.elapsed()));
+                })
+                .expect("a handler");
+            command_buffer.commit().expect("a commit");
+            let (idle, took) = answer.recv_timeout(PATIENCE).expect("the handler's answer");
+            assert!(!idle, "{name}: false in a scheduled handler");
+            assert!(
+                took < Duration::from_secs(1),
+                "{name}: at once, took {took:?}"
+            );
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}: it ran");
+            assert_eq!(word(&a), 9, "{name}");
+            assert!(!device.quiesce(PATIENCE), "{name}: a later call's answer");
+            drop((a, arena, queue, command_buffer, device));
+            within("the teardown", || counters.gauges() == Gauges::default());
+        });
+    }
+
+    /// In a scheduled handler, on the submit thread: the command buffer reads Scheduled with its
+    /// kernel times set; each call that may wait for that thread is refused, on every device and
+    /// whatever the runtime holds, and answers as before once the handler has returned; what the
+    /// handler may do, enqueueing and making objects that take no upload, it does.
+    #[test]
+    fn every_device_refuses_each_call_that_waits_for_the_submit_thread_in_a_scheduled_handler() {
+        use crate::{PixelFormat, Region, TextureDescriptor, TextureType, TextureUsage};
+        each_device("scheduled_refusals", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (a, b) = (arena.buffer(), arena.buffer());
+            let private = device
+                .take_block(MemoryClass::Private, 4096)
+                .expect("a Private block");
+            let shared = device
+                .take_block(MemoryClass::Shared, 4096)
+                .expect("a Shared block");
+            let event = shared_event(&device);
+            let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+            d.usage = TextureUsage::RENDER_TARGET;
+            let texture = device.new_texture(&d, None).expect("a texture");
+            let queue = queue(&device);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill(&command_buffer, &a, 3);
+            let other = queue.command_buffer().expect("a command buffer");
+            fill(&other, &b, 4);
+            let later = queue.command_buffer().expect("a command buffer");
+            let (answered, answers) = mpsc::channel();
+            let (in_device, in_other, in_later, in_event, in_texture) = (
+                device.clone(),
+                other.clone(),
+                later.clone(),
+                event.clone(),
+                texture.clone(),
+            );
+            let private_id = private.id;
+            let shared_id = shared.id;
+            command_buffer
+                .add_scheduled_handler(move |own| {
+                    let refused = |result: Result<(), Error>| -> String { format!("{result:?}") };
+                    let region = Region {
+                        origin: [0, 0, 0],
+                        size: [1, 1, 1],
+                    };
+                    let mut bytes = [0_u8; 4];
+                    let lines = vec![
+                        ("status", format!("{:?}", own.status())),
+                        (
+                            "kernel times",
+                            format!(
+                                "{}",
+                                own.kernel_start_time() > 0
+                                    && own.kernel_end_time() >= own.kernel_start_time()
+                            ),
+                        ),
+                        ("commit", refused(in_other.commit())),
+                        ("wait_until_scheduled", refused(own.wait_until_scheduled())),
+                        ("wait_until_completed", refused(own.wait_until_completed())),
+                        (
+                            "wait_until_signaled_value",
+                            refused(
+                                in_event
+                                    .wait_until_signaled_value(1, Duration::ZERO)
+                                    .map(drop),
+                            ),
+                        ),
+                        (
+                            "replace_region",
+                            refused(in_texture.replace_region(region, 0, 0, &[0; 4], 4, 4)),
+                        ),
+                        (
+                            "upload_region",
+                            refused(in_texture.upload_region(region, 0, 0)),
+                        ),
+                        (
+                            "get_bytes",
+                            refused(in_texture.get_bytes(&mut bytes, 4, 4, region, 0, 0)),
+                        ),
+                        (
+                            "zero_block_range",
+                            refused(in_device.zero_block_range(private_id, 0, 0)),
+                        ),
+                        (
+                            "new_managed_buffer",
+                            refused(
+                                (in_device.new_managed_buffer((shared_id, 1024), None, 64, 0))
+                                    .map(drop),
+                            ),
+                        ),
+                        (
+                            "new_buffer zeroed in a Private block",
+                            refused(in_device.new_buffer(private_id, 0, 64, Some(0)).map(drop)),
+                        ),
+                        (
+                            "new_buffer in a Private block, not zeroed",
+                            refused(in_device.new_buffer(private_id, 64, 64, None).map(drop)),
+                        ),
+                        (
+                            "new_buffer zeroed in a Shared block",
+                            refused(in_device.new_buffer(shared_id, 0, 64, Some(0)).map(drop)),
+                        ),
+                        ("enqueue", refused(in_later.enqueue())),
+                        (
+                            "new_texture",
+                            refused(in_device.new_texture(&d, None).map(drop)),
+                        ),
+                    ];
+                    let _ = answered.send(lines);
+                })
+                .expect("a handler");
+            command_buffer.commit().expect("a commit");
+            let lines = answers
+                .recv_timeout(PATIENCE)
+                .expect("the handler's answers");
+            let refusal = format!(
+                "{:?}",
+                Err::<(), Error>(Error::Refused(Refusal::InScheduledHandler))
+            );
+            for (call, answer) in &lines {
+                let want = match *call {
+                    "status" => format!("{:?}", CommandBufferStatus::Scheduled),
+                    "kernel times" => "true".to_string(),
+                    "new_buffer in a Private block, not zeroed"
+                    | "new_buffer zeroed in a Shared block"
+                    | "enqueue"
+                    | "new_texture" => "Ok(())".to_string(),
+                    _ => refusal.clone(),
+                };
+                assert_eq!(*answer, want, "{name}: {call}");
+            }
+            assert_eq!(lines.len(), 16, "{name}: {lines:?}");
+            finished(name, &command_buffer);
+            assert_eq!(later.status(), CommandBufferStatus::Enqueued, "{name}");
+            // Outside a handler the same calls answer as before. The one the handler enqueued
+            // goes first: the other is enqueued behind it as it commits.
+            later.commit().expect("a commit outside a handler");
+            other.commit().expect("a commit outside a handler");
+            finished(name, &later);
+            finished(name, &other);
+            assert_eq!((word(&a), word(&b)), (3, 4), "{name}");
+            assert!(event
+                .wait_until_signaled_value(0, Duration::ZERO)
+                .expect("a wait outside a scheduled handler"));
+        });
+    }
+
     /// At a loss: a host wait for a pending signal ends false; the command buffer in flight ends
     /// DeviceLost in flight, the held one and every later commit DeviceLost not in flight; the
     /// device tears down, and a new device opens and runs work.
@@ -1944,7 +2183,10 @@ pub(crate) mod on_device {
                 in_flight.status() == CommandBufferStatus::Scheduled
             });
             let waiting = thread::scope(|scope| {
-                let waiter = scope.spawn(|| g.wait_until_signaled_value(1, PATIENCE));
+                let waiter = scope.spawn(|| {
+                    g.wait_until_signaled_value(1, PATIENCE)
+                        .expect("a wait outside a scheduled handler")
+                });
                 thread::sleep(Duration::from_millis(20));
                 device.lose_for_test();
                 waiter.join().expect("the waiter")

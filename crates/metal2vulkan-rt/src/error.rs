@@ -162,6 +162,26 @@ pub enum Refusal {
     /// buffer", "Completed handler provided after commit call" and "Scheduled handler provided
     /// after commit call").
     Committed,
+    /// A call a scheduled handler may not make
+    /// ([`CommandBuffer::add_scheduled_handler`](crate::CommandBuffer::add_scheduled_handler)):
+    /// [`CommandBuffer::commit`](crate::CommandBuffer::commit), the waits
+    /// ([`CommandBuffer::wait_until_scheduled`](crate::CommandBuffer::wait_until_scheduled),
+    /// [`CommandBuffer::wait_until_completed`](crate::CommandBuffer::wait_until_completed),
+    /// [`Event::wait_until_signaled_value`](crate::Event::wait_until_signaled_value)), the uploads
+    /// and readbacks ([`Texture::replace_region`](crate::Texture::replace_region),
+    /// [`Texture::upload_region`](crate::Texture::upload_region),
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes),
+    /// [`Device::zero_block_range`](crate::Device::zero_block_range)), and the objects that take
+    /// an upload ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer), and
+    /// [`Device::new_buffer`](crate::Device::new_buffer) zeroing a buffer in a Private block).
+    /// Refused on every device and whatever the runtime holds: a scheduled handler runs on the
+    /// submit thread, before its command buffer's submission, and each of these calls may wait
+    /// for that thread to submit. Metal runs a scheduled handler on a thread of its own, where
+    /// each of these calls runs.
+    ///
+    /// Basis: ours (the consumer's scheduled handlers run on the submit thread, and the one
+    /// consumer's make none of these calls; a guest's scheduled handler runs in the guest).
+    InScheduledHandler,
     /// An event, a buffer, a texture or a pipeline state of another device in an encode call
     /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event),
     /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event), or a

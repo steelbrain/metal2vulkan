@@ -196,7 +196,9 @@ mod on_device {
             );
             encoder.end_encoding();
             (command_buffer.commit()).unwrap_or_else(|error| panic!("{name}: {error}"));
-            command_buffer.wait_until_completed();
+            command_buffer
+                .wait_until_completed()
+                .expect("a wait outside a scheduled handler");
             wait_until("the command buffer to retire", || {
                 memory.strong_count() == 0
             });

@@ -533,7 +533,12 @@ pub(crate) mod on_device {
                 .expect("a signal");
             encode_add(&command_buffer, &o);
             run(name, &command_buffer);
-            assert!(signaled.wait_until_signaled_value(1, PATIENCE), "{name}");
+            assert!(
+                signaled
+                    .wait_until_signaled_value(1, PATIENCE)
+                    .expect("a wait outside a scheduled handler"),
+                "{name}"
+            );
             assert_eq!(counters.host_reaches(), before + 2, "{name}: signal");
             let expected: Vec<u32> = (0..WORDS as u32).map(|index| 103 + index).collect();
             assert_eq!(words(&o), expected, "{name}: after a signal");
@@ -553,7 +558,12 @@ pub(crate) mod on_device {
                 .encode_wait_for_event(release.as_event(), 1)
                 .expect("a wait");
             command_buffer.commit().expect("a commit");
-            assert!(signaled.wait_until_signaled_value(1, PATIENCE), "{name}");
+            assert!(
+                signaled
+                    .wait_until_signaled_value(1, PATIENCE)
+                    .expect("a wait outside a scheduled handler"),
+                "{name}"
+            );
             let expected: Vec<u32> = (0..WORDS as u32).map(|index| 2 * index + 1).collect();
             assert_eq!(words(&x), expected, "{name}: at the signal");
             release.set_signaled_value(1);

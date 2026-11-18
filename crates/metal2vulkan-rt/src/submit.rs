@@ -27,7 +27,7 @@
 
 use crate::buffer::{Buffer, DeviceCopy};
 use crate::capture::{self, Changes, Chunk, CopyIn, Modified, Named, CAPTURE_LEN};
-use crate::command::{CbInner, CommandBufferError, Handler, Pending, Segment};
+use crate::command::{self, CbInner, CommandBufferError, Handler, Pending, Segment};
 use crate::complete;
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
@@ -1802,8 +1802,8 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
             continue;
         };
         drop(state);
-        // Scheduled handlers reach the completion thread before the submission they are in.
-        core.done.scheduled(core, std::mem::take(&mut joined));
+        // Scheduled handlers run here, with no lock held, before the submission they are in.
+        scheduled(&mut joined);
         core.done.end_all(core, std::mem::take(&mut ended));
         submit(core, value, upload, batch);
         sent = true;
@@ -1824,7 +1824,7 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
     }
     if !joined.is_empty() || !ended.is_empty() {
         drop(state);
-        core.done.scheduled(core, joined);
+        scheduled(&mut joined);
         core.done.end_all(core, ended);
         state = work.lock();
     }
@@ -1848,6 +1848,14 @@ impl Batch {
             wrote: Vec::new(),
             spans: Vec::new(),
         }
+    }
+}
+
+/// Runs the scheduled handlers of the command buffers `joined` scheduled, in order, with no lock
+/// held: before the submission they are in goes, and before any of them is handed on as ended.
+fn scheduled(joined: &mut Vec<Joined>) {
+    for (cb, handlers) in joined.drain(..) {
+        command::run_scheduled(cb, handlers);
     }
 }
 

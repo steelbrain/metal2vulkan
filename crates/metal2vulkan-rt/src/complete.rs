@@ -1,12 +1,12 @@
 //! The completion thread: it retires command buffers and uploads as the GPU completes them, runs
-//! the handlers, follows the event signals it submitted and runs listeners, and ends the work in
+//! their completed handlers, follows the event signals it submitted and runs listeners, and ends the work in
 //! flight at a loss.
 
-use crate::command::{self, CbInner, CommandBufferError, Gpu, Handler, Handlers, Pending};
+use crate::command::{self, CbInner, CommandBufferError, Gpu, Handlers, Pending};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
-use crate::submit::{Ended, Finished, Joined, Upload};
+use crate::submit::{Ended, Finished, Upload};
 use crate::times::{self, Calibration};
 use ash::vk;
 use std::collections::VecDeque;
@@ -31,8 +31,6 @@ pub(crate) struct Done {
 }
 
 struct DoneState {
-    /// Command buffers just scheduled, with their scheduled handlers.
-    scheduled: Vec<(Arc<CbInner>, Vec<Handler>)>,
     /// Work submitted, by progress value: each retires once the progress semaphore reaches it.
     flight: VecDeque<Retiree>,
     /// Command buffers that ended without anything in flight: they retire at once.
@@ -127,7 +125,6 @@ impl Done {
         })?;
         Ok(Done {
             state: Mutex::new(DoneState {
-                scheduled: Vec::new(),
                 flight: VecDeque::new(),
                 ended: Vec::new(),
                 watched: Vec::new(),
@@ -184,17 +181,6 @@ impl Done {
             }
         }
         state.waiting = Waiting::Not;
-    }
-
-    /// From the submit thread: command buffers scheduled as they joined a submission, with their
-    /// scheduled handlers, ahead of that submission.
-    pub(crate) fn scheduled(&self, core: &Core, joined: Vec<Joined>) {
-        if joined.is_empty() {
-            return;
-        }
-        let mut state = self.lock();
-        state.scheduled.extend(joined);
-        self.wake(&mut state, &core.device, false);
     }
 
     /// From the submit thread: a submission passed to `vkQueueSubmit2` with progress `value`.
@@ -345,7 +331,6 @@ pub(crate) fn run(core: Arc<Core>) {
     let mut calibration = Calibration::read(&core);
     let mut state = done.lock();
     loop {
-        let scheduled = std::mem::take(&mut state.scheduled);
         let mut retire = std::mem::take(&mut state.ended);
         let fired = std::mem::take(&mut state.fire);
         let mut fire: Vec<(Listener, u64)> = Vec::new();
@@ -397,7 +382,7 @@ pub(crate) fn run(core: Arc<Core>) {
         for event in &fired {
             event.observe(None, &mut fire);
         }
-        if newly_lost || !scheduled.is_empty() || !retire.is_empty() || !fire.is_empty() {
+        if newly_lost || !retire.is_empty() || !fire.is_empty() {
             state.waiting = Waiting::Not;
             drop(state);
             if newly_lost {
@@ -408,9 +393,6 @@ pub(crate) fn run(core: Arc<Core>) {
                 core.work.completed();
             }
             // Handlers and listeners run with no lock held.
-            for (cb, handlers) in scheduled {
-                command::run_scheduled(cb, handlers);
-            }
             // Each completed command buffer's timestamps are placed on the host clock by the
             // last calibration, read again first where the period has passed since it.
             let stamps: Vec<Option<(u64, u64)>> =

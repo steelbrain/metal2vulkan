@@ -691,8 +691,8 @@ impl NewRuntime {
             let Some((_, front, retired)) = self.in_flight.front() else {
                 return;
             };
-            front.wait_until_completed();
-            if !retired.load(Ordering::Acquire) {
+            // Refused only in a scheduled handler, where the player never runs.
+            if front.wait_until_completed().is_err() || !retired.load(Ordering::Acquire) {
                 return;
             }
         }
@@ -1849,7 +1849,12 @@ impl Backend for NewRuntime {
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError> {
         match self.objects.get(&command_buffer) {
             Some(Object::CommandBuffer(waited)) => {
-                waited.wait_until_completed();
+                waited
+                    .wait_until_completed()
+                    .map_err(|error| PlayError::Runtime {
+                        selector: "waitUntilCompleted".into(),
+                        error: error.to_string(),
+                    })?;
                 match waited.error() {
                     None => Ok(()),
                     Some(error) => Err(PlayError::Runtime {

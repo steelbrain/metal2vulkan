@@ -526,7 +526,8 @@ mod on_device {
                 })
                 .expect("a copy");
                 copy.commit().expect("a commit");
-                copy.wait_until_completed();
+                copy.wait_until_completed()
+                    .expect("a wait outside a scheduled handler");
                 assert_eq!(copy.status(), CommandBufferStatus::Completed, "{name}");
                 let range = (offset + zero_from) as usize..(offset + length) as usize;
                 for (index, &byte) in host[..8192].iter().enumerate() {
@@ -819,7 +820,8 @@ mod on_device {
             })
             .expect("a copy");
             copy.commit().expect("a commit");
-            copy.wait_until_completed();
+            copy.wait_until_completed()
+                .expect("a wait outside a scheduled handler");
             assert_eq!(copy.status(), CommandBufferStatus::Completed, "{name}");
             for (index, &byte) in host[..3 * 4096].iter().enumerate() {
                 let expected = if (4096..8192).contains(&index) {
@@ -1262,7 +1264,9 @@ mod on_device {
             let buffer = (device.new_buffer(target.id, 0, 256, None)).expect("a buffer");
             let command_buffer = queue.command_buffer().expect("a command buffer");
             command_buffer.commit().expect("a commit");
-            command_buffer.wait_until_completed();
+            command_buffer
+                .wait_until_completed()
+                .expect("a wait outside a scheduled handler");
             let mut blocks: Vec<Block> = (0..3)
                 .map(|_| {
                     (device.take_block(MemoryClass::Shared, len))
@@ -1328,7 +1332,9 @@ mod on_device {
                     })
                     .expect("a fill");
                 command_buffer.commit().expect("a commit");
-                command_buffer.wait_until_completed();
+                command_buffer
+                    .wait_until_completed()
+                    .expect("a wait outside a scheduled handler");
             };
             core.pool.hold_frees(true);
             device.release_block(blocks.remove(0)).expect("a release");
@@ -1621,7 +1627,9 @@ mod on_device {
                     })
                     .expect("the copies");
                 command_buffer.commit().expect("a commit");
-                command_buffer.wait_until_completed();
+                command_buffer
+                    .wait_until_completed()
+                    .expect("a wait outside a scheduled handler");
                 assert_eq!(
                     command_buffer.status(),
                     CommandBufferStatus::Completed,

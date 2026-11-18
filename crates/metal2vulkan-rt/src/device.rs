@@ -41,8 +41,9 @@ use std::time::{Duration, Instant};
 /// A cheap handle: clones share one device, and every object made from it holds a clone, except
 /// a committed command buffer. Blocks the consumer holds do not.
 ///
-/// The runtime runs four threads: the block-maker, the submit thread, the completion thread,
-/// which runs every handler and listener, and the reaper, which frees the semaphores and command
+/// The runtime runs four threads: the block-maker, the submit thread, which runs every scheduled
+/// handler, the completion thread, which runs every completed handler and listener, and the
+/// reaper, which frees the semaphores and command
 /// pools the others give up, one at a time, so no driver free runs on the completion thread. The
 /// device is torn down when the last handle is dropped: the submit thread submits what is ready
 /// and ends what it holds with [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun);
@@ -87,8 +88,9 @@ enum Role {
     /// Not a runtime thread.
     None,
     Blocks,
+    /// The submit thread: it runs the consumer's scheduled handlers.
     Submit,
-    /// The completion thread: the only one that runs the consumer's code.
+    /// The completion thread: it runs the consumer's completed handlers and listeners.
     Complete,
     Reaper,
 }
@@ -645,17 +647,19 @@ impl Device {
     /// No Metal counterpart: stops the runtime's threads and its GPU work, for a process about to
     /// exit with the device still alive. True once the GPU went idle and every thread ended
     /// within `timeout`; false where the timeout passed first, or the call ran in a handler or a
-    /// listener (the completion thread cannot wait for itself).
+    /// listener (the submit thread, which runs the scheduled handlers, and the completion thread,
+    /// which runs the completed handlers and listeners, cannot wait for themselves).
     ///
     /// In order, each wait bounded by `timeout`: the submit thread submits what is ready, ends
     /// every command buffer it holds or has not yet submitted with
     /// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun), and ends; the
     /// block-maker thread ends; the GPU completes everything submitted; the completion thread
-    /// retires it, runs the handlers, and ends; then [`BlockMappings::unmap`] runs on this thread
-    /// for every block still handed out. After it, no runtime thread touches a block, unless the
-    /// call answered false. A thread past the timeout ends alone: the completion thread once the
-    /// GPU completed what was submitted and it retired that, running its handlers, so what the
-    /// work held, the device among it, goes once the device's last handle has dropped.
+    /// retires it, runs the completed handlers, and ends; then [`BlockMappings::unmap`] runs on
+    /// this thread for every block still handed out. After it, no runtime thread touches a block,
+    /// unless the call answered false. A thread past the timeout ends alone: the completion
+    /// thread once the GPU completed what was submitted and it retired that, running its
+    /// completed handlers, so what the work held, the device among it, goes once the device's
+    /// last handle has dropped.
     ///
     /// It frees nothing: every block's memory and mapping stays valid until the process ends, or
     /// until the device's last handle drops, which then frees it without the hook. Later calls
@@ -844,13 +848,16 @@ fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: 
         complete,
         reaper,
     } = threads;
+    // Where a scheduled handler quiesces, on the submit thread, the thread's own submission and
+    // the completion thread wait for the handler to return: neither is waited for.
+    let on_submit = role(core) == Role::Submit;
     // Submission stops: what is ready goes, and what is held ends.
     core.work.stop();
     let submitted = finish(submit, core, deadline);
     let mut idle = submitted;
     core.pool.stop();
     idle &= finish(blocks, core, deadline);
-    if quiesce {
+    if quiesce && !on_submit {
         idle &= core.wait_progress(core.work.progress(), deadline);
     }
     // The submit thread stops the completion thread as it ends; here only where it has ended, or
@@ -858,7 +865,9 @@ fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: 
     if submitted {
         core.done.stop(core);
     }
-    idle &= finish(complete, core, deadline);
+    if !on_submit {
+        idle &= finish(complete, core, deadline);
+    }
     core.reaper.stop();
     idle &= finish(reaper, core, deadline);
     // The consumer's mappings go here, on the thread that stops the device, whichever thread
@@ -871,8 +880,8 @@ fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: 
 
 /// Waits for a thread to end, up to `deadline`, and joins it once it has; a thread past the
 /// deadline is left to end alone. True once it ended. A thread is never waited for by itself: the
-/// completion thread where a handler or listener quiesces, the reaper where it runs a teardown;
-/// it ends once the call returns.
+/// completion thread where a completed handler or a listener quiesces, the submit thread where a
+/// scheduled handler does, the reaper where it runs a teardown; it ends once the call returns.
 fn finish(runner: Option<Runner>, core: &Arc<Core>, deadline: Option<Instant>) -> bool {
     let Some(Runner {
         handle,
@@ -1179,9 +1188,9 @@ impl Drop for Shared {
             // pipelines freed with the core.
             core.kernels.clear(&core.counters);
         };
-        if role(&self.core) == Role::Complete {
+        if matches!(role(&self.core), Role::Complete | Role::Submit) {
             // A handler or listener dropped the last handle: the reaper tears down, once the
-            // handler returns and the completion thread can end.
+            // handler returns and its thread can end.
             self.core.reaper.give(Job::Teardown(Box::new(teardown)));
         } else {
             teardown(&self.core);
