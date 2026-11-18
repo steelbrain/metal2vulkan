@@ -2299,9 +2299,11 @@ field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
 field	metal2vulkan-rt::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.pipeline_cache_bytes	pub pipeline_cache_bytes: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
+field	metal2vulkan-rt::Gauges.private_idle_age_nanos	pub private_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
+field	metal2vulkan-rt::Gauges.shared_idle_age_nanos	pub shared_idle_age_nanos: u64
 field	metal2vulkan-rt::Gauges.shared_idle_bytes	pub shared_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.stage_entries	pub stage_entries: u64
@@ -2345,6 +2347,8 @@ field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u6
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
 field	metal2vulkan-rt::Metrics.forced_flushes_across_queues	pub forced_flushes_across_queues: u64
 field	metal2vulkan-rt::Metrics.groups_beside_another_queue	pub groups_beside_another_queue: u64
+field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
+field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
 field	metal2vulkan-rt::Metrics.lone_submissions_across_queues	pub lone_submissions_across_queues: u64
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
 field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64

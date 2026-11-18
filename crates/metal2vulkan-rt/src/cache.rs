@@ -73,7 +73,6 @@
 
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
-use crate::memory::QUIET_NANOS;
 use crate::times::host_time;
 use ash::vk;
 use std::collections::VecDeque;
@@ -92,6 +91,9 @@ pub(crate) const DEFAULT_CAP: u64 = 128 << 20;
 /// replaced by a fresh one, and so the most its blob holds: 32 MiB, about five times the 6.25 MB
 /// of pipeline data a long recorded session made.
 pub(crate) const PIPELINE_CACHE_BOUND: u64 = 32 << 20;
+/// How long pipeline creation stays quiet, no creation running and none ending, before the
+/// reaper looks at the cache: 20 ms, in nanoseconds of [`host_time`].
+const QUIET_NANOS: u64 = 20_000_000;
 /// The first bytes of a blob, before its data's length and checksum.
 const MAGIC: &[u8; 8] = b"m2vblob1";
 /// The start of a device's blob's name, under the cache directory.

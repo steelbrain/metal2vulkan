@@ -162,6 +162,10 @@ mod on_device {
                 core.pool.kept(MemoryClass::Private) == 1
             });
             assert_eq!(counters.gauges().blocks, base + 2, "{name}: after release");
+            // Its allocation, idle, is freed at its idle age.
+            wait_until("the released block's allocation freed", || {
+                counters.gauges().blocks == base + 1
+            });
 
             // Textures made and released in the kept block allocate nothing.
             let made = counters.metrics().blocks_made;
@@ -182,7 +186,7 @@ mod on_device {
             );
             assert_eq!(
                 counters.gauges().blocks,
-                base + 2,
+                base + 1,
                 "{name}: after the rounds"
             );
 

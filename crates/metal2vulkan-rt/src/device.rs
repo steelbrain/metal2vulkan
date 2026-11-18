@@ -667,12 +667,11 @@ impl Device {
     /// buffer that used it has retired. The block-maker thread then keeps it, with the same
     /// number, address, mapping and bytes, for a later [`take_block`](Device::take_block) of its
     /// length. An allocation none of whose blocks is held is idle, and one that holds a block is
-    /// in use: the device keeps a class's idle allocations while their bytes and those of its
-    /// allocations in use stay at or under the most bytes it had in use over the last 3 seconds,
-    /// and frees the oldest past that, after [`BlockMappings::unmap`] of each block kept in it. It
-    /// frees them one at a time, on the block-maker thread, and only once no commit or submission
-    /// has come on any of the device's queues for 20 ms: a program that goes quiet gives its idle
-    /// allocations back without a call of its own.
+    /// in use. The block-maker thread frees each allocation that has been idle for 250 ms, the
+    /// idle age, after [`BlockMappings::unmap`] of each block kept in it, one at a time and
+    /// whatever the device's queues are doing; a take that lands in an idle allocation before
+    /// then ends its idle time. Each class keeps a reserve made ahead of need that it does not
+    /// free: the idle allocations its free bytes need to stay at 8 MiB or more.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's block, whose handle is dropped all the
     /// same.

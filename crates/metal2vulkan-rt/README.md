@@ -140,18 +140,19 @@ in its memory.
   class keeps blocks of other lengths makes its allocation at once, and the block-maker thread then
   gives those blocks' bytes back to their allocations, after `BlockMappings::unmap` of each; only
   where the take's allocation fails does it wait for those bytes and take a range of them. An
-  allocation that holds no block anyone holds is idle. The idle window is 3 seconds: the device
-  keeps a class's idle allocations while their bytes and those of its allocations in use stay at
-  or under the most bytes it had in use over the last 3 seconds, and frees the oldest past that,
-  after `BlockMappings::unmap` of each block kept in them, except those the class's free bytes
-  need to stay at 8 MiB or more. The quiet test is 20 ms: the block-maker thread frees them one at
-  a time, only once no commit or submission has come on any of the device's queues for 20 ms, and
-  looks again after each free. A commit or submission made during a free starts the 20 ms again
-  where that free ends, however long the driver held it. So a program that goes quiet gives its
-  idle allocations back without a call of its own, and a busy one at its next quiet gap.
-  `Metrics::allocations_freed`
-  counts the frees. `Gauges::shared_idle_bytes` and `Gauges::private_idle_bytes` count the idle
-  bytes. Once the last handle is gone the block's
+  allocation that holds no block anyone holds is idle. Its idle time starts when its last block
+  comes back, and only a take that lands in it again ends it. The idle age is 250 ms, on every
+  device: the block-maker thread frees each allocation idle that long, one at a time, after
+  `BlockMappings::unmap` of each block kept in it, whatever the device's queues are doing, so a
+  program that keeps committing gives back what it stopped using within 250 ms plus the frees
+  ahead of it. It frees between the allocations it makes, never beside one. Each class keeps one
+  reserve made ahead of need and not freed: the idle allocations its free bytes need to stay at
+  8 MiB or more, one 16 MiB allocation of each class at most. `Metrics::allocations_freed`
+  counts the frees and `Metrics::idle_frees_by_age` their idle times; `Metrics::idle_reuses_by_age`
+  counts idle allocations taken again, by how long they were idle. `Gauges::shared_idle_bytes` and
+  `Gauges::private_idle_bytes` count the idle bytes, the reserve's included, and
+  `Gauges::shared_idle_age_nanos` and `Gauges::private_idle_age_nanos` the age of the oldest idle
+  allocation the rule will free. Once the last handle is gone the block's
   number names nothing
   (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's
   teardown frees every block still claimed, after the consumer's `BlockMappings::unmap` returned
@@ -243,8 +244,9 @@ after a quiesce.
   buffer is still made and its other uses run; only the dispatch or draw is refused.
 - On the NVIDIA cards we measured in Thunderbolt enclosures, freeing host-visible memory takes
   about 1.1 ms per MiB and holds any submit of the same process for its length; on an internal
-  NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one block at a time and only
-  after 20 ms with no commit. `Metrics::allocations_freed` counts the frees, and
+  NVIDIA card the same free takes about 0.5 ms per 16 MiB. rt frees one idle allocation at a time,
+  at its idle age, whatever the queues are doing, so a submit can meet a free and wait for the
+  rest of it. `Metrics::allocations_freed` counts the frees, and
   `Metrics::submissions_during_frees` the submits made while one was in progress.
 - On a full discrete card a Private block the consumer takes goes to another memory type, host
   memory where the card has no other device-local type, and the kernels that read a Managed

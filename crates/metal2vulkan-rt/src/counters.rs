@@ -8,6 +8,20 @@ use std::sync::Arc;
 /// threads, and its cache directory's removal thread while one runs.
 const THREADS: usize = 5;
 
+/// The upper bounds, in milliseconds, of [`Metrics::idle_frees_by_age`]'s buckets but the last.
+const FREE_AGES_MS: [u64; 5] = [250, 275, 350, 500, 1000];
+
+/// The upper bounds, in milliseconds, of [`Metrics::idle_reuses_by_age`]'s buckets but the last.
+const REUSE_AGES_MS: [u64; 6] = [50, 100, 250, 500, 1000, 2000];
+
+/// The bucket of `nanos` under `bounds`, upper bounds in milliseconds: the first bound past it,
+/// else the last bucket.
+fn bucket(bounds: &[u64], nanos: u64) -> usize {
+    (bounds.iter())
+        .position(|&ms| nanos < ms * 1_000_000)
+        .unwrap_or(bounds.len())
+}
+
 /// A metric the runtime adds to.
 #[derive(Clone, Copy)]
 pub(crate) enum Metric {
@@ -156,6 +170,8 @@ struct Atomics {
     over_copies: AtomicU64,
     allocations_freed: AtomicU64,
     submissions_during_frees: AtomicU64,
+    idle_frees_by_age: [AtomicU64; FREE_AGES_MS.len() + 1],
+    idle_reuses_by_age: [AtomicU64; REUSE_AGES_MS.len() + 1],
     managed_bytes_captured: AtomicU64,
     capture_waits: AtomicU64,
     capture_streams: AtomicU64,
@@ -180,6 +196,11 @@ struct Atomics {
     managed_spilled_bytes: AtomicU64,
     shared_idle_bytes: AtomicU64,
     private_idle_bytes: AtomicU64,
+    /// When the oldest idle Shared allocation the idle rule weighs became idle, in nanoseconds of
+    /// [`host_time`](crate::host_time); 0 where none is.
+    shared_idle_since: AtomicU64,
+    /// As [`shared_idle_since`](Self::shared_idle_since), of Private allocations.
+    private_idle_since: AtomicU64,
     capture_bytes: AtomicU64,
     staging_bytes: AtomicU64,
     stage_entries: AtomicU64,
@@ -257,6 +278,31 @@ impl Counters {
     /// An allocation of `bytes` made for blocks ([`Metrics::block_bytes_made`]).
     pub(crate) fn allocated(&self, bytes: u64) {
         self.atomics.block_bytes_made.fetch_add(bytes, Relaxed);
+    }
+
+    /// An idle allocation whose free began after `nanos` nanoseconds idle
+    /// ([`Metrics::idle_frees_by_age`]).
+    pub(crate) fn freed_idle(&self, nanos: u64) {
+        self.atomics.idle_frees_by_age[bucket(&FREE_AGES_MS, nanos)].fetch_add(1, Relaxed);
+    }
+
+    /// An idle allocation taken again after `nanos` nanoseconds idle
+    /// ([`Metrics::idle_reuses_by_age`]).
+    pub(crate) fn reused_idle(&self, nanos: u64) {
+        self.atomics.idle_reuses_by_age[bucket(&REUSE_AGES_MS, nanos)].fetch_add(1, Relaxed);
+    }
+
+    /// When the oldest idle allocation of a class (Shared where `shared`) that the idle rule weighs
+    /// became idle, in nanoseconds of [`host_time`](crate::host_time); 0 where none is
+    /// ([`Gauges::shared_idle_age_nanos`]).
+    pub(crate) fn idle_since(&self, shared: bool, since: u64) {
+        let a = &self.atomics;
+        let atomic = if shared {
+            &a.shared_idle_since
+        } else {
+            &a.private_idle_since
+        };
+        atomic.store(since, Relaxed);
     }
 
     /// A `vkAllocateMemory` that took `nanos` nanoseconds, on the block-maker thread where
@@ -435,6 +481,8 @@ impl Counters {
             over_copies: a.over_copies.load(Relaxed),
             allocations_freed: a.allocations_freed.load(Relaxed),
             submissions_during_frees: a.submissions_during_frees.load(Relaxed),
+            idle_frees_by_age: std::array::from_fn(|at| a.idle_frees_by_age[at].load(Relaxed)),
+            idle_reuses_by_age: std::array::from_fn(|at| a.idle_reuses_by_age[at].load(Relaxed)),
             managed_bytes_captured: a.managed_bytes_captured.load(Relaxed),
             capture_waits: a.capture_waits.load(Relaxed),
             capture_streams: a.capture_streams.load(Relaxed),
@@ -460,6 +508,11 @@ impl Counters {
     /// No Metal counterpart: the live count of each kind of resource.
     pub fn gauges(&self) -> Gauges {
         let a = &self.atomics;
+        let now = crate::host_time();
+        let age = |since: &AtomicU64| match since.load(Relaxed) {
+            0 => 0,
+            since => now.saturating_sub(since),
+        };
         Gauges {
             threads: std::array::from_fn(|slot| a.threads[slot].load(Relaxed)),
             buffers: a.buffers.load(Relaxed),
@@ -479,6 +532,8 @@ impl Counters {
             managed_spilled_bytes: a.managed_spilled_bytes.load(Relaxed),
             shared_idle_bytes: a.shared_idle_bytes.load(Relaxed),
             private_idle_bytes: a.private_idle_bytes.load(Relaxed),
+            shared_idle_age_nanos: age(&a.shared_idle_since),
+            private_idle_age_nanos: age(&a.private_idle_since),
             capture_bytes: a.capture_bytes.load(Relaxed),
             staging_bytes: a.staging_bytes.load(Relaxed),
             stage_entries: a.stage_entries.load(Relaxed),
@@ -617,13 +672,22 @@ pub struct Metrics {
     /// buffer's bytes into the image, in the upload that leads a submission or after a command
     /// wrote the buffer, and the image back into the buffer after a command wrote the texture.
     pub over_copies: u64,
-    /// Idle allocations the block-maker thread freed: one at a time, each once no commit or
-    /// submission had come on any of the device's queues for 20 ms.
+    /// Idle allocations the block-maker thread freed: one at a time, each once it had been idle,
+    /// holding no live block, for 250 ms, whatever the device's queues were doing.
     pub allocations_freed: u64,
     /// Submissions made while the block-maker thread was inside an idle allocation's
     /// `vkFreeMemory`. A driver may hold such a submission until the free returns: on the NVIDIA
     /// cards measured in Thunderbolt enclosures, about 1.1 ms per MiB of host-visible memory.
     pub submissions_during_frees: u64,
+    /// The frees of [`allocations_freed`](Self::allocations_freed) by how long each allocation had
+    /// been idle when its free began, in buckets of under 250 ms (a spilled allocation that
+    /// emptied, freed at once), 250 to 275 ms, 275 to 350 ms, 350 to 500 ms, 500 ms to 1 s, and
+    /// 1 s or more.
+    pub idle_frees_by_age: [u64; 6],
+    /// Idle allocations taken again, by how long each had been idle: in buckets of under 50 ms,
+    /// 50 to 100 ms, 100 to 250 ms, 250 to 500 ms, 500 ms to 1 s, 1 to 2 s, and 2 s or more. Only
+    /// a class's reserve, which the idle rule does not free, is taken again past 250 ms.
+    pub idle_reuses_by_age: [u64; 7],
     /// Bytes commits copied on the host from Managed buffers' bytes into staging memory: each range
     /// `didModifyRange:` named since the last capture, once, on a device whose Managed buffers have
     /// device copies ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
@@ -746,13 +810,19 @@ pub struct Gauges {
     /// the block's allocation was made), so their kernels read host memory; counted per buffer
     /// while it lives. Metal has no counterpart.
     pub managed_spilled_bytes: u64,
-    /// Bytes of idle Shared allocations, which hold no block anyone holds: those the idle rule
-    /// keeps (at most the most bytes of Shared allocations in use over the last 3 seconds less
-    /// those in use now), and the reserve that keeps the free bytes at 8 MiB or more.
+    /// Bytes of idle Shared allocations, which hold no block anyone holds: those idle for less
+    /// than 250 ms, which the idle rule frees at that age, and the reserve made ahead of need
+    /// that keeps the free bytes at 8 MiB or more (one allocation of 16 MiB, at most).
     pub shared_idle_bytes: u64,
     /// Bytes of idle Private allocations, as [`shared_idle_bytes`](Self::shared_idle_bytes) for
     /// Shared ones.
     pub private_idle_bytes: u64,
+    /// How long the oldest idle Shared allocation the idle rule weighs (not the reserve) has been
+    /// idle, in nanoseconds; 0 where none is. The rule frees it at 250 ms, so this stays under
+    /// that plus the frees ahead of it.
+    pub shared_idle_age_nanos: u64,
+    /// As [`shared_idle_age_nanos`](Self::shared_idle_age_nanos), of Private allocations.
+    pub private_idle_age_nanos: u64,
     /// Bytes of staging for Managed buffers' captures: the capture ring, once a commit made it, and
     /// the staging blocks of overflows that command buffers not yet retired hold.
     pub capture_bytes: u64,

@@ -1882,7 +1882,6 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         .collect();
     if ok {
         let queue = lock(&core.queues.runtime);
-        core.pool.worked(crate::host_time());
         if core.pool.freeing() {
             core.counters.count(Metric::SubmissionsDuringFrees);
         }
