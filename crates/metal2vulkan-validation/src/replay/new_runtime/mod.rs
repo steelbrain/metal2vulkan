@@ -1936,6 +1936,7 @@ impl Backend for NewRuntime {
             ("passes", metrics.passes),
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),
+            ("over_copies", metrics.over_copies),
             ("bytes_zeroed", metrics.bytes_zeroed),
             ("allocations_zeroed", metrics.allocations_zeroed),
             ("allocation_zeroing_nanos", metrics.allocation_zeroing_nanos),
