@@ -5,7 +5,9 @@
 // layer stops the process at a call it does not take, so a case that prints "taken" was taken.
 // A buffer case fills bytes 4..12 of a 64-byte buffer, byte i = (uint8_t)i * 31 + 21 before the
 // fill, with 0xab, synchronizes the buffer in the same blit encoder, and prints the bytes' FNV-1a
-// 64 where the host reaches them. A texture case synchronizes a 4x4 RGBA8Unorm texture.
+// 64 where the host reaches them. A texture case synchronizes a 4x4 RGBA8Unorm texture; a
+// Managed one is first written by copyFromBuffer: from a Shared buffer of the same 64 bytes before
+// the fill, and its getBytes: (rows 16 bytes apart) after the command buffer completes is hashed.
 //
 //   managed-buffer   a Managed buffer
 //   shared-buffer    a Shared buffer
@@ -62,9 +64,10 @@ int main(int argc, const char **argv) {
         id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
         MTLStorageMode mode = cases[found].mode;
         id<MTLBuffer> buffer = nil;
+        id<MTLTexture> texture = nil;
+        uint8_t start[64];
+        for (int i = 0; i < 64; i++) start[i] = (uint8_t)((uint8_t)i * 31 + 21);
         if (!cases[found].texture) {
-            uint8_t start[64];
-            for (int i = 0; i < 64; i++) start[i] = (uint8_t)((uint8_t)i * 31 + 21);
             MTLResourceOptions options = (MTLResourceOptions)mode << MTLResourceStorageModeShift;
             buffer = mode == MTLStorageModePrivate
                          ? [device newBufferWithLength:64 options:options]
@@ -78,7 +81,21 @@ int main(int argc, const char **argv) {
                                                                   height:4
                                                                mipmapped:NO];
             d.storageMode = mode;
-            id<MTLTexture> texture = [device newTextureWithDescriptor:d];
+            texture = [device newTextureWithDescriptor:d];
+            if (mode == MTLStorageModeManaged) {
+                id<MTLBuffer> source = [device newBufferWithBytes:start
+                                                           length:64
+                                                          options:MTLResourceStorageModeShared];
+                [blit copyFromBuffer:source
+                           sourceOffset:0
+                      sourceBytesPerRow:16
+                    sourceBytesPerImage:64
+                             sourceSize:MTLSizeMake(4, 4, 1)
+                              toTexture:texture
+                       destinationSlice:0
+                       destinationLevel:0
+                      destinationOrigin:MTLOriginMake(0, 0, 0)];
+            }
             if (cases[found].slice) {
                 [blit synchronizeTexture:texture slice:0 level:0];
             } else {
@@ -90,8 +107,18 @@ int main(int argc, const char **argv) {
         [cb waitUntilCompleted];
         printf("%s: taken, status %ld%s%s\n", name, (long)cb.status, cb.error ? ", error " : "",
                cb.error ? cb.error.localizedDescription.UTF8String : "");
+        uint8_t read[64];
+        const uint8_t *bytes = NULL;
         if (buffer != nil && mode != MTLStorageModePrivate) {
-            const uint8_t *bytes = buffer.contents;
+            bytes = buffer.contents;
+        } else if (texture != nil && mode == MTLStorageModeManaged) {
+            [texture getBytes:read
+                  bytesPerRow:16
+                   fromRegion:MTLRegionMake2D(0, 0, 4, 4)
+                  mipmapLevel:0];
+            bytes = read;
+        }
+        if (bytes != NULL) {
             uint64_t hash = 0xcbf29ce484222325ull;
             for (int i = 0; i < 64; i++) {
                 hash ^= bytes[i];
