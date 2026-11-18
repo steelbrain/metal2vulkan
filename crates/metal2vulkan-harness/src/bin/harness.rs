@@ -648,19 +648,19 @@ mod tests {
 
     #[test]
     fn skip_leaves_out_what_only_would_run_and_the_creation_rows_split_apart() {
-        let workloads: Vec<String> = (authored::WORKLOADS.iter())
+        let every: Vec<String> = (authored::WORKLOADS.iter())
             .map(|workload| workload.name.to_owned())
             .collect();
         let creates: Vec<&str> = authored::CREATES.iter().map(|create| create.name).collect();
         assert_eq!(
             selected(&["--runtime", "new", "--skip", "create_*"]),
-            (workloads.clone(), Vec::new())
+            (every.clone(), Vec::new())
         );
         assert_eq!(
             selected(&["--runtime", "new", "--only", "create_*"]),
             (Vec::new(), creates.clone())
         );
-        assert_eq!(selected(&["--runtime", "new"]), (workloads, creates));
+        assert_eq!(selected(&["--runtime", "new"]), (every, creates));
         let first = authored::WORKLOADS[0].name;
         assert_eq!(
             selected(&["--runtime", "new", "--only", first, "--skip", first]),
