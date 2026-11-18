@@ -486,10 +486,9 @@ made, with no lock, and never rewritten for layouts.
   with the group's last: up to the GPU time of the fifteen after it late. Only a queue already two
   submissions behind holds a group; one whose submissions have completed sends its next command
   buffer alone. Without a wait or a hint, the lateness is bounded only while two submissions are
-  in flight, and the completion that leaves fewer sends the group. The worst case measured: four
-  command buffers of 29 ms each in one submission on an RX 550 (the harness row `long_4cb`), the
-  first seen complete 87 ms after it ended. A command buffer ended while its queue holds a group
-  joins it, and retires in its place.
+  in flight, and the completion that leaves fewer sends the group (the measured lateness is under
+  "Known gaps"). A command buffer ended while its queue holds a group joins it, and retires in its
+  place.
 - A command buffer's times, its GPU times included, are nanoseconds of one host clock,
   `host_time()`: `CLOCK_MONOTONIC` on Linux and other Unix systems, `CLOCK_MONOTONIC_RAW` on
   macOS and the performance counter on Windows, each the host time domain the device calibrates
@@ -558,6 +557,14 @@ that touch blocks first.
 
 ### Known gaps
 
+- Command buffers committed while an earlier one of their queue runs are reported complete
+  together, at the last one's end, where Metal reports each at its own. Measured with the harness
+  row `long_4cb` (four command buffers committed together, two runs in flight): on an RTX 2080,
+  at about 12 ms of GPU time each, the second and third were reported with the fourth, the second
+  about 25 ms after its own end; on an RX 550, at about 7 ms each, about 14 ms. The last command
+  buffer's own report is not late: on the 2080 it came 96.6-97.2 ms after its commit, where the
+  old runtime's came 95.6-95.8 ms after. The harness prints each command buffer's lateness, from
+  its `gpu_end_time` to its completed handler (`late_us`).
 - Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
   the two timestamp queries of a command buffer, which decide only its `gpu_start_time`, through

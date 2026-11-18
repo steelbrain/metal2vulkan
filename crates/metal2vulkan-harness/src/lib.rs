@@ -57,9 +57,12 @@
 //! command buffer's creation through `commit`'s return, and the process's CPU time per dispatch
 //! from there to the return of the wait for the run before (unix only), each the median of the
 //! timed runs; where the workload asks for it ([`plan::Plan::commit_to_complete`]), the time of
-//! each timed command buffer from just before its `commit` until its completed handler ran, at
-//! the 50th and 99th percentiles of all of them, and, for a run of several command buffers, on a
-//! line of its own at those percentiles by the command buffer's place in its run; the runtime's
+//! each timed command buffer from just before its `commit` until its completed handler ran, and
+//! its lateness, from its `GPUEndTime` to its completed handler's start on the runtime's host
+//! clock (a command buffer reported complete only with a later one is late by the time between
+//! their ends), each at the 50th and 99th percentiles of all of them, and, for a run of several
+//! command buffers, on lines of their own at those percentiles by the command buffer's place in
+//! its run; the runtime's
 //! gauges after the 100th and 200th timed runs; and, on a line of its own, its matrix time
 //! ([`run::matrix_time`]) and the host wall time a run adds at the 50th percentile. Per creation
 //! workload and runtime it prints the warm-up, the wall time of `newBufferWithLength:options:` at
@@ -74,8 +77,9 @@
 //!
 //! where a plan workload's time is what a program waits on, timed on the host
 //! ([`run::matrix_time`]): the steady time ([`run::steady`]: the lowest median of the timed runs'
-//! consecutive windows of 10, with at least 5 timed runs) of each run's mean commit-to-complete
-//! time where the workload times its command buffers' ([`plan::Plan::commit_to_complete`]), else
+//! consecutive windows of 10, with at least 5 timed runs) of each run's last command buffer's
+//! commit-to-complete time where the workload times its command buffers'
+//! ([`plan::Plan::commit_to_complete`]), the lateness of the others a column that decides nothing, else
 //! of the host wall time each run adds. The GPU time (the table's `steady` column) is a
 //! diagnostic and decides no row. A creation workload's time is the steady time of its creation
 //! calls. A workload the device sizes ([`plan::Scaled`]) prints the size it ran at on a line of
@@ -360,8 +364,9 @@ pub trait CommandBuffer<D: ComputeDevice> {
     /// `GPUEndTime`, in seconds.
     fn gpu_end_time(&self) -> Result<f64>;
 
-    /// `addCompletedHandler:`, with a handler that reads nothing of the command buffer.
-    fn add_completed_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()>;
+    /// `addCompletedHandler:`, with a handler given how late it runs: from the command buffer's
+    /// `GPUEndTime` to the handler's start, both on the runtime's host clock, in microseconds.
+    fn add_completed_handler(&self, handler: Box<dyn FnOnce(f64) + Send>) -> Result<()>;
 }
 
 /// `MTLBlitCommandEncoder`.

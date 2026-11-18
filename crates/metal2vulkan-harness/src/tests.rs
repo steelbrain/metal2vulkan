@@ -903,20 +903,24 @@ fn a_row_is_judged_by_host_time_never_its_gpu_time() {
         ..Report::default()
     };
     assert_eq!(matrix_time(&report), Some(50.0), "the wall time a run adds");
-    // Where the plan times its command buffers' commit to completion, each run's mean over its
-    // places: 100, 200 and 300 us at the three places of every run.
+    // Where the plan times its command buffers' commit to completion, each run's last command
+    // buffer's: 100, 200 and 300 us at the three places of every run.
     report.commit_us = vec![vec![100.0; 20], vec![200.0; 20], vec![300.0; 20]];
     assert_eq!(
         matrix_time(&report),
-        Some(200.0),
-        "the mean commit-to-complete time"
+        Some(300.0),
+        "the last command buffer's commit-to-complete time"
     );
+    // The earlier command buffers' times decide nothing: they are late where a later one's
+    // completion reports them, which the lateness column shows.
+    report.commit_us[0].fill(290.0);
+    assert_eq!(matrix_time(&report), Some(300.0), "the last place alone");
     // A slow window of runs leaves the steady time at the faster windows' level.
-    report.commit_us[0][..10].fill(400.0);
+    report.commit_us[2][..10].fill(400.0);
     assert_eq!(
         matrix_time(&report),
-        Some(200.0),
-        "the steady time of the means"
+        Some(300.0),
+        "the steady time of the last place"
     );
     report.wall_us.clear();
     report.commit_us.clear();

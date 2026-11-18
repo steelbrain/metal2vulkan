@@ -71,19 +71,16 @@ pub fn steady(times: &[f64]) -> Option<f64> {
 
 /// The time the matrix judges a plan's row by, in microseconds: what a program waits on, timed
 /// on the host. Where the plan times each command buffer's commit to its completed handler
-/// ([`Plan::commit_to_complete`]), the [`steady`] time of each run's mean commit-to-complete time
-/// over its command buffers; else the [`steady`] time of the runs' wall times
-/// ([`Report::wall_us`]). A run's GPU time ([`Report::gpu_us`]) decides no row.
+/// ([`Plan::commit_to_complete`]), the [`steady`] time of each run's last command buffer's
+/// commit-to-complete time: a program that waits for its run waits for its last command buffer,
+/// and the earlier ones' lateness ([`Report::late_us`]) is a column of its own. Else the
+/// [`steady`] time of the runs' wall times ([`Report::wall_us`]). A run's GPU time
+/// ([`Report::gpu_us`]) decides no row.
 pub fn matrix_time(report: &Report) -> Option<f64> {
-    if report.commit_us.is_empty() {
-        return steady(&report.wall_us);
+    match report.commit_us.last() {
+        None => steady(&report.wall_us),
+        Some(last) => steady(last),
     }
-    let places = report.commit_us.len() as f64;
-    let runs = (report.commit_us.iter().map(Vec::len)).min().unwrap_or(0);
-    let means: Vec<f64> = (0..runs)
-        .map(|run| report.commit_us.iter().map(|place| place[run]).sum::<f64>() / places)
-        .collect();
-    steady(&means)
 }
 
 /// The untimed runs before a workload's timed ones.
@@ -172,6 +169,11 @@ pub struct Report {
     /// committed first, each in the order the handlers ran. Empty unless the plan asks for it
     /// ([`Plan::commit_to_complete`]).
     pub commit_us: Vec<Vec<f64>>,
+    /// Each of those command buffers' lateness, by its place in its run as
+    /// [`commit_us`](Self::commit_us) is: from its `GPUEndTime` to its completed handler's start,
+    /// both on the runtime's host clock, in microseconds. A command buffer reported complete only
+    /// with a later one is late by the time between their ends.
+    pub late_us: Vec<Vec<f64>>,
     /// Where the plan is [`Scaled`], the size it ran at and the time that size came from
     /// ([`run_each`]).
     pub scaled_to: Option<ScaledTo>,
@@ -184,13 +186,13 @@ pub struct Report {
     pub warmup: Warmup,
 }
 
-/// The commit-to-complete times that the completed handlers of a plan's timed command buffers
-/// report ([`Plan::commit_to_complete`]).
+/// The commit-to-complete times and lateness that the completed handlers of a plan's timed
+/// command buffers report ([`Plan::commit_to_complete`]).
 #[derive(Default)]
 struct Completions {
     /// The times reported, each with its command buffer's place in its run, in microseconds, in
-    /// the order the handlers ran.
-    times: Mutex<Vec<(usize, f64)>>,
+    /// the order the handlers ran: its commit-to-complete time and its lateness.
+    times: Mutex<Vec<(usize, f64, f64)>>,
     /// Signalled at each report.
     reported: Condvar,
 }
@@ -199,17 +201,18 @@ struct Completions {
 const HANDLERS_RUN: Duration = Duration::from_secs(10);
 
 impl Completions {
-    /// Reports the commit-to-complete time of the command buffer at `place` in its run.
-    fn ran(&self, place: usize, time: Duration) {
+    /// Reports the commit-to-complete time and the lateness, in microseconds, of the command
+    /// buffer at `place` in its run.
+    fn ran(&self, place: usize, time: Duration, late_us: f64) {
         let mut times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
-        times.push((place, time.as_secs_f64() * 1e6));
+        times.push((place, time.as_secs_f64() * 1e6, late_us));
         self.reported.notify_all();
     }
 
-    /// The times of `runs` runs of `places` command buffers each, by place, once their handlers
-    /// have run: a completed handler may run after the wait for its command buffer returns. An
-    /// error where fewer have run within [`HANDLERS_RUN`].
-    fn wait(&self, runs: usize, places: usize) -> Result<Vec<Vec<f64>>> {
+    /// The commit-to-complete times and the lateness of `runs` runs of `places` command buffers
+    /// each, by place, once their handlers have run: a completed handler may run after the wait
+    /// for its command buffer returns. An error where fewer have run within [`HANDLERS_RUN`].
+    fn wait(&self, runs: usize, places: usize) -> Result<(Vec<Vec<f64>>, Vec<Vec<f64>>)> {
         let count = runs * places;
         let times = self.times.lock().unwrap_or_else(PoisonError::into_inner);
         let (times, _) = (self.reported)
@@ -219,10 +222,12 @@ impl Completions {
             return Err(format!("{} of {count} completed handlers ran", times.len()).into());
         }
         let mut by_place = vec![Vec::with_capacity(runs); places];
-        for &(place, us) in times.iter() {
+        let mut late = vec![Vec::with_capacity(runs); places];
+        for &(place, us, late_us) in times.iter() {
             by_place[place].push(us);
+            late[place].push(late_us);
         }
-        Ok(by_place)
+        Ok((by_place, late))
     }
 }
 
@@ -564,8 +569,8 @@ impl<D: ComputeDevice> Harness<D> {
                 let command_buffer = self.encode(plan, made, range)?;
                 if let Some(completions) = completions {
                     let (completions, committed) = (Arc::clone(completions), Instant::now());
-                    command_buffer.add_completed_handler(Box::new(move || {
-                        completions.ran(place, committed.elapsed());
+                    command_buffer.add_completed_handler(Box::new(move |late_us| {
+                        completions.ran(place, committed.elapsed(), late_us);
                     }))?;
                 }
                 command_buffer.commit()?;
@@ -903,7 +908,8 @@ impl<D: ComputeDevice> Session for Harness<D> {
         report.timed_submit_infos = (infos.zip(self.device.submit_infos()))
             .map(|(before, after)| (after - before) as f64 / timed);
         if let Some(completions) = completions {
-            report.commit_us = completions.wait(runs.timed as usize, plan.command_buffers())?;
+            (report.commit_us, report.late_us) =
+                completions.wait(runs.timed as usize, plan.command_buffers())?;
         }
         let (before, submissions) = (self.device.counts(), self.device.submissions());
         wait_run::<D>(&self.commit_run(plan, &made, None)?)?;

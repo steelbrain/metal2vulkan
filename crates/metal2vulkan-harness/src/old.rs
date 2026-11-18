@@ -311,10 +311,13 @@ impl crate::CommandBuffer<runtime::Device> for runtime::CommandBuffer {
         Ok(runtime::CommandBuffer::gpu_end_time(self)?)
     }
 
-    fn add_completed_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()> {
+    fn add_completed_handler(&self, handler: Box<dyn FnOnce(f64) + Send>) -> Result<()> {
         Ok(runtime::CommandBuffer::add_completed_handler(
             self,
-            Box::new(move |_| handler()),
+            Box::new(move |done| {
+                let end = runtime::CommandBuffer::gpu_end_time(done).unwrap_or(0.0);
+                handler((runtime::host_time() - end) * 1e6)
+            }),
         )?)
     }
 }

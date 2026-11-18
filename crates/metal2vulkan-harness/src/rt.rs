@@ -609,8 +609,12 @@ impl crate::CommandBuffer<Device> for rt::CommandBuffer {
         Ok(rt::CommandBuffer::gpu_end_time(self) as f64 / 1e9)
     }
 
-    fn add_completed_handler(&self, handler: Box<dyn FnOnce() + Send>) -> Result<()> {
-        rt::CommandBuffer::add_completed_handler(self, move |_| handler()).map_err(error)
+    fn add_completed_handler(&self, handler: Box<dyn FnOnce(f64) + Send>) -> Result<()> {
+        rt::CommandBuffer::add_completed_handler(self, move |done| {
+            let late = rt::host_time().saturating_sub(done.gpu_end_time());
+            handler(late as f64 / 1e3)
+        })
+        .map_err(error)
     }
 }
 

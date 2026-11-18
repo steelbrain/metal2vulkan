@@ -189,7 +189,7 @@ fn run_all(args: &Args) -> Result<bool> {
     );
     if !workloads.is_empty() {
         println!(
-            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11} {:>11} {:>11}  gauges @100 -> @200",
+            "{:<17} {:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11} {:>11} {:>11} {:>11} {:>11}  gauges @100 -> @200",
             "workload",
             "runtime",
             "dispatches",
@@ -203,6 +203,8 @@ fn run_all(args: &Args) -> Result<bool> {
             "submits/run",
             "c2c_us_p50",
             "c2c_us_p99",
+            "late_us_p50",
+            "late_us_p99",
         );
     }
     let set = if args.description.is_some() {
@@ -416,13 +418,15 @@ fn print(runtime: &str, name: &str, report: &Report) {
         |values: &[f64], p| percentile(values, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     let every: Vec<f64> = report.commit_us.concat();
     let commit = |p| us(&every, p);
+    let late_every: Vec<f64> = report.late_us.concat();
+    let late = |p| us(&late_every, p);
     let per_dispatch = |values: &[f64]| {
         percentile(values, 50).map_or("-".to_owned(), |ns| {
             format!("{:.0}", ns / report.dispatches as f64)
         })
     };
     println!(
-        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11} {:>11} {:>11}  {}",
+        "{name:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11} {:>18} {:>15} {:>11} {:>11} {:>11} {:>11} {:>11}  {}",
         report.dispatches,
         warmup(&report.warmup),
         gpu(10),
@@ -434,6 +438,8 @@ fn print(runtime: &str, name: &str, report: &Report) {
         report.submissions,
         commit(50),
         commit(99),
+        late(50),
+        late(99),
         gauges(&report.gauges),
     );
     println!(
@@ -449,11 +455,18 @@ fn print(runtime: &str, name: &str, report: &Report) {
             "{name:<17} {runtime:<8} c2c_us p50 / p99 by place in the run: {}",
             places.join(", ")
         );
+        let places: Vec<String> = (report.late_us.iter().enumerate())
+            .map(|(place, times)| format!("#{} {} / {}", place + 1, us(times, 50), us(times, 99)))
+            .collect();
+        println!(
+            "{name:<17} {runtime:<8} late_us p50 / p99 by place in the run: {}",
+            places.join(", ")
+        );
     }
     let judged = if report.commit_us.is_empty() {
         "the host wall time a run adds"
     } else {
-        "a run's mean commit-to-complete time"
+        "a run's last command buffer's commit-to-complete time"
     };
     let time = matrix_time(report);
     println!(
