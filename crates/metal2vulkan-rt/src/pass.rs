@@ -100,7 +100,10 @@ impl ClearColor {
 /// Not built: a resolve (`resolveTexture` with a resolving store action, refused by the store
 /// action), a 3D texture's `depthPlane` (refused by the texture's type) and
 /// `storeActionOptions`, whose one option needs more than one sample.
-#[derive(Clone, Debug)]
+///
+/// Its default is Metal's: no texture, level and slice 0, `DontCare` load, `Store` store, opaque
+/// black clear.
+#[derive(Clone, Default)]
 pub struct RenderPassColorAttachmentDescriptor {
     /// `texture`: the texture rendered into; `None` for no attachment at this index. It needs
     /// `RenderTarget` usage and a color format, and one sample; a 2D texture, a 2D array, a cube
@@ -118,24 +121,9 @@ pub struct RenderPassColorAttachmentDescriptor {
     pub clear_color: ClearColor,
 }
 
-impl Default for RenderPassColorAttachmentDescriptor {
-    /// Metal's defaults: no texture, level and slice 0, `DontCare` load, `Store` store, opaque
-    /// black clear.
-    fn default() -> RenderPassColorAttachmentDescriptor {
-        RenderPassColorAttachmentDescriptor {
-            texture: None,
-            level: 0,
-            slice: 0,
-            load_action: LoadAction::DontCare,
-            store_action: StoreAction::Store,
-            clear_color: ClearColor::default(),
-        }
-    }
-}
-
 /// `MTLRenderPassDepthAttachmentDescriptor`: a pass with a depth texture is refused,
 /// [`Gap::RenderPass`] of [`RenderPassKind::DepthAttachment`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RenderPassDepthAttachmentDescriptor {
     /// `texture`: the depth texture rendered into; `None` for no depth attachment.
     pub texture: Option<Texture>,
@@ -169,7 +157,7 @@ impl Default for RenderPassDepthAttachmentDescriptor {
 /// `MTLRenderPassStencilAttachmentDescriptor`.
 ///
 /// Not built: a resolve and a 3D texture's `depthPlane`, as a color attachment's.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RenderPassStencilAttachmentDescriptor {
     /// `texture`: the texture whose stencil is rendered into; `None` for no stencil attachment. It
     /// needs `RenderTarget` usage, a format with stencil and one sample.
@@ -208,7 +196,7 @@ impl Default for RenderPassStencilAttachmentDescriptor {
 /// sizes, imageblock and threadgroup memory lengths, sample buffer attachments, layered rendering
 /// (`renderTargetArrayLength`) and a pass with no attachment (`defaultRasterSampleCount`); a pass
 /// with no attachment is refused, [`Gap::RenderPass`] of [`RenderPassKind::NoAttachment`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RenderPassDescriptor {
     /// `colorAttachments`.
     pub color_attachments: [RenderPassColorAttachmentDescriptor; MAX_COLOR_ATTACHMENTS],
@@ -342,8 +330,8 @@ impl Pass {
             Some(texture) => {
                 mine(texture)?;
                 let pf = texture.descriptor().pixel_format;
-                let aspects = formats::aspects(pf).unwrap_or_default();
-                if !aspects.contains(vk::ImageAspectFlags::STENCIL) {
+                let stencil = metal2vulkan::vk::ImageAspectFlags::STENCIL;
+                if !formats::aspects(pf).is_some_and(|aspects| aspects.contains(stencil)) {
                     return Err(Error::Refused(Refusal::AttachmentFormat {
                         pixel_format: pf,
                     }));
@@ -365,7 +353,7 @@ impl Pass {
             }
             None => None,
         };
-        let max = core.translator.profile().limits.max_color_attachments;
+        let max = core.translator.profile().limits().max_color_attachments;
         if colors.len() > max as usize {
             return Err(Error::Limit(Limit::ColorAttachments {
                 count: colors.len() as u32,

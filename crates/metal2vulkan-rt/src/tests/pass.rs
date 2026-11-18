@@ -37,9 +37,8 @@ fn load_and_store_actions_are_one_to_one() {
             (StoreAction::DontCare, vk::AttachmentStoreOp::DONT_CARE),
             (StoreAction::Store, vk::AttachmentStoreOp::STORE),
         ] {
-            assert_eq!(
-                ops(load, store).ok(),
-                Some((op, store_op)),
+            assert!(
+                ops(load, store).ok() == Some((op, store_op)),
                 "{load:?} {store:?}"
             );
         }

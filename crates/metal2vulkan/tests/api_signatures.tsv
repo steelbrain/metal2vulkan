@@ -11523,10 +11523,10 @@ struct	metal2vulkan-rt::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevic
 struct	metal2vulkan-rt::RawDevice	#[non_exhaustive] pub struct RawDevice<'a>
 struct	metal2vulkan-rt::Region	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct Region
 struct	metal2vulkan-rt::RenderCommandEncoder	pub struct RenderCommandEncoder
-struct	metal2vulkan-rt::RenderPassColorAttachmentDescriptor	#[derive(Clone, Debug)] pub struct RenderPassColorAttachmentDescriptor
-struct	metal2vulkan-rt::RenderPassDepthAttachmentDescriptor	#[derive(Clone, Debug)] pub struct RenderPassDepthAttachmentDescriptor
-struct	metal2vulkan-rt::RenderPassDescriptor	#[derive(Clone, Debug, Default)] pub struct RenderPassDescriptor
-struct	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor	#[derive(Clone, Debug)] pub struct RenderPassStencilAttachmentDescriptor
+struct	metal2vulkan-rt::RenderPassColorAttachmentDescriptor	#[derive(Clone, Default)] pub struct RenderPassColorAttachmentDescriptor
+struct	metal2vulkan-rt::RenderPassDepthAttachmentDescriptor	#[derive(Clone)] pub struct RenderPassDepthAttachmentDescriptor
+struct	metal2vulkan-rt::RenderPassDescriptor	#[derive(Clone, Default)] pub struct RenderPassDescriptor
+struct	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor	#[derive(Clone)] pub struct RenderPassStencilAttachmentDescriptor
 struct	metal2vulkan-rt::RenderPipelineDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct RenderPipelineDescriptor
 struct	metal2vulkan-rt::RenderPipelineState	#[derive(Clone)] pub struct RenderPipelineState
 struct	metal2vulkan-rt::ResourceId	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct ResourceId
@@ -12095,7 +12095,6 @@ trait-impl	metal2vulkan-rt::Gap impl fmt::Display	impl fmt::Display for Gap
 trait-impl	metal2vulkan-rt::Limit impl fmt::Display	impl fmt::Display for Limit
 trait-impl	metal2vulkan-rt::Refusal impl fmt::Display	impl fmt::Display for Refusal
 trait-impl	metal2vulkan-rt::RenderCommandEncoder impl Drop	impl Drop for RenderCommandEncoder
-trait-impl	metal2vulkan-rt::RenderPassColorAttachmentDescriptor impl Default	impl Default for RenderPassColorAttachmentDescriptor
 trait-impl	metal2vulkan-rt::RenderPassDepthAttachmentDescriptor impl Default	impl Default for RenderPassDepthAttachmentDescriptor
 trait-impl	metal2vulkan-rt::RenderPassStencilAttachmentDescriptor impl Default	impl Default for RenderPassStencilAttachmentDescriptor
 trait-impl	metal2vulkan-rt::ResourceUsage impl BitOr	impl BitOr for ResourceUsage

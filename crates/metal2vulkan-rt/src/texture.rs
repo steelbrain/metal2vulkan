@@ -2293,11 +2293,11 @@ impl Texture {
         let (level_in_image, layer) = (first_level + level, first_layer + slice);
         let image = &self.inner.image;
         let mut views = lock(&self.inner.attachments);
-        let view = match views
-            .iter()
+        let kept = (views.iter())
             .find(|a| a.level == level_in_image && a.layer == layer)
-        {
-            Some(a) => a.view,
+            .map(|a| a.view);
+        let view = match kept {
+            Some(view) => view,
             None => {
                 let core = self.inner.device.core();
                 let range = vk::ImageSubresourceRange {
