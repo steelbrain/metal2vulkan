@@ -12,8 +12,8 @@
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        Buffer, Error, Gap, MemoryClass, PixelFormat, Refusal, Region, StorageMode, Texture,
-        TextureDescriptor, TexturePlace, TextureType, TextureUsage,
+        Buffer, Error, Gap, IndexClass, MemoryClass, PixelFormat, Refusal, Region, StorageMode,
+        Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
 
     const WIDTH: u32 = 100;
@@ -101,12 +101,14 @@ mod on_device {
             write(&buffer, &now);
             let pitch = (ROW + 1).next_multiple_of(align);
             let offset = align;
+            // Read and written by shaders, at indices of a grant.
+            (device.grant_indices(IndexClass::StorageTexture, 1, 4)).expect("a grant");
             let mut d =
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
-            d.usage = TextureUsage::RENDER_TARGET;
+            d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
             d.storage_mode = StorageMode::Private;
             let (blocks, copied) = (counters.gauges().blocks, counters.metrics().bytes_copied);
-            let texture = (buffer.new_texture(&d, None, offset, pitch))
+            let texture = (buffer.new_texture(&d, Some(1), offset, pitch))
                 .unwrap_or_else(|error| panic!("{name}: at {offset}, pitch {pitch}: {error}"));
             assert_eq!(texture.descriptor().storage_mode, StorageMode::Shared);
             assert_eq!(
@@ -156,6 +158,7 @@ mod on_device {
 
             // A blit's write to the texture reaches the host in the buffer.
             let mut plain_d = d;
+            plain_d.usage = TextureUsage::RENDER_TARGET;
             plain_d.storage_mode = StorageMode::Shared;
             let plain = (device.new_texture(&plain_d, None))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -194,11 +197,18 @@ mod on_device {
             assert_eq!(
                 counters.metrics().bytes_copied - copied,
                 // The plain texture's upload, and each read of the image above.
-                ROW * u64::from(HEIGHT) * 5,
+                ROW * u64::from(HEIGHT) * 4,
                 "{name}: nothing else copied"
             );
 
+            // A render target over the buffer, which a device may not hold in place.
+            let mut r = d;
+            r.usage = TextureUsage::RENDER_TARGET;
+            let target = buffer.new_texture(&r, None, offset, pitch).map(|_| ());
+            println!("over: {name}: a render target over a buffer: {target:?}");
+
             // What Metal's layout rules refuse, and what is not held in place.
+            let d = r;
             let refused = |d: &TextureDescriptor, offset: u64, pitch: u64, what: &str| match buffer
                 .new_texture(d, None, offset, pitch)
             {
@@ -238,7 +248,9 @@ mod on_device {
             let mut bytes: Vec<u8> = (0..LEN).map(|i| (i % 239) as u8).collect();
             write(&managed, &bytes);
             (managed.did_modify_range(0, LEN)).unwrap_or_else(|error| panic!("{name}: {error}"));
-            let over = (managed.new_texture(&d, None, offset, pitch))
+            let mut m = d;
+            m.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+            let over = (managed.new_texture(&m, Some(2), offset, pitch))
                 .unwrap_or_else(|error| panic!("{name}: over a Managed buffer: {error}"));
             assert_ne!(over.descriptor().storage_mode, StorageMode::Private);
             assert!(
