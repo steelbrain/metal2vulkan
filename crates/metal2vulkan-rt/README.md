@@ -585,18 +585,22 @@ that touch blocks first.
   resource IDs it made up, with no fault. The consumer treats every byte on the device as
   guest-writable and keeps nothing there that it parses or trusts.
 - On NVIDIA, a GPU fault in a guest's kernel hangs that command buffer's completion, where Metal
-  ends it with an error. A fault (an access to an address nothing maps) loses the device on
-  NVIDIA's driver and on RADV, and one device serves every guest process, so every guest's later
-  work ends `DeviceLost`; a second Vulkan device, such as another process's, keeps running.
-  NVIDIA's driver (620.70.06; an RTX 2080 and an RTX 3090) tells only a later submission or
-  `vkDeviceWaitIdle`: the faulting submission's semaphore never signals, and an unbounded wait for
-  it had not returned after 60 s. Until some queue's next submission meets the loss, the faulting
-  command buffer, and every host wait for it, stay as they are; that submission's failure then
-  ends everything as a loss. RADV (a 780M and an RX 7900 XTX) signals the semaphore within about
-  2 s and refuses the next submission; Intel's Windows driver (a UHD 630) does so at once; ANV (an
-  Iris Xe) takes the store with no fault. The old runtime took a store through a pointer to an
-  address nothing maps, and one 64 TiB past a buffer, without a fault on all six GPUs; the new
-  runtime refuses the first kernel and took the second without a fault.
+  ends it with an error. A fault (an access to an address nothing maps) loses the device on NVIDIA's
+  driver and on RADV, and one device serves every guest process, so every guest's later work ends
+  `DeviceLost`; a second Vulkan device, such as another process's, keeps running. NVIDIA's driver
+  (620.70.06; an RTX 2080 and an RTX 3090) tells only a later submission or `vkDeviceWaitIdle`: the
+  faulting submission's semaphore never signals, and an unbounded wait for it had not returned after
+  60 s. The hang lasts until the device's next submission on any queue: that submission meets the
+  loss, the completion thread wakes, and everything ends as a loss. Where something submits on the
+  device every frame, the hang lasts about a frame and then every guest process sees the device
+  lost; it lasts indefinitely only when nothing else submits. RADV (a 780M and an RX 7900 XTX)
+  signals the semaphore within about 2 s and refuses the next submission; Intel's Windows driver (a
+  UHD 630) does so at once; ANV (an Iris Xe) takes the store with no fault. The old runtime took a
+  store through a pointer to an address nothing maps, and one 64 TiB past a buffer, without a fault
+  on all six GPUs, since it does not hand kernels raw addresses; the new runtime refuses the first
+  kernel and took the second without a fault. A bad address that the old runtime survived ends the
+  GPU's work for every guest process under the new runtime on NVIDIA and RADV: the consequence of
+  one device and direct addresses, which the owner accepted.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 - A fence orders the encoders of one queue: an encoder of another queue that updates or waits on
   it is refused (`Gap::FenceOtherQueue`), as Metal's fence orders one queue and `MTLEvent` orders
