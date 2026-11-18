@@ -59,7 +59,9 @@ A shader takes a texture slot's ID from the slot's push field (`PushField::SlotG
 argument buffer's texture's ID from the member's 8 bytes, with no table between. It indexes the
 arrays with the low word, answers `is_null_texture` by whether the index is 0, and,
 where it checks a `read` itself (a device without `robustImageAccess2`), takes an out-of-bounds
-alpha of 1 from bit 12 of the word.
+alpha of 1 from bit 12 of the word. The runtime writes a slot's ID, so its index is an element;
+the program writes an argument buffer's, so the shader masks its index to its low 16 bits: a bad
+ID reads the element at `index & 0xFFFF`, never one outside the arrays.
 
 Element `i` of each sampler array is a device sampler made of the sampler whose ID holds index `i`,
 one per use, which the shader picks by the instruction and the texture's numeric type: binding 2
@@ -74,8 +76,8 @@ A constexpr sampler has no ID: the consumer places a device sampler of it (the f
 `PushField::ConstexprSampler` names it and its use, and `CombinedSampler::constexpr_sampler`
 describes it) at an index of the use's array and pushes that index as a `u32`. Its coordinates
 are normalized; the shader scales a pixel sampler's coordinate itself. It samples with its own
-address modes. An argument buffer's
-sampler is not lowered under these domains yet.
+address modes. An argument buffer's sampler is not lowered under these domains yet; the change
+that first lowers it masks its index as an argument buffer's texture's is masked.
 
 ## The texture word
 

@@ -37,7 +37,8 @@
 //!   bounds from the word, as `tests/resource_words.tsv` gives it.
 //! - The same kernel with its textures in an argument buffer (`tex` with `ab`) reads their
 //!   resource IDs from the buffer's members, at its pushed address, and answers the same at the
-//!   same elements, with no handle table and no descriptor.
+//!   same elements, with no handle table and no descriptor; IDs whose indices are 65,536 past
+//!   the arrays read the elements at their low 16 bits.
 //! - A kernel's slots that nothing writes (`read_only`, generated: an unaliased `device` buffer it
 //!   only reads and a `constant` one) are loaded through `NonWritable` device-address places; a
 //!   written slot, and a `device` slot the AIR does not declare unaliased, are not. It passes L3
@@ -792,7 +793,7 @@ fn texture_slots_are_the_set_1_elements_their_pushed_resource_ids_name() {
 
 /// An argument buffer's textures under the identity domains are the same elements, at the
 /// indices of the resource IDs its members hold, with no handle table and no descriptor of the
-/// argument buffer's own.
+/// argument buffer's own, and an ID's index past the arrays is masked to its low 16 bits.
 #[test]
 fn argument_buffer_textures_are_the_set_1_elements_their_resource_ids_name() {
     textures_at_their_resource_ids(true);
@@ -800,6 +801,10 @@ fn argument_buffer_textures_are_the_set_1_elements_their_resource_ids_name() {
 
 /// The address of the argument buffer of [`texture_kernel`]`(true)`.
 const AB: u64 = 0x4_0000_0100;
+
+/// An index past the set-1 image arrays by their length: masked to its low 16 bits, index `i +
+/// PAST` is element `i`.
+const PAST: u32 = 0x1_0000;
 
 /// [`texture_kernel`]`(ab)` under the identity domains, on the CPU interpreter: its textures are
 /// the set-1 elements their resource IDs name, pushed or, with `ab`, in the argument buffer.
@@ -900,11 +905,22 @@ fn textures_at_their_resource_ids(ab: bool) {
         };
         let (sampled, storage) = (class(0), class(1));
         // Two dispatches: `src` of a format without alpha and `other` nil, then `src` with alpha
-        // and `other` bound.
-        for (word, other, alpha) in [(red, 0, 1.0f32), (rgba, resource_id(1, rgba), 0.0)] {
+        // and `other` bound. With `ab`, a third holds the second's IDs with their indices
+        // `PAST` higher, past the arrays: the shader masks an argument buffer's index to its low
+        // 16 bits, so they read the same elements.
+        let dispatches = [(red, 0, 1.0f32, 0), (rgba, 1, 0.0, 0), (rgba, 1, 0.0, PAST)];
+        for &(word, other, alpha, past) in &dispatches[..2 + usize::from(ab)] {
             let oob = [0, 0, 0, f(alpha)];
             let robust = (!checked).then_some(oob);
-            let ids = [resource_id(SRC, word), resource_id(DST, rgba), other];
+            let other = match other {
+                0 => 0,
+                index => resource_id(index + past, rgba),
+            };
+            let ids = [
+                resource_id(SRC + past, word),
+                resource_id(DST + past, rgba),
+                other,
+            ];
             let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
             let mut fields = Vec::new();
             for field in &plan.push.fields {
@@ -969,13 +985,19 @@ fn textures_at_their_resource_ids(ab: bool) {
                 }
             }
             want.extend_from_slice(&[0; 4]);
-            assert_eq!(got.buffers[0], want, "{stem}: out, alpha {alpha}");
+            assert_eq!(
+                got.buffers[0], want,
+                "{stem}: out, alpha {alpha}, indices {past:#x} past"
+            );
             let dst = &images[(SRC + 1 + DST) as usize];
             let written: Vec<[u32; 4]> = (0..2)
                 .flat_map(|y| (0..5).map(move |x| (x, y)))
                 .map(|(x, y)| read(x, y))
                 .collect();
-            assert_eq!(dst.texels, written, "{stem}: dst, alpha {alpha}");
+            assert_eq!(
+                dst.texels, written,
+                "{stem}: dst, alpha {alpha}, indices {past:#x} past"
+            );
         }
     }
 }

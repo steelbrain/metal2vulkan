@@ -980,11 +980,13 @@ pub fn emit(
 }
 
 /// Under the identity domains, the handle of a texture whose resource ID `id` (`uvec2`, low word
-/// first) an argument buffer holds (`docs/RESOURCE-ID.md`), defining `vid`: the id's index, the
-/// element of the set-1 arrays (0, nil, the null descriptor), with the word's missing-alpha bit
+/// first) an argument buffer holds (`docs/RESOURCE-ID.md`), defining `vid`: the id's index masked
+/// below the set-1 image arrays' length (`pipeline::link::IDENTITY_TEXTURES`, a power of two), the
+/// element of those arrays (0, nil, the null descriptor), with the word's missing-alpha bit
 /// (`TextureWord::OUT_OF_BOUNDS_ALPHA_ONE`) moved to `HANDLE_ALPHA_ONE` where the function's
-/// handles carry it (`memory::handles::Lookup::Flagged`'s `alpha`). The admission allows no other
-/// form (`select::identity_admits`).
+/// handles carry it (`memory::handles::Lookup::Flagged`'s `alpha`). The program writes the ID, so
+/// the mask keeps any value it holds inside the arrays: a bad ID reads the element at its masked
+/// index. The admission allows no other form (`select::identity_admits`).
 fn emit_identity_handle(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -992,7 +994,9 @@ fn emit_identity_handle(
     id: SValue,
 ) -> BResult<()> {
     use crate::metal::resource_word::TextureWord;
-    let index = fb.composite_extract(id, &[0])?;
+    let low = fb.composite_extract(id, &[0])?;
+    let mask = k32(fb, crate::pipeline::link::IDENTITY_TEXTURES - 1)?;
+    let index = fb.binary(BinOp::BitwiseAnd, low, mask)?;
     let h = match cx.plan.families.access.lookup() {
         handles::Lookup::Element => index,
         handles::Lookup::Flagged { alpha: true, .. } => {

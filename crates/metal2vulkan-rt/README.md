@@ -236,6 +236,8 @@ after a quiesce.
 
 ### Known gaps of memory blocks
 
+- A shader uses a buffer's `gpuAddress` directly, unchecked: a stale one, of a released buffer, can
+  still fault the device.
 - A dispatch whose indirect arguments, or an indexed draw whose indices, start at a byte of their
   block that is not a multiple of 4, or of the index size, is refused (`Refusal::ArgumentPlace`).
   Metal's offset rules keep both at that multiple of the buffer's start, so only a buffer that
@@ -273,6 +275,10 @@ made, with no lock, and never rewritten for layouts.
   with no storage view); on a device without the loop it is the texture's view of its image's
   shadow (Render encoders), written at the first draw that reads through it where the texture
   still owns index `i`. It is a null descriptor otherwise, and no grant reaches it.
+- A shader masks the index of a texture ID it reads from an argument buffer to its low 16 bits,
+  so a bad ID there reads the element at `index & 0xFFFF`, never one outside the arrays. A slot's
+  index is the runtime's own push, unmasked, and no argument buffer's ID reaches the feedback
+  elements.
 - Every element no object owns is defined. A texture element is a null descriptor
   (`nullDescriptor`): it reads zeros, sizes 0 and drops writes, as Metal's nil texture does. A
   sampler element is its array's default sampler, nearest and clamped to the edge; the

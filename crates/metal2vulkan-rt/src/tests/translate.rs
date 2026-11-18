@@ -1901,4 +1901,146 @@ mod on_device {
             println!("{name}: loads and stores up to 2 GiB landed at their own words");
         });
     }
+
+    /// A kernel that reads, through the argument buffer at buffer 0 (one `texture2d<float, read>`
+    /// member, its 8-byte resource ID), the texture's width, height and texel `(0, 0)`'s red bits
+    /// into words 0 to 2 of `out` (buffer 1).
+    const ARGUMENT_TEXTURE: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+%struct.T = type { ptr addrspace(1) }
+%struct.R = type { %struct.T }
+
+define void @argument_texture(ptr addrspace(2) %r, ptr addrspace(1) noundef "air-buffer-no-alias" %out) {
+entry:
+  %pt = getelementptr inbounds %struct.R, ptr addrspace(2) %r, i64 0, i32 0, i32 0
+  %t = load ptr addrspace(1), ptr addrspace(2) %pt, align 8
+  %s = tail call ptr addrspace(2) @air.get_read_sampler()
+  %r0 = tail call { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) %s, <2 x i32> zeroinitializer, <2 x i32> zeroinitializer, i32 0, i32 1)
+  %v = extractvalue { <4 x float>, i8 } %r0, 0
+  %red = extractelement <4 x float> %v, i64 0
+  %rb = bitcast float %red to i32
+  %w = tail call i32 @air.get_width_texture_2d(ptr addrspace(1) %t, i32 0)
+  %h = tail call i32 @air.get_height_texture_2d(ptr addrspace(1) %t, i32 0)
+  store i32 %w, ptr addrspace(1) %out, align 4
+  %o1 = getelementptr inbounds i32, ptr addrspace(1) %out, i64 1
+  store i32 %h, ptr addrspace(1) %o1, align 4
+  %o2 = getelementptr inbounds i32, ptr addrspace(1) %out, i64 2
+  store i32 %rb, ptr addrspace(1) %o2, align 4
+  ret void
+}
+
+declare ptr addrspace(2) @air.get_read_sampler()
+declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x i32>, <2 x i32>, i32, i32)
+declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
+declare i32 @air.get_height_texture_2d(ptr addrspace(1), i32)
+
+!air.kernel = !{!0}
+!air.version = !{!7}
+!air.language_version = !{!8}
+!0 = !{ptr @argument_texture, !1, !2}
+!1 = !{}
+!2 = !{!3, !5}
+!3 = !{i32 0, !"air.indirect_buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !4, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"R", !"air.arg_name", !"r"}
+!4 = !{i32 0, i32 8, i32 0, !"texture2d<float, read>", !"t", !"air.indirect_argument", !6}
+!5 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!6 = !{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.read", !"air.arg_type_name", !"texture2d<float, read>", !"air.arg_name", !"t"}
+!7 = !{i32 2, i32 8, i32 0}
+!8 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+    /// An argument buffer's texture ID is the program's word, so the shader masks its index to
+    /// the set-1 image arrays: an ID whose index is 65,536 past texture 5's reads texture 5, as
+    /// its own ID does, and never an element outside the arrays.
+    #[test]
+    fn every_device_reads_an_argument_buffer_texture_at_its_index_masked_to_the_arrays() {
+        use crate::{
+            IndexClass, PixelFormat, Region, Resource, ResourceUsage, TextureDescriptor,
+            TextureType, TextureUsage,
+        };
+        let bitcode = match metal2vulkan_devtools::llvm_assemble_text(ARGUMENT_TEXTURE) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("argument_texture: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("argument_texture").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        each_device("compute_argument_texture_masked", |name, _, device| {
+            let _grant = device
+                .grant_indices(IndexClass::Texture, 1, 8)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (width, height) = (7u32, 3u32);
+            let mut d = TextureDescriptor::new(
+                TextureType::Type2D,
+                PixelFormat::RGBA32Float,
+                width,
+                height,
+            );
+            d.usage = TextureUsage::SHADER_READ;
+            let texture = device
+                .new_texture(&d, Some(5))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let texel = [0.75f32, 0.0, 0.0, 1.0];
+            let bytes: Vec<u8> = (0..width * height)
+                .flat_map(|_| texel.iter().flat_map(|c| c.to_le_bytes()))
+                .collect();
+            let row = u64::from(width) * 16;
+            texture
+                .replace_region(
+                    Region {
+                        origin: [0, 0, 0],
+                        size: [width, height, 1],
+                    },
+                    0,
+                    0,
+                    &bytes,
+                    row,
+                    row * u64::from(height),
+                )
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let id = texture.gpu_resource_id();
+            assert_eq!(id.index, 5, "{name}");
+            let state = state(name, &device, &descriptor);
+            let mut buffers = Buffers::new(&device, 1 << 16);
+            let queue = device.new_command_queue(4).expect("a queue");
+            for index in [id.index, id.index + 0x1_0000] {
+                let argument = buffers.buffer(8);
+                write(
+                    &argument,
+                    0,
+                    &(u64::from(index) | u64::from(id.word) << 32).to_le_bytes(),
+                );
+                let out = buffers.buffer(16);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&argument), 0, 0).expect("a buffer");
+                encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
+                encoder
+                    .use_resource(Resource::Texture(&texture), ResourceUsage::READ)
+                    .expect("a resident texture");
+                encoder
+                    .dispatch_threadgroups([1, 1, 1], [1, 1, 1])
+                    .expect("a dispatch");
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                assert_eq!(
+                    words(&out, 0, 3),
+                    [width, height, 0.75f32.to_bits()],
+                    "{name}: an ID of index {index:#x}"
+                );
+            }
+            println!("{name}: index 5 and index 0x10005 both read texture 5");
+        });
+    }
 }

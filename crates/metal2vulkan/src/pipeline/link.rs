@@ -1262,8 +1262,10 @@ fn heap_set(
 
 /// Each image array of the identity domains' set 1, the sampled-image array (binding 0) and the
 /// storage-image array (binding 1): one element per index a texture's resource ID may hold, the
-/// same index in both (`docs/RESOURCE-ID.md`).
-const IDENTITY_TEXTURES: u32 = 65_536;
+/// same index in both (`docs/RESOURCE-ID.md`). A power of two, so an argument buffer's texture
+/// index masked below it (`lower::access::handle`) is an element of both.
+pub(crate) const IDENTITY_TEXTURES: u32 = 65_536;
+const _: () = assert!(IDENTITY_TEXTURES.is_power_of_two());
 
 /// Each sampler array of the identity domains' set 1: bindings 2, 3 and 4, one element per index a
 /// sampler's resource ID may hold (`docs/RESOURCE-ID.md`).
