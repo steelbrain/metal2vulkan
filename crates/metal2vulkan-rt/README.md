@@ -528,8 +528,9 @@ that touch blocks first.
   `sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:`, a
   `BufferLayout` holding the offset and the two strides; their options forms with no option are
   the same calls. Each records `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` against the
-  buffer's own range of its block, one region an image of the region, each at its own offset, so
-  an image stride of no whole number of rows copies too. The bytes between the region's rows and
+  bytes shaders reach (a Managed buffer's device copy, where the device keeps one), one region an
+  image of the region, each at its own offset, so an image stride of no whole number of rows
+  copies too. The bytes between the region's rows and
   images are kept. It records the same two barriers as a copy between textures; the second also
   makes a write into the buffer visible to every later command, and a write into a Shared buffer
   marks the segment, whose end barrier then reaches the host. A command buffer of one copy into a
@@ -538,15 +539,15 @@ that touch blocks first.
   stride of no whole number of a format's texels, rows or images closer than the region's, and a
   region past the buffer's end. Metal reads no row stride of a region one row high and no image
   stride of a region one image deep, and neither does the runtime. Not built
-  (`Gap::BufferCopyAlignment`), though Metal takes them: an image's offset in the buffer's block
-  that is no multiple of a texel block's bytes, or of 4 for a depth or stencil aspect, and a row
+  (`Gap::BufferCopyAlignment`), though Metal takes them: an image's offset in the `VkBuffer`
+  shaders reach that is no multiple of a texel block's bytes, or of 4 for a depth or stencil aspect, and a row
   stride of no whole number of a compressed format's blocks; also what `replace_region` and
   `get_bytes` refuse (`Gap::TextureBytes`, and `Gap::FloatDepthUpload` into a texture).
 - `fill_buffer` is `fillBuffer:range:value:`: one `vkCmdFillBuffer` of the byte in each word,
   between the same two barriers, a fill of a Shared buffer marking the segment as a copy into
   one does. Refused (`Refusal::FillRange`), as Metal's validation stops them: an empty range and
   one past the buffer's end. Not built (`Gap::FillAlignment`): a range that does not start and end
-  on whole 4-byte words of the buffer's block, which Metal fills byte by byte.
+  on whole 4-byte words of the bytes shaders reach, which Metal fills byte by byte.
 - The slice-and-level and whole-texture forms of `copyFromTexture`, and the other blit commands,
   are not built yet.
 

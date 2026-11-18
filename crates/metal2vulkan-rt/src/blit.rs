@@ -8,7 +8,8 @@
 //! region Metal names.
 //!
 //! A copy between a buffer and a texture is the same: `vkCmdCopyBufferToImage` or
-//! `vkCmdCopyImageToBuffer` against the buffer's own range of its block, one region per image of
+//! `vkCmdCopyImageToBuffer` against the bytes shaders reach (the buffer's range of its block, or a
+//! Managed buffer's device copy where it has one), one region per image of
 //! the region, between the same two barriers; the second also makes a write into the buffer
 //! visible to every later command, and to the host where the buffer is Shared.
 //!
@@ -182,7 +183,8 @@ impl BlitCommandEncoder {
     /// `source`, laid out as `layout` says, to `to` in `destination`, one
     /// `vkCmdCopyBufferToImage` a 3D region's image. The options form with no option is this
     /// call. Sizes of 0 copy as [`copy_from_texture`](Self::copy_from_texture)'s do. The command
-    /// buffer keeps the texture and the buffer's block until it retires.
+    /// buffer keeps the texture and the buffer until it retires. A Managed buffer's bytes here are
+    /// those shaders reach: its device copy, where the device keeps one.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's buffer or texture;
     /// [`Refusal::TextureRegion`]; [`Refusal::BufferCopyLayout`] for a layout Metal's validation
@@ -206,7 +208,7 @@ impl BlitCommandEncoder {
     /// `vkCmdCopyImageToBuffer` a 3D region's image. The options form with no option is this
     /// call. Bytes between the region's rows and images are kept. Sizes of 0 copy as
     /// [`copy_from_texture`](Self::copy_from_texture)'s do. The command buffer keeps the texture
-    /// and the buffer's block until it retires.
+    /// and the buffer until it retires.
     ///
     /// Err: as [`copy_from_buffer`](Self::copy_from_buffer)'s, but for [`Gap::FloatDepthUpload`].
     pub fn copy_from_texture_to_buffer(
@@ -235,8 +237,10 @@ impl BlitCommandEncoder {
         if !texture.is_of(&core) || !buffer.is_of(&core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
+        // A Managed buffer's GPU side is its device copy, where it has one.
+        let (vk_buffer, base) = buffer.device_range();
         let lies = Lies {
-            base: buffer.offset(),
+            base,
             len: buffer.length(),
             layout,
         };
@@ -244,7 +248,7 @@ impl BlitCommandEncoder {
             return Ok(());
         };
         building.keep_texture(texture);
-        building.keep(buffer.held_block());
+        building.keep(buffer);
         let command = building.ordered_command()?;
         // Marked after `ordered_command`, which may have split the recording at a signal: the
         // mark is the copy's own segment's.
@@ -273,11 +277,10 @@ impl BlitCommandEncoder {
             false => &written[..],
         };
         let device = &core.device;
-        let vk_buffer = buffer.held_block().memory.buffer;
         // SAFETY: the command buffer records outside any render pass and keeps the image and the
-        // buffer's block until it retires; the subresource is in its home layout between
+        // buffer until it retires; the subresource is in its home layout between
         // commands and in `layout` between the barriers; each region lies in the image and, by
-        // `buffer_copy`, in the buffer's range of the block, its offset aligned as the command
+        // `buffer_copy`, in the buffer's device range, its offset aligned as the command
         // requires.
         unsafe {
             device.cmd_pipeline_barrier2(
@@ -318,11 +321,11 @@ impl BlitCommandEncoder {
 
     /// `fillBuffer:range:value:`: `value` in every byte of `range` of `buffer`, one
     /// `vkCmdFillBuffer` of the byte four times over in each word. The command buffer keeps the
-    /// buffer's block until it retires.
+    /// buffer until it retires.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's buffer; [`Refusal::FillRange`] for an
     /// empty range or one past the buffer's end; [`Gap::FillAlignment`] for a range that does not
-    /// start and end on whole 4-byte words of the buffer's block; [`Error::Vulkan`] where the
+    /// start and end on whole 4-byte words of the bytes shaders reach; [`Error::Vulkan`] where the
     /// command buffer cannot record.
     pub fn fill_buffer(
         &mut self,
@@ -335,8 +338,9 @@ impl BlitCommandEncoder {
         if !buffer.is_of(&core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
-        let (offset, length) = fill_range(buffer.offset(), buffer.length(), range)?;
-        building.keep(buffer.held_block());
+        let (vk_buffer, base) = buffer.device_range();
+        let (offset, length) = fill_range(base, buffer.length(), range)?;
+        building.keep(buffer);
         let command = building.ordered_command()?;
         // Marked after `ordered_command`, as a copy into a buffer is.
         if buffer.is_shared() {
@@ -349,8 +353,8 @@ impl BlitCommandEncoder {
             .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
             .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)];
         let device = &core.device;
-        // SAFETY: the command buffer records outside any render pass and keeps the buffer's block
-        // until it retires; the range lies in the buffer's range of the block, in whole words
+        // SAFETY: the command buffer records outside any render pass and keeps the buffer until it
+        // retires; the range lies in the buffer's device range, in whole words
         // (`fill_range`).
         unsafe {
             device.cmd_pipeline_barrier2(
@@ -359,7 +363,7 @@ impl BlitCommandEncoder {
             );
             device.cmd_fill_buffer(
                 command,
-                buffer.held_block().memory.buffer,
+                vk_buffer,
                 offset,
                 length,
                 u32::from_ne_bytes([value; 4]),
@@ -443,7 +447,7 @@ pub(crate) struct Lies {
 }
 
 /// A copy between a buffer and a texture, checked: the texture's region, its aspect, and where
-/// each image of it lies in the buffer's block.
+/// each image of it lies in the `VkBuffer` shaders reach the buffer through.
 pub(crate) struct BufferCopy {
     pub(crate) placed: Placed,
     pub(crate) aspect: vk::ImageAspectFlags,

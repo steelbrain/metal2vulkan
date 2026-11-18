@@ -568,9 +568,9 @@ pub enum Gap {
     /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) or
     /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
     /// whose bytes no copy command in the floor addresses, though Metal takes them: an image's
-    /// offset in the buffer's block that is no multiple of a texel block's bytes (of 4 for a depth
-    /// or stencil aspect: a 16-bit depth at an offset of 2), or a row stride of no whole number of
-    /// a compressed format's blocks.
+    /// offset in the `VkBuffer` shaders reach that is no multiple of a texel block's bytes (of 4
+    /// for a depth or stencil aspect: a 16-bit depth at an offset of 2), or a row stride of no
+    /// whole number of a compressed format's blocks.
     ///
     /// Basis: ours (Vulkan 1.3 places a copy's rows in a buffer by a count of texels from an
     /// aligned offset; each is built when a replay stream makes one).
@@ -585,7 +585,7 @@ pub enum Gap {
         bytes_per_image: u64,
     },
     /// [`BlitCommandEncoder::fill_buffer`](crate::BlitCommandEncoder::fill_buffer) of a range
-    /// that does not start and end on whole 4-byte words of the buffer's block, which Metal fills
+    /// that does not start and end on whole 4-byte words of the bytes shaders reach, which Metal fills
     /// byte by byte (probe `blit_fill_rules.m` in the conformance crate, an Apple M3 Max, macOS
     /// 27.0.1, job m3-max-43571).
     ///
