@@ -80,8 +80,6 @@ pub struct ValOptions {
     pub scalar_block_layout: bool,
     /// `--uniform-buffer-standard-layout` (`uniformBufferStandardLayout`).
     pub uniform_buffer_standard_layout: bool,
-    /// `--workgroup-scalar-block-layout` (`workgroupMemoryExplicitLayoutScalarBlockLayout`).
-    pub workgroup_scalar_block_layout: bool,
     /// `--allow-localsizeid` (`maintenance4`, needed for `LocalSizeId` under Vulkan 1.2).
     pub allow_localsizeid: bool,
     /// `--allow-offset-texture-operand` (`maintenance8`, needed for `Offset` outside a gather,
@@ -101,9 +99,6 @@ impl ValOptions {
         ValOptions {
             scalar_block_layout: has(VkFeature::ScalarBlockLayout),
             uniform_buffer_standard_layout: has(VkFeature::UniformBufferStandardLayout),
-            workgroup_scalar_block_layout: has(
-                VkFeature::WorkgroupMemoryExplicitLayoutScalarBlockLayout,
-            ),
             allow_localsizeid: has(VkFeature::Maintenance4),
             allow_offset_texture_operand: has(VkFeature::Maintenance8),
         }
@@ -117,10 +112,6 @@ impl ValOptions {
             (
                 self.uniform_buffer_standard_layout,
                 "--uniform-buffer-standard-layout",
-            ),
-            (
-                self.workgroup_scalar_block_layout,
-                "--workgroup-scalar-block-layout",
             ),
             (self.allow_localsizeid, "--allow-localsizeid"),
             (

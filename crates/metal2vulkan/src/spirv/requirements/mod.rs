@@ -218,25 +218,14 @@ pub fn interface(m: &ModuleView<'_>) -> BResult<Vec<GlobalId>> {
         .filter(|(_, u)| **u)
         .map(|(i, _)| GlobalId::new(i as u32))
         .collect();
-    // Explicitly laid-out `Workgroup` memory is all or nothing per entry point, and an entry has
-    // at most one payload (`TaskPayloadWorkgroupEXT`).
-    let (mut blocks, mut implicit, mut payloads) = (false, false, 0usize);
+    // An entry has at most one payload (`TaskPayloadWorkgroupEXT`).
+    let mut payloads = 0usize;
     for g in &interface {
         let gv = m
             .globals
             .get(g.index())
             .ok_or(BuildError::Dangling(Dangling::Global(*g)))?;
-        if gv.class == StorageClass::Workgroup {
-            if m.types.facts(gv.pointee)?.block {
-                blocks = true;
-            } else {
-                implicit = true;
-            }
-        }
         payloads += usize::from(gv.class == StorageClass::TaskPayloadWorkgroupEXT);
-    }
-    if blocks && implicit {
-        return Err(BuildError::Global(GlobalRule::MixedWorkgroupLayout));
     }
     if payloads > 1 {
         return Err(BuildError::Global(GlobalRule::Payload));
@@ -568,8 +557,8 @@ impl Deriver<'_> {
                 }
                 return Ok(());
             }
-            // Workgroup narrow access is a property of explicitly laid-out `Workgroup` blocks
-            // (see `globals`); other classes need only the arithmetic capability.
+            // `Workgroup` memory is implicitly laid out (`ModuleBuilder::plain_global`), so its
+            // narrow access, as other classes', needs only the arithmetic capability.
             _ => return self.layout(class, pointee),
         };
         if n.w8 {
@@ -585,8 +574,7 @@ impl Deriver<'_> {
 
     /// The layout feature an explicitly laid-out pointee needs in `class` (the P8a layout rules:
     /// scalar layout needs `scalarBlockLayout`, std430 in `Uniform` needs
-    /// `uniformBufferStandardLayout`, scalar `Workgroup` blocks need
-    /// `workgroupMemoryExplicitLayoutScalarBlockLayout`).
+    /// `uniformBufferStandardLayout`).
     fn layout(&mut self, class: StorageClass, pointee: TypeId) -> BResult<()> {
         // A descriptor array's layout is its element's.
         let laid = match self.ty(pointee)? {
@@ -610,9 +598,6 @@ impl Deriver<'_> {
             ) => self.feat(VkFeature::ScalarBlockLayout),
             (StorageClass::Uniform, LayoutRule::Std430) => {
                 self.feat(VkFeature::UniformBufferStandardLayout)
-            }
-            (StorageClass::Workgroup, LayoutRule::Scalar) => {
-                self.feat(VkFeature::WorkgroupMemoryExplicitLayoutScalarBlockLayout)
             }
             _ => {}
         }
@@ -671,20 +656,6 @@ impl Deriver<'_> {
                 GlobalKind::Plain if g.class == StorageClass::Workgroup => {
                     if g.init.is_some() {
                         self.feat(VkFeature::ShaderZeroInitializeWorkgroupMemory);
-                    }
-                    if m.types.facts(g.pointee)?.block {
-                        self.cap(Cap::WorkgroupMemoryExplicitLayoutKHR);
-                        self.ext(SpirvExtension::KhrWorkgroupMemoryExplicitLayout);
-                        self.feat(VkFeature::WorkgroupMemoryExplicitLayout);
-                        let n = self.narrow(g.pointee)?;
-                        if n.w8 {
-                            self.cap(Cap::WorkgroupMemoryExplicitLayout8BitAccessKHR);
-                            self.feat(VkFeature::WorkgroupMemoryExplicitLayout8BitAccess);
-                        }
-                        if n.w16 {
-                            self.cap(Cap::WorkgroupMemoryExplicitLayout16BitAccessKHR);
-                            self.feat(VkFeature::WorkgroupMemoryExplicitLayout16BitAccess);
-                        }
                     }
                 }
                 GlobalKind::BuiltIn { builtin, dir } => {

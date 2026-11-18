@@ -719,12 +719,9 @@ impl ModuleBuilder {
         init: Option<ConstId>,
     ) -> BResult<GlobalId> {
         match class {
-            StorageClass::Workgroup
-                if self.types.facts(ty)?.shape == Shape::Explicit
-                    && !self.types.facts(ty)?.block =>
-            {
-                // An explicitly laid-out `Workgroup` variable must be a `Block`
-                // (`SPV_KHR_workgroup_memory_explicit_layout`).
+            StorageClass::Workgroup if self.types.facts(ty)?.shape == Shape::Explicit => {
+                // `Workgroup` memory is implicitly laid out: an explicit layout there is
+                // `SPV_KHR_workgroup_memory_explicit_layout`, which no module needs.
                 Err(BuildError::Type(TypeRule::PointeeForClass(class)))
             }
             StorageClass::Private | StorageClass::Workgroup => {

@@ -10,7 +10,7 @@ use crate::device::requirements::SpirvCapability;
 use crate::pipeline::sym::{PushField, ResourceKind, SpecKey};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, KillForm, LoopCtx, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
-use crate::spirv::error::{BuildError, GlobalRule};
+use crate::spirv::error::{BuildError, GlobalRule, TypeRule};
 use crate::spirv::ids::{GlobalId, TypeId, Value};
 use crate::spirv::ir::{
     natural_layout, BinOp, ConstBits, Constant, DerivOp, ExecMode, ExecModel, GlslOp,
@@ -915,31 +915,23 @@ fn push_constants_uniform_buffers_and_layouts() {
     assert_spirv_valid(finish_compute(b, main));
 }
 
-/// A compute module with two workgroup variables, the second zero-initialized: both explicit
-/// `Block`s, both implicit, or (when `mixed`) one of each.
-fn workgroup_module(block_layout: bool, mixed: bool) -> Result<TypedModule, BuildError> {
+/// A compute module with two implicitly laid-out workgroup variables, the second
+/// zero-initialized.
+fn workgroup_module() -> Result<TypedModule, BuildError> {
     let mut b = ModuleBuilder::new();
     let t = tys(&mut b);
-    let first = if block_layout {
-        laid(&mut b, LayoutRule::Std430, true, &[t.u32_, t.u16_, t.u8_])
-    } else {
-        b.ty(Type::Struct {
+    let first = b
+        .ty(Type::Struct {
             members: [t.u32_, t.u16_, t.u8_].into(),
             layout: None,
         })
-        .expect("implicit struct")
-    };
+        .expect("implicit struct");
     let wg = b
         .plain_global(StorageClass::Workgroup, first, None)
         .expect("workgroup struct");
-    let second = if block_layout && !mixed {
-        laid(&mut b, LayoutRule::Std430, true, &[t.vec4])
-    } else {
-        t.vec4
-    };
-    let null = b.constant(Constant::Null { ty: second }).expect("null");
+    let null = b.constant(Constant::Null { ty: t.vec4 }).expect("null");
     let zeroed = b
-        .plain_global(StorageClass::Workgroup, second, Some(null))
+        .plain_global(StorageClass::Workgroup, t.vec4, Some(null))
         .expect("zero-initialized workgroup");
     let main = compute(&mut b, |f| {
         let zero = cval(f, t.u32_, 0);
@@ -957,14 +949,30 @@ fn workgroup_module(block_layout: bool, mixed: bool) -> Result<TypedModule, Buil
     b.finalize()
 }
 
+/// `Workgroup` memory is implicitly laid out: an explicitly laid-out variable or pointee there,
+/// `Block` or not, is refused, so no module needs `SPV_KHR_workgroup_memory_explicit_layout`.
 #[test]
-fn workgroup_explicit_layout_and_zero_init() {
-    assert_spirv_valid(workgroup_module(true, false).expect("explicit layout"));
-    assert_spirv_valid(workgroup_module(false, false).expect("implicit layout"));
-    assert_eq!(
-        workgroup_module(true, true).err(),
-        Some(BuildError::Global(GlobalRule::MixedWorkgroupLayout))
-    );
+fn workgroup_memory_is_implicitly_laid_out_and_zero_initialized() {
+    assert_spirv_valid(workgroup_module().expect("implicit layout"));
+    let mut b = ModuleBuilder::new();
+    let t = tys(&mut b);
+    let refused = Some(BuildError::Type(TypeRule::PointeeForClass(
+        StorageClass::Workgroup,
+    )));
+    for block in [true, false] {
+        let explicit = laid(&mut b, LayoutRule::Std430, block, &[t.u32_, t.u16_, t.u8_]);
+        assert_eq!(
+            b.plain_global(StorageClass::Workgroup, explicit, None)
+                .err(),
+            refused,
+            "block {block}"
+        );
+        let pointer = Type::Pointer {
+            class: StorageClass::Workgroup,
+            pointee: explicit,
+        };
+        assert_eq!(b.ty(pointer).err(), refused, "block {block}");
+    }
 }
 
 #[test]

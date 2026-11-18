@@ -808,16 +808,9 @@ impl Types {
             StorageClass::Input | StorageClass::Output => {
                 matches!(f.shape, Shape::Plain | Shape::Implicit)
             }
-            StorageClass::Workgroup => {
-                // Explicit layout in `Workgroup` is `SPV_KHR_workgroup_memory_explicit_layout`, which
-                // lays out `Block` variables only (`ModuleBuilder::plain_global` requires that);
-                // pointers to their laid-out members come from access chains.
-                match f.shape {
-                    Shape::Plain | Shape::Implicit => true,
-                    Shape::Explicit => !f.runtime_sized,
-                    _ => false,
-                }
-            }
+            // `Workgroup` memory is implicitly laid out: an explicit layout there is
+            // `SPV_KHR_workgroup_memory_explicit_layout`, which no module needs.
+            StorageClass::Workgroup => matches!(f.shape, Shape::Plain | Shape::Implicit),
             StorageClass::Image => matches!(t, Type::Int { .. } | Type::Float { .. }),
             // An object function's payload is implicitly laid out data.
             StorageClass::TaskPayloadWorkgroupEXT => {

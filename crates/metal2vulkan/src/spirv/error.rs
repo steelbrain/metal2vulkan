@@ -202,10 +202,6 @@ pub enum GlobalRule {
     PlainClass(StorageClass),
     /// An initializer whose type differs from the variable's.
     InitializerType,
-    /// An entry interface whose `Workgroup` variables mix explicitly laid-out `Block`s with
-    /// implicitly laid-out variables (`SPV_KHR_workgroup_memory_explicit_layout` allows all or
-    /// none).
-    MixedWorkgroupLayout,
     /// `Invariant` on a variable other than the `Position`, `ClipDistance`, `FragDepth`,
     /// `SampleMask` and `FragStencilRefEXT` outputs.
     InvariantTarget,
