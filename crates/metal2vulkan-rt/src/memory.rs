@@ -58,9 +58,11 @@ pub(crate) fn surplus(idle: &[u64], peak: u64, live: u64, cap: u64) -> usize {
 /// A driver may hold the device's other calls (pipeline creation, submissions, other allocations)
 /// for the whole of an allocation's `vkAllocateMemory`, and the hold grows with the bytes: on an
 /// RTX 3090 (NVIDIA's Linux driver) about 0.25 ms per MiB of Shared memory and a third of that of
-/// Private; on a UHD Graphics 630 (Intel's Windows driver) 0.4 to 0.75 ms per MiB of Private
-/// memory and about 0.1 of Shared. So allocations are short, and a take longer than one pays its
-/// own length once: the allocation it makes serves later takes as free ranges.
+/// Private. On a UHD Graphics 630 (Intel's Windows driver) the call takes 0.1 to 0.2 ms for 16 to
+/// 64 MiB of Private memory and holds nothing measurable, while the making of a new Private
+/// allocation, whose zero fill is its first use, held other submissions 0.4 to 0.75 ms per MiB.
+/// So allocations are short, and a take longer than one pays its own length once: the allocation
+/// it makes serves later takes as free ranges.
 const ALLOCATION_LEN: u64 = 16 << 20;
 
 /// The block-maker thread makes an allocation of a class while the class's free bytes, the free
