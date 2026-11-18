@@ -252,7 +252,7 @@ pub struct DeviceOptions {
     /// [`Metrics::translations_loaded`]: crate::Metrics::translations_loaded
     pub pipeline_cache_dir: Option<PathBuf>,
     /// The most bytes the files in [`pipeline_cache_dir`](Self::pipeline_cache_dir) take, the
-    /// lowered kernels and the pipelines' data together; `None` is 512 MiB. Half of it is what the
+    /// lowered kernels and the pipelines' data together; `None` is 128 MiB. Half of it is what the
     /// directory is sure to keep: a file stays for at least half the cap, and at most the cap, of
     /// files written or used after its last use, and a file larger than half is not kept. Devices
     /// on one directory, in one process or several, share its files and one count of their bytes,

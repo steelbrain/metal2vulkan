@@ -54,8 +54,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed, O
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// The cap of a cache directory where the consumer names none.
-pub(crate) const DEFAULT_CAP: u64 = 512 << 20;
+/// The cap of a cache directory where the consumer names none: half of it, what the store is sure
+/// to keep, is about four times the 15.4 MB a long recorded session's pipelines and lowerings
+/// fill (379 pipeline files, 6.25 MB; 282 lowerings, 9.16 MB).
+pub(crate) const DEFAULT_CAP: u64 = 128 << 20;
 /// The most pipeline caches waiting for the reaper to write their data.
 pub(crate) const PENDING: usize = 64;
 /// The first bytes of a pipeline data file, before its length and its checksum.

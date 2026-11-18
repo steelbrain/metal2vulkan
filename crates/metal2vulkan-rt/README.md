@@ -899,7 +899,8 @@ keeps two kinds of file in, for compute and render pipeline states:
   written, and its next creation is a miss.
 
 Both kinds live in two generations, `g<N>/` (young) and `g<N-1>/` (old), each holding at most half
-of `DeviceOptions::pipeline_cache_cap` (512 MiB where it is `None`). A lookup tries young, then
+of `DeviceOptions::pipeline_cache_cap` (128 MiB where it is `None`: half of it is about four times
+the 15.4 MB a long recorded session's pipelines and lowerings fill). A lookup tries young, then
 old, and a hit in old moves the file into young by a rename. A new file goes into young. The write
 that takes young past half the cap starts the next generation: young becomes old, and the old one
 is removed whole, by a thread the store starts for it. So a file stays for at least half the cap,
@@ -914,6 +915,13 @@ written under its lock, so devices open on one directory, in one process or seve
 files and one count; they should pass one cap, since each starts a generation at half its own.
 Opening the directory reads `state` and checks for a generation a removal left unfinished,
 which it then removes; it lists no directory and keeps nothing per file in memory.
+
+The costs do not grow with the number of files. Measured with 100,000 and 1,000,000 files of 100
+bytes (release build, btrfs on Linux / NTFS on Windows): opening the directory 10-11 µs / 106-129
+µs, with no resident growth on Linux; a hit in young 2 µs / 53-58 µs; a miss 4-5 µs / 33-37 µs; a
+hit in old, which renames the file into young, 15-21 µs / 244-249 µs; a write 15-17 µs / 253-330
+µs. The store's own thread removes a dead generation of 49,800 / 499,800 files in 0.42 / 4.6 s on
+btrfs and 4.0 / 43 s on NTFS.
 
 Each write is a temporary file renamed over its name, and each file checks itself (the
 translator's self-checking encoding, the pipeline data's checksum), so a file cut short, by a

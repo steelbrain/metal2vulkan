@@ -1,6 +1,7 @@
 //! The cache directory on the host: two generations under one cap, a hit in old moved into young,
 //! the state file read at open with no listing and rebuilt where it is torn or missing, a removal
-//! cut short finished by the next open, torn files removed, and stores in threads and processes
+//! cut short (a process's exit in it included) finished by the next open, torn files removed, and
+//! stores in threads and processes
 //! sharing one directory without losing a count or reading a file another was writing.
 
 use crate::cache::{frame, unframe, State, Store};
@@ -194,6 +195,70 @@ fn a_removal_cut_short_is_finished_by_the_next_open() {
         "the open stats, never lists"
     );
     assert_eq!(reopened.get(&name(15), whole), Some(vec![15; 100]));
+}
+
+/// The exit child's files a generation, of 10 bytes each.
+const EXIT_FILES: u32 = 3000;
+/// The exit child's cap: two generations of [`EXIT_FILES`] files.
+const EXIT_CAP: u64 = 2 * EXIT_FILES as u64 * 10;
+/// The directory the exit child works in, named by the parent.
+const EXIT_DIR: &str = "M2V_RT_STORE_EXIT_DIR";
+
+/// A child of the exit test: fills generations 1 and 2, makes 3 young with its last write, so 1
+/// is dead and its removal thread starts, and exits at once. Does nothing when run alone.
+#[test]
+#[ignore = "a child of the exit-in-a-removal test"]
+fn store_exit_child() {
+    let Some(dir) = std::env::var_os(EXIT_DIR) else {
+        return;
+    };
+    let store = Store::open(PathBuf::from(dir), EXIT_CAP);
+    for n in 0..=2 * EXIT_FILES {
+        assert!(store.put(&name(n), &[1; 10]));
+    }
+    std::process::exit(0);
+}
+
+#[test]
+fn a_process_that_exits_in_a_removal_leaves_it_to_the_next_open() {
+    let scratch = Scratch::new("store-exit");
+    let exe = std::env::current_exe().expect("the test binary");
+    let mut child = std::process::Command::new(&exe)
+        .args(["tests::cache::store_exit_child", "--exact", "--ignored"])
+        .env(EXIT_DIR, &scratch.0)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("a child");
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("the child") {
+            break status;
+        }
+        if start.elapsed() > Duration::from_secs(120) {
+            let _ = child.kill();
+            panic!("the child ran past two minutes");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success(), "the child wrote every file");
+    let dead = scratch.0.join("g1");
+    assert!(dead.exists(), "the child exited before its removal ended");
+    let reopened = Store::open(scratch.0.clone(), EXIT_CAP);
+    reopened.settle();
+    assert!(!dead.exists(), "the next open finished the removal");
+    assert_eq!(
+        state(&reopened),
+        State {
+            young: 3,
+            bytes: 10
+        }
+    );
+    assert_eq!(reopened.listings.load(Relaxed), 0, "the state was whole");
+    // The last file in young, the last of old moved into young.
+    for n in [2 * EXIT_FILES, 2 * EXIT_FILES - 1] {
+        assert_eq!(reopened.get(&name(n), whole), Some(vec![1; 10]), "file {n}");
+    }
+    assert!(scratch.bytes() <= EXIT_CAP);
 }
 
 #[test]
