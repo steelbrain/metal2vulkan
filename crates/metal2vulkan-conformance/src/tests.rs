@@ -8002,3 +8002,33 @@ fn the_ledger_s_typed_reasons_parse_and_count() {
         assert!(refused.contains("names who"), "{refused}");
     }
 }
+
+/// A site only ours holds whose value is our typed error is our refusal of a call Metal answered:
+/// a case records a piece of work's failure where it failed, and Metal's piece did not fail, so
+/// Metal holds no site for it. It reads as a refusal at that site, and a site only ours holds
+/// whose value is an answer still diverges.
+#[test]
+fn a_failure_only_ours_records_is_a_refusal() {
+    let row = |extra: Option<Node>| {
+        let mut row = Node::branch("row", Vec::new())
+            .with(Node::leaf("coverage", Observed::value(Value::set(["4,3"]))));
+        if let Some(extra) = extra {
+            row = row.with(extra);
+        }
+        Transcript::new(vec![row])
+    };
+    let metal = row(None);
+    let refused = Failure::named("Error::Unsupported", "a draw with Points is not built");
+    let ours = row(Some(Node::leaf(
+        "pass",
+        Observed::value(refused.recorded()),
+    )));
+    let found = compare(&metal, &ours, &[], Offered::notices(&[]));
+    assert!(found.divergences.is_empty(), "{:?}", found.divergences);
+    assert_eq!(found.refusals.len(), 1, "{:?}", found.refusals);
+    assert_eq!(found.refusals[0].path, "row/pass");
+    let answered = row(Some(Node::leaf("pass", Observed::value(Value::Bool(true)))));
+    let found = compare(&metal, &answered, &[], Offered::notices(&[]));
+    assert!(found.refusals.is_empty(), "{:?}", found.refusals);
+    assert_eq!(found.divergences.len(), 1, "{:?}", found.divergences);
+}

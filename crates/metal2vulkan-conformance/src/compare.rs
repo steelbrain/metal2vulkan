@@ -478,7 +478,13 @@ impl Walk<'_> {
             }
         }
         for child in &ours.children {
-            if metal.child(&child.name).is_none() {
+            // A site only ours holds whose value is our refusal is a call of ours that refused
+            // where Metal's answered: a case records a piece of work's failure where it failed,
+            // and Metal's piece did not fail, so Metal holds no site for it. That is a refusal,
+            // which the run reports and the ledger names, never a site only ours observed.
+            if metal.child(&child.name).is_none() && child.observed.value.is_error() {
+                self.refusal(&format!("{path}/{}", child.name), &child.observed.value);
+            } else if metal.child(&child.name).is_none() {
                 self.found.divergences.push(Divergence::new(
                     format!("{path}/{}", child.name),
                     DivergenceKind::Site {
