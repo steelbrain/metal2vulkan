@@ -206,6 +206,24 @@ pub enum Refusal {
         /// The buffer's length.
         length: u64,
     },
+    /// A dispatch whose kernel reaches a buffer bound where its address, the buffer's
+    /// `gpuAddress` plus the bind offset, is not a multiple of the kernel argument's alignment
+    /// (`air.arg_type_align_size`, at most 16). Plain Metal runs such a dispatch at addresses of
+    /// its own: an Apple M3 Max reaches each element at its address rounded down to the smaller of
+    /// the element's alignment and 4 (`probes/misaligned_buffer_binds.m` in the conformance
+    /// crate).
+    ///
+    /// Basis: metal-documented (Metal's API validation refuses the bind offset: "must be a
+    /// multiple of 4 but was set to 2" for a `uint *` argument bound at offset 2, an Apple M3 Max,
+    /// macOS 27.0.1, `probes/vector_access_placement.m` in the conformance crate).
+    BufferOffsetAlignment {
+        /// The buffer argument index.
+        index: u32,
+        /// The bind offset.
+        offset: u64,
+        /// The argument's alignment in bytes.
+        alignment: u64,
+    },
     /// A grant of an index already granted ([`Device::grant_indices`](crate::Device::grant_indices)).
     /// Metal has no counterpart: Metal chooses its resource IDs itself.
     ///
@@ -1069,6 +1087,14 @@ impl fmt::Display for Refusal {
             Refusal::IndirectOffset { offset, length } => write!(
                 f,
                 "indirect arguments at offset {offset} of a {length}-byte buffer are misaligned or past its end"
+            ),
+            Refusal::BufferOffsetAlignment {
+                index,
+                offset,
+                alignment,
+            } => write!(
+                f,
+                "the buffer at index {index}, bound at offset {offset}, is not at a multiple of its argument's {alignment}-byte alignment"
             ),
             Refusal::IndicesGranted { class, index } => {
                 write!(f, "{class:?} index {index} is granted already")

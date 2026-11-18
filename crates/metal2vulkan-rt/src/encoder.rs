@@ -540,8 +540,8 @@ impl ComputeCommandEncoder {
     /// each reading Metal's whole grid from its region.
     ///
     /// A kernel that writes no memory (`PipelineInterface::writes_memory`) has no effect a program
-    /// can observe: once the threadgroup size is checked, its dispatch, direct or indirect, records
-    /// nothing, binds nothing and reads no indirect buffer
+    /// can observe: once the threadgroup size and the bound buffers' alignment are checked, its
+    /// dispatch, direct or indirect, records nothing, binds nothing and reads no indirect buffer
     /// ([`Metrics::dispatches_without_effects`](crate::Metrics::dispatches_without_effects)).
     ///
     /// A threadgroup that is not whole subgroups of a kernel whose tier runs only whole ones (32
@@ -549,7 +549,9 @@ impl ComputeCommandEncoder {
     /// the kernel's emulated-SIMD-group module, waiting for the reaper's lowering of it where
     /// that is not done.
     ///
-    /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`]; [`Limit::ThreadgroupShape`];
+    /// Err: [`Refusal::NoPipeline`]; [`Refusal::ThreadgroupSize`];
+    /// [`Refusal::BufferOffsetAlignment`] for a buffer the kernel reaches bound off its argument's
+    /// alignment, which nothing records; [`Limit::ThreadgroupShape`];
     /// [`Limit::ThreadgroupMemory`]; [`Gap::PartialSimdgroups`] for a threadgroup that is not
     /// whole SIMD groups of a kernel whose tier needs them and that has no emulated module;
     /// [`Error::Quiesced`] where the device was quiesced before that module was lowered;
@@ -670,11 +672,14 @@ impl ComputeCommandEncoder {
         if total == 0 || total > u64::from(max) {
             return Err(Error::Refused(Refusal::ThreadgroupSize { size, max }));
         }
+        // Every module of a state is the same function, with the same arguments and alignments,
+        // so the whole module answers this check and the next.
+        self.check_alignment(&inner.whole.interface)?;
         let core = Arc::clone(self.building().device.core());
         let limits = &core.limits;
         // A kernel that writes no memory has no effect a program can observe: once checked as
         // Metal checks it, the dispatch records nothing, binds nothing and reads no indirect
-        // buffer. Every module of a state is the same function, so the whole module answers.
+        // buffer.
         if !inner.whole.interface.has_effects {
             core.counters.count(Metric::DispatchesWithoutEffects);
             return Ok(());
@@ -910,6 +915,28 @@ impl ComputeCommandEncoder {
         building.record_dispatch(pipeline, &mut self.parameters, &launch)
     }
 
+    /// [`Refusal::BufferOffsetAlignment`] where a buffer `interface` reaches is bound at an
+    /// address, its `gpuAddress` plus the offset, that is not a multiple of the alignment the
+    /// module takes it to have (`FieldValue::BufferAddress`'s mask). A `set_bytes` copy is at a
+    /// multiple of 16 in the ring, which every mask divides.
+    fn check_alignment(&self, interface: &Interface) -> Result<(), Error> {
+        for field in &interface.fields {
+            let FieldValue::BufferAddress { slot, mask } = field.value else {
+                continue;
+            };
+            if let Some(Slot::Buffer { buffer, offset }) = self.slots.get(slot as usize) {
+                if buffer.gpu_address().wrapping_add(*offset) & mask != 0 {
+                    return Err(Error::Refused(Refusal::BufferOffsetAlignment {
+                        index: slot,
+                        offset: *offset,
+                        alignment: mask + 1,
+                    }));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The length set for threadgroup memory index `index`, 0 where none was.
     fn threadgroup_length(&self, index: u32) -> u32 {
         self.threadgroup_lengths
@@ -923,8 +950,8 @@ impl ComputeCommandEncoder {
     /// samplers `sampler_ids`. The block's address is written by [`Building::record_dispatch`]
     /// once the block is in the ring.
     ///
-    /// A buffer's address that is not a multiple of the alignment the module takes it to have
-    /// goes rounded down to that alignment, where Metal's API validation refuses the bind offset.
+    /// Every buffer address is a multiple of the alignment the module takes it to have, which the
+    /// dispatch checked first (`check_alignment`).
     fn fill_parameters(&mut self, kernel: &Kernel, sampler_ids: &[u32], region: &[u8; 32]) {
         let interface: &Interface = &kernel.interface;
         let parameters = &mut self.parameters;
@@ -940,14 +967,14 @@ impl ComputeCommandEncoder {
                 Place::Block(offset) => (&mut parameters.block, offset as usize),
             };
             match field.value {
-                FieldValue::BufferAddress { slot, mask } => {
+                FieldValue::BufferAddress { slot, .. } => {
                     let address = match self.slots.get(slot as usize) {
                         Some(Slot::Buffer { buffer, offset }) => {
                             buffer.gpu_address().wrapping_add(*offset)
                         }
                         Some(Slot::Bytes(address)) => *address,
                         Some(Slot::Empty) | None => 0,
-                    } & !mask;
+                    };
                     bytes[at..at + 8].copy_from_slice(&address.to_le_bytes());
                 }
                 FieldValue::TextureId(slot) => {

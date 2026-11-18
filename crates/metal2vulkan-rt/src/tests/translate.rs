@@ -19,7 +19,7 @@ mod on_device {
     use crate::{
         host_time, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
         DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Instance, Library, Limit,
-        MemoryClass, PrecisionNote, StageSource, MAX_BUFFER_LENGTH,
+        MemoryClass, PrecisionNote, Refusal, StageSource, MAX_BUFFER_LENGTH,
     };
     use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
     use metal2vulkan::Budget;
@@ -1305,23 +1305,23 @@ mod on_device {
     }
 
     /// `vwp_vec16` takes its `float4 *` arguments' addresses to be multiples of 16 and `vwp_words`
-    /// its `uint *` arguments' multiples of 4 (`RuntimeFact::AddressAlignment`). Each argument
-    /// bound off that alignment (`vwp_words`'s 1 and 3 bytes past each word phase, `vwp_vec16`'s
-    /// 4 and 12 bytes past its multiples of 16) runs at the address rounded down to it, where
-    /// Metal's API validation refuses the bind: all four buffers hold Metal's words for the binds
-    /// at the rounded addresses (`vector_word_phases`' answer), and the command buffer completes
-    /// without error.
+    /// its `uint *` arguments' multiples of 4 (`RuntimeFact::AddressAlignment`). A dispatch with
+    /// either argument bound off that alignment (`vwp_words`'s 1 and 3 bytes past each word phase,
+    /// `vwp_vec16`'s 4 and 12 bytes past its multiples of 16) is refused, as Metal's API
+    /// validation refuses the bind (`Refusal::BufferOffsetAlignment`, naming the index, the offset
+    /// and the alignment), and records nothing: the command buffer completes without error and
+    /// every buffer holds its bytes as they were.
     #[test]
-    fn an_argument_bound_off_its_alignment_runs_at_the_address_rounded_down() {
+    fn an_argument_bound_off_its_alignment_is_refused() {
         use metal2vulkan_devtools::vector_word_phases::{
-            answer, inputs, vec16_offsets, FIXTURE, OFFSETS, THREADS, VEC16, WORDS,
+            inputs, vec16_offsets, FIXTURE, OFFSETS, THREADS, VEC16, WORDS,
         };
         let (Some(phased), Some(aligned)) =
             (descriptor_of(FIXTURE, WORDS), descriptor_of(FIXTURE, VEC16))
         else {
             return;
         };
-        each_device("compute_rounded_binds", |name, _, device| {
+        each_device("compute_misaligned_binds", |name, _, device| {
             let before = inputs();
             let (phased, aligned) = (
                 state(name, &device, &phased),
@@ -1338,6 +1338,7 @@ mod on_device {
                 "{name}: the buffers' addresses"
             );
             let queue = device.new_command_queue(4).expect("a queue");
+            let mut refusals = 0;
             for offset in OFFSETS {
                 for (buffer, bytes) in &held {
                     write(buffer, 0, bytes);
@@ -1347,9 +1348,12 @@ mod on_device {
                 let mut encoder = command_buffer
                     .compute_command_encoder(DispatchType::Serial)
                     .expect("an encoder");
-                for (state, binds) in [
-                    (&phased, [(0, offset + 1), (1, offset + 3)]),
-                    (&aligned, [(2, a_at + 4), (3, b_at + 12)]),
+                // Each case binds one argument off its alignment and the other on it.
+                for (state, binds, off, alignment) in [
+                    (&phased, [(0, offset + 1), (1, offset)], 0, 4),
+                    (&phased, [(0, offset), (1, offset + 3)], 1, 4),
+                    (&aligned, [(2, a_at + 4), (3, b_at)], 0, 16),
+                    (&aligned, [(2, a_at), (3, b_at + 12)], 1, 16),
                 ] {
                     encoder.set_compute_pipeline_state(state).expect("a state");
                     for (index, (buffer, at)) in binds.into_iter().enumerate() {
@@ -1357,36 +1361,37 @@ mod on_device {
                             .set_buffer(Some(&held[buffer].0), at, index as u32)
                             .expect("a buffer");
                     }
-                    encoder
-                        .dispatch_threadgroups([1, 1, 1], [THREADS, 1, 1])
-                        .unwrap_or_else(|error| panic!("{name}: offset {offset}: {error}"));
+                    let at = binds[off as usize].1;
+                    assert!(
+                        matches!(
+                            encoder.dispatch_threadgroups([1, 1, 1], [THREADS, 1, 1]),
+                            Err(Error::Refused(Refusal::BufferOffsetAlignment {
+                                index,
+                                offset: refused,
+                                alignment: refused_alignment,
+                            })) if index == off && refused == at && refused_alignment == alignment
+                        ),
+                        "{name}: offset {offset}: index {off} bound at {at}"
+                    );
+                    refusals += 1;
                 }
                 encoder.end_encoding();
                 command_buffer.commit().expect("a commit");
                 finished(name, &command_buffer);
                 assert_eq!(command_buffer.error(), None, "{name}: offset {offset}");
-                let want = answer(offset);
-                for ((buffer, bytes), (which, want)) in held.iter().zip([
-                    ("src", &want.src),
-                    ("dst", &want.dst),
-                    ("a", &want.a),
-                    ("b", &want.b),
-                ]) {
+                for ((buffer, bytes), which) in held.iter().zip(["src", "dst", "a", "b"]) {
                     let got = words(buffer, 0, bytes.len() / 4);
-                    let want: Vec<u32> = want
+                    let want: Vec<u32> = bytes
                         .as_chunks::<4>()
                         .0
                         .iter()
                         .map(|w| u32::from_le_bytes(*w))
                         .collect();
-                    let first = got.iter().zip(&want).position(|(x, y)| x != y);
-                    assert_eq!(
-                        first, None,
-                        "{name}: offset {offset}: {which} differs from Metal's words at the rounded binds"
-                    );
+                    assert_eq!(got, want, "{name}: offset {offset}: {which} changed");
                 }
             }
-            println!("{name}: each argument bound off its alignment ran at the rounded address");
+            assert_eq!(refusals, 4 * OFFSETS.len(), "{name}: the binds");
+            println!("{name}: {refusals} dispatches with an argument off its alignment refused");
         });
     }
 

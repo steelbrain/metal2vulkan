@@ -140,20 +140,20 @@ pub(crate) mod on_device {
         });
     }
 
-    /// The binder pushes a bound buffer's address rounded down to a multiple of the alignment the
-    /// kernel takes it to have (`FieldValue::BufferAddress`'s mask, `RuntimeFact::AddressAlignment`
-    /// in a translated kernel), where Metal's API validation refuses the bind offset. At each
-    /// alignment, 2, 4, 8 and 16, a buffer bound 1, 3, 4, 8, 12 or 15 bytes past a multiple of 16
-    /// (each offset that is not a multiple of the alignment and rounds down to a word: 15 binds)
-    /// is stepped from its address rounded down to the alignment, and no other word changes. An
-    /// 8- or 16-byte alignment's bind 4, 8 or 12 bytes past a multiple of 16 is a word apart from
-    /// its rounded address, so a bind not rounded steps other words on every device.
+    /// A dispatch whose kernel takes a bound buffer's address to be a multiple of an alignment
+    /// (`FieldValue::BufferAddress`'s mask, `RuntimeFact::AddressAlignment` in a translated
+    /// kernel) that the address, the buffer's `gpuAddress` plus the offset, is not is refused, as
+    /// Metal's API validation refuses the bind offset (`Refusal::BufferOffsetAlignment`), and
+    /// records nothing. At each alignment, 2, 4, 8 and 16, every bind 1, 3, 4, 8, 12 or 15 bytes
+    /// past a multiple of 16 that is not a multiple of the alignment is refused (17 binds) and
+    /// leaves every word as it was; the same buffer bound 16 bytes past one then runs, stepping
+    /// the 16 words from its address.
     #[test]
-    fn every_device_rounds_a_bound_address_down_to_its_alignment() {
-        each_device("compute_rounded_address", |name, _, device| {
+    fn every_device_refuses_a_bound_address_off_its_alignment() {
+        each_device("compute_misaligned_address", |name, _, device| {
             let mut arena = Arena::new(&device);
             let queue = device.new_command_queue(4).expect("a queue");
-            let mut runs = 0;
+            let mut refusals = 0;
             for align in [2u64, 4, 8, 16] {
                 let fields = vec![
                     region(),
@@ -172,42 +172,61 @@ pub(crate) mod on_device {
                     interface(buffers, fields, 40),
                 )
                 .expect("the step kernel");
+                let x = arena.buffer();
+                assert_eq!(x.gpu_address() % 16, 0, "{name}: the buffer's address");
+                write_words(&x, |index| index);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
                 for at in [1u64, 3, 4, 8, 12, 15] {
-                    let rounded = (32 + at) & !(align - 1);
-                    if at % align == 0 || rounded % 4 != 0 {
+                    if at % align == 0 {
                         continue;
                     }
-                    let x = arena.buffer();
-                    assert_eq!(x.gpu_address() % 16, 0, "{name}: the buffer's address");
-                    write_words(&x, |index| index);
-                    let command_buffer = queue.command_buffer().expect("a command buffer");
-                    let mut encoder = command_buffer
-                        .compute_command_encoder(DispatchType::Serial)
-                        .expect("an encoder");
-                    encoder.set_compute_pipeline_state(&state).expect("a state");
                     encoder.set_buffer(Some(&x), 32 + at, 0).expect("a buffer");
-                    encoder
-                        .dispatch_threadgroups([1, 1, 1], [16, 1, 1])
-                        .expect("a dispatch");
-                    encoder.end_encoding();
-                    run(name, &command_buffer);
-                    let stepped = rounded as u32 / 4..rounded as u32 / 4 + 16;
-                    let expected: Vec<u32> = (0..WORDS as u32)
-                        .map(|index| match stepped.contains(&index) {
-                            true => index * 2 + 1,
-                            false => index,
-                        })
-                        .collect();
-                    assert_eq!(
-                        words(&x),
-                        expected,
+                    assert!(
+                        matches!(
+                            encoder.dispatch_threadgroups([1, 1, 1], [16, 1, 1]),
+                            Err(Error::Refused(Refusal::BufferOffsetAlignment {
+                                index: 0,
+                                offset,
+                                alignment,
+                            })) if offset == 32 + at && alignment == align
+                        ),
                         "{name}: alignment {align}, bound at 32 + {at}"
                     );
-                    runs += 1;
+                    refusals += 1;
                 }
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let unchanged: Vec<u32> = (0..WORDS as u32).collect();
+                assert_eq!(words(&x), unchanged, "{name}: alignment {align}, refused");
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&x), 48, 0).expect("a buffer");
+                encoder
+                    .dispatch_threadgroups([1, 1, 1], [16, 1, 1])
+                    .expect("an aligned dispatch");
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let expected: Vec<u32> = (0..WORDS as u32)
+                    .map(|index| match (12..28).contains(&index) {
+                        true => index * 2 + 1,
+                        false => index,
+                    })
+                    .collect();
+                assert_eq!(
+                    words(&x),
+                    expected,
+                    "{name}: alignment {align}, bound at 48"
+                );
             }
-            assert_eq!(runs, 15, "{name}: the binds");
-            println!("{name}: {runs} binds off their alignment, each run at the rounded address");
+            assert_eq!(refusals, 17, "{name}: the binds");
+            println!("{name}: {refusals} binds off their alignment refused, each aligned bind run");
         });
     }
 

@@ -206,7 +206,7 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::TexelRows { .. } => Mechanism::Variant,
         // Keyed by the slots bound to a texture buffer of more texels than one view holds.
         RuntimeFact::TexelBufferParts { .. } => Mechanism::Variant,
-        // The binder rounds the slot's address down to a multiple of the alignment.
+        // The runtime refuses a dispatch whose slot address is not a multiple of the alignment.
         RuntimeFact::AddressAlignment { .. } => Mechanism::PlanTimeCheck,
         // The function marks the `ExecutionStatus` buffer its `ExecutionStatus` fact binds; the
         // consumer reads the bit after the command buffer.

@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 46 | 46 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 47 | 47 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 11 | 11 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 19 | 19 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 14 | 12 | 0 | 0 | 20 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 14 | 13 | 0 | 0 | 20 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 8 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 19 | 0 | 0 | 0 |
 
@@ -631,6 +631,7 @@ Columns:
 | `NoBufferAtIndex` | `setBufferOffset` at an index where no buffer is bound | every device (a public call's own check of its arguments) | `ours`: there is no buffer whose offset to change | 1: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)` | `-` |
 | `ThreadgroupSize` | A threadgroup of no threads, or of more than the pipeline state's `maxTotalThreadsPerThreadgroup` | every device (a public call's own check of its arguments) | `metal-documented`: a threadgroup's threads total at most the state's `maxTotalThreadsPerThreadgroup` | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)` | `-` |
 | `IndirectOffset` | An indirect dispatch's argument offset that is not a multiple of 4, or that leaves fewer than 12 bytes (three 32-bit counts) in the buffer | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads three 32-bit counts at a 4-byte aligned offset inside the buffer | 1: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)` | `-` |
+| `BufferOffsetAlignment` | A dispatch whose kernel reaches a buffer bound where its address, the buffer's `gpuAddress` plus the bind offset, is not a multiple of the kernel... | every device (a public call's own check of its arguments) | `metal-documented`: Metal's API validation refuses the bind offset: "must be a multiple of 4 but was set to 2" for a `uint *` argument bound at offset 2, an Apple M3 Max, macOS 27.0.1, `probes/vector_access_placement.m` in the conformance crate | 1: `crates/metal2vulkan-rt/src/encoder.rs (check_alignment)` | `-` |
 | `IndicesGranted` | A grant of an index already granted (`Device::grant_indices`) | every device (a public call's own check of its arguments) | `ours`: each index has one grant, so each resource ID names one object | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
 | `IndicesNotGranted` | A release of an index that is not granted (`Device::release_indices`) | every device (a public call's own check of its arguments) | `ours`: a grant is returned once | 2: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`, `crates/metal2vulkan-rt/src/arrays.rs (release)` | `-` |
 | `IndexInUse` | A texture, a sampler state or a pipeline state's constexpr sampler at an index where another object lives already (`Device::new_texture`,... | every device (a public call's own check of its arguments) | `ours`: an index names one object at a time, and its elements are that object's | 2: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`, `crates/metal2vulkan-rt/src/sampler.rs (hold_constexpr)` | `-` |
@@ -1206,6 +1207,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::NoBufferAtIndex`: `crates/metal2vulkan-rt/src/encoder.rs (set_buffer_offset)`
 - `rt:Refusal::ThreadgroupSize`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch, 2 sites)`
 - `rt:Refusal::IndirectOffset`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`
+- `rt:Refusal::BufferOffsetAlignment`: `crates/metal2vulkan-rt/src/encoder.rs (check_alignment)`
 - `rt:Refusal::IndicesGranted`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
 - `rt:Refusal::IndicesNotGranted`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`; `crates/metal2vulkan-rt/src/arrays.rs (release)`
 - `rt:Refusal::IndexInUse`: `crates/metal2vulkan-rt/src/arrays.rs (occupy)`; `crates/metal2vulkan-rt/src/sampler.rs (hold_constexpr)`

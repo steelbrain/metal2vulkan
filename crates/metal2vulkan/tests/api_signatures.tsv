@@ -13569,6 +13569,7 @@ variant	metal2vulkan-rt::Refusal::BufferCopyOverlap	BufferCopyOverlap { source_o
 variant	metal2vulkan-rt::Refusal::BufferCopyRange	BufferCopyRange { offset: u64, size: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferCopyUnaligned	BufferCopyUnaligned { source_offset: u64, destination_offset: u64, size: u64 }
 variant	metal2vulkan-rt::Refusal::BufferIndex	BufferIndex { index: u32 }
+variant	metal2vulkan-rt::Refusal::BufferOffsetAlignment	BufferOffsetAlignment { index: u32, offset: u64, alignment: u64 }
 variant	metal2vulkan-rt::Refusal::BufferPastBlock	BufferPastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferTextureLayout	BufferTextureLayout { offset: u64, bytes_per_row: u64, len: u64 }
 variant	metal2vulkan-rt::Refusal::BufferTooLong	BufferTooLong { length: u64, max: u64 }

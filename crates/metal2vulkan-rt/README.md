@@ -682,10 +682,11 @@ that touch blocks first.
   before indirect argument reads gets one that does, in either kind of encoder. The other
   commands a segment records that touch memory, blit copies, order themselves against everything
   before and after them; the barrier at a segment's end takes every command and the host.
-- A buffer bound where its address, its `gpuAddress` plus the offset, is not a multiple of its
-  kernel argument's alignment (`air.arg_type_align_size`, at most 16) is pushed rounded down to
-  that alignment, where Metal's API validation refuses the bind; `docs/API.md` section 10 says
-  where that differs from Metal without validation.
+- A dispatch whose kernel reaches a buffer bound where its address, its `gpuAddress` plus the
+  offset, is not a multiple of the kernel argument's alignment (`air.arg_type_align_size`, at
+  most 16) is refused (`Refusal::BufferOffsetAlignment`) before anything is recorded, as Metal's
+  API validation refuses the bind offset. Plain Metal runs such a dispatch at addresses of its
+  own; `docs/API.md` section 10 says which.
 - Parameters: fields in the push window, `[0, 256)` on every device, are pushed: the dispatch
   region and up to 28 buffer addresses, each kernel pushing only the bytes it reads. Fields past it
   go to a 16-byte aligned block in the parameter ring, whose address is a field in the window: a
