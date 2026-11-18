@@ -60,15 +60,12 @@ order, and a lower one never overrides a higher one.
    limit and memory-type queries. Product code holds no vendor, device or driver ID, and no
    runtime policy switch. A test enforces this for `metal2vulkan-rt`. One form means one form per
    Vulkan capability: where the floor cannot require a feature, that feature's query may choose a
-   second form, for eight only: 16-bit floats, storage-image reads without a format, 64-bit
+   second form, for seven only: 16-bit floats, storage-image reads without a format, 64-bit
    atomics, 64-bit floats, SIMD groups (the subgroup size range with its stages and operations,
    and maximal reconvergence), unified memory (decided by Vulkan's physical device type alone:
-   one copy of a Managed buffer on an integrated or CPU device, two elsewhere), the attachment
-   feedback loop (a device without it reads a render target through a counted copy of that
-   target, recorded as a known gap), and the null descriptor (a device without it gives every
-   element of the texture and sampler arrays that no resource owns a small zero image or the
-   default sampler, recorded as a known gap). A second form chosen by anything else is not
-   allowed.
+   one copy of a Managed buffer on an integrated or CPU device, two elsewhere), and the
+   attachment feedback loop (a device without it reads a render target through a counted copy of
+   that target, recorded as a known gap). A second form chosen by anything else is not allowed.
 3. **Native-like speed.** Structure decides speed: driver-owned memory, optimal images in real
    layouts, direct addresses, nothing copied that Metal would not copy. The one exception to
    optimal images is a texture over a Shared buffer: a linear image on that buffer's memory, in
