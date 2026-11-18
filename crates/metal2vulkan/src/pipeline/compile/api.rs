@@ -38,7 +38,8 @@ use crate::pipeline::artifact::{
     RenderPipeline, RuntimeDependency, StageModule,
 };
 use crate::pipeline::compile::key::{
-    function_key, mesh_descriptor_key, pipeline_key, render_descriptor_key,
+    function_key, mesh_descriptor_key, pipeline_key, queried_render_descriptor_key,
+    render_descriptor_key,
 };
 use crate::pipeline::compile::{
     color_group, compile_stage, compile_stage_from, dynamic_order, guarded, linked_keys,
@@ -147,6 +148,33 @@ impl Device {
             StageSource::Compiled(c) => (1, *c.key().digest()),
         };
         render_descriptor_key(&self.profile_fingerprint(), d, stage)
+    }
+
+    /// The key of render pipeline descriptor `d` on this device for the runtime on
+    /// [`Device::from_queries`]: every field of `d`, each `Function` stage by its
+    /// [`Device::function_compile_key`] under the default lowering inputs, each `Compiled` stage
+    /// by its key, with this device's profile fingerprint and
+    /// [`SEMANTICS_VERSION`](crate::cache::SEMANTICS_VERSION), as
+    /// [`Device::render_descriptor_key`] keys it, the fields written as fixed-width words rather
+    /// than in their `Debug` form, so a seen descriptor's key costs no formatting. Two descriptors
+    /// have one key exactly where `render_descriptor_key` gives them one, so everything a creation
+    /// asks of `d` before its compile is a function of this key too. The two keys' values differ:
+    /// `render_descriptor_key` is the old runtime's, which keeps answers under its values, and goes
+    /// at the cutover. The crate keeps no cache.
+    pub fn queried_render_descriptor_key(
+        &self,
+        d: &RenderPipelineDescriptor,
+    ) -> crate::cache::PipelineKey {
+        let stage = |s: &StageSource| match s {
+            StageSource::Function(f) => (
+                0,
+                *self
+                    .function_compile_key(f, &LoweringInputs::default())
+                    .digest(),
+            ),
+            StageSource::Compiled(c) => (1, *c.key().digest()),
+        };
+        queried_render_descriptor_key(&self.profile_fingerprint(), d, stage)
     }
 
     /// The key of mesh render pipeline descriptor `d` on this device, without decoding, as

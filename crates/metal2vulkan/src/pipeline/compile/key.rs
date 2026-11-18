@@ -25,8 +25,9 @@ use crate::cache::{Hash256, PipelineKey, SEMANTICS_VERSION};
 use crate::library::{FunctionCompileKey, FunctionConstantValues};
 use crate::lower::select::LowerInputs;
 use crate::pipeline::descriptor::{
-    LinkedList, MeshPipelineDescriptor, PrivateRenderState, RenderPipelineDescriptor,
-    StageInputDescriptor, StageSource, TessellationDescriptor,
+    ColorAttachmentDescriptor, LinkedList, MeshPipelineDescriptor, PrivateRenderState,
+    RenderPipelineDescriptor, StageInputDescriptor, StageSource, TessellationDescriptor,
+    VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 
 /// What a compile key records of one linked function: the list it is in, its name, the
@@ -787,4 +788,243 @@ pub(crate) fn render_descriptor_key(
         h.bytes(field.as_bytes());
     }
     PipelineKey::new(h.finish())
+}
+
+/// The key of render pipeline descriptor `d` for the profile of fingerprint `profile`, on
+/// `Device::from_queries`' path (`Device::queried_render_descriptor_key`): each stage by `stage`'s
+/// kind and digest, then every other field of `d` as fixed-width little-endian words in a fixed
+/// order, each optional or repeated part after its tag or count, so no two descriptors write the
+/// same words. Every field of `d` and of each struct it holds is named here, so that a field added
+/// to any of them does not compile until the key writes it. The private state's one float is
+/// written by its bits, so `-0.0` and each NaN payload are told apart.
+pub(crate) fn queried_render_descriptor_key(
+    profile: &Hash256,
+    d: &RenderPipelineDescriptor,
+    stage: impl Fn(&StageSource) -> (u64, Hash256),
+) -> PipelineKey {
+    let RenderPipelineDescriptor {
+        vertex,
+        fragment,
+        vertex_descriptor,
+        color_attachments,
+        depth_format,
+        stencil_format,
+        raster_sample_count,
+        alpha_to_coverage,
+        alpha_to_one,
+        rasterization_enabled,
+        input_primitive_topology,
+        max_vertex_amplification_count,
+        tessellation,
+        support_indirect_command_buffers,
+        max_vertex_call_stack_depth,
+        max_fragment_call_stack_depth,
+        support_adding_vertex_binary_functions,
+        support_adding_fragment_binary_functions,
+        vertex_buffers,
+        fragment_buffers,
+        texture_write_rounding_mode,
+        private,
+    } = d;
+    let PrivateRenderState {
+        sample_mask,
+        sample_coverage,
+        sample_coverage_invert,
+        alpha_test_enabled,
+        alpha_test_function,
+        logic_operation_enabled,
+        logic_operation,
+        clip_distance_enable_mask,
+        point_smooth_enabled,
+        point_coord_lower_left,
+        point_size_output_vs,
+        two_side_enabled,
+        vertex_depth_compare_clamp_mask,
+        fragment_depth_compare_clamp_mask,
+        depth_stencil_write_disabled,
+        needs_custom_border_color_samplers,
+        vertex_amplification_mode,
+        explicit_visibility_group_id,
+        open_gl_mode_enabled,
+    } = private;
+    let mut h = KeyHasher::new(b"metal2vulkan/queried-render-descriptor-key/v1");
+    h.bytes(profile);
+    let (kind, digest) = stage(vertex);
+    h.u64(kind).bytes(&digest);
+    match fragment {
+        Some(fragment) => {
+            let (kind, digest) = stage(fragment);
+            h.u64(kind).bytes(&digest);
+        }
+        None => {
+            h.u64(u64::MAX);
+        }
+    }
+    // The fields' words, hashed as one field.
+    let mut w = Words(Vec::with_capacity(384));
+    match vertex_descriptor {
+        None => {
+            w.u32(0);
+        }
+        Some(VertexDescriptor {
+            layouts,
+            attributes,
+        }) => {
+            w.u32(1).count(layouts.len());
+            for (
+                &buffer,
+                VertexBufferLayoutDescriptor {
+                    stride,
+                    step_function,
+                    step_rate,
+                },
+            ) in layouts
+            {
+                // The dynamic stride (`None`) apart from every stride.
+                w.u32(buffer)
+                    .u64(stride.map_or(u64::MAX, u64::from))
+                    .u32(step_function.as_raw())
+                    .u32(*step_rate);
+            }
+            w.count(attributes.len());
+            for (
+                &index,
+                VertexAttributeDescriptor {
+                    format,
+                    offset,
+                    buffer_index,
+                },
+            ) in attributes
+            {
+                w.u32(index)
+                    .u32(format.as_raw())
+                    .u32(*offset)
+                    .u32(*buffer_index);
+            }
+        }
+    }
+    for color in color_attachments {
+        match color {
+            None => {
+                w.u32(0);
+            }
+            Some(ColorAttachmentDescriptor {
+                pixel_format,
+                blending_enabled,
+                source_rgb_blend_factor,
+                destination_rgb_blend_factor,
+                rgb_blend_operation,
+                source_alpha_blend_factor,
+                destination_alpha_blend_factor,
+                alpha_blend_operation,
+                write_mask,
+            }) => {
+                w.u32(1)
+                    .u32(pixel_format.as_raw())
+                    .flag(*blending_enabled)
+                    .u32(source_rgb_blend_factor.as_raw())
+                    .u32(destination_rgb_blend_factor.as_raw())
+                    .u32(rgb_blend_operation.as_raw())
+                    .u32(source_alpha_blend_factor.as_raw())
+                    .u32(destination_alpha_blend_factor.as_raw())
+                    .u32(alpha_blend_operation.as_raw())
+                    .u32(write_mask.as_raw());
+            }
+        }
+    }
+    // An absent format apart from every format, `Invalid` included.
+    let format = |f: &Option<crate::metal::PixelFormat>| f.map_or(u64::MAX, |f| f.as_raw().into());
+    w.u64(format(depth_format))
+        .u64(format(stencil_format))
+        .u32(*raster_sample_count)
+        .flag(*alpha_to_coverage)
+        .flag(*alpha_to_one)
+        .flag(*rasterization_enabled)
+        .u32(input_primitive_topology.as_raw())
+        .u32(*max_vertex_amplification_count);
+    match tessellation {
+        None => {
+            w.u32(0);
+        }
+        Some(TessellationDescriptor {
+            max_tessellation_factor,
+            partition_mode,
+            factor_format,
+            factor_step_function,
+            output_winding_order,
+            control_point_index_type,
+            factor_scale_enabled,
+        }) => {
+            w.u32(1)
+                .u32(*max_tessellation_factor)
+                .u32(partition_mode.as_raw())
+                .u32(factor_format.as_raw())
+                .u32(factor_step_function.as_raw())
+                .u32(output_winding_order.as_raw())
+                .u32(control_point_index_type.as_raw())
+                .flag(*factor_scale_enabled);
+        }
+    }
+    w.flag(*support_indirect_command_buffers)
+        .u32(*max_vertex_call_stack_depth)
+        .u32(*max_fragment_call_stack_depth)
+        .flag(*support_adding_vertex_binary_functions)
+        .flag(*support_adding_fragment_binary_functions);
+    for buffers in [vertex_buffers, fragment_buffers] {
+        w.count(buffers.len());
+        for (&index, mutability) in buffers {
+            w.u32(index).u32(mutability.as_raw());
+        }
+    }
+    // Metal's raw value of each mode.
+    let rounding = match texture_write_rounding_mode {
+        crate::metal::TextureWriteRoundingMode::TowardZero => 0,
+        crate::metal::TextureWriteRoundingMode::NearestEven => 2,
+    };
+    w.u32(rounding)
+        .u64(*sample_mask)
+        .u32(sample_coverage.to_bits())
+        .flag(*sample_coverage_invert)
+        .flag(*alpha_test_enabled)
+        .u64(*alpha_test_function)
+        .flag(*logic_operation_enabled)
+        .u64(*logic_operation)
+        .u32((*clip_distance_enable_mask).into())
+        .flag(*point_smooth_enabled)
+        .flag(*point_coord_lower_left)
+        .flag(*point_size_output_vs)
+        .flag(*two_side_enabled)
+        .u32(*vertex_depth_compare_clamp_mask)
+        .u32(*fragment_depth_compare_clamp_mask)
+        .flag(*depth_stencil_write_disabled)
+        .flag(*needs_custom_border_color_samplers)
+        .u64(*vertex_amplification_mode)
+        .u32(*explicit_visibility_group_id)
+        .flag(*open_gl_mode_enabled);
+    h.bytes(&w.0);
+    PipelineKey::new(h.finish())
+}
+
+/// Fixed-width little-endian words, gathered to be hashed as one field.
+struct Words(Vec<u8>);
+
+impl Words {
+    fn u32(&mut self, v: u32) -> &mut Self {
+        self.0.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    fn u64(&mut self, v: u64) -> &mut Self {
+        self.0.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+
+    fn flag(&mut self, v: bool) -> &mut Self {
+        self.u32(v.into())
+    }
+
+    /// A count, before the parts it counts.
+    fn count(&mut self, n: usize) -> &mut Self {
+        self.u64(n as u64)
+    }
 }

@@ -22,7 +22,7 @@ pub(crate) const KERNEL_ENTRIES: usize = 1024;
 /// (`Device::compute_pipeline_key`: the kernel's AIR and entry, its constant values, linked
 /// functions and dynamic libraries, its lowering inputs, the descriptor's fields that change the
 /// compile, the device's profile and the translator's semantics version; or
-/// `Device::render_descriptor_key`, every field of a render pipeline descriptor with its
+/// `Device::queried_render_descriptor_key`, every field of a render pipeline descriptor with its
 /// functions keyed as a kernel is; neither key decodes a function), and a compute descriptor's
 /// `requiredThreadsPerThreadgroup`, which the state answers as its `maxTotalThreadsPerThreadgroup`
 /// and the translator's key leaves out (`None` for a render pipeline).

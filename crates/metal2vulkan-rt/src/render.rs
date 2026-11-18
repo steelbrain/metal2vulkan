@@ -2,7 +2,7 @@
 //! modules, and its `VkPipeline`s, one for each topology class drawn.
 //!
 //! What a state compiles is its content, never the state: the translator's key of its descriptor
-//! (`Device::render_descriptor_key`: every field of the descriptor, each function by its AIR,
+//! (`Device::queried_render_descriptor_key`: every field of the descriptor, each function by its AIR,
 //! entry, constant values, linked functions and dynamic libraries, with the device's profile and
 //! the translator's semantics version), which reads no function, as a compute state's key reads
 //! none. Every state of one content shares one [`RenderCompiled`]: the translation, its shader
@@ -155,7 +155,7 @@ impl crate::Device {
         refuse(descriptor)?;
         let core = self.core();
         let key = KernelKey {
-            pipeline: core.translator.render_descriptor_key(descriptor),
+            pipeline: core.translator.queried_render_descriptor_key(descriptor),
             required: None,
         };
         let compiled = match core.kernels.find_render(&key) {

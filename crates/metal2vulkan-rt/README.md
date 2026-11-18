@@ -894,7 +894,7 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   compute state. A refusal of the translator is `Error::Translation`.
 - What a state compiles is its content, never the state: its descriptor, with its functions'
   constant values and linked functions, and every field (the translator's
-  `Device::render_descriptor_key`). Every state of one content shares one compiled content: its
+  `Device::queried_render_descriptor_key`). Every state of one content shares one compiled content: its
   translation, its shader modules and their `VkPipeline`s, and its precision notes. Render
   contents and compute kernels share the device's one map of the last 1,024 contents used, so a
   state of a content it holds costs the key, which reads no function, and a lookup.

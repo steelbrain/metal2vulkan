@@ -1243,6 +1243,288 @@ fn one_entry_set_specializes_a_sweeps_stages_once() {
     assert_eq!(apart, 16, "two stages specialized for each of the eight");
 }
 
+/// The old runtime's render descriptor key keeps its value: one known descriptor's key, pinned.
+/// The old runtime keeps answers under it in its cache directory, so a change of value is a
+/// change to the old runtime.
+#[test]
+fn the_old_render_descriptor_key_keeps_its_value() {
+    let Some(bc) = fixture("stage_io") else {
+        return;
+    };
+    let lib = Library::from_air(&bc).expect("library");
+    let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
+        lib.function("stage_io_vertex_position").expect("vertex"),
+    )));
+    d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+        lib.function("stage_io_fragment_primitive")
+            .expect("fragment"),
+    )));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
+        metal::PixelFormat::RGBA8Unorm,
+    ));
+    let key = device("moltenvk-m3").render_descriptor_key(&d);
+    let hex: String = key.digest().iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        hex, "9d941806be7907dabf5a876a17e746faa567bcb748bdd6cb14d624bde714ba27",
+        "the old runtime's key of the descriptor"
+    );
+}
+
+/// The key on `Device::from_queries`' path is the same for an equal descriptor and on another
+/// device of the same profile, and differs from the descriptor's where one field group of it
+/// changes: the stages, the vertex descriptor, a colour attachment's every field, the depth and
+/// stencil formats, the sample and rasterization state, the topology class and amplification,
+/// tessellation, indirect command buffers, the call-stack depths, binary functions, buffer
+/// mutability, the rounding mode, each private field group, and the profile; and the old
+/// runtime's key tells each change apart too.
+#[test]
+fn a_queried_render_descriptor_key_covers_each_field_group() {
+    let Some(bc) = fixture("stage_io") else {
+        return;
+    };
+    let lib = Library::from_air(&bc).expect("library");
+    let vertex = lib.function("stage_io_vertex_position").expect("vertex");
+    let fragment = lib
+        .function("stage_io_fragment_primitive")
+        .expect("fragment");
+    let dev = device("moltenvk-m3");
+    let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
+        vertex.clone(),
+    )));
+    d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+        fragment.clone(),
+    )));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
+        metal::PixelFormat::RGBA8Unorm,
+    ));
+    let key = dev.queried_render_descriptor_key(&d);
+    assert_eq!(dev.queried_render_descriptor_key(&d.clone()), key);
+    assert_eq!(device("moltenvk-m3").queried_render_descriptor_key(&d), key);
+    assert_ne!(
+        device("lunarg-desktop-baseline-2023").queried_render_descriptor_key(&d),
+        key,
+        "the profile"
+    );
+    assert_ne!(
+        dev.render_descriptor_key(&d),
+        key,
+        "the old runtime's values"
+    );
+    let with_layout = |e: &mut RenderPipelineDescriptor, stride| {
+        let mut v = VertexDescriptor::new();
+        v.layouts
+            .insert(0, VertexBufferLayoutDescriptor::new(stride));
+        v.attributes.insert(
+            0,
+            VertexAttributeDescriptor::new(metal::VertexFormat::Float4, 0, 0),
+        );
+        e.vertex_descriptor = Some(v);
+    };
+    let color = |e: &RenderPipelineDescriptor| e.color_attachments[0].expect("the attachment");
+    type Change<'a> = Box<dyn Fn(&mut RenderPipelineDescriptor) + 'a>;
+    let changes: Vec<(&str, Change<'_>)> = vec![
+        ("no fragment", Box::new(|e| e.fragment = None)),
+        (
+            "the fragment's function",
+            Box::new(|e| {
+                e.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+                    vertex.clone(),
+                )));
+            }),
+        ),
+        (
+            "constants",
+            Box::new(|e| {
+                if let StageSource::Function(f) = &mut e.vertex {
+                    f.constants = has_tint(true);
+                }
+            }),
+        ),
+        (
+            "a vertex descriptor",
+            Box::new(|e| with_layout(e, Some(16))),
+        ),
+        ("another stride", Box::new(|e| with_layout(e, Some(32)))),
+        ("the dynamic stride", Box::new(|e| with_layout(e, None))),
+        (
+            "a step function",
+            Box::new(|e| {
+                with_layout(e, Some(16));
+                if let Some(v) = &mut e.vertex_descriptor {
+                    if let Some(l) = v.layouts.get_mut(&0) {
+                        l.step_function = metal::VertexStepFunction::PerInstance;
+                    }
+                }
+            }),
+        ),
+        (
+            "an attribute's offset",
+            Box::new(|e| {
+                with_layout(e, Some(16));
+                if let Some(v) = &mut e.vertex_descriptor {
+                    if let Some(a) = v.attributes.get_mut(&0) {
+                        a.offset = 4;
+                    }
+                }
+            }),
+        ),
+        (
+            "a color format",
+            Box::new(|e| {
+                e.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
+                    metal::PixelFormat::BGRA8Unorm,
+                ));
+            }),
+        ),
+        (
+            "a second attachment",
+            Box::new(|e| {
+                e.color_attachments[1] = Some(color(e));
+            }),
+        ),
+        (
+            "blending",
+            Box::new(|e| {
+                let mut c = color(e);
+                c.blending_enabled = true;
+                e.color_attachments[0] = Some(c);
+            }),
+        ),
+        (
+            "a blend factor",
+            Box::new(|e| {
+                let mut c = color(e);
+                c.destination_alpha_blend_factor = metal::BlendFactor::One;
+                e.color_attachments[0] = Some(c);
+            }),
+        ),
+        (
+            "a blend operation",
+            Box::new(|e| {
+                let mut c = color(e);
+                c.alpha_blend_operation = metal::BlendOperation::Max;
+                e.color_attachments[0] = Some(c);
+            }),
+        ),
+        (
+            "a write mask",
+            Box::new(|e| {
+                let mut c = color(e);
+                c.write_mask = metal::ColorWriteMask::RED;
+                e.color_attachments[0] = Some(c);
+            }),
+        ),
+        (
+            "depth",
+            Box::new(|e| e.depth_format = Some(metal::PixelFormat::Depth32Float)),
+        ),
+        (
+            "stencil",
+            Box::new(|e| e.stencil_format = Some(metal::PixelFormat::Stencil8)),
+        ),
+        ("samples", Box::new(|e| e.raster_sample_count = 4)),
+        (
+            "alpha to coverage",
+            Box::new(|e| e.alpha_to_coverage = true),
+        ),
+        ("alpha to one", Box::new(|e| e.alpha_to_one = true)),
+        (
+            "rasterization",
+            Box::new(|e| e.rasterization_enabled = false),
+        ),
+        (
+            "the topology class",
+            Box::new(|e| e.input_primitive_topology = metal::PrimitiveTopologyClass::Line),
+        ),
+        (
+            "amplification",
+            Box::new(|e| e.max_vertex_amplification_count = 2),
+        ),
+        (
+            "tessellation",
+            Box::new(|e| e.tessellation = Some(TessellationDescriptor::default())),
+        ),
+        (
+            "indirect command buffers",
+            Box::new(|e| e.support_indirect_command_buffers = true),
+        ),
+        (
+            "a call-stack depth",
+            Box::new(|e| e.max_fragment_call_stack_depth = 2),
+        ),
+        (
+            "binary functions",
+            Box::new(|e| e.support_adding_vertex_binary_functions = true),
+        ),
+        (
+            "a buffer's mutability",
+            Box::new(|e| {
+                e.fragment_buffers.insert(0, metal::Mutability::Immutable);
+            }),
+        ),
+        (
+            "the rounding mode",
+            Box::new(|e| {
+                e.texture_write_rounding_mode = metal::TextureWriteRoundingMode::NearestEven
+            }),
+        ),
+        ("the sample mask", Box::new(|e| e.private.sample_mask = 1)),
+        (
+            "coverage 0.0",
+            Box::new(|e| e.private.sample_coverage = 0.0),
+        ),
+        (
+            "coverage -0.0",
+            Box::new(|e| e.private.sample_coverage = -0.0),
+        ),
+        (
+            "the alpha test",
+            Box::new(|e| e.private.alpha_test_function = 3),
+        ),
+        (
+            "the logic operation",
+            Box::new(|e| e.private.logic_operation = 5),
+        ),
+        (
+            "a clip distance",
+            Box::new(|e| e.private.clip_distance_enable_mask = 1),
+        ),
+        (
+            "a private flag",
+            Box::new(|e| e.private.two_side_enabled = true),
+        ),
+        (
+            "a clamp mask",
+            Box::new(|e| e.private.fragment_depth_compare_clamp_mask = 1),
+        ),
+        (
+            "the amplification mode",
+            Box::new(|e| e.private.vertex_amplification_mode = 1),
+        ),
+        (
+            "a visibility group",
+            Box::new(|e| e.private.explicit_visibility_group_id = 0),
+        ),
+        (
+            "OpenGL mode",
+            Box::new(|e| e.private.open_gl_mode_enabled = true),
+        ),
+    ];
+    let mut seen = vec![key];
+    for (what, change) in &changes {
+        let mut e = d.clone();
+        change(&mut e);
+        let k = dev.queried_render_descriptor_key(&e);
+        assert!(!seen.contains(&k), "{what} changes the key");
+        assert_ne!(
+            dev.render_descriptor_key(&e),
+            dev.render_descriptor_key(&d),
+            "{what}: the old key tells it apart too"
+        );
+        seen.push(k);
+    }
+}
+
 /// A render descriptor's key is the same for an equal descriptor and on another device of the
 /// same profile, and differs where a field, a stage, a private field, or the profile does: a
 /// consumer keeping answers under it never takes another descriptor's.
