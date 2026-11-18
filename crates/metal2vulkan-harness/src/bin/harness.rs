@@ -31,7 +31,7 @@
 //! themselves. The command exits 0 when every workload matched or was refused, 1 when one did
 //! not match or failed, and 2 when it could not start.
 
-use metal2vulkan_harness::authored::{Create, Makes};
+use metal2vulkan_harness::authored::{Create, Makes, FIRST_THREADGROUP};
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
     commit_to_complete, count_instructions, matrix_time, percentile, run_each, steady,
@@ -464,11 +464,16 @@ fn gauges(gauges: &[(u32, Vec<(&'static str, u64)>)]) -> String {
     }
 }
 
+/// A threadgroup size as `64x1x1`.
+fn size([width, height, depth]: [u32; 3]) -> String {
+    format!("{width}x{height}x{depth}")
+}
+
 /// `report`'s row, and its matrix lines.
 fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &str) {
     let us = |p| percentile(&report.create_us, p).map_or("-".to_owned(), |us| format!("{us:.1}"));
     println!(
-        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}{}{}",
+        "{:<17} {runtime:<8} {:>10} {:>11} {:>11} {:>11} {:>11} {:>11}  {}{}{}{}",
         create.name,
         match create.makes {
             Makes::Buffers { length } | Makes::PrivateBuffers { length } => length.to_string(),
@@ -490,7 +495,8 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
                 format!("; first {us:.1} us, its creation alone; store {store}")
             }
             (Some(us), Some(create), _, _) => format!(
-                "; first {us:.1} us with one dispatch, its creation {create:.1} us; store {store}"
+                "; first {us:.1} us with one dispatch of {}, its creation {create:.1} us; store {store}",
+                size(FIRST_THREADGROUP)
             ),
             (None, Some(first), Some(again), _) => {
                 format!("; first take {first:.1} us, the next {again:.1} us")
@@ -500,6 +506,9 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
         report
             .device_first_us
             .map_or(String::new(), |us| format!("; its warm-up {us:.1} us")),
+        report.one_thread_first_us.map_or(String::new(), |us| format!(
+            "; another content's first with one dispatch of 1x1x1 {us:.1} us"
+        )),
     );
     if let Some(waits) = report.first_allocations {
         println!(
@@ -543,6 +552,12 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
     {
         println!(
             "M2V-MATRIX time harness-{runtime}/{}/first_call {call:.3}",
+            create.name
+        );
+    }
+    if let Some(us) = report.one_thread_first_us {
+        println!(
+            "M2V-MATRIX time harness-{runtime}/{}/first_one_thread {us:.3}",
             create.name
         );
     }

@@ -198,10 +198,15 @@ pub enum Makes {
     /// Compute pipeline states of one content: `function` of the authored library with the
     /// `float` function constants `constants` (index, value), values no other workload gives it,
     /// so the first creation is of a content the device has not seen and each later one of a
-    /// content it has. [`STATE_CREATIONS`] are timed, whatever `--runs` says.
+    /// content it has. The first's dispatch is one threadgroup of [`FIRST_THREADGROUP`]. Beside
+    /// it, shown and never judged, the first of another content, `function` with `one_thread`'s
+    /// constants, dispatched as one thread
+    /// ([`CreateReport::one_thread_first_us`](crate::run::CreateReport::one_thread_first_us)).
+    /// [`STATE_CREATIONS`] are timed, whatever `--runs` says.
     States {
         function: &'static str,
         constants: &'static [(u32, f32)],
+        one_thread: &'static [(u32, f32)],
     },
     /// Render pipeline states of one content: the vertex function `vertex` and the fragment
     /// function `fragment` of the render library ([`render_library_air`]), drawing into one colour
@@ -226,6 +231,12 @@ pub const WARM_KERNEL: &str = "lcg_step";
 /// ([`CreateReport::device_first_us`](crate::run::CreateReport::device_first_us)), with the row's
 /// vertex function and attachment: another of the render library's.
 pub const WARM_FRAGMENT: &str = "sampled_fragment";
+
+/// The threadgroup of a compute pipeline state row's first dispatch: 64 by 1 by 1, the commonest
+/// threadgroup size of the replay streams' compute dispatches (24% of them: 42% of those recorded
+/// on a unified-memory device, 7% of those on a discrete one, where 128 by 1 by 1 leads with 39%).
+/// A runtime that compiles its pipeline for the dispatch's size compiles it at this one.
+pub const FIRST_THREADGROUP: [u32; 3] = [64, 1, 1];
 
 /// The timed creations of a pipeline-state workload.
 pub const STATE_CREATIONS: u32 = 1000;
@@ -253,6 +264,7 @@ pub const CREATES: [Create; 6] = [
         makes: Makes::States {
             function: "signed_zero_products",
             constants: &[(0, 2.0), (1, -2.0)],
+            one_thread: &[(0, 3.0), (1, -3.0)],
         },
     },
     Create {

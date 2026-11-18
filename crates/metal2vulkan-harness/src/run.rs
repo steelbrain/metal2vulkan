@@ -1,6 +1,6 @@
 //! A plan on a device: its objects made, its first run checked, the runs after it timed.
 
-use crate::authored::{Makes, STATE_CREATIONS, WARM_FRAGMENT, WARM_KERNEL};
+use crate::authored::{Makes, FIRST_THREADGROUP, STATE_CREATIONS, WARM_FRAGMENT, WARM_KERNEL};
 use crate::plan::{
     Binding, Blit, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
     TextureSource,
@@ -520,10 +520,10 @@ pub struct CreateReport {
     pub create_us: Vec<f64>,
     /// The first creation's wall time, in microseconds, where it is timed apart: a pipeline
     /// state's of a content the device had not seen. A compute pipeline state's holds one
-    /// dispatch of it through to completion, since a runtime may pay its pipeline's compile in the
-    /// creation or at the first dispatch and the sum holds both, and the creation of the 16-byte
-    /// buffer the dispatch writes, the guest's take of memory beside it; a render pipeline state's
-    /// is its creation alone.
+    /// dispatch of it through to completion, one threadgroup of [`FIRST_THREADGROUP`], since a
+    /// runtime may pay its pipeline's compile in the creation or at the first dispatch and the sum
+    /// holds both, and the creation of the buffer the dispatch writes (16 bytes a thread), the
+    /// guest's take of memory beside it; a render pipeline state's is its creation alone.
     pub first_us: Option<f64>,
     /// The warm-up ahead of the first creation, in microseconds: an object of the row's kind made
     /// and used as the first is, and kept until the first is done, so that the first is a fresh
@@ -536,6 +536,11 @@ pub struct CreateReport {
     /// [`first_us`](Self::first_us) the creation call paid, all of it for a render pipeline
     /// state; for a buffer, the device's first take of memory for a buffer of its length.
     pub first_create_us: Option<f64>,
+    /// For a compute pipeline state, the first of another content the device has not seen,
+    /// timed as [`first_us`](Self::first_us) is but with its dispatch one thread, after the
+    /// first, in microseconds: shown beside the first, whose dispatch is a threadgroup of
+    /// [`FIRST_THREADGROUP`].
+    pub one_thread_first_us: Option<f64>,
     /// For a buffer, the wall time of the creation after the first's release, in microseconds,
     /// which a runtime may serve from the memory that buffer gave back.
     pub again_us: Option<f64>,
@@ -1224,7 +1229,8 @@ impl<D: ComputeDevice> Session for Harness<D> {
             Makes::States {
                 function,
                 constants,
-            } => self.create_states(function, constants, runs),
+                one_thread,
+            } => self.create_states(function, constants, one_thread, runs),
             Makes::RenderStates {
                 vertex,
                 fragment,
@@ -1345,48 +1351,50 @@ impl<D: ComputeDevice> Harness<D> {
 
     /// [`Session::create`] of pipeline states of `function` with the `float` constants
     /// `constants`: each made, timed, and released. The first, of a content the device has not
-    /// seen, is timed with one dispatch of it through to completion, its output checked; the
-    /// warm-up ahead of it is a state of [`WARM_KERNEL`] made and dispatched the same way, kept
-    /// until the first is done ([`CreateReport::device_first_us`]).
+    /// seen, is timed with one dispatch of it through to completion, one threadgroup of
+    /// [`FIRST_THREADGROUP`], its output checked; the warm-up ahead of it is a state of
+    /// [`WARM_KERNEL`] made and dispatched as one thread, kept until the first is done
+    /// ([`CreateReport::device_first_us`]). After it, the first of another content, `function`
+    /// with the constants `one_thread`, dispatched as one thread
+    /// ([`CreateReport::one_thread_first_us`]).
     fn create_states(
         &self,
         function: &str,
         constants: &[(u32, f32)],
+        one_thread: &[(u32, f32)],
         runs: Runs,
     ) -> Result<CreateReport> {
-        let values: Vec<Constant> = (constants.iter())
-            .map(|&(index, value)| Constant {
-                index,
-                // `MTLDataTypeFloat`.
-                data_type: 3,
-                value: value.to_le_bytes().to_vec(),
-            })
-            .collect();
-        let function = self.authored.new_function(function, &values)?;
+        let of = |constants: &[(u32, f32)]| {
+            let values: Vec<Constant> = (constants.iter())
+                .map(|&(index, value)| Constant {
+                    index,
+                    // `MTLDataTypeFloat`.
+                    data_type: 3,
+                    value: value.to_le_bytes().to_vec(),
+                })
+                .collect();
+            self.authored.new_function(function, &values)
+        };
+        let (main, other) = (of(constants)?, of(one_thread)?);
         let warm = self.authored.new_function(WARM_KERNEL, &[])?;
         // Word 0 stepped once from zero with an increment of 1.
-        let (_, device_first, warm) = self.first_state(&warm, [1, 0, 0, 0])?;
-        // Thread 0's start (0, -0, 0.5, -0.25), one round: the FMA step plus the products'
-        // difference, a * positive - a * negative, of the start.
-        let factor = |index| {
-            (constants.iter())
-                .find(|&&(at, _)| at == index)
-                .map_or(0.0, |&(_, value)| value)
-        };
-        let want = [0.0f32, -0.0, 0.5, -0.25].map(|a| {
-            (a.mul_add(0.96875, 0.03125) + (0.0 + a * factor(0) - a * factor(1))).to_bits()
-        });
+        let (_, device_first, warm) = self.first_state(&warm, [1, 1, 1], |_| [1, 0, 0, 0])?;
         let before = self.device.allocations();
-        let (first_create, first, _) = self.first_state(&function, want)?;
+        let (first_create, first, _) = self.first_state(&main, FIRST_THREADGROUP, |thread| {
+            products(constants, thread)
+        })?;
         let allocations = since(before, self.device.allocations());
         drop(warm);
+        let (_, one_thread_first, _) =
+            self.first_state(&other, [1, 1, 1], |thread| products(one_thread, thread))?;
         let mut report = self.time_states(
-            || self.device.new_compute_pipeline_state(&function, &[]),
+            || self.device.new_compute_pipeline_state(&main, &[]),
             first,
             runs,
         )?;
         report.device_first_us = Some(device_first);
         report.first_create_us = Some(first_create);
+        report.one_thread_first_us = Some(one_thread_first);
         report.first_allocations = allocations;
         Ok(report)
     }
@@ -1421,17 +1429,23 @@ impl<D: ComputeDevice> Harness<D> {
         Ok(report)
     }
 
-    /// A first state of `function`, a kernel that writes up to 16 bytes at buffer 0 and reads a
-    /// `uint` at buffer 1, made, then dispatched once, one thread with 1 at buffer 1, through to
-    /// completion: the creation's wall time and the whole's, in microseconds, and the state. The
-    /// 16 bytes are checked against `want`, four little-endian words.
+    /// A first state of `function`, a kernel whose thread at grid position `i` writes up to 16
+    /// bytes at byte `16 * i` of buffer 0 and reads a `uint` at buffer 1, made, then dispatched
+    /// once, one threadgroup of `size` (one row: `size[1]` and `size[2]` are 1) with 1 at buffer
+    /// 1, through to completion: the creation's wall time and the whole's, in microseconds, and
+    /// the state. Each thread's 16 bytes are checked against `want` of its index, four
+    /// little-endian words.
     fn first_state(
         &self,
         function: &D::Function,
-        want: [u32; 4],
+        size: [u32; 3],
+        want: impl Fn(u32) -> [u32; 4],
     ) -> Result<(f64, f64, D::ComputePipelineState)> {
+        let threads = size[0];
         let started = Instant::now();
-        let destination = self.device.new_buffer(16, Storage::Shared)?;
+        let destination = self
+            .device
+            .new_buffer(16 * u64::from(threads), Storage::Shared)?;
         let creating = Instant::now();
         let state = self.device.new_compute_pipeline_state(function, &[])?;
         let made = creating.elapsed();
@@ -1440,7 +1454,7 @@ impl<D: ComputeDevice> Harness<D> {
         encoder.set_compute_pipeline_state(&state)?;
         encoder.set_buffer(&destination, 0, 0)?;
         encoder.set_bytes(&1u32.to_le_bytes(), 1)?;
-        encoder.dispatch_threadgroups([1, 1, 1], [1, 1, 1])?;
+        encoder.dispatch_threadgroups([1, 1, 1], size)?;
         encoder.end_encoding()?;
         command_buffer.commit()?;
         command_buffer.wait_until_completed()?;
@@ -1448,19 +1462,43 @@ impl<D: ComputeDevice> Harness<D> {
         let contents = destination
             .contents()
             .ok_or("the first state's destination has no contents")?;
-        let mut got = [0u32; 4];
-        for (at, value) in got.iter_mut().enumerate() {
-            // SAFETY: the buffer holds 16 bytes and its command buffer has completed.
-            let bytes = unsafe { contents.as_ptr().add(4 * at).cast::<[u8; 4]>().read() };
-            *value = u32::from_le_bytes(bytes);
-        }
-        if got != want {
-            return Err(
-                format!("the first state's dispatch wrote {got:#x?}, not {want:#x?}").into(),
-            );
+        for thread in 0..threads {
+            let mut got = [0u32; 4];
+            for (at, value) in got.iter_mut().enumerate() {
+                let byte = 16 * thread as usize + 4 * at;
+                // SAFETY: the buffer holds 16 bytes a thread and its command buffer has completed.
+                let bytes = unsafe { contents.as_ptr().add(byte).cast::<[u8; 4]>().read() };
+                *value = u32::from_le_bytes(bytes);
+            }
+            let want = want(thread);
+            if got != want {
+                return Err(format!(
+                    "the first state's dispatch wrote {got:#x?} at thread {thread}, not {want:#x?}"
+                )
+                .into());
+            }
         }
         Ok((made.as_secs_f64() * 1e6, whole.as_secs_f64() * 1e6, state))
     }
+}
+
+/// What `signed_zero_products` with the `float` constants `constants` writes for thread
+/// `thread`, one round: its start (`thread & 63`, `-((thread >> 6) & 63)`, 0.5, -0.25) after the
+/// FMA step, plus the products' difference of the start, `a * positive - a * negative`, as four
+/// little-endian words.
+fn products(constants: &[(u32, f32)], thread: u32) -> [u32; 4] {
+    let factor = |index| {
+        (constants.iter())
+            .find(|&&(at, _)| at == index)
+            .map_or(0.0, |&(_, value)| value)
+    };
+    let start = [
+        (thread & 63) as f32,
+        -(((thread >> 6) & 63) as f32),
+        0.5,
+        -0.25,
+    ];
+    start.map(|a| (a.mul_add(0.96875, 0.03125) + (0.0 + a * factor(0) - a * factor(1))).to_bits())
 }
 
 /// The allocations between two reads of [`Device::allocations`]: their count and time, and

@@ -611,11 +611,14 @@ HARNESS_FIRST = "harness-first/"
 #: runtime does). A creation row's first sample is a fresh object's on a device that has made one of
 #: its kind: the harness makes a warm-up of the row's kind first. The first samples SHOWN_FIRST
 #: names are shown with the ratio of their medians, and never judged, each for its reason: the
-#: creation call alone (`/first_call`), and the warm-up (`/device_first`), which holds what the
-#: device pays once, which a guest that keeps its device pays once in its life.
+#: creation call alone (`/first_call`), the warm-up (`/device_first`), which holds what the
+#: device pays once, which a guest that keeps its device pays once in its life, and a compute
+#: state's first dispatched as one thread (`/first_one_thread`), beside the judged first, whose
+#: dispatch is a threadgroup of the replay streams' commonest size.
 SHOWN_FIRST = {
     "/first_call": "the creation call alone, which old returns from before it makes its pipeline",
     "/device_first": "the warm-up, the first object of its kind on the device",
+    "/first_one_thread": "a first dispatched as one thread, a size of few dispatches",
 }
 #: The sed program the first creation process's output goes through: its devices' gauges at drop
 #: become `harness-<runtime>/creates/device/...`, apart from the other rows' process's, so each

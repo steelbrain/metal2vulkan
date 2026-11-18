@@ -39,9 +39,11 @@
 //! (`create_private_16MiB`: the runtime's zeroing of the buffer lands in that time, wherever it
 //! does it); and compute pipeline states of
 //! one content (`create_state`), the first of a content the device has not seen timed apart
-//! with one dispatch of it through to completion (`first`: a runtime may compile its pipeline in
-//! the creation or at the first dispatch, and the sum holds both; the row also shows the creation
-//! alone), then 1,000 of a content it has, each made and released in turn; and render pipeline
+//! with one dispatch of it through to completion, one threadgroup of
+//! [`authored::FIRST_THREADGROUP`] (`first`: a runtime may compile its pipeline in the creation
+//! or at the first dispatch, and the sum holds both; the row also shows the creation alone, and
+//! another content's first dispatched as one thread), then 1,000 of a content it has, each made
+//! and released in turn; and render pipeline
 //! states of one content the same way, the first's creation alone (`create_render_state`: a
 //! vertex and a fragment function of the public fixture `examples/runtime_examples.ll`, into one
 //! `BGRA8Unorm` attachment). Each row's first is a fresh object's on a device that has gone that

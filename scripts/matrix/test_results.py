@@ -495,6 +495,21 @@ class HarnessBudgetTests(unittest.TestCase):
                 "harness budget create_private_16MiB/first_take: median of 5 processes, new 3003.0 us over "
                 "old 1003.0 us is 2.994, past 1.03"], []))
 
+    def test_a_first_at_one_thread_is_kept_from_every_process_shown_and_never_judged(self):
+        row = "create_state/first_one_thread"
+        keep = results.FIRST_KEEP.replace("$runtime", "new").replace("$n", "2")
+        run = subprocess.run(["sed", "-n", keep], input=f"M2V-MATRIX time harness-new/{row} 3000.000\n",
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(run.stdout.splitlines(), [f"M2V-MATRIX time {results.HARNESS_FIRST}{row}/2/new 3000.000"])
+        times = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 3000.0}
+        for n in range(2, results.FIRST_RUNS + 1):
+            times[f"{results.HARNESS_FIRST}{row}/{n}/old"] = 1000.0 + n
+            times[f"{results.HARNESS_FIRST}{row}/{n}/new"] = 3000.0 + n
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(self.budget("a", times), ([], [
+                f"harness budget {row}: median of 5 processes, new 3003.0 us over old 1003.0 us is 2.994: "
+                "shown, not judged: a first dispatched as one thread, a size of few dispatches"]))
+
     def test_the_creation_processes_record_each_key_once_beside_the_other_rows(self):
         others = ["M2V-MATRIX time harness-new/alu 10.000", "M2V-MATRIX gauge harness-new/device/blocks@drop 0"]
         creates = ["M2V-MATRIX time harness-new/create_64MiB 700.000",

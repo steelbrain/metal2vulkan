@@ -52,6 +52,8 @@ fn every_workload(session: &mut dyn Session) {
                 let timed = authored::STATE_CREATIONS as usize;
                 assert_eq!(report.create_us.len(), timed, "{name}");
                 assert!(report.first_us.is_some(), "{name}");
+                let compute = matches!(create.makes, authored::Makes::States { .. });
+                assert_eq!(report.one_thread_first_us.is_some(), compute, "{name}");
                 // The first state's timed work holds its VkPipeline's compile on either runtime:
                 // in the creation, or at its one dispatch. (The warm-up's kernel is one the
                 // authored workloads made already here.)

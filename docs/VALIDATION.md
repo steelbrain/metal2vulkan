@@ -390,8 +390,8 @@ Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run 
 on a fresh empty cache directory and store, so no row before them moves their times: a
 creation's first sample on the new runtime is cold, and the old runtime's follows it on the same
 cache. The first process's records are kept whole, its devices' gauges at drop as `harness-<runtime>/creates/device/...`; of each later process, only the
-creation rows' first samples (`<row>/first`, `/first_call`, `/first_take`, `/next_take`,
-`/first_allocation_total`, `/device_first`, one sample per process), as
+creation rows' first samples (`<row>/first`, `/first_call`, `/first_one_thread`, `/first_take`,
+`/next_take`, `/first_allocation_total`, `/device_first`, one sample per process), as
 `harness-first/<row>/<n>/<runtime>`,
 parked for the `time` rule.
 
@@ -440,9 +440,12 @@ within that is named on the leg's line. A fix lowers its row's ceiling to the ra
 and a row within 1.03 leaves the list. A creation row's first sample is judged by the ratio of
 the medians of its five processes, the new runtime's over the old's; a first sample alone is
 never past its limit. A compute pipeline state row's `/first` is its creation and one dispatch
-through to completion, since Metal compiles at the creation and a runtime may compile at the
-first dispatch instead, as the old runtime does; its `/first_call`, the creation call alone, is
-shown beside it with the ratio of its medians and never judged. Each creation row's first sample
+through to completion, one threadgroup of 64 by 1 by 1, the replay streams' commonest compute
+dispatch size (24% of their dispatches), since Metal compiles at the creation and a runtime may
+compile at the first dispatch instead, for the dispatch's size, as the old runtime does; its
+`/first_call`, the creation call alone, is shown beside it with the ratio of its medians and
+never judged, and so is `/first_one_thread`, another content's first dispatched as one thread,
+a size of few dispatches (under 4% of them). Each creation row's first sample
 is a fresh object's on a device that has gone that way once: the harness makes a warm-up of the
 row's kind first (a buffer of the same length, kept; a compute state of another kernel, with its
 dispatch; a render state of another fragment function), so what a device pays once, which a guest
