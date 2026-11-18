@@ -87,16 +87,13 @@ impl RtSide<'_> {
     }
 
     /// `newTextureWithDescriptor:` of a render target: Shared or Private, multisampled or of the
-    /// shape the spec states, at a texture index where a shader reaches it.
+    /// shape the spec states, at a texture index where a shader reaches it. A target over a buffer
+    /// is the buffer's `newTextureWithDescriptor:offset:bytesPerRow:` of one level of 2D, whose
+    /// storage is the buffer's, as the old runtime's side makes it.
     pub(super) fn make_target(&mut self, spec: &TargetSpec) -> Answer<Handle> {
         if spec.surface.is_some() {
             return Err(Failure::unavailable(
                 "newTextureWithDescriptor:iosurface:plane:",
-            ));
-        }
-        if spec.over_buffer.is_some() {
-            return Err(Failure::unavailable(
-                "newTextureWithDescriptor:offset:bytesPerRow:",
             ));
         }
         let mut descriptor = rt::TextureDescriptor::new(
@@ -113,6 +110,16 @@ impl RtSide<'_> {
             usage |= rt::TextureUsage::SHADER_WRITE;
         }
         descriptor.usage = usage;
+        if let Some(over) = &spec.over_buffer {
+            if let Some(why) = over.unsafe_stride() {
+                return Err(Failure::named("WouldEndMetalsProcess", why));
+            }
+            let index = self.on.texture_index(usage);
+            let buffer = self.held(over.buffer)?;
+            let texture = (buffer.new_texture(&descriptor, index, over.offset, over.bytes_per_row))
+                .map_err(of_rt)?;
+            return Ok(keep(&mut self.textures, texture));
+        }
         descriptor.storage_mode = match spec.shared {
             true => rt::StorageMode::Shared,
             false => rt::StorageMode::Private,
