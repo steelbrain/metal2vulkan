@@ -703,42 +703,6 @@ fn access_chains_derive_pointers_and_check_indices() {
     assert_eq!(ty(f, r), want);
 }
 
-#[test]
-fn workgroup_blocks_yield_laid_out_member_pointers() {
-    let mut b = ModuleBuilder::new();
-    let t = tys(&mut b);
-    let n = uconst(&mut b, 8);
-    let arr = b
-        .ty(Type::Array {
-            elem: t.u32_,
-            len: n,
-            stride: Some(4),
-        })
-        .expect("strided array");
-    let layout = natural_layout(b.types(), LayoutRule::Std430, true, &[arr]).expect("layout");
-    let block = b
-        .ty(Type::Struct {
-            members: [arr].into(),
-            layout: Some(layout),
-        })
-        .expect("block");
-    let g = b
-        .plain_global(StorageClass::Workgroup, block, None)
-        .expect("workgroup block");
-    let base = b.global_value(g).expect("pointer");
-    let mut f = b.function(t.void).expect("function");
-    let zero = cval(&mut f, t.u32_, 0);
-    let r = f.access_chain(base, &[zero]).expect("member");
-    let want = mty(
-        &mut f,
-        Type::Pointer {
-            class: StorageClass::Workgroup,
-            pointee: arr,
-        },
-    );
-    assert_eq!(ty(&f, r), want);
-}
-
 /// The instruction defining `v` in the function under construction.
 fn def_of(f: &FunctionBuilder<'_>, v: Value) -> Inst {
     f.mb()

@@ -443,19 +443,20 @@ fn pointer_classes_admit_only_their_layouts() {
     assert!(!ok(&mut t, StorageClass::Uniform, rblock));
     assert!(!ok(&mut t, StorageClass::PushConstant, rblock));
     assert!(ok(&mut t, StorageClass::PhysicalStorageBuffer, laid));
-    // A laid-out member of a `Workgroup` block is addressable (access chains), but a `Workgroup`
-    // variable itself must be a `Block` when laid out.
-    assert!(ok(&mut t, StorageClass::Workgroup, laid));
-    assert!(ok(&mut t, StorageClass::Workgroup, block));
+    // `Workgroup` memory is implicitly laid out: no explicitly laid-out pointee or variable there,
+    // `Block` or not.
+    assert!(ok(&mut t, StorageClass::Workgroup, implicit));
+    assert!(!ok(&mut t, StorageClass::Workgroup, laid));
+    assert!(!ok(&mut t, StorageClass::Workgroup, block));
     assert!(!ok(&mut t, StorageClass::Workgroup, rblock));
-    assert_eq!(
-        t.b.plain_global(StorageClass::Workgroup, laid, None),
-        Err(BuildError::Type(TypeRule::PointeeForClass(
-            StorageClass::Workgroup
-        )))
-    );
-    t.b.plain_global(StorageClass::Workgroup, block, None)
-        .expect("workgroup block");
+    for laid_out in [laid, block] {
+        assert_eq!(
+            t.b.plain_global(StorageClass::Workgroup, laid_out, None),
+            Err(BuildError::Type(TypeRule::PointeeForClass(
+                StorageClass::Workgroup
+            )))
+        );
+    }
     assert!(!ok(&mut t, StorageClass::UniformConstant, f));
     assert!(ok(&mut t, StorageClass::Image, f));
     assert!(!ok(&mut t, StorageClass::Image, implicit));
