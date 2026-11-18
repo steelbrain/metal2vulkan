@@ -560,7 +560,9 @@ counted from 0), completes the work committed so far, reports as at the stream's
   result: `report.txt` says so on a `skipped` line. It places buffers of their own, and the GPU
   copies of two-copy Managed buffers, in the runtime's blocks of 16 MiB of either class (a longer
   one in a block of its own), a range freed for reuse once every command buffer committed before
-  its release completed, gives
+  its release completed, zeroes a block or heap of the stream once at its making (as the live
+  system zeroes a heap's memory once: a buffer placed there reads zero where nothing wrote it,
+  though the runtime may take a released block's bytes again), gives
   the runtime back a block or heap of the stream at its release (`release_block`), and gives
   textures and sampler states indices from the whole of each index class (section 5): its
   `indices named N: ...` line counts the objects placed at the index the stream named, those

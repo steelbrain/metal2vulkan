@@ -647,6 +647,21 @@ impl NewRuntime {
             .collect()
     }
 
+    /// Zeroes bytes `[from, len)` of `block`, a block or heap of the stream just made: the live
+    /// system zeroes a heap's memory once at its making, so a buffer placed in it reads zero where
+    /// nothing wrote it, while a block the runtime takes again holds a released one's bytes.
+    /// `from` is the extent the runtime zeroed itself. Each piece is a buffer zeroed from its start
+    /// and dropped at once: its zeroing stays (`rt::Device::new_buffer`).
+    fn zero_block(&self, block: &rt::Block, from: u64, len: u64) -> Result<(), rt::Error> {
+        let mut at = from;
+        while at < len {
+            let piece = (len - at).min(rt::MAX_BUFFER_LENGTH);
+            drop(self.device.new_buffer(block.id, at, piece, Some(0))?);
+            at += piece;
+        }
+        Ok(())
+    }
+
     /// The commits that have completed, every earlier one with them.
     fn completed(&mut self) -> u64 {
         while let Some((at, front)) = self.in_flight.front() {
@@ -1118,6 +1133,8 @@ impl NewRuntime {
                     .device
                     .take_block(class, length)
                     .map_err(failed(call))?;
+                // The runtime zeroes none of a block's bytes yet.
+                self.zero_block(&block, 0, length).map_err(failed(call))?;
                 self.block_bytes[class_index(class)] += length;
                 let made = Made {
                     address: Some(block.gpu_address),

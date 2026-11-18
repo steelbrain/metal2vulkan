@@ -22,6 +22,9 @@
 //!   descriptor names, inside a reservation of every storage-capable index (as a program that
 //!   reserves Metal's texture IDs 1 to 16,320 for its own textures makes them): made and released
 //!   past the class's 4,095 indices, each takes its own.
+//! - A buffer placed in a block of the stream that the runtime may take from a released block's
+//!   bytes reads zero where nothing wrote it: the player zeroes each block and heap of the stream
+//!   once at its making, as the live system does.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -590,4 +593,45 @@ fn a_sampler_state_takes_the_index_of_the_id_the_program_saw() {
     let (report, _, indices) = played("recorded", &path, &[2, 3]);
     assert_eq!(indices, [7, 1]);
     assert!(report.ids.is_empty(), "{:?}", report.ids);
+}
+
+#[test]
+fn a_buffer_placed_in_a_block_taken_again_reads_zero() {
+    let dir = ScratchDir::new("rt-replay-zero-once").unwrap();
+    let length = 64 * 1024;
+    let piece = 4096u64;
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let block = [Value::Uint(length), Value::Uint(0)];
+        let placed = "m2v.newBufferInBlock:offset:length:options:";
+        // A Shared block, a buffer in it written whole, both released.
+        w.call("m2v.newBlockWithLength:storageMode:", 1, 2, &block, &[])?;
+        let at = |block| {
+            [
+                Value::Object(block),
+                Value::Uint(0),
+                Value::Uint(piece),
+                Value::Uint(0),
+            ]
+        };
+        w.call(placed, 2, 3, &at(2), &[])?;
+        let bytes = Value::Bytes(vec![0xab; piece as usize]);
+        w.call("m2v.write", 3, 0, &[Value::Uint(0), bytes], &[])?;
+        w.call("release", 3, 0, &[], &[])?;
+        w.call("release", 2, 0, &[], &[])?;
+        // A block of the same length, which the runtime may take from the same bytes, and a
+        // buffer in it that nothing writes.
+        w.call("m2v.newBlockWithLength:storageMode:", 1, 4, &block, &[])?;
+        w.call(placed, 4, 5, &at(4), &[])?;
+        let zeros = vec![0u8; piece as usize];
+        let sum = Value::List(vec![Value::Bytes(Sha256::digest(&zeros).to_vec())]);
+        w.call("m2v.check", 0, 0, &[Value::Object(5)], &[("sha256", sum)])
+    });
+    let (report, _) = play("zero-once", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let zeroed = report.total.executed["bytes_zeroed"];
+    assert!(
+        zeroed >= 2 * length,
+        "each block zeroed at its making: {zeroed}"
+    );
 }
