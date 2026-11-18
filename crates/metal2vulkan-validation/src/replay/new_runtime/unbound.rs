@@ -37,14 +37,21 @@ struct Read {
     index: u32,
 }
 
+/// An open encoder's pipeline state and the buffer indices bound on it.
+#[derive(Default)]
+struct Encoder {
+    state: Option<u64>,
+    bound: BTreeSet<(Stage, u32)>,
+}
+
 #[derive(Default)]
 pub(in crate::replay) struct Unbound {
     /// Each pipeline state's used buffer arguments.
     reads: HashMap<u64, BTreeSet<(Stage, u32)>>,
     /// The pipeline states the translator gave no reflection of, which nothing is counted for.
     unreflected: u64,
-    /// Each encoder's pipeline state and bound buffer indices.
-    encoders: HashMap<u64, (Option<u64>, BTreeSet<(Stage, u32)>)>,
+    /// The open encoders.
+    encoders: HashMap<u64, Encoder>,
     /// The draws and dispatches that read a buffer argument unbound, and the states they ran.
     count: u64,
     states: BTreeSet<u64>,
@@ -118,7 +125,7 @@ impl Unbound {
         };
         match selector {
             "setComputePipelineState:" | "setRenderPipelineState:" => {
-                encoder.0 = match call.args.first() {
+                encoder.state = match call.args.first() {
                     Some(Value::Object(state)) if *state != 0 => Some(*state),
                     _ => None,
                 };
@@ -127,14 +134,14 @@ impl Unbound {
             | "setVertexBuffer:offset:atIndex:"
             | "setFragmentBuffer:offset:atIndex:" => {
                 if let Some(at) = uint(2) {
-                    set(&mut encoder.1, call.args.first(), at);
+                    set(&mut encoder.bound, call.args.first(), at);
                 }
             }
             "setBytes:length:atIndex:"
             | "setVertexBytes:length:atIndex:"
             | "setFragmentBytes:length:atIndex:" => {
                 if let Some(at) = uint(2) {
-                    set(&mut encoder.1, None, at);
+                    set(&mut encoder.bound, None, at);
                 }
             }
             "setBuffers:offsets:withRange:"
@@ -149,17 +156,17 @@ impl Unbound {
                     return;
                 };
                 for (at, buffer) in span.zip(buffers) {
-                    set(&mut encoder.1, Some(buffer), at);
+                    set(&mut encoder.bound, Some(buffer), at);
                 }
             }
             s if s.starts_with("draw") || s.starts_with("dispatch") => {
-                let Some(state) = encoder.0 else {
+                let Some(state) = encoder.state else {
                     return;
                 };
                 let Some(reads) = self.reads.get(&state) else {
                     return;
                 };
-                let Some(&(stage, index)) = reads.difference(&encoder.1).next() else {
+                let Some(&(stage, index)) = reads.difference(&encoder.bound).next() else {
                     return;
                 };
                 self.count += 1;
