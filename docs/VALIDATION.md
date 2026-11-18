@@ -305,7 +305,7 @@ holds them, then times each GPU in a job of its own.
 
 | Leg | Runs | Built |
 |---|---|---|
-| Each GPU of a Linux node | `metal2vulkan-rt`'s tests under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`harness --runtime <runtime>`, `crates/metal2vulkan-harness`), each runtime its own suite, `harness-<runtime>` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
+| Each GPU of a Linux node | `metal2vulkan-rt`'s tests under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`crates/metal2vulkan-harness`), both runtimes in one process (`harness --runtime new,old`), the leg's suite `harness` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
 | The Windows host's GPU | The same tests (under the validation layer) and harness, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
 | `lavapipe` | The gate's suites and the device tests (`metal2vulkan-rt`'s under the validation layer) in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
 | `lint` | The gate's `cargo fmt --all --check`, clippy with `-D warnings` plain, under `--cfg m2v_gpu` and under `--cfg m2v_cpu_icd`, and Rustdoc with `-D warnings`, each its own suite | In place, on the builder, beside its other jobs |
@@ -357,18 +357,24 @@ runtime.
 
 The harness's first-use records (`harness-new/<set>/first_use_*`: how many of the new runtime's
 first pipeline uses waited, and for how long) depend on the driver's shader cache, which outlives a
-run. So each runtime's harness run has a fresh empty cache directory (`MESA_SHADER_CACHE_DIR` for
+run. The two runtimes' rows are timed in one process, `harness --runtime new,old`: each workload
+runs on the new runtime, then on the old, so their passes alternate on the GPU, the node and the
+driver as they are at that moment, and a clock or a co-runner that moves one moves the other
+alike. The new runtime runs first in each workload, so its first uses compile before the old
+runtime's of the same workload, as cold as in a process of its own. The process has a fresh empty
+cache directory (`MESA_SHADER_CACHE_DIR` for
 Mesa, `__GL_SHADER_DISK_CACHE_PATH` for NVIDIA; on the Windows host, `LOCALAPPDATA` and
 `USERPROFILE` point into it, which the Intel driver's cache follows), and a fresh empty store for
-the runtime's own pipelines (the harness's `--store`: the old runtime's shader cache, the new
+each runtime's own pipelines (the harness's `--store`: the old runtime's shader cache, the new
 runtime's cache directory), so its first uses and its `create_state` row are cold on both
 runtimes: those records are judged. A short second run on the same directory and store follows
 (`--runs 5 --warmup 1 --no-settle`), and its first-use records are kept as
 `harness-new-warm/<set>/first_use_*`, the same first uses with both warm; they are parked.
 
 Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run alone after them,
-`--only 'create_*'`, in five processes per runtime, each with a fresh empty cache directory and
-store, so no row before them moves their times. The first process's records are kept whole, its
+`--only 'create_*'`, in five processes per runtime, the runtimes' alternating, each with a fresh
+empty cache directory and store, so no row before them moves their times. Each runtime's first
+process's records are kept whole, its
 device's gauges at drop as `harness-<runtime>/creates/device/...`; of each later process, only the
 creation rows' first samples (`<row>/first`, `/first_call`, `/first_take`, `/next_take`,
 `/first_allocation_total`, `/device_first`, one sample per process), as
@@ -425,7 +431,7 @@ dispatch; a render state of another fragment function), so what a device pays on
 that keeps its device pays once in its life, stays out of the judged sample. The warm-up's own
 time, `/device_first`, is shown the same way and never judged. A row whose time
 either runtime recorded more than once fails, uncompared. A row whose size follows the device
-(`long_4cb`) is sized by the first runtime's run, and the later runs, warm and re-timed ones
+(`long_4cb`) is sized by the first runtime's pass, and the later runs, warm and re-timed ones
 included, are given that size (the harness's `--size`); each run records it as
 `size harness-<runtime>/<row>`, and a row the two runtimes ran at different sizes fails,
 uncompared, its times measuring different work.

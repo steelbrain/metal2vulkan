@@ -62,10 +62,12 @@ NOTES = "refs/notes/matrix"
 LAYER = STATE / "validation-layer"
 ARCHIVE = "m2v-matrix-gpu.tar.zst"
 HARNESS = "m2v-matrix-harness"
-#: The runtimes the harness command times (`harness --runtime NAME`), each its own suite of the leg,
-#: `harness-NAME`, so that a failure names its runtime.
-HARNESS_RUNTIMES = ("old", "new")
-HARNESS_SUITES = tuple(f"harness-{runtime}" for runtime in HARNESS_RUNTIMES)
+#: The runtimes the harness command times, in one process (`harness --runtime new,old`), in the
+#: order each workload runs on them: the new runtime first, so its first uses compile on the
+#: driver cache as it was before the workload (harness_runs). The process is the leg's one suite,
+#: HARNESS_SUITE; a failure names its runtime (`M2V-FAILED harness-<runtime>/<row>`).
+HARNESS_RUNTIMES = ("new", "old")
+HARNESS_SUITE = "harness"
 #: The runtimes whose first-use waits the harness also times warm (harness_runs): those that
 #: count first-use waits. The old runtime counts none.
 HARNESS_WARM = ("new",)
@@ -276,9 +278,9 @@ echo "M2V-BUILD exit $a $h"
 
 def gpu_script(short, setup, legs, mirror, rev, suite, last, layer=None):
     """A node's legs in turn, running SUITE: `rt` (the device tests, under the validation layer
-    LAYER carries, layer_lines) or `harness` (the timed workloads, one run per runtime, without
-    it). The node's LAST job removes the tree and its carry's mirror there (no other job reads
-    it; potluck never prunes one), and any left by a job that never ran."""
+    LAYER carries, layer_lines) or `harness` (the timed workloads, both runtimes in one process,
+    harness_runs, without it). The node's LAST job removes the tree and its carry's mirror there
+    (no other job reads it; potluck never prunes one), and any left by a job that never ran."""
     runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(results.card_of(leg.id) + "!" if leg.select else "")])
                      for leg in legs)
     if suite == "rt":
@@ -315,28 +317,33 @@ exit $all
 
 
 def harness_runs(manifest_dir, command, leg, windows=False):
-    """The harness command once per runtime (HARNESS_RUNTIMES), each run its own suite of leg LEG
-    (HARNESS_SUITES); the shell's status is 1 where one failed. Each runtime's run has a fresh
-    empty driver shader cache (Mesa's MESA_SHADER_CACHE_DIR, NVIDIA's
-    __GL_SHADER_DISK_CACHE_PATH; on WINDOWS, the Intel driver's, which follows LOCALAPPDATA and
-    USERPROFILE), so its first uses compile cold whatever ran on the node before.
-    For HARNESS_WARM, a short second run on the same cache follows, before the suite's line, and
-    its first-use records are kept under harness-<runtime>-warm/: the same first uses with the
-    driver's cache warm. These runs skip the creation rows (results.HARNESS_CREATES): those run
-    alone after them, in results.FIRST_RUNS processes per runtime, each with a fresh empty driver
-    cache and store, so no row before them moves their times. The first process's output is kept
-    whole, its device's gauges apart (results.CREATES_APART); of each later one's, only the first
+    """The harness command on leg LEG, its one suite (HARNESS_SUITE); the shell's status is 1
+    where it failed. The two runtimes' rows are timed in one process, `--runtime` naming
+    HARNESS_RUNTIMES in order: each workload runs on each runtime in turn, so the runtimes'
+    passes alternate on the GPU, the node and the driver as they are at that moment, and a clock
+    or a co-runner that moves one moves the other alike. The process has a fresh empty driver
+    shader cache (Mesa's MESA_SHADER_CACHE_DIR, NVIDIA's __GL_SHADER_DISK_CACHE_PATH; on WINDOWS,
+    the Intel driver's, which follows LOCALAPPDATA and USERPROFILE), so its first uses compile
+    cold whatever ran on the node before; the new runtime runs first in each workload, so its
+    first uses, the judged ones, compile before the old runtime's of the same workload, as cold
+    as in a process of its own. For HARNESS_WARM, a short second run on the same cache follows,
+    before the suite's line, and its first-use records are kept under harness-<runtime>-warm/: the
+    same first uses with the driver's cache warm. These runs skip the creation rows
+    (results.HARNESS_CREATES): those run alone after them, in results.FIRST_RUNS processes per
+    runtime, the runtimes' processes alternating, each with a fresh empty driver cache and store,
+    so no row before them moves their times. Each runtime's first process's output is kept whole,
+    its device's gauges apart (results.CREATES_APART); of each later one's, only the first
     samples (results.FIRST_KEEP), which results.harness_budget judges by the median of the
-    processes. After the last runtime's runs, before its suite's line, the rows over their
-    limits (results.RETIME_SELECT, at most results.RETIME_ROWS, the furthest over first) are each
-    re-timed alone in results.RETIME_PAIRS pairs, old then new, then new then old, their
-    times and GPU times kept (results.RETIME_KEEP) for results.harness_budget. A row whose size
-    follows the device is sized by the first runtime's run, and every later run, warm and re-timed
-    ones included, is given that size (`--size`), so each runtime times the same work. Each
-    runtime's main run also has a fresh empty store for its pipelines (`--store`), so its first
-    uses and its `create_state` row are cold for both runtimes; its warm run takes the same store,
+    processes. Then the rows over their limits (results.RETIME_SELECT, at most
+    results.RETIME_ROWS, the furthest over first) are each re-timed alone in results.RETIME_PAIRS
+    pairs, old then new, then new then old, their times and GPU times kept (results.RETIME_KEEP)
+    for results.harness_budget. A row whose size follows the device is sized by the first
+    runtime's pass, which the process gives the other, and every later run, warm and re-timed ones
+    included, is given that size (`--size`), so each runtime times the same work. The process has
+    a fresh empty store for its pipelines (`--store`, each runtime's apart in it), so its first
+    uses and its `create_state` row are cold for both runtimes; the warm run takes the same store,
     warm; a re-timed row's runs each take a fresh store of the harness's own."""
-    warm = " ".join(HARNESS_WARM)
+    runtimes = ",".join(HARNESS_RUNTIMES)
     profile = unprofile = ""
     store = '"$(cygpath -w "$store")"' if windows else '"$store"'
     point = ""
@@ -344,66 +351,58 @@ def harness_runs(manifest_dir, command, leg, windows=False):
         point = r"""      mkdir -p "$cache/AppData/Local" && w=$(cygpath -w "$cache") || exit 3
       export LOCALAPPDATA="$w\AppData\Local" USERPROFILE="$w"
 """
-        profile = "      saved_local=$LOCALAPPDATA saved_profile=$USERPROFILE\n" + point
-        unprofile = '\n      export LOCALAPPDATA="$saved_local" USERPROFILE="$saved_profile"'
+        profile = "    saved_local=$LOCALAPPDATA saved_profile=$USERPROFILE\n" + point
+        unprofile = '\n    export LOCALAPPDATA="$saved_local" USERPROFILE="$saved_profile"'
     creates = f"'{results.HARNESS_CREATES}*'"
     rename = r"s#^M2V-MATRIX \([a-z]*\) harness-$runtime/\([a-z]*\)/first_use_#M2V-MATRIX \1 harness-$runtime-warm/\2/first_use_#p"
-    outputs = " ".join(f'"$out/{runtime}"' for runtime in HARNESS_RUNTIMES)
-    limits = "\n".join(f"        {leg_id}|{leg_id}@*) limits='{results.harness_limits(leg_id)}' "
+    limits = "\n".join(f"      {leg_id}|{leg_id}@*) limits='{results.harness_limits(leg_id)}' "
                         f"gpulimits='{results.harness_limits(leg_id, gpu=True)}' ;;"
                         for leg_id in sorted(set(results.HARNESS_CEILINGS) | set(results.HARNESS_FLOORS)
                                              | set(results.HARNESS_GPU_FLOORS)))
     sized = r"s#^\([a-z0-9_]*\)  *[a-z]*  *sized to \([0-9][0-9]*\) .*#--size \1=\2#p"
-    return f"""rc=0
-    out=$(mktemp -d) || exit 3
-    sizes=
-    for runtime in {" ".join(HARNESS_RUNTIMES)}; do
-      cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
-      export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
-{profile}      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --skip {creates} --store {store} 2>&1 | tee "$out/$runtime"
-      r=${{PIPESTATUS[0]}}
-      [ -n "$sizes" ] || sizes=$(sed -n "{sized}" "$out/$runtime" | tr '\\n' ' ')
-      case " {warm} " in
-        *" $runtime "*)
-          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --skip {creates} --store {store} --runs 5 --warmup 1 --no-settle 2>&1 |
-            sed -n "{rename}" ;;
-      esac
-      for n in $(seq {results.FIRST_RUNS}); do
+    return f"""out=$(mktemp -d) || exit 3
+    cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
+    export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
+{profile}    CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime {runtimes} --skip {creates} --store {store} 2>&1 | tee "$out/timed"
+    r=${{PIPESTATUS[0]}}
+    sizes=$(sed -n "{sized}" "$out/timed" | sort -u | tr '\\n' ' ')
+    for runtime in {" ".join(HARNESS_WARM)}; do
+      CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime $sizes --skip {creates} --store {store} --runs 5 --warmup 1 --no-settle 2>&1 |
+        sed -n "{rename}"
+    done
+    for n in $(seq {results.FIRST_RUNS}); do
+      for runtime in {" ".join(HARNESS_RUNTIMES)}; do
         rm -rf "$cache" "$store"
         cache=$(mktemp -d) && store=$(mktemp -d) || exit 3
         export MESA_SHADER_CACHE_DIR="$cache" __GL_SHADER_DISK_CACHE_PATH="$cache"
 {point}        if [ $n -eq 1 ]; then
           CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
-            sed "{results.CREATES_APART}" | tee -a "$out/$runtime"
+            sed "{results.CREATES_APART}" | tee -a "$out/timed"
         else
           CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $runtime --only {creates} --store {store} 2>&1 |
             sed -n "{results.FIRST_KEEP}"
         fi
         [ ${{PIPESTATUS[0]}} -eq 0 ] || r=1
       done
-      if [ "$runtime" = {HARNESS_RUNTIMES[-1]} ]; then
-        case "{leg}" in
-{limits}
-          *) limits= gpulimits= ;;
-        esac
-        select='{results.RETIME_SELECT}'
-        rows=$(awk -v limits="$limits" -v gpulimits="$gpulimits" -v wallre='{results.WALL_RE}' -v budget={results.HARNESS_BUDGET!r} "$select" {outputs} | sort -rn | head -n {results.RETIME_ROWS} | cut -d' ' -f2)
-        for row in $rows; do
-          for pair in $(seq {results.RETIME_PAIRS}); do
-            case $pair in 2) order="new old" ;; *) order="old new" ;; esac
-            for timed in $order; do
-              CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "$row" 2>&1 | sed -n "{results.RETIME_KEEP}"
-            done
-          done
-        done
-      fi
-      unset MESA_SHADER_CACHE_DIR __GL_SHADER_DISK_CACHE_PATH{unprofile}
-      rm -rf "$cache" "$store"
-      echo "M2V-SUITE {leg} harness-$runtime exit $r"
-      [ $r -eq 0 ] || rc=1
     done
-    rm -rf "$out"
-    exit $rc"""
+    case "{leg}" in
+{limits}
+      *) limits= gpulimits= ;;
+    esac
+    select='{results.RETIME_SELECT}'
+    rows=$(awk -v limits="$limits" -v gpulimits="$gpulimits" -v wallre='{results.WALL_RE}' -v budget={results.HARNESS_BUDGET!r} "$select" "$out/timed" | sort -rn | head -n {results.RETIME_ROWS} | cut -d' ' -f2)
+    for row in $rows; do
+      for pair in $(seq {results.RETIME_PAIRS}); do
+        case $pair in 2) order="new old" ;; *) order="old new" ;; esac
+        for timed in $order; do
+          CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "$row" 2>&1 | sed -n "{results.RETIME_KEEP}"
+        done
+      done
+    done
+    unset MESA_SHADER_CACHE_DIR __GL_SHADER_DISK_CACHE_PATH{unprofile}
+    rm -rf "$cache" "$store" "$out"
+    echo "M2V-SUITE {leg} {HARNESS_SUITE} exit $r"
+    exit $r"""
 
 
 def lavapipe_script(setup, layer=None):
@@ -709,9 +708,8 @@ class Run:
                 continue
             leg.parsed["device"].update(parsed[leg.id]["device"])
             leg.parsed["suites"].update(parsed[leg.id]["suites"])
-            missing = [name for name in HARNESS_SUITES if name not in parsed[leg.id]["suites"]]
-            if suite == "harness" and missing:
-                self.fail([leg], f"harness: job {rec and rec.get('id')} reported no suite {', '.join(missing)} "
+            if suite == "harness" and HARNESS_SUITE not in parsed[leg.id]["suites"]:
+                self.fail([leg], f"harness: job {rec and rec.get('id')} reported no suite {HARNESS_SUITE} "
                                  f"of leg {leg.id} (exit {code})")
 
     def windows(self, leg):

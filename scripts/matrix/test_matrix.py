@@ -139,5 +139,53 @@ class LayerTests(unittest.TestCase):
                 self.assertIn("/.no-validation-layer", out)
 
 
+#: A stand-in for the harness command: it logs its `--runtime` and `--only`, and prints a time
+#: per runtime it names, a row of the creation workloads under `--only`, else a timed row and a
+#: first-use record.
+FAKE_HARNESS = r"""#!/bin/bash
+runtimes= only=
+while [ $# -gt 0 ]; do
+  case $1 in --runtime) runtimes=$2; shift ;; --only) only=$2; shift ;; esac
+  shift
+done
+echo "$runtimes ${only:-all}" >> "$LOG"
+for runtime in ${runtimes//,/ }; do
+  case $only in
+    create_*) echo "M2V-MATRIX time harness-$runtime/create_state/first 1000.000" ;;
+    '') echo "M2V-MATRIX time harness-$runtime/alu 10.000"
+        echo "M2V-MATRIX time harness-$runtime/authored/first_use_wait_total 5.000" ;;
+  esac
+done
+"""
+
+
+class HarnessRunTests(unittest.TestCase):
+    def test_both_runtimes_are_timed_in_one_process_and_their_creation_processes_alternate(self):
+        with tempfile.TemporaryDirectory() as work:
+            fake, log = Path(work) / "harness", Path(work) / "log"
+            fake.write_text(FAKE_HARNESS)
+            fake.chmod(0o755)
+            script = matrix.harness_runs(f'"{work}"', f'"{fake}"', "a")
+            run = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                 env={"PATH": "/usr/bin:/bin", "LOG": str(log), "TMPDIR": work})
+            self.assertEqual(run.returncode, 0, run.stderr)
+            calls = log.read_text().splitlines()
+        # One process times both runtimes, the new runtime's pass first in each workload; the warm
+        # run is the new runtime's; the creation processes alternate, one runtime each.
+        self.assertEqual(calls, ["new,old all", "new all"] + ["new create_*", "old create_*"] * 5)
+        legs = matrix.results.parse_job("M2V-LEG a begin\n" + run.stdout)
+        suites = legs["a"]["suites"]
+        self.assertEqual(list(suites), [matrix.HARNESS_SUITE])
+        times = suites[matrix.HARNESS_SUITE]["records"]["time"]
+        self.assertEqual(sorted(key for key in times if not key.startswith(matrix.results.HARNESS_FIRST)), [
+            "harness-new-warm/authored/first_use_wait_total", "harness-new/alu",
+            "harness-new/authored/first_use_wait_total", "harness-new/create_state/first",
+            "harness-old/alu", "harness-old/authored/first_use_wait_total", "harness-old/create_state/first"])
+        self.assertEqual(sorted(key for key in times if key.startswith(matrix.results.HARNESS_FIRST)),
+                         [f"{matrix.results.HARNESS_FIRST}create_state/first/{n}/{runtime}"
+                          for n in range(2, 6) for runtime in ("new", "old")])
+        self.assertEqual(suites[matrix.HARNESS_SUITE]["duplicated"], set())
+
+
 if __name__ == "__main__":
     unittest.main()
