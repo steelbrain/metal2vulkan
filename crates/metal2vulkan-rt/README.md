@@ -28,9 +28,10 @@ device against the floor below.
   floor's first. The consumer names an extension's dependencies too. It names the core Vulkan
   features its own work needs as `ConsumerFeature`s (`SamplerYcbcrConversion` for now): the device
   enables each one it reports, once, and `Device::features` lists those enabled. It names the
-  directory the device keeps its compiled kernels in, `pipeline_cache_dir`, and the most bytes
-  they take, `pipeline_cache_cap` (see "The cache directory"). With `None`, every boot lowers every
-  kernel and compiles every pipeline cold, so a consumer should pass a directory.
+  directory the device keeps its lowered functions and its pipeline cache in,
+  `pipeline_cache_dir`, and the most bytes the lowerings take, `pipeline_cache_cap` (see "The
+  cache directory"). With `None`, every boot lowers every function and compiles every pipeline
+  cold, so a consumer should pass a directory.
 - `Device::raw` gives the instance, physical device, device and queue family handles, and
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock.
   The runtime keeps owning every handle.
@@ -42,9 +43,9 @@ The runtime runs four threads per device: the block-maker, the submit thread, th
 thread, and the reaper, which frees the semaphores and command pools the others give up, one at a
 time, so no driver free runs on the completion thread and a submission waits behind at most one,
 lowers the compute pipeline states' emulated-SIMD-group variants after their creation returned,
-and writes each new `VkPipeline`'s data to the cache directory. While an old generation of the
-cache directory is removed, a thread of the store's own does it, and ends with the removal; no
-teardown waits for it.
+and makes the device's pipeline cache when it starts and writes it to the cache directory once
+pipeline creation is quiet. While an old generation of the cache directory is removed, a thread of
+the store's own does it, and ends with the removal; no teardown waits for it.
 A device is torn down when its last handle, and the last handle of every object made from
 it, is dropped; a committed command buffer and the blocks the consumer holds do not keep it alive.
 Teardown stops the submit thread, which submits what is ready and ends what it holds with
@@ -927,9 +928,17 @@ that touch blocks first.
 
 ### The cache directory
 
-`DeviceOptions::pipeline_cache_dir` names a directory, made where it is missing, that the device
-keeps two kinds of file in, for compute and render pipeline states:
+Every `VkPipeline` of a device, compute or render, is made through one `VkPipelineCache` of the
+device's, internally synchronized, which threads that create at once share.
+`DeviceOptions::pipeline_cache_dir` names a directory, made where it is missing, that keeps it and
+the lowerings from one device to the next:
 
+- `pipelines-<header>`: the pipeline cache's blob, its data as `vkGetPipelineCacheData` gave it
+  after a magic, its length and its checksum, named by the hex of the first 16 bytes of the
+  pipeline cache header the device's driver writes (everything in it but the
+  `pipelineCacheUUID`, so a driver update replaces the blob rather than leaving it beside a new
+  one). One per kind of device: devices of one kind, in one process or several, start from it,
+  and each replaces it.
 - `translations/`: each function's lowering, a kernel's or a render pipeline's vertex or fragment
   function's, named by its `FunctionCompileKey`, which covers everything that changes the
   lowering: the function's AIR, entry, constants and linked functions, its lowering inputs (a
@@ -937,63 +946,76 @@ keeps two kinds of file in, for compute and render pipeline states:
   fingerprint and the translator's semantics version. A state whose lowering is there reads it in
   place of lowering (`Metrics::translations_loaded`, beside `Metrics::translations`); a kernel
   variant the translator refused is kept too.
-- `pipelines/<pipelineCacheUUID>/`: one file per `VkPipeline`, named by a SHA-256 over everything
-  its creation takes (each module's SPIR-V and entry point, its stage's flags and required
-  subgroup size, its specialization and the runtime's pipeline layout; for a render pipeline also
-  its fixed-function state, its attachments' formats and its topology class). A `VkPipeline` is
-  made through a `VkPipelineCache` of its own, started from its file where there is one. The
-  reaper then reads the cache's data and writes it as the file, unless the data is no longer than
-  the file's (the pipeline came from it), and destroys the cache, so a pipeline's creation writes
-  nothing on the calling thread. At most 64 caches wait for the reaper; past that a pipeline's data is not
-  written, and its next creation is a miss.
 
-Both kinds live in two generations, `g<N>/` (young) and `g<N-1>/` (old), each holding at most half
-of `DeviceOptions::pipeline_cache_cap` (128 MiB where it is `None`: half of it is about four times
-the 15.4 MB a long recorded session's pipelines and lowerings fill). A lookup tries young, then
+**The pipeline cache.** The reaper makes the cache first when it starts, from the blob where there
+is one, so the read and the driver's parse run off the thread that made the device; a creation that
+comes before the cache is made waits for it. A blob that does not check, whose data does not begin
+with the device's pipeline cache header (whole, the `pipelineCacheUUID` a new driver version changes
+included), or that the driver refuses, is removed, and the cache starts empty. Once pipeline
+creation has been quiet for 20 ms (no creation running and none ending) after a creation, the reaper
+reads the cache's size (`vkGetPipelineCacheData` with no buffer), and where it grew by more than an
+eighth since the last write, writes the cache's data over the blob: a temporary file renamed over
+it, never appended to. So it writes at most once a quiet period, a run that makes no new pipeline
+writes nothing, and a device's writes over its life come to a few times the blob's final size. The
+device's drop writes it once more where the size changed at all. A crash between writes loses only
+the pipelines made since the last; no creation waits for a size query or a write.
+
+The cache holds at most 32 MiB when the reaper looks (about five times the 6.25 MB of pipeline data
+a long recorded session made): one past it is replaced by a fresh, empty cache that creations take
+from then on, and is destroyed once no creation holds it. The next write replaces the blob with
+the fresh cache's data, so the blob holds at most 32 MiB too, with no second file and no
+generations. `Gauges::pipeline_cache_bytes` is the cache's size at the reaper's last look, and is
+zero once the device is torn down. With no directory the cache is the same, made empty, and
+nothing is written.
+
+**The lowerings** live in two generations, `g<N>/` (young) and `g<N-1>/` (old), each holding at
+most half of `DeviceOptions::pipeline_cache_cap` (128 MiB where it is `None`: half of it is about
+seven times the 9.16 MB a long recorded session's 282 lowerings fill). A lookup tries young, then
 old, and a hit in old moves the file into young by a rename. A new file goes into young. The write
 that takes young past half the cap starts the next generation: young becomes old, and the old one
 is removed whole, by a thread the store starts for it. So a file stays for at least half the cap,
 and at most the whole cap, of files written or moved after its last use. Half the cap is what the
-store is sure to keep: a set of pipelines used over and over that is larger than half the cap is
-partly removed at each new generation and compiled again. On disk the store takes at most the
-cap, and while a removal runs, also what is left of the generation it removes. A file larger than
-half the cap is not kept. `Metrics::cache_bytes_written` counts the bytes the device wrote there.
+store is sure to keep: a set of functions used over and over that is larger than half the cap is
+partly removed at each new generation and lowered again. On disk the lowerings take at most the
+cap, and while a removal runs, also what is left of the generation it removes; the blobs are
+beside them. A file larger than half the cap is not kept. `Metrics::cache_bytes_written` counts
+the bytes the device wrote there, lowerings and blobs.
 
 The bytes young holds are counted in `state`, a file of 24 bytes beside the generations, read and
 written under its lock, so devices open on one directory, in one process or several, share its
 files and one count; they should pass one cap, since each starts a generation at half its own.
-Opening the directory reads `state` and checks for a generation a removal left unfinished,
-which it then removes; it lists no directory and keeps nothing per file in memory.
+Opening the directory reads `state` and checks for a generation a removal left unfinished, and for
+the `pipelines/` directories under young and old in which an earlier version kept one file of
+pipeline data per `VkPipeline`, which the store's thread then removes; it lists no directory and
+keeps nothing per file in memory.
 
 The costs do not grow with the number of files. Measured with 100,000 and 1,000,000 files of 100
 bytes (release build, btrfs on Linux / NTFS on Windows): opening the directory 10-11 µs / 106-129
-µs, with no resident growth on Linux; a hit in young 2 µs / 53-58 µs; a miss 4-5 µs / 33-37 µs; a
-hit in old, which renames the file into young, 15-21 µs / 244-249 µs; a write 15-17 µs / 253-330
-µs. The store's own thread removes a dead generation of 49,800 / 499,800 files in 0.42 / 4.6 s on
-btrfs and 4.0 / 43 s on NTFS.
+µs, with no resident growth on Linux; a hit in young 1.8-2.0 µs / 49-50 µs; a miss 3.6-4.4 µs /
+30-35 µs; a hit in old, which renames the file into young, 15-21 µs / 244-249 µs; a write 15-17
+µs / 253-330 µs. The store's own thread removes a dead generation of 49,800 / 499,800 files in
+0.42 / 4.6 s on btrfs and 4.0 / 43 s on NTFS.
 
 Each write is a temporary file renamed over its name, and each file checks itself (the
-translator's self-checking encoding, the pipeline data's checksum), so a file cut short, by a
-crash or a power loss, is a miss and is removed: nothing unchecked reaches the driver. A failed
-read or write, a full disk included, is a miss too, and never fails a call; in a directory the
-device can read and not write, its hits stay where they are and it writes nothing. A `state` that
-is missing or does not check is rebuilt from the generations' names, with young counted full.
-With no directory, nothing is kept on disk, and each `VkPipeline` is made without a
-`VkPipelineCache`.
+translator's self-checking encoding, the blob's checksum), so a file cut short, by a crash or a
+power loss, is a miss and is removed: nothing unchecked reaches the driver. A failed read or
+write, a full disk included, is a miss too, and never fails a call; in a directory the device can
+read and not write, its hits stay where they are and it writes nothing. A `state` that is missing
+or does not check is rebuilt from the generations' names, with young counted full.
 
 ### Known gaps of pipeline states
 
 - No translation or `VkPipeline` compile runs ahead of the call or the dispatch that needs it, but
   the emulated-SIMD-group variant's lowering on the reaper: a state reads only its lowerings from
   the cache directory, and each `VkPipeline` past the first tile is made at its first dispatch,
-  from its file where there is one.
+  through the device's pipeline cache.
 - An image-only kernel's first dispatch over a grid more than one deep at a tile no state of its
   content has run makes that tile's `VkPipeline` on the calling thread, which waits for it
-  (`Metrics::first_use_waits`), from its file in the cache directory where there is one. In each of
-  the two recorded streams measured, on a device that holds 1,024 threads along `z`, that made 50
-  pipelines, all in one frame: the frame where the stream's image-only dispatches over such grids
-  start (frame 224 of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row,
-  so a device that holds 64 makes the same 50.
+  (`Metrics::first_use_waits`), through the device's pipeline cache. In each of the two recorded
+  streams measured, on a device that holds 1,024 threads along `z`, that made 50 pipelines, all in
+  one frame: the frame where the stream's image-only dispatches over such grids start (frame 224
+  of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row, so a device
+  that holds 64 makes the same 50.
 - A kernel that observes its threadgroup partition is lowered twice at creation (its variant and
   its plain module). For the observing kernel the device tests run, a grid template over
   threadgroup memory, the second lowering took 0.61 to 0.63 ms and the whole creation 2.7 to
@@ -1141,9 +1163,8 @@ With no directory, nothing is kept on disk, and each `VkPipeline` is made withou
     attributes or layouts than `maxVertexInputAttributes` or `maxVertexInputBindings`
     (`VertexInputLayout`, with the limit where one is passed);
   - the per-patch and per-patch-control-point steps, with tessellation (`Tessellation`).
-- The triangle class's `VkPipeline` is made with the state, through its file in the cache
-  directory where there is one; the line class's is made by the content's first draw of lines,
-  which waits for it (`Metrics::first_use_waits`). Of the two replay streams' 537 render contents
+- The triangle class's `VkPipeline` is made with the state, through the device's pipeline
+  cache; the line class's is made by the content's first draw of lines, which waits for it (`Metrics::first_use_waits`). Of the two replay streams' 537 render contents
   drawn, 527 draw only triangles and 2 lines and triangles; a content drawn only as lines (8 of
   them) makes a triangle `VkPipeline` it never uses.
 

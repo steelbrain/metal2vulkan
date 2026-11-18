@@ -1079,12 +1079,11 @@ mod on_device {
         all
     }
 
-    /// The pipelines' files among `files`.
-    fn pipeline_files(files: &[(String, u64, SystemTime)]) -> usize {
-        files
-            .iter()
-            .filter(|(file, ..)| file.contains("/pipelines/"))
-            .count()
+    /// The pipeline cache blobs among `files`.
+    fn blobs(files: &[(String, u64, SystemTime)]) -> Vec<&(String, u64, SystemTime)> {
+        (files.iter())
+            .filter(|(file, ..)| file.starts_with("pipelines-"))
+            .collect()
     }
 
     /// A device on `dir`.
@@ -1098,9 +1097,10 @@ mod on_device {
 
     /// A device on a cache directory a device before it used lowers nothing at creation: the
     /// tiling kernel's lowering and the observing kernel's two are read from the directory, and
-    /// the tile's `VkPipeline` is made from its file. The first device's writes
-    /// (`Metrics::cache_bytes_written`) are the files' bytes, one file for each `VkPipeline` it
-    /// made; the second writes nothing and leaves every file as it was.
+    /// the tile's `VkPipeline` is made through a pipeline cache started from the device's blob.
+    /// The first device's writes (`Metrics::cache_bytes_written`) are at least the files' bytes,
+    /// the blob among them (written once creation was quiet, and again at the drop where the
+    /// cache grew since); the second writes nothing and leaves every file as it was.
     #[test]
     fn every_device_takes_the_kernels_a_device_before_it_lowered_from_the_cache_directory() {
         let (Some(tiled), Some(observing)) = (
@@ -1136,13 +1136,11 @@ mod on_device {
                 let files = files(&dir);
                 if round == 0 {
                     let bytes: u64 = files.iter().map(|&(_, len, _)| len).sum();
-                    assert_eq!(written, bytes, "{name}: the bytes written are the files'");
-                    let made = counters.metrics().pipelines_created;
-                    assert_eq!(
-                        pipeline_files(&files) as u64,
-                        made,
-                        "{name}: a file a pipeline"
+                    assert!(
+                        written >= bytes,
+                        "{name}: {written} written, {bytes} in files"
                     );
+                    assert_eq!(blobs(&files).len(), 1, "{name}: the device's blob");
                     first = files;
                 } else {
                     assert_eq!(written, 0, "{name}: the second device writes nothing");
@@ -1150,10 +1148,7 @@ mod on_device {
                 }
             }
             let _ = std::fs::remove_dir_all(&dir);
-            println!(
-                "{name}: 3 lowerings and {} pipeline file(s) written, none by a second device",
-                pipeline_files(&first)
-            );
+            println!("{name}: 3 lowerings and the blob written, nothing by a second device");
         }
     }
 
@@ -1163,8 +1158,8 @@ mod on_device {
     const SECOND: &str = "tests::translate::on_device::second_process_on_a_cache_directory";
 
     /// A second process on a cache directory: its device takes the kernel the first process's
-    /// device left there and writes none of its files again; the kernel of its own adds its
-    /// lowering and one file for its one `VkPipeline`.
+    /// device left there and writes none of its lowerings again; the kernel of its own adds its
+    /// lowering, and its `VkPipeline`'s data grows the blob, which the second process replaces.
     #[test]
     fn every_device_shares_the_cache_directory_with_a_second_process() {
         let Some(tiled) = descriptor("a1_bool_from_float") else {
@@ -1192,7 +1187,10 @@ mod on_device {
             assert!(status.success(), "{name}: the second process");
             let after = files(&dir);
             let _ = std::fs::remove_dir_all(&dir);
-            for file in &before {
+            let (blob, blob_after) = (blobs(&before), blobs(&after));
+            assert_eq!((blob.len(), blob_after.len()), (1, 1), "{name}: one blob");
+            assert!(blob_after[0].1 > blob[0].1, "{name}: the blob grew");
+            for file in before.iter().filter(|file| !blob.contains(file)) {
                 assert!(
                     after.contains(file),
                     "{name}: {} written again or gone",
@@ -1200,12 +1198,15 @@ mod on_device {
                 );
             }
             let added: Vec<&String> = (after.iter())
-                .filter(|file| !before.contains(file))
+                .filter(|file| !before.contains(file) && !blob_after.contains(file))
                 .map(|(file, ..)| file)
                 .collect();
-            let pipelines = added.iter().filter(|file| file.contains("/pipelines/"));
-            assert_eq!(pipelines.count(), 1, "{name}: added {added:?}");
-            println!("{name}: the second process added {added:?}, rewrote nothing");
+            assert!(!added.is_empty(), "{name}: its own kernel's lowering");
+            assert!(
+                added.iter().all(|file| file.contains("translations/")),
+                "{name}: added {added:?}"
+            );
+            println!("{name}: the second process added {added:?}, grew the blob, rewrote nothing");
         }
     }
 
@@ -1246,6 +1247,159 @@ mod on_device {
             2,
             "{name}: two pipelines made"
         );
+    }
+
+    /// The length of the blob of `device`'s pipeline cache, 0 where there is none.
+    fn blob_len(device: &Device) -> u64 {
+        let blob = device.core().caches.blob().expect("a cache directory");
+        std::fs::metadata(blob).map_or(0, |meta| meta.len())
+    }
+
+    /// Makes the state of `descriptor` on `device` and waits for the reaper's look at the pipeline
+    /// cache once creation is quiet after it.
+    fn state_and_look(
+        name: &str,
+        device: &Device,
+        descriptor: &ComputePipelineDescriptor,
+    ) -> ComputePipelineState {
+        let caches = &device.core().caches;
+        let looks = caches.looks_and_writes().0;
+        let made = state(name, device, descriptor);
+        within("the reaper's look", || caches.looks_and_writes().0 > looks);
+        made
+    }
+
+    /// The pipeline cache filled past its bound: at the look after a creation takes it past, the
+    /// reaper replaces it with a fresh one, which the gauge falls to, keeps the old one while it is
+    /// held, and destroys it at the first look after it is let go; creations go on through the
+    /// fresh cache, and the next write replaces the blob with the fresh cache's data alone.
+    #[test]
+    fn every_device_replaces_its_pipeline_cache_past_its_bound() {
+        let (Some(first), Some(second), Some(third)) = (
+            descriptor("a1_bool_from_float"),
+            descriptor("a1_sign_and_division"),
+            descriptor("icb_replay_grid_template"),
+        ) else {
+            return;
+        };
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-bound-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let device = on_directory(name, physical, &dir);
+            let caches = &device.core().caches;
+            let counters = device.counters();
+            let a = state_and_look(name, &device, &first);
+            let full = counters.gauges().pipeline_cache_bytes;
+            assert!(full > 0, "{name}: the cache's size read");
+            let first_blob = blob_len(&device);
+            assert_eq!(
+                first_blob,
+                24 + full,
+                "{name}: the blob written at the look"
+            );
+            // Held as a creation holds it, across the next look.
+            let held = caches.hold();
+            caches.set_bound(full - 1);
+            let b = state_and_look(name, &device, &second);
+            let fresh = counters.gauges().pipeline_cache_bytes;
+            assert!(
+                fresh < full,
+                "{name}: the gauge falls from {full} to {fresh}"
+            );
+            assert_eq!(caches.retired(), 1, "{name}: the old cache kept while held");
+            assert_eq!(
+                blob_len(&device),
+                first_blob,
+                "{name}: no write at the replacement"
+            );
+            drop(held);
+            caches.set_bound(crate::cache::PIPELINE_CACHE_BOUND);
+            let c = state_and_look(name, &device, &third);
+            assert_eq!(
+                caches.retired(),
+                0,
+                "{name}: the old cache destroyed once let go"
+            );
+            let now = counters.gauges().pipeline_cache_bytes;
+            assert!(now > fresh, "{name}: the fresh cache grew to {now}");
+            assert_eq!(
+                blob_len(&device),
+                24 + now,
+                "{name}: the blob holds the fresh cache"
+            );
+            drop((a, b, c));
+            drop(device);
+            within("the teardown", || counters.gauges() == Gauges::default());
+            let _ = std::fs::remove_dir_all(&dir);
+            println!(
+                "{name}: {full} bytes past a bound of {}, replaced by {fresh}, grown to {now}",
+                full - 1
+            );
+        }
+    }
+
+    /// A blob the device cannot take, cut short or of another device's header, is removed when
+    /// the reaper makes the cache, which starts empty: creations go on, and the drop writes the
+    /// blob a next device takes. That device's look finds the cache no larger, so neither it nor
+    /// the drop writes.
+    #[test]
+    fn every_device_removes_a_blob_it_cannot_take() {
+        let Some(tiled) = descriptor("a1_bool_from_float") else {
+            return;
+        };
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let other = {
+                let mut header = vec![0; 32];
+                header[..4].copy_from_slice(&32u32.to_le_bytes());
+                header[4..8].copy_from_slice(&1u32.to_le_bytes());
+                header.extend([7; 64]);
+                [&crate::cache::frame(&header)[..], &header].concat()
+            };
+            for (what, bytes) in [
+                ("cut short", other[..other.len() - 1].to_vec()),
+                ("another device's", other),
+            ] {
+                let dir =
+                    std::env::temp_dir().join(format!("m2v-rt-refuse-{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&dir);
+                let device = on_directory(name, physical, &dir);
+                within("the pipeline cache", || device.core().caches.is_made());
+                let blob = device.core().caches.blob().expect("a blob").to_owned();
+                drop(device);
+                assert!(!blob.exists(), "{name}: no creation, no blob");
+                std::fs::write(&blob, &bytes).expect("a blob");
+                let device = on_directory(name, physical, &dir);
+                within("the pipeline cache", || device.core().caches.is_made());
+                assert!(!blob.exists(), "{name}: a blob {what} removed");
+                drop(state(name, &device, &tiled));
+                drop(device);
+                let written = std::fs::read(&blob).expect("the blob the drop wrote");
+                assert_ne!(written, bytes, "{name}: replaced");
+                let device = on_directory(name, physical, &dir);
+                let counters = device.counters();
+                let made = state_and_look(name, &device, &tiled);
+                let caches = &device.core().caches;
+                let (looks, writes) = caches.looks_and_writes();
+                assert!(
+                    looks >= 1 && writes == 0,
+                    "{name}: {looks} looks, {writes} writes"
+                );
+                drop(made);
+                drop(device);
+                within("the teardown", || counters.gauges() == Gauges::default());
+                let blob_written = counters.metrics().cache_bytes_written;
+                assert_eq!(blob_written, 0, "{name}: the next device writes nothing");
+                assert_eq!(std::fs::read(&blob).expect("the blob"), written, "{name}");
+                let _ = std::fs::remove_dir_all(&dir);
+                println!("{name}: a blob {what} removed, rewritten, then taken");
+            }
+        }
     }
 
     /// `vector_word_phases`'s kernels (`metal2vulkan_devtools::vector_word_phases`): with

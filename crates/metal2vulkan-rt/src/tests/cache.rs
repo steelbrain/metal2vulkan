@@ -1,10 +1,11 @@
 //! The cache directory on the host: two generations under one cap, a hit in old moved into young,
 //! a lookup that reads no state, the state file read at open with no listing and rebuilt where it
 //! is torn or missing, a removal cut short (a process's exit in it included) finished by the next
-//! open, torn files removed, and stores in threads and processes sharing one directory without
-//! losing a count or reading a file another was writing.
+//! open, an earlier version's pipeline data removed at open, torn files removed, a blob that does
+//! not check refused, and stores in threads and processes sharing one directory without losing a
+//! count or reading a file another was writing.
 
-use crate::cache::{frame, unframe, State, Store};
+use crate::cache::{checksum, frame, unframe, State, Store};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -54,12 +55,14 @@ fn bytes_under(dir: &Path) -> u64 {
         .sum()
 }
 
-/// A file the store keeps: a lowering for even `n`, a pipeline's data for odd.
+/// A file the store keeps: a lowering.
 fn name(n: u32) -> String {
-    match n % 2 {
-        0 => format!("translations/{n:064x}"),
-        _ => format!("pipelines/{:032x}/{n:064x}", 7),
-    }
+    format!("translations/{n:064x}")
+}
+
+/// `data` as its blob holds it, after its magic, length and checksum.
+fn framed(data: &[u8]) -> Vec<u8> {
+    [&frame(data)[..], data].concat()
 }
 
 /// Every byte as it is.
@@ -358,7 +361,7 @@ fn a_torn_file_is_a_miss_and_is_removed() {
     let scratch = Scratch::new("store-torn");
     let store = Store::open(scratch.0.clone(), 1000);
     let data: Vec<u8> = (0..=255).collect();
-    assert!(store.put(&name(1), &frame(&data)));
+    assert!(store.put(&name(1), &framed(&data)));
     let path = store.generation(1).join(name(1));
     let held = fs::read(&path).expect("the file");
     fs::write(&path, &held[..held.len() - 1]).expect("cut short");
@@ -396,16 +399,74 @@ fn stores_on_one_directory_share_its_files_and_its_count() {
 }
 
 #[test]
-fn pipeline_data_that_does_not_check_is_a_miss() {
+fn a_blob_that_does_not_check_is_a_miss() {
     let data: Vec<u8> = (0..=255).collect();
-    let file = frame(&data);
+    let file = framed(&data);
     assert_eq!(unframe(&file), Some(&data[..]));
     assert_eq!(unframe(&file[..file.len() - 1]), None, "cut short");
     let mut flipped = file.clone();
     flipped[100] ^= 1;
     assert_eq!(unframe(&flipped), None, "a flipped bit");
+    let mut zeroed = file.clone();
+    zeroed[40..72].fill(0);
+    assert_eq!(unframe(&zeroed), None, "a zeroed run");
     assert_eq!(unframe(&[]), None, "empty");
-    assert_eq!(unframe(&frame(&[])), Some(&[][..]), "no data");
+    assert_eq!(unframe(&framed(&[])), Some(&[][..]), "no data");
+}
+
+/// Every one bit flipped in a buffer changes its checksum, at every offset whole words and the
+/// tail past them cover, and so does its length.
+#[test]
+fn the_checksum_changes_with_any_one_bit() {
+    let bytes: Vec<u8> = (0..77u32).map(|n| (n * 37 + 11) as u8).collect();
+    let sum = checksum(&bytes);
+    for at in 0..bytes.len() {
+        for bit in 0..8 {
+            let mut flipped = bytes.clone();
+            flipped[at] ^= 1 << bit;
+            assert_ne!(checksum(&flipped), sum, "byte {at} bit {bit}");
+        }
+    }
+    assert_ne!(checksum(&bytes[..76]), sum, "one byte shorter");
+    assert_ne!(
+        checksum(&[0; 64]),
+        checksum(&[0; 65]),
+        "zeros of two lengths"
+    );
+}
+
+/// The `pipelines/` directories an earlier version kept pipeline data in under young and old are
+/// removed by the store's removal thread at open, and the lowerings stay.
+#[test]
+fn an_earlier_versions_pipeline_data_is_removed_at_open() {
+    let scratch = Scratch::new("store-earlier");
+    let store = Store::open(scratch.0.clone(), 1000);
+    for n in 0..6 {
+        assert!(store.put(&name(n), &[n as u8; 100]));
+    }
+    assert_eq!(state(&store).young, 2);
+    drop(store);
+    let earlier: Vec<PathBuf> = [1, 2]
+        .iter()
+        .map(|g| scratch.0.join(format!("g{g}/pipelines/{:032x}", 7)))
+        .collect();
+    for dir in &earlier {
+        fs::create_dir_all(dir).expect("an earlier version's directory");
+        fs::write(dir.join(format!("{:064x}", 1)), [1; 50]).expect("its file");
+    }
+    let reopened = Store::open(scratch.0.clone(), 1000);
+    reopened.settle();
+    for g in [1, 2] {
+        let dir = scratch.0.join(format!("g{g}/pipelines"));
+        assert!(!dir.exists(), "{} removed", dir.display());
+    }
+    for n in 0..6 {
+        assert_eq!(
+            reopened.get(&name(n), whole),
+            Some(vec![n as u8; 100]),
+            "file {n}"
+        );
+    }
 }
 
 /// The stress's cap: a generation of about twelve files, so the stores move on every few writes.
@@ -415,7 +476,7 @@ const STRESS_DIR: &str = "M2V_RT_STORE_STRESS_DIR";
 
 /// The bytes of key `k`'s file, framed: a length and content of the key's own.
 fn content(k: u32) -> Vec<u8> {
-    frame(&vec![k as u8; 40 + 13 * k as usize])
+    framed(&vec![k as u8; 40 + 13 * k as usize])
 }
 
 /// `rounds` lookups of keys a seeded generator picks, each written where it missed; the count of

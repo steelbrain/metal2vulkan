@@ -2297,6 +2297,7 @@ field	metal2vulkan-rt::Gauges.events	pub events: u64
 field	metal2vulkan-rt::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-rt::Gauges.kernels	pub kernels: u64
 field	metal2vulkan-rt::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64
+field	metal2vulkan-rt::Gauges.pipeline_cache_bytes	pub pipeline_cache_bytes: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
 field	metal2vulkan-rt::Gauges.private_idle_bytes	pub private_idle_bytes: u64
 field	metal2vulkan-rt::Gauges.render_contents	pub render_contents: u64

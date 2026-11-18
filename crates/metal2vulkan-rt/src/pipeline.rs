@@ -39,7 +39,7 @@
 //! encoding thread.
 
 use crate::arrays::BINDINGS;
-use crate::cache::{module_digest, pipeline_key, KeepPipeline};
+use crate::cache;
 use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::{Error, Gap, Refusal};
@@ -262,8 +262,6 @@ pub(crate) struct Kernel {
     module: vk::ShaderModule,
     /// The module's entry point.
     entry: CString,
-    /// The digest of the module's part of its pipelines' keys in the cache directory.
-    digest: [u8; 32],
     pub(crate) interface: Interface,
     /// The `VkPipeline`s made so far, by their specialization.
     variants: Mutex<Vec<(Variant, vk::Pipeline)>>,
@@ -712,61 +710,21 @@ pub(crate) fn lower(
     Ok(lowered)
 }
 
-/// The one `VkPipeline` that `create` makes through the cache it is given: with a cache directory,
-/// a `VkPipelineCache` of the pipeline's own, started from the file of `key` (the pipeline's
-/// [`pipeline_key`]), which the reaper then writes the data of; else none. `call` names `create`'s
-/// Vulkan call. Counted as made.
+/// The one `VkPipeline` that `create` makes through the cache it is given: the device's one
+/// `VkPipelineCache` (`crate::cache`), which a creation before the reaper made it waits for.
+/// `call` names `create`'s Vulkan call. Counted as made.
 pub(crate) fn made_through_cache(
     core: &Core,
     call: &'static str,
-    key: impl FnOnce() -> [u8; 32],
     create: impl FnOnce(vk::PipelineCache) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)>,
 ) -> Result<vk::Pipeline, Error> {
-    let device = &core.device;
-    let mut kept = None;
-    if core.caches.on_disk() {
-        let key = key();
-        let seed = core.caches.pipeline_data(&key).unwrap_or_default();
-        let cache_info = vk::PipelineCacheCreateInfo::default().initial_data(&seed);
-        // SAFETY: the data is empty or what `vkGetPipelineCacheData` gave for this device's
-        // `pipelineCacheUUID`, whole, as its checksum shows. A cache the driver refuses is a
-        // miss: the pipeline is made without one.
-        if let Ok(cache) = unsafe { device.create_pipeline_cache(&cache_info, None) } {
-            kept = Some(KeepPipeline {
-                cache,
-                key,
-                seeded: seed.len(),
-            });
-        }
-    }
-    let cache = kept
-        .as_ref()
-        .map_or(vk::PipelineCache::null(), |kept| kept.cache);
-    let made = create(cache);
-    if let Some(kept) = kept {
-        if made.is_ok() && core.caches.take_pending() {
-            core.reaper.give(Job::KeepPipeline(kept));
-        } else {
-            // SAFETY: no pipeline is being made from the cache.
-            unsafe { device.destroy_pipeline_cache(kept.cache, None) };
-        }
-    }
+    let creation = cache::creation(core);
+    let made = create(creation.handle());
+    drop(creation);
     let pipeline = made.map_err(|(_, result)| Error::Vulkan { call, result })?[0];
     core.counters.count(Metric::PipelinesCreated);
     core.counters.rise(Gauge::Pipelines);
     Ok(pipeline)
-}
-
-/// The words that describe the runtime's pipeline layout, which every pipeline takes: its push
-/// window's bytes and its bindings, for a module's digest ([`module_digest`]).
-pub(crate) fn layout_words() -> Vec<u32> {
-    std::iter::once(PUSH_BYTES)
-        .chain(
-            BINDINGS
-                .iter()
-                .flat_map(|&(binding, kind, count)| [binding, kind.as_raw() as u32, count]),
-        )
-        .collect()
 }
 
 /// The runtime's view of the translator's kernel, or [`Gap::KernelInput`] where the kernel reads
@@ -1100,7 +1058,6 @@ impl ComputePipelineState {
         let whole = Kernel {
             module,
             entry: c"main".to_owned(),
-            digest: [0; 32],
             interface,
             variants: Mutex::new(Vec::new()),
         };
@@ -1237,23 +1194,11 @@ impl Kernel {
         let stage = pipeline.stage;
         // The translator's entry points hold no NUL; one that did would name no entry point.
         let entry = CString::new(stage.entry_point).map_err(|_| gap())?;
-        let digest = core.caches.on_disk().then(|| {
-            let ids: Vec<u32> = interface.constants.iter().map(|&(id, _)| id).collect();
-            module_digest(
-                &stage.spirv,
-                entry.as_bytes(),
-                interface.stage_flags,
-                interface.required_subgroup_size,
-                &ids,
-                &layout_words(),
-            )
-        });
         // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
         let module = unsafe { Kernel::module(core, &stage.spirv) }?;
         Ok(Kernel {
             module,
             entry,
-            digest: digest.unwrap_or_default(),
             interface,
             variants: Mutex::new(Vec::new()),
         })
@@ -1330,8 +1275,7 @@ impl Kernel {
         let info = vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(core.layout);
-        let key = || pipeline_key(&self.digest, &values);
-        made_through_cache(core, "vkCreateComputePipelines", key, |cache| {
+        made_through_cache(core, "vkCreateComputePipelines", |cache| {
             // SAFETY: the module, the layout and the cache are the device's, and the
             // specialization gives each of the kernel's constants a 4-byte value.
             unsafe { core.device.create_compute_pipelines(cache, &[info], None) }

@@ -1,76 +1,102 @@
-//! The device's caches on disk, under [`DeviceOptions::pipeline_cache_dir`]: a kernel lowered and
-//! a `VkPipeline` compiled in one run cost little in the next. Compute and render pipelines.
+//! The device's caches: a kernel lowered and a `VkPipeline` compiled in one run cost little in
+//! the next. Compute and render pipelines.
 //!
-//! Two kinds of file, each under the generation it was last used in (below):
+//! **The pipeline cache.** A device makes every `VkPipeline` through one `VkPipelineCache` of its
+//! own, internally synchronized, which threads that create at once share. With a cache directory
+//! ([`DeviceOptions::pipeline_cache_dir`]) the cache starts from the device's blob there: the
+//! cache's data as `vkGetPipelineCacheData` gave it, after a magic, its length and its checksum,
+//! named `pipelines-` and the hex of the first 16 bytes of the pipeline cache header the device's
+//! driver writes (everything in the header but the `pipelineCacheUUID`, which a driver update
+//! changes, so the update replaces the blob rather than leaving it beside a new one). The reaper
+//! makes the cache first when it starts, off the thread that makes the device; a creation that
+//! comes before it waits for it. A blob that does not check, whose data does not begin with the
+//! device's header, or that the driver refuses, is removed, and the cache starts empty.
 //!
-//! - `translations/`: one file per lowered function (a kernel, or a render pipeline's vertex or
-//!   fragment function), named by the hex of its `FunctionCompileKey`, which covers everything
-//!   that changes the lowering's output: the function's AIR, entry, constants and linked
-//!   functions, its lowering inputs, the device profile's fingerprint and the translator's
-//!   semantics version. The bytes are the translator's self-checking encoding
-//!   (`CompiledFunction::to_bytes`), and bytes that do not decode for the key are a miss. A
-//!   partial-threadgroups variant the translator refused is kept too, as a marker.
-//! - `pipelines/<pipelineCacheUUID>/`: one file per `VkPipeline`, named by the hex of a SHA-256
-//!   over everything its creation takes ([`pipeline_key`]): the `VkPipelineCache` data of a cache
-//!   that made only that pipeline, framed with its length and checksum. A `VkPipeline` is made
-//!   through a `VkPipelineCache` of its own, started from its file where there is one; the reaper
-//!   then reads the cache's data and writes it as the file, unless the data is no longer than
-//!   the file's (the pipeline came from it), and destroys the cache. At most [`PENDING`] caches
-//!   wait for the reaper: past it a pipeline's cache is destroyed at once and its file not
-//!   written, a miss at its next creation.
+//! The reaper writes the cache's data over the blob, a temporary file renamed over it and never
+//! appended to, once creation is quiet (no creation running and none for [`QUIET_NANOS`]) after a
+//! creation: at most once a quiet period, and only where the size the driver gives grew by more
+//! than an eighth since the last write, so a run that makes nothing new writes nothing and a
+//! device's writes over its life come to a few times the blob's size. The device's drop writes it
+//! once more where the size changed at all. A crash between writes loses only the pipelines made
+//! since the last. No guest call waits for a write or a size query.
+//!
+//! The cache holds at most [`PIPELINE_CACHE_BOUND`]: a cache past it when the reaper looks is
+//! replaced by a fresh, empty one that creations take from then on, and destroyed once no creation
+//! holds it; the next write replaces the blob with the fresh cache's data, so the blob holds at
+//! most the bound too, with no second file. [`Gauges::pipeline_cache_bytes`] is the cache's size
+//! at the reaper's last look. Without a directory the cache is the same, and nothing is on disk.
+//!
+//! **The lowerings.** The store keeps one file per lowered function (a kernel, or a render
+//! pipeline's vertex or fragment function) under `translations/`, named by the hex of its
+//! `FunctionCompileKey`, which covers everything that changes the lowering's output: the
+//! function's AIR, entry, constants and linked functions, its lowering inputs, the device
+//! profile's fingerprint and the translator's semantics version. The bytes are the translator's
+//! self-checking encoding (`CompiledFunction::to_bytes`), and bytes that do not decode for the key
+//! are a miss. A partial-threadgroups variant the translator refused is kept too, as a marker.
 //!
 //! The files live in two generations, `g<N>/` (young) and `g<N-1>/` (old), which the consumer's
 //! cap ([`DeviceOptions::pipeline_cache_cap`]) bounds at half of it each. A lookup tries young,
-//! then old; a hit in old is renamed into young, which is its mark of use. A write goes into
-//! young. The bytes young holds are counted in `state`, 24 bytes beside the generations: young's
-//! number, its bytes and a checksum of both, read and written under a lock on the file, which
-//! every store on the directory, in this process or another, holds open for its life. The write
-//! that takes young past half the cap makes the next generation young: young becomes old, and the
-//! old one is dead. A store keeps young's number as it last read or wrote the state, so a lookup
-//! reads no state: a move another store made is seen at this store's next write, and until then
-//! its lookups try the generations it knew, a miss at worst. A thread of the store's own removes
-//! the dead generation and ends, so no thread that submits, waits for or completes work removes
+//! then old; a hit in old is renamed into young, which is its mark of use. Generations start at
+//! 1, and the first has no old: a lookup there tries young alone. A write goes into young. The
+//! bytes young holds are counted in `state`, 24 bytes beside the generations: young's number,
+//! its bytes and a checksum of both, read and written under a lock on the file, which every store
+//! on the directory, in this process or another, holds open for its life. The write that takes
+//! young past half the cap makes the next generation young: young becomes old, and the old one is
+//! dead. A store keeps young's number as it last read or wrote the state, so a lookup reads no
+//! state: a move another store made is seen at this store's next write, and until then its
+//! lookups try the generations it knew, a miss at worst. A thread of the store's own removes the
+//! dead generation and ends, so no thread that submits, waits for or completes work removes
 //! files. So a file stays at least half the cap and at most the cap of other writes and moves
 //! after its last use, opening reads one file whatever the store holds, and nothing per file is
-//! kept in memory.
+//! kept in memory. The same thread removes the `pipelines/` directories under young and old in
+//! which an earlier version kept one file of pipeline data per `VkPipeline`; their bytes stay
+//! counted in young until it moves on.
 //!
 //! Every write is a temporary file renamed over its name, counted before it is written and given
 //! back where it fails, so the count is never below what young holds. Every file checks itself
-//! (the translator's encoding, the pipeline data's checksum): a file cut short, by a crash or a
-//! power loss, is a miss and is removed, and nothing unchecked reaches the driver. A failed read
-//! or write is a miss too: the caches never fail a call. A state file that does not check, or is
-//! missing, is rebuilt from the generations' names, with young counted full, so the next write
-//! moves on and the removal takes the rest. A removal cut short by the process's end is found by
-//! the next open, which looks for the generation below old.
+//! (the translator's encoding, the blob's checksum): a file cut short, by a crash or a power loss,
+//! is a miss and is removed, and nothing unchecked reaches the driver. A failed read or write is
+//! a miss too: the caches never fail a call. A state file that does not check, or is missing, is
+//! rebuilt from the generations' names, with young counted full, so the next write moves on and
+//! the removal takes the rest. A removal cut short by the process's end is found by the next
+//! open, which looks for the generation below old.
 //!
 //! [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
 //! [`DeviceOptions::pipeline_cache_cap`]: crate::DeviceOptions::pipeline_cache_cap
+//! [`Gauges::pipeline_cache_bytes`]: crate::Gauges::pipeline_cache_bytes
 
-use crate::counters::Counters;
-use crate::device::lock;
+use crate::counters::{Counters, Gauge};
+use crate::device::{lock, Core};
+use crate::memory::QUIET_NANOS;
+use crate::times::host_time;
 use ash::vk;
-use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed, Ordering::SeqCst};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::thread;
+use std::time::Duration;
 
-/// The cap of a cache directory where the consumer names none: half of it, what the store is sure
-/// to keep, is about four times the 15.4 MB a long recorded session's pipelines and lowerings
-/// fill (379 pipeline files, 6.25 MB; 282 lowerings, 9.16 MB).
+/// The cap of the lowerings in a cache directory where the consumer names none: half of it, what
+/// the store is sure to keep, is about seven times the 9.16 MB a long recorded session's 282
+/// lowerings fill.
 pub(crate) const DEFAULT_CAP: u64 = 128 << 20;
-/// The most pipeline caches waiting for the reaper to write their data.
-pub(crate) const PENDING: usize = 64;
-/// The first bytes of a pipeline data file, before its length and its checksum.
-const MAGIC: &[u8; 8] = b"m2vpipe1";
+/// The most bytes of data a device's `VkPipelineCache` holds when the reaper looks before it is
+/// replaced by a fresh one, and so the most its blob holds: 32 MiB, about five times the 6.25 MB
+/// of pipeline data a long recorded session made.
+pub(crate) const PIPELINE_CACHE_BOUND: u64 = 32 << 20;
+/// The first bytes of a blob, before its data's length and checksum.
+const MAGIC: &[u8; 8] = b"m2vblob1";
+/// The start of a device's blob's name, under the cache directory.
+const BLOB: &str = "pipelines";
 /// What a translation file holds where the translator refused the lowering: bytes no lowering
 /// encodes to, and that a file cut short is not.
 const REFUSED: &[u8] = b"m2v-refused";
 /// The translations' directory, under a generation.
 const TRANSLATIONS: &str = "translations";
-/// The pipelines' directory, under a generation: one directory per `pipelineCacheUUID`.
+/// The directory, under a generation, an earlier version kept a file of pipeline data per
+/// `VkPipeline` in: removed where it is found.
 const PIPELINES: &str = "pipelines";
 /// The state file, under the cache directory.
 const STATE: &str = "state";
@@ -82,8 +108,8 @@ pub(crate) struct State {
     pub(crate) bytes: u64,
 }
 
-/// The files of a cache directory, `translations/<name>` and `pipelines/<uuid>/<name>` under
-/// two generations of at most half of `cap` bytes each (the module's doc).
+/// The lowerings of a cache directory, `translations/<name>` under two generations of at most
+/// half of `cap` bytes each (the module's doc).
 pub(crate) struct Store {
     root: PathBuf,
     /// Half the cap: the most bytes young counts.
@@ -110,7 +136,7 @@ pub(crate) struct Store {
 
 impl Store {
     /// The store in `root`, made where it is missing; it starts the removal of a generation a
-    /// removal before left.
+    /// removal before left, and of an earlier version's pipeline data.
     pub(crate) fn open(root: PathBuf, cap: u64) -> Arc<Store> {
         let _ = fs::create_dir_all(&root);
         let path = root.join(STATE);
@@ -139,11 +165,26 @@ impl Store {
         });
         if let Some(state) = store.current() {
             store.young.fetch_max(state.young, Relaxed);
-            if state.young >= 2 && store.generation(state.young - 2).exists() {
+            let young = state.young;
+            let dead = young >= 2 && store.generation(young - 2).exists();
+            if dead || !store.pipeline_dirs(young).is_empty() {
                 store.remove_dead();
             }
         }
         store
+    }
+
+    /// Whether the state file is open for writing: a read-only directory serves hits only.
+    pub(crate) fn writable(&self) -> bool {
+        self.writable
+    }
+
+    /// The directories of an earlier version's pipeline data under young, `young`, and old.
+    fn pipeline_dirs(&self, young: u64) -> Vec<PathBuf> {
+        (young.saturating_sub(1)..=young)
+            .map(|number| self.generation(number).join(PIPELINES))
+            .filter(|dir| dir.exists())
+            .collect()
     }
 
     /// What `decode` makes of the bytes of `file`, a path under a generation, where the
@@ -176,7 +217,7 @@ impl Store {
             return false;
         };
         if self
-            .place(young, file, |path| write_whole(path, bytes))
+            .place(young, file, |path| write_whole(path, &[bytes]))
             .is_ok()
         {
             return true;
@@ -355,7 +396,8 @@ impl Store {
         op(&path)
     }
 
-    /// Starts the removal thread, where none runs: it removes every generation below old.
+    /// Starts the removal thread, where none runs: it removes every generation below old, and an
+    /// earlier version's pipeline data.
     fn remove_dead(self: &Arc<Self>) {
         if !self.writable || self.removing.swap(true, SeqCst) {
             return;
@@ -369,36 +411,39 @@ impl Store {
         }
     }
 
-    /// The removal thread: makes the state durable, then removes the dead generations, until a
-    /// pass finds none it did not try.
+    /// The removal thread: makes the state durable, then removes the dead generations and an
+    /// earlier version's pipeline data, until a pass finds none it did not try.
     fn remove(&self) {
         loop {
             if let Some(file) = &self.state {
                 let _ = file.sync_all();
             }
             let tried = self.dead();
-            for &number in &tried {
-                let _ = fs::remove_dir_all(self.generation(number));
+            for dir in &tried {
+                let _ = fs::remove_dir_all(dir);
             }
             self.removing.store(false, SeqCst);
             // A move to the next generation during the pass found the thread running and started
             // none: its dead generation is taken here. One the pass could not remove waits for
             // the next move or open.
-            let new = self.dead().iter().any(|number| !tried.contains(number));
+            let new = self.dead().iter().any(|dir| !tried.contains(dir));
             if !new || self.removing.swap(true, SeqCst) {
                 return;
             }
         }
     }
 
-    /// The generations below old.
-    fn dead(&self) -> Vec<u64> {
+    /// The generations below old, and an earlier version's pipeline data under young and old.
+    fn dead(&self) -> Vec<PathBuf> {
         let Some(young) = self.current().map(|state| state.young) else {
             return Vec::new();
         };
-        (generations(&self.root).into_iter())
+        let mut dead: Vec<PathBuf> = (generations(&self.root).into_iter())
             .filter(|&number| number + 1 < young)
-            .collect()
+            .map(|number| self.generation(number))
+            .collect();
+        dead.extend(self.pipeline_dirs(young));
+        dead
     }
 }
 
@@ -489,9 +534,9 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Writes `bytes` to `path` through a temporary file beside it, named for this process and this
-/// write, then renamed over it.
-fn write_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
+/// Writes `parts`, one after another, to `path` through a temporary file beside it, named for this
+/// process and this write, then renamed over it.
+fn write_whole(path: &Path, parts: &[&[u8]]) -> io::Result<()> {
     static WRITES: AtomicU64 = AtomicU64::new(0);
     let mut temp = path.as_os_str().to_owned();
     temp.push(format!(
@@ -500,7 +545,8 @@ fn write_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
         WRITES.fetch_add(1, Relaxed)
     ));
     let temp = PathBuf::from(temp);
-    let written = File::create(&temp).and_then(|mut file| file.write_all(bytes));
+    let written = File::create(&temp)
+        .and_then(|mut file| parts.iter().try_for_each(|part| file.write_all(part)));
     match written.and_then(|()| fs::rename(&temp, path)) {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -510,15 +556,26 @@ fn write_whole(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
 }
 
-/// FNV-1a over `bytes`: the pipeline data file's check that it was written whole.
-fn checksum(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-    })
+/// A hash of `bytes`, eight at a time in four lanes, each step a bijection of its lane, so any one
+/// changed word changes it: the state's and the blob's check that they were written whole, fast
+/// enough to check a 32 MiB blob in a few milliseconds. Not a defence against a writer that means
+/// harm.
+pub(crate) fn checksum(bytes: &[u8]) -> u64 {
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    let step = |lane: u64, word: u64| (lane ^ word).wrapping_mul(K).rotate_left(29);
+    let mut lanes = [K, K ^ 1, K ^ 2, K ^ 3];
+    let (chunks, tail) = bytes.as_chunks::<32>();
+    for chunk in chunks {
+        for (lane, word) in lanes.iter_mut().zip(chunk.as_chunks::<8>().0) {
+            *lane = step(*lane, u64::from_le_bytes(*word));
+        }
+    }
+    let hash = lanes.into_iter().fold(bytes.len() as u64, step);
+    tail.iter()
+        .fold(hash, |hash, &byte| step(hash, u64::from(byte)))
 }
 
-/// The pipeline data a file holds: its bytes after the magic, their length and their checksum,
-/// where all three check.
+/// The blob's data, after its magic, its length and its checksum, where all three check.
 pub(crate) fn unframe(file: &[u8]) -> Option<&[u8]> {
     let (magic, rest) = file.split_first_chunk::<8>()?;
     let (len, rest) = rest.split_first_chunk::<8>()?;
@@ -529,94 +586,193 @@ pub(crate) fn unframe(file: &[u8]) -> Option<&[u8]> {
     .then_some(data)
 }
 
-/// `data` framed for its file.
-pub(crate) fn frame(data: &[u8]) -> Vec<u8> {
-    let mut file = Vec::with_capacity(24 + data.len());
-    file.extend_from_slice(MAGIC);
-    file.extend_from_slice(&(data.len() as u64).to_le_bytes());
-    file.extend_from_slice(&checksum(data).to_le_bytes());
-    file.extend_from_slice(data);
-    file
+/// The bytes before `data` in its blob: the magic, its length and its checksum.
+pub(crate) fn frame(data: &[u8]) -> [u8; 24] {
+    let mut head = [0; 24];
+    head[..8].copy_from_slice(MAGIC);
+    head[8..16].copy_from_slice(&(data.len() as u64).to_le_bytes());
+    head[16..].copy_from_slice(&checksum(data).to_le_bytes());
+    head
 }
 
-/// The key of a `VkPipeline`'s file: a SHA-256 over what its creation takes, `module` (a compute
-/// module's digest, [`module_digest`], or a render content's, over its modules' digests and its
-/// fixed-function state) and `values` (its specialization's, after a render pipeline's topology
-/// class), so two creations with one key make one pipeline.
-pub(crate) fn pipeline_key(module: &[u8; 32], values: &[u8]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(module);
-    hash.update((values.len() as u64).to_le_bytes());
-    hash.update(values);
-    hash.finalize().into()
-}
-
-/// The digest of a module's part of its pipelines' creation: its SPIR-V, its entry point, its
-/// stage's flags and required subgroup size, the specialization's constant IDs, and the pipeline
-/// layout's, which is the runtime's own (`layout`, the words that describe it).
-pub(crate) fn module_digest(
-    spirv: &[u32],
-    entry: &[u8],
-    flags: vk::PipelineShaderStageCreateFlags,
-    subgroup: Option<u32>,
-    constant_ids: &[u32],
-    layout: &[u32],
-) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    let words = |hash: &mut Sha256, words: &[u32]| {
-        hash.update((words.len() as u64).to_le_bytes());
-        for word in words {
-            hash.update(word.to_le_bytes());
-        }
-    };
-    words(&mut hash, spirv);
-    hash.update((entry.len() as u64).to_le_bytes());
-    hash.update(entry);
-    hash.update(flags.as_raw().to_le_bytes());
-    hash.update(subgroup.map_or([0; 5], |size| {
-        let mut bytes = [1; 5];
-        bytes[1..].copy_from_slice(&size.to_le_bytes());
-        bytes
-    }));
-    words(&mut hash, constant_ids);
-    words(&mut hash, layout);
-    hash.finalize().into()
-}
-
-/// A device's caches.
+/// A device's caches: the lowerings in the store, and the `VkPipelineCache` every `VkPipeline`
+/// is made through, with its blob.
 pub(crate) struct Caches {
     store: Option<Arc<Store>>,
-    /// The device's pipelines directory under the root: `pipelines/<pipelineCacheUUID>`.
-    pipelines: String,
-    /// The pipeline caches given to the reaper and not written yet.
-    pending: AtomicUsize,
+    /// The cache directory, where there is one.
+    dir: Option<PathBuf>,
+    /// The device's blob in it, named once the reaper has read the device's header.
+    blob: OnceLock<PathBuf>,
+    pipelines: Mutex<Pipelines>,
+    /// Signalled once the reaper made the cache.
+    made: Condvar,
+    /// Creations through the cache that have not ended.
+    creating: AtomicUsize,
+    /// When the last creation ended, in nanoseconds of [`host_time`].
+    created: AtomicU64,
+    /// Set by a creation's end, cleared by the reaper's look at the cache.
+    grown: AtomicBool,
+    /// [`PIPELINE_CACHE_BOUND`], lower in a test.
+    bound: AtomicU64,
+    /// The reaper's looks at the cache.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    looks: AtomicUsize,
+    /// The blob's writes.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    writes: AtomicUsize,
 }
 
-/// A `VkPipeline`'s cache, for the reaper to write the data of and destroy.
-pub(crate) struct KeepPipeline {
-    pub(crate) cache: vk::PipelineCache,
-    /// The pipeline's key.
-    pub(crate) key: [u8; 32],
-    /// The length of the data the cache started from.
-    pub(crate) seeded: usize,
+/// The `VkPipelineCache` creations take, and those a fresh one replaced.
+struct Pipelines {
+    /// Whether the reaper made the cache, or found the driver makes none.
+    made: bool,
+    /// The cache creations take; none where the driver made none.
+    current: Option<Arc<PipelineCache>>,
+    /// The caches a fresh one replaced, each destroyed once no creation holds it.
+    retired: Vec<Arc<PipelineCache>>,
+    /// The size of the current cache's data when the blob was last written from it, or when it
+    /// was made: what the next write must grow past.
+    written: u64,
+}
+
+/// A `VkPipelineCache` of the device's, held by each creation through it.
+pub(crate) struct PipelineCache(vk::PipelineCache);
+
+/// A creation through the device's `VkPipelineCache`, from [`creation`] until it is dropped.
+pub(crate) struct Creation<'a> {
+    core: &'a Core,
+    cache: Option<Arc<PipelineCache>>,
+}
+
+impl Creation<'_> {
+    /// The cache to make the pipeline through; null where the driver made none.
+    pub(crate) fn handle(&self) -> vk::PipelineCache {
+        self.cache
+            .as_ref()
+            .map_or(vk::PipelineCache::null(), |cache| cache.0)
+    }
+}
+
+impl Drop for Creation<'_> {
+    fn drop(&mut self) {
+        let caches = &self.core.caches;
+        caches.created.fetch_max(host_time(), Relaxed);
+        caches.creating.fetch_sub(1, SeqCst);
+        // The first creation since the reaper's last look tells it to look again once creation
+        // is quiet.
+        if !caches.grown.swap(true, SeqCst) {
+            self.core.reaper.poke();
+        }
+    }
+}
+
+/// A creation through `core`'s `VkPipelineCache`: where the reaper has not made the cache yet,
+/// which it does first when it starts, the calling thread waits for it.
+pub(crate) fn creation(core: &Core) -> Creation<'_> {
+    let caches = &core.caches;
+    caches.creating.fetch_add(1, SeqCst);
+    let mut pipelines = lock(&caches.pipelines);
+    while !pipelines.made {
+        pipelines = (caches.made.wait(pipelines)).unwrap_or_else(PoisonError::into_inner);
+    }
+    let cache = pipelines.current.clone();
+    Creation { core, cache }
+}
+
+/// A `VkPipelineCache` of `device` started from `data`, internally synchronized.
+///
+/// # Safety
+///
+/// `data` is empty, or what `vkGetPipelineCacheData` gave, whole.
+unsafe fn make_cache(device: &ash::Device, data: &[u8]) -> Option<vk::PipelineCache> {
+    let info = vk::PipelineCacheCreateInfo::default().initial_data(data);
+    // SAFETY: the caller's contract; data of another device or version is ignored by the driver,
+    // and a refusal is answered by the caller.
+    unsafe { device.create_pipeline_cache(&info, None) }.ok()
+}
+
+/// The size of `cache`'s data, `vkGetPipelineCacheData` with no buffer; 0 where the driver
+/// fails it.
+///
+/// # Safety
+///
+/// The cache is `device`'s.
+unsafe fn data_size(device: &ash::Device, cache: vk::PipelineCache) -> u64 {
+    let mut size = 0;
+    // SAFETY: the caller's contract; no buffer is given, so only the size is written.
+    let result = unsafe {
+        (device.fp_v1_0().get_pipeline_cache_data)(
+            device.handle(),
+            cache,
+            &mut size,
+            std::ptr::null_mut(),
+        )
+    };
+    match result {
+        vk::Result::SUCCESS => size as u64,
+        _ => 0,
+    }
 }
 
 impl Caches {
-    /// The caches of a device whose pipeline data is keyed by `uuid`, in `dir` where there is
-    /// one, at most `cap` bytes in all.
-    pub(crate) fn new(dir: Option<&Path>, cap: u64, uuid: [u8; vk::UUID_SIZE]) -> Caches {
-        let pipelines = format!("{PIPELINES}/{}", hex(&uuid));
-        let store = dir.map(|dir| Store::open(dir.to_owned(), cap));
+    /// A device's caches, in `dir` where there is one, the lowerings at most `cap` bytes.
+    pub(crate) fn new(dir: Option<&Path>, cap: u64) -> Caches {
         Caches {
-            store,
-            pipelines,
-            pending: AtomicUsize::new(0),
+            store: dir.map(|dir| Store::open(dir.to_owned(), cap)),
+            dir: dir.map(Path::to_owned),
+            blob: OnceLock::new(),
+            pipelines: Mutex::new(Pipelines {
+                made: false,
+                current: None,
+                retired: Vec::new(),
+                written: 0,
+            }),
+            made: Condvar::new(),
+            creating: AtomicUsize::new(0),
+            created: AtomicU64::new(0),
+            grown: AtomicBool::new(false),
+            bound: AtomicU64::new(PIPELINE_CACHE_BOUND),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            looks: AtomicUsize::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            writes: AtomicUsize::new(0),
         }
     }
 
-    /// Whether the device has a cache directory.
-    pub(crate) fn on_disk(&self) -> bool {
-        self.store.is_some()
+    /// The device's blob, where it has a cache directory and the reaper has made the cache.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn blob(&self) -> Option<&Path> {
+        self.blob.get().map(PathBuf::as_path)
+    }
+
+    /// Sets the cache's bound for a test.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn set_bound(&self, bytes: u64) {
+        self.bound.store(bytes, Relaxed);
+    }
+
+    /// The caches a fresh one replaced and the reaper has not destroyed yet.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn retired(&self) -> usize {
+        lock(&self.pipelines).retired.len()
+    }
+
+    /// Whether the reaper has made the cache.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn is_made(&self) -> bool {
+        lock(&self.pipelines).made
+    }
+
+    /// The current cache, held as a creation holds it, without counting as one.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn hold(&self) -> Option<Arc<PipelineCache>> {
+        lock(&self.pipelines).current.clone()
+    }
+
+    /// The reaper's looks at the cache, and the blob writes of its looks and of the drop.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn looks_and_writes(&self) -> (usize, usize) {
+        (self.looks.load(Relaxed), self.writes.load(Relaxed))
     }
 
     fn translation_file(key: &[u8]) -> String {
@@ -659,51 +815,205 @@ impl Caches {
         self.keep_translation(key, REFUSED, counters);
     }
 
-    fn pipeline_file(&self, key: &[u8; 32]) -> String {
-        format!("{}/{}", self.pipelines, hex(key))
-    }
-
-    /// The data kept for the `VkPipeline` of `key`, where its file checks.
-    pub(crate) fn pipeline_data(&self, key: &[u8; 32]) -> Option<Vec<u8>> {
-        let file = self.pipeline_file(key);
-        (self.store.as_ref()?).get(&file, |bytes| unframe(bytes).map(<[u8]>::to_vec))
-    }
-
-    /// Takes a place among the caches waiting for the reaper: false past [`PENDING`], when the
-    /// pipeline's cache is to be destroyed at once.
-    pub(crate) fn take_pending(&self) -> bool {
-        self.pending
-            .try_update(Relaxed, Relaxed, |pending| {
-                (pending < PENDING).then_some(pending + 1)
-            })
-            .is_ok()
-    }
-
-    /// On the reaper: writes the data of `kept`'s cache as its pipeline's file where it is longer
-    /// than the data the cache started from, then destroys the cache.
+    /// On the reaper, first: makes the device's `VkPipelineCache`, from its blob where the blob
+    /// checks, its data begins with the header the device's driver writes and the driver takes
+    /// it; else empty, removing a blob that is not taken. Creations waiting for the cache go on.
+    ///
+    /// The blob is named by the hex of the header's first 16 bytes: everything in it but the
+    /// `pipelineCacheUUID`, so a driver update replaces a device's blob rather than leaving it
+    /// beside a new one.
     ///
     /// # Safety
     ///
-    /// The cache is the device's, and no pipeline is being made from it.
-    pub(crate) unsafe fn keep_pipeline(
-        &self,
-        device: &ash::Device,
-        kept: KeepPipeline,
-        counters: &Counters,
-    ) {
+    /// `device` is the device of the caches.
+    pub(crate) unsafe fn seed(&self, device: &ash::Device, counters: &Counters) {
+        // SAFETY: no data.
+        let mut made = unsafe { make_cache(device, &[]) };
+        let header = made.and_then(|empty| {
+            // SAFETY: the cache is the device's.
+            let data = unsafe { device.get_pipeline_cache_data(empty) }.ok()?;
+            data.first_chunk::<32>().copied()
+        });
+        if let (Some(dir), Some(header)) = (&self.dir, header) {
+            let path = dir.join(format!("{BLOB}-{}", hex(&header[..16])));
+            let file = read_whole(&path, None).ok().flatten();
+            let data = (file.as_deref())
+                .and_then(unframe)
+                .filter(|data| data.starts_with(&header));
+            // SAFETY: the data is what `vkGetPipelineCacheData` gave for a device of this header,
+            // whole, as its length and checksum show.
+            let seeded = data.and_then(|data| unsafe { make_cache(device, data) });
+            match seeded {
+                Some(seeded) => {
+                    if let Some(empty) = made.replace(seeded) {
+                        // SAFETY: the cache is the device's, and no creation has taken it.
+                        unsafe { device.destroy_pipeline_cache(empty, None) };
+                    }
+                }
+                None if file.is_some() => {
+                    let _ = fs::remove_file(&path);
+                }
+                None => {}
+            }
+            drop(file);
+            let _ = self.blob.set(path);
+        }
+        // SAFETY: the cache is the device's.
+        let size = made.map_or(0, |cache| unsafe { data_size(device, cache) });
+        counters.set(Gauge::PipelineCacheBytes, size);
+        let mut pipelines = lock(&self.pipelines);
+        pipelines.current = made.map(|cache| Arc::new(PipelineCache(cache)));
+        pipelines.written = size;
+        pipelines.made = true;
+        drop(pipelines);
+        self.made.notify_all();
+    }
+
+    /// When the reaper is to look at the cache ([`Caches::look`]), at `now` in nanoseconds of
+    /// [`host_time`]: none where no creation ended since its last look; else once creation has
+    /// been quiet, no creation running and none ending, for [`QUIET_NANOS`], zero once it has.
+    pub(crate) fn look_in(&self, now: u64) -> Option<Duration> {
+        if !self.grown.load(SeqCst) {
+            return None;
+        }
+        if self.creating.load(SeqCst) > 0 {
+            return Some(Duration::from_nanos(QUIET_NANOS));
+        }
+        let quiet = self.created.load(Relaxed).saturating_add(QUIET_NANOS);
+        Some(Duration::from_nanos(quiet.saturating_sub(now)))
+    }
+
+    /// On the reaper, creation quiet: destroys each replaced cache no creation holds, reads the
+    /// cache's size, and past the bound starts a fresh cache, else writes the blob where the
+    /// data grew by more than an eighth since the last write.
+    ///
+    /// # Safety
+    ///
+    /// `device` is the device of the caches.
+    pub(crate) unsafe fn look(&self, device: &ash::Device, counters: &Counters) {
+        self.grown.store(false, SeqCst);
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.looks.fetch_add(1, Relaxed);
         // SAFETY: the caller's contract.
-        let data = unsafe { device.get_pipeline_cache_data(kept.cache) };
-        // SAFETY: the caller's contract; the data is read.
-        unsafe { device.destroy_pipeline_cache(kept.cache, None) };
-        self.pending.fetch_sub(1, Relaxed);
-        let (Some(store), Ok(data)) = (&self.store, data) else {
+        let Some(current) = (unsafe { self.reap(device) }) else {
             return;
         };
-        if data.len() > kept.seeded {
-            let file = frame(&data);
-            if store.put(&self.pipeline_file(&kept.key), &file) {
-                counters.cache_written(file.len() as u64);
+        // SAFETY: the cache is the device's.
+        let size = unsafe { data_size(device, current.0) };
+        counters.set(Gauge::PipelineCacheBytes, size);
+        if size > self.bound.load(Relaxed) {
+            // SAFETY: no data.
+            let Some(fresh) = (unsafe { make_cache(device, &[]) }) else {
+                return;
+            };
+            // SAFETY: the cache is the device's.
+            let fresh_size = unsafe { data_size(device, fresh) };
+            let mut pipelines = lock(&self.pipelines);
+            let old = pipelines.current.replace(Arc::new(PipelineCache(fresh)));
+            pipelines.retired.extend(old);
+            pipelines.written = fresh_size;
+            drop(pipelines);
+            counters.set(Gauge::PipelineCacheBytes, fresh_size);
+            drop(current);
+            // SAFETY: the caller's contract.
+            unsafe { self.reap(device) };
+            return;
+        }
+        let written = lock(&self.pipelines).written;
+        if size > written + written / 8 {
+            // SAFETY: the cache is the device's.
+            unsafe { self.write(device, &current, size, counters) };
+        }
+    }
+
+    /// Destroys each replaced cache no creation holds; the current cache.
+    ///
+    /// # Safety
+    ///
+    /// `device` is the device of the caches.
+    unsafe fn reap(&self, device: &ash::Device) -> Option<Arc<PipelineCache>> {
+        let mut pipelines = lock(&self.pipelines);
+        // A replaced cache is never handed out again: once the list holds its last reference,
+        // no creation holds it.
+        let (idle, held) =
+            (pipelines.retired.drain(..)).partition(|old| Arc::strong_count(old) == 1);
+        pipelines.retired = held;
+        let current = pipelines.current.clone();
+        drop(pipelines);
+        // SAFETY: the caches are the device's, and no creation holds them.
+        unsafe { destroy(device, idle) };
+        current
+    }
+
+    /// Writes `cache`'s data, of size `size` as the driver last gave it, over the device's blob,
+    /// where the directory is writable and the data is within the bound.
+    ///
+    /// # Safety
+    ///
+    /// The cache is `device`'s.
+    unsafe fn write(
+        &self,
+        device: &ash::Device,
+        cache: &PipelineCache,
+        size: u64,
+        counters: &Counters,
+    ) {
+        let (Some(path), Some(store)) = (self.blob.get(), &self.store) else {
+            return;
+        };
+        if !store.writable() {
+            return;
+        }
+        // SAFETY: the caller's contract; the cache is internally synchronized.
+        let Ok(data) = (unsafe { device.get_pipeline_cache_data(cache.0) }) else {
+            return;
+        };
+        let len = data.len() as u64;
+        if len > self.bound.load(Relaxed) {
+            return;
+        }
+        if write_whole(path, &[&frame(&data), &data]).is_ok() {
+            counters.cache_written(24 + len);
+            lock(&self.pipelines).written = size;
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            self.writes.fetch_add(1, Relaxed);
+        }
+    }
+
+    /// At the device's drop, no creation running: writes the blob where the cache's data changed
+    /// since the last write, then destroys every cache.
+    ///
+    /// # Safety
+    ///
+    /// `device` is the device of the caches, and no creation runs.
+    pub(crate) unsafe fn close(&self, device: &ash::Device, counters: &Counters) {
+        let (current, written) = {
+            let mut pipelines = lock(&self.pipelines);
+            (pipelines.current.take(), pipelines.written)
+        };
+        if let Some(current) = &current {
+            // SAFETY: the cache is the device's.
+            let size = unsafe { data_size(device, current.0) };
+            if size != written {
+                // SAFETY: the cache is the device's.
+                unsafe { self.write(device, current, size, counters) };
             }
         }
+        let mut pipelines = lock(&self.pipelines);
+        // SAFETY: the caches are the device's, and no creation runs.
+        unsafe { destroy(device, pipelines.retired.drain(..).chain(current)) };
+        counters.set(Gauge::PipelineCacheBytes, 0);
+    }
+}
+
+/// Destroys `caches`.
+///
+/// # Safety
+///
+/// The caches are `device`'s, and no creation holds them.
+unsafe fn destroy(device: &ash::Device, caches: impl IntoIterator<Item = Arc<PipelineCache>>) {
+    for cache in caches {
+        // SAFETY: the caller's contract.
+        unsafe { device.destroy_pipeline_cache(cache.0, None) };
     }
 }

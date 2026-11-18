@@ -36,7 +36,6 @@
 //! The cost: a content drawn only as lines or points makes a triangle `VkPipeline` it never uses
 //! (8 contents of the 537). The replay streams draw no points: a draw of points is refused.
 
-use crate::cache::{module_digest, pipeline_key};
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
 use crate::error::{Error, Gap, RenderPipelineKind};
@@ -44,8 +43,8 @@ use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
 use crate::pass::Pass;
 use crate::pipeline::{
-    access, layout_words, lower, made_through_cache, number_samplers, of_the_device,
-    texture_access, FieldValue, Numbered, PUSH_BYTES,
+    access, lower, made_through_cache, number_samplers, of_the_device, texture_access, FieldValue,
+    Numbered, PUSH_BYTES,
 };
 use crate::reaper::{Free, Job};
 use crate::times::host_time;
@@ -58,7 +57,6 @@ use metal2vulkan::pipeline::{
     SlotClass, SlotInterface, SlotRef, SpecKey, Stage, StageEntries, StageSource, VertexStride,
 };
 use metal2vulkan::Budget;
-use sha2::{Digest, Sha256};
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 
@@ -134,10 +132,6 @@ pub(crate) struct RenderCompiled {
     stages: Vec<Module>,
     /// The fixed-function state every `VkPipeline` of the content takes.
     fixed: Fixed,
-    /// With a cache directory, the digest of everything the content gives a `VkPipeline`'s
-    /// creation (its modules' digests and its fixed-function state), which with the topology
-    /// class and the specialization's values keys the pipeline's file; else zeros.
-    digest: [u8; 32],
     /// The triangle class's `VkPipeline`, made with the content.
     triangles: vk::Pipeline,
     /// The line class's, made by the first draw of lines; null until then.
@@ -546,42 +540,6 @@ impl Fixed {
             }),
         }
     }
-
-    /// Everything it gives a `VkPipeline`'s creation, with the dynamic states, as words.
-    fn words(&self) -> Vec<u32> {
-        let raw = |value: i32| value as u32;
-        let mut words = vec![self.bindings.len() as u32];
-        for b in &self.bindings {
-            words.extend([b.binding, b.stride, raw(b.input_rate.as_raw())]);
-        }
-        words.push(self.attributes.len() as u32);
-        for a in &self.attributes {
-            words.extend([a.location, a.binding, raw(a.format.as_raw()), a.offset]);
-        }
-        words.extend([
-            u32::from(self.discard),
-            self.samples.as_raw(),
-            u32::from(self.alpha_to_coverage),
-        ]);
-        words.push(self.blends.len() as u32);
-        for b in &self.blends {
-            words.extend([
-                b.blend_enable,
-                raw(b.src_color_blend_factor.as_raw()),
-                raw(b.dst_color_blend_factor.as_raw()),
-                raw(b.color_blend_op.as_raw()),
-                raw(b.src_alpha_blend_factor.as_raw()),
-                raw(b.dst_alpha_blend_factor.as_raw()),
-                raw(b.alpha_blend_op.as_raw()),
-                b.color_write_mask.as_raw(),
-            ]);
-        }
-        words.push(self.colors.len() as u32);
-        words.extend(self.colors.iter().map(|format| raw(format.as_raw())));
-        words.push(raw(self.stencil.as_raw()));
-        words.extend(DYNAMIC.iter().map(|state| raw(state.as_raw())));
-        words
-    }
 }
 
 impl RenderCompiled {
@@ -625,11 +583,6 @@ impl RenderCompiled {
         let samples = descriptor.raster_sample_count;
         let mut stages = Vec::new();
         let mut notes = Vec::new();
-        let mut digest = core.caches.on_disk().then(|| {
-            let mut hash = Sha256::new();
-            hash.update((pipeline.stages.len() as u64).to_le_bytes());
-            hash
-        });
         for stage in &pipeline.stages {
             let mut constants = Vec::new();
             let mut values = Vec::new();
@@ -660,18 +613,6 @@ impl RenderCompiled {
             };
             let flags = vk::PipelineShaderStageCreateFlags::from_raw(stage.stage_flags.as_raw());
             let kind = vk::ShaderStageFlags::from_raw(stage.stage.as_raw());
-            if let Some(hash) = &mut digest {
-                let ids: Vec<u32> = constants.iter().map(|entry| entry.constant_id).collect();
-                hash.update(kind.as_raw().to_le_bytes());
-                hash.update(module_digest(
-                    &stage.spirv,
-                    entry.as_bytes(),
-                    flags,
-                    None,
-                    &ids,
-                    &layout_words(),
-                ));
-            }
             let info = vk::ShaderModuleCreateInfo::default().code(&stage.spirv);
             // SAFETY: the words are the translator's SPIR-V, for the features device creation
             // enabled.
@@ -698,18 +639,11 @@ impl RenderCompiled {
         notes.sort_unstable();
         notes.dedup();
         let fixed = Fixed::of(&pipeline);
-        let digest: [u8; 32] = digest.map_or([0; 32], |mut hash| {
-            for word in fixed.words() {
-                hash.update(word.to_le_bytes());
-            }
-            hash.finalize().into()
-        });
         core.counters.rise(Gauge::RenderContents);
         let mut compiled = RenderCompiled {
             core: Arc::clone(core),
             stages,
             fixed,
-            digest,
             triangles: vk::Pipeline::null(),
             lines: Mutex::new(vk::Pipeline::null()),
             notes,
@@ -813,16 +747,7 @@ impl RenderCompiled {
         if !fixed.discard {
             info = info.color_blend_state(&blend);
         }
-        // The topology's class and the stages' specialization values, beside the content's
-        // digest, key the pipeline's file.
-        let key = || {
-            let mut values = (topology.as_raw() as u32).to_le_bytes().to_vec();
-            for stage in &self.stages {
-                values.extend(&stage.values);
-            }
-            pipeline_key(&self.digest, &values)
-        };
-        made_through_cache(core, "vkCreateGraphicsPipelines", key, |cache| {
+        made_through_cache(core, "vkCreateGraphicsPipelines", |cache| {
             // SAFETY: the modules, the layout and the cache are the device's; each specialization
             // gives each of its stage's constants a 4-byte value; the formats are the
             // attachments' the translator maps for the device, for the features device creation

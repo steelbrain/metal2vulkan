@@ -96,6 +96,8 @@ pub(crate) enum Gauge {
     StageEntries,
     /// [`Gauges::stage_entry_bytes`].
     StageEntryBytes,
+    /// [`Gauges::pipeline_cache_bytes`].
+    PipelineCacheBytes,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -170,6 +172,7 @@ struct Atomics {
     staging_bytes: AtomicU64,
     stage_entries: AtomicU64,
     stage_entry_bytes: AtomicU64,
+    pipeline_cache_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -376,6 +379,7 @@ impl Counters {
             Gauge::StagingBytes => &a.staging_bytes,
             Gauge::StageEntries => &a.stage_entries,
             Gauge::StageEntryBytes => &a.stage_entry_bytes,
+            Gauge::PipelineCacheBytes => &a.pipeline_cache_bytes,
         }
     }
 
@@ -450,6 +454,7 @@ impl Counters {
             staging_bytes: a.staging_bytes.load(Relaxed),
             stage_entries: a.stage_entries.load(Relaxed),
             stage_entry_bytes: a.stage_entry_bytes.load(Relaxed),
+            pipeline_cache_bytes: a.pipeline_cache_bytes.load(Relaxed),
         }
     }
 }
@@ -530,7 +535,9 @@ pub struct Metrics {
     /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
     pub translations_loaded: u64,
     /// Bytes written to the cache directory ([`DeviceOptions::pipeline_cache_dir`]): lowered
-    /// kernels, and each `VkPipeline`'s data where it did not come from its file.
+    /// kernels, and the device's pipeline cache blob each time it is written: once creation is
+    /// quiet where the cache grew by more than an eighth since the last write, and at the
+    /// device's drop where it changed.
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     pub cache_bytes_written: u64,
@@ -671,4 +678,8 @@ pub struct Gauges {
     /// The bytes those entries and decodes hold, each counted as the ledger bytes making it held:
     /// at most 64 MiB of entries and 32 MiB of decodes.
     pub stage_entry_bytes: u64,
+    /// The size of the data in the device's `VkPipelineCache`, as `vkGetPipelineCacheData` gave
+    /// it when the reaper last looked, once creation was quiet: at most 32 MiB at a look, past
+    /// which the reaper replaces the cache with a fresh one, and this falls to the fresh one's.
+    pub pipeline_cache_bytes: u64,
 }

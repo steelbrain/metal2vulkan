@@ -1,14 +1,16 @@
-//! The reaper thread: it frees what the runtime's other threads give up, one object at a time, runs
-//! a teardown that starts on the completion thread, lowers the pipeline states' emulated-SIMD-group
-//! variants after their creation returned, and writes each new `VkPipeline`'s data to the cache
-//! directory. No driver free runs on the completion thread, so no completion waits behind one, and
-//! a submission on another thread waits behind at most one free.
+//! The reaper thread: it makes the device's `VkPipelineCache` from its blob first, then frees
+//! what the runtime's other threads give up, one object at a time, runs a teardown that starts on
+//! the completion thread, lowers the pipeline states' emulated-SIMD-group variants after their
+//! creation returned, and looks at the pipeline cache once creation is quiet, writing its blob or
+//! replacing it past its bound (`crate::cache`). No driver free runs on the completion thread, so
+//! no completion waits behind one, and a submission on another thread waits behind at most one
+//! free.
 
-use crate::cache::KeepPipeline;
 use crate::counters::Gauge;
 use crate::device::{lock, Core};
 use crate::pipeline::Compiled;
 use crate::texture::Backing;
+use crate::times::host_time;
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
@@ -33,8 +35,6 @@ pub(crate) enum Job {
     Free(Free),
     /// The device's teardown, after its last handle dropped on the completion thread.
     Teardown(Teardown),
-    /// A new `VkPipeline`'s cache, whose data goes to the cache directory.
-    KeepPipeline(KeepPipeline),
 }
 
 /// A teardown the reaper runs.
@@ -121,20 +121,26 @@ impl Reaper {
         }
     }
 
+    /// Wakes the reaper to see when to look at the pipeline cache, after the first creation since
+    /// its last look.
+    pub(crate) fn poke(&self) {
+        let _state = lock(&self.state);
+        self.changed.notify_one();
+    }
+
     /// Tells the reaper to end once its queue is empty.
     pub(crate) fn stop(&self) {
         lock(&self.state).stop = true;
         self.changed.notify_one();
     }
 
-    /// At the core's drop, the reaper having ended: frees what is left, and writes the data of
-    /// the pipeline caches left. No teardown is left: one holds blocks, and so the core.
+    /// At the core's drop, the reaper having ended: frees what is left. No teardown is left: one
+    /// holds blocks, and so the core.
     pub(crate) fn drain(&self, core: &Core) {
         let jobs = std::mem::take(&mut lock(&self.state).jobs);
         for job in jobs {
             match job {
                 Job::Free(object) => free(core, object),
-                Job::KeepPipeline(kept) => keep(core, kept),
                 Job::Teardown(_) => {}
             }
         }
@@ -229,26 +235,21 @@ fn free(core: &Core, object: Free) {
     }
 }
 
-/// Writes the data of a new `VkPipeline`'s cache and destroys it.
-fn keep(core: &Core, kept: KeepPipeline) {
-    // SAFETY: the pipeline was made from the cache, which nothing else holds.
-    unsafe {
-        core.caches
-            .keep_pipeline(&core.device, kept, &core.counters)
-    };
-}
-
 /// What the reaper does next.
 enum Next {
     Job(Job),
     /// Lower a state's emulated variant.
     Lower(Weak<Compiled>),
+    /// Look at the pipeline cache, creation being quiet.
+    Look,
     /// End, after telling the states whose lowering is left that it will not run.
     End(VecDeque<Weak<Compiled>>),
 }
 
-/// The reaper thread, until it is stopped and its queue is empty.
+/// The reaper thread, until it is stopped and its queue is empty: the pipeline cache first.
 pub(crate) fn run(core: Arc<Core>) {
+    // SAFETY: the caches are the core's device's.
+    unsafe { core.caches.seed(&core.device, &core.counters) };
     let reaper = &core.reaper;
     loop {
         let next = {
@@ -263,16 +264,23 @@ pub(crate) fn run(core: Arc<Core>) {
                 if let Some(lowering) = state.lowerings.pop_front() {
                     break Next::Lower(lowering);
                 }
-                state = reaper
-                    .changed
-                    .wait(state)
-                    .unwrap_or_else(PoisonError::into_inner);
+                // A creation that ends after this read sets its mark and then pokes under the
+                // lock, which this thread holds until it waits.
+                state = match core.caches.look_in(host_time()) {
+                    Some(due) if due.is_zero() => break Next::Look,
+                    Some(due) => match reaper.changed.wait_timeout(state, due) {
+                        Ok((state, _)) => state,
+                        Err(poisoned) => poisoned.into_inner().0,
+                    },
+                    None => (reaper.changed.wait(state)).unwrap_or_else(PoisonError::into_inner),
+                };
             }
         };
         match next {
             Next::Job(Job::Free(object)) => free(&core, object),
             Next::Job(Job::Teardown(teardown)) => teardown(&core),
-            Next::Job(Job::KeepPipeline(kept)) => keep(&core, kept),
+            // SAFETY: the caches are the core's device's.
+            Next::Look => unsafe { core.caches.look(&core.device, &core.counters) },
             Next::Lower(lowering) => {
                 if let Some(state) = lowering.upgrade() {
                     state.lower_emulated();

@@ -1690,13 +1690,15 @@ pub(crate) mod on_device {
         });
     }
 
-    /// Returns once the block-maker thread has nothing to make: it makes an allocation of a
-    /// class whose free bytes run low, which a count of a test's own work must not take in.
+    /// Returns once the block-maker thread has nothing to make (it makes an allocation of a
+    /// class whose free bytes run low, which a count of a test's own work must not take in), and
+    /// the reaper has made the pipeline cache, which sets its gauge.
     pub(crate) fn settled(device: &Device) {
         within("8 MiB free in each class", || {
             let pool = &device.core().pool;
             pool.stocked(MemoryClass::Private) && pool.stocked(MemoryClass::Shared)
         });
+        within("the pipeline cache", || device.core().caches.is_made());
     }
 
     /// `command_buffer` committed and complete with no error.

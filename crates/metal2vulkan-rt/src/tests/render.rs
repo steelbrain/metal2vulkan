@@ -253,27 +253,14 @@ mod on_device {
         });
     }
 
-    /// The pipelines' files under `dir`'s generations, by path, with their lengths and times.
-    fn pipeline_files(dir: &Path) -> Vec<(String, u64, SystemTime)> {
+    /// The pipeline cache blobs in `dir`, by name, with their lengths and times.
+    fn blobs(dir: &Path) -> Vec<(String, u64, SystemTime)> {
         let mut all = Vec::new();
-        let Ok(generations) = std::fs::read_dir(dir) else {
-            return all;
-        };
-        let pipelines = generations
-            .flatten()
-            .map(|generation| generation.path().join("pipelines"));
-        let uuids =
-            pipelines.flat_map(|pipelines| std::fs::read_dir(pipelines).into_iter().flatten());
-        for uuid in uuids.flatten() {
-            for file in std::fs::read_dir(uuid.path())
-                .expect("a directory")
-                .flatten()
-            {
+        for file in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let name = file.file_name().to_string_lossy().into_owned();
+            if name.starts_with("pipelines-") {
                 let meta = file.metadata().expect("its metadata");
-                let path = file.path();
-                let path = path.strip_prefix(dir).expect("under the root");
-                let path = path.to_string_lossy().replace('\\', "/");
-                all.push((path, meta.len(), meta.modified().expect("its time")));
+                all.push((name, meta.len(), meta.modified().expect("its time")));
             }
         }
         all.sort();
@@ -314,14 +301,14 @@ mod on_device {
                 drop(device);
                 // The teardown ends once the reaper wrote what it was given.
                 within("the teardown", || counters.gauges() == Gauges::default());
-                let files = pipeline_files(&dir);
+                let files = blobs(&dir);
                 if round == 0 {
-                    assert_eq!(files.len(), 1, "{name}: a file for the pipeline");
+                    assert_eq!(files.len(), 1, "{name}: the device's pipeline cache blob");
                     first = files;
                 } else {
                     let written = counters.metrics().cache_bytes_written;
                     assert_eq!(written, 0, "{name}: the second device writes nothing");
-                    assert_eq!(files, first, "{name}: the pipeline's file as it was");
+                    assert_eq!(files, first, "{name}: the blob as it was");
                 }
             }
             let _ = std::fs::remove_dir_all(&dir);

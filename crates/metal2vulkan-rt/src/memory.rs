@@ -107,7 +107,7 @@ const WINDOW_SECS: u64 = 3;
 /// time, only in such a gap, and looks again after each; a submission that arrives during a free
 /// waits for the rest of it, and the quiet time starts again where that free ended, so the next
 /// free waits 20 ms past the held submission however long the hold.
-const QUIET_NANOS: u64 = 20_000_000;
+pub(crate) const QUIET_NANOS: u64 = 20_000_000;
 
 /// `MTLStorageMode` of a block, as the buffers in it see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

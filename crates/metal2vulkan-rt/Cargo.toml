@@ -22,8 +22,6 @@ path = "src/lib.rs"
 ash = { workspace = true, features = ["std", "loaded"] }
 # The translator: Metal AIR to SPIR-V, through its public API only.
 metal2vulkan = { version = "0.2.0", path = "../metal2vulkan", features = ["ash"] }
-# The keys of the pipelines' files in the cache directory.
-sha2.workspace = true
 
 # The host clock of command buffer times on unix.
 [target.'cfg(unix)'.dependencies]

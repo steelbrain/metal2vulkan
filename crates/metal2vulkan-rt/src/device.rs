@@ -198,7 +198,8 @@ pub(crate) struct Core {
     pub(crate) ids: Ids,
     /// The translator, for what device creation enables, under the identity domains.
     pub(crate) translator: metal2vulkan::device::Device,
-    /// The lowered kernels and the pipelines' data on disk.
+    /// The lowered kernels on disk, and the `VkPipelineCache` every pipeline is made through with
+    /// its blob.
     pub(crate) caches: Caches,
     /// The compiled kernels by content, which every compute pipeline state of a content shares.
     pub(crate) kernels: KernelMap,
@@ -243,25 +244,30 @@ pub struct DeviceOptions {
     /// Vulkan features the consumer needs for its own raw Vulkan work, each enabled where the
     /// device reports it ([`Device::features`]).
     pub features: Vec<ConsumerFeature>,
-    /// The directory the device keeps compute kernels it lowered and each `VkPipeline`'s
-    /// compiled data in, made where it is missing, so a later device on it, in this process or
+    /// The directory the device keeps the compute and render functions it lowered and its
+    /// pipeline cache in, made where it is missing, so a later device on it, in this process or
     /// another, takes them in place of lowering and compiling again
-    /// ([`Metrics::translations_loaded`]). The files take at most
+    /// ([`Metrics::translations_loaded`]). The lowerings take at most
     /// [`pipeline_cache_cap`](Self::pipeline_cache_cap) bytes, in two generations of half of it
     /// each: a file used again moves into the young one, and the old one is removed whole when
-    /// the young one fills. A file that does not check, or a failed read or write, is a miss and
-    /// never fails a call. `None` keeps nothing on disk, so every boot lowers every kernel and compiles
-    /// every pipeline cold: a consumer should pass a directory. Metal keeps its compiled shaders
-    /// in a system cache the program does not name.
+    /// the young one fills. Beside them, one file per kind of device (named by its pipeline cache
+    /// header) holds the data of the `VkPipelineCache` every `VkPipeline` of the device is made through,
+    /// at most 32 MiB: the device's cache starts from it, and it is replaced, never appended to,
+    /// once pipeline creation has been quiet for 20 ms after the cache grew by more than an
+    /// eighth, and at the device's drop where the cache changed. A file that does not check, or a
+    /// failed read or write, is a miss and never fails a call. `None` keeps nothing on disk, so
+    /// every boot lowers every function and compiles every pipeline cold: a consumer should pass a
+    /// directory. Metal keeps its compiled shaders in a system cache the program does not name.
     ///
     /// [`Metrics::translations_loaded`]: crate::Metrics::translations_loaded
     pub pipeline_cache_dir: Option<PathBuf>,
-    /// The most bytes the files in [`pipeline_cache_dir`](Self::pipeline_cache_dir) take, the
-    /// lowered kernels and the pipelines' data together; `None` is 128 MiB. Half of it is what the
-    /// directory is sure to keep: a file stays for at least half the cap, and at most the cap, of
-    /// files written or used after its last use, and a file larger than half is not kept. Devices
-    /// on one directory, in one process or several, share its files and one count of their bytes,
-    /// and should pass one cap: each starts a new generation at half its own.
+    /// The most bytes the lowerings in [`pipeline_cache_dir`](Self::pipeline_cache_dir) take;
+    /// `None` is 128 MiB. The pipeline cache's file, at most 32 MiB per kind of device, is beside
+    /// them. Half of the cap is what the directory is sure to keep: a lowering stays for at least
+    /// half the cap, and at most the cap, of lowerings written or used after its last use, and
+    /// one larger than half is not kept. Devices on one directory, in one process or several,
+    /// share its files and one count of their bytes, and should pass one cap: each starts a new
+    /// generation at half its own.
     pub pipeline_cache_cap: Option<u64>,
 }
 
@@ -385,7 +391,6 @@ impl Device {
         let caches = Caches::new(
             options.pipeline_cache_dir.as_deref(),
             (options.pipeline_cache_cap).unwrap_or(cache::DEFAULT_CAP),
-            properties.properties.pipeline_cache_uuid,
         );
         let counters = Counters::new();
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
@@ -1133,6 +1138,8 @@ impl Drop for Core {
         // it, which may give a texture block back to the pool), and then the pools of the queues
         // still alive.
         self.reaper.drain(self);
+        // SAFETY: the caches are the device's, and no creation runs: every handle is gone.
+        unsafe { self.caches.close(&self.device, &self.counters) };
         if let Some(region) = self.work.take_capture_region() {
             self.counters
                 .fall_by(Gauge::CaptureBytes, crate::capture::CAPTURE_LEN);
