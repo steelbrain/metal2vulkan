@@ -8,7 +8,8 @@
 //! - Under a device cfg, on every device of the cfg's kind, the device writes every element of
 //!   set 1 its default at creation, and holds two `VkSampler`s for it; grants work through the
 //!   device; `Device::new`, and making and destroying a second set 1, are timed and reported,
-//!   and the second set's two samplers are gone after it.
+//!   and the second set's two samplers are gone after it; every device supports both of the
+//!   runtime's set layouts, which `Device::new` asks before it makes them.
 
 use crate::arrays::Grants;
 use crate::error::{Error, Limit, Refusal};
@@ -107,10 +108,38 @@ fn an_index_has_one_grant_at_a_time() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use super::refusal;
-    use crate::arrays::Arrays;
+    use crate::arrays::{supported, with_arrays_layout, Arrays, BINDINGS};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{Device, DeviceOptions, IndexClass, Instance, Refusal};
+    use ash::vk;
     use std::time::Instant;
+
+    /// The floor's last item, asked of the created device: every device of the cfg's kind
+    /// supports both of the runtime's set layouts (`vkGetDescriptorSetLayoutSupport`), the empty
+    /// set 0 and set 1 of the arrays, which `Device::new` asks before it makes them.
+    #[test]
+    fn every_device_supports_the_runtimes_set_layouts() {
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(
+            !devices.is_empty(),
+            "the loader lists no device of this cfg's kind"
+        );
+        for (name, physical) in devices {
+            let device = Device::new(&physical, DeviceOptions::default())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let raw = &device.core().device;
+            let empty = vk::DescriptorSetLayoutCreateInfo::default();
+            // SAFETY: the device is live, with the floor's features.
+            unsafe { supported(raw, &empty, 0) }.unwrap_or_else(|error| panic!("{name}: {error}"));
+            with_arrays_layout(BINDINGS.map(|(_, _, count)| count), |info| {
+                // SAFETY: the device is live, with the floor's features.
+                unsafe { supported(raw, info, 1) }
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!("floor: {name}: set layouts 0 and 1 supported");
+        }
+    }
 
     /// Set 1 is made with the device: its two default samplers are live while it is, grants
     /// work through it, and making a second set 1 with every element written is timed.

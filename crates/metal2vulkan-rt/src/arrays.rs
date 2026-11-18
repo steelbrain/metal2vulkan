@@ -26,7 +26,7 @@
 use crate::counters::{Counters, Gauge};
 use crate::device::lock;
 use crate::error::{Error, Limit, Refusal};
-use crate::floor::{SAMPLED_IMAGES, SAMPLERS, SAMPLER_ARRAYS, STORAGE_IMAGES};
+use crate::floor::{BelowFloor, Missing, SAMPLED_IMAGES, SAMPLERS, SAMPLER_ARRAYS, STORAGE_IMAGES};
 use crate::Device;
 use ash::vk;
 use std::ops::Range;
@@ -437,29 +437,21 @@ impl Made {
     unsafe fn make(&mut self, device: &ash::Device, counters: &Counters) -> Result<Arrays, Error> {
         let empty = vk::DescriptorSetLayoutCreateInfo::default();
         // SAFETY: the device is live.
+        unsafe { supported(device, &empty, 0) }?;
+        // SAFETY: the device is live.
         let empty = unsafe { device.create_descriptor_set_layout(&empty, None) }
             .map_err(Error::vulkan("vkCreateDescriptorSetLayout"))?;
         self.empty = Some(empty);
-        let bindings = BINDINGS.map(|(binding, ty, count)| {
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(binding)
-                .descriptor_type(ty)
-                .descriptor_count(count)
-                .stage_flags(vk::ShaderStageFlags::ALL)
-        });
-        let flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND
-            | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
-            | vk::DescriptorBindingFlags::UPDATE_UNUSED_WHILE_PENDING; 5];
-        let mut binding_flags =
-            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
-        let info = vk::DescriptorSetLayoutCreateInfo::default()
-            .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
-            .bindings(&bindings)
-            .push_next(&mut binding_flags);
         // SAFETY: the device is live, with the update-after-bind features of each binding's type
         // (the floor's).
-        let layout = unsafe { device.create_descriptor_set_layout(&info, None) }
-            .map_err(Error::vulkan("vkCreateDescriptorSetLayout"))?;
+        let layout = unsafe {
+            with_arrays_layout(BINDINGS.map(|(_, _, count)| count), |info| {
+                supported(device, info, 1)?;
+                device
+                    .create_descriptor_set_layout(info, None)
+                    .map_err(Error::vulkan("vkCreateDescriptorSetLayout"))
+            })
+        }?;
         self.layout = Some(layout);
         let sizes = [
             vk::DescriptorPoolSize {
@@ -540,6 +532,54 @@ impl Made {
                 device.destroy_descriptor_set_layout(layout, None);
             }
         }
+    }
+}
+
+/// Runs `f` with set 1's layout, `counts` elements in each binding of [`BINDINGS`].
+pub(crate) fn with_arrays_layout<R>(
+    counts: [u32; 5],
+    f: impl FnOnce(&vk::DescriptorSetLayoutCreateInfo) -> R,
+) -> R {
+    let bindings = std::array::from_fn::<_, 5, _>(|index| {
+        let (binding, ty, _) = BINDINGS[index];
+        vk::DescriptorSetLayoutBinding::default()
+            .binding(binding)
+            .descriptor_type(ty)
+            .descriptor_count(counts[index])
+            .stage_flags(vk::ShaderStageFlags::ALL)
+    });
+    let flags = [vk::DescriptorBindingFlags::PARTIALLY_BOUND
+        | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+        | vk::DescriptorBindingFlags::UPDATE_UNUSED_WHILE_PENDING; 5];
+    let mut binding_flags =
+        vk::DescriptorSetLayoutBindingFlagsCreateInfo::default().binding_flags(&flags);
+    let info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+        .bindings(&bindings)
+        .push_next(&mut binding_flags);
+    f(&info)
+}
+
+/// The floor's last item, asked of the created device: the device supports the layout `info` of
+/// set `set` (`vkGetDescriptorSetLayoutSupport`), which the limits alone do not promise. Else the
+/// device is below the floor, [`Missing::SetLayout`].
+///
+/// # Safety
+///
+/// `device` is live, with the features `info` needs.
+pub(crate) unsafe fn supported(
+    device: &ash::Device,
+    info: &vk::DescriptorSetLayoutCreateInfo,
+    set: u32,
+) -> Result<(), Error> {
+    let mut support = vk::DescriptorSetLayoutSupport::default();
+    // SAFETY: the caller's contract.
+    unsafe { device.get_descriptor_set_layout_support(info, &mut support) };
+    match support.supported == vk::TRUE {
+        true => Ok(()),
+        false => Err(Error::BelowFloor(BelowFloor {
+            missing: vec![Missing::SetLayout { set }],
+        })),
     }
 }
 

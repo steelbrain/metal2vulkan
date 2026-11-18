@@ -36,7 +36,7 @@ Columns:
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
-| Devices below the new runtime's floor | 7 | 7 | 0 | 0 | 0 | 0 | 0 |
+| Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 37 | 37 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 14 | 14 | 0 | 0 | 0 | 0 | 0 |
@@ -54,7 +54,7 @@ Columns:
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
-| Devices below the new runtime's floor | 0 | 0 | 0 | 7 | 0 | 0 | 0 | 0 |
+| Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 12 | 8 | 0 | 0 | 17 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
@@ -608,6 +608,7 @@ Columns:
 | `QueueFamily` | A queue family with both `VK_QUEUE_GRAPHICS_BIT` and `VK_QUEUE_COMPUTE_BIT` | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (decide)` | `-` |
 | `MemoryType` | A memory type with these property flags, as Vulkan names them, for buffers of every usage the runtime gives them | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (choose)` | `-` |
 | `TimeDomain` | A time domain of [`TIME_DOMAINS`] the device does not calibrate (`vkGetPhysicalDeviceCalibrateableTimeDomainsEXT`), as Vulkan names it | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/floor.rs (decide)` | `-` |
+| `SetLayout` | The layout of one of the runtime's descriptor sets, `set` 0 (empty) or 1 (the texture and sampler arrays), which `vkGetDescriptorSetLayoutSupport`... | devices below the floor, at device creation | `device` | 1: `crates/metal2vulkan-rt/src/arrays.rs (supported)` | `-` |
 
 ## 11. The new runtime's `Refusal` (`Error::Refused(Refusal)`)
 
@@ -1172,6 +1173,7 @@ Each refusal's sites, with the function that builds it.
 - `floor::QueueFamily`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
 - `floor::MemoryType`: `crates/metal2vulkan-rt/src/floor.rs (choose)`
 - `floor::TimeDomain`: `crates/metal2vulkan-rt/src/floor.rs (decide)`
+- `floor::SetLayout`: `crates/metal2vulkan-rt/src/arrays.rs (supported)`
 - `rt:Refusal::EmptyBuffer`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::BufferTooLong`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::BufferPastBlock`: `crates/metal2vulkan-rt/src/buffer.rs (new_buffer)`; `crates/metal2vulkan-rt/src/buffer.rs (new_managed_buffer)`

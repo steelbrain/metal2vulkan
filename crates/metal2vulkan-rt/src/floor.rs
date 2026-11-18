@@ -399,6 +399,14 @@ pub enum Missing {
     /// A time domain of [`TIME_DOMAINS`] the device does not calibrate
     /// (`vkGetPhysicalDeviceCalibrateableTimeDomainsEXT`), as Vulkan names it.
     TimeDomain(&'static str),
+    /// The layout of one of the runtime's descriptor sets, `set` 0 (empty) or 1 (the texture and
+    /// sampler arrays), which `vkGetDescriptorSetLayoutSupport` reports unsupported. Vulkan
+    /// answers it only for a created device, so `Device::new` asks it, and
+    /// `PhysicalDevice::check` cannot.
+    SetLayout {
+        /// The set.
+        set: u32,
+    },
 }
 
 impl fmt::Display for Missing {
@@ -421,6 +429,10 @@ impl fmt::Display for Missing {
             Missing::QueueFamily => f.write_str("a queue family with graphics and compute"),
             Missing::MemoryType { flags } => write!(f, "a memory type with {flags} for buffers"),
             Missing::TimeDomain(name) => write!(f, "the calibrateable time domain {name}"),
+            Missing::SetLayout { set } => write!(
+                f,
+                "support for descriptor set {set}'s layout (vkGetDescriptorSetLayoutSupport)"
+            ),
         }
     }
 }
@@ -432,7 +444,8 @@ impl fmt::Display for Missing {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BelowFloor {
     /// Each item the device lacks, in the floor's order: the version, extensions, features,
-    /// limits, the queue family, memory types, then time domains.
+    /// limits, the queue family, memory types, then time domains; or, from `Device::new`, a set
+    /// layout.
     pub missing: Vec<Missing>,
 }
 

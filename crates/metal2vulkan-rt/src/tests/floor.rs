@@ -853,6 +853,15 @@ fn the_translator_sees_the_portability_subset_device_creation_enables() {
         .contains(&VkFeature::ImageViewFormatSwizzle));
 }
 
+/// A set layout the created device does not support is named by its set.
+#[test]
+fn a_set_layout_the_device_does_not_support_is_named() {
+    assert_eq!(
+        Missing::SetLayout { set: 1 }.to_string(),
+        "support for descriptor set 1's layout (vkGetDescriptorSetLayoutSupport)"
+    );
+}
+
 #[test]
 fn the_optional_features_decide_the_capabilities() {
     type Set = fn(&mut Features);

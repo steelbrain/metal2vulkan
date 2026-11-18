@@ -727,8 +727,12 @@ below, of the instance and of every device. `PhysicalDevice::check` decides for 
 device, with no unsafe call: it returns what the device offers above the floor
 (`floor::Capabilities`), or `floor::BelowFloor`, a typed refusal that names every item the device
 lacks (`floor::Missing`: the version, an extension, a feature, a limit, the queue family, a
-memory type or a time domain). `Device::new` makes the last choice, of memory types, on the
-created device.
+memory type, a time domain or a set layout). `Device::new` makes the last choice, of memory
+types, on the created device, and asks the last item there: that the device supports both of the
+runtime's descriptor set layouts, the empty set 0 and set 1 of the arrays
+(`vkGetDescriptorSetLayoutSupport`, which Vulkan answers only for a created device; the limits
+alone do not promise it). A device that does not is refused with `Error::BelowFloor`,
+`Missing::SetLayout`.
 
 ### Extensions
 
