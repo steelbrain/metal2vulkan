@@ -654,7 +654,7 @@ impl NewRuntime {
                         f.only("heapType", Fields::uint, 1)?;
                         let raw =
                             option_sets(call, 2 << 4, f.list("options")?.unwrap_or_default())?;
-                        (f.required("size", Fields::uint)?, raw >> 4 & 0xf)
+                        (f.required("size", Fields::uint)?, (raw >> 4) & 0xf)
                     }
                     _ => (uint(call, 0)?, uint(call, 1)?),
                 };
