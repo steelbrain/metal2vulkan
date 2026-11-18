@@ -8,6 +8,7 @@ use metal2vulkan::metal::{
     DataType, PixelFormat, SamplerAddressMode, SamplerMinMagFilter, TextureType, TextureUsage,
 };
 use metal2vulkan::pipeline::{FunctionDescriptor, LinkedFunction, LinkedFunctions};
+use std::ops::Range;
 use std::path::PathBuf;
 
 /// One workload.
@@ -106,6 +107,27 @@ pub struct BufferPlan {
     /// `contents`, for `Private` copied in from a `Shared` buffer by the harness's own kernel.
     /// `None`: as `newBufferWithLength:` made it.
     pub contents: Option<Vec<u8>>,
+    /// The range the CPU writes again before each run, with the buffer's starting bytes there
+    /// (zero where it has none), and marks with `didModifyRange:` where `Managed`: a program's
+    /// update of a buffer before each frame. A `Shared` or `Managed` buffer's alone.
+    pub modified: Option<Range<u64>>,
+}
+
+impl BufferPlan {
+    /// What is wrong with its modified range, if anything.
+    pub fn modify_problem(&self) -> Option<String> {
+        let range = self.modified.as_ref()?;
+        if self.storage == Storage::Private {
+            return Some("the CPU writes no private buffer".to_owned());
+        }
+        if range.is_empty() || range.end > self.length {
+            return Some(format!(
+                "its modified range {range:?} is not within its {} bytes",
+                self.length
+            ));
+        }
+        None
+    }
 }
 
 /// `function` with `private` linked as its private functions
@@ -590,6 +612,9 @@ impl Plan {
                     buffer.length
                 )
                 .into());
+            }
+            if let Some(problem) = buffer.modify_problem() {
+                return Err(format!("{name}: buffer {i}: {problem}").into());
             }
             if let Some(contents) = &buffer.contents {
                 if contents.len() as u64 != buffer.length {

@@ -491,6 +491,11 @@ impl<D: ComputeDevice> Harness<D> {
         made: &Made<D>,
         completions: Option<&Arc<Completions>>,
     ) -> Result<Vec<D::CommandBuffer>> {
+        for (buffer, object) in plan.buffers.iter().zip(&made.buffers) {
+            if let Some(range) = &buffer.modified {
+                modify(object, buffer, range)?;
+            }
+        }
         parts(0..plan.dispatches.len(), plan.per_command_buffer)
             .enumerate()
             .map(|(place, range)| {
@@ -721,6 +726,15 @@ impl<D: ComputeDevice> Session for Harness<D> {
             self.texels = Some(self.make_texels()?);
         }
         self.fill(&plan.buffers, &made.buffers)?;
+        for (i, (buffer, object)) in plan.buffers.iter().zip(&made.buffers).enumerate() {
+            if buffer.modified.is_some() && object.contents().is_none() {
+                return Err(Box::new(Refused(format!(
+                    "{}: buffer {i}, which the CPU writes before each run, is {:?}, and this \
+                     runtime gives it no CPU copy",
+                    plan.name, buffer.storage
+                ))));
+            }
+        }
         self.fill_textures(&plan.textures, &made.textures)?;
         wait_run::<D>(&self.commit_run(plan, &made, None)?)?;
         for expect in &plan.expect {
@@ -935,6 +949,29 @@ fn write(buffer: &impl Buffer, bytes: &[u8]) -> Result<()> {
     // SAFETY: `contents` holds the buffer's bytes, at least `bytes.len()` of them (the plan's
     // length, `Plan::validate`), and no command buffer uses them now.
     unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len()) };
+    Ok(())
+}
+
+/// The CPU's write of `range` of `buffer` before a run: `plan`'s starting bytes there, or zero
+/// where it has none, marked with `didModifyRange:` where `Managed`. The bytes are those the range
+/// already holds, so a run still in flight reads the same values.
+fn modify(buffer: &impl Buffer, plan: &BufferPlan, range: &Range<u64>) -> Result<()> {
+    let contents = buffer
+        .contents()
+        .ok_or("a modified buffer has no contents")?;
+    let (at, length) = (range.start as usize, (range.end - range.start) as usize);
+    // SAFETY: `contents` holds the buffer's `plan.length` bytes, `range` is within them
+    // (`Plan::validate`), and so it is within the starting bytes.
+    unsafe {
+        let to = contents.as_ptr().add(at);
+        match &plan.contents {
+            Some(bytes) => std::ptr::copy_nonoverlapping(bytes[at..].as_ptr(), to, length),
+            None => std::ptr::write_bytes(to, 0, length),
+        }
+    }
+    if plan.storage == Storage::Managed {
+        buffer.did_modify_range(range.start, range.end - range.start)?;
+    }
     Ok(())
 }
 

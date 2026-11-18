@@ -7,6 +7,7 @@ use crate::plan::{
     SamplerPlan, Scaled, Source, TextureExpect, TexturePlan, Values,
 };
 use crate::{Result, Storage};
+use std::ops::Range;
 
 /// An authored workload: its name, and the builder of its plan. A plan holds its inputs and
 /// expected results (up to 128 MiB), so each is built when it runs.
@@ -19,7 +20,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 20] = [
+pub const WORKLOADS: [Workload; 22] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -99,6 +100,14 @@ pub const WORKLOADS: [Workload; 20] = [
     Workload {
         name: "vote_loop",
         plan: vote_loop,
+    },
+    Workload {
+        name: "constant_managed",
+        plan: constant_managed,
+    },
+    Workload {
+        name: "constant_private",
+        plan: constant_private,
     },
 ];
 
@@ -307,6 +316,7 @@ fn simd_reduce() -> Plan {
                 length: 16,
                 storage: Storage::Shared,
                 contents: Some(vec![0; 16]),
+                modified: None,
             },
         ],
         dispatches: vec![
@@ -469,6 +479,7 @@ fn private(contents: Vec<u8>) -> BufferPlan {
         length: contents.len() as u64,
         storage: Storage::Private,
         contents: Some(contents),
+        modified: None,
     }
 }
 
@@ -478,6 +489,7 @@ fn unset(length: u64) -> BufferPlan {
         length,
         storage: Storage::Private,
         contents: None,
+        modified: None,
     }
 }
 
@@ -564,6 +576,7 @@ fn lcg_frame(
                 length: 16,
                 storage,
                 contents: Some(word_bytes(&[increment, 0, 0, 0])),
+                modified: None,
             },
         ],
         dispatches: vec![dispatch; steps],
@@ -705,6 +718,73 @@ fn vote_loop() -> Plan {
         expect: vec![Expect {
             buffer: 1,
             values: Values::Words(ends),
+        }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
+        outputs: Vec::new(),
+        per_command_buffer: None,
+        per_encoder: None,
+        commit_to_complete: false,
+        scaled: None,
+    }
+}
+
+/// Reads of a 64 KiB table as constants (`constant_reads`): 2^20 threads in threadgroups of 256,
+/// each folding 64 of the table's 4,096 entries into a word, the table `Managed`, and the first
+/// 256 bytes of it written again by the CPU before each run and marked with `didModifyRange:`, as
+/// a program updates a constant buffer a little before each frame. On a GPU with memory of its
+/// own, each run reads the table after its update reached the GPU's copy.
+fn constant_managed() -> Plan {
+    constant_reads("constant_managed", Storage::Managed, Some(0..256))
+}
+
+/// [`constant_managed`]'s reads from a `Private` table that nothing writes after its first run:
+/// the reference its time is read against.
+fn constant_private() -> Plan {
+    constant_reads("constant_private", Storage::Private, None)
+}
+
+/// The constant reads of [`constant_managed`] from a table of `storage`, `modified` before each
+/// run.
+fn constant_reads(name: &str, storage: Storage, modified: Option<Range<u64>>) -> Plan {
+    const THREADS: u32 = 1 << 20;
+    const ENTRIES: u32 = 4096;
+    const GROUP: u32 = 256;
+    let table = words(16, 4 * ENTRIES as usize);
+    let folded: Vec<u32> = (0..THREADS)
+        .map(|index| {
+            (0..64).fold(index, |folded, i| {
+                let at = 4 * ((index + i * 67) & (ENTRIES - 1)) as usize;
+                let entry = &table[at..at + 4];
+                (folded ^ entry[0] ^ entry[1]).wrapping_add(entry[2] ^ entry[3])
+            })
+        })
+        .collect();
+    Plan {
+        name: name.to_owned(),
+        library: Source::Authored,
+        buffers: vec![
+            BufferPlan {
+                length: 16 * u64::from(ENTRIES),
+                storage,
+                contents: Some(word_bytes(&table)),
+                modified,
+            },
+            unset(4 * u64::from(THREADS)),
+        ],
+        dispatches: vec![Dispatch {
+            function: "constant_reads".to_owned(),
+            linked: Vec::new(),
+            constants: Vec::new(),
+            bindings: vec![buffer(0, 0), buffer(1, 1)],
+            grid: Grid::Threadgroups {
+                groups: [u64::from(THREADS / GROUP), 1, 1],
+                threads: [u64::from(GROUP), 1, 1],
+            },
+        }],
+        expect: vec![Expect {
+            buffer: 1,
+            values: Values::Words(folded),
         }],
         textures: Vec::new(),
         expect_textures: Vec::new(),

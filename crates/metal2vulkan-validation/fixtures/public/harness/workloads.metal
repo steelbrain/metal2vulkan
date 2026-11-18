@@ -2,8 +2,8 @@
 // standing for a class of compute work: bandwidth-bound, ALU-bound, threadgroup memory with
 // barriers, SIMD reductions, 2D image-like indexing, many tiny dispatches in a chain, narrow
 // integer arithmetic, sampling through a runtime sampler and through a constexpr one, products
-// by a constant zero of either sign, many buffers bound for each of many dispatches, and many
-// one-wave threadgroups that each do almost nothing. Written
+// by a constant zero of either sign, many buffers bound for each of many dispatches, many
+// one-wave threadgroups that each do almost nothing, and reads of a table of constants. Written
 // from scratch for it; `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir harness` compiles
 // it. The harness holds a CPU reference of every result. No translator sweep reads this directory.
 #include <metal_stdlib>
@@ -301,4 +301,18 @@ kernel void group_sums(device const uint *source [[buffer(0)]],
     if (at == 0) {
         sums[group] = scratch[0];
     }
+}
+
+// Reads of a 64 KiB table in the constant address space, as a program reads a constant buffer it
+// updates a little before each frame: each thread folds 64 of the table's 4,096 entries into one
+// word, the threads of a threadgroup reading consecutive entries.
+kernel void constant_reads(constant uint4 *table [[buffer(0)]],
+                           device uint *destination [[buffer(1)]],
+                           uint index [[thread_position_in_grid]]) {
+    uint folded = index;
+    for (uint i = 0; i < 64; ++i) {
+        uint4 entry = table[(index + i * 67) & 4095];
+        folded = (folded ^ entry.x ^ entry.y) + (entry.z ^ entry.w);
+    }
+    destination[index] = folded;
 }

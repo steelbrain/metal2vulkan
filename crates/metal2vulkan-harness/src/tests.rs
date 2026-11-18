@@ -89,6 +89,7 @@ fn one_buffer_plan(length: u64, contents: Option<Vec<u8>>, bound: usize) -> Plan
             length,
             storage: Storage::Private,
             contents,
+            modified: None,
         }],
         dispatches: vec![Dispatch {
             function: "copy_words".to_owned(),
@@ -313,6 +314,8 @@ check 1 float 0.5
 
 workload second other.metallib
 buffer 16 private zero
+buffer 64 managed words 3
+modify 1 16 32
 texture 2 70 4 2 1 1 shared plain words 5
 texture 3 20 2 2 3 3 managed heap zero
 texture 2 115 16 16 1 0 private over-buffer undefined
@@ -408,6 +411,14 @@ fn a_description_makes_its_plans() {
     ));
     assert_eq!(second.dispatches[0].linked, ["f", "g"]);
     assert!(first.dispatches.iter().all(|d| d.linked.is_empty()));
+    assert_eq!(
+        (
+            second.buffers[1].storage,
+            second.buffers[1].modified.clone()
+        ),
+        (Storage::Managed, Some(16..48))
+    );
+    assert!(first.buffers.iter().all(|b| b.modified.is_none()));
     let [words, array, undefined] = second.textures.as_slice() else {
         panic!("three textures, not {}", second.textures.len());
     };
@@ -513,8 +524,24 @@ fn a_faulty_description_is_refused_naming_its_line() {
         "line 1: workload takes NAME METALLIB"
     );
     assert_eq!(
-        refusal("buffer 16 managed zero"),
-        "line 3: storage managed is neither shared nor private"
+        refusal("buffer 16 memoryless zero"),
+        "line 3: storage memoryless is not shared, managed or private"
+    );
+    assert_eq!(
+        refusal("modify 0 0 16"),
+        "line 3: buffer 0: the CPU writes no private buffer"
+    );
+    assert_eq!(
+        refusal("modify 1 0 16"),
+        "line 3: modify names buffer 1, which no line before it makes"
+    );
+    assert_eq!(
+        refusal("buffer 32 managed zero\nmodify 1 16 32"),
+        "line 4: buffer 1: its modified range 16..48 is not within its 32 bytes"
+    );
+    assert_eq!(
+        refusal("modify 0 0"),
+        "line 3: modify takes BUFFER OFFSET LENGTH"
     );
     assert_eq!(
         refusal("buffer 16 shared hex 00ff"),

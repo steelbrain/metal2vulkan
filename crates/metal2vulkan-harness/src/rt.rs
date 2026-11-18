@@ -12,7 +12,8 @@
 //! The new runtime has no `Managed` storage, so a `Managed` buffer is a `Private` one here: the
 //! GPU's copy in device memory, which the harness writes as it writes a `Private` buffer, through
 //! a `Shared` buffer and its copy kernel, as `didModifyRange:` brings a `Managed` buffer's GPU copy
-//! up to date on a Mac with a discrete GPU. It has no CPU copy: its `contents` is `None`.
+//! up to date on a Mac with a discrete GPU. It has no CPU copy: its `contents` is `None`, and a
+//! plan whose CPU writes such a buffer before each run (`BufferPlan::modified`) is refused.
 //!
 //! Its known gaps and the device's limits (`Error::Unsupported`, `Error::Limit`) are typed
 //! refusals ([`Refused`]); its other errors are failures.

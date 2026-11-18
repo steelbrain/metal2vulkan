@@ -7,7 +7,12 @@
 //!
 //! ```text
 //! workload NAME METALLIB                 the metallib, a file in the directory
-//! buffer LENGTH shared|private FILL      the next buffer, numbered from 0
+//! buffer LENGTH STORAGE FILL             the next buffer, numbered from 0, its storage shared,
+//!                                        managed or private
+//! modify BUFFER OFFSET LENGTH            before each run, the CPU writes LENGTH bytes of BUFFER
+//!                                        at OFFSET again, its starting bytes there, and marks
+//!                                        them with didModifyRange: where managed; a shared or
+//!                                        managed BUFFER alone
 //! set-buffer INDEX BUFFER [OFFSET]       setBuffer:offset:atIndex: before the next dispatch
 //! set-bytes INDEX LENGTH FILL            setBytes:length:atIndex: before the next dispatch
 //! threadgroup-length INDEX LENGTH        setThreadgroupMemoryLength:atIndex: before the next
@@ -60,6 +65,7 @@ use crate::plan::{
 };
 use crate::{Result, Size, Storage};
 use metal2vulkan::metal::{PixelFormat, SamplerAddressMode, TextureType, TextureUsage};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 /// A workload a description names: its lines, made into its plan when it runs, since a plan
@@ -129,25 +135,41 @@ impl Described {
         };
         let mut lines = self.lines.iter().map(|(number, words)| {
             let words: Vec<&str> = words.iter().map(String::as_str).collect();
-            line(&words).map_err(|why| format!("line {number}: {why}"))
+            (line(&words).map(|line| (*number, line)))
+                .map_err(|why| format!("line {number}: {why}"))
         });
         // A dispatch at a time: the lines up to it, its bindings and constants among them.
         loop {
             let (mut bindings, mut constants, mut linked) = (Vec::new(), Vec::new(), Vec::new());
             let dispatch = loop {
-                match lines.next().transpose()? {
-                    None => break None,
-                    Some(Line::Buffer(buffer)) => plan.buffers.push(buffer),
-                    Some(Line::Texture(texture)) => plan.textures.push(texture),
-                    Some(Line::Binding(binding)) => bindings.push(binding),
-                    Some(Line::Constant(constant)) => constants.push(constant),
-                    Some(Line::Linked(functions)) => linked.extend(functions),
-                    Some(Line::Output(output)) => plan.outputs.push(output),
-                    Some(Line::Dispatch {
+                let Some((number, line)) = lines.next().transpose()? else {
+                    break None;
+                };
+                match line {
+                    Line::Buffer(buffer) => plan.buffers.push(buffer),
+                    Line::Modify { buffer, range } => {
+                        let Some(made) = plan.buffers.get_mut(buffer) else {
+                            return Err(format!(
+                                "line {number}: modify names buffer {buffer}, which no line \
+                                 before it makes"
+                            )
+                            .into());
+                        };
+                        made.modified = Some(range);
+                        if let Some(problem) = made.modify_problem() {
+                            return Err(format!("line {number}: buffer {buffer}: {problem}").into());
+                        }
+                    }
+                    Line::Texture(texture) => plan.textures.push(texture),
+                    Line::Binding(binding) => bindings.push(binding),
+                    Line::Constant(constant) => constants.push(constant),
+                    Line::Linked(functions) => linked.extend(functions),
+                    Line::Output(output) => plan.outputs.push(output),
+                    Line::Dispatch {
                         function,
                         grid,
                         repeat,
-                    }) => break Some((function, grid, repeat)),
+                    } => break Some((function, grid, repeat)),
                 }
             };
             let Some((function, grid, repeat)) = dispatch else {
@@ -192,6 +214,10 @@ impl Described {
 /// What a line inside a workload adds to it.
 enum Line {
     Buffer(BufferPlan),
+    Modify {
+        buffer: usize,
+        range: Range<u64>,
+    },
     Texture(TexturePlan),
     Binding(Binding),
     Constant(Constant),
@@ -211,18 +237,28 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
             let length = number(length)?;
             let storage = match *storage {
                 "shared" => Storage::Shared,
+                "managed" => Storage::Managed,
                 "private" => Storage::Private,
-                other => return Err(format!("storage {other} is neither shared nor private")),
+                other => return Err(format!("storage {other} is not shared, managed or private")),
             };
             Line::Buffer(BufferPlan {
                 length,
                 storage,
+                modified: None,
                 contents: match fill {
                     ["zero"] => None,
                     fill => Some(filled(length, fill)?),
                 },
             })
         }
+        ["modify", buffer, offset, length] => {
+            let (offset, length): (u64, u64) = (number(offset)?, number(length)?);
+            Line::Modify {
+                buffer: number(buffer)?,
+                range: offset..offset.checked_add(length).ok_or("the range does not fit")?,
+            }
+        }
+        ["modify", ..] => return Err("modify takes BUFFER OFFSET LENGTH".to_owned()),
         ["set-buffer", index, buffer, offset @ ..] => {
             let offset = match offset {
                 [] => 0,

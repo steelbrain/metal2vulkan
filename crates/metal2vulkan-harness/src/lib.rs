@@ -13,6 +13,9 @@
 //! run, and the buffers runtimes compare. Most workloads put a run in one command buffer; `frame`
 //! and `frame_5cb` are frames of one and of five command buffers of four small dispatches each,
 //! the `burst_` workloads bursts of 160 and 2,000, and `long_4cb` four long command buffers.
+//! `constant_managed` reads a `Managed` table of constants whose first 256 bytes the CPU writes
+//! again before each run (`plan::BufferPlan::modified`), and `constant_private` the same reads
+//! from a `Private` table, its reference.
 //! A [`run::Session`] makes its objects, checks the first run, then times the rest. The authored
 //! workloads ([`authored`]) are MSL kernels committed as public fixtures
 //! (`crates/metal2vulkan-validation/fixtures/public/harness/workloads.metal`, compiled by
