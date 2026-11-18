@@ -436,6 +436,11 @@ fn print(runtime: &str, name: &str, report: &Report) {
         commit(99),
         gauges(&report.gauges),
     );
+    println!(
+        "{name:<17} {runtime:<8} timed runs: {:.2} submissions and {} submit infos a run",
+        report.timed_submissions,
+        (report.timed_submit_infos).map_or("-".to_owned(), |infos| format!("{infos:.2}")),
+    );
     if report.commit_us.len() > 1 {
         let places: Vec<String> = (report.commit_us.iter().enumerate())
             .map(|(place, times)| format!("#{} {} / {}", place + 1, us(times, 50), us(times, 99)))

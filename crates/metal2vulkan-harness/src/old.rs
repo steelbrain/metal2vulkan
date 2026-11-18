@@ -67,6 +67,11 @@ impl crate::Device for runtime::Device {
         self.work_counts().queue_submissions
     }
 
+    /// None: it counts no submit infos.
+    fn submit_infos(&self) -> Option<u64> {
+        None
+    }
+
     /// `None`: it does not count them.
     fn first_use_waits(&self) -> Option<crate::Waits> {
         None

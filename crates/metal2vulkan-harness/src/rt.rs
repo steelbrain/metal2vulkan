@@ -382,6 +382,11 @@ impl crate::Device for Device {
         self.device.counters().metrics().submissions
     }
 
+    /// `Metrics::submit_infos`.
+    fn submit_infos(&self) -> Option<u64> {
+        Some(self.device.counters().metrics().submit_infos)
+    }
+
     /// `Metrics::first_use_waits`, with their time and the longest.
     fn first_use_waits(&self) -> Option<Waits> {
         let metrics = self.device.counters().metrics();

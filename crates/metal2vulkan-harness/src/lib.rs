@@ -90,7 +90,9 @@
 //! first-use waits ([`Waits`]): the count, and their total and longest time in microseconds.
 //! Each plan workload also prints the runtime's own counts of its work ([`Device::counts`]) over
 //! one run after the timed ones, run alone; the table shows that run's submissions
-//! ([`Device::submissions`]), which timing decides, so they are no matrix metric:
+//! ([`Device::submissions`]), and a line of its own the submissions and submit infos
+//! ([`Device::submit_infos`]) a timed run made with two in flight, which timing decides, so they
+//! are no matrix metric:
 //!
 //! ```text
 //! M2V-MATRIX metric harness-<runtime>/<set>/pipelines_created <n>
@@ -226,6 +228,10 @@ pub trait Device: Sized {
     /// many of its command buffers the runtime found ready together, which timing decides. No
     /// Metal counterpart.
     fn submissions(&self) -> u64;
+
+    /// The submit infos (`VkSubmitInfo2`s) those calls passed so far; `None` where the runtime
+    /// does not count them. No Metal counterpart.
+    fn submit_infos(&self) -> Option<u64>;
 
     /// The runtime's first-use waits so far; `None` where it does not count them. No Metal
     /// counterpart.

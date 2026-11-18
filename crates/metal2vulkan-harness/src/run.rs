@@ -155,6 +155,12 @@ pub struct Report {
     pub counts: Vec<(&'static str, u64)>,
     /// The runtime's submissions ([`Device::submissions`]) over that run.
     pub submissions: u64,
+    /// The runtime's submissions over the timed runs, two in flight, per run: how many its
+    /// grouping made of them.
+    pub timed_submissions: f64,
+    /// The submit infos those submissions passed, per run ([`Device::submit_infos`]); `None`
+    /// where the runtime does not count them.
+    pub timed_submit_infos: Option<f64>,
     /// Each run's encoding thread's wall time from the command buffer's creation through
     /// `commit`'s return, in nanoseconds.
     pub encode_ns: Vec<f64>,
@@ -873,6 +879,7 @@ impl<D: ComputeDevice> Session for Harness<D> {
             ..Report::default()
         };
         let completions = (plan.commit_to_complete).then(|| Arc::new(Completions::default()));
+        let (submitted, infos) = (self.device.submissions(), self.device.submit_infos());
         for run in 1..=runs.timed {
             let wall = Instant::now();
             let cpu = clocks::process_cpu_nanos();
@@ -891,6 +898,10 @@ impl<D: ComputeDevice> Session for Harness<D> {
             }
         }
         wait_run::<D>(&in_flight)?;
+        let timed = f64::from(runs.timed.max(1));
+        report.timed_submissions = (self.device.submissions() - submitted) as f64 / timed;
+        report.timed_submit_infos = (infos.zip(self.device.submit_infos()))
+            .map(|(before, after)| (after - before) as f64 / timed);
         if let Some(completions) = completions {
             report.commit_us = completions.wait(runs.timed as usize, plan.command_buffers())?;
         }
