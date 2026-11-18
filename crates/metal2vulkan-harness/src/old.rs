@@ -153,6 +153,26 @@ impl crate::ComputeDevice for runtime::Device {
                 let buffer = runtime::Device::new_buffer(self, length, options)?;
                 made(buffer.new_texture(&descriptor, 0, row)?, None, Some(buffer))
             }
+            TextureSource::View { .. } => return Err("a view is made from its parent".into()),
+        })
+    }
+
+    fn new_texture_view(
+        &self,
+        parent: &Texture,
+        texture: &plan::TexturePlan,
+        slices: std::ops::Range<u32>,
+    ) -> Result<Texture> {
+        let view = parent.texture.new_texture_view_with_levels_slices(
+            texture.pixel_format,
+            texture.texture_type,
+            0..1,
+            u64::from(slices.start)..u64::from(slices.end),
+        )?;
+        Ok(Texture {
+            texture: view,
+            _heap: None,
+            _buffer: None,
         })
     }
 

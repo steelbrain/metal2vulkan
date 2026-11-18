@@ -3,6 +3,7 @@
 use crate::authored::{Makes, STATE_CREATIONS};
 use crate::plan::{
     Binding, Blit, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
+    TextureSource,
 };
 use crate::{
     clocks, BlitCommandEncoder, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder,
@@ -433,9 +434,18 @@ impl<D: ComputeDevice> Harness<D> {
     /// library, which [`load`](Self::load) made, and its buffers. The textures come first: a
     /// runtime that makes none refuses the plan for that before its kernels are translated.
     fn make(&self, plan: &Plan) -> Result<Made<D>> {
-        let textures = (plan.textures.iter())
-            .map(|texture| self.device.new_texture(texture))
-            .collect::<Result<Vec<_>>>()?;
+        let mut textures: Vec<D::Texture> = Vec::with_capacity(plan.textures.len());
+        for texture in &plan.textures {
+            let made = match texture.source {
+                TextureSource::View { parent, slice } => {
+                    let parent = (textures.get(parent)).ok_or("a view's parent is unmade")?;
+                    let slices = slice..slice + texture.array_length;
+                    self.device.new_texture_view(parent, texture, slices)?
+                }
+                _ => self.device.new_texture(texture)?,
+            };
+            textures.push(made);
+        }
         let mut samplers: Vec<(SamplerPlan, D::SamplerState)> = Vec::new();
         for binding in plan
             .dispatches

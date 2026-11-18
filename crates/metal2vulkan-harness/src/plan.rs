@@ -291,6 +291,15 @@ pub enum TextureSource {
     /// `newTextureWithDescriptor:offset:bytesPerRow:` of a buffer of its own, of its storage
     /// mode, at offset 0, its rows `minimumLinearTextureAlignmentForPixelFormat:` apart: 2D.
     OverBuffer,
+    /// `newTextureViewWithPixelFormat:textureType:levels:slices:` of an earlier texture of the
+    /// plan, `parent` by index: its format, its one level, and its slices from `slice`, as many
+    /// as the view's array length. The view's format, extent, usage and storage are its parent's.
+    View {
+        /// The parent, by index.
+        parent: usize,
+        /// The view's first slice in the parent.
+        slice: u32,
+    },
 }
 
 /// The bytes of one element of `pixel_format`, for the formats a description takes, Metal's

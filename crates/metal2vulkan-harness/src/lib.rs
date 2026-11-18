@@ -259,6 +259,15 @@ pub trait ComputeDevice: Device {
     /// that makes no such texture refuses it ([`Refused`]).
     fn new_texture(&self, texture: &plan::TexturePlan) -> Result<Self::Texture>;
 
+    /// `newTextureViewWithPixelFormat:textureType:levels:slices:` of `parent`: `texture`'s pixel
+    /// format and type, its one level and `slices` (its [`TextureSource::View`](plan::TextureSource::View)).
+    fn new_texture_view(
+        &self,
+        parent: &Self::Texture,
+        texture: &plan::TexturePlan,
+        slices: std::ops::Range<u32>,
+    ) -> Result<Self::Texture>;
+
     /// `newSamplerStateWithDescriptor:` of `sampler`.
     fn new_sampler_state(&self, sampler: plan::SamplerPlan) -> Result<Self::SamplerState>;
 }

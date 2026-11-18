@@ -450,6 +450,7 @@ impl crate::ComputeDevice for Device {
                 "newTextureWithDescriptor:offset:bytesPerRow: of a buffer: the new runtime makes \
                  no texture over a buffer yet",
             ),
+            TextureSource::View { .. } => return Err("a view is made from its parent".into()),
         };
         if let Some(refused) = refused {
             return Err(Box::new(Refused(refused.to_owned())));
@@ -467,22 +468,29 @@ impl crate::ComputeDevice for Device {
             Storage::Managed => rt::StorageMode::Managed,
             Storage::Private => rt::StorageMode::Private,
         };
-        // Unknown usage is every usage, as the runtime takes it; a texture no shader reaches
-        // takes no index.
-        let usage = match texture.usage.is_empty() {
-            true => rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE,
-            false => texture.usage,
-        };
-        if !usage.intersects(rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE) {
-            return self.device.new_texture(&descriptor, None).map_err(error);
+        match class(texture.usage) {
+            Some(class) => self.place(class, |index| {
+                self.device.new_texture(&descriptor, Some(index))
+            }),
+            None => self.device.new_texture(&descriptor, None).map_err(error),
         }
-        let class = match usage.contains(rt::TextureUsage::SHADER_WRITE) {
-            true => rt::IndexClass::StorageTexture,
-            false => rt::IndexClass::Texture,
+    }
+
+    /// At an index as [`new_texture`](Self::new_texture) places a texture.
+    fn new_texture_view(
+        &self,
+        parent: &rt::Texture,
+        texture: &plan::TexturePlan,
+        slices: Range<u32>,
+    ) -> Result<rt::Texture> {
+        let (pixel_format, texture_type) = (texture.pixel_format, texture.texture_type);
+        let view = |index| {
+            parent.new_texture_view(pixel_format, texture_type, 0..1, slices.clone(), index)
         };
-        self.place(class, |index| {
-            self.device.new_texture(&descriptor, Some(index))
-        })
+        match class(texture.usage) {
+            Some(class) => self.place(class, |index| view(Some(index))),
+            None => view(None).map_err(error),
+        }
     }
 
     fn new_sampler_state(&self, sampler: plan::SamplerPlan) -> Result<rt::SamplerState> {
@@ -490,6 +498,19 @@ impl crate::ComputeDevice for Device {
         self.place(rt::IndexClass::Sampler, |index| {
             self.device.new_sampler_state(&descriptor, index)
         })
+    }
+}
+
+/// The index class of a texture of `usage`, where shaders reach it: unknown usage is every
+/// usage, as the runtime takes it; a texture no shader reaches takes no index.
+fn class(usage: rt::TextureUsage) -> Option<rt::IndexClass> {
+    let usage = match usage.is_empty() {
+        true => rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE,
+        false => usage,
+    };
+    match usage.contains(rt::TextureUsage::SHADER_WRITE) {
+        true => Some(rt::IndexClass::StorageTexture),
+        false => (usage.contains(rt::TextureUsage::SHADER_READ)).then_some(rt::IndexClass::Texture),
     }
 }
 

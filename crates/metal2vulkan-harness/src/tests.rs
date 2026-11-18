@@ -525,6 +525,27 @@ fn a_faulty_description_is_refused_naming_its_line() {
         copy("copy-texture 0 0 0 0 4 4 3 0 0 0"),
         "line 6: texture 3 is not made before it"
     );
+    for (line, why) in [
+        ("texture-view 3 2 0 1", "texture 3 is not made before it"),
+        (
+            "texture-view 1 2 1 2",
+            "slices 1..3 are empty or leave texture 1's 2",
+        ),
+        (
+            "texture-view 1 2 0 0",
+            "slices 0..0 are empty or leave texture 1's 2",
+        ),
+        (
+            "texture-view 1 7 0 1",
+            "the view: a Type3D texture of 1 slices: the harness makes 2D textures and 2D arrays",
+        ),
+        (
+            "texture-view 1 2",
+            "texture-view takes PARENT TYPE SLICE SLICES",
+        ),
+    ] {
+        assert_eq!(copy(line), format!("line 6: {why}"), "{line}");
+    }
     assert_eq!(
         copy("copy-texture 0 0 0 0 4 4 1 2 0 0"),
         "line 6: texture 1 has 2 slices, not slice 2"

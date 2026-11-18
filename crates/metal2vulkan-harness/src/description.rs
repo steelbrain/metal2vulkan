@@ -45,6 +45,10 @@
 //!                                        OFFSET with the byte VALUE, as copy-texture goes
 //! synchronize BUFFER                     synchronizeResource: of BUFFER, a managed one, as
 //!                                        copy-texture goes
+//! texture-view PARENT TYPE SLICE SLICES newTextureViewWithPixelFormat:textureType:levels:slices:
+//!                                        of texture PARENT, the next texture: its format and one
+//!                                        level, of raw MTLTextureType TYPE, SLICES slices from
+//!                                        SLICE
 //! set-sampler INDEX FILTER ADDRESS COORDS
 //!                                        setSamplerState:atIndex: before the next dispatch, of a
 //!                                        sampler state of FILTER (nearest or linear) as its min
@@ -180,6 +184,15 @@ impl Described {
                         }
                     }
                     Line::Texture(texture) => plan.textures.push(texture),
+                    Line::View {
+                        parent,
+                        texture_type,
+                        slices,
+                    } => {
+                        let view = view(&plan.textures, parent, texture_type, slices)
+                            .map_err(|why| format!("line {number}: {why}"))?;
+                        plan.textures.push(view);
+                    }
                     Line::Blit(blit) => {
                         if let Some(problem) = blit.problem(&plan.buffers, &plan.textures) {
                             return Err(format!("line {number}: {problem}").into());
@@ -256,6 +269,11 @@ enum Line {
         range: Range<u64>,
     },
     Texture(TexturePlan),
+    View {
+        parent: usize,
+        texture_type: TextureType,
+        slices: Range<u32>,
+    },
     Blit(Blit),
     Binding(Binding),
     Constant(Constant),
@@ -324,6 +342,19 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
             return Err(
                 "texture takes TYPE FORMAT WIDTH HEIGHT ARRAY USAGE STORAGE SOURCE FILL".to_owned(),
             )
+        }
+        ["texture-view", parent, texture_type, slice, slices] => {
+            let slice: u32 = number(slice)?;
+            let count: u32 = number(slices)?;
+            Line::View {
+                parent: number(parent)?,
+                texture_type: TextureType::try_from(number::<u32>(texture_type)?)
+                    .map_err(|why| why.to_string())?,
+                slices: slice..slice.checked_add(count).ok_or("the slices do not fit")?,
+            }
+        }
+        ["texture-view", ..] => {
+            return Err("texture-view takes PARENT TYPE SLICE SLICES".to_owned())
         }
         ["set-texture", index, texture] => Line::Binding(Binding::Texture {
             index: number(index)?,
@@ -491,6 +522,38 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
 
 /// The texture of a `texture` line: its raw type, format and usage, its size, storage, source
 /// and fill.
+/// The plan of a view of `slices` of `textures[parent]` as `texture_type`, its parent's format,
+/// extent, usage and storage; or why Metal makes no such view.
+fn view(
+    textures: &[TexturePlan],
+    parent: usize,
+    texture_type: TextureType,
+    slices: Range<u32>,
+) -> std::result::Result<TexturePlan, String> {
+    let made = (textures.get(parent)).ok_or(format!("texture {parent} is not made before it"))?;
+    if slices.is_empty() || slices.end > made.array_length {
+        return Err(format!(
+            "slices {}..{} are empty or leave texture {parent}'s {}",
+            slices.start, slices.end, made.array_length
+        ));
+    }
+    let view = TexturePlan {
+        texture_type,
+        array_length: slices.end - slices.start,
+        source: TextureSource::View {
+            parent,
+            slice: slices.start,
+        },
+        texels: None,
+        bytes: None,
+        ..made.clone()
+    };
+    match view.problem(false) {
+        Some(problem) => Err(format!("the view: {problem}")),
+        None => Ok(view),
+    }
+}
+
 fn texture(
     [texture_type, pixel_format, usage]: [&str; 3],
     [width, height, array_length]: [&str; 3],

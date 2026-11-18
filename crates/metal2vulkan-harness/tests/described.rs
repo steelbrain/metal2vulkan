@@ -18,8 +18,8 @@ use metal2vulkan_harness::{authored, description, old, rt};
 /// set for the dispatches after, both dispatch calls, `repeat`, both comparisons, a threadgroup
 /// memory length, textures of each source with their bytes written by the CPU, a sampler
 /// state, a texture copy from a slice of an array into a 2D texture, a Private texture
-/// written from a buffer and read into another around a fill, and a Managed buffer filled and
-/// synchronized.
+/// written from a buffer and read into another around a fill, a Managed buffer filled and
+/// synchronized, and a 2D view of one slice of a 2D array read by a kernel.
 const DESCRIPTION: &str = "\
 # Synthetic workloads over the authored kernels.
 workload scale kernels.metallib
@@ -140,6 +140,16 @@ set-buffer 0 0
 set-bytes 1 4 words 3
 dispatch lcg_step threadgroups 1 1 1 256 1 1
 check 0 exact
+
+workload viewed kernels.metallib
+texture 3 70 32 16 2 1 shared plain words 43   # RGBA8Unorm, a 2D array of 2 slices, ShaderRead
+texture-view 0 2 1 1   # a 2D view of slice 1
+buffer 8192 shared zero
+set-texture 0 1
+set-buffer 0 0
+set-bytes 1 4 hex 20000000   # its width, 32
+dispatch texels_out threadgroups 2 1 1 16 16 1
+check 0 exact
 ";
 
 #[test]
@@ -241,6 +251,21 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             }
             texels = Some(first.outputs[0].clone());
         }
+        if plan.name == "viewed" {
+            // Slice 1 of the array: its second 2048 bytes.
+            let slice = &seeded_bytes(43, 1024)[2048..];
+            let got: Vec<f32> = (first.outputs[0].as_chunks::<4>().0.iter())
+                .map(|word| f32::from_le_bytes(*word))
+                .collect();
+            assert_eq!(got.len(), slice.len());
+            for (at, (&got, &byte)) in got.iter().zip(slice).enumerate() {
+                let want = f32::from(byte) / 255.0;
+                assert!(
+                    (got - want).abs() <= 1e-6,
+                    "viewed: channel {at}: {got} for {want}"
+                );
+            }
+        }
         if plan.name == "staged" {
             // The texture is buffer 0's first 2048 bytes; buffer 2 its words with 4..24 filled
             // and the region's rows at 256, 64 bytes apart.
@@ -305,7 +330,7 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             assert_eq!(got, want);
         }
     }
-    assert_eq!(described.len(), 12);
+    assert_eq!(described.len(), 13);
 }
 
 /// The bytes of `count` of SplitMix64's words from `seed`, as a description's `words` fill.
