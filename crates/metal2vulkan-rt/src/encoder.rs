@@ -392,9 +392,9 @@ impl ComputeCommandEncoder {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 building.keep_texture(texture);
-                // The host reads a texture's bytes only through a copy that makes them visible
-                // to it itself (`Texture::get_bytes`).
-                (texture.id(), false)
+                // The host reads a texture's bytes through a copy that makes them visible to it
+                // itself (`Texture::get_bytes`), but for a texture over a Shared buffer.
+                (texture.hazard_id(), texture.host_reads())
             }
         };
         let Some(access) = usage.access() else {
@@ -669,8 +669,9 @@ impl ComputeCommandEncoder {
         };
         self.last = Some((module, local, vk_pipeline));
         let serial = self.serial;
-        // A write the host may read once the command buffer completes: to a Shared buffer bound or
-        // declared, or through an address outside the dispatch's resources.
+        // A write the host may read once the command buffer completes: to a Shared buffer or a
+        // texture over one, bound or declared, or through an address outside the dispatch's
+        // resources.
         let host = kernel.interface.writes_unbound
             || self.declared_shared_write
             || (kernel.interface.buffers.iter()).any(|&(slot, access)| {
@@ -678,6 +679,13 @@ impl ComputeCommandEncoder {
                     && matches!(
                         self.slots.get(slot as usize),
                         Some(Slot::Buffer { buffer, .. }) if buffer.is_shared()
+                    )
+            })
+            || (kernel.interface.textures.iter()).any(|&(slot, access)| {
+                access.writes()
+                    && matches!(
+                        self.textures.get(slot as usize),
+                        Some(Some(texture)) if texture.host_reads()
                     )
             });
         let wrote = {
@@ -870,7 +878,7 @@ impl Accesses<'_> {
         });
         let textures = interface.textures.iter().filter_map(|&(slot, access)| {
             let texture = self.textures.get(slot as usize)?.as_ref()?;
-            Some((texture.id(), access))
+            Some((texture.hazard_id(), access))
         });
         slots
             .chain(textures)

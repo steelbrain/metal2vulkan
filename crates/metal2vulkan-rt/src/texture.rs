@@ -187,12 +187,22 @@ struct TextureInner {
     word: u32,
     /// Its resource id in the encoders' hazard sets.
     id: u32,
-    /// A Managed texture's bytes the consumer names: the buffer, and a place for each level and
-    /// slice in order.
-    managed: Option<(Buffer, Vec<BytesPlace>)>,
+    /// The bytes the host reaches in a buffer: a Managed texture's, or a texture over a buffer's.
+    named: Option<Named>,
     /// A view's parent and place in the image ([`Texture::new_texture_view`]); `None` for a
     /// texture with an image of its own.
     view: Option<View>,
+}
+
+/// A texture's bytes in a buffer, which [`Texture::replace_region`] and [`Texture::get_bytes`]
+/// write and read there.
+struct Named {
+    buffer: Buffer,
+    /// A place for each level and slice, in order.
+    places: Vec<BytesPlace>,
+    /// The texture lies over them ([`Buffer::new_texture`]): its image's memory is the buffer's.
+    /// Else they are a Managed texture's, which [`Texture::upload_region`] copies into the image.
+    over: bool,
 }
 
 /// A texture view's parent, its place in the image, and its own image views.
@@ -235,10 +245,14 @@ pub(crate) struct Image {
     home: vk::ImageLayout,
     /// Every aspect of the image's format, which a change of layout names.
     aspects: vk::ImageAspectFlags,
-    /// An upload recorded its move from undefined to `home`. Read and set under the work lock.
+    /// The layout the image is made in: undefined, or preinitialized for a texture over a buffer
+    /// in place, whose move home keeps the bytes.
+    first: vk::ImageLayout,
+    /// An upload recorded its move from `first` to `home`. Read and set under the work lock.
     homed: AtomicBool,
-    /// A heap texture's block, which the image's memory is, held while anything holds the image.
-    _heap: Option<Arc<Block>>,
+    /// The block the image's memory is in, held while anything holds the image: a heap
+    /// texture's, or the buffer's a texture over it lies in in place.
+    _block: Option<Arc<Block>>,
 }
 
 impl Image {
@@ -254,7 +268,7 @@ impl Image {
                 .src_access_mask(vk::AccessFlags2::NONE)
                 .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
                 .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
+                .old_layout(self.first)
                 .new_layout(self.home)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -282,8 +296,9 @@ pub(crate) enum Backing {
     /// An allocation of its own, and its bytes where it spilled out of device-local memory (else
     /// 0).
     Own(vk::DeviceMemory, u64),
-    /// A place in a heap's range of a block the image holds ([`Device::new_heap_texture`]).
-    Heap,
+    /// A place in a block the image holds: a heap's range ([`Device::new_heap_texture`]), or a
+    /// buffer's bytes ([`Buffer::new_texture`]).
+    InBlock,
 }
 
 /// The unit of a copy between an image and bytes or another image: the aspect, an element's
@@ -375,7 +390,7 @@ impl Device {
         descriptor: &TextureDescriptor,
         index: Option<u32>,
     ) -> Result<Texture, Error> {
-        self.texture(descriptor, index, None, None)
+        self.texture(descriptor, index, Source::Plain)
     }
 
     /// `heapTextureSizeAndAlignWithDescriptor:`: the bytes and alignment a texture of
@@ -403,6 +418,67 @@ impl Device {
         heap_fit(core, descriptor, &requirements, &dedicated)
     }
 
+    /// `minimumLinearTextureAlignmentForPixelFormat:`: what a texture over a buffer's offset and
+    /// rows are to be multiples of for the device's own linear image to hold it in place
+    /// ([`Buffer::new_texture`]). It is the smallest power of two from 16 to 4,096 at which the
+    /// device lays the rows of a linear image of the format, of every width tried, at the row
+    /// rounded up to it, and of which the image's memory alignment is a factor; the largest over
+    /// reading, reading and rendering, and reading and a shader's writes, where the device makes
+    /// such an image; Metal's 16 where no candidate holds. The device answers: each image is
+    /// made, read with `vkGetImageSubresourceLayout` and destroyed, never bound, once per format
+    /// for the device's life. The answer differs by device, as Metal's does by GPU.
+    ///
+    /// Err: [`Gap::TextureFormat`] for a format no texture is made of.
+    pub fn minimum_linear_texture_alignment(
+        &self,
+        pixel_format: PixelFormat,
+    ) -> Result<u64, Error> {
+        const WIDTHS: [u32; 9] = [1, 3, 17, 64, 65, 100, 129, 1000, 1920];
+        let core = self.core();
+        if let Some(&answer) = lock(&core.linear_alignments).get(&pixel_format) {
+            return Ok(answer);
+        }
+        let read = TextureUsage::SHADER_READ;
+        let usages = [
+            read,
+            read | TextureUsage::RENDER_TARGET,
+            read | TextureUsage::SHADER_WRITE,
+        ];
+        let mut answer = None;
+        for usage in usages {
+            let mut rows = Vec::with_capacity(WIDTHS.len());
+            for width in WIDTHS {
+                let mut d = TextureDescriptor::new(TextureType::Type2D, pixel_format, width, 3);
+                d.usage = usage;
+                let (shape, plan) = match self.prepare(&d) {
+                    Ok((shape, plan, _)) => (shape, plan),
+                    Err(error) if usage == read => return Err(error),
+                    Err(_) => break,
+                };
+                let Some(unit) = plan.unit.filter(|unit| unit.block == [1, 1]) else {
+                    break;
+                };
+                let Some((pitch, align)) = linear_layout(core, &d, &shape, &plan) else {
+                    break;
+                };
+                rows.push((u64::from(width * unit.bytes), pitch, align));
+            }
+            if rows.len() < WIDTHS.len() {
+                continue;
+            }
+            let holds = |candidate: u64| {
+                (rows.iter()).all(|&(row, pitch, align)| {
+                    pitch == row.next_multiple_of(candidate) && candidate.is_multiple_of(align)
+                })
+            };
+            let found = (4..=12).map(|power| 1u64 << power).find(|&p| holds(p));
+            answer = answer.max(found);
+        }
+        let answer = answer.unwrap_or(16);
+        lock(&core.linear_alignments).insert(pixel_format, answer);
+        Ok(answer)
+    }
+
     /// `MTLHeap`'s `newTextureWithDescriptor:`, at `index`: a texture as [`Device::new_texture`]
     /// makes it, its image bound at `offset` in `heap`, where the consumer's own placement put it
     /// by [`Device::heap_texture_size_and_align`]. Nothing is allocated, and the bytes are those
@@ -428,7 +504,7 @@ impl Device {
                 pixel_format: descriptor.pixel_format,
             }));
         }
-        self.texture(descriptor, index, None, Some((block, heap, offset)))
+        self.texture(descriptor, index, Source::Heap(block, heap, offset))
     }
 
     /// `newTextureWithDescriptor:` with `MTLStorageModeManaged`, at `index`: as
@@ -460,7 +536,7 @@ impl Device {
         }
         let mut d = *descriptor;
         d.storage_mode = StorageMode::Managed;
-        self.texture(&d, index, Some((bytes, places)), None)
+        self.texture(&d, index, Source::Managed(bytes, places))
     }
 
     /// A descriptor's checks, as Metal makes them, and what its texture is made of: the shape,
@@ -492,14 +568,12 @@ impl Device {
         Ok((shape, plan, usage))
     }
 
-    /// [`Device::new_texture`]; [`Device::new_managed_texture`] with its bytes; and
-    /// [`Device::new_heap_texture`] with its block, heap and offset.
+    /// A texture of `descriptor` at `index`, its image made as `source` says.
     fn texture(
         &self,
         descriptor: &TextureDescriptor,
         index: Option<u32>,
-        managed: Option<(&Buffer, &[BytesPlace])>,
-        heap: Option<(Arc<Block>, HeapRange, u64)>,
+        source: Source<'_>,
     ) -> Result<Texture, Error> {
         let d = *descriptor;
         let (shape, plan, usage) = self.prepare(&d)?;
@@ -512,9 +586,33 @@ impl Device {
             false => IndexClass::Texture,
         };
         let core = self.core();
-        if let Some((bytes, places)) = managed {
-            check_places(&d, plan.unit, bytes, places)?;
-        }
+        let (named, first, home) = match &source {
+            Source::Plain | Source::Heap(..) => (None, vk::ImageLayout::UNDEFINED, plan.home),
+            Source::Managed(bytes, places) => {
+                check_places(&d, plan.unit, bytes, places)?;
+                let named = Named {
+                    buffer: (*bytes).clone(),
+                    places: places.to_vec(),
+                    over: false,
+                };
+                (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
+            }
+            Source::Over(buffer, offset, bytes_per_row) => {
+                check_over(core, &d, &shape, &plan, buffer, *offset, *bytes_per_row)?;
+                let named = Named {
+                    buffer: (*buffer).clone(),
+                    places: vec![BytesPlace {
+                        offset: *offset,
+                        bytes_per_row: *bytes_per_row,
+                        bytes_per_image: 0,
+                    }],
+                    over: true,
+                };
+                // The host reaches the image's memory too: general, from preinitialized.
+                let general = vk::ImageLayout::GENERAL;
+                (Some(named), vk::ImageLayout::PREINITIALIZED, general)
+            }
+        };
         let index = match index {
             Some(index) => {
                 lock(&core.arrays.grants).occupy(class, index)?;
@@ -523,17 +621,31 @@ impl Device {
             }
             None => None,
         };
-        let bind = match &heap {
-            Some((block, heap, offset)) => Bind::Heap {
-                memory: block.memory.device_memory(),
-                block_len: block.memory.len,
-                heap: *heap,
-                offset: *offset,
-            },
-            None => Bind::Pooled,
+        let (bind, block) = match source {
+            Source::Plain | Source::Managed(..) => (Bind::Pooled, None),
+            Source::Heap(block, heap, offset) => {
+                let bind = Bind::Heap {
+                    memory: block.memory.device_memory(),
+                    block_len: block.memory.len,
+                    heap,
+                    offset,
+                };
+                (bind, Some(block))
+            }
+            Source::Over(buffer, offset, bytes_per_row) => {
+                let block = Arc::clone(buffer.held().0);
+                let bind = Bind::InPlace {
+                    memory: block.memory.device_memory(),
+                    memory_type: core.memory_type(block.memory.class),
+                    block_len: block.memory.len,
+                    at: buffer.offset() + offset,
+                    bytes_per_row,
+                };
+                (bind, Some(block))
+            }
         };
         // SAFETY: the device is live, and `plan` was checked against its image format query; a
-        // heap's block is the device's, and the texture holds it.
+        // heap's or a buffer's block is the device's, and the texture holds it.
         let made = unsafe { make(core, &d, &shape, &plan, bind) };
         let (image, backing, bytes, sampled, storage) = match made {
             Ok(made) => made,
@@ -553,10 +665,11 @@ impl Device {
             bytes,
             sampled,
             storage,
-            home: plan.home,
+            home,
             aspects: plan.aspects,
+            first,
             homed: AtomicBool::new(false),
-            _heap: heap.map(|(block, ..)| block),
+            _block: block,
         });
         let inner = TextureInner {
             device: self.clone(),
@@ -567,7 +680,7 @@ impl Device {
             index,
             word: plan.word,
             id: core.ids.take(),
-            managed: managed.map(|(bytes, places)| (bytes.clone(), places.to_vec())),
+            named,
             view: None,
         };
         if let Some((class, index)) = index {
@@ -579,7 +692,7 @@ impl Device {
                     &core.device,
                     class,
                     index,
-                    sampled.map(|view| (view, plan.home)),
+                    sampled.map(|view| (view, home)),
                     storage,
                 )
             };
@@ -663,6 +776,133 @@ fn check_places(
         }
     }
     Ok(())
+}
+
+/// Checks a texture over `buffer` at `offset`, rows `bytes_per_row` apart: rows a whole number of
+/// texels apart and at least a row, an offset a whole number of texels in, and every texel
+/// inside the buffer; and that it is a texture the runtime holds in place: 2D of one level,
+/// sample and slice, of a color format of one texel an element, over a buffer of no device copy
+/// in memory that did not spill, of a format and usage the device makes linear images of, with
+/// every format feature its optimal image has that the usage uses.
+fn check_over(
+    core: &Core,
+    d: &TextureDescriptor,
+    shape: &Shape,
+    plan: &Plan,
+    buffer: &Buffer,
+    offset: u64,
+    bytes_per_row: u64,
+) -> Result<(), Error> {
+    let gap = || {
+        Error::Unsupported(Gap::TextureOverBuffer {
+            pixel_format: d.pixel_format,
+        })
+    };
+    let one = d.mipmap_level_count == 1 && d.sample_count == 1 && d.array_length == 1;
+    if d.texture_type != TextureType::Type2D || !one {
+        return Err(gap());
+    }
+    let unit = (plan.unit)
+        .filter(|unit| unit.aspect == vk::ImageAspectFlags::COLOR && unit.block == [1, 1])
+        .ok_or_else(gap)?;
+    let texel = u64::from(unit.bytes);
+    let row = u64::from(d.width) * texel;
+    let end = u64::from(d.height - 1)
+        .checked_mul(bytes_per_row)
+        .and_then(|span| span.checked_add(row))
+        .and_then(|span| span.checked_add(offset));
+    let laid = bytes_per_row.is_multiple_of(texel)
+        && bytes_per_row >= row
+        && offset.is_multiple_of(texel)
+        && end.is_some_and(|end| end <= buffer.length());
+    if !laid {
+        return Err(Error::Refused(Refusal::BufferTextureLayout {
+            offset,
+            bytes_per_row,
+            len: buffer.length(),
+        }));
+    }
+    let (block, copy) = buffer.held();
+    if copy.is_some() || block.memory.spilled() {
+        return Err(gap());
+    }
+    let max = linear_extent(core, shape, plan).ok_or_else(gap)?;
+    if d.width > max.width || d.height > max.height {
+        return Err(gap());
+    }
+    let (linear, optimal) = core.format_features(plan.format);
+    if !linear.contains(optimal & kept_features(plan.usage)) {
+        return Err(gap());
+    }
+    Ok(())
+}
+
+/// The format features an image of `usage` is used by, which a linear image is to keep where the
+/// device's optimal image of its format has them: copies and blits; sampling and its linear
+/// filter; a shader's reads, writes and atomics without a format; rendering and blending.
+fn kept_features(usage: vk::ImageUsageFlags) -> vk::FormatFeatureFlags2 {
+    type F = vk::FormatFeatureFlags2;
+    let mut kept = F::TRANSFER_SRC | F::TRANSFER_DST | F::BLIT_SRC | F::BLIT_DST;
+    if usage.contains(vk::ImageUsageFlags::SAMPLED) {
+        kept |= F::SAMPLED_IMAGE | F::SAMPLED_IMAGE_FILTER_LINEAR;
+    }
+    if usage.contains(vk::ImageUsageFlags::STORAGE) {
+        kept |= F::STORAGE_IMAGE
+            | F::STORAGE_IMAGE_ATOMIC
+            | F::STORAGE_READ_WITHOUT_FORMAT
+            | F::STORAGE_WRITE_WITHOUT_FORMAT;
+    }
+    if usage.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT) {
+        kept |= F::COLOR_ATTACHMENT | F::COLOR_ATTACHMENT_BLEND;
+    }
+    kept
+}
+
+/// The largest extent of a linear image of `plan`'s format and usage of `shape`'s type, where the
+/// device makes one.
+fn linear_extent(core: &Core, shape: &Shape, plan: &Plan) -> Option<vk::Extent3D> {
+    let linear = vk::PhysicalDeviceImageFormatInfo2::default()
+        .format(plan.format)
+        .ty(shape.image_type)
+        .tiling(vk::ImageTiling::LINEAR)
+        .usage(plan.usage)
+        .flags(shape.flags);
+    core.image_format_properties(&linear)
+        .map(|properties| properties.max_extent)
+}
+
+/// The row pitch and memory alignment of a linear image of `d`, `shape` and `plan`, where the
+/// device makes one: the image is made, read and destroyed, never bound.
+fn linear_layout(
+    core: &Core,
+    d: &TextureDescriptor,
+    shape: &Shape,
+    plan: &Plan,
+) -> Option<(u64, u64)> {
+    let max = linear_extent(core, shape, plan)?;
+    if d.width > max.width || d.height > max.height {
+        return None;
+    }
+    let info = image_info(d, shape, plan)
+        .tiling(vk::ImageTiling::LINEAR)
+        .initial_layout(vk::ImageLayout::PREINITIALIZED);
+    let device = &core.device;
+    // SAFETY: the device is live, and makes a linear image of the format, usage and extent.
+    let image = unsafe { device.create_image(&info, None) }.ok()?;
+    let color = vk::ImageSubresource {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        mip_level: 0,
+        array_layer: 0,
+    };
+    // SAFETY: the image is the device's, linear, of one level and layer of a color format; it is
+    // destroyed once read, never bound.
+    let (layout, requirements) = unsafe {
+        let layout = device.get_image_subresource_layout(image, color);
+        let requirements = device.get_image_memory_requirements(image);
+        device.destroy_image(image, None);
+        (layout, requirements)
+    };
+    Some((layout.row_pitch, requirements.alignment))
 }
 
 /// Checks a descriptor's shape as Metal does.
@@ -985,10 +1225,32 @@ unsafe fn make(
     objects
 }
 
+/// What a texture's image is made from.
+enum Source<'a> {
+    /// A place in a texture block, or memory of its own.
+    Plain,
+    /// As `Plain`, with a Managed texture's named bytes.
+    Managed(&'a Buffer, &'a [BytesPlace]),
+    /// A block, a heap's range of it, and the texture's offset in the heap.
+    Heap(Arc<Block>, HeapRange, u64),
+    /// A buffer, the texture's offset in it and its rows' pitch.
+    Over(&'a Buffer, u64, u64),
+}
+
 /// Where [`make`] binds the image.
 enum Bind {
     /// A place in a texture block, or memory of its own.
     Pooled,
+    /// A linear image, made preinitialized, at `at` in a block whose memory is `memory`, of type
+    /// `memory_type` and of `block_len` bytes, where the device lays its rows `bytes_per_row`
+    /// apart from there.
+    InPlace {
+        memory: vk::DeviceMemory,
+        memory_type: u32,
+        block_len: u64,
+        at: u64,
+        bytes_per_row: u64,
+    },
     /// `offset` in `heap`, whose block's memory is `memory`, of `block_len` bytes.
     Heap {
         memory: vk::DeviceMemory,
@@ -1066,7 +1328,12 @@ impl Made {
         bind: Bind,
     ) -> Result<Objects, Error> {
         let device = &core.device;
-        let info = image_info(d, shape, plan);
+        let info = match bind {
+            Bind::InPlace { .. } => image_info(d, shape, plan)
+                .tiling(vk::ImageTiling::LINEAR)
+                .initial_layout(vk::ImageLayout::PREINITIALIZED),
+            Bind::Pooled | Bind::Heap { .. } => image_info(d, shape, plan),
+        };
         // SAFETY: the caller's contract: the device makes such an image.
         let image =
             unsafe { device.create_image(&info, None) }.map_err(Error::vulkan("vkCreateImage"))?;
@@ -1092,7 +1359,36 @@ impl Made {
             },
             false => None,
         };
-        let (backing, memory, offset) = if let Bind::Heap {
+        let (backing, memory, offset) = if let Bind::InPlace {
+            memory,
+            memory_type,
+            block_len,
+            at,
+            bytes_per_row,
+        } = bind
+        {
+            let color = vk::ImageSubresource {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                array_layer: 0,
+            };
+            // SAFETY: the image is the device's, linear, of one level and layer of a color format.
+            let layout = unsafe { device.get_image_subresource_layout(image, color) };
+            let fits = layout.offset == 0
+                && layout.row_pitch == bytes_per_row
+                && dedicated.requires_dedicated_allocation == vk::FALSE
+                && bits & (1 << memory_type) != 0
+                && at.is_multiple_of(requirements.alignment)
+                && at
+                    .checked_add(requirements.size)
+                    .is_some_and(|end| end <= block_len);
+            if !fits {
+                return Err(Error::Unsupported(Gap::TextureOverBuffer {
+                    pixel_format: d.pixel_format,
+                }));
+            }
+            (Backing::InBlock, memory, at)
+        } else if let Bind::Heap {
             memory,
             block_len,
             heap,
@@ -1113,7 +1409,7 @@ impl Made {
                 && end.is_some_and(|end| end <= heap.len)
                 && at.is_some_and(|at| at.is_multiple_of(fit.align));
             match (fits, at) {
-                (true, Some(at)) => (Backing::Heap, memory, at),
+                (true, Some(at)) => (Backing::InBlock, memory, at),
                 _ => return Err(refused),
             }
         } else if let Some((place, block)) = pooled {
@@ -1190,7 +1486,7 @@ impl Made {
                     core.counters.fall_by(Gauge::SpilledBytes, spilled);
                 }
                 Some(Backing::Placed(place)) => core.places.release(core, place),
-                Some(Backing::Heap) | None => {}
+                Some(Backing::InBlock) | None => {}
             }
         }
     }
@@ -1481,7 +1777,8 @@ impl TextureInner {
         slice: u32,
     ) -> Result<Option<(Transfer, &Buffer, BytesPlace, u64)>, Error> {
         let refused = || Error::Refused(Refusal::ManagedTextureBytes { level, slice });
-        let (bytes, places) = self.managed.as_ref().ok_or_else(refused)?;
+        let named = self.named.as_ref().ok_or_else(refused)?;
+        let (bytes, places) = (&named.buffer, &named.places);
         let d = &self.descriptor;
         let slices = slices(d);
         let place = match level < d.mipmap_level_count && slice < slices {
@@ -1505,6 +1802,13 @@ impl TextureInner {
         Ok(Some((copy, bytes, place, start)))
     }
 
+    /// The buffer a texture over a buffer lies over ([`Buffer::new_texture`]).
+    fn over(&self) -> Option<&Buffer> {
+        (self.named.as_ref())
+            .filter(|named| named.over)
+            .map(|named| &named.buffer)
+    }
+
     /// Where the host reaches a Managed texture's named bytes of a non-empty `region` of `level`
     /// and `slice`: the region's first element and its place. `None` for a texture without named
     /// bytes.
@@ -1514,7 +1818,7 @@ impl TextureInner {
         level: u32,
         slice: u32,
     ) -> Result<Option<(*mut u8, BytesPlace)>, Error> {
-        if self.managed.is_none() {
+        if self.named.is_none() {
             return Ok(None);
         }
         let refused = || Error::Refused(Refusal::ManagedTextureBytes { level, slice });
@@ -1748,15 +2052,17 @@ impl Texture {
             Some(view) => view.parent.clone(),
             None => self.clone(),
         };
-        // A view of a Managed texture names the parent's bytes of its own levels and slices.
+        // A view names the parent's bytes of its own levels and slices: a Managed texture's, or a
+        // texture over a buffer's.
         let per_level = self::slices(p);
-        let managed = (inner.managed.as_ref()).map(|(bytes, places)| {
-            let at = |level, slice| places[(level * per_level + slice) as usize];
+        let named = (inner.named.as_ref()).map(|named| {
+            let at = |level, slice| named.places[(level * per_level + slice) as usize];
             let level_places = |level| slices.clone().map(move |slice| at(level, slice));
-            (
-                bytes.clone(),
-                levels.clone().flat_map(level_places).collect(),
-            )
+            Named {
+                buffer: named.buffer.clone(),
+                places: levels.clone().flat_map(level_places).collect(),
+                over: named.over,
+            }
         });
         let view = TextureInner {
             device: inner.device.clone(),
@@ -1767,7 +2073,7 @@ impl Texture {
             index,
             word: plan.word,
             id: inner.id,
-            managed,
+            named,
             view: Some(View {
                 parent,
                 base,
@@ -1817,8 +2123,8 @@ impl Texture {
     /// A Managed texture's named bytes ([`Device::new_managed_texture`]): the buffer and its
     /// places, one for each level and, within it, each slice. `None` for any other texture.
     pub(crate) fn named_bytes(&self) -> Option<(&Buffer, &[BytesPlace])> {
-        let (bytes, places) = self.inner.managed.as_ref()?;
-        Some((bytes, places))
+        let named = (self.inner.named.as_ref()).filter(|named| !named.over)?;
+        Some((&named.buffer, &named.places))
     }
 
     /// The barrier that moves `placed` from home to the transfer `layout` for a copy's
@@ -1849,6 +2155,20 @@ impl Texture {
             index: self.inner.index.map_or(0, |(_, index)| index),
             word: self.inner.word,
         }
+    }
+
+    /// Its id in the encoders' hazard sets: a texture over a buffer's is the buffer's, as the two
+    /// are the same bytes and a use of either is a use of both.
+    pub(crate) fn hazard_id(&self) -> u32 {
+        match self.inner.over() {
+            Some(buffer) => buffer.id(),
+            None => self.inner.id,
+        }
+    }
+
+    /// Whether the host reads the GPU's writes to it with no copy: a texture over a Shared buffer.
+    pub(crate) fn host_reads(&self) -> bool {
+        self.inner.over().is_some_and(Buffer::is_shared)
     }
 
     /// For the device tests: the bytes its image's memory requirements name.
@@ -1915,7 +2235,11 @@ impl Texture {
                         .copy_to_nonoverlapping(host.add(to), len)
                 }
             }
-            return self.upload_region(region, level, slice);
+            return match inner.over() {
+                None => self.upload_region(region, level, slice),
+                // The image's memory is the bytes.
+                Some(_) => Ok(()),
+            };
         }
         let core = inner.device.core();
         let stage = core.work.stage(core, copy.len(), false)?;
@@ -1960,6 +2284,12 @@ impl Texture {
     /// made.
     pub fn upload_region(&self, region: Region, level: u32, slice: u32) -> Result<(), Error> {
         let inner = &self.inner;
+        if inner.named.as_ref().is_none_or(|named| named.over) {
+            return Err(Error::Refused(Refusal::ManagedTextureBytes {
+                level,
+                slice,
+            }));
+        }
         let Some((copy, bytes, place, start)) = inner.named(region, level, slice)? else {
             return Ok(());
         };
@@ -2081,5 +2411,40 @@ impl Texture {
             core.work.unread(number);
         }
         waited
+    }
+}
+
+impl Buffer {
+    /// `newTextureWithDescriptor:offset:bytesPerRow:`, at `index` as for
+    /// [`Device::new_texture`]: a texture whose texels are the buffer's bytes from `offset`,
+    /// rows `bytes_per_row` apart, with the buffer's storage mode whatever the descriptor's. Its
+    /// image is a linear image on the buffer's own memory, made preinitialized so that its move
+    /// home keeps the bytes, in the general layout, where the device lays such an image's rows at
+    /// `bytes_per_row` and the place meets its memory alignment: the GPU and the host then reach
+    /// the same bytes, and nothing is copied. [`Device::minimum_linear_texture_alignment`]
+    /// answers the offset and pitch at which a texture is so. [`Texture::replace_region`] and
+    /// [`Texture::get_bytes`] write and read the buffer's bytes. The texture holds the buffer.
+    ///
+    /// Err: as [`Device::new_texture`]; [`Refusal::BufferTextureLayout`] for rows that are not a
+    /// whole number of texels apart or are closer than a row, an offset that is not a whole
+    /// number of texels, or texels past the buffer; [`Gap::TextureOverBuffer`] for a texture the
+    /// runtime does not hold in place: other than 2D of one level, sample and slice, of a format
+    /// of other than one color texel an element, over a Managed buffer's device copy or memory
+    /// that spilled, of a format and usage the device makes no linear image of, or where the
+    /// device's linear image lays its rows at another pitch or needs another alignment.
+    pub fn new_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        index: Option<u32>,
+        offset: u64,
+        bytes_per_row: u64,
+    ) -> Result<Texture, Error> {
+        let mut d = *descriptor;
+        d.storage_mode = match self.held().0.memory.class {
+            MemoryClass::Shared => StorageMode::Shared,
+            MemoryClass::Private => StorageMode::Private,
+        };
+        let over = Source::Over(self, offset, bytes_per_row);
+        self.device().texture(&d, index, over)
     }
 }

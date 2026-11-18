@@ -330,6 +330,11 @@ impl Buffer {
         self.inner.copy.is_none() && self.inner.block.memory.class == MemoryClass::Shared
     }
 
+    /// The device it was made on.
+    pub(crate) fn device(&self) -> &Device {
+        &self.inner.device
+    }
+
     /// The block, and a Managed buffer's device copy, for a command buffer to keep.
     pub(crate) fn held(&self) -> (&Arc<Block>, Option<&Arc<DeviceCopy>>) {
         (&self.inner.block, self.inner.copy.as_ref())

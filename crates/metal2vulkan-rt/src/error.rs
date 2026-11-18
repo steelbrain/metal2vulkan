@@ -448,6 +448,20 @@ pub enum Refusal {
         /// The slice of the first place refused; 0 where the count of places is wrong.
         slice: u32,
     },
+    /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) whose rows
+    /// are not a whole number of texels apart or are closer than a row, whose offset is not a
+    /// whole number of texels, or whose texels run past the buffer.
+    ///
+    /// Basis: ours (a linear image and a copy read rows whole texels apart from a texel's start,
+    /// and texels past the buffer would lie in memory it does not hold).
+    BufferTextureLayout {
+        /// The texture's offset in the buffer.
+        offset: u64,
+        /// Its rows' pitch.
+        bytes_per_row: u64,
+        /// The buffer's length.
+        len: u64,
+    },
     /// A heap texture whose image does not lie in its heap
     /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture)): past the heap's end at
     /// its offset, at an offset in the block that is not a multiple of the image's alignment, or
@@ -585,6 +599,18 @@ pub enum Gap {
         source: PixelFormat,
         /// The destination texture's pixel format.
         destination: PixelFormat,
+    },
+    /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) the runtime
+    /// does not hold in place: other than 2D of one level, sample and slice; of a format of
+    /// other than one color texel an element; over a Managed buffer's device copy or a block
+    /// that spilled; of a format and usage the device makes no linear image of; or where the
+    /// device's linear image lays its rows at another pitch than the texture's, or needs an
+    /// alignment its place misses. The copy form for those is not built yet.
+    ///
+    /// Basis: ours (only the in-place linear image is built).
+    TextureOverBuffer {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
     },
     /// A heap texture the runtime does not place
     /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture) and
@@ -966,6 +992,14 @@ impl fmt::Display for Refusal {
                 f,
                 "a Managed texture's bytes of level {level}, slice {slice} are not where a copy reads them in place"
             ),
+            Refusal::BufferTextureLayout {
+                offset,
+                bytes_per_row,
+                len,
+            } => write!(
+                f,
+                "a texture at offset {offset}, rows {bytes_per_row} bytes apart, does not lie in whole texels inside a buffer of {len} bytes"
+            ),
             Refusal::HeapTexturePlace {
                 offset,
                 size,
@@ -1023,6 +1057,10 @@ impl fmt::Display for Gap {
             } => write!(
                 f,
                 "this copy from a texture of {source:?} to one of {destination:?} is not built"
+            ),
+            Gap::TextureOverBuffer { pixel_format } => write!(
+                f,
+                "this texture of {pixel_format:?} over a buffer is not held in place on this device"
             ),
             Gap::HeapTexture { pixel_format } => write!(
                 f,

@@ -186,7 +186,7 @@ fn free(core: &Core, object: Free) {
                     core.counters.fall_by(Gauge::SpilledBytes, spilled);
                 }
                 Backing::Placed(place) => core.places.release(core, place),
-                Backing::Heap => {}
+                Backing::InBlock => {}
             }
             core.counters.fall(Gauge::Textures);
         }

@@ -184,6 +184,8 @@ pub(crate) struct Core {
     pub(crate) samplers: Mutex<SamplerTable>,
     /// The constexpr samplers the live pipeline states number, by index.
     pub(crate) constexprs: Mutex<HashMap<u32, Constexpr>>,
+    /// [`Device::minimum_linear_texture_alignment`]'s answers, one per pixel format asked.
+    pub(crate) linear_alignments: Mutex<HashMap<metal2vulkan::metal::PixelFormat, u64>>,
     /// The device's compute limits.
     pub(crate) limits: ComputeLimits,
     /// The parameter ring.
@@ -461,6 +463,7 @@ impl Device {
             arrays,
             samplers: Mutex::new(SamplerTable::new(sampler_cap)),
             constexprs: Mutex::new(HashMap::new()),
+            linear_alignments: Mutex::new(HashMap::new()),
             limits,
             ring: Ring::new(),
             ids: Ids::new(),
@@ -965,6 +968,24 @@ impl Core {
         }
         .ok()
         .map(|()| properties.image_format_properties)
+    }
+
+    /// The device's features for `format`: its linear tiling's, then its optimal tiling's.
+    pub(crate) fn format_features(
+        &self,
+        format: vk::Format,
+    ) -> (vk::FormatFeatureFlags2, vk::FormatFeatureFlags2) {
+        let mut three = vk::FormatProperties3::default();
+        let mut properties = vk::FormatProperties2::default().push_next(&mut three);
+        // SAFETY: the physical device is the instance's, which is Vulkan 1.3.
+        unsafe {
+            (self.instance.vk()).get_physical_device_format_properties2(
+                self.physical,
+                format,
+                &mut properties,
+            )
+        };
+        (three.linear_tiling_features, three.optimal_tiling_features)
     }
 
     pub(crate) fn memory_type(&self, class: MemoryClass) -> u32 {
