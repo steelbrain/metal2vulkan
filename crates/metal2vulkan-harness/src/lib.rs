@@ -29,7 +29,9 @@
 //! buffers of 4 KiB, 1 MiB and 64 MiB, each made and released in turn over the range the last
 //! one left ([`run::Session::create`]), each checked to start zero; and compute pipeline states of
 //! one content (`create_state`), the first of a content the device has not seen timed apart
-//! (`first`), then 1,000 of a content it has, each made and released in turn.
+//! with one dispatch of it through to completion (`first`: a runtime may compile its pipeline in
+//! the creation or at the first dispatch, and the sum holds both; the row also shows the creation
+//! alone), then 1,000 of a content it has, each made and released in turn.
 //!
 //! ```sh
 //! cargo run --release -p metal2vulkan-harness -- --runtime old|new[,old|new...] [--runs 200] \

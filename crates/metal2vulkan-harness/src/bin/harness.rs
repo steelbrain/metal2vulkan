@@ -358,9 +358,11 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
         us(90),
         time(&report.create_us),
         gauges(&report.gauges),
-        report
-            .first_us
-            .map_or(String::new(), |us| format!("; first {us:.1} us")),
+        match (report.first_us, report.first_create_us) {
+            (Some(us), Some(create)) =>
+                format!("; first {us:.1} us with one dispatch, its creation {create:.1} us"),
+            _ => String::new(),
+        },
     );
     matrix(runtime, create.name, &report.create_us, &report.gauges);
     if let Some(us) = report.first_us {

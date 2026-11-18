@@ -331,9 +331,14 @@ fn run_scaled(
 pub struct CreateReport {
     /// Each timed creation call's wall time, in microseconds.
     pub create_us: Vec<f64>,
-    /// The first creation's wall time, in microseconds, where it is timed apart: a pipeline
-    /// state's of a content the device had not seen.
+    /// The first creation's wall time with one dispatch of what it made through to completion,
+    /// in microseconds, where it is timed apart: a pipeline state's of a content the device had
+    /// not seen. A runtime may pay its pipeline's compile in the creation or at the first
+    /// dispatch; the sum holds both.
     pub first_us: Option<f64>,
+    /// The first creation's wall time alone, in microseconds, the part of
+    /// [`first_us`](Self::first_us) the creation call paid.
+    pub first_create_us: Option<f64>,
     /// The device's gauges after the 100th and the 200th timed creation, where there were that
     /// many.
     pub gauges: Vec<(u32, Vec<(&'static str, u64)>)>,
@@ -914,7 +919,8 @@ pub(crate) fn parts(range: Range<usize>, per: Option<usize>) -> impl Iterator<It
 
 impl<D: ComputeDevice> Harness<D> {
     /// [`Session::create`] of pipeline states of `function` with the `float` constants
-    /// `constants`: each made, timed, and released.
+    /// `constants`: each made, timed, and released. The first, of a content the device has not
+    /// seen, is timed with one dispatch of it through to completion, its output checked.
     fn create_states(
         &self,
         function: &str,
@@ -937,9 +943,10 @@ impl<D: ComputeDevice> Harness<D> {
             drop(state);
             Ok(made.as_secs_f64() * 1e6)
         };
-        let first = once()?;
+        let (first_create, first) = self.first_state(&function, constants)?;
         let mut report = CreateReport {
             first_us: Some(first),
+            first_create_us: Some(first_create),
             warmup: warm_up(runs, &once)?,
             ..CreateReport::default()
         };
@@ -950,6 +957,49 @@ impl<D: ComputeDevice> Harness<D> {
             }
         }
         Ok(report)
+    }
+
+    /// The first state of `function` (`signed_zero_products`, with the `float` constants
+    /// `constants` as its two products' factors) made, then dispatched once, one thread of one
+    /// round, through to completion: the creation's wall time and the whole's, in microseconds.
+    /// The thread's `float4` is checked against the kernel's arithmetic.
+    fn first_state(&self, function: &D::Function, constants: &[(u32, f32)]) -> Result<(f64, f64)> {
+        let destination = self.device.new_buffer(16, Storage::Shared)?;
+        let started = Instant::now();
+        let state = self.device.new_compute_pipeline_state(function, &[])?;
+        let made = started.elapsed();
+        let command_buffer = self.queue.command_buffer()?;
+        let mut encoder = command_buffer.compute_command_encoder()?;
+        encoder.set_compute_pipeline_state(&state)?;
+        encoder.set_buffer(&destination, 0, 0)?;
+        encoder.set_bytes(&1u32.to_le_bytes(), 1)?;
+        encoder.dispatch_threadgroups([1, 1, 1], [1, 1, 1])?;
+        encoder.end_encoding()?;
+        command_buffer.commit()?;
+        command_buffer.wait_until_completed()?;
+        let whole = started.elapsed();
+        // Thread 0's start (0, -0, 0.5, -0.25), one round: the FMA step plus the products'
+        // difference, a * positive - a * negative, of the start.
+        let factor = |index| {
+            (constants.iter())
+                .find(|&&(at, _)| at == index)
+                .map_or(0.0, |&(_, value)| value)
+        };
+        let want = [0.0f32, -0.0, 0.5, -0.25]
+            .map(|a| a.mul_add(0.96875, 0.03125) + (0.0 + a * factor(0) - a * factor(1)));
+        let contents = destination
+            .contents()
+            .ok_or("the first state's destination has no contents")?;
+        let mut got = [0f32; 4];
+        for (at, value) in got.iter_mut().enumerate() {
+            // SAFETY: the buffer holds 16 bytes and its command buffer has completed.
+            let bytes = unsafe { contents.as_ptr().add(4 * at).cast::<[u8; 4]>().read() };
+            *value = f32::from_le_bytes(bytes);
+        }
+        if got != want {
+            return Err(format!("the first state's dispatch wrote {got:?}, not {want:?}").into());
+        }
+        Ok((made.as_secs_f64() * 1e6, whole.as_secs_f64() * 1e6))
     }
 }
 
