@@ -11,7 +11,7 @@
 //! attachment's level, cut to `renderTargetWidth` and `renderTargetHeight` where they are set.
 
 use crate::device::Core;
-use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind};
+use crate::error::{Error, Gap, Refusal, RenderPassKind};
 use crate::texture::{Attachment, Texture};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
@@ -356,7 +356,7 @@ impl Pass {
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's texture; [`Refusal::AttachmentUsage`];
     /// [`Refusal::AttachmentPlace`]; [`Refusal::AttachmentFormat`]; [`Gap::RenderPass`];
-    /// [`Limit::ColorAttachments`]; [`Error::Vulkan`] where an attachment's view cannot be made.
+    /// [`Error::Vulkan`] where an attachment's view cannot be made.
     pub(crate) fn check(core: &Arc<Core>, d: &RenderPassDescriptor) -> Result<Pass, Error> {
         let gap = |kind| Error::Unsupported(Gap::RenderPass { kind });
         let mine = |texture: &Texture| match texture.is_of(core) {
@@ -424,13 +424,6 @@ impl Pass {
             }
             None => None,
         };
-        let max = core.translator.profile().limits().max_color_attachments;
-        if colors.len() > max as usize {
-            return Err(Error::Limit(Limit::ColorAttachments {
-                count: colors.len() as u32,
-                max,
-            }));
-        }
         let mut pass = Pass {
             colors,
             stencil,

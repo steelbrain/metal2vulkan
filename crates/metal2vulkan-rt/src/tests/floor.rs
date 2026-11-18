@@ -429,7 +429,7 @@ fn each_missing_feature_is_named() {
 #[test]
 fn each_low_limit_is_named() {
     type Lower = fn(&mut Queried);
-    let cases: [(Lower, &str, u32); 16] = [
+    let cases: [(Lower, &str, u32); 17] = [
         (
             |d| {
                 d.vulkan12
@@ -524,6 +524,11 @@ fn each_low_limit_is_named() {
             |d| d.families[0].timestamp_valid_bits = 35,
             "timestampValidBits",
             36,
+        ),
+        (
+            |d| d.limits.max_color_attachments = 7,
+            "maxColorAttachments",
+            8,
         ),
     ];
     for (lower, name, needed) in cases {

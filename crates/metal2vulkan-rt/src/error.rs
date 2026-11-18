@@ -1131,18 +1131,6 @@ pub enum Limit {
         /// The counts the device makes, one bit each (`VkSampleCountFlags`).
         counts: u32,
     },
-    /// A render pass whose color attachments reach past the device's `maxColorAttachments`
-    /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)):
-    /// its last color attachment with a texture is at index `count - 1`. Metal's counterpart is
-    /// its 8 color attachments on every device.
-    ///
-    /// Basis: device (the device's `maxColorAttachments`).
-    ColorAttachments {
-        /// The color attachments the pass reaches.
-        count: u32,
-        /// The device's most.
-        max: u32,
-    },
 }
 
 impl Error {
@@ -1570,10 +1558,6 @@ impl fmt::Display for Limit {
             } => write!(
                 f,
                 "a sample count of {sample_count} is not among the device's ({counts:#x})"
-            ),
-            Limit::ColorAttachments { count, max } => write!(
-                f,
-                "a pass of {count} color attachments is past the device's {max}"
             ),
         }
     }

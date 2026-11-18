@@ -1424,9 +1424,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - Refused, as Metal's validation stops them: an attachment's texture made without
   `RenderTarget` usage (`Refusal::AttachmentUsage`), a level or slice past its texture's
   (`Refusal::AttachmentPlace`), a color attachment of a depth or stencil format or a stencil
-  attachment of a format without stencil (`Refusal::AttachmentFormat`). A pass whose color
-  attachments reach past the device's `maxColorAttachments` is `Limit::ColorAttachments`. A refused
-  descriptor leaves the command buffer open for another encoder.
+  attachment of a format without stencil (`Refusal::AttachmentFormat`). A refused descriptor
+  leaves the command buffer open for another encoder. A pass may use all eight color attachments:
+  the floor's `maxColorAttachments` is 8.
 - An encoder holds Metal's render state: a pipeline state, the vertex and fragment functions'
   buffers (`set_vertex_buffer`, `set_vertex_bytes` and their offsets, the fragment's alike),
   textures and sampler states, one viewport and scissor rectangle, the cull mode, the
@@ -1730,7 +1730,9 @@ The descriptor limits are what the runtime's fixed arrays need: 65,536 sampled t
 storage textures and three arrays of 4,000 samplers, one per use (plain, depth comparison,
 integer texture). Vulkan requires at least 500,000 of each texture limit and of the two resource
 totals on a device that supports `descriptorIndexing`, as every lab device does. 4,000 is Vulkan's minimum `maxSamplerAllocationCount`. The compute limits let a threadgroup take
-Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's minimum is 1,
+Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. `maxColorAttachments` holds
+Metal's eight color attachments on every device; Vulkan 1.3 requires 4 of it, and Vulkan 1.4 8.
+A Boolean limit's minimum is 1,
 `VK_TRUE`; `timestampValidBits` is the queue family's.
 
 | Limit | Minimum | Used for |
@@ -1751,6 +1753,7 @@ Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's
 | `maxComputeWorkGroupSize[2]` | `64` | a threadgroup's depth; a deeper one runs as one row |
 | `timestampComputeAndGraphics` | `1` | GPU times of command buffers |
 | `timestampValidBits` | `36` | GPU times of command buffers |
+| `maxColorAttachments` | `8` | every color attachment of a render pass descriptor |
 
 ### Queue family and memory types
 

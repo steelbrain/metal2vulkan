@@ -440,8 +440,7 @@ impl CommandBuffer {
     /// texture; [`Refusal::AttachmentUsage`];
     /// [`Refusal::AttachmentPlace`];
     /// [`Refusal::AttachmentFormat`];
-    /// [`Gap::RenderPass`];
-    /// [`Limit::ColorAttachments`]; [`Error::Vulkan`] where an
+    /// [`Gap::RenderPass`]; [`Error::Vulkan`] where an
     /// attachment's view cannot be made or the command buffer cannot record. A refused
     /// descriptor leaves the command buffer as it was, open for another encoder.
     pub fn render_command_encoder(

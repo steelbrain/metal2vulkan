@@ -13632,7 +13632,6 @@ variant	metal2vulkan-rt::IndexClass::Texture	Texture
 variant	metal2vulkan-rt::Limit::BlockIds	BlockIds
 variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
-variant	metal2vulkan-rt::Limit::ColorAttachments	ColorAttachments { count: u32, max: u32 }
 variant	metal2vulkan-rt::Limit::DeviceSamplers	DeviceSamplers { max: u32 }
 variant	metal2vulkan-rt::Limit::IndexRange	IndexRange { class: IndexClass, first: u32, count: u32 }
 variant	metal2vulkan-rt::Limit::MemoryAllocations	MemoryAllocations { max: u32 }

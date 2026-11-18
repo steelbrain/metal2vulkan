@@ -38,7 +38,7 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 58 | 58 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -56,7 +56,7 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 27 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 6 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 20 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -688,7 +688,6 @@ Columns:
 | `DeviceSamplers` | A sampler state whose device samplers would take the device past its `maxSamplerAllocationCount`, less the sampler arrays' two defaults... | at the device's limit | `device`: the device's `maxSamplerAllocationCount` | 1: `crates/metal2vulkan-rt/src/sampler.rs (take)` | `-` |
 | `MemoryAllocations` | A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones, refused before the driver is called | at the device's limit | `device`: the device's `maxMemoryAllocationCount` | 1: `crates/metal2vulkan-rt/src/memory.rs (allocate)` | `-` |
 | `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
-| `ColorAttachments` | A render pass whose color attachments reach past the device's `maxColorAttachments` (`CommandBuffer::render_command_encoder`) | at the device's limit | `device`: the device's `maxColorAttachments` | 1: `crates/metal2vulkan-rt/src/pass.rs (check)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
 
@@ -1272,7 +1271,6 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-rt/src/sampler.rs (take)`
 - `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-rt/src/memory.rs (allocate)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
-- `rt:Limit::ColorAttachments`: `crates/metal2vulkan-rt/src/pass.rs (check)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`; `crates/metal2vulkan-rt/src/render.rs (refuse)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch)`

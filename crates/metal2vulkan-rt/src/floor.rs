@@ -945,7 +945,7 @@ fn second_elements_fit(device: &Queried) -> bool {
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
 /// uses.
-pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 15] {
+pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 16] {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
     [
@@ -1024,6 +1024,13 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 15] {
             "timestampComputeAndGraphics",
             limits.timestamp_compute_and_graphics,
             vk::TRUE,
+        ),
+        // Every slot of a render pass descriptor (`MTLRenderPassDescriptor.colorAttachments`),
+        // so a pass of any slots draws.
+        (
+            "maxColorAttachments",
+            limits.max_color_attachments,
+            crate::pass::MAX_COLOR_ATTACHMENTS as u32,
         ),
     ]
 }
