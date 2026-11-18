@@ -559,8 +559,8 @@ impl Compiled {
                     }
                 };
                 match variant {
-                    // A pipeline of the variant that states no grid tiles is the plain module of
-                    // a kernel of its own size, which the variant's lowering answered.
+                    // A kernel that does not observe its partition runs its variant alone: in
+                    // tiles where the variant states them, else at its own size.
                     Some(variant) if !variant.observes_threadgroup_partition() => {
                         let image_only = variant.is_image_only();
                         let pipeline = compiled(variant).map_err(Error::Translation)?;
