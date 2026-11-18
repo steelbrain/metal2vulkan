@@ -3,6 +3,7 @@
 
 use super::addresses::AddressMap;
 use super::new_runtime::places::Waiting;
+use super::new_runtime::second::merge;
 use super::new_runtime::unwritten::Unwritten;
 use super::new_runtime::{next_index, top_index};
 use super::player::{
@@ -1669,4 +1670,24 @@ fn a_place_waits_for_its_uncommitted_users() {
     done.sort();
     assert_eq!(done, vec!["held", "other"]);
     assert!(waiting.ended(9).is_empty(), "each place is let go once");
+}
+
+/// The ranges a second copy names merge where they overlap or touch, in order, as one copy-in
+/// each at the next commit.
+#[test]
+fn named_ranges_merge_where_they_overlap_or_touch() {
+    let mut ranges = Vec::new();
+    for (start, end) in [
+        (256, 260),
+        (0, 4),
+        (4, 8),
+        (100, 120),
+        (110, 300),
+        (512, 516),
+    ] {
+        merge(&mut ranges, start, end);
+    }
+    assert_eq!(ranges, vec![(0, 8), (100, 300), (512, 516)]);
+    merge(&mut ranges, 8, 100);
+    assert_eq!(ranges, vec![(0, 300), (512, 516)]);
 }

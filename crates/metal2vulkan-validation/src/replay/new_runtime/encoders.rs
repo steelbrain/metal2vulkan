@@ -98,6 +98,40 @@ impl NewRuntime {
         }
     }
 
+    /// The ranges of second copies named since the last commit (`second`), copied from the CPU's
+    /// copies into the GPU's in a command buffer of the backend's own on the queue of `call`'s
+    /// command buffer, committed just before it, so that it and every command buffer the queue
+    /// runs after it read them.
+    fn copy_named(&mut self, call: &Call) -> Result<(), PlayError> {
+        if !self.seconds.named() {
+            return Ok(());
+        }
+        let queue = self.queue_of.get(&call.receiver).copied();
+        let command_buffer = match queue.and_then(|queue| self.objects.get(&queue)) {
+            Some(Object::Queue(queue)) => queue.command_buffer().map_err(failed(call))?,
+            _ => return Err(refuse(call, "a commit of a command buffer of no queue")),
+        };
+        let mut blit = command_buffer
+            .blit_command_encoder()
+            .map_err(failed(call))?;
+        let (named, places) = self.seconds.take();
+        for named in named {
+            for (start, end) in named.ranges {
+                let size = end - start;
+                (blit.copy_from_buffer_to_buffer(&named.cpu, start, &named.gpu, start, size))
+                    .map_err(failed(call))?;
+            }
+        }
+        blit.end_encoding();
+        command_buffer.commit().map_err(failed(call))?;
+        self.commits += 1;
+        self.in_flight.push_back((self.commits, command_buffer));
+        for place in places {
+            self.places.give(place, self.commits, Vec::new());
+        }
+        Ok(())
+    }
+
     pub(super) fn command_buffer_call(
         &mut self,
         call: &Call,
@@ -139,6 +173,7 @@ impl NewRuntime {
             "renderCommandEncoderWithDescriptor:" => self.render_encoder(call, &command_buffer),
             "parallelRenderCommandEncoderWithDescriptor:" => self.skip_encoder(),
             "commit" => {
+                self.copy_named(call)?;
                 command_buffer.commit().map_err(failed(call))?;
                 self.commits += 1;
                 // Its first use committed, a no-copy Managed buffer's GPU copy changes only by
@@ -481,9 +516,17 @@ impl NewRuntime {
             }
             // A skipped resource is counted above, with the blits that name a skipped object.
             "synchronizeResource:" => match self.resource(call, 0)? {
-                Held::Buffer(buffer) => self
-                    .blit(id)
-                    .synchronize_resource(rt::Resource::Buffer(&buffer)),
+                // A buffer with a second copy: the GPU's copy into the CPU's, its whole words.
+                Held::Buffer(buffer) => match self.seconds.cpu(Self::id(call, 0)?).cloned() {
+                    Some(cpu) => {
+                        let words = buffer.length() / 4 * 4;
+                        self.blit(id)
+                            .copy_from_buffer_to_buffer(&buffer, 0, &cpu, 0, words)
+                    }
+                    None => self
+                        .blit(id)
+                        .synchronize_resource(rt::Resource::Buffer(&buffer)),
+                },
                 Held::Texture(texture) => self
                     .blit(id)
                     .synchronize_resource(rt::Resource::Texture(&texture)),

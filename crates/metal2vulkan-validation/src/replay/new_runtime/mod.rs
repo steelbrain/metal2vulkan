@@ -10,6 +10,7 @@
 mod encoders;
 pub(super) mod places;
 mod render;
+pub(super) mod second;
 pub(super) mod unwritten;
 
 use super::args::{arg, data, metal, option_sets, refuse, uint, variant, Fields};
@@ -185,6 +186,11 @@ pub struct NewRuntime {
     /// The buffers in a place of the play's own that an encoder of each command buffer not yet
     /// committed named: a release of one waits for those command buffers (`Places::give`).
     users: HashMap<u64, HashSet<u64>>,
+    /// The CPU copies of a two-copy stream's Managed buffers on a one-copy device
+    /// (`second`).
+    seconds: second::Seconds,
+    /// The queue each command buffer was made on.
+    queue_of: HashMap<u64, u64>,
     /// The bytes those copies staged.
     staged_bytes: u64,
     /// The compute pipeline states whose `gpuResourceID` the player asked, which the runtime does
@@ -416,6 +422,8 @@ impl NewRuntime {
             unwritten: unwritten::Unwritten::default(),
             staging: HashMap::new(),
             users: HashMap::new(),
+            seconds: second::Seconds::default(),
+            queue_of: HashMap::new(),
             staged_bytes: 0,
             unanswered_pipeline_ids: 0,
             block_bytes: [0; 2],
@@ -617,6 +625,22 @@ impl NewRuntime {
         let place = (self.places.take(class, length, completed)).map_err(failed(call))?;
         let (start, block) = (place.range.start, place.block);
         let buffer = match mode {
+            // A two-copy stream's Managed buffer on a one-copy device: the GPU's copy here, the
+            // CPU's in a place of its own (`second`), both holding the bytes it starts with.
+            rt::StorageMode::Managed if self.device.has_unified_memory() => {
+                let gpu = self.device.new_buffer(block, start, length, Some(0));
+                let gpu = gpu.map_err(failed(call))?;
+                write_into(&gpu, 0, bytes)?;
+                let cpu_place =
+                    (self.places.take(class, length, completed)).map_err(failed(call))?;
+                let at = (cpu_place.block, cpu_place.range.start);
+                let cpu = self.device.new_buffer(at.0, at.1, length, Some(0));
+                let cpu = cpu.map_err(failed(call))?;
+                write_into(&cpu, 0, bytes)?;
+                self.seconds
+                    .insert(call.result, cpu, cpu_place, gpu.clone());
+                gpu
+            }
             rt::StorageMode::Managed => {
                 // The consumer's bytes first: the place may hold a released buffer's.
                 let shared = self.device.new_buffer(block, start, length, Some(0));
@@ -1174,6 +1198,9 @@ impl NewRuntime {
                     match self.managed_form(call)? {
                         ManagedCopies::One => device.new_buffer(range.block, at, length, None),
                         ManagedCopies::Two => {
+                            if device.has_unified_memory() {
+                                self.seconds.in_block += 1;
+                            }
                             device.new_managed_buffer(range.block, at, length, length)
                         }
                     }
@@ -1216,6 +1243,9 @@ impl NewRuntime {
         match &*call.selector {
             "didModifyRange:" => {
                 let range = super::args::range(call, arg(call, 0)?)?;
+                if self.seconds.name(call.receiver, range.start, range.end) {
+                    return Ok(None);
+                }
                 let did = buffer.did_modify_range(range.start, range.end - range.start);
                 did.map_err(failed(call))?;
                 Ok(None)
@@ -1376,6 +1406,11 @@ impl Backend for NewRuntime {
             self.fresh.remove(&call.receiver);
             self.unwritten.released(call.receiver);
             self.outside.remove(&call.receiver);
+            self.queue_of.remove(&call.receiver);
+            // A second copy's CPU copy: the commits so far copied from it.
+            if let Some(place) = self.seconds.remove(call.receiver) {
+                self.places.give(place, self.commits, Vec::new());
+            }
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => {
                     let users = (self.users.iter())
@@ -1460,6 +1495,7 @@ impl Backend for NewRuntime {
                 Object::Queue(queue) => match &*call.selector {
                     "commandBuffer" => {
                         let command_buffer = queue.command_buffer().map_err(failed(call))?;
+                        self.queue_of.insert(call.result, id);
                         unaddressed(Object::CommandBuffer(command_buffer))?
                     }
                     _ => return Err(refuse(call, "not played on a command queue")),
@@ -1553,6 +1589,16 @@ impl Backend for NewRuntime {
     fn write(&mut self, target: u64, offset: u64, bytes: &[u8]) -> Result<(), PlayError> {
         let end = offset + bytes.len() as u64;
         self.unwritten.written(target, offset..end);
+        if let Some(cpu) = self.seconds.cpu(target) {
+            // The CPU's copy of a buffer with a second copy; bytes recorded before a no-copy
+            // one's first use reach its GPU copy at the next commit.
+            write_into(cpu, offset, bytes)?;
+            if self.fresh.contains_key(&target) && !bytes.is_empty() {
+                self.seconds.name(target, offset, end);
+                self.from_first_use.insert(target);
+            }
+            return Ok(());
+        }
         match self.objects.get(&target) {
             Some(Object::Buffer(buffer, _)) => {
                 write_into(buffer, offset, bytes)?;
@@ -1617,8 +1663,14 @@ impl Backend for NewRuntime {
             selector: "m2v.check".into(),
             why: why.into(),
         };
-        match self.objects.get(&object) {
-            Some(Object::Buffer(buffer, _)) => {
+        // The CPU's bytes of a buffer with a second copy, as Metal's `contents` answers them.
+        let buffer = match (self.seconds.cpu(object), self.objects.get(&object)) {
+            (Some(cpu), _) => Some(cpu),
+            (None, Some(Object::Buffer(buffer, _))) => Some(buffer),
+            _ => None,
+        };
+        match buffer {
+            Some(buffer) => {
                 let contents = buffer
                     .contents()
                     .ok_or_else(|| unread("a Private buffer"))?;
@@ -1781,6 +1833,9 @@ impl Backend for NewRuntime {
                 "skipped render states {}, the first #{at}: {why}",
                 self.skips.render_states
             ));
+        }
+        if self.managed == Some(ManagedCopies::Two) && self.device.has_unified_memory() {
+            lines.push(self.seconds.line());
         }
         lines.push(self.unwritten.line());
         lines
