@@ -1,15 +1,17 @@
 //! No module the translator writes declares a capability of `VK_KHR_workgroup_memory_explicit_layout`
 //! (`WorkgroupMemoryExplicitLayoutKHR`, `WorkgroupMemoryExplicitLayout8BitAccessKHR`,
-//! `WorkgroupMemoryExplicitLayout16BitAccessKHR`): every `Workgroup` variable it declares is a
-//! plain array or scalar (the threadgroup arena, typed shared objects, SIMD-group scratch, mesh
-//! and object state), never a `Block`, so no device needs the extension.
+//! `WorkgroupMemoryExplicitLayout16BitAccessKHR`) or requires the extension or one of its four
+//! features: every `Workgroup` variable it declares is a plain array or scalar (the threadgroup
+//! arena, typed shared objects, SIMD-group scratch, mesh and object state), never a `Block`, so no
+//! device needs the extension.
 //!
 //! Each fixture of `validation/fixtures/public/` and its `engine/` directory whose text reaches
 //! threadgroup memory, a SIMD-group or quad function, or a mesh or object stage (`addrspace(3)`,
 //! `@air.simd_`, `@air.quad_`, `air.mesh`, `air.object`) is compiled, every entry its ABI declares,
 //! on every committed profile under `Device::new`'s default policy and under
 //! `Device::from_queries` with the identity domains (the new runtime's), and each module compiled
-//! is read: it declares none of the three capabilities, and each part compiles modules that
+//! is read: it declares none of the three capabilities, its requirements name neither the
+//! extension (Vulkan's or SPIR-V's) nor its features, and each part compiles modules that
 //! declare `Workgroup` variables. Each part counts the modules whose threadgroup arena is sized at
 //! run time (a `Workgroup` array whose length is a specialization constant: the
 //! `[[threadgroup(n)]]` regions the binder sizes from the encoder's threadgroup memory lengths)
@@ -23,6 +25,7 @@ use std::path::{Path, PathBuf};
 
 use super::engine_word_phases::identity_profiles;
 use super::public_fixtures_engine::refusal;
+use crate::device::{SpirvExtension, VkExtension, VkFeature};
 use crate::pipeline::testing::{
     compile, engine_dir, fixtures_dir, llvm_assemble, metal_assemble, AssembleError,
 };
@@ -35,6 +38,14 @@ const EXPLICIT_LAYOUT: [Capability; 3] = [
     Capability::WorkgroupMemoryExplicitLayoutKHR,
     Capability::WorkgroupMemoryExplicitLayout8BitAccessKHR,
     Capability::WorkgroupMemoryExplicitLayout16BitAccessKHR,
+];
+
+/// The extension's features, which no module may require.
+const EXPLICIT_LAYOUT_FEATURES: [VkFeature; 4] = [
+    VkFeature::WorkgroupMemoryExplicitLayout,
+    VkFeature::WorkgroupMemoryExplicitLayoutScalarBlockLayout,
+    VkFeature::WorkgroupMemoryExplicitLayout8BitAccess,
+    VkFeature::WorkgroupMemoryExplicitLayout16BitAccess,
 ];
 
 /// The text a fixture that reaches `Workgroup` memory names.
@@ -183,6 +194,21 @@ fn check_part(part: usize, of: usize) {
                         cap as u32
                     );
                 }
+                let r = &a.module.requirements;
+                for feature in EXPLICIT_LAYOUT_FEATURES {
+                    assert!(
+                        !r.features.contains(&feature),
+                        "{name} {entry} on {stem} requires {feature:?}"
+                    );
+                }
+                assert!(
+                    !r.extensions
+                        .contains(&VkExtension::KhrWorkgroupMemoryExplicitLayout)
+                        && !r
+                            .spirv_extensions
+                            .contains(&SpirvExtension::KhrWorkgroupMemoryExplicitLayout),
+                    "{name} {entry} on {stem} requires the explicit layout's extension"
+                );
             }
         }
     }
@@ -190,7 +216,7 @@ fn check_part(part: usize, of: usize) {
         "part {} of {of}: {} fixtures ({skipped} skipped), {} profiles ({committed} committed, the \
          rest identity): {modules} modules, {run_time} with a threadgroup arena sized at run time \
          and {fixed} more with fixed-size Workgroup variables, none declaring the explicit \
-         layout's capabilities; {refused} refused",
+         layout's capabilities or requiring its extension or features; {refused} refused",
         part + 1,
         paths.iter().skip(part).step_by(of).count(),
         profiles.len(),
