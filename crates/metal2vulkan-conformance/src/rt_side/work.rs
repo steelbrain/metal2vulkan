@@ -106,9 +106,15 @@ fn descriptor(spec: &TextureSpec) -> Answer<rt::TextureDescriptor> {
 enum Made {
     /// A buffer, with the blocks this side took for it alone: none for a heap's buffer, whose
     /// heap holds its block.
-    Buffer(rt::Buffer, Vec<rt::Block>),
+    Buffer {
+        buffer: rt::Buffer,
+        _blocks: Vec<rt::Block>,
+    },
     /// A placement heap: the block of its storage and the range it is.
-    Heap(rt::Block, rt::HeapRange),
+    Heap {
+        _block: rt::Block,
+        range: rt::HeapRange,
+    },
     Texture(rt::Texture),
     Fence(rt::Fence),
     /// The resource a [`Step::Release`] dropped, an explicit state so that a step naming it is
@@ -225,17 +231,20 @@ fn heap(on: &RtDevice, size: u64, storage: Storage) -> Answer<Made> {
         offset: 0,
         len: size.max(1),
     };
-    Ok(Made::Heap(block, range))
+    Ok(Made::Heap {
+        _block: block,
+        range,
+    })
 }
 
 /// Make one resource, of the ones `made` already holds.
 fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
     let buffer_at = |at: usize| match made.get(at) {
-        Some(Made::Buffer(buffer, _)) => Ok(buffer),
+        Some(Made::Buffer { buffer, .. }) => Ok(buffer),
         _ => Err(Failure::named("NoSuchResource", format!("buffer {at}"))),
     };
     let heap_at = |at: usize| match made.get(at) {
-        Some(Made::Heap(_, range)) => Ok(*range),
+        Some(Made::Heap { range, .. }) => Ok(*range),
         _ => Err(Failure::named("NoSuchResource", format!("heap {at}"))),
     };
     let texture_at = |at: usize| match made.get(at) {
@@ -247,11 +256,17 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
         Resource::Buffer { bytes } => {
             let (buffer, block) = shared_buffer(on, bytes.len() as u64)?;
             write(&buffer, bytes)?;
-            Ok(Made::Buffer(buffer, vec![block]))
+            Ok(Made::Buffer {
+                buffer,
+                _blocks: vec![block],
+            })
         }
         Resource::UnwrittenBuffer { length, storage } => {
             let (buffer, blocks) = buffer_of(on, *length, *storage)?;
-            Ok(Made::Buffer(buffer, blocks))
+            Ok(Made::Buffer {
+                buffer,
+                _blocks: blocks,
+            })
         }
         Resource::Fence => Ok(Made::Fence(device.new_fence())),
         Resource::Heap { size, storage } => heap(on, *size, *storage),
@@ -268,7 +283,10 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
             let at = range.offset + offset;
             // A heap's memory is not zeroed for a buffer placed in it, as Metal's is not.
             let buffer = (device.new_buffer(range.block, at, *length, None)).map_err(of_rt)?;
-            Ok(Made::Buffer(buffer, Vec::new()))
+            Ok(Made::Buffer {
+                buffer,
+                _blocks: Vec::new(),
+            })
         }
         Resource::Texture { spec } => {
             let d = descriptor(spec)?;
@@ -375,7 +393,7 @@ pub(super) fn run(on: &RtDevice, queue: &rt::CommandQueue, work: &Work) -> Answe
 impl Run<'_> {
     fn buffer(&self, at: usize) -> Answer<rt::Buffer> {
         match self.made.get(at) {
-            Some(Made::Buffer(buffer, _)) => Ok(buffer.clone()),
+            Some(Made::Buffer { buffer, .. }) => Ok(buffer.clone()),
             _ => Err(Failure::named("NoSuchResource", format!("buffer {at}"))),
         }
     }
@@ -558,7 +576,7 @@ impl Run<'_> {
             }
             Step::SynchronizeResource { resource } => {
                 let held = match self.made.get(*resource) {
-                    Some(Made::Buffer(buffer, _)) => Held::Buffer(buffer.clone()),
+                    Some(Made::Buffer { buffer, .. }) => Held::Buffer(buffer.clone()),
                     Some(Made::Texture(texture)) => Held::Texture(texture.clone()),
                     _ => {
                         return Err(Failure::named(
