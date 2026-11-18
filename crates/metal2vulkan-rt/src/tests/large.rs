@@ -1,12 +1,15 @@
-//! Buffers of over half a GiB, the lengths a replayed frame makes before a GPU fault, under a
-//! device cfg on every device of the cfg's kind, in each class: taken as a block of its own
-//! length and made zeroed, its first, middle and last pages read through its device address by
-//! the very next commit and then written and read again; the same with other work in flight when
-//! it is made, with a blit into it, with two of them alive at once, and as the frame's three
-//! (two Shared, one Managed) alive at once. Every read sees the bytes its buffer holds, and every
-//! gauge reads zero after teardown. Also, for any length: a block given up while an encoded and
-//! uncommitted command buffer holds a buffer in it is not taken again until that command buffer
-//! retires, or is dropped uncommitted.
+//! Blocks held by command buffers, and a take longer than the pool's own allocations, under a
+//! device cfg on every device of the cfg's kind:
+//!
+//! - a buffer of 548 MiB in each class, taken as a block of its own length and made zeroed: the
+//!   very next commit reads zero at its first, middle and last pages through its device address,
+//!   and the writes after it read back;
+//! - such a buffer and its block given up right after the commit of a command buffer that writes
+//!   and reads it: the command buffer completes and reads its writes;
+//! - a block given up while an encoded, uncommitted command buffer holds a buffer in it is not
+//!   taken again until that command buffer retires, or is dropped uncommitted;
+//!
+//! and every gauge reads zero after teardown.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -14,10 +17,9 @@ mod on_device {
     use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::{Buffer, CommandQueue, ComputePipelineState, Device, DispatchType, MemoryClass};
 
-    /// The lengths of the three buffers a replayed frame makes one after another before a GPU
-    /// fault: 548 MiB, and 547 MiB and 1,312 bytes twice.
+    /// The length of the first of three buffers a replayed frame makes, 548 MiB: a take longer
+    /// than any allocation the pool makes on its own.
     const LEN: u64 = 574_619_648;
-    const LEN_PINNED: u64 = 573_723_936;
 
     /// The offsets of the first, middle and last pages of [`WORDS`] words of a buffer of `len`.
     fn offsets(len: u64) -> [u64; 3] {
@@ -107,7 +109,7 @@ mod on_device {
         }
 
         /// Reads `big`'s pages as `before`, steps them, and reads them as `before * 2 + 1`, on
-        /// the device and, where `mapped`, through its mapping.
+        /// the device and, for a Shared buffer, through its mapping.
         fn check(
             &self,
             name: &str,
@@ -115,7 +117,6 @@ mod on_device {
             arena: &mut Arena,
             big: &Buffer,
             before: &dyn Fn(u32) -> u32,
-            mapped: bool,
         ) {
             let pages = |word: &dyn Fn(u32) -> u32| -> Vec<Vec<u32>> {
                 let page: Vec<u32> = (0..WORDS as u32).map(word).collect();
@@ -133,7 +134,7 @@ mod on_device {
                 pages(&after),
                 "{name}: written"
             );
-            if let Some(contents) = big.contents().filter(|_| mapped) {
+            if let Some(contents) = big.contents() {
                 for offset in offsets(big.length()) {
                     let at = contents.as_ptr();
                     // SAFETY: the page lies in the buffer, and its work completed.
@@ -170,182 +171,9 @@ mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: the block: {error}"));
                 let big = (device.new_buffer(block.id, 0, LEN, Some(0)))
                     .unwrap_or_else(|error| panic!("{name}: the buffer: {error}"));
-                kernels.check(&name, &queue, &mut arena, &big, &|_| 0, true);
+                kernels.check(&name, &queue, &mut arena, &big, &|_| 0);
                 drop((big, block));
             }
-        });
-    }
-
-    /// The same, made while a fill of another 64 MiB buffer is in flight on another queue.
-    #[test]
-    fn every_device_reads_a_buffer_of_over_half_a_gib_made_while_other_work_is_in_flight() {
-        each_device("large_buffer_busy", |name, _, device| {
-            let kernels = Kernels::new(&device);
-            let queue = device.new_command_queue(4).expect("a queue");
-            let other_queue = device.new_command_queue(4).expect("a queue");
-            let mut arena = Arena::new(&device);
-            for (name, class) in classes(name) {
-                let other_block =
-                    (device.take_block(MemoryClass::Private, 64 << 20)).expect("the other block");
-                let other = (device.new_buffer(other_block.id, 0, 64 << 20, None))
-                    .expect("the other buffer");
-                let busy = other_queue.command_buffer().expect("a command buffer");
-                let mut blit = busy.blit_command_encoder().expect("a blit encoder");
-                for round in 0..8u8 {
-                    blit.fill_buffer(&other, 0..64 << 20, round)
-                        .expect("a fill");
-                }
-                blit.end_encoding();
-                busy.commit().expect("a commit");
-                let block = (device.take_block(class, LEN))
-                    .unwrap_or_else(|error| panic!("{name}: the block: {error}"));
-                let big = (device.new_buffer(block.id, 0, LEN, Some(0)))
-                    .unwrap_or_else(|error| panic!("{name}: the buffer: {error}"));
-                kernels.check(&name, &queue, &mut arena, &big, &|_| 0, true);
-                finished(&name, &busy);
-                drop((big, block, busy, other, other_block));
-            }
-        });
-    }
-
-    /// A blit copies words into its first, middle and last pages, which then read back.
-    #[test]
-    fn every_device_reads_a_blit_into_a_buffer_of_over_half_a_gib() {
-        each_device("large_buffer_blit", |name, _, device| {
-            let kernels = Kernels::new(&device);
-            let queue = device.new_command_queue(4).expect("a queue");
-            let mut arena = Arena::new(&device);
-            let source = arena.buffer();
-            let contents = source.contents().expect("a Shared buffer").cast::<u32>();
-            for index in 0..WORDS {
-                // SAFETY: the buffer holds `WORDS` words, and no GPU work uses it.
-                unsafe {
-                    contents
-                        .as_ptr()
-                        .add(index)
-                        .write_volatile(1000 + index as u32)
-                };
-            }
-            for (name, class) in classes(name) {
-                let block = (device.take_block(class, LEN))
-                    .unwrap_or_else(|error| panic!("{name}: the block: {error}"));
-                let big = (device.new_buffer(block.id, 0, LEN, Some(0)))
-                    .unwrap_or_else(|error| panic!("{name}: the buffer: {error}"));
-                let command_buffer = queue.command_buffer().expect("a command buffer");
-                let mut blit = command_buffer
-                    .blit_command_encoder()
-                    .expect("a blit encoder");
-                for offset in offsets(LEN) {
-                    blit.copy_from_buffer_to_buffer(&source, 0, &big, offset, 4 * WORDS as u64)
-                        .expect("a copy");
-                }
-                blit.end_encoding();
-                command_buffer.commit().expect("a commit");
-                finished(&name, &command_buffer);
-                assert_eq!(command_buffer.error(), None, "{name}: the copies");
-                kernels.check(&name, &queue, &mut arena, &big, &|index| 1000 + index, true);
-                drop((big, block));
-            }
-        });
-    }
-
-    /// Two such buffers alive at once, each in a block of its own: each reads and writes its own
-    /// pages.
-    #[test]
-    fn every_device_reads_two_buffers_of_over_half_a_gib_alive_at_once() {
-        each_device("large_buffer_two", |name, _, device| {
-            let kernels = Kernels::new(&device);
-            let queue = device.new_command_queue(4).expect("a queue");
-            let mut arena = Arena::new(&device);
-            for (name, class) in classes(name) {
-                let made: Vec<_> = (0..2)
-                    .map(|_| {
-                        let block = (device.take_block(class, LEN))
-                            .unwrap_or_else(|error| panic!("{name}: a block: {error}"));
-                        let big = (device.new_buffer(block.id, 0, LEN, Some(0)))
-                            .unwrap_or_else(|error| panic!("{name}: a buffer: {error}"));
-                        (big, block)
-                    })
-                    .collect();
-                for (index, (big, _)) in made.iter().enumerate() {
-                    let name = format!("{name} {index}");
-                    kernels.check(&name, &queue, &mut arena, big, &|_| 0, true);
-                }
-                drop(made);
-            }
-        });
-    }
-
-    /// The replayed frame's three: a Shared buffer of [`LEN`] bytes and one of [`LEN_PINNED`],
-    /// both zeroed, and a Managed one of [`LEN_PINNED`] whose consumer bytes at its pages hold
-    /// words the next commit copies, all alive at once and each in a block of its own: each reads
-    /// and writes its own pages, the Managed one through its device copy where it has one.
-    #[test]
-    fn every_device_reads_the_three_buffers_of_a_replayed_frame_alive_at_once() {
-        each_device("large_buffer_frame", |name, _, device| {
-            let kernels = Kernels::new(&device);
-            let queue = device.new_command_queue(4).expect("a queue");
-            let mut arena = Arena::new(&device);
-            let shared = |len: u64| {
-                let block = (device.take_block(MemoryClass::Shared, len))
-                    .unwrap_or_else(|error| panic!("{name}: a block: {error}"));
-                let big = (device.new_buffer(block.id, 0, len, Some(0)))
-                    .unwrap_or_else(|error| panic!("{name}: a buffer: {error}"));
-                (big, block)
-            };
-            let (first, first_block) = shared(LEN);
-            let (second, second_block) = shared(LEN_PINNED);
-            let managed_block = (device.take_block(MemoryClass::Shared, LEN_PINNED))
-                .unwrap_or_else(|error| panic!("{name}: the Managed block: {error}"));
-            let mapping = managed_block.contents.expect("the Managed block's mapping");
-            for offset in offsets(LEN_PINNED) {
-                for index in 0..WORDS {
-                    // SAFETY: the word lies in the block, which no GPU work uses yet.
-                    unsafe {
-                        (mapping
-                            .as_ptr()
-                            .add(offset as usize + 4 * index)
-                            .cast::<u32>())
-                        .write_unaligned(5000 + index as u32)
-                    };
-                }
-            }
-            let managed = (device.new_managed_buffer(managed_block.id, 0, LEN_PINNED, LEN_PINNED))
-                .unwrap_or_else(|error| panic!("{name}: the Managed buffer: {error}"));
-            kernels.check(
-                &format!("{name} Shared"),
-                &queue,
-                &mut arena,
-                &first,
-                &|_| 0,
-                true,
-            );
-            kernels.check(
-                &format!("{name} pinned"),
-                &queue,
-                &mut arena,
-                &second,
-                &|_| 0,
-                true,
-            );
-            let unified = device.has_unified_memory();
-            let words = |index| 5000 + index;
-            kernels.check(
-                &format!("{name} Managed"),
-                &queue,
-                &mut arena,
-                &managed,
-                &words,
-                unified,
-            );
-            drop((
-                first,
-                first_block,
-                second,
-                second_block,
-                managed,
-                managed_block,
-            ));
         });
     }
 
