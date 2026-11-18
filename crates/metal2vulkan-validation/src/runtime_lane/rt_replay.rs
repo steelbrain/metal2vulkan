@@ -7,6 +7,10 @@
 //!   which the stream checks green, and nothing is skipped.
 //! - A draw of points after it, which the runtime does not build, is skipped and counted, and the
 //!   report says the play is no verdict past it: its gap, frame and call.
+//! - A Managed buffer of a stream recorded with two copies keeps both on any device (the player's
+//!   own second copy where the device has one): a blit's fill reaches the GPU's copy and not the
+//!   CPU's, an announcement with no write puts the CPU's bytes back into the GPU's copy at the next
+//!   commit, and a synchronize brings the GPU's bytes into the CPU's copy.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -267,4 +271,79 @@ fn a_draw_the_runtime_does_not_build_is_skipped_and_ends_the_verdict() {
     assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 19"));
     let line = "skipped render commands Draw { kind: Points } 1, the first at frame 0, call 19";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
+#[test]
+fn a_two_copy_stream_s_managed_buffer_keeps_both_copies() {
+    let dir = ScratchDir::new("rt-replay-two-copies").unwrap();
+    let sum = |bytes: &[u8]| Value::List(vec![Value::Bytes(Sha256::digest(bytes).to_vec())]);
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let identity = [("hasUnifiedMemory", Value::Bool(false))];
+        w.call("m2v.deviceIdentity", 1, 0, &[], &identity)?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        // #3 Managed (MTLResourceStorageModeManaged, 1 << 4), #4 and #5 Shared, 4 bytes each.
+        let made = "newBufferWithLength:options:";
+        for (id, options) in [(3, 16), (4, 0), (5, 0)] {
+            w.call(made, 1, id, &[Value::Uint(4), Value::Uint(options)], &[])?;
+        }
+        let range = uints(&[("location", 0), ("length", 4)]);
+        let fill = |value| vec![Value::Object(3), range.clone(), Value::Uint(value)];
+        let copy = |to| {
+            let (zero, four) = (Value::Uint(0), Value::Uint(4));
+            vec![
+                Value::Object(3),
+                zero.clone(),
+                Value::Object(to),
+                zero,
+                four,
+            ]
+        };
+        let copy_from = "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:";
+        let check = |w: &mut StreamWriter<File>, id, bytes: [u8; 4]| {
+            w.call(
+                "m2v.check",
+                0,
+                0,
+                &[Value::Object(id)],
+                &[("sha256", sum(&bytes))],
+            )
+        };
+        // Each blit command in an encoder of its own, the encoders in command buffer `cb`.
+        let blits = |w: &mut StreamWriter<File>, cb, commands: &[(&str, Vec<Value>)]| {
+            w.call("commandBuffer", 2, cb, &[], &[])?;
+            for (at, (selector, args)) in commands.iter().enumerate() {
+                let encoder = cb + 1 + at as u64;
+                w.call("blitCommandEncoder", cb, encoder, &[], &[])?;
+                w.call(selector, encoder, 0, args, &[])?;
+                w.call("endEncoding", encoder, 0, &[], &[])?;
+            }
+            w.call("commit", cb, 0, &[], &[])?;
+            w.call(WAIT_COMPLETED, cb, 0, &[], &[])
+        };
+        // A fill of 7s reaches the GPU's copy, which a copy into #4 reads; the CPU's copy keeps
+        // the zeros it was made with.
+        let first = [("fillBuffer:range:value:", fill(7)), (copy_from, copy(4))];
+        blits(w, 10, &first)?;
+        check(w, 4, [7; 4])?;
+        check(w, 3, [0; 4])?;
+        // An announcement with no write: the next commit puts the CPU's zeros back, which a copy
+        // into #5 reads. Then a fill of 9s and a synchronize: the CPU's copy takes the GPU's bytes.
+        w.call("didModifyRange:", 3, 0, &[range.clone()], &[])?;
+        let buffer = Value::Map(vec![("Buffer".into(), Value::Object(3))]);
+        let second = [
+            (copy_from, copy(5)),
+            ("fillBuffer:range:value:", fill(9)),
+            ("synchronizeResource:", vec![buffer]),
+        ];
+        blits(w, 20, &second)?;
+        check(w, 5, [0; 4])?;
+        check(w, 3, [9; 4])
+    });
+    let (report, lines) = play("two-copies", &path);
+    assert_eq!(report.checks.len(), 4, "{lines:?}");
+    for check in &report.checks {
+        let object = check.object;
+        assert_eq!(Some(check.sha256), check.recorded, "#{object}: {lines:?}");
+    }
 }
