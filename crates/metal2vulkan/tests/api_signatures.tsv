@@ -11011,6 +11011,7 @@ method	metal2vulkan::device::Device::from_queries	pub fn from_queries(desc: Devi
 method	metal2vulkan::device::Device::function_compile_key	pub fn function_compile_key(&self, f: &FunctionDescriptor, inp: &LoweringInputs) -> FunctionCompileKey
 method	metal2vulkan::device::Device::generated_commands	pub fn generated_commands(&self) -> Option<&GeneratedCommandsProperties>
 method	metal2vulkan::device::Device::kernel_inputs_read	pub fn kernel_inputs_read(&self, f: &FunctionDescriptor, inp: &LoweringInputs, b: &Budget, entries: &StageEntries) -> Result<LoweringInputs, Error>
+method	metal2vulkan::device::Device::kernel_observes_partition	pub fn kernel_observes_partition(&self, f: &FunctionDescriptor, inp: &LoweringInputs, b: &Budget, entries: &StageEntries) -> Result<bool, Error>
 method	metal2vulkan::device::Device::mesh_descriptor_key	pub fn mesh_descriptor_key(&self, d: &MeshPipelineDescriptor) -> crate::cache::PipelineKey
 method	metal2vulkan::device::Device::metal_properties	pub fn metal_properties(&self) -> &MetalDeviceProperties
 method	metal2vulkan::device::Device::neutral_kinds	pub fn neutral_kinds(&self) -> Vec<NeutralResource>

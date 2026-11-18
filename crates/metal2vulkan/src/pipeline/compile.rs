@@ -2246,6 +2246,34 @@ pub(crate) fn kernel_inputs_read(
     })
 }
 
+/// Whether the kernel of stage `fd` observes its threadgroup partition under `inputs`, as its
+/// compile decides it (`KernelFacts::partition_oblivious`, which
+/// `CompiledFunction::observes_threadgroup_partition` answers): of the entry the compile selects
+/// from, specialized (the entry `entries` holds, or one made there now) and ordered for the
+/// device of `p` (`lower::simd::lockstep::order`, whose barriers observe it), lowering nothing.
+/// Any other stage observes it.
+pub(crate) fn kernel_observes_partition(
+    fd: &FunctionDescriptor,
+    p: &DeviceProfile,
+    inputs: InputsFrom<'_>,
+    entries: &StageEntries,
+    m: &mut Meter,
+) -> Result<bool, Error> {
+    guarded(|| {
+        with_request_shared(
+            &fd.function,
+            &fd.constants,
+            (&fd.linked, &fd.libraries),
+            inputs,
+            Shared::Entry(entries, fd),
+            |r| {
+                let ordered = ordered_entry(r, p, m)?;
+                Ok(partition::partition(&ordered.spec) != Partition::Oblivious)
+            },
+        )
+    })
+}
+
 /// The color attachments the specialized fragment entry `spec` writes (an output of either
 /// dual-source index) whose pixel format in `colors` is a signed integer. Empty for any other
 /// stage.

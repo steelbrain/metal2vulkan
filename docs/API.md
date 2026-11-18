@@ -1897,6 +1897,10 @@ does not divide the grid, and a range of threadgroups at its own size (`MultiReg
 kernel runs the same positions with the same answers. At `MultiRegion` 0 a runtime may run a direct dispatch of the
 variant in workgroups of a size it picks, the region flagged `NONUNIFORM` where they do not divide
 the grid, whose invocations past the grid then return before the body as a tile's do.
+`Device::kernel_observes_partition(&kernel, &inputs, &budget, &entries)` answers, before any
+lowering, what `CompiledFunction::observes_threadgroup_partition` answers for the compile under the
+same inputs (from the specialized entry `entries` holds, ordered for the device), so a runtime
+lowers only the variant a creation needs.
 `CompiledFunction::is_image_only` (`KernelFacts::image_only`) states, from the AIR alone, a kernel
 that samples, gathers or reads a texture and loads, stores and updates atomically nothing through
 a `device` pointer (`constant` loads and texture writes allowed), which a runtime may run in

@@ -42,9 +42,9 @@ use crate::pipeline::compile::key::{
     render_descriptor_key,
 };
 use crate::pipeline::compile::{
-    color_group, compile_stage, compile_stage_from, dynamic_order, guarded, linked_keys,
-    primitive_id_carried_on, reads_primitive_id_varying, stage_inputs, FragmentPass, InputsFrom,
-    RawIndices, StageEntries, NO_PRIMITIVE_VARYINGS,
+    color_group, compile_stage, compile_stage_from, dynamic_order, guarded,
+    kernel_observes_partition, linked_keys, primitive_id_carried_on, reads_primitive_id_varying,
+    stage_inputs, FragmentPass, InputsFrom, RawIndices, StageEntries, NO_PRIMITIVE_VARYINGS,
 };
 use crate::pipeline::descriptor::{
     ComputePipelineDescriptor, FunctionDescriptor, MeshPipelineDescriptor,
@@ -290,6 +290,32 @@ impl Device {
     ) -> Result<LoweringInputs, Error> {
         let mut m = Meter::new(b);
         crate::pipeline::compile::kernel_inputs_read(f, inp, entries, &mut m)
+    }
+
+    /// Whether the kernel `f` observes its threadgroup partition under `inp`: the answer
+    /// [`CompiledFunction::observes_threadgroup_partition`] gives for its compile under the same
+    /// inputs, without lowering it. A kernel that does not observe it computes the same in every
+    /// partition of its grid into threadgroups; on [`Device::from_queries`]' profile its
+    /// partial-threadgroups variant runs its grid in tiles (`RuntimeFact::GridTiles`), while one
+    /// that does runs a grid that is not a whole number of threadgroups on that variant at its own
+    /// threadgroup size. So a consumer that asks first lowers only the module a creation needs.
+    /// `true` for a function that is not a kernel.
+    ///
+    /// It decodes and specializes the kernel's AIR under `b`, reading the stage's specialized
+    /// entry from `entries` (the one a key or check of the same creation made, charged to `b`
+    /// what making it charged, else one made there now), and orders it for this device as the
+    /// compile does, whose inserted barriers observe the partition.
+    ///
+    /// Refused by the decode's and the specialization's own errors.
+    pub fn kernel_observes_partition(
+        &self,
+        f: &FunctionDescriptor,
+        inp: &LoweringInputs,
+        b: &Budget,
+        entries: &StageEntries,
+    ) -> Result<bool, Error> {
+        let mut m = Meter::new(b);
+        kernel_observes_partition(f, self.profile(), InputsFrom::Given(inp), entries, &mut m)
     }
 
     /// The key of the compute pipeline `d` (no decode).

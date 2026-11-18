@@ -28,6 +28,7 @@
 //!   no division by a value the driver does not know, and over grids ragged along every axis,
 //!   along one, and whole, in `grid_tile`'s tiles, it stores each thread's Metal position once and
 //!   nothing past the grid; an indirect dispatch runs at its own size.
+//!   `Device::kernel_observes_partition` answers what its compile does.
 //! - A kernel's texture slots (`tex`, generated: a read, a write, a width and an `is_null_texture`)
 //!   are the elements of the two fixed set-1 arrays at the indices their pushed resource IDs hold,
 //!   with no descriptor of their own. It passes L3 and, on the CPU interpreter, reads and writes
@@ -1923,6 +1924,50 @@ fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
         };
         let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem} indirect: {e}"));
         assert_eq!(got.buffers[0], edge_words([8, 6, 1], 48), "{stem} indirect");
+    }
+}
+
+/// `Device::kernel_observes_partition` answers, lowering nothing, what the compile of the same
+/// kernel under the same inputs answers (`CompiledFunction::observes_threadgroup_partition`): no
+/// for a kernel of the grid alone, yes for one that reads its threadgroup's position, on both
+/// profiles.
+#[test]
+fn the_partition_query_answers_what_the_compile_does() {
+    let kernels = [
+        ("edge", edge_kernel(), false),
+        ("grid", grid_kernel("grid"), true),
+    ];
+    for (name, text, observes) in kernels {
+        let Some(bc) = assemble_text(name, &text) else {
+            return;
+        };
+        for stem in PROFILES {
+            let desc =
+                crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+            for dev in [
+                Device::new(desc.clone(), identity()),
+                Device::from_queries(desc, identity()),
+            ] {
+                let dev = dev.unwrap_or_else(|e| panic!("{e}"));
+                let lib = Library::from_air(&bc).unwrap_or_else(|e| panic!("{stem}: {e}"));
+                let f =
+                    FunctionDescriptor::new(lib.function(name).unwrap_or_else(|e| panic!("{e}")));
+                let inputs = LowerInputs::new();
+                let entries = crate::pipeline::StageEntries::new();
+                let answer = dev
+                    .kernel_observes_partition(&f, &inputs, &Budget::standard(), &entries)
+                    .unwrap_or_else(|e| panic!("{stem} {name}: {e}"));
+                let compiled = dev
+                    .compile_function(&f, &inputs, &Budget::standard())
+                    .unwrap_or_else(|e| panic!("{stem} {name}: {e}"));
+                assert_eq!(
+                    answer,
+                    compiled.observes_threadgroup_partition(),
+                    "{stem} {name}"
+                );
+                assert_eq!(answer, observes, "{stem} {name}");
+            }
+        }
     }
 }
 
