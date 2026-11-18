@@ -2282,9 +2282,14 @@ field	metal2vulkan-rt::IndexGrant.first	pub first: u32
 field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
 field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
 field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
+field	metal2vulkan-rt::Metrics.commit_lock_wait_max_nanos	pub commit_lock_wait_max_nanos: u64
+field	metal2vulkan-rt::Metrics.commit_lock_wait_nanos	pub commit_lock_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_max_nanos	pub first_use_wait_max_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_wait_nanos	pub first_use_wait_nanos: u64
 field	metal2vulkan-rt::Metrics.first_use_waits	pub first_use_waits: u64
+field	metal2vulkan-rt::Metrics.forced_flushes_across_queues	pub forced_flushes_across_queues: u64
+field	metal2vulkan-rt::Metrics.groups_beside_another_queue	pub groups_beside_another_queue: u64
+field	metal2vulkan-rt::Metrics.lone_submissions_across_queues	pub lone_submissions_across_queues: u64
 field	metal2vulkan-rt::Metrics.passes	pub passes: u64
 field	metal2vulkan-rt::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-rt::Metrics.ring_writes	pub ring_writes: u64
