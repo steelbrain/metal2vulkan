@@ -717,6 +717,80 @@ mod on_device {
         });
     }
 
+    /// An equal sampler state made at the index of one the program released, while a command
+    /// buffer that samples through that index is held from completing, writes no element of the
+    /// sampler arrays and makes no device sampler: the command buffer waits on an event ahead of
+    /// a dispatch that samples A through SA; SA is released and SB, of SA's descriptor, takes its
+    /// index. Released, the held work samples through the index as SA would. A state of another
+    /// descriptor at the index writes its elements.
+    #[test]
+    fn every_device_writes_no_element_for_an_equal_sampler_at_an_index_work_reads() {
+        const AT: u32 = 3;
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("sampling_equal_sampler_held", |name, _, device| {
+            let counters = device.counters();
+            let grants =
+                [(IndexClass::Texture, 8), (IndexClass::Sampler, 1)].map(|(class, count)| {
+                    (device.grant_indices(class, 1, count))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"))
+                });
+            let read = TextureUsage::SHADER_READ;
+            let a = texture(&device, SIDE, read, AT);
+            fill(name, &a);
+            let target = texture(&device, SIDE / 2, read | TextureUsage::SHADER_WRITE, 5);
+            let sa = linear(name, &device, 1);
+            let down = down_state(name, &device, &library);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let release = shared_event(&device);
+            let held = queue.command_buffer().expect("a command buffer");
+            (held.encode_wait_for_event(release.as_event(), 1)).expect("a wait");
+            encode_down(name, &held, (&down, &sa), [&a, &target]);
+            held.commit().expect("a commit");
+            let writes = counters.metrics().sampler_element_writes;
+            let samplers = counters.gauges().device_samplers;
+            drop(sa);
+            let sb = linear(name, &device, 1);
+            assert_eq!(
+                counters.metrics().sampler_element_writes,
+                writes,
+                "{name}: an equal state at the index writes no element"
+            );
+            assert_eq!(counters.gauges().device_samplers, samplers, "{name}");
+            let status = held.status();
+            assert!(
+                !matches!(
+                    status,
+                    CommandBufferStatus::Completed | CommandBufferStatus::Error
+                ),
+                "{name}: the command buffer is held: {status:?}"
+            );
+            release.set_signaled_value(1);
+            finished(name, &held);
+            assert!(held.error().is_none(), "{name}");
+            let got = texels(&target, SIDE / 2);
+            assert!(
+                near(&got, &means()),
+                "{name}: the held work sampled {got:?}"
+            );
+            // Another descriptor at the index writes its elements.
+            let mut nearest = SamplerDescriptor::new();
+            nearest.min_filter = SamplerMinMagFilter::Nearest;
+            nearest.mag_filter = SamplerMinMagFilter::Nearest;
+            let other = (device.new_sampler_state(&nearest, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(
+                counters.metrics().sampler_element_writes > writes,
+                "{name}: another descriptor at the index writes its elements"
+            );
+            drop((sb, other, held, queue, down, a, target));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
     /// A constexpr sampler past the device's samplers is refused, and the refusal lets go of what
     /// the state took: the same state is made once the samplers have room.
     #[test]

@@ -337,7 +337,12 @@ made, with no lock, and never rewritten for layouts.
   storage element null where it took the index from another, so nothing stale answers there),
   and the earlier object's going, at its release or once its command buffers retire, touches
   neither the index nor its elements. No work in flight may read a displaced or released object
-  through the index: the program's duty, as it is Metal's, which the runtime does not check.
+  through the index: the program's duty, as it is Metal's, which the runtime does not check. A
+  sampler state or constexpr sampler whose device samplers equal the displaced one's is safe under
+  work in flight: equal create infos share the device's `VkSampler`s, the arrays keep the samplers last written at each index, and
+  an element that holds its sampler already is not written, so the placement changes no
+  descriptor that pending work reads (`Metrics::sampler_element_writes` counts the elements
+  written). A different sampler state stays the program's duty.
   Making one at an index not granted is `Refusal::IndicesNotGranted`. Where nothing took it, the
   index is free again once its owner's last handle is gone, and with it the last command buffer
   that used it; its elements read their default again from then.

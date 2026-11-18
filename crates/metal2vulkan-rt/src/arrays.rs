@@ -33,7 +33,7 @@
 //! take 1 to 65,535, an index valid in both texture arrays; samplers 1 to 3,999. Index 0 is nil
 //! and never granted.
 
-use crate::counters::{Counters, Gauge};
+use crate::counters::{Counters, Gauge, Metric};
 use crate::device::lock;
 use crate::error::{Error, Limit, Refusal};
 use crate::floor::{BelowFloor, Missing, SAMPLERS, SAMPLER_ARRAYS, TEXTURES};
@@ -304,6 +304,10 @@ pub(crate) struct Arrays {
     /// Whether the sampled-texture array holds the second elements.
     seconds: bool,
     pub(crate) grants: Mutex<Grants>,
+    /// The sampler each sampler array's element at each index holds, plain, comparison and
+    /// integer texture, as last written: a default, or a sampler the index's owner holds, so a
+    /// handle here is never one destroyed. Written under the grants' lock.
+    samplers: Mutex<Box<[[vk::Sampler; SAMPLER_ARRAYS as usize]]>>,
 }
 
 impl Arrays {
@@ -576,7 +580,7 @@ impl Arrays {
         let mut grants = lock(&self.grants);
         if grants.owns(IndexClass::Sampler, index, owner) {
             // SAFETY: the caller's contract; the object owns the index, and the lock is held.
-            unsafe { self.write_samplers(device, index, added) };
+            unsafe { self.write_samplers(device, counters, index, added) };
             return Ok(owner);
         }
         // SAFETY: the caller's contract, and the lock is held.
@@ -610,7 +614,7 @@ impl Arrays {
             );
         }
         // SAFETY: the caller's contract; the object owns the index, and the lock is held.
-        unsafe { self.write_samplers(device, index, &all) };
+        unsafe { self.write_samplers(device, counters, index, &all) };
         Ok(owner)
     }
 
@@ -632,34 +636,49 @@ impl Arrays {
         if grants.vacate(IndexClass::Sampler, index, owner) {
             // SAFETY: the caller's contract; the lock is held, so no object is placed there
             // before every element is its default.
-            unsafe { self.write_samplers(device, index, &[(0, None), (1, None), (2, None)]) };
+            unsafe {
+                self.write_samplers(device, counters, index, &[(0, None), (1, None), (2, None)])
+            };
             counters.fall(Gauge::DescriptorSlots);
         }
     }
 
     /// Writes elements at `index` of the sampler arrays, each `(array, sampler)`, the array 0
     /// plain, 1 comparison and 2 integer texture: the array's default where the sampler is `None`.
-    /// The elements not listed are left as they are.
+    /// An element that holds that sampler already is not written: an equal sampler state, whose
+    /// create infos share the device's `VkSampler`s, placed at the index of one that pending work
+    /// still reads writes nothing. The elements not listed are left as they are.
     ///
     /// # Safety
     ///
     /// The grants' lock is held by a placement, an addition or a vacating of the index, no
-    /// pending work uses an element it writes, and each sampler is live and of the device
+    /// pending work uses an element it changes, and each sampler is live and of the device
     /// whenever work uses it.
     unsafe fn write_samplers(
         &self,
         device: &ash::Device,
+        counters: &Counters,
         index: u32,
         elements: &[(usize, Option<vk::Sampler>)],
     ) {
         let defaults = [self.plain, self.compare, self.plain];
-        let infos: Vec<[vk::DescriptorImageInfo; 1]> = elements
-            .iter()
-            .map(|&(array, sampler)| {
-                [vk::DescriptorImageInfo::default().sampler(sampler.unwrap_or(defaults[array]))]
-            })
+        let mut all = lock(&self.samplers);
+        let held = &mut all[index as usize];
+        let changed: Vec<(usize, vk::Sampler)> = (elements.iter())
+            .map(|&(array, sampler)| (array, sampler.unwrap_or(defaults[array])))
+            .filter(|&(array, sampler)| held[array] != sampler)
             .collect();
-        let writes: Vec<vk::WriteDescriptorSet> = elements
+        if changed.is_empty() {
+            return;
+        }
+        for &(array, sampler) in &changed {
+            held[array] = sampler;
+            counters.count(Metric::SamplerElementWrites);
+        }
+        let infos: Vec<[vk::DescriptorImageInfo; 1]> = (changed.iter())
+            .map(|&(_, sampler)| [vk::DescriptorImageInfo::default().sampler(sampler)])
+            .collect();
+        let writes: Vec<vk::WriteDescriptorSet> = changed
             .iter()
             .zip(&infos)
             .map(|(&(array, _), info)| {
@@ -796,6 +815,9 @@ impl Made {
             compare,
             seconds,
             grants: Mutex::new(Grants::new()),
+            samplers: Mutex::new(
+                vec![[plain, compare, plain]; SAMPLERS as usize].into_boxed_slice(),
+            ),
         })
     }
 

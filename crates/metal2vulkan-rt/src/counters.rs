@@ -79,10 +79,12 @@ pub(crate) enum Metric {
     CaptureOverflows,
     /// [`Metrics::untimed_command_buffers`].
     UntimedCommandBuffers,
+    /// [`Metrics::sampler_element_writes`].
+    SamplerElementWrites,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::UntimedCommandBuffers as usize + 1;
+const METRICS: usize = Metric::SamplerElementWrites as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -113,6 +115,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::CaptureStreams,
     Metric::CaptureOverflows,
     Metric::UntimedCommandBuffers,
+    Metric::SamplerElementWrites,
 ];
 
 // Each metric of the order is at its own index.
@@ -270,6 +273,7 @@ struct Atomics {
     capture_streams: AtomicU64,
     capture_overflows: AtomicU64,
     untimed_command_buffers: AtomicU64,
+    sampler_element_writes: AtomicU64,
     capture_overflow_bytes: AtomicU64,
     capture_copy_nanos: AtomicU64,
     capture_wait_nanos: AtomicU64,
@@ -367,6 +371,7 @@ impl Counters {
             Metric::CaptureStreams => &a.capture_streams,
             Metric::CaptureOverflows => &a.capture_overflows,
             Metric::UntimedCommandBuffers => &a.untimed_command_buffers,
+            Metric::SamplerElementWrites => &a.sampler_element_writes,
         }
     }
 
@@ -663,6 +668,7 @@ impl Counters {
             capture_streams: a.capture_streams.load(Relaxed),
             capture_overflows: a.capture_overflows.load(Relaxed),
             untimed_command_buffers: a.untimed_command_buffers.load(Relaxed),
+            sampler_element_writes: a.sampler_element_writes.load(Relaxed),
             capture_overflow_bytes: a.capture_overflow_bytes.load(Relaxed),
             capture_copy_nanos: a.capture_copy_nanos.load(Relaxed),
             capture_wait_nanos: a.capture_wait_nanos.load(Relaxed),
@@ -945,6 +951,11 @@ pub struct Metrics {
     /// record, every pair of the device's timestamp pools was taken and the device made no new
     /// pool ([`Gauges::timestamp_pools`]).
     pub untimed_command_buffers: u64,
+    /// Elements of set 1's sampler arrays written (`vkUpdateDescriptorSets`): a sampler state's or
+    /// a constexpr sampler's placement and its going write only the elements whose sampler
+    /// differs from what the index's element holds, so an equal state made at the index of one
+    /// released, while work that used it is pending, writes none.
+    pub sampler_element_writes: u64,
 }
 
 /// A thread's slot in [`Gauges::threads`], given back as it drops.
