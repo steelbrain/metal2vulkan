@@ -696,4 +696,80 @@ mod on_device {
             );
         }
     }
+
+    /// With the device's `maxMemoryAllocationCount` answered as 8 (`Device::open`), the eighth
+    /// live allocation is the last: past it a texture's memory and a `replace_region` staging
+    /// buffer are `Limit::MemoryAllocations` with the device's count, refused before the driver is
+    /// called, the gauges unchanged; once a texture is gone a texture is made again, and every
+    /// gauge reads zero after teardown.
+    #[test]
+    fn every_device_refuses_an_allocation_past_its_count() {
+        use crate::{IndexClass, PixelFormat, Region, TextureDescriptor, TextureType};
+        const MAX: u32 = 8;
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = Device::open(physical, DeviceOptions::default(), |limits| {
+                limits.max_memory_allocation_count = MAX;
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let counters = device.counters();
+            wait_until("a ready block of each class", || {
+                counters.gauges().blocks == ZERO_SOURCE + 2
+            });
+            device
+                .grant_indices(IndexClass::Texture, 4096, 16)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+            let mut textures = Vec::new();
+            let refused = loop {
+                match device.new_texture(&d, Some(4096 + textures.len() as u32)) {
+                    Ok(texture) => textures.push(texture),
+                    Err(error) => break error,
+                }
+                assert!(textures.len() < 16, "{name}: no refusal by 16 textures");
+            };
+            assert!(
+                matches!(refused, Error::Limit(Limit::MemoryAllocations { max: MAX })),
+                "{name}: past the count: {refused}"
+            );
+            let held = u64::from(MAX) - ZERO_SOURCE - 2;
+            assert_eq!(textures.len() as u64, held, "{name}: the textures made");
+            let gauges = counters.gauges();
+            assert_eq!(
+                (gauges.blocks, gauges.textures, gauges.descriptor_slots),
+                (u64::from(MAX), held, held),
+                "{name}: after the refused texture"
+            );
+            let whole = Region {
+                origin: [0; 3],
+                size: [4, 4, 1],
+            };
+            match textures[0].replace_region(whole, 0, 0, &[0x5A; 64], 16, 64) {
+                Err(Error::Limit(Limit::MemoryAllocations { max: MAX })) => {}
+                other => panic!("{name}: a staging buffer past the count: {other:?}"),
+            }
+            assert_eq!(
+                counters.gauges().blocks,
+                u64::from(MAX),
+                "{name}: after the refused staging buffer"
+            );
+            drop(textures.pop());
+            wait_until("the texture's memory freed", || {
+                counters.gauges().blocks == u64::from(MAX) - 1
+            });
+            let index = 4096 + textures.len() as u32;
+            textures.push(
+                (device.new_texture(&d, Some(index)))
+                    .unwrap_or_else(|error| panic!("{name}: a texture once one is gone: {error}")),
+            );
+            assert_eq!(counters.gauges().blocks, u64::from(MAX), "{name}");
+            drop(textures);
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
+            print_gauges_at_drop("memory_allocation_count", counters.gauges());
+            println!("memory: {name}: {held} textures, refused past {MAX} allocations");
+        }
+    }
 }

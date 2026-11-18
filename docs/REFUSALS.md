@@ -38,7 +38,7 @@ Columns:
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 6 | 6 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 9 | 9 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
@@ -56,7 +56,7 @@ Columns:
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
 | The new runtime's `Refusal` | 10 | 8 | 0 | 0 | 13 | 0 | 0 | 0 |
-| The new runtime's `Limit` | 0 | 0 | 0 | 6 | 3 | 0 | 0 | 0 |
+| The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 10 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
@@ -656,6 +656,7 @@ Columns:
 | `IndexRange` | A grant of no indices, or one past its class's range (`Device::grant_indices`, [`IndexClass::range`]) | every device (a public call's own check of its arguments) | `ours`: the descriptor arrays are 65,536 sampled textures, 4,096 storage textures and 4,000 samplers of each use, and index 0 is nil | 1: `crates/metal2vulkan-rt/src/arrays.rs (grant)` | `-` |
 | `TextureSize` | A texture whose extent or array layers are past what the device makes of its format, type, usage and sample count | at the device's limit | `device`: the image format query's `maxExtent` and `maxArrayLayers` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
 | `DeviceSamplers` | A sampler state whose device samplers would take the device past its `maxSamplerAllocationCount`, less the sampler arrays' two defaults... | at the device's limit | `device`: the device's `maxSamplerAllocationCount` | 1: `crates/metal2vulkan-rt/src/sampler.rs (take)` | `-` |
+| `MemoryAllocations` | A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones, refused before the driver is called | at the device's limit | `device`: the device's `maxMemoryAllocationCount` | 1: `crates/metal2vulkan-rt/src/memory.rs (allocate)` | `-` |
 | `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-rt/src/texture.rs (plan)` | `-` |
 
 ## 13. The new runtime's `Gap` (`Error::Unsupported(Gap)`)
@@ -1198,6 +1199,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::IndexRange`: `crates/metal2vulkan-rt/src/arrays.rs (grant)`
 - `rt:Limit::TextureSize`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-rt/src/sampler.rs (take)`
+- `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-rt/src/memory.rs (allocate)`
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-rt/src/texture.rs (plan)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-rt/src/pipeline.rs (new_compute_pipeline_state)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-rt/src/pipeline.rs (gap)`

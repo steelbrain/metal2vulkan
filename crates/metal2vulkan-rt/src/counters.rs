@@ -141,6 +141,14 @@ impl Counters {
         self.gauge(gauge).fetch_add(1, Relaxed);
     }
 
+    /// One more live resource of `gauge`'s kind where fewer than `max` live; false, and no
+    /// change, where `max` do.
+    pub(crate) fn rise_below(&self, gauge: Gauge, max: u64) -> bool {
+        (self.gauge(gauge))
+            .fetch_update(Relaxed, Relaxed, |live| (live < max).then_some(live + 1))
+            .is_ok()
+    }
+
     /// One fewer live resource of `gauge`'s kind.
     pub(crate) fn fall(&self, gauge: Gauge) {
         self.gauge(gauge).fetch_sub(1, Relaxed);

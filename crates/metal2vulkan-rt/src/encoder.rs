@@ -335,8 +335,9 @@ impl ComputeCommandEncoder {
     /// copies them, and the slot's address is the copy's.
     ///
     /// Err: [`Refusal::BufferIndex`] for an index of 31 or more; [`Limit::BytesLength`] past one
-    /// ring chunk (64 KiB; Metal documents the call for data under 4 KB); [`Error::Vulkan`] where
-    /// the ring cannot grow.
+    /// ring chunk (64 KiB; Metal documents the call for data under 4 KB);
+    /// [`Limit::MemoryAllocations`] where the ring's next block would take the device past its
+    /// allocation count; [`Error::Vulkan`] where the ring cannot grow.
     pub fn set_bytes(&mut self, bytes: &[u8], index: u32) -> Result<(), Error> {
         let slot = self.slot(index)?;
         if bytes.len() as u64 > CHUNK {
@@ -434,7 +435,9 @@ impl ComputeCommandEncoder {
     /// [`Refusal::MisalignedBuffer`] where a bound buffer's address plus its offset is not a
     /// multiple of its argument's alignment, as Metal's API validation refuses the bind: the
     /// dispatch is not recorded, and the encoder and its command buffer stay usable;
-    /// [`Error::Vulkan`] where the pipeline's compile, the ring or recording fails.
+    /// [`Limit::MemoryAllocations`] where the parameter ring needs a block past the device's
+    /// allocation count; [`Error::Vulkan`] where the pipeline's compile, the ring or recording
+    /// fails.
     pub fn dispatch_threadgroups(
         &mut self,
         threadgroups_per_grid: [u32; 3],

@@ -9232,6 +9232,7 @@ method	metal2vulkan-rt::CommandBuffer::wait_until_scheduled	pub fn wait_until_sc
 method	metal2vulkan-rt::CommandQueue::abandon	pub fn abandon(&self)
 method	metal2vulkan-rt::CommandQueue::command_buffer	pub fn command_buffer(&self) -> Result<CommandBuffer, Error>
 method	metal2vulkan-rt::CommandQueue::device	pub fn device(&self) -> &Device
+method	metal2vulkan-rt::CommandQueue::send_now	pub fn send_now(&self, command_buffer: &CommandBuffer)
 method	metal2vulkan-rt::ComputeCommandEncoder::dispatch_threadgroups	pub fn dispatch_threadgroups(&mut self, threadgroups_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3]) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::dispatch_threadgroups_with_indirect_buffer	pub fn dispatch_threadgroups_with_indirect_buffer(&mut self, buffer: &Buffer, offset: u64, threads_per_threadgroup: [u32; 3]) -> Result<(), Error>
 method	metal2vulkan-rt::ComputeCommandEncoder::dispatch_threads	pub fn dispatch_threads(&mut self, threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3]) -> Result<(), Error>
@@ -13274,6 +13275,7 @@ variant	metal2vulkan-rt::Limit::BlockLen	BlockLen { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::BytesLength	BytesLength { len: u64, max: u64 }
 variant	metal2vulkan-rt::Limit::DeviceSamplers	DeviceSamplers { max: u32 }
 variant	metal2vulkan-rt::Limit::IndexRange	IndexRange { class: IndexClass, first: u32, count: u32 }
+variant	metal2vulkan-rt::Limit::MemoryAllocations	MemoryAllocations { max: u32 }
 variant	metal2vulkan-rt::Limit::TextureSamples	TextureSamples { sample_count: u32, counts: u32 }
 variant	metal2vulkan-rt::Limit::TextureSize	TextureSize { extent: [u32; 3], layers: u32, max_extent: [u32; 3], max_layers: u32 }
 variant	metal2vulkan-rt::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32 }

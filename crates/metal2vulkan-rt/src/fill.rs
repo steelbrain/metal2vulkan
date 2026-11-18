@@ -5,6 +5,7 @@
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::Error;
+use crate::memory;
 use crate::record::{barrier, Reach};
 use ash::vk;
 use std::sync::{Mutex, PoisonError};
@@ -98,7 +99,8 @@ struct Objects {
 }
 
 impl Filler {
-    /// Makes the command pool, command buffer, fence and zero source.
+    /// Makes the command pool, command buffer, fence and zero source, whose allocation counts
+    /// against `max_allocations`, the device's `maxMemoryAllocationCount` ([`memory::allocate`]).
     ///
     /// # Safety
     ///
@@ -109,10 +111,11 @@ impl Filler {
         family: u32,
         host_type: u32,
         counters: &Counters,
+        max_allocations: u32,
     ) -> Result<Filler, Error> {
         let mut objects = Objects::default();
         // SAFETY: the caller's contract.
-        match unsafe { objects.make(device, family, host_type, counters) } {
+        match unsafe { objects.make(device, family, host_type, counters, max_allocations) } {
             Ok(()) => Ok(Filler {
                 zeros: objects.zeros,
                 state: Mutex::new(objects),
@@ -202,6 +205,7 @@ impl Objects {
         family: u32,
         host_type: u32,
         counters: &Counters,
+        max_allocations: u32,
     ) -> Result<(), Error> {
         let pool = vk::CommandPoolCreateInfo::default().queue_family_index(family);
         let fence = vk::FenceCreateInfo::default();
@@ -232,10 +236,7 @@ impl Objects {
             let allocate = vk::MemoryAllocateInfo::default()
                 .allocation_size(requirements.size)
                 .memory_type_index(host_type);
-            self.zeros_memory = device
-                .allocate_memory(&allocate, None)
-                .map_err(Error::vulkan("vkAllocateMemory"))?;
-            counters.rise(Gauge::Blocks);
+            self.zeros_memory = memory::allocate(device, counters, max_allocations, &allocate)?;
             counters.count(Metric::BlocksMade);
             device
                 .bind_buffer_memory(self.zeros, self.zeros_memory, 0)

@@ -146,6 +146,9 @@ pub(crate) struct Core {
     /// The longest block: the device's `maxMemoryAllocationSize` or `maxBufferSize`, whichever is
     /// less.
     max_block_len: u64,
+    /// The device's `maxMemoryAllocationCount`: the most allocations live at once
+    /// ([`memory::allocate`](crate::memory::allocate)).
+    pub(crate) max_allocations: u32,
     pub(crate) pool: Pool,
     pub(crate) filler: Filler,
     pub(crate) recorders: Recorders,
@@ -241,9 +244,20 @@ impl Device {
     /// the completion thread.
     ///
     /// Err: [`Error::BelowFloor`] with every item the device lacks; [`Error::Vulkan`] where a
-    /// Vulkan call fails; [`Error::Thread`]; [`Error::Translation`] where the translator takes no
-    /// description of the device.
+    /// Vulkan call fails; [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) at a
+    /// device whose `maxMemoryAllocationCount` does not take the zero source; [`Error::Thread`];
+    /// [`Error::Translation`] where the translator takes no description of the device.
     pub fn new(physical: &PhysicalDevice, options: DeviceOptions) -> Result<Device, Error> {
+        Device::open(physical, options, |_| {})
+    }
+
+    /// [`Device::new`], with the device's limits as `answer` leaves them: the tests' way to run a
+    /// device at a smaller limit than its own.
+    pub(crate) fn open(
+        physical: &PhysicalDevice,
+        options: DeviceOptions,
+        answer: impl FnOnce(&mut vk::PhysicalDeviceLimits),
+    ) -> Result<Device, Error> {
         let instance = physical.instance().clone();
         let vk_instance = instance.vk();
         let raw = physical.raw();
@@ -323,6 +337,8 @@ impl Device {
             .push_next(&mut vulkan13);
         // SAFETY: as for the floor check; the device is Vulkan 1.3, which defines both structures.
         unsafe { vk_instance.get_physical_device_properties2(raw, &mut properties) };
+        answer(&mut properties.properties.limits);
+        let max_allocations = properties.properties.limits.max_memory_allocation_count;
         let directory = options.pipeline_cache_dir.as_deref();
         let uuid = properties.properties.pipeline_cache_uuid;
         // SAFETY: the device is live.
@@ -340,7 +356,7 @@ impl Device {
         let counters = Counters::new();
         // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
         // its queues' family.
-        let made = unsafe { objects(&device, &capabilities, family, &counters) };
+        let made = unsafe { objects(&device, &capabilities, family, &counters, max_allocations) };
         let (memory_types, filler, done, arrays, layout) = match made {
             Ok(made) => made,
             Err(error) => {
@@ -403,6 +419,7 @@ impl Device {
             counters,
             ticks,
             max_block_len,
+            max_allocations,
             pool: Pool::new(options.block_mappings),
             filler,
             recorders: Recorders::new(family),
@@ -512,8 +529,10 @@ impl Device {
     /// keeps its number, address and mapping.
     ///
     /// Err: [`Limit::BlockLen`](crate::Limit::BlockLen) past the device's largest allocation or
-    /// buffer; [`Limit::BlockIds`](crate::Limit::BlockIds); [`Error::Vulkan`] where the device is
-    /// out of memory or lost; [`Error::Quiesced`].
+    /// buffer; [`Limit::BlockIds`](crate::Limit::BlockIds);
+    /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) where the block takes an
+    /// allocation past the device's count; [`Error::Vulkan`] where the device is out of memory or
+    /// lost; [`Error::Quiesced`].
     pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<BlockInfo, Error> {
         let core = &self.shared.core;
         if core.closed() {
@@ -827,13 +846,22 @@ unsafe fn objects(
     capabilities: &floor::Capabilities,
     family: u32,
     counters: &Counters,
+    max_allocations: u32,
 ) -> Result<(floor::MemoryTypes, Filler, Done, Arrays, vk::PipelineLayout), Error> {
     // SAFETY: the caller's contract.
     let memory_types =
         unsafe { floor::memory_types(device, capabilities) }.map_err(Error::BelowFloor)?;
     // SAFETY: the caller's contract; the Shared type is host-visible and host-coherent, and the
     // floor chose it for buffers of every usage.
-    let mut filler = unsafe { Filler::new(device, family, memory_types.shared, counters) }?;
+    let mut filler = unsafe {
+        Filler::new(
+            device,
+            family,
+            memory_types.shared,
+            counters,
+            max_allocations,
+        )
+    }?;
     // SAFETY: the device is live.
     let made = unsafe { Done::new(device) }.and_then(|mut done| {
         // SAFETY: the device is live, with the floor's features.

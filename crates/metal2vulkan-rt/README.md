@@ -86,6 +86,13 @@ in its memory.
   class ready, made off every caller's path, so a take waits only when none is ready. Past
   `BLOCK_LEN` a block is dedicated: the length rounded up to 64 KiB, made in the call, up to the
   device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
+- Every `VkDeviceMemory` the runtime holds counts against the device's
+  `maxMemoryAllocationCount`: each block, each texture's own allocation, the staging buffer of
+  each `Texture::replace_region` and `Texture::get_bytes` while its copy runs, the parameter ring's
+  blocks and the zero source. One more past it is `Limit::MemoryAllocations`, refused before the
+  driver is called; `Gauges::blocks` counts those live. The limit is about 4.29 billion on RADV,
+  NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD Graphics 630, and
+  4,096 at Vulkan's minimum.
 - Every block reads zero when it is handed out, new or taken again, as Metal's new buffers do. A
   Shared block is zeroed through its mapping, which also makes every page resident before anyone
   holds it; a Private block by a GPU fill.

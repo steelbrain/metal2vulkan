@@ -17,7 +17,7 @@ use crate::arrays::{IndexClass, ResourceId};
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal};
-use crate::memory::{Mapping, MemoryClass};
+use crate::memory::{self, Mapping, MemoryClass};
 use crate::reaper::{Free, Job};
 use crate::submit::Held;
 use ash::vk;
@@ -225,6 +225,7 @@ impl Device {
     /// [`Refusal::IndicesNotGranted`] and [`Refusal::IndexInUse`] for an index not granted or
     /// taken; [`Limit::TextureSize`] and [`Limit::TextureSamples`] past the device's;
     /// [`Gap::TextureFormat`], [`Gap::TextureBuffer`] and [`Gap::MemorylessTexture`];
+    /// [`Limit::MemoryAllocations`] where its memory would take the device past its count;
     /// [`Error::Vulkan`] where the image or its memory cannot be made; [`Error::Quiesced`].
     pub fn new_texture(
         &self,
@@ -281,7 +282,6 @@ impl Device {
             }
         };
         core.counters.rise(Gauge::Textures);
-        core.counters.rise(Gauge::Blocks);
         let objects = Arc::new(Image {
             core: Arc::clone(core),
             image,
@@ -641,7 +641,7 @@ unsafe fn make(
     let objects = unsafe { made.make(core, d, shape, plan) };
     if objects.is_err() {
         // SAFETY: nothing else holds what was made: no descriptor and no command names it.
-        unsafe { made.destroy(&core.device) };
+        unsafe { made.destroy(core) };
     }
     objects
 }
@@ -702,8 +702,8 @@ impl Made {
             .memory_type_index(memory_type)
             .push_next(&mut dedicated);
         // SAFETY: the type is one the image's requirements allow, and the allocation its own.
-        let memory = unsafe { device.allocate_memory(&allocate, None) }
-            .map_err(Error::vulkan("vkAllocateMemory"))?;
+        let memory =
+            unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) }?;
         self.memory = Some(memory);
         // SAFETY: the allocation is the image's size, of a type its requirements allow.
         unsafe { device.bind_image_memory(image, memory, 0) }
@@ -735,10 +735,13 @@ impl Made {
         Ok((image, memory, sampled, storage))
     }
 
+    /// Destroys what was made, the allocation's gauge falling with it.
+    ///
     /// # Safety
     ///
     /// Nothing else holds what was made.
-    unsafe fn destroy(&self, device: &ash::Device) {
+    unsafe fn destroy(&self, core: &Core) {
+        let device = &core.device;
         // SAFETY: the caller's contract.
         unsafe {
             for &view in &self.views {
@@ -749,6 +752,7 @@ impl Made {
             }
             if let Some(memory) = self.memory {
                 device.free_memory(memory, None);
+                core.counters.fall(Gauge::Blocks);
             }
         }
     }
@@ -1035,7 +1039,8 @@ impl Texture {
     /// Err: [`Refusal::TextureBytesPrivate`]; [`Refusal::TextureRegion`] for a level, slice or
     /// region outside the texture or off its format's block grid;
     /// [`Refusal::TextureBytesLayout`]; [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`] for a
-    /// 32-bit float depth; [`Error::Vulkan`] where the staging buffer cannot be made;
+    /// 32-bit float depth; [`Limit::MemoryAllocations`] where the staging buffer's memory would
+    /// take the device past its count; [`Error::Vulkan`] where the staging buffer cannot be made;
     /// [`Error::Quiesced`].
     ///
     /// [`Metrics::bytes_copied`]: crate::Metrics::bytes_copied
@@ -1167,15 +1172,14 @@ impl Staging {
             .allocation_size(requirements.size)
             .memory_type_index(core.memory_type(MemoryClass::Shared));
         // SAFETY: the Shared type serves a buffer of every usage, so one of fewer too.
-        let memory = match unsafe { device.allocate_memory(&allocate, None) } {
+        let allocated =
+            unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) };
+        let memory = match allocated {
             Ok(memory) => memory,
-            Err(result) => {
+            Err(error) => {
                 // SAFETY: the buffer is unused.
                 unsafe { device.destroy_buffer(buffer, None) };
-                return Err(Error::Vulkan {
-                    call: "vkAllocateMemory",
-                    result,
-                });
+                return Err(error);
             }
         };
         // SAFETY: the allocation is the buffer's size, of a type it allows; the memory is
@@ -1198,6 +1202,7 @@ impl Staging {
                     device.destroy_buffer(buffer, None);
                     device.free_memory(memory, None);
                 }
+                core.counters.fall(Gauge::Blocks);
                 return Err(error);
             }
         };
@@ -1208,12 +1213,12 @@ impl Staging {
                 device.destroy_buffer(buffer, None);
                 device.free_memory(memory, None);
             }
+            core.counters.fall(Gauge::Blocks);
             return Err(Error::Vulkan {
                 call: "vkMapMemory",
                 result: vk::Result::ERROR_MEMORY_MAP_FAILED,
             });
         };
-        core.counters.rise(Gauge::Blocks);
         Ok(Staging {
             core: Arc::clone(core),
             buffer,

@@ -530,6 +530,18 @@ pub enum Limit {
         /// The most samplers the device's states hold.
         max: u32,
     },
+    /// A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones,
+    /// refused before the driver is called: each block, each texture's own memory, each staging
+    /// buffer of [`Texture::replace_region`](crate::Texture::replace_region) and
+    /// [`Texture::get_bytes`](crate::Texture::get_bytes), the parameter ring's blocks and the zero
+    /// source count one while they live ([`Gauges::blocks`](crate::Gauges::blocks)). Metal has no
+    /// counterpart: its allocations are bounded by memory alone.
+    ///
+    /// Basis: device (the device's `maxMemoryAllocationCount`).
+    MemoryAllocations {
+        /// The most allocations the device holds at once.
+        max: u32,
+    },
     /// A multisample texture of a sample count the device does not make for its format, type and
     /// usage.
     ///
@@ -757,6 +769,9 @@ impl fmt::Display for Limit {
             ),
             Limit::DeviceSamplers { max } => {
                 write!(f, "the device holds {max} samplers for sampler states already")
+            }
+            Limit::MemoryAllocations { max } => {
+                write!(f, "the device holds {max} memory allocations already")
             }
             Limit::TextureSamples {
                 sample_count,

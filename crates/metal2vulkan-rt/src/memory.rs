@@ -1,7 +1,7 @@
 //! Memory blocks: what the consumer takes and releases, the pool that makes them ahead of need on
 //! its own thread, and how a block is made, zeroed and freed.
 
-use crate::counters::{Gauge, Metric};
+use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::{Error, Limit};
 use crate::floor;
@@ -383,6 +383,32 @@ pub(crate) fn dedicated_len(len: u64, max: u64) -> Result<u64, Error> {
     }
 }
 
+/// `vkAllocateMemory`, every allocation the runtime makes: one more live allocation in
+/// `counters`' blocks gauge, refused with [`Limit::MemoryAllocations`] before the driver is called
+/// where `max`, the device's `maxMemoryAllocationCount`, are live. Each free falls the gauge.
+///
+/// # Safety
+///
+/// `info` is valid for `device`.
+pub(crate) unsafe fn allocate(
+    device: &ash::Device,
+    counters: &Counters,
+    max: u32,
+    info: &vk::MemoryAllocateInfo<'_>,
+) -> Result<vk::DeviceMemory, Error> {
+    if !counters.rise_below(Gauge::Blocks, u64::from(max)) {
+        return Err(Error::Limit(Limit::MemoryAllocations { max }));
+    }
+    // SAFETY: the caller's.
+    unsafe { device.allocate_memory(info, None) }.map_err(|result| {
+        counters.fall(Gauge::Blocks);
+        Error::Vulkan {
+            call: "vkAllocateMemory",
+            result,
+        }
+    })
+}
+
 /// Makes a zeroed block of `len` bytes of `class`: a `VkBuffer` with every buffer usage, bound to
 /// an allocation of its own with a device address, and for Shared mapped and zeroed through the
 /// mapping, which also makes every page resident before anyone holds the block.
@@ -405,24 +431,21 @@ pub(crate) fn make(
     let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
     let mut flags =
         vk::MemoryAllocateFlagsInfo::default().flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-    let allocate = vk::MemoryAllocateInfo::default()
+    let allocation = vk::MemoryAllocateInfo::default()
         .allocation_size(requirements.size)
         .memory_type_index(core.memory_type(class))
         .push_next(&mut flags);
     // SAFETY: the floor chose the memory type for buffers of this usage on this device, and
     // `bufferDeviceAddress` is enabled.
-    let memory = match unsafe { device.allocate_memory(&allocate, None) } {
+    let allocated = unsafe { allocate(device, &core.counters, core.max_allocations, &allocation) };
+    let memory = match allocated {
         Ok(memory) => memory,
-        Err(result) => {
+        Err(error) => {
             // SAFETY: `buffer` is unused.
             unsafe { device.destroy_buffer(buffer, None) };
-            return Err(Error::Vulkan {
-                call: "vkAllocateMemory",
-                result,
-            });
+            return Err(error);
         }
     };
-    core.counters.rise(Gauge::Blocks);
     core.counters.count(Metric::BlocksMade);
     let mut block = Memory {
         id,

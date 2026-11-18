@@ -12,7 +12,7 @@ use crate::counters::{Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::floor;
-use crate::memory::Mapping;
+use crate::memory::{self, Mapping};
 use ash::vk;
 use std::ptr::NonNull;
 use std::sync::Mutex;
@@ -123,18 +123,16 @@ fn make(core: &Core) -> Result<(RingBlock, u64, Mapping), Error> {
         .push_next(&mut flags);
     // SAFETY: the floor chose the ring type for buffers of this usage, and `bufferDeviceAddress`
     // is enabled.
-    let memory = match unsafe { device.allocate_memory(&allocate, None) } {
+    let allocated =
+        unsafe { memory::allocate(device, &core.counters, core.max_allocations, &allocate) };
+    let memory = match allocated {
         Ok(memory) => memory,
-        Err(result) => {
+        Err(error) => {
             // SAFETY: `buffer` is unused.
             unsafe { device.destroy_buffer(buffer, None) };
-            return Err(Error::Vulkan {
-                call: "vkAllocateMemory",
-                result,
-            });
+            return Err(error);
         }
     };
-    core.counters.rise(Gauge::Blocks);
     core.counters.count(Metric::BlocksMade);
     let block = RingBlock { buffer, memory };
     match finish(device, &block) {
