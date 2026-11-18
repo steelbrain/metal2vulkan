@@ -1231,6 +1231,9 @@ impl fmt::Display for Refusal {
                  {buffer_length} bytes"
             ),
             Refusal::Committed => f.write_str("the command buffer is already committed"),
+            Refusal::InScheduledHandler => f.write_str(
+                "a scheduled handler runs on the submit thread, and this call may wait for it",
+            ),
             Refusal::OtherDevice => f.write_str("the object is another device's"),
             Refusal::NoCommandBuffers => {
                 f.write_str("a command queue must hold at least one command buffer")
