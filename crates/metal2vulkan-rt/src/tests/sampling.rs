@@ -294,7 +294,7 @@ mod on_device {
         let Some(library) = library() else {
             return;
         };
-        each_device("sampling", |name, _, device| {
+        each_device("sampling_runtime_and_constexpr", |name, _, device| {
             let counters = device.counters();
             let grants = [
                 (IndexClass::Texture, 4096),
@@ -421,7 +421,7 @@ mod on_device {
         let Some(library) = library() else {
             return;
         };
-        each_device("sampling", |name, _, device| {
+        each_device("sampling_any_usage_at_any_index", |name, _, device| {
             let range = IndexClass::Texture.range();
             let grants = [
                 (IndexClass::Texture, range.start, range.end - range.start),
@@ -469,7 +469,7 @@ mod on_device {
         let Some(library) = library() else {
             return;
         };
-        each_device("sampling", |name, _, device| {
+        each_device("sampling_index_placed_last", |name, _, device| {
             let counters = device.counters();
             let range = IndexClass::Texture.range();
             let grants = [
@@ -564,7 +564,7 @@ mod on_device {
         let Some(library) = library() else {
             return;
         };
-        each_device("sampling", |name, _, device| {
+        each_device("sampling_constexpr_index_placed_last", |name, _, device| {
             let counters = device.counters();
             let grants = [IndexClass::Texture, IndexClass::Sampler].map(|class| {
                 (device.grant_indices(class, 1, 4))
@@ -643,7 +643,7 @@ mod on_device {
         let Some(library) = library() else {
             return;
         };
-        each_device("sampling", |name, _, device| {
+        each_device("sampling_released_index_next", |name, _, device| {
             let counters = device.counters();
             let grants =
                 [(IndexClass::Texture, 8), (IndexClass::Sampler, 1)].map(|(class, count)| {
