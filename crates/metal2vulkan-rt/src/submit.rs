@@ -51,8 +51,11 @@ pub(crate) const GROUP: usize = 16;
 /// submission's start whenever the completion that sends the held group comes late. Behind three,
 /// the frame of five command buffers on the UHD 630 completed in 420-429 us against 895-1137 us,
 /// and the second of four long command buffers was seen complete 74.7 ms after its commit against
-/// 99.2 ms (76.5 against 96.8 on an RTX 2080), while a burst of 160 kept its time within 0.5% on
-/// both (probe b15b306d2f, jobs m3-max-44423 and m3-max-44424).
+/// 99.2 ms (76.5 against 96.8 on an RTX 2080, 46.8 against 57.7 on an RX 550), while a burst of
+/// 160 kept its time within 0.5% on all three (probe b15b306d2f, jobs m3-max-44423, m3-max-44424
+/// and m3-max-44437). Not four: behind four the UHD 630 ran that burst in 2768-2839 us against
+/// 1850-1860 us, more of its command buffers going alone, and the RTX 2080's long rows came to
+/// 78.1-78.2 ms against 42.8-43.2 ms (jobs m3-max-44442 and m3-max-44443).
 pub(crate) const IN_FLIGHT: usize = 3;
 
 /// The calls the pending upload records at most: a call past them waits for it to complete.

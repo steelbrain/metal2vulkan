@@ -562,10 +562,11 @@ that touch blocks first.
 - Command buffers committed while an earlier one of their queue runs are reported complete
   together, at the last one's end, where Metal reports each at its own. Measured with the harness
   row `long_4cb` (four command buffers committed together, two runs in flight): on an RTX 2080,
-  at about 12 ms of GPU time each, the second and third were reported with the fourth, the second
-  about 25 ms after its own end; on an RX 550, at about 7 ms each, about 14 ms. The last command
-  buffer's own report is not late: on the 2080 it came 96.6-97.2 ms after its commit, where the
-  old runtime's came 95.6-95.8 ms after. The harness prints each command buffer's lateness, from
+  at about 12 ms of GPU time each, the third was reported with the fourth, about 12 ms after its
+  own end, and the second 0.8 ms after its own at the median (25 ms at the 90th percentile); on an
+  RX 550, at about 7 ms each, the third about 7.7 ms late and the second 0.9-1.4 ms at the median
+  (15 ms at the 90th). The last command buffer's own report is not late: on the 2080 it came
+  97.2-97.5 ms after its commit, where the old runtime's came 94.9-96.4 ms after. The harness prints each command buffer's lateness, from
   its `gpu_end_time` to its completed handler (`late_us`).
 - Values the runtime reads back from GPU-written memory decide nothing beyond the reading command
   buffer's own results (`src/readback.rs`; a rule test holds every such read there). The sites:
