@@ -47,7 +47,7 @@ fn every_workload(session: &mut dyn Session) {
             authored::Makes::Buffers { .. } => {
                 assert_eq!(report.create_us.len(), 1, "{name}");
             }
-            authored::Makes::States { .. } => {
+            authored::Makes::States { .. } | authored::Makes::RenderStates { .. } => {
                 let timed = authored::STATE_CREATIONS as usize;
                 assert_eq!(report.create_us.len(), timed, "{name}");
                 assert!(report.first_us.is_some(), "{name}");
