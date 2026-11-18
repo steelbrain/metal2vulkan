@@ -281,14 +281,11 @@ impl Store {
         self.root.join(format!("g{number}"))
     }
 
-    /// Waits for the removal thread to end.
+    /// Waits for the removal thread to end: its last look for a dead generation too, which reads
+    /// the state and rebuilds one that does not check.
     #[cfg(test)]
     pub(crate) fn settle(&self) {
-        let start = std::time::Instant::now();
-        while self.removing.load(SeqCst) {
-            assert!(start.elapsed().as_secs() < 60, "the removal ends");
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        self.join_removal();
     }
 
     /// Looks `file` up in young, then old: `decode`'s answer for its bytes where they are `len`
@@ -468,6 +465,8 @@ impl Store {
                 let _ = fs::remove_dir_all(dir);
             }
             self.removing.store(false, SeqCst);
+            #[cfg(test)]
+            std::thread::sleep(Duration::from_millis(LAST_LOOK_PAUSE.load(Relaxed)));
             // A move to the next generation during the pass found the thread running and started
             // none: its dead generation is taken here. One the pass could not remove waits for
             // the next move or open.
@@ -496,6 +495,11 @@ impl Store {
 /// down during one.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub(crate) static REMOVAL_PAUSE: AtomicU64 = AtomicU64::new(0);
+
+/// A pause before the removal thread's last look for a dead generation, in milliseconds, for a
+/// test that tears the state once a store is settled.
+#[cfg(test)]
+pub(crate) static LAST_LOOK_PAUSE: AtomicU64 = AtomicU64::new(0);
 
 /// Makes directory `dir` where it is missing; not its parent.
 fn make_dir(dir: &Path) -> io::Result<()> {

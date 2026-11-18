@@ -1,6 +1,7 @@
 //! The cache directory on the host: two generations under one cap, a hit in old moved into young,
 //! a lookup that reads no state, the state file read at open with no listing and rebuilt where it
-//! is torn or missing, a removal cut short (a process's exit in it included) finished by the next
+//! is torn or missing, a settled store's removal thread ended with its last look, a removal cut
+//! short (a process's exit in it included) finished by the next
 //! open, an earlier version's pipeline data removed at open, torn files removed, a blob that does
 //! not check refused, a blob named by its device's whole pipeline cache header, at most four
 //! blobs kept, and stores in threads and processes sharing one directory without losing a count
@@ -308,6 +309,40 @@ fn a_process_that_exits_in_a_removal_leaves_it_to_the_next_open() {
         assert_eq!(reopened.get(&name(n), whole), Some(vec![1; 10]), "file {n}");
     }
     assert!(scratch.bytes() <= EXIT_CAP);
+}
+
+/// A settled store's removal thread has ended, its last look for a dead generation included:
+/// that look reads the state and rebuilds one that does not check, so a look still to come once
+/// `settle` returned would rebuild a state the test tears after it. Here that look waits 200 ms.
+#[test]
+fn a_settled_stores_removal_reads_the_state_no_more() {
+    use crate::cache::LAST_LOOK_PAUSE;
+    let scratch = Scratch::new("store-settled");
+    LAST_LOOK_PAUSE.store(200, Relaxed);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    // The move to generation 3 leaves generation 1 dead, and starts the removal.
+    for n in 0..13 {
+        assert!(store.put(&name(n), &[n as u8; 100]));
+    }
+    store.settle();
+    assert!(
+        !store.generation(1).exists(),
+        "the removal took generation 1"
+    );
+    // The open of the empty directory listed it once.
+    let listed = store.listings.load(Relaxed);
+    fs::write(scratch.0.join("state"), b"cut short").expect("the state torn");
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(
+        store.listings.load(Relaxed),
+        listed,
+        "nothing rebuilt the state"
+    );
+    assert_eq!(
+        fs::read(scratch.0.join("state")).expect("the state"),
+        b"cut short",
+        "nothing wrote the state"
+    );
 }
 
 #[test]
