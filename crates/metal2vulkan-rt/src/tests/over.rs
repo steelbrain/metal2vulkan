@@ -3,9 +3,10 @@
 //! of formats that answer 16 is printed; at each width tried, a texture over a Shared buffer whose
 //! pitch is its row rounded up to the answer, at a place of the linear image's memory alignment,
 //! is in place; an RGBA8Unorm texture over a Shared buffer at a pitch of the answer, its rows
-//! longer than their texels, at such a place, is made in place: it allocates nothing and stages
-//! nothing, its image's bytes are the
-//! host's in the buffer as they change, `replace_region` and `get_bytes` write and read the
+//! longer than their texels, at such a place, is made in place: it allocates nothing (live
+//! allocations counted once the block-maker thread holds a ready block of each class, the count
+//! that a plain texture's allocation moves) and stages nothing, its image's bytes are the host's
+//! in the buffer as they change, `replace_region` and `get_bytes` write and read the
 //! buffer, and a blit's write to the texture reaches the host in the buffer. Over a Managed buffer
 //! the image is the bytes shaders reach, which `replace_region` changes. Rows past the buffer,
 //! closer than a row or off a texel, and an offset off a texel, are refused; a 3D texture or one
@@ -13,11 +14,14 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::device::Core;
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
         Buffer, Error, Gap, IndexClass, MemoryClass, PixelFormat, Refusal, Region, StorageMode,
         Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     const WIDTH: u32 = 100;
     const HEIGHT: u32 = 10;
@@ -67,6 +71,21 @@ mod on_device {
                 bytes[at..at + ROW as usize].iter().copied()
             })
             .collect()
+    }
+
+    /// The device's live allocations once the block-maker thread holds a ready block of each
+    /// class, refilling off this thread any a take used, and the texture blocks among them.
+    fn settled(name: &str, core: &Core) -> (u64, usize) {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while core.pool.idle(MemoryClass::Private) == 0 || core.pool.idle(MemoryClass::Shared) == 0
+        {
+            assert!(
+                Instant::now() < deadline,
+                "{name}: a ready block of each class"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        (core.counters.gauges().blocks, core.places.blocks())
     }
 
     /// The texture's image's bytes, read by the device.
@@ -139,13 +158,17 @@ mod on_device {
                 TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, WIDTH, HEIGHT);
             d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
             d.storage_mode = StorageMode::Private;
-            let (blocks, copied) = (counters.gauges().blocks, counters.metrics().bytes_copied);
+            // Counted with the block-maker thread settled on both sides, so a refill of the
+            // ready block the take above used is not the texture's, and a block the texture took
+            // from the pool shows as the refill it causes.
+            let (blocks, copied) = (settled(name, core), counters.metrics().bytes_copied);
+            assert_eq!(blocks.1, 0, "{name}: no texture block yet");
             let texture = (buffer.new_texture(&d, Some(1), offset, pitch))
                 .unwrap_or_else(|error| panic!("{name}: at {offset}, pitch {pitch}: {error}"));
             assert_eq!(texture.descriptor().storage_mode, StorageMode::Shared);
             assert_eq!(
-                (counters.gauges().blocks, core.places.blocks()),
-                (blocks, 0),
+                settled(name, core),
+                blocks,
                 "{name}: a texture over a buffer allocates nothing"
             );
 
@@ -194,6 +217,12 @@ mod on_device {
             plain_d.storage_mode = StorageMode::Shared;
             let plain = (device.new_texture(&plain_d, None))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // The count sees a texture's allocation: a plain texture's.
+            assert_ne!(
+                settled(name, core),
+                blocks,
+                "{name}: a plain texture allocates"
+            );
             let source: Vec<u8> = (0..ROW * u64::from(HEIGHT))
                 .map(|i| (i % 241) as u8 ^ 0x3C)
                 .collect();
