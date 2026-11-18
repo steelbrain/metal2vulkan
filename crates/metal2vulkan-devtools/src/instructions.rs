@@ -296,7 +296,9 @@ fn raw_event(name: &str) -> io::Result<(&str, u64)> {
     Ok((unit, config))
 }
 
-/// The CPUs of a kernel CPU list (`0-11,16`).
+/// The CPUs of a kernel CPU list (`0-11,16`), as Linux lists a unit's CPUs: read only where the
+/// counters are Linux's.
+#[cfg(all(target_os = "linux", target_endian = "little"))]
 fn cpu_list(text: &str) -> io::Result<Vec<usize>> {
     let invalid = || {
         io::Error::new(
@@ -519,7 +521,7 @@ mod linux {
 
 #[cfg(test)]
 mod names {
-    use super::{cpu_list, raw_event};
+    use super::raw_event;
 
     /// A raw event's name gives its unit and config, `cpu` where it names none; a trailing `/`,
     /// `/u` or `:u` is taken; anything else is refused.
@@ -547,8 +549,10 @@ mod names {
     }
 
     /// A kernel CPU list gives its CPUs in order; a list of another form is refused.
+    #[cfg(all(target_os = "linux", target_endian = "little"))]
     #[test]
     fn a_cpu_list_gives_its_cpus() {
+        use super::cpu_list;
         assert_eq!(
             cpu_list("0-3,8,10-11\n").expect("a list"),
             [0, 1, 2, 3, 8, 10, 11]
