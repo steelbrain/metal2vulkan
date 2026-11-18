@@ -20,6 +20,7 @@ mod encoder;
 mod error;
 mod event;
 mod extension;
+mod fence;
 mod fill;
 pub mod floor;
 mod hazard;
@@ -51,6 +52,7 @@ pub use encoder::{ComputeCommandEncoder, DispatchType, Resource, ResourceUsage};
 pub use error::{Error, Gap, Limit, Refusal, TextureViewKind};
 pub use event::{Event, SharedEvent};
 pub use extension::{ConsumerFeature, DeviceExtension};
+pub use fence::Fence;
 pub use instance::{Instance, PhysicalDevice};
 pub use memory::{BlockId, BlockInfo, BlockMappings, MemoryClass, BLOCK_LEN};
 /// `MTLLibrary`: the translator's, read from AIR or a metallib.

@@ -27,6 +27,7 @@ use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::encoder::Resource;
 use crate::error::{Error, Gap, Refusal};
+use crate::fence::Fence;
 use crate::record::{memory_barrier, Reach};
 use crate::texture::{place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor};
 use ash::vk;
@@ -519,6 +520,26 @@ impl BlitCommandEncoder {
             core.counters.count(Metric::Barriers);
         }
         Ok(())
+    }
+
+    /// `updateFence:`: encoders that wait on `fence` after this one see what this encoder and the
+    /// ones before it wrote. It records nothing ([`Fence`]): each copy's own barrier already
+    /// reaches them.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's fence; [`Gap::FenceOtherQueue`] for a
+    /// fence another queue used first.
+    pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
+        let core = Arc::clone(self.building().device.core());
+        fence.used_on(&core, self.command_buffer.queue())
+    }
+
+    /// `waitForFence:`: this encoder sees what the encoders up to `fence`'s last update wrote. It
+    /// records nothing ([`Fence`]): each copy's barrier before it already orders them.
+    ///
+    /// Err: as [`update_fence`](Self::update_fence).
+    pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
+        let core = Arc::clone(self.building().device.core());
+        fence.used_on(&core, self.command_buffer.queue())
     }
 
     /// `endEncoding`. Each copy ordered itself, so the encoder owes no barrier.

@@ -4,6 +4,7 @@ use crate::buffer::Buffer;
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::error::{Error, Gap, Limit, Refusal};
+use crate::fence::Fence;
 use crate::hazard::Access;
 use crate::pipeline::{
     ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
@@ -416,6 +417,26 @@ impl ComputeCommandEncoder {
     /// barrier either way, before the next dispatch.
     pub fn memory_barrier(&mut self) {
         self.building().owe();
+    }
+
+    /// `updateFence:`: encoders that wait on `fence` after this one see what this encoder and the
+    /// ones before it wrote. It records nothing ([`Fence`]): its barrier at the end already
+    /// reaches them.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's fence; [`Gap::FenceOtherQueue`] for a
+    /// fence another queue used first.
+    pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error> {
+        let core = Arc::clone(self.building().device.core());
+        fence.used_on(&core, self.command_buffer.queue())
+    }
+
+    /// `waitForFence:`: this encoder sees what the encoders up to `fence`'s last update wrote. It
+    /// records nothing ([`Fence`]): the barrier before its first dispatch already orders them.
+    ///
+    /// Err: as [`update_fence`](Self::update_fence).
+    pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
+        let core = Arc::clone(self.building().device.core());
+        fence.used_on(&core, self.command_buffer.queue())
     }
 
     /// `dispatchThreadgroups:threadsPerThreadgroup:`.

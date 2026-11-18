@@ -4,6 +4,7 @@ mod cache;
 mod command;
 mod compute;
 mod device;
+mod fence;
 mod floor;
 mod hazard;
 mod heap;

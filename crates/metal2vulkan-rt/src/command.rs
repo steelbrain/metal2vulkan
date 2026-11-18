@@ -457,6 +457,11 @@ impl CommandBuffer {
         }
     }
 
+    /// Its queue.
+    pub(crate) fn queue(&self) -> &Arc<QueueInner> {
+        &self.inner.queue
+    }
+
     /// Whether the command buffer is `queue`'s.
     pub(crate) fn is_of(&self, queue: &QueueInner) -> bool {
         self.inner.queue.is(queue)

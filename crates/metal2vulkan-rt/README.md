@@ -439,6 +439,12 @@ made, with no lock, and never rewritten for layouts.
   `signaled_value` is the higher of the semaphore and the floor. `notify_listener` runs its
   listener on the completion thread when the value is reached, at a signal in the middle of a
   command buffer as well as at its end; `wait_until_signaled_value` wakes then too.
+- `Fence` is `MTLFence`, and `update_fence` and `wait_for_fence` on compute and blit encoders are
+  `updateFence:` and `waitForFence:`. They record nothing: a command buffer's encoders run in
+  their order and a queue's command buffers in their commit order, and each encoder's writes reach
+  the commands after it through the barrier at its end or at its segment's end, so a wait after an
+  update already sees them. Work with no fence between it is ordered as well, where Metal may run
+  it at once. A fence keeps the first queue whose encoder uses it.
 - `CommandQueue::abandon` ends every command buffer of the queue held at an event wait or not yet
   scheduled with `NotRun` and runs its handlers, as a Mac drops a dead process's held work, each
   retiring in the queue's order. Segments already submitted still complete, and so does a group
@@ -489,6 +495,9 @@ that touch blocks first.
   resource IDs it made up, with no fault. The consumer treats every byte on the device as
   guest-writable and keeps nothing there that it parses or trusts.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
+- A fence orders the encoders of one queue: an encoder of another queue that updates or waits on
+  it is refused (`Gap::FenceOtherQueue`), as Metal's fence orders one queue and `MTLEvent` orders
+  queues.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
   dispatch past it is split into dispatches of at most that many, each told its first
