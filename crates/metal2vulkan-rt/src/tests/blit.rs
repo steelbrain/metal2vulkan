@@ -744,10 +744,12 @@ fn a_fill_takes_whole_words_of_a_range_inside_the_buffer() {
 pub(crate) mod on_device {
     use crate::tests::command::on_device::{each_device, finished, within};
     use crate::{
-        BlitCommandEncoder, Buffer, BufferLayout, BytesPlace, CommandBuffer, Device, DispatchType,
-        Error, Gap, IndexClass, MemoryClass, PixelFormat, Refusal, Region, Resource, StorageMode,
-        Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
+        BlitCommandEncoder, Buffer, BufferLayout, BytesPlace, CommandBuffer, CommandBufferStatus,
+        Device, DispatchType, Error, Gap, IndexClass, MemoryClass, PixelFormat, Refusal, Region,
+        Resource, StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     /// A byte pattern of `len` bytes, different at every offset of one call and between calls.
     fn pattern(len: usize, seed: u8) -> Vec<u8> {
@@ -1603,8 +1605,25 @@ pub(crate) mod on_device {
                 .synchronize_resource(Resource::Texture(&texture))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             encoder.end_encoding();
+            let ran = Arc::new(AtomicBool::new(false));
+            let handled = Arc::clone(&ran);
+            command_buffer
+                .add_completed_handler(move |done| {
+                    let completed = done.status() == CommandBufferStatus::Completed;
+                    handled.store(completed, Ordering::SeqCst);
+                })
+                .expect("a completed handler");
             run(name, &command_buffer);
             let after = counters.metrics();
+            within("the completed handler", || ran.load(Ordering::SeqCst));
+            let (start, end) = (
+                command_buffer.gpu_start_time(),
+                command_buffer.gpu_end_time(),
+            );
+            assert!(
+                start == end && start > 0,
+                "{name}: GPU times {start}, {end}"
+            );
             assert_eq!(
                 (
                     after.submissions - metrics.submissions,

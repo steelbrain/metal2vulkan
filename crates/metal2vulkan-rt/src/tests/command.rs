@@ -1554,7 +1554,9 @@ pub(crate) mod on_device {
 
     /// A stream of command buffers with nothing for the GPU leaves nothing behind: 10,000
     /// committed, none waited for until the last, take no submission, the live command buffers
-    /// never pass the queue's 64, and every gauge is back where it was once they retire.
+    /// never pass the queue's 64, and every gauge is back where it was once they retire. Each
+    /// one's completed handler runs, in commit order, seeing it completed with its GPU start and
+    /// end equal and nonzero.
     #[test]
     fn every_device_keeps_its_gauges_flat_under_ten_thousand_empty_commits() {
         each_device("command_empty_stream", |name, _, device| {
@@ -1563,9 +1565,25 @@ pub(crate) mod on_device {
             // The block-maker thread has made its ready blocks: the gauges hold still.
             crate::tests::blit::on_device::settled(&device);
             let (gauges, submissions) = (counters.gauges(), counters.metrics().submissions);
+            // Handlers run so far, and those that ran out of commit order or saw a command buffer
+            // not completed or with other times.
+            let (ran, wrong) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
             let mut last = None;
             for at in 0..10_000 {
                 let command_buffer = queue.command_buffer().expect("a command buffer");
+                let (ran, wrong) = (Arc::clone(&ran), Arc::clone(&wrong));
+                command_buffer
+                    .add_completed_handler(move |done| {
+                        let (start, end) = (done.gpu_start_time(), done.gpu_end_time());
+                        let right = ran.fetch_add(1, Ordering::SeqCst) == at
+                            && done.status() == CommandBufferStatus::Completed
+                            && start == end
+                            && start > 0;
+                        if !right {
+                            wrong.fetch_add(1, Ordering::SeqCst);
+                        }
+                    })
+                    .expect("a completed handler");
                 command_buffer.commit().expect("a commit");
                 let live = counters.gauges().command_buffers;
                 assert!(
@@ -1584,6 +1602,11 @@ pub(crate) mod on_device {
                 counters.metrics().submissions,
                 submissions,
                 "{name}: a submission"
+            );
+            assert_eq!(
+                (ran.load(Ordering::SeqCst), wrong.load(Ordering::SeqCst)),
+                (10_000, 0),
+                "{name}: handlers run, and those out of order, not completed or with other times"
             );
             drop((queue, device));
         });
