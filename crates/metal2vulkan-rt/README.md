@@ -727,7 +727,11 @@ that touch blocks first.
   burst of command buffers of two dispatches each took 122-124 µs a command buffer with them and
   29.5-29.8 µs without. The driver writes a timestamp outside a render pass with a one-thread
   dispatch in a compute encoder, making the encoder where none is open, and resolves each on the
-  GPU as the encoder ends.
+  GPU as the encoder ends. On NVIDIA's driver 620.70.06 the start timestamp costs a command
+  buffer about 2.6 µs and the end one about 0.3 µs: on an RTX 2080, a burst of 2,000 command
+  buffers of one dispatch each took 23.88 µs a command buffer with the start alone, 21.57 with
+  the end alone and 21.29 with neither, medians of 40 runs. Writing the start at the
+  bottom-of-pipe stage costs the same, 23.68.
 - A command buffer that finds every pair of the device's timestamp pools taken, where the device
   then refuses a new pool, runs untimed: its `gpu_start_time` and `gpu_end_time` are 0, and
   `Metrics::untimed_command_buffers` counts it. Once the device refuses a pool it asks for none
