@@ -1,6 +1,10 @@
-//! Command buffers' GPU times across queues, under a device cfg on every device of the cfg's
-//! kind: a short command buffer reports its completion, with its GPU times, while a long one of
-//! another queue committed after it still runs.
+//! Command buffers' GPU times across queues, under the GPU cfg on every GPU: a short command
+//! buffer reports its completion, with its GPU times, while a long one of another queue committed
+//! after it still runs.
+//!
+//! Not under the CPU device cfg: lavapipe's read of a query pool's results waits for the whole
+//! device to idle (`lvp_GetQueryPoolResults`, with or without the wait flag), so there the short
+//! one's completion waits for the long one.
 
 use crate::tests::command::on_device::{each_device, finished, within, Arena, Busy};
 use crate::tests::compute::on_device::step;
