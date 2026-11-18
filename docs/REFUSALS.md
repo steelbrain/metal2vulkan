@@ -315,7 +315,7 @@ Columns:
 | `OutputBlocks` | Structurizer output blocks, `4(n+e)+1024` | every device (a deterministic cap) | `ours` | 4: `crates/metal2vulkan/src/structurize/irreducible.rs (round)`, `crates/metal2vulkan/src/structurize/mod.rs (structure_loops)` (+2) | `rare`: very large control flow |
 | `IrreducibleDepth` | Irreducible nesting depth | every device (a deterministic cap) | `ours` | 4: `crates/metal2vulkan-air/src/graph/loops.rs (compute_in)`, `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (check_within_depth)` (+1) | `none`: deeply nested irreducible loops |
 | `SpirvWords` | Emitted SPIR-V words | every device (a deterministic cap) | `ours` | 2: `crates/metal2vulkan/src/lower/estimate.rs (check)`, `crates/metal2vulkan/src/lower/estimate.rs (check_emitted)` | `rare`: very large output modules |
-| `WorkUnits` | Deterministic work units of one attempt | every device (a deterministic cap) | `ours` | 1: `crates/metal2vulkan-air/src/budget/mod.rs (tick)` | `rare`: very large shaders |
+| `WorkUnits` | Deterministic work units of one attempt | every device (a deterministic cap) | `ours` | 1: `crates/metal2vulkan-air/src/budget/mod.rs (counted)` | `rare`: very large shaders |
 | `LedgerBytes` | Ledger bytes of one attempt | every device (a deterministic cap) | `ours` | 9: `crates/metal2vulkan-air/src/bitstream/mod.rs (count)`, `crates/metal2vulkan-air/src/budget/mod.rs (charge)` (+5) | `rare`: very large shaders |
 | `TypeCount` | Types in the bitcode type table | every device (a deterministic cap) | `ours` | 2: `crates/metal2vulkan-air/src/bitcode/types.rs (decode)`, `crates/metal2vulkan-air/src/ir/types.rs (intern)` | `none`: a type table past the cap |
 | `MetadataNodes` | Metadata nodes | every device (a deterministic cap) | `ours` | 3: `crates/metal2vulkan-air/src/bitcode/function.rs (metadata)`, `crates/metal2vulkan-air/src/bitcode/metadata.rs (push)` (+1) | `none`: metadata past the cap |
@@ -340,7 +340,7 @@ Columns:
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
-| `Time` | The attempt's deadline passed | every device (the attempt's deadline, 20 seconds by default) | `ours` | 1: `crates/metal2vulkan-air/src/budget/mod.rs (tick)` | `none`: a translation past its deadline: a defect of ours to fix on any supported input (AGENTS.md: 20 seconds) |
+| `Time` | The attempt's deadline passed | every device (the attempt's deadline, 20 seconds by default) | `ours` | 1: `crates/metal2vulkan-air/src/budget/mod.rs (counted)` | `none`: a translation past its deadline: a defect of ours to fix on any supported input (AGENTS.md: 20 seconds) |
 
 ## 8. What a call did wrong (`Error::Metal(MetalError)`: a `Problem`)
 
@@ -948,7 +948,7 @@ Each refusal's sites, with the function that builds it.
 - `limit::OutputBlocks`: `crates/metal2vulkan/src/structurize/irreducible.rs (round)`; `crates/metal2vulkan/src/structurize/mod.rs (structure_loops)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (output_cap_is_checked_before_allocating)`; `crates/metal2vulkan/src/structurize/structurizer_properties/trees.rs (the_output_cap_is_checked_before_emission)`
 - `limit::IrreducibleDepth`: `crates/metal2vulkan-air/src/graph/loops.rs (compute_in)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (check_within_depth)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (irreducible_nesting_beyond_the_cap_is_refused, 2 sites)`
 - `limit::SpirvWords`: `crates/metal2vulkan/src/lower/estimate.rs (check)`; `crates/metal2vulkan/src/lower/estimate.rs (check_emitted)`
-- `limit::WorkUnits`: `crates/metal2vulkan-air/src/budget/mod.rs (tick)`
+- `limit::WorkUnits`: `crates/metal2vulkan-air/src/budget/mod.rs (counted)`
 - `limit::LedgerBytes`: `crates/metal2vulkan-air/src/bitstream/mod.rs (count)`; `crates/metal2vulkan-air/src/budget/mod.rs (charge)`; `crates/metal2vulkan-air/src/budget/mod.rs (grow, 2 sites)`; `crates/metal2vulkan-air/src/budget/mod.rs (reserve)`; `crates/metal2vulkan-air/src/budget/mod.rs (reserve_exact, 2 sites)`; `crates/metal2vulkan-air/src/graph/mod.rs (grow)`; `crates/metal2vulkan/src/spirv/verify/mod.rs (with_capacity)`
 - `limit::TypeCount`: `crates/metal2vulkan-air/src/bitcode/types.rs (decode)`; `crates/metal2vulkan-air/src/ir/types.rs (intern)`
 - `limit::MetadataNodes`: `crates/metal2vulkan-air/src/bitcode/function.rs (metadata)`; `crates/metal2vulkan-air/src/bitcode/metadata.rs (push)`; `crates/metal2vulkan-air/src/bitcode/metadata.rs (strings)`
@@ -963,7 +963,7 @@ Each refusal's sites, with the function that builds it.
 - `ratemap::DenseSamples`: `crates/metal2vulkan/src/bind/rate_map.rs (new)`
 - `ratemap::SampleOutOfRange`: `crates/metal2vulkan/src/bind/rate_map.rs (new)`
 - `ratemap::SampleCount`: `crates/metal2vulkan/src/bind/rate_map.rs (new)`
-- `budget::Time`: `crates/metal2vulkan-air/src/budget/mod.rs (tick)`
+- `budget::Time`: `crates/metal2vulkan-air/src/budget/mod.rs (counted)`
 - `invalid::EncoderOpen`: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (commit_refusal)`; `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (queue_commit)`
 - `invalid::ProtectedEncoder`: `crates/metal2vulkan-runtime/src/blit.rs (refuse_aborted)`; `crates/metal2vulkan-runtime/src/command_buffer/protection.rs (refuse_protected)`
 - `invalid::EncoderAbandoned`: `crates/metal2vulkan-runtime/src/command_buffer/mod.rs (commit_refusal)`
