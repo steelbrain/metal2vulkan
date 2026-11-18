@@ -45,11 +45,7 @@ struct DoneState {
     /// The wake semaphore's last value.
     woken: u64,
     stop: bool,
-    /// With `stop`: when the thread ends whatever is still in flight.
-    deadline: Option<Instant>,
     lost: bool,
-    /// The thread ended with nothing in flight.
-    drained: bool,
 }
 
 /// Where the completion thread waits.
@@ -139,9 +135,7 @@ impl Done {
                 waiting: Waiting::Not,
                 woken: 0,
                 stop: false,
-                deadline: None,
                 lost: false,
-                drained: false,
             }),
             changed: Condvar::new(),
             progress,
@@ -282,17 +276,15 @@ impl Done {
         self.wake(&mut state, &core.device, false);
     }
 
-    /// Tells the completion thread to end once nothing is in flight, or at `deadline`.
-    pub(crate) fn stop(&self, core: &Core, deadline: Option<Instant>) {
+    /// Tells the completion thread to end once nothing is in flight. The submit thread tells it
+    /// as it ends, after the last command buffers it ended came here, so none comes after the
+    /// thread. The thread ends then whatever a stop's deadline was: one past a quiesce's deadline
+    /// ends alone, once the GPU completed what was in flight and it retired that, so nothing in
+    /// flight is left holding what it used, the core among it.
+    pub(crate) fn stop(&self, core: &Core) {
         let mut state = self.lock();
         state.stop = true;
-        state.deadline = deadline;
         self.wake(&mut state, &core.device, false);
-    }
-
-    /// Whether the completion thread ended with nothing in flight.
-    pub(crate) fn drained(&self) -> bool {
-        self.lock().drained
     }
 }
 
@@ -444,36 +436,15 @@ pub(crate) fn run(core: Arc<Core>) {
             continue;
         }
         drop(fired);
-        if state.stop {
-            if state.flight.is_empty() {
-                state.drained = true;
-                break;
-            }
-            if state
-                .deadline
-                .is_some_and(|deadline| Instant::now() >= deadline)
-            {
-                break;
-            }
+        if state.stop && state.flight.is_empty() {
+            break;
         }
-        let timeout = state
-            .deadline
-            .filter(|_| state.stop)
-            .map(|deadline| deadline.saturating_duration_since(Instant::now()));
         if state.lost || (state.flight.is_empty() && state.watched.is_empty()) {
             state.waiting = Waiting::Host;
-            state = match timeout {
-                None => done
-                    .changed
-                    .wait(state)
-                    .unwrap_or_else(PoisonError::into_inner),
-                Some(timeout) => {
-                    done.changed
-                        .wait_timeout(state, timeout)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-            };
+            state = done
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
             state.waiting = Waiting::Not;
             continue;
         }
@@ -500,10 +471,9 @@ pub(crate) fn run(core: Arc<Core>) {
             .flags(vk::SemaphoreWaitFlags::ANY)
             .semaphores(&semaphores)
             .values(&values);
-        let nanos = timeout.map_or(u64::MAX, nanos);
         // SAFETY: every semaphore is a timeline semaphore of the device, live while the state
         // holds its event or the core lives.
-        let result = unsafe { device.wait_semaphores(&wait, nanos) };
+        let result = unsafe { device.wait_semaphores(&wait, u64::MAX) };
         state = done.lock();
         state.waiting = Waiting::Not;
         if result.is_err_and(|result| result != vk::Result::TIMEOUT) {

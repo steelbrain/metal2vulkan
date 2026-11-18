@@ -1763,6 +1763,9 @@ pub(crate) fn run(core: Arc<Core>) {
                 copy_in.retire(&core);
             }
             core.done.end_all(&core, ended);
+            // The last command buffers this thread ends went to the completion thread first, so
+            // it retires them before it ends.
+            core.done.stop(&core);
             return;
         }
         while !state.dirty {

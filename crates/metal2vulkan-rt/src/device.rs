@@ -653,7 +653,9 @@ impl Device {
     /// block-maker thread ends; the GPU completes everything submitted; the completion thread
     /// retires it, runs the handlers, and ends; then [`BlockMappings::unmap`] runs on this thread
     /// for every block still handed out. After it, no runtime thread touches a block, unless the
-    /// call answered false.
+    /// call answered false. A thread past the timeout ends alone: the completion thread once the
+    /// GPU completed what was submitted and it retired that, running its handlers, so what the
+    /// work held, the device among it, goes once the device's last handle has dropped.
     ///
     /// It frees nothing: every block's memory and mapping stays valid until the process ends, or
     /// until the device's last handle drops, which then frees it without the hook. Later calls
@@ -844,14 +846,19 @@ fn halt(core: &Arc<Core>, threads: Threads, deadline: Option<Instant>, quiesce: 
     } = threads;
     // Submission stops: what is ready goes, and what is held ends.
     core.work.stop();
-    let mut idle = finish(submit, core, deadline);
+    let submitted = finish(submit, core, deadline);
+    let mut idle = submitted;
     core.pool.stop();
     idle &= finish(blocks, core, deadline);
     if quiesce {
         idle &= core.wait_progress(core.work.progress(), deadline);
     }
-    core.done.stop(core, deadline);
-    idle &= finish(complete, core, deadline) && core.done.drained();
+    // The submit thread stops the completion thread as it ends; here only where it has ended, or
+    // never ran. One past the deadline stops it when it ends alone.
+    if submitted {
+        core.done.stop(core);
+    }
+    idle &= finish(complete, core, deadline);
     core.reaper.stop();
     idle &= finish(reaper, core, deadline);
     // The consumer's mappings go here, on the thread that stops the device, whichever thread
