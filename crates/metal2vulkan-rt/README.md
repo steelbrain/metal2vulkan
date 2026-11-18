@@ -436,6 +436,9 @@ made, with no lock, and never rewritten for layouts.
   buffer, or of a command buffer submitted with it, reads the texture's older texels, where a
   discrete Mac's GPU reads the written ones. A command buffer that wrote such a texture and is
   never committed leaves the texture's entry with the buffer until the buffer is released.
+- A `replace_region` on a Managed texture made after a commit and before the GPU reaches that
+  command buffer's upload is seen by it; Metal on a two-copy GPU sees it only until the command
+  buffer is scheduled.
 - Texture views that change what the replay streams' views keep are not built
   (`Gap::TextureView`, naming the kind): another pixel format, another texture type (but a 2D
   view of one slice of a 2D array), some of a cube's faces or a cube array's cubes, and any view
