@@ -810,6 +810,49 @@ fn a_device_that_lists_the_portability_subset_is_asked_for_its_features() {
     );
 }
 
+/// The translator is told what device creation enables of the portability subset: the extension,
+/// which its description of a device that lists it must enable, and the portability features the
+/// floor asks for, but no other the device reports. A device that does not list it gives neither.
+#[test]
+fn the_translator_sees_the_portability_subset_device_creation_enables() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::{VkExtension, VkFeature};
+    let mut device = at_the_floor();
+    device
+        .extensions
+        .push(ash::khr::portability_subset::NAME.to_owned());
+    for feature in PORTABILITY {
+        *(feature.field)(&mut device.features) = vk::TRUE;
+    }
+    device
+        .features
+        .portability
+        .constant_alpha_color_blend_factors = vk::TRUE;
+    let enables = shader_enables(&decide(&device).unwrap_or_else(|below| panic!("{below}")));
+    assert!(enables
+        .extensions
+        .contains(&VkExtension::KhrPortabilitySubset));
+    for feature in [
+        VkFeature::ImageViewFormatSwizzle,
+        VkFeature::MutableComparisonSamplers,
+        VkFeature::MultisampleArrayImage,
+    ] {
+        assert!(enables.features.contains(&feature), "{feature:?}");
+    }
+    assert!(!enables
+        .features
+        .contains(&VkFeature::ConstantAlphaColorBlendFactors));
+
+    let unlisted =
+        shader_enables(&decide(&at_the_floor()).unwrap_or_else(|below| panic!("{below}")));
+    assert!(!unlisted
+        .extensions
+        .contains(&VkExtension::KhrPortabilitySubset));
+    assert!(!unlisted
+        .features
+        .contains(&VkFeature::ImageViewFormatSwizzle));
+}
+
 #[test]
 fn the_optional_features_decide_the_capabilities() {
     type Set = fn(&mut Features);

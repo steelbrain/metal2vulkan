@@ -48,7 +48,9 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::portability_subset::NAME,
 ];
 
-/// The translator's name for an extension device creation enables that its shaders may use.
+/// The translator's name for an extension device creation enables that its shaders may use, or
+/// that its description of the device must enable: the portability subset, where the device lists
+/// it.
 fn shader_extension(name: &CStr) -> Option<VkExtension> {
     if name == ash::khr::workgroup_memory_explicit_layout::NAME {
         Some(VkExtension::KhrWorkgroupMemoryExplicitLayout)
@@ -58,6 +60,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::KhrShaderSubgroupUniformControlFlow)
     } else if name == ash::ext::robustness2::NAME {
         Some(VkExtension::ExtRobustness2)
+    } else if name == ash::khr::portability_subset::NAME {
+        Some(VkExtension::KhrPortabilitySubset)
     } else {
         None
     }
@@ -292,11 +296,11 @@ pub(crate) const REQUIRED: &[Feature] = &[
 /// definition, so it is not asked.
 pub(crate) const PORTABILITY: &[Feature] = &[
     // A texture's view maps its format's components and Metal's swizzle.
-    feature!(portability.image_view_format_swizzle),
+    feature!(portability.image_view_format_swizzle => ImageViewFormatSwizzle),
     // The comparison sampler array takes each sampler state's sampler as it is made.
-    feature!(portability.mutable_comparison_samplers),
+    feature!(portability.mutable_comparison_samplers => MutableComparisonSamplers),
     // `MTLTextureType2DMultisampleArray`.
-    feature!(portability.multisample_array_image),
+    feature!(portability.multisample_array_image => MultisampleArrayImage),
 ];
 
 /// The features the runtime uses only where the device reports them. Each answer chooses one of
@@ -318,7 +322,7 @@ pub(crate) const OPTIONAL: &[Feature] = &[
 pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
     let mut features = capabilities.features;
     let mut enables = EnableSet::new();
-    for feature in REQUIRED.iter().chain(OPTIONAL) {
+    for feature in REQUIRED.iter().chain(OPTIONAL).chain(PORTABILITY) {
         if let Some(name) = feature.translator {
             if *(feature.field)(&mut features) == vk::TRUE {
                 enables.features.insert(name);
