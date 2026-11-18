@@ -8,9 +8,13 @@ the summary, then each test's captured output, indented, after a header naming t
 
 import subprocess
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import results
+
+#: The cards' variance rows as stored, before a test patches them away.
+CARD_VARIANCE_STORED = results.CARD_VARIANCE
 
 NEXTEST = """\
     Starting 3 tests across 1 binary
@@ -228,10 +232,20 @@ class RuleTests(unittest.TestCase):
 
 class HarnessBudgetTests(unittest.TestCase):
     def setUp(self):
-        # The rules below on no floors unless a test gives its own.
-        floors = mock.patch.object(results, "HARNESS_FLOORS", {})
-        floors.start()
-        self.addCleanup(floors.stop)
+        # The rules below on no floors and no card's variance unless a test gives its own.
+        for name in ("HARNESS_FLOORS", "HARNESS_GPU_FLOORS", "CARD_VARIANCE"):
+            patch = mock.patch.object(results, name, {})
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def select(self, leg_id, lines):
+        """The rows the leg's re-time selection chooses from LINES, as the matrix runs it."""
+        run = subprocess.run(["awk", "-v", f"limits={results.harness_limits(leg_id)}", "-v",
+                              f"gpulimits={results.harness_limits(leg_id, gpu=True)}", "-v",
+                              f"wallre={results.WALL_RE}", "-v", f"budget={results.HARNESS_BUDGET!r}",
+                              results.RETIME_SELECT],
+                             input="\n".join(lines) + "\n", capture_output=True, text=True, check=True)
+        return sorted(line.split()[1] for line in run.stdout.splitlines())
 
     def budget(self, leg_id, times):
         return results.harness_budget(leg_id, leg_of(recs(time=times)))
@@ -447,10 +461,17 @@ class HarnessBudgetTests(unittest.TestCase):
     def test_the_floors_table_reads_per_leg_and_row(self):
         text = "# a comment\nrow  a  b\nframe  1.10  -\nalu  1.00  1.02\n"
         self.assertEqual(results.read_floors(text), {"a": {"frame": 1.1, "alu": 1.0}, "b": {"alu": 1.02}})
-        # The stored table: every floor is a ratio of at least 1, on a leg id.
-        for leg, rows in results.HARNESS_FLOORS.items():
-            self.assertRegex(leg, r"^[0-9a-f]{4}:[0-9a-f]{4}$")
-            self.assertTrue(all(value >= 1.0 for value in rows.values()), leg)
+        # The stored tables: every floor is a ratio of at least 1, on a leg id; the GPU floors name no
+        # row judged on its host time, and each card's variance row has a GPU floor.
+        floors = results.read_floors((Path(results.__file__).parent / "floors.tsv").read_text())
+        gpu_floors = results.read_floors((Path(results.__file__).parent / "gpu-floors.tsv").read_text())
+        for table in (floors, gpu_floors):
+            for leg, rows in table.items():
+                self.assertRegex(leg, r"^[0-9a-f]{4}:[0-9a-f]{4}$")
+                self.assertTrue(all(value >= 1.0 for value in rows.values()), leg)
+        self.assertFalse([row for rows in gpu_floors.values() for row in rows if row.startswith(results.WALL_ROWS)])
+        for leg, rows in CARD_VARIANCE_STORED.items():
+            self.assertTrue(set(rows) <= set(gpu_floors[leg]), leg)
 
     def test_a_leg_re_times_the_rows_the_budget_would_fail_on_their_one_time(self):
         ceilings = {"a": {"listed": 2.0, "edge": 2.0}}
@@ -461,10 +482,7 @@ class HarnessBudgetTests(unittest.TestCase):
         lines += ["M2V-MATRIX time harness-new/authored/first_use_wait_total 900.000",
                   "M2V-MATRIX gauge harness-new/alu/buffers@100 2", "a table row"]
         with mock.patch.object(results, "HARNESS_CEILINGS", ceilings):
-            run = subprocess.run(["awk", "-v", f"limits={results.harness_limits('a')}", "-v",
-                                  f"budget={results.HARNESS_BUDGET!r}", results.RETIME_SELECT],
-                                 input="\n".join(lines) + "\n", capture_output=True, text=True, check=True)
-            chosen = sorted(line.split()[1] for line in run.stdout.splitlines())
+            chosen = self.select("a", lines)
             records = {f"harness-{runtime}/{row}": pair[i]
                        for row, pair in times.items() for i, runtime in enumerate(("old", "new"))}
             failed = sorted(line.split()[2].rstrip(":") for line in self.budget("a", records)[0])
@@ -475,32 +493,95 @@ class HarnessBudgetTests(unittest.TestCase):
 
     def test_re_timed_pairs_are_parked_records(self):
         self.assertTrue(f"{results.HARNESS_RETIME}vote_loop/1/new".startswith(results.PARKED_RECORDS))
+        self.assertTrue(f"{results.HARNESS_RETIME_GPU}vote_loop/1/new".startswith(results.PARKED_RECORDS))
 
-    def test_a_row_s_gpu_time_is_shown_beside_its_time_and_judged_by_nothing(self):
+    def test_a_row_with_a_gpu_time_is_judged_on_it_and_a_frame_or_burst_row_on_its_time(self):
         times = {"harness-old/frame": 100.0, "harness-new/frame": 120.0,
                  "harness-gpu-old/frame": 80.25, "harness-gpu-new/frame": 81.0,
+                 "harness-old/burst_160": 100.0, "harness-new/burst_160": 101.0,
+                 "harness-gpu-old/burst_160": 50.0, "harness-gpu-new/burst_160": 90.0,
                  "harness-old/alu": 100.0, "harness-new/alu": 100.0,
-                 "harness-gpu-old/alu": 10.0, "harness-gpu-new/alu": 900.0}
+                 "harness-gpu-old/alu": 10.0, "harness-gpu-new/alu": 900.0,
+                 "harness-old/simd_reduce": 45.0, "harness-new/simd_reduce": 55.0,
+                 "harness-gpu-old/simd_reduce": 37.0, "harness-gpu-new/simd_reduce": 37.1}
+        frame = ("harness budget frame: new 120.0 us (GPU p50 81.0 us) over old 100.0 us (GPU p50 80.2 us) "
+                 "is 1.200, past 1.03")
+        alu = ("harness budget alu: GPU p50 new 900.0 us over old 10.0 us is 90.000 (time new 100.0 us over old "
+               "100.0 us is 1.000), past 1.03")
         with mock.patch.object(results, "HARNESS_CEILINGS", {}):
-            self.assertEqual(self.budget("a", times), ([
-                "harness budget frame: new 120.0 us (GPU p50 81.0 us) over old 100.0 us (GPU p50 80.2 us) "
-                "is 1.200, past 1.03"], []))
-            # Only one runtime's GPU time: the other's line shows none.
-            del times["harness-gpu-old/frame"]
+            # alu is past on its GPU time, its time level; simd_reduce is within on its GPU time, its
+            # time 1.22 past; frame is judged on its time, burst_160 on its time, whatever their GPU's.
+            self.assertEqual(self.budget("a", times), ([alu, frame], []))
+            self.assertTrue(results.gpu_judged(times, "alu"))
+            self.assertFalse(results.gpu_judged(times, "burst_160"))
+            # Only one runtime's GPU time: the row is judged on its time, the other's line showing none.
+            del times["harness-gpu-old/frame"], times["harness-gpu-old/alu"]
             self.assertEqual(self.budget("a", times)[0], [
                 "harness budget frame: new 120.0 us (GPU p50 81.0 us) over old 100.0 us is 1.200, past 1.03"])
+            # The re-time selection makes the same choice.
+            times["harness-gpu-old/alu"] = 10.0
+            lines = [f"M2V-MATRIX time {key} {value:.3f}" for key, value in times.items()]
+            self.assertEqual(self.select("a", lines), ["alu", "frame"])
         # A GPU time's cross-GPU outlier is named and fails no leg.
         key = f"{results.HARNESS_GPU}new/frame"
         bases = {leg: {key: 100} for leg in "abcd"}
         failing, parked = results.time_outliers(
             {"a": {key: 100}, "b": {key: 101}, "c": {key: 99}, "d": {key: 150}}, bases)
         self.assertEqual((failing, list(parked)), ({}, ["d"]))
-        # The re-time selection reads the rows' times alone.
-        lines = "\n".join(f"M2V-MATRIX time {key} {value:.3f}" for key, value in times.items()) + "\n"
-        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
-            run = subprocess.run(["awk", "-v", "limits=", "-v", f"budget={results.HARNESS_BUDGET!r}",
-                                  results.RETIME_SELECT], input=lines, capture_output=True, text=True, check=True)
-        self.assertEqual([line.split()[1] for line in run.stdout.splitlines()], ["frame"])
+
+    def test_a_row_judged_on_its_gpu_time_takes_its_gpu_floor_and_its_re_timed_gpu_pairs(self):
+        times = {"harness-old/sampling": 35.0, "harness-new/sampling": 36.0,
+                 "harness-gpu-old/sampling": 16.0, "harness-gpu-new/sampling": 17.6}
+        line = ("harness budget sampling: GPU p50 new 17.6 us over old 16.0 us is 1.100 (time new 36.0 us over "
+                "old 35.0 us is 1.029), past its GPU floor 1.05 with its allowance, 1.082")
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}), \
+                mock.patch.object(results, "HARNESS_FLOORS", {"a": {"sampling": 1.3}}):
+            # Its host time's floor is not its limit.
+            self.assertEqual(len(self.budget("a", times)[0]), 1)
+            with mock.patch.object(results, "HARNESS_GPU_FLOORS", {"a": {"sampling": 1.1}}):
+                self.assertEqual(self.budget("a", times), ([], []))
+                self.assertEqual(results.harness_limits("a", gpu=True), f"sampling={1.1 * results.HARNESS_BUDGET!r}")
+            with mock.patch.object(results, "HARNESS_GPU_FLOORS", {"a": {"sampling": 1.05}}):
+                self.assertEqual(self.budget("a", times), ([line], []))
+                lines = [f"M2V-MATRIX time {key} {value:.3f}" for key, value in times.items()]
+                self.assertEqual(self.select("a", lines), ["sampling"])
+                # Its re-timed GPU pairs judge it, not its re-timed times.
+                pairs = dict(times, **{"harness-retime/sampling/1/old": 35.0, "harness-retime/sampling/1/new": 50.0,
+                                       "harness-retime/sampling/2/old": 35.0, "harness-retime/sampling/2/new": 50.0,
+                                       "harness-retime-gpu/sampling/1/old": 16.0,
+                                       "harness-retime-gpu/sampling/1/new": 16.2,
+                                       "harness-retime-gpu/sampling/2/old": 16.0,
+                                       "harness-retime-gpu/sampling/2/new": 16.4})
+                self.assertEqual(self.budget("a", pairs), ([], [
+                    f"{line}; re-timed in 2 pairs, 1.012, 1.025, median 1.019, within: judged by the median"]))
+
+    def test_a_card_s_variance_row_is_named_and_fails_nothing(self):
+        times = {"harness-old/sampling": 35.0, "harness-new/sampling": 36.0,
+                 "harness-gpu-old/sampling": 16.0, "harness-gpu-new/sampling": 20.0}
+        variance = {"a": {"sampling": "its GPU p50 ran 16-20 us"}}
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}), \
+                mock.patch.object(results, "CARD_VARIANCE", variance):
+            self.assertEqual(self.budget("a", times), ([], [
+                "harness budget sampling: GPU p50 new 20.0 us over old 16.0 us is 1.250 (time new 36.0 us over "
+                "old 35.0 us is 1.029), past 1.03: the card's own variance, not judged (its GPU p50 ran 16-20 us)"]))
+            # Within its limit and over the budget, it is named too.
+            with mock.patch.object(results, "HARNESS_GPU_FLOORS", {"a": {"sampling": 1.3}}):
+                self.assertEqual(self.budget("a", times)[1], [
+                    "harness budget sampling: GPU p50 new 20.0 us over old 16.0 us is 1.250 (time new 36.0 us "
+                    "over old 35.0 us is 1.029), within its limit: the card's own variance (its GPU p50 ran "
+                    "16-20 us)"])
+            # Another GPU's row is judged.
+            self.assertEqual(len(self.budget("b", times)[0]), 1)
+
+    def test_a_re_timed_run_keeps_the_row_s_time_and_gpu_time(self):
+        output = ["M2V-MATRIX time harness-new/sampling 36.000", "M2V-MATRIX time harness-gpu-new/sampling 17.600",
+                  "M2V-MATRIX time harness-new/alu 10.000", "a table row"]
+        keep = results.RETIME_KEEP.replace("$timed", "new").replace("$row", "sampling").replace("$pair", "2")
+        run = subprocess.run(["sed", "-n", keep], input="\n".join(output) + "\n", capture_output=True, text=True,
+                             check=True)
+        self.assertEqual(run.stdout.splitlines(), [
+            "M2V-MATRIX time harness-retime/sampling/2/new 36.000",
+            "M2V-MATRIX time harness-retime-gpu/sampling/2/new 17.600"])
 
     def test_every_row_shows_its_times_and_gpu_times_on_both_runtimes(self):
         times = {"harness-old/frame": 100.0, "harness-new/frame": 120.0,

@@ -285,7 +285,7 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     processes. After the last runtime's runs, before its suite's line, the rows over their
     limits (results.RETIME_SELECT, at most results.RETIME_ROWS, the furthest over first) are each
     re-timed alone in results.RETIME_PAIRS pairs, old then new, then new then old, their
-    times kept as harness-retime/<row>/<pair>/<runtime> (results.harness_budget). A row whose size
+    times and GPU times kept (results.RETIME_KEEP) for results.harness_budget. A row whose size
     follows the device is sized by the first runtime's run, and every later run, warm and re-timed
     ones included, is given that size (`--size`), so each runtime times the same work. Each
     runtime's main run also has a fresh empty store for its pipelines (`--store`), so its first
@@ -303,10 +303,11 @@ def harness_runs(manifest_dir, command, leg, windows=False):
         unprofile = '\n      export LOCALAPPDATA="$saved_local" USERPROFILE="$saved_profile"'
     creates = f"'{results.HARNESS_CREATES}*'"
     rename = r"s#^M2V-MATRIX \([a-z]*\) harness-$runtime/\([a-z]*\)/first_use_#M2V-MATRIX \1 harness-$runtime-warm/\2/first_use_#p"
-    retime = r"s#^M2V-MATRIX time harness-$timed/$row #M2V-MATRIX time harness-retime/$row/$pair/$timed #p"
     outputs = " ".join(f'"$out/{runtime}"' for runtime in HARNESS_RUNTIMES)
-    limits = "\n".join(f"        {leg_id}) limits='{results.harness_limits(leg_id)}' ;;"
-                        for leg_id in sorted(set(results.HARNESS_CEILINGS) | set(results.HARNESS_FLOORS)))
+    limits = "\n".join(f"        {leg_id}) limits='{results.harness_limits(leg_id)}' "
+                        f"gpulimits='{results.harness_limits(leg_id, gpu=True)}' ;;"
+                        for leg_id in sorted(set(results.HARNESS_CEILINGS) | set(results.HARNESS_FLOORS)
+                                             | set(results.HARNESS_GPU_FLOORS)))
     sized = r"s#^\([a-z0-9_]*\)  *[a-z]*  *sized to \([0-9][0-9]*\) .*#--size \1=\2#p"
     return f"""rc=0
     out=$(mktemp -d) || exit 3
@@ -338,15 +339,15 @@ def harness_runs(manifest_dir, command, leg, windows=False):
       if [ "$runtime" = {HARNESS_RUNTIMES[-1]} ]; then
         case "{leg}" in
 {limits}
-          *) limits= ;;
+          *) limits= gpulimits= ;;
         esac
         select='{results.RETIME_SELECT}'
-        rows=$(awk -v limits="$limits" -v budget={results.HARNESS_BUDGET!r} "$select" {outputs} | sort -rn | head -n {results.RETIME_ROWS} | cut -d' ' -f2)
+        rows=$(awk -v limits="$limits" -v gpulimits="$gpulimits" -v wallre='{results.WALL_RE}' -v budget={results.HARNESS_BUDGET!r} "$select" {outputs} | sort -rn | head -n {results.RETIME_ROWS} | cut -d' ' -f2)
         for row in $rows; do
           for pair in $(seq {results.RETIME_PAIRS}); do
             case $pair in 2) order="new old" ;; *) order="old new" ;; esac
             for timed in $order; do
-              CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "$row" 2>&1 | sed -n "{retime}"
+              CARGO_MANIFEST_DIR={manifest_dir} {command} --runtime $timed $sizes --only "$row" 2>&1 | sed -n "{results.RETIME_KEEP}"
             done
           done
         done
