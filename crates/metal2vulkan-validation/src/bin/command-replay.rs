@@ -1,10 +1,12 @@
-//! Replay streams (`docs/REPLAY-STREAM.md`): play one on a Vulkan device through the old runtime,
-//! or print its records.
+//! Replay streams (`docs/REPLAY-STREAM.md`): play one on a Vulkan device through the old runtime
+//! or the new one, or print its records.
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-//! [--blobs DIR]` plays the stream whose first segment is `FILE` and writes `DIR/report.txt`:
-//! `device NAME`, the player's report lines, `cut SEGMENT OFFSET` where the last segment ends in
-//! a record cut short, then `ok` or `error WHAT`. The exit status is 0 for `ok`, 1 for a play that
+//! [--blobs DIR] [--runtime old|rt]` plays the stream whose first segment is `FILE` through the
+//! old runtime (the default) or the new one (`rt`) and writes `DIR/report.txt`: `device NAME`,
+//! the player's report lines, `cut SEGMENT OFFSET` where the last segment ends in a record cut
+//! short, `skipped ...` where the new runtime skipped what it does not build yet (such a play is
+//! no gate result), then `ok` or `error WHAT`. The exit status is 0 for `ok`, 1 for a play that
 //! stopped and 2 for a harness failure (a bad command line, no device, an unreadable stream).
 //!
 //! `command-replay dump --stream FILE` prints each call record as a line (a blob as its hash),
@@ -21,14 +23,14 @@ use metal2vulkan_runtime::{DeviceOptions, ShaderCacheOptions};
 use metal2vulkan_validation::candidate::runtime_case::open_device;
 use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::replay::{
-    segments, OldRuntime, PlayError, Player, StreamError, StreamReader, Value,
+    segments, Backend, NewRuntime, OldRuntime, PlayError, Player, StreamError, StreamReader, Value,
 };
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::PathBuf;
 
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
-                     --shader-cache DIR [--blobs DIR]\n       command-replay dump --stream FILE\n       \
+                     --shader-cache DIR [--blobs DIR] [--runtime old|rt]\n       command-replay dump --stream FILE\n       \
                      command-replay shapes --stream FILE";
 
 fn main() {
@@ -199,18 +201,101 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
-    let mut device_options = DeviceOptions::default();
-    device_options.shader_cache = ShaderCacheOptions::in_directory(&options["shader-cache"]);
-    let device = match open_device(device_type, device_options) {
-        Ok(device) => device,
-        Err(error) => {
-            report.line(&format!("error device: {error}"));
-            return 2;
+    let cache = PathBuf::from(&options["shader-cache"]);
+    match options.get("runtime").map(String::as_str) {
+        None | Some("old") => {
+            let mut device_options = DeviceOptions::default();
+            device_options.shader_cache =
+                ShaderCacheOptions::in_directory(&options["shader-cache"]);
+            let device = match open_device(device_type, device_options) {
+                Ok(device) => device,
+                Err(error) => {
+                    report.line(&format!("error device: {error}"));
+                    return 2;
+                }
+            };
+            report.line(&format!("device {}", device.name()));
+            let mut backend = OldRuntime::new(device, device_type);
+            run(&mut backend, &mut reader, &mut report)
         }
+        Some("rt") => {
+            let mut backend = match open_rt(device_type, cache) {
+                Ok((backend, name)) => {
+                    report.line(&format!("device {name} runtime rt"));
+                    backend
+                }
+                Err(error) => {
+                    report.line(&format!("error device: {error}"));
+                    return 2;
+                }
+            };
+            let code = run(&mut backend, &mut reader, &mut report);
+            let skips = backend.counters();
+            let skips: Vec<_> = skips
+                .iter()
+                .filter(|(name, count)| name.starts_with("skipped_") && **count > 0)
+                .map(|(name, count)| format!("{name}={count}"))
+                .collect();
+            if !skips.is_empty() {
+                report.line(&format!("skipped {}: no gate result", skips.join(" ")));
+            }
+            code
+        }
+        Some(other) => {
+            report.line(&format!("error runtime: {other} is neither old nor rt"));
+            2
+        }
+    }
+}
+
+/// The new runtime's backend on the first physical device of `device_type` that opens (a GPU:
+/// discrete, then integrated, then virtual), its compiled kernels kept in `cache`, and its name.
+fn open_rt(device_type: DeviceType, cache: PathBuf) -> Result<(NewRuntime, String), String> {
+    use ash::vk::PhysicalDeviceType as Kind;
+    let instance = metal2vulkan_rt::Instance::new(&[]).map_err(|error| error.to_string())?;
+    let (_, vk_instance) = instance.raw();
+    let ranks: &[Kind] = match device_type {
+        DeviceType::Cpu => &[Kind::CPU],
+        DeviceType::Gpu => &[Kind::DISCRETE_GPU, Kind::INTEGRATED_GPU, Kind::VIRTUAL_GPU],
     };
-    report.line(&format!("device {}", device.name()));
-    let mut backend = OldRuntime::new(device, device_type);
-    let (played, ended) = Player::new(&mut backend).play(&mut reader);
+    let mut candidates = Vec::new();
+    for physical in instance
+        .physical_devices()
+        .map_err(|error| error.to_string())?
+    {
+        // SAFETY: `physical` is one of the instance's physical devices, and the instance is live.
+        let properties = unsafe { vk_instance.get_physical_device_properties(physical.raw()) };
+        if let Some(rank) = ranks
+            .iter()
+            .position(|&kind| kind == properties.device_type)
+        {
+            let name = (properties.device_name_as_c_str()).map_or_else(
+                |_| "?".to_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            );
+            candidates.push((rank, name, physical));
+        }
+    }
+    candidates.sort_by_key(|(rank, ..)| *rank);
+    let mut refused = Vec::new();
+    for (_, name, physical) in candidates {
+        let mut options = metal2vulkan_rt::DeviceOptions::default();
+        options.pipeline_cache_dir = Some(cache.clone());
+        let opened = metal2vulkan_rt::Device::new(&physical, options).and_then(NewRuntime::new);
+        match opened {
+            Ok(backend) => return Ok((backend, name)),
+            Err(why) => refused.push(format!("{name}: {why}")),
+        }
+    }
+    Err(format!(
+        "no {device_type:?} device opens: {}",
+        refused.join("; ")
+    ))
+}
+
+/// Play `reader` through `backend` into `report`: the exit status.
+fn run<B: Backend>(backend: &mut B, reader: &mut StreamReader, report: &mut ReportFile) -> i32 {
+    let (played, ended) = Player::new(backend).play(reader);
     for line in played.lines() {
         report.line(&line);
     }

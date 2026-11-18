@@ -1,12 +1,16 @@
 //! Replay streams (`docs/REPLAY-STREAM.md`): their reader and writer, the address map the player
-//! relocates by, the player, and its backend over the old runtime.
+//! relocates by, the player, and its backends over the old runtime and the new one.
 
 mod addresses;
+mod args;
+mod new_runtime;
 mod old_runtime;
 mod player;
 mod stream;
+mod translator;
 mod value;
 
+pub use new_runtime::NewRuntime;
 pub use old_runtime::OldRuntime;
 pub use player::WAIT_COMPLETED;
 pub use player::{

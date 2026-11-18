@@ -502,7 +502,7 @@ impl OldRuntime {
         let function = match &*call.selector {
             "newFunctionWithName:" => library.new_function_with_name(name),
             "newFunctionWithName:constantValues:error:" => {
-                let constants = descriptors::constants(call, args::list(call, 1)?)?;
+                let constants = super::translator::constants(call, args::list(call, 1)?)?;
                 library.new_function_with_name_constant_values(name, &constants)
             }
             "newFunctionWithDescriptor:error:" => {
