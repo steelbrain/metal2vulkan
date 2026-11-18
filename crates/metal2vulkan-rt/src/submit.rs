@@ -567,7 +567,7 @@ impl Work {
                                 state = self.lock();
                                 if let Err(error) = waited {
                                     let error = self
-                                        .abandon(core, state, recorder, &spans, &modified, error);
+                                        .unwind(core, state, recorder, &spans, &modified, error);
                                     return Err(error);
                                 }
                                 completed = completed.max(value);
@@ -584,7 +584,7 @@ impl Work {
                         if state.closed {
                             let error = Error::Quiesced;
                             let error =
-                                self.abandon(core, state, recorder, &spans, &modified, error);
+                                self.unwind(core, state, recorder, &spans, &modified, error);
                             return Err(error);
                         }
                         continue;
@@ -617,7 +617,7 @@ impl Work {
         }
         if state.closed {
             let error = Error::Quiesced;
-            return Err(self.abandon(core, state, recorder, &spans, &modified, error));
+            return Err(self.unwind(core, state, recorder, &spans, &modified, error));
         }
         // The textures over the ranges in images of their own: the copies back owed to them go
         // first, so the consumer's bytes land over them, and their copies in last.
@@ -666,7 +666,7 @@ impl Work {
                 call: "vkEndCommandBuffer",
                 result,
             };
-            return Err(self.abandon(core, state, recorder, &spans, &modified, error));
+            return Err(self.unwind(core, state, recorder, &spans, &modified, error));
         }
         let images = (backs.into_iter().map(|(_, _, image)| image))
             .chain(into.into_iter().map(|(_, image)| image))
@@ -683,7 +683,7 @@ impl Work {
 
     /// A capture that cannot finish: its spans are given up, its ranges named again for the next
     /// commit, its recorder given back, and `error` is the commit's.
-    fn abandon(
+    fn unwind(
         &self,
         core: &Core,
         mut state: MutexGuard<'_, WorkState>,
