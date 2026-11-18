@@ -10,10 +10,12 @@
 //   length-byte    range 4..10: a length of no whole word
 //   bytes          range 3..13: neither
 //   private        range 4..12 of a Private buffer (nothing printed but the verdict)
+//   past-end       range 60..68: past the buffer's end
+//   empty          range 8..8
 //
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation \
 //       -o blit_fill_rules blit_fill_rules.m
-//   for c in fine offset-byte length-byte bytes private; do
+//   for c in fine offset-byte length-byte bytes private past-end empty; do
 //       MTL_DEBUG_LAYER=1 ./blit_fill_rules $c; done
 //
 // WHAT IT MEASURED: see the rt crate's `BlitCommandEncoder::fill_buffer`, with the run it came
@@ -36,7 +38,8 @@ int main(int argc, const char **argv) {
             BOOL private_;
         } cases[] = {
             {"fine", 4, 8, NO},  {"offset-byte", 1, 8, NO}, {"length-byte", 4, 6, NO},
-            {"bytes", 3, 10, NO}, {"private", 4, 8, YES},
+            {"bytes", 3, 10, NO}, {"private", 4, 8, YES},   {"past-end", 60, 8, NO},
+            {"empty", 8, 0, NO},
         };
         int found = -1;
         for (int i = 0; i < (int)(sizeof cases / sizeof cases[0]); i++) {
