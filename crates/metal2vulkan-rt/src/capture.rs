@@ -254,27 +254,19 @@ impl Chunk {
 
     /// Records its copies into the device copies of `named`, the capture's buffers, then the copies
     /// in `into` (the last of a capture's), or a barrier that makes the copies visible to every
-    /// later command, and ends its command buffer: a copy-in holding `named`.
+    /// later command, and ends its command buffer, for [`Chunk::ended`].
     ///
-    /// Err: [`Error::Vulkan`] where the command buffer cannot be ended, with the chunk's recorder
-    /// and spans, to be given up.
+    /// Err: [`Error::Vulkan`] where the command buffer cannot be ended; the chunk is then given
+    /// up.
     pub(crate) fn end(
-        self,
+        &self,
         core: &Core,
-        named: Vec<Modified>,
-        into: Vec<(OverCopy, Arc<Image>)>,
-    ) -> Result<CopyIn, (Recorder, Vec<u64>, Error)> {
+        named: &[Modified],
+        into: &[(OverCopy, Arc<Image>)],
+    ) -> Result<(), Error> {
         let device = &core.device;
-        let Chunk {
-            recorder,
-            command,
-            spans,
-            copies,
-            mut images,
-            staging,
-        } = self;
+        let (command, copies) = (self.command, &self.copies);
         let into_copies: Vec<OverCopy> = into.iter().map(|(copy, _)| *copy).collect();
-        images.extend(into.into_iter().map(|(_, image)| image));
         let mut at = 0;
         // SAFETY: the command buffer is recording, and only this thread has it; the ring's, the
         // staging blocks' and the device copies' buffers have transfer usage, each region lies in
@@ -303,22 +295,32 @@ impl Chunk {
             }
         }
         // SAFETY: the command buffer is recording, and only this thread has it.
-        if let Err(result) = unsafe { device.end_command_buffer(command) } {
-            let error = Error::Vulkan {
-                call: "vkEndCommandBuffer",
-                result,
-            };
-            drop((images, staging));
-            return Err((recorder, spans, error));
-        }
-        Ok(CopyIn {
+        unsafe { device.end_command_buffer(command) }.map_err(|result| Error::Vulkan {
+            call: "vkEndCommandBuffer",
+            result,
+        })
+    }
+
+    /// The chunk, ended with `named` and `into` ([`Chunk::end`]): a copy-in holding `named` and
+    /// the images of `into`.
+    pub(crate) fn ended(self, named: Vec<Modified>, into: Vec<(OverCopy, Arc<Image>)>) -> CopyIn {
+        let Chunk {
+            recorder,
+            command,
+            spans,
+            copies: _,
+            mut images,
+            staging,
+        } = self;
+        images.extend(into.into_iter().map(|(_, image)| image));
+        CopyIn {
             recorder,
             command,
             spans,
             modified: named,
             images,
             staging,
-        })
+        }
     }
 
     /// Gives up its recorder, for a capture that cannot finish: its spans come back.
@@ -340,10 +342,10 @@ pub(crate) fn backs(named: &[Modified]) -> Vec<Back> {
 
 /// The copies in the textures over `named`'s ranges in images of their own take, after a
 /// capture's copies.
-pub(crate) fn into(named: &[Modified]) -> Vec<(OverCopy, Arc<Image>)> {
+pub(crate) fn copies_in(named: &[Modified]) -> Vec<(OverCopy, Arc<Image>)> {
     let mut into = Vec::new();
     for modified in named.iter().filter(|modified| modified.overs.any()) {
-        modified.overs.into_after(&modified.ranges, &mut into);
+        modified.overs.copies_in_after(&modified.ranges, &mut into);
     }
     into
 }

@@ -646,28 +646,19 @@ impl Work {
                         return Err(self.unwind(state, spans, &named, error));
                     }
                 };
-                let full = match std::mem::replace(&mut chunk, next).end(
-                    core,
-                    named.clone(),
-                    Vec::new(),
-                ) {
-                    Ok(full) => full,
-                    Err((recorder, spans, error)) => {
-                        core.recorders.give_back(core, recorder);
-                        let more = chunk.give_up(core);
-                        let spans = spans.into_iter().chain(more).collect();
+                let upload = chunk
+                    .end(core, &named, &[])
+                    .and_then(|()| (state.upload.take()).map_or_else(|| Upload::begin(core), Ok));
+                let upload = match upload {
+                    Ok(upload) => upload,
+                    Err(error) => {
+                        let spans = chunk.give_up(core);
+                        let spans = spans.into_iter().chain(next.give_up(core)).collect();
                         return Err(self.unwind(state, spans, &named, error));
                     }
                 };
-                let value = match state.stream(core, full) {
-                    Ok(value) => value,
-                    Err((full, error)) => {
-                        let spans = full.spans.clone();
-                        full.retire(core);
-                        let spans = spans.into_iter().chain(chunk.give_up(core)).collect();
-                        return Err(self.unwind(state, spans, &named, error));
-                    }
-                };
+                let value = state.stream(upload, chunk.ended(named.clone(), Vec::new()));
+                chunk = next;
                 drop(state);
                 self.wake();
                 core.counters.count(Metric::CaptureStreams);
@@ -705,14 +696,12 @@ impl Work {
             let spans = chunk.give_up(core);
             return Err(self.unwind(state, spans, &named, Error::Quiesced));
         }
-        let into = capture::into(&named);
-        let last = match chunk.end(core, named.clone(), into) {
-            Ok(last) => last,
-            Err((recorder, spans, error)) => {
-                core.recorders.give_back(core, recorder);
-                return Err(self.unwind(state, spans, &named, error));
-            }
-        };
+        let into = capture::copies_in(&named);
+        if let Err(error) = chunk.end(core, &named, &into) {
+            let spans = chunk.give_up(core);
+            return Err(self.unwind(state, spans, &named, error));
+        }
+        let last = chunk.ended(named.clone(), into);
         core.counters.captured(captured);
         // Taken last, so a capture that failed before left them carried.
         let mut copy_ins = std::mem::take(&mut state.changes.carried);
@@ -1109,26 +1098,18 @@ impl WorkState {
         self.changes.carried.extend(copy_ins);
     }
 
-    /// A capture's ring-full, `full`, goes in the next submission, after the upload's commands and
-    /// the copy-ins carried from a failed commit, and the upload is submitted at once: the
-    /// progress value at which it completes. The caller wakes the thread.
-    ///
-    /// Err: [`Error::Vulkan`] where the upload's command buffer cannot be made, with `full`.
-    fn stream(&mut self, core: &Core, full: CopyIn) -> Result<u64, (CopyIn, Error)> {
-        let upload = match self.upload.take() {
-            Some(upload) => upload,
-            None => match Upload::begin(core) {
-                Ok(upload) => upload,
-                Err(error) => return Err((full, error)),
-            },
-        };
+    /// A capture's ring-full, `full`, goes in the next submission with `upload`, the pending
+    /// upload taken or a new one, after its commands and the copy-ins carried from a failed
+    /// commit, and the upload is submitted at once: the progress value at which it completes. The
+    /// caller wakes the thread.
+    fn stream(&mut self, upload: Upload, full: CopyIn) -> u64 {
         let upload = self.upload.insert(upload);
         upload
             .copy_ins
             .extend(std::mem::take(&mut self.changes.carried));
         upload.copy_ins.push(full);
         upload.entries += 1;
-        Ok(self.flush())
+        self.flush()
     }
 
     /// What a capture behind copies not yet submitted can do: `None` while a held group or a

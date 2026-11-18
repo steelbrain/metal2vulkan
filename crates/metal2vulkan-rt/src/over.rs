@@ -550,7 +550,11 @@ impl ManagedOvers {
     /// each live texture whose range meets one of them takes its copy in after those copies, in
     /// the same command buffer, and owes none for the events before it, its copy and image going
     /// to `into`.
-    pub(crate) fn into_after(&self, ranges: &[(u64, u64)], into: &mut Vec<(OverCopy, Arc<Image>)>) {
+    pub(crate) fn copies_in_after(
+        &self,
+        ranges: &[(u64, u64)],
+        into: &mut Vec<(OverCopy, Arc<Image>)>,
+    ) {
         for entry in lock(&self.entries).iter_mut() {
             if !entry.released && meets_any(ranges, entry.range) {
                 entry.into = false;
