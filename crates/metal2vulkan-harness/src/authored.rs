@@ -526,9 +526,13 @@ fn unset(length: u64) -> BufferPlan {
 
 /// A desktop session's frame, in the shape its recordings commit (a median of one command buffer
 /// a frame, two at the 90th percentile, a few dispatches each), in compute alone: a run is one
-/// command buffer of four `lcg_step` dispatches ([`lcg_frame`]).
+/// command buffer of four `lcg_step` dispatches ([`lcg_frame`]). Its commit-to-complete time is
+/// timed (`Plan::commit_to_complete`).
 fn frame() -> Plan {
-    lcg_frame("frame", 1, 4, None, Storage::Managed)
+    Plan {
+        commit_to_complete: true,
+        ..lcg_frame("frame", 1, 4, None, Storage::Managed)
+    }
 }
 
 /// A game's median frame, in the shape its recordings commit (a median of five command buffers a

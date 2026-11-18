@@ -18,7 +18,7 @@
 use metal2vulkan_harness::authored::{Create, Makes};
 use metal2vulkan_harness::plan::Plan;
 use metal2vulkan_harness::run::{
-    percentile, run_each, steady, CreateReport, Harness, Report, Runs, Session, Warmup,
+    matrix_time, percentile, run_each, steady, CreateReport, Harness, Report, Runs, Session, Warmup,
 };
 use metal2vulkan_harness::{authored, description, old, rt, Error, Failed, Result, Waits};
 use std::path::PathBuf;
@@ -313,8 +313,13 @@ fn warmup(warmup: &Warmup) -> String {
 
 /// The matrix lines of a workload's gauges at the timed runs they were read after, and of its
 /// [`steady`] time where it has one.
-fn matrix(runtime: &str, name: &str, times: &[f64], gauges: &[(u32, Vec<(&'static str, u64)>)]) {
-    if let Some(time) = steady(times) {
+fn matrix(
+    runtime: &str,
+    name: &str,
+    time: Option<f64>,
+    gauges: &[(u32, Vec<(&'static str, u64)>)],
+) {
+    if let Some(time) = time {
         println!("M2V-MATRIX time harness-{runtime}/{name} {time:.3}");
     }
     for (point, values) in gauges {
@@ -364,7 +369,12 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport) {
             _ => String::new(),
         },
     );
-    matrix(runtime, create.name, &report.create_us, &report.gauges);
+    matrix(
+        runtime,
+        create.name,
+        steady(&report.create_us),
+        &report.gauges,
+    );
     if let Some(us) = report.first_us {
         println!(
             "M2V-MATRIX time harness-{runtime}/{}/first {us:.3}",
@@ -409,16 +419,26 @@ fn print(runtime: &str, name: &str, report: &Report) {
             places.join(", ")
         );
     }
+    let judged = if report.commit_us.is_empty() {
+        "the host wall time a run adds"
+    } else {
+        "a run's mean commit-to-complete time"
+    };
+    let time = matrix_time(report);
+    println!(
+        "{name:<17} {runtime:<8} matrix time {} us: {judged}; wall p50 {} us",
+        time.map_or("-".to_owned(), |us| format!("{us:.1}")),
+        us(&report.wall_us, 50),
+    );
     match report.scaled_to {
-        None => matrix(runtime, name, &report.gpu_us, &report.gauges),
+        None => matrix(runtime, name, time, &report.gauges),
         Some(scaled) => {
             println!(
                 "{name:<17} {runtime:<8} sized to {} from {} at {:.1} us a command buffer; its matrix time is a run's at {}",
                 scaled.size, scaled.base, scaled.base_us, scaled.base
             );
             let at_base = f64::from(scaled.base) / f64::from(scaled.size);
-            let times: Vec<f64> = report.gpu_us.iter().map(|us| us * at_base).collect();
-            matrix(runtime, name, &times, &report.gauges);
+            matrix(runtime, name, time.map(|us| us * at_base), &report.gauges);
         }
     }
     for (count, value) in &report.counts {

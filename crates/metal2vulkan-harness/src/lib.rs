@@ -55,8 +55,9 @@
 //! timed runs; where the workload asks for it ([`plan::Plan::commit_to_complete`]), the time of
 //! each timed command buffer from just before its `commit` until its completed handler ran, at
 //! the 50th and 99th percentiles of all of them, and, for a run of several command buffers, on a
-//! line of its own at those percentiles by the command buffer's place in its run; and the
-//! runtime's gauges after the 100th and 200th timed runs. Per creation
+//! line of its own at those percentiles by the command buffer's place in its run; the runtime's
+//! gauges after the 100th and 200th timed runs; and, on a line of its own, its matrix time
+//! ([`run::matrix_time`]) and the host wall time a run adds at the 50th percentile. Per creation
 //! workload and runtime it prints the warm-up, the wall time of `newBufferWithLength:options:` at
 //! the same percentiles, and the gauges. Beside each row it prints lines for the matrix's runner
 //! (docs/VALIDATION.md, "The matrix"):
@@ -67,10 +68,15 @@
 //! M2V-MATRIX gauge harness-<runtime>/<workload>/<gauge>@200 <value>
 //! ```
 //!
-//! where the steady time ([`run::steady`], the table's `steady` column) is the lowest median of
-//! the timed runs' consecutive windows of 10, with at least 5 timed runs. A workload the device
-//! sizes ([`plan::Scaled`]) prints the size it ran at on a line of its own, and its matrix time
-//! is that time scaled to its base size, so its row keeps one scale whatever size it ran at. After
+//! where a plan workload's time is what a program waits on, timed on the host
+//! ([`run::matrix_time`]): the steady time ([`run::steady`]: the lowest median of the timed runs'
+//! consecutive windows of 10, with at least 5 timed runs) of each run's mean commit-to-complete
+//! time where the workload times its command buffers' ([`plan::Plan::commit_to_complete`]), else
+//! of the host wall time each run adds. The GPU time (the table's `steady` column) is a
+//! diagnostic and decides no row. A creation workload's time is the steady time of its creation
+//! calls. A workload the device sizes ([`plan::Scaled`]) prints the size it ran at on a line of
+//! its own, and its matrix time is that time scaled to its base size, so its row keeps one scale
+//! whatever size it ran at. After
 //! the plan
 //! workloads, per runtime and set (`authored` or `described`), it prints how many `VkPipeline`s
 //! they created and how many workloads it refused, and where the runtime counts them, its

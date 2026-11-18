@@ -282,7 +282,10 @@ def time_outliers(times, bases):
 
 
 #: The harness budget: on each GPU, a harness row's time on the new runtime over its time on the
-#: old, both timed in the same leg, is at most this. It is a rule of its own, apart from
+#: old, both timed in the same leg, is at most this. A row's time is what a program waits on, timed
+#: on the host (the harness's `run::matrix_time`): a run's mean commit-to-complete time where the
+#: row times its command buffers', else the host wall time a run adds; a run's GPU time is a
+#: diagnostic in the harness's table and is no record. It is a rule of its own, apart from
 #: TIME_OUTLIER and PARKED_RECORDS: those judge a time against its base commit's across GPUs and
 #: park the old runtime's outliers, while this compares the two runtimes within one leg, the old
 #: runtime's time the reference. It ends with the cutover, with the old runtime.
@@ -292,16 +295,11 @@ HARNESS_OLD = "harness-old/"
 #: The harness rows over HARNESS_BUDGET, per GPU leg, each with its ratio as its ceiling: a row
 #: past its ceiling fails its leg, so an open row can neither hide nor grow. A fix lowers the
 #: ceiling to the ratio the row then reaches, and a row within HARNESS_BUDGET leaves the list.
+#: Each ceiling is a ratio of host times; a row a matrix has not yet timed on the host has none,
+#: and the first matrix that does sets it. frame_5cb's are its commit-to-complete ratios at
+#: 594b86d1f2 (the p50 of its command buffers in that matrix's harness output).
 HARNESS_CEILINGS = {
-    "1002:699f": {"burst_160": 1.089, "burst_160_shared": 1.074, "burst_2000": 1.226, "threadgroup_scan": 1.05,
-                  "waves": 2.461, "wide_bindings": 1.23},
-    "1002:744c": {"simd_reduce": 1.033, "threadgroup_scan": 1.039},
-    "10de:1e87": {"burst_160": 1.811, "burst_160_shared": 2.024, "burst_2000": 2.031, "burst_2000x5": 1.724,
-                  "frame_5cb": 1.636, "image_filter": 1.527, "wide_bindings": 1.162, "zero_products": 1.031},
-    "10de:2204": {"burst_160": 1.259, "burst_160_shared": 1.408, "burst_2000": 1.366, "burst_2000x5": 1.315,
-                  "frame_5cb": 1.137, "image_filter": 1.14, "wide_bindings": 1.171},
-    "8086:3e9b": {"burst_160": 1.433, "burst_160_shared": 1.258, "burst_2000": 1.108, "burst_2000x5": 1.054,
-                  "threadgroup_scan": 1.093, "waves": 1.354, "wide_bindings": 1.208},
+    "10de:1e87": {"frame_5cb": 1.166},
 }
 
 

@@ -69,6 +69,23 @@ pub fn steady(times: &[f64]) -> Option<f64> {
         .min_by(f64::total_cmp)
 }
 
+/// The time the matrix judges a plan's row by, in microseconds: what a program waits on, timed
+/// on the host. Where the plan times each command buffer's commit to its completed handler
+/// ([`Plan::commit_to_complete`]), the [`steady`] time of each run's mean commit-to-complete time
+/// over its command buffers; else the [`steady`] time of the runs' wall times
+/// ([`Report::wall_us`]). A run's GPU time ([`Report::gpu_us`]) decides no row.
+pub fn matrix_time(report: &Report) -> Option<f64> {
+    if report.commit_us.is_empty() {
+        return steady(&report.wall_us);
+    }
+    let places = report.commit_us.len() as f64;
+    let runs = (report.commit_us.iter().map(Vec::len)).min().unwrap_or(0);
+    let means: Vec<f64> = (0..runs)
+        .map(|run| report.commit_us.iter().map(|place| place[run]).sum::<f64>() / places)
+        .collect();
+    steady(&means)
+}
+
 /// The untimed runs before a workload's timed ones.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Warmup {
@@ -126,8 +143,13 @@ pub struct Report {
     /// The dispatches of a run.
     pub dispatches: usize,
     /// Each run's GPU time, from its first command buffer's `GPUStartTime` to its last's
-    /// `GPUEndTime`, in microseconds.
+    /// `GPUEndTime`, in microseconds: a diagnostic, which decides no row ([`matrix_time`]).
     pub gpu_us: Vec<f64>,
+    /// Each timed run's host wall time, from the start of its encoding until the wait for the run
+    /// before it returned, in microseconds: with two runs in flight, the time each run adds. The
+    /// 100th and 200th runs' times leave out the wait for the device to go idle that reads the
+    /// gauges.
+    pub wall_us: Vec<f64>,
     /// The runtime's counts of its work ([`Device::counts`]) over one run after the timed ones,
     /// committed alone and waited for, so nothing else is in flight.
     pub counts: Vec<(&'static str, u64)>,
@@ -839,11 +861,13 @@ impl<D: ComputeDevice> Session for Harness<D> {
         };
         let completions = (plan.commit_to_complete).then(|| Arc::new(Completions::default()));
         for run in 1..=runs.timed {
+            let wall = Instant::now();
             let cpu = clocks::process_cpu_nanos();
             let (gpu_us, encoded) = self.next(plan, &made, &mut in_flight, completions.as_ref())?;
             if let (Some(before), Some(after)) = (cpu, clocks::process_cpu_nanos()) {
                 report.cpu_ns.push(after.saturating_sub(before) as f64);
             }
+            report.wall_us.push(wall.elapsed().as_secs_f64() * 1e6);
             report.encode_ns.push(encoded.as_nanos() as f64);
             report.gpu_us.push(gpu_us);
             if run == 100 || run == 200 {

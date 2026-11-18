@@ -8,8 +8,8 @@ use crate::plan::{
 };
 use crate::rt::{self, Ranges};
 use crate::run::{
-    compare_outputs, copy_dispatches, parts, percentile, run_each, settled, steady, warm_up,
-    zeroed, CreateReport, Report, Runs, Session,
+    compare_outputs, copy_dispatches, matrix_time, parts, percentile, run_each, settled, steady,
+    warm_up, zeroed, CreateReport, Report, Runs, Session,
 };
 use crate::{Buffer, Failed, Refused, Result, Storage, Waits};
 use metal2vulkan_rt::{Error as RtError, Gap, Limit};
@@ -891,6 +891,35 @@ fn a_steady_time_is_the_lowest_median_of_windows_of_ten() {
     times[3] = 400.0;
     assert_eq!(steady(&times), Some(100.0));
     assert_eq!(percentile(&times, 50), Some(105.0));
+}
+
+#[test]
+fn a_row_is_judged_by_host_time_never_its_gpu_time() {
+    // Twenty runs: GPU times of 10 us, host wall times of 50 us.
+    let mut report = Report {
+        gpu_us: vec![10.0; 20],
+        wall_us: vec![50.0; 20],
+        ..Report::default()
+    };
+    assert_eq!(matrix_time(&report), Some(50.0), "the wall time a run adds");
+    // Where the plan times its command buffers' commit to completion, each run's mean over its
+    // places: 100, 200 and 300 us at the three places of every run.
+    report.commit_us = vec![vec![100.0; 20], vec![200.0; 20], vec![300.0; 20]];
+    assert_eq!(
+        matrix_time(&report),
+        Some(200.0),
+        "the mean commit-to-complete time"
+    );
+    // A slow window of runs leaves the steady time at the faster windows' level.
+    report.commit_us[0][..10].fill(400.0);
+    assert_eq!(
+        matrix_time(&report),
+        Some(200.0),
+        "the steady time of the means"
+    );
+    report.wall_us.clear();
+    report.commit_us.clear();
+    assert_eq!(matrix_time(&report), None, "no host time, no matrix time");
 }
 
 /// The new runtime's known gaps and the device's limits are typed refusals; its other errors are
