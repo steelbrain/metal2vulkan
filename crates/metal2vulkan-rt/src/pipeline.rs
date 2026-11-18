@@ -3,12 +3,11 @@
 //! The translator lowers every kernel first as its partial-threadgroups variant, through one
 //! decode and specialization of its entry. A kernel that does not observe its threadgroup
 //! partition keeps that module alone, which runs its grid in tiles (`RuntimeFact::GridTiles`):
-//! a direct dispatch of a grid one deep runs in workgroups of 256 threads, each one tile of the
-//! grid whose sides the translator's rule picks from the grid's extents (`grid_tile`) and its
-//! region carries, on one `VkPipeline` made with the state, or, for an image-only kernel
-//! (`CompiledFunction::is_image_only`), in workgroups of 16x16x1 on that one; a grid more than one
-//! deep runs in its tiles on a `VkPipeline` that folds the tile, or, for an image-only kernel, in
-//! workgroups of its tile, one `VkPipeline` per tile, made at its first dispatch; an indirect
+//! every direct dispatch runs in workgroups of 256 threads, each one tile of the grid whose sides
+//! the translator's rule picks from the grid's extents (`grid_tile`) and its region carries, on
+//! one `VkPipeline` made with the state. An image-only kernel's (`CompiledFunction::is_image_only`)
+//! runs instead in workgroups of 16x16x1 over a grid one deep, on that one, and of the grid's tile
+//! over a deeper one, on one `VkPipeline` per tile made at its first dispatch. An indirect
 //! dispatch runs at its own threadgroup size. A
 //! kernel that observes its partition is lowered
 //! once more, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that
@@ -227,8 +226,7 @@ pub(crate) enum Form {
     /// The kernel does not observe its threadgroup partition: `whole`, its partial-threadgroups
     /// variant, runs its grid in tiles (`RuntimeFact::GridTiles`): every direct dispatch in
     /// workgroups of `GRID_TILE_THREADS`, each a `grid_tile` tile of its grid, whatever the
-    /// threadgroup size; a grid more than one deep on a `VkPipeline` that folds its tile
-    /// ([`Variant::fold`]).
+    /// threadgroup size.
     Tiled,
     /// The kernel does not observe its partition and is image-only
     /// (`CompiledFunction::is_image_only`): `whole` runs a direct dispatch at `MultiRegion` 0,
@@ -357,9 +355,6 @@ pub(crate) enum Constant {
     /// tile; 0 for every other launch, whose region states the pipeline's own threadgroup size,
     /// so the kernel takes `L` from its workgroup size and reads no decode.
     MultiRegion,
-    /// `FoldedTile`: the tile a kernel's grid tiles' pipeline folds ([`Variant::fold`]), packed
-    /// as a region packs it, 0 for none.
-    FoldedTile,
 }
 
 /// A parameter and where it goes.
@@ -402,17 +397,13 @@ pub(crate) enum FieldValue {
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
-/// order of [`Interface::threadgroups`], whether it runs a kernel's grid tiles, and the tile it
-/// folds.
+/// order of [`Interface::threadgroups`], and whether it runs a kernel's grid tiles.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Variant {
     pub(crate) size: [u32; 3],
     pub(crate) threadgroup_lengths: Vec<u32>,
     /// The launches are a kernel's grid tiles (`MultiRegion` 1).
     pub(crate) tiles: bool,
-    /// The tile the grid tiles' `VkPipeline` folds (`SpecKey::FoldedTile`), so the driver folds
-    /// its masks and shifts; `None` where each region carries it.
-    pub(crate) fold: Option<[u32; 3]>,
 }
 
 /// The workgroup an image-only kernel that does not observe its threadgroup partition runs a grid
@@ -624,7 +615,6 @@ impl Compiled {
                 size,
                 threadgroup_lengths: vec![0; compiled.whole.interface.threadgroups.len()],
                 tiles,
-                fold: None,
             };
             let made = compiled.whole.make(&compiled.core, &variant)?;
             lock(&compiled.whole.variants).push((variant, made));
@@ -961,7 +951,6 @@ fn interface(
                     .ok_or_else(gap)?,
             ),
             SpecKey::MultiRegion => Constant::MultiRegion,
-            SpecKey::FoldedTile => Constant::FoldedTile,
             _ => return Err(gap()),
         };
         constants.push((constant.id, set));
@@ -1283,9 +1272,6 @@ impl Kernel {
                 Constant::Threads => variant.size.iter().product(),
                 Constant::ThreadgroupLength(at) => variant.threadgroup_lengths[at],
                 Constant::MultiRegion => u32::from(variant.tiles),
-                Constant::FoldedTile => variant
-                    .fold
-                    .map_or(0, |t| (t[0] - 1) | (t[1] - 1) << 10 | (t[2] - 1) << 20),
             })
             .flat_map(u32::to_ne_bytes)
             .collect();

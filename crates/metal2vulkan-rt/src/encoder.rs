@@ -157,8 +157,8 @@ pub struct ComputeCommandEncoder {
     declared: Vec<(u32, Access)>,
     /// A `use_resource` declaration writes a Shared buffer.
     declared_shared_write: bool,
-    /// The module, workgroup size, folded tile and `VkPipeline` of the last dispatch, while the
-    /// state and the threadgroup memory lengths are unchanged.
+    /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state and the
+    /// threadgroup memory lengths are unchanged.
     last: Option<Last>,
     /// The parameters being filled, kept to reuse their bytes.
     parameters: Parameters,
@@ -179,12 +179,11 @@ pub(crate) enum Module {
     Emulated,
 }
 
-/// The last dispatch's module, workgroup size and folded tile, and its `VkPipeline`.
+/// The last dispatch's module and workgroup size, and its `VkPipeline`.
 #[derive(Clone, Copy)]
 struct Last {
     module: Module,
     local: [u32; 3],
-    fold: Option<[u32; 3]>,
     pipeline: vk::Pipeline,
 }
 
@@ -198,14 +197,12 @@ pub(crate) struct Direct {
 }
 
 /// What runs a dispatch ([`choose`]): which of the state's modules, its workgroup size, the
-/// threadgroup size its regions carry, the tile its `VkPipeline` folds, and for a direct
-/// dispatch Metal's grid, the workgroups, and whether the last along some axis is partial.
+/// threadgroup size its regions carry, and for a direct dispatch Metal's grid, the workgroups, and whether the last along some axis is partial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Choice {
     pub(crate) module: Module,
     pub(crate) local: [u32; 3],
     pub(crate) nominal: [u32; 3],
-    pub(crate) fold: Option<[u32; 3]>,
     pub(crate) direct: Option<([u32; 3], [u32; 3], bool)>,
 }
 
@@ -217,8 +214,7 @@ pub(crate) struct Choice {
 ///   the region carrying them, flagged where they do not divide the grid; a tile past `max` runs
 ///   as a tiling kernel's does;
 /// - a tiling kernel ([`Form::Tiled`]): its tiles, workgroups of `GRID_TILE_THREADS`, each one
-///   `grid_tile` tile of the grid, which its region carries, a grid more than one deep on a
-///   `VkPipeline` that folds the tile;
+///   `grid_tile` tile of the grid, which its region carries;
 /// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
 ///   partial-threadgroups variant.
 pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [u32; 3]) -> Choice {
@@ -227,7 +223,6 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [
             module: Module::Whole,
             local: size,
             nominal: size,
-            fold: None,
             direct: None,
         };
     };
@@ -245,7 +240,6 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [
         module: Module::Whole,
         local: shape,
         nominal: shape,
-        fold: None,
         direct: over(shape),
     };
     match form {
@@ -258,7 +252,6 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [
                     module: Module::Tiles,
                     local: [GRID_TILE_THREADS, 1, 1],
                     nominal: tile,
-                    fold: (threads[2] > 1).then_some(tile),
                     direct: over(tile),
                 },
             }
@@ -270,7 +263,6 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [
             },
             local: size,
             nominal: size,
-            fold: None,
             direct: Some((threads, groups, ragged)),
         },
     }
@@ -715,7 +707,6 @@ impl ComputeCommandEncoder {
             module,
             local,
             nominal,
-            fold,
             direct,
         } = choose(&inner.form, direct, size, limits.max_group_size);
         // The workgroup Vulkan runs is within the device's sizes: the threadgroup itself where it
@@ -764,9 +755,7 @@ impl ComputeCommandEncoder {
             return Ok(());
         }
         let vk_pipeline = match self.last {
-            Some(last) if last.module == module && last.local == local && last.fold == fold => {
-                last.pipeline
-            }
+            Some(last) if last.module == module && last.local == local => last.pipeline,
             _ => {
                 let variant = Variant {
                     size: local,
@@ -777,7 +766,6 @@ impl ComputeCommandEncoder {
                         .map(|&index| self.threadgroup_length(index))
                         .collect(),
                     tiles: module == Module::Tiles,
-                    fold,
                 };
                 let length = kernel
                     .interface
@@ -795,7 +783,6 @@ impl ComputeCommandEncoder {
         self.last = Some(Last {
             module,
             local,
-            fold,
             pipeline: vk_pipeline,
         });
         let serial = self.serial;

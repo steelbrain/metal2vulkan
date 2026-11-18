@@ -888,8 +888,7 @@ pub enum RuntimeFact {
     /// tiles such a kernel's grid (`Device::from_queries`') under the identity domains. Where its
     /// region's `MultiRegion` is 1, its workgroup of `pipeline::GRID_TILE_THREADS` threads is one
     /// tile of the grid, whose power-of-two sides the region's nominal size gives
-    /// (`pipeline::grid_tile`), or `SpecKey::FoldedTile` where the pipeline folds the tile;
-    /// where it is 0, the kernel runs at its pipeline's size. Under either, where the region is
+    /// (`pipeline::grid_tile`); where it is 0, the kernel runs at its pipeline's size. Under either, where the region is
     /// flagged `lower::dispatch::NONUNIFORM` an invocation past the region's grid returns before
     /// the body. Its plans run a `dispatchThreads` grid in such tiles.
     GridTiles,

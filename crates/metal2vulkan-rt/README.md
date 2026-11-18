@@ -788,17 +788,12 @@ that touch blocks first.
     by 1 where it is one deep, on one `VkPipeline` made with the state, and of its tile (below)
     where it is deeper, on one `VkPipeline` per tile, made at the kernel's first dispatch at that
     tile, which waits for it, each thread's position the workgroup's origin plus its place in it,
-    with no decode. A tile past the device's `maxComputeWorkGroupSize` runs as the last item's;
-  - a grid one deep of any other such kernel in tiles: workgroups of 256 threads on one
-    `VkPipeline`, made with the state, each one tile of the grid, which its region carries. A
-    thread's position is the tile's origin plus its index masked and shifted by the tile's sides,
-    with no division;
-  - a grid more than one deep of any other such kernel in tiles on a `VkPipeline` that folds the
-    tile, so the driver folds the masks and shifts when it specializes it: one per tile, made at
-    the kernel's first dispatch at that tile, which waits for it.
-
-  A kernel's pipelines of a tile are kept with its other pipelines, at most one per tile of the 45
-  a rule's tile can be.
+    with no decode. Those pipelines are kept with the kernel's others, at most one per tile of the
+    45 a rule's tile can be. A tile past the device's `maxComputeWorkGroupSize` runs as the next
+    item's;
+  - a grid of any other such kernel in tiles: workgroups of 256 threads on one `VkPipeline`, made
+    with the state, each one tile of the grid, which its region carries. A thread's position is
+    the tile's origin plus its index masked and shifted by the tile's sides, with no division.
 
   The translator's `pipeline::grid_tile` picks the tile from the grid's extents alone:
   power-of-two sides whose product is 256, launching the fewest threads past the grid, then with

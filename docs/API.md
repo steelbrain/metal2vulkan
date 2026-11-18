@@ -1875,10 +1875,7 @@ instead (`RuntimeFact::GridTiles`): its plans run a direct dispatch's threads in
 `pipeline::grid_tile`'s tiles, one workgroup of `pipeline::GRID_TILE_THREADS` each with the tile
 as the region's nominal size (`MultiRegion` 1), the region flagged `NONUNIFORM` where the tile
 does not divide the grid, and a range of threadgroups at its own size (`MultiRegion` 0); the
-kernel runs the same positions with the same answers. A pipeline may fold the tile
-(`SpecKey::FoldedTile`, the tile packed as the region packs its nominal size, default 0, which the
-binder keeps): the kernel takes it in place of the region's, so the driver folds the tile's masks
-and shifts when it specializes. At `MultiRegion` 0 a runtime may run a direct dispatch of the
+kernel runs the same positions with the same answers. At `MultiRegion` 0 a runtime may run a direct dispatch of the
 variant in workgroups of a size it picks, the region flagged `NONUNIFORM` where they do not divide
 the grid, whose invocations past the grid then return before the body as a tile's do.
 `CompiledFunction::is_image_only` (`KernelFacts::image_only`) states, from the AIR alone, a kernel

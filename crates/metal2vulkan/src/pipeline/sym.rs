@@ -947,12 +947,6 @@ pub enum SpecKey {
     /// nothing for it and the write's test is dead code at pipeline creation, exactly, since no
     /// handle the command names then names such a texture. A pipeline's key carries it.
     HeapYCbCrWrites(Stage),
-    /// A kernel's grid tile that its pipeline folds (`u32`, default 0): of the partial-threadgroups
-    /// variant of a kernel that runs its grid in tiles (`RuntimeFact::GridTiles`), the tile packed
-    /// as the region packs its nominal size, `(x − 1) | (y − 1) << 10 | (z − 1) << 20`, which the
-    /// kernel then takes in place of the region's under `MultiRegion` 1, so the driver folds the
-    /// tile's masks and shifts when it specializes. 0 takes the region's.
-    FoldedTile,
 }
 
 impl SpecKey {

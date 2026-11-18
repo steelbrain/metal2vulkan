@@ -831,18 +831,11 @@ fn the_version_486_member_round_trips() {
     assert_ne!(encode(&p), encode(&VkProperty::MetalSmallFloatNans));
 }
 
-/// The members format version 535 appends encode and decode, each as itself: a kernel's folded grid
-/// tile and its image-only fact.
+/// The member format version 535 appends encodes and decodes as itself: a kernel's image-only
+/// fact.
 #[test]
-fn the_version_535_members_round_trip() {
+fn the_version_535_member_round_trips() {
     use crate::library::KernelFacts;
-    use crate::pipeline::sym::SpecKey;
-    let key = SpecKey::FoldedTile;
-    assert_eq!(decode::<SpecKey>(&encode(&key)), Ok(key));
-    assert_ne!(
-        encode(&key),
-        encode(&SpecKey::HeapYCbCrWrites(Stage::Kernel))
-    );
     let facts = KernelFacts {
         image_only: true,
         ..KernelFacts::default()

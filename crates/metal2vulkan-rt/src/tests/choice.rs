@@ -2,9 +2,8 @@
 //! not observe its threadgroup partition runs its grid at `MultiRegion` 0 in workgroups of 16x16x1
 //! where it is one deep and of its tile where it is deeper, with no tile decode and its edge tested
 //! where they do not divide the grid. A kernel that does not observe it and is not image-only runs
-//! a grid one deep in the tiles the region carries, and a deeper one in tiles on a pipeline that
-//! folds the tile, as an image-only kernel does where its tile is past the device's sizes. An
-//! observing kernel runs at its own size. Every workgroup a kernel that does not observe its
+//! every grid in the tiles the region carries, as an image-only kernel does where its tile is past
+//! the device's sizes. An observing kernel runs at its own size. Every workgroup a kernel that does not observe its
 //! partition runs is within the device's `maxComputeWorkGroupSize`, whatever its threadgroup size.
 
 use crate::encoder::{choose, fits, Choice, Direct, Module};
@@ -56,7 +55,6 @@ fn an_image_only_kernels_grid_one_deep_runs_in_square_workgroups() {
                 module: Module::Whole,
                 local: SQUARE,
                 nominal: SQUARE,
-                fold: None,
                 direct: Some((threads, groups, ragged)),
             },
             "{threads:?}"
@@ -65,8 +63,7 @@ fn an_image_only_kernels_grid_one_deep_runs_in_square_workgroups() {
 }
 
 /// An image-only kernel's grid more than one deep runs its whole module in workgroups of the
-/// grid's tile at `MultiRegion` 0, its regions carrying them, on a pipeline that folds none: one
-/// pipeline per tile.
+/// grid's tile at `MultiRegion` 0, its regions carrying them: one pipeline per tile.
 #[test]
 fn an_image_only_kernels_deeper_grid_runs_in_workgroups_of_its_tile() {
     for threads in [[4, 16, 312], [24, 24, 252], [256, 256, 8], [7, 5, 3]] {
@@ -83,7 +80,6 @@ fn an_image_only_kernels_deeper_grid_runs_in_workgroups_of_its_tile() {
                 module: Module::Whole,
                 local: tile,
                 nominal: tile,
-                fold: None,
                 direct: Some(over(threads, tile)),
             },
             "{threads:?}"
@@ -91,35 +87,24 @@ fn an_image_only_kernels_deeper_grid_runs_in_workgroups_of_its_tile() {
     }
 }
 
-/// A kernel that is not image-only runs a grid one deep in the tiles its regions carry, on its
-/// tiles' pipeline, which folds none.
+/// A kernel that is not image-only runs every grid, one deep or deeper, in the tiles its regions
+/// carry, on its tiles' one pipeline.
 #[test]
-fn a_tiling_kernels_grid_one_deep_runs_in_its_regions_tiles() {
-    for threads in [[1984, 1088, 1], [100, 60, 1], [300, 1, 1]] {
+fn a_tiling_kernel_runs_every_grid_in_its_regions_tiles() {
+    for threads in [
+        [1984, 1088, 1],
+        [100, 60, 1],
+        [300, 1, 1],
+        [4, 16, 312],
+        [24, 24, 252],
+        [128, 128, 64],
+        [7, 5, 3],
+    ] {
         let tile = grid_tile(threads);
         let choice = choose(
             &Form::Tiled,
             Some(threads_of(threads, [32, 1, 1])),
             [32, 1, 1],
-            MAX,
-        );
-        assert_eq!(choice.module, Module::Tiles, "{threads:?}");
-        assert_eq!(choice.local, [GRID_TILE_THREADS, 1, 1], "{threads:?}");
-        assert_eq!(choice.nominal, tile, "{threads:?}");
-        assert_eq!(choice.fold, None, "{threads:?}");
-    }
-}
-
-/// A kernel that is not image-only runs a grid more than one deep in its tiles on a pipeline that
-/// folds the tile: one pipeline per tile.
-#[test]
-fn a_tiling_kernels_deeper_grid_runs_on_a_pipeline_that_folds_its_tile() {
-    for threads in [[4, 16, 312], [24, 24, 252], [128, 128, 64], [7, 5, 3]] {
-        let tile = grid_tile(threads);
-        let choice = choose(
-            &Form::Tiled,
-            Some(threads_of(threads, [4, 4, 4])),
-            [4, 4, 4],
             MAX,
         );
         assert_eq!(
@@ -128,7 +113,6 @@ fn a_tiling_kernels_deeper_grid_runs_on_a_pipeline_that_folds_its_tile() {
                 module: Module::Tiles,
                 local: [GRID_TILE_THREADS, 1, 1],
                 nominal: tile,
-                fold: Some(tile),
                 direct: Some(over(threads, tile)),
             },
             "{threads:?}"
@@ -147,10 +131,7 @@ fn an_observing_kernel_and_an_indirect_dispatch_run_at_their_own_size() {
         [8, 8, 1],
         MAX,
     );
-    assert_eq!(
-        (whole.module, whole.local, whole.fold),
-        (Module::Whole, [8, 8, 1], None)
-    );
+    assert_eq!((whole.module, whole.local), (Module::Whole, [8, 8, 1]));
     let ragged = choose(
         &sized,
         Some(threads_of([60, 64, 1], [8, 8, 1])),
@@ -166,7 +147,6 @@ fn an_observing_kernel_and_an_indirect_dispatch_run_at_their_own_size() {
                 module: Module::Whole,
                 local: [4, 2, 1],
                 nominal: [4, 2, 1],
-                fold: None,
                 direct: None,
             }
         );
@@ -178,7 +158,7 @@ fn an_observing_kernel_and_an_indirect_dispatch_run_at_their_own_size() {
 /// square, tiled or of its tile, over a grid one deep and a deeper one alike; an observing
 /// kernel's workgroup is the threadgroup, past the device's depth, which the encoder refuses
 /// (`Limit::ThreadgroupShape`). An image-only kernel whose grid's tile is past the device's depth
-/// (a column 1,024 deep, whose tile is 1 by 1 by 256) runs it in folded tiles.
+/// (a column 1,024 deep, whose tile is 1 by 1 by 256) runs it in the tiles its regions carry.
 #[test]
 fn a_threadgroup_deeper_than_the_device_runs_only_where_it_is_not_the_workgroup() {
     let limits = vk::PhysicalDeviceLimits {
@@ -200,7 +180,7 @@ fn a_threadgroup_deeper_than_the_device_runs_only_where_it_is_not_the_workgroup(
     assert_eq!(grid_tile(column), [1, 1, 256]);
     let choice = choose(&Form::Square, Some(threads_of(column, size)), size, max);
     assert_eq!(
-        (choice.module, choice.local, choice.fold),
-        (Module::Tiles, [GRID_TILE_THREADS, 1, 1], Some([1, 1, 256]))
+        (choice.module, choice.local, choice.nominal),
+        (Module::Tiles, [GRID_TILE_THREADS, 1, 1], [1, 1, 256])
     );
 }
