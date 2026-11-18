@@ -436,7 +436,7 @@ mod on_device {
             return;
         };
         let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
-        each_device("draw_locks", |name, _, device| {
+        locks.each_device("draw_locks", |name, _, device| {
             let state = state(name, &device, &d);
             let mut buffers = Buffers::new(&device);
             let (positions, colors) = vertices(&device, &mut buffers);
@@ -478,7 +478,7 @@ mod on_device {
             return;
         };
         let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
-        each_device("bind_locks", |name, _, device| {
+        locks.each_device("bind_locks", |name, _, device| {
             let state = state(name, &device, &d);
             let mut buffers = Buffers::new(&device);
             let (positions, colors) = vertices(&device, &mut buffers);

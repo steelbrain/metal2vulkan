@@ -63,17 +63,26 @@ pub(crate) mod on_device {
         }
     }
 
-    /// Opens each device of the cfg's kind with `options`, runs `body`, which drops the device,
-    /// and checks that every gauge reaches zero.
-    pub(crate) fn each_device(test: &str, mut body: impl FnMut(&str, &Instance, Device)) {
+    /// Opens each device of the cfg's kind with `options`, under the validation layer, runs
+    /// `body`, which drops the device, and checks that every gauge reaches zero.
+    pub(crate) fn each_device(test: &str, body: impl FnMut(&str, &Instance, Device)) {
         let instance = crate::tests::validation::instance(&[]);
-        let devices = devices_of_the_cfgs_kind(&instance);
+        on_each_device(test, &instance, body);
+    }
+
+    /// [`each_device`] on `instance`.
+    pub(crate) fn on_each_device(
+        test: &str,
+        instance: &Instance,
+        mut body: impl FnMut(&str, &Instance, Device),
+    ) {
+        let devices = devices_of_the_cfgs_kind(instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
             let device = Device::new(physical, DeviceOptions::default())
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let counters = device.counters();
-            body(name, &instance, device);
+            body(name, instance, device);
             within("the teardown", || counters.gauges() == Gauges::default());
             print_gauges_at_drop(test, counters.gauges());
         }

@@ -387,7 +387,7 @@ pub(crate) mod on_device {
         let Some(locks) = Locks::open("compute_locks") else {
             return;
         };
-        each_device("compute_locks", |name, _, device| {
+        locks.each_device("compute_locks", |name, _, device| {
             let mut arena = Arena::new(&device);
             let state = step(&device);
             let queue = device.new_command_queue(4).expect("a queue");

@@ -9,7 +9,12 @@
 //! `perf` names a raw event (`metal2vulkan_devtools::instructions::ProcessEvent`):
 //! `cpu_core/r21d0` (an Intel performance core's `MEM_INST_RETIRED.LOCK_LOADS`) or `r1e25` (a
 //! Zen 4 core's locked instructions). A node that names none prints that it measured nothing.
+//!
+//! The devices are opened on an instance without the validation layer ([`Locks::each_device`]):
+//! the layer takes a lock of its own on every command it checks, 74 locked instructions a draw on
+//! the Radeon RX 7900 XTX and the RTX 2080, which would be all the count read.
 
+use crate::{Device, Instance};
 use metal2vulkan_devtools::instructions::{pin_this_thread, ProcessEvent};
 
 /// The variable naming the node's locked-instruction event.
@@ -45,6 +50,23 @@ impl Locks {
                 .unwrap_or_else(|error| panic!("pinning to {name}'s CPUs: {error}"));
         }
         Some(Locks { name, event })
+    }
+
+    /// Each device of the cfg's kind, as `each_device` opens it, on an instance without the
+    /// validation layer: the test fails where a device lists the layer active, since its locks
+    /// would be the count.
+    pub(crate) fn each_device(&self, test: &str, body: impl FnMut(&str, &Instance, Device)) {
+        let instance = Instance::new(&[])
+            .unwrap_or_else(|error| panic!("{test}: an instance at the floor: {error}"));
+        for (name, physical) in crate::tests::devices_of_the_cfgs_kind(&instance) {
+            let tool = crate::tests::validation::validation_tool(&instance, &name, physical.raw());
+            assert!(
+                tool.is_none(),
+                "{test}: {name} lists {tool:?} active: the lock count is the runtime's and the \
+                 driver's, without the layer"
+            );
+        }
+        crate::tests::command::on_device::on_each_device(test, &instance, body);
     }
 
     /// The locked instructions the process executed while `work` ran.
