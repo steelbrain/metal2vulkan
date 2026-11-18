@@ -246,6 +246,16 @@ impl Leaf {
         self.bytes.div_ceil(4)
     }
 
+    /// Whether the leaf is whole, aligned `float` words: a `float` or a vector of 2 to 4 of them
+    /// at an offset its alignment makes a multiple of 4 (an arena of `float` words holds it as
+    /// they are, `memory::arena::TgWords`).
+    pub fn float_words(&self) -> bool {
+        self.form.held == Held::Float(FloatFmt::F32)
+            && (1..=4).contains(&self.form.lanes)
+            && self.bytes == 4 * u32::from(self.form.lanes)
+            && matches!(self.path, Path::Vec4 | Path::Vec2 | Path::Aligned)
+    }
+
     /// Whether the value is a chunked vector.
     pub fn chunked(&self) -> bool {
         self.form.lanes > 4

@@ -22,6 +22,14 @@
 //! contained load, which reads at offset 0, stays inside the array; a 32768-byte threadgroup
 //! allocation is a 32768-byte array and fits `maxComputeSharedMemorySize = 32768`.
 //!
+//! **A kernel's arena of `float` words** ([`TgWords::Floats`], on a profile whose
+//! `ThreadgroupMemory` is `Native`, `Device::from_queries`'): where every access of a kernel's
+//! arena is a whole, aligned `float` word, a scalar or a vector of them (`lower::access::local`),
+//! the array is of `float`, `N` long, `N` the arena's whole words (at least [`FLOAT_LEAST`]), and
+//! an access of `lanes` lanes reads or writes them at the words from `off / 4`. Nothing contains
+//! it: an access past the arena is undefined, as in Metal. The array is the arena's own words, so
+//! its threadgroup memory is Metal's static length and lengths, as for any arena.
+//!
 //! A kernel's explicit imageblock is the arena's last region: `width · height` cells of
 //! `cell_bytes`, its extent the specialization constants `SpecKey::ImageblockWidth` and
 //! `SpecKey::ImageblockHeight` (`RuntimeFact::ImageblockSize`, declared through
@@ -72,6 +80,25 @@ pub const MIN_ARENA_BYTES: u64 = 32;
 /// Metal aligns every `[[threadgroup(n)]]` region, and its length, to 16 bytes.
 pub const REGION_ALIGN: u64 = 16;
 
+/// The least length of an arena of `float` words ([`TgWords::Floats`]): Metal's 16 bytes
+/// ([`REGION_ALIGN`]), the grain of its threadgroup memory, so an arena whose lengths are 0 is
+/// still an array.
+pub const FLOAT_LEAST: u64 = REGION_ALIGN / 4;
+
+/// What the threadgroup accesses selection has seen say of the arena's words.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TgWords {
+    /// No access yet, in a kernel on a profile that holds such an arena in `float`s.
+    #[default]
+    Unseen,
+    /// Every access so far a whole, aligned `float` word access; the arena is of `float`s once
+    /// selection keeps it so (`lower::access::local::choose_words`).
+    Floats,
+    /// The `u32` array of composed words: an access of another shape, an atomic, a memory
+    /// intrinsic, a pointer cell, or a stage, tier or profile that keeps the composed form.
+    Composed,
+}
+
 /// Which arena a pointer points into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Arena {
@@ -102,6 +129,8 @@ pub struct TgShape {
     /// that of the pixel of the `FragCoord` input, stage-IO object `fragment` (the module docs).
     /// `tile` holds too.
     pub fragment: Option<usize>,
+    /// Whether the arena's words are `float`s (the module docs).
+    pub words: TgWords,
 }
 
 impl TgShape {
@@ -113,6 +142,7 @@ impl TgShape {
             imageblock: None,
             tile: false,
             fragment: None,
+            words: TgWords::Unseen,
         }
     }
 
@@ -247,7 +277,8 @@ pub fn workgroup_limit(stage: Stage, limits: &Limits) -> WorkgroupLimit {
 }
 
 /// A declared arena: its `u32` array variable and its byte size, the containment domain (a
-/// plain `u32` constant, or for a threadgroup arena with regions an `OpSpecConstantOp`).
+/// plain `u32` constant, or for a threadgroup arena with regions an `OpSpecConstantOp`), or a
+/// threadgroup arena's `float` array.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArenaDecl {
     pub arena: Arena,
@@ -258,6 +289,8 @@ pub struct ArenaDecl {
     /// the access, `lower::access::tile_memory::base`) is the arena's word 0. `None` for an
     /// arena that is its own array, and in the declaration, before a function computes it.
     pub tile_base: Option<Value>,
+    /// An arena of `float` words (the module docs): `global` is a `float` array.
+    pub floats: bool,
 }
 
 /// The declared threadgroup arena and the byte offset of each region: `(parameter, offset)` in
@@ -311,6 +344,23 @@ fn array(mb: &mut ModuleBuilder, class: StorageClass, words: ConstId) -> BResult
     mb.plain_global(class, ty, None)
 }
 
+/// The length of an arena of `float` words of `words` whole words: its words, and never under
+/// [`FLOAT_LEAST`].
+pub fn float_len(words: u64) -> u64 {
+    words.max(FLOAT_LEAST)
+}
+
+/// The `Workgroup` `float` array of `len` (a constant) words: an arena of `float` words.
+fn float_array(mb: &mut ModuleBuilder, len: ConstId) -> BResult<GlobalId> {
+    let elem = mb.ty(Type::Float { width: 32 })?;
+    let ty = mb.ty(Type::Array {
+        elem,
+        len,
+        stride: None,
+    })?;
+    mb.plain_global(StorageClass::Workgroup, ty, None)
+}
+
 /// Words of a static arena of `bytes`: whole words, at least [`MIN_ARENA_BYTES`].
 fn static_words(bytes: u64) -> u64 {
     bytes.max(MIN_ARENA_BYTES).div_ceil(4)
@@ -322,19 +372,27 @@ fn static_words(bytes: u64) -> u64 {
 /// `SpecKey::TgLength(n_i)` (default 0: the binder always specializes it). The imageblock is one
 /// more region after them, of length `width · height · cell_bytes` from its specialization
 /// constants (default 0 by 0). The size is the last region's end, and the array's length `max(size
-/// / 4, MIN_ARENA_BYTES / 4)`, all `OpSpecConstantOp`s.
+/// / 4, MIN_ARENA_BYTES / 4)`, all `OpSpecConstantOp`s. An arena of `float` words
+/// ([`TgWords::Floats`]) is a `float` array of its whole words, at least [`FLOAT_LEAST`]
+/// ([`float_len`]).
 pub fn declare_threadgroup(mb: &mut ModuleBuilder, shape: &TgShape) -> BResult<TgDecl> {
     let u32_ = u32_ty(mb)?;
     if shape.regions.is_empty() && shape.imageblock.is_none() {
         let size = konst(mb, shape.static_size)?;
-        let words = konst(mb, static_words(shape.static_size))?;
-        let global = array(mb, StorageClass::Workgroup, words)?;
+        let (global, floats) = if shape.words == TgWords::Floats {
+            let len = konst(mb, float_len(shape.static_size.div_ceil(4)))?;
+            (float_array(mb, len)?, true)
+        } else {
+            let words = konst(mb, static_words(shape.static_size))?;
+            (array(mb, StorageClass::Workgroup, words)?, false)
+        };
         return Ok(TgDecl {
             decl: ArenaDecl {
                 arena: Arena::Threadgroup,
                 global,
                 size,
                 tile_base: None,
+                floats,
             },
             regions: Vec::new(),
             imageblock: None,
@@ -381,18 +439,31 @@ pub fn declare_threadgroup(mb: &mut ModuleBuilder, shape: &TgShape) -> BResult<T
     };
     let size = off;
     let two = konst(mb, 2)?;
-    let min = konst(mb, MIN_ARENA_BYTES / 4)?;
-    let words = mb.spec_op(SpecOp::ShiftRightLogical, u32_, &[size, two])?;
-    let bool_ = mb.ty(Type::Bool)?;
-    let small = mb.spec_op(SpecOp::ULessThan, bool_, &[words, min])?;
-    let words = mb.spec_op(SpecOp::Select, u32_, &[small, min, words])?;
-    let global = array(mb, StorageClass::Workgroup, words)?;
+    let (global, floats) = if shape.words == TgWords::Floats {
+        // The regions end on 16 bytes, so `words` is the arena's whole words: the array is
+        // `max(words, FLOAT_LEAST)` long ([`float_len`]).
+        let words = mb.spec_op(SpecOp::ShiftRightLogical, u32_, &[size, two])?;
+        let least = konst(mb, FLOAT_LEAST)?;
+        let bool_ = mb.ty(Type::Bool)?;
+        let small = mb.spec_op(SpecOp::ULessThan, bool_, &[words, least])?;
+        let len = mb.spec_op(SpecOp::Select, u32_, &[small, least, words])?;
+        (float_array(mb, len)?, true)
+    } else {
+        // The composed form's words, made in this order so its module is the same word for word.
+        let min = konst(mb, MIN_ARENA_BYTES / 4)?;
+        let words = mb.spec_op(SpecOp::ShiftRightLogical, u32_, &[size, two])?;
+        let bool_ = mb.ty(Type::Bool)?;
+        let small = mb.spec_op(SpecOp::ULessThan, bool_, &[words, min])?;
+        let words = mb.spec_op(SpecOp::Select, u32_, &[small, min, words])?;
+        (array(mb, StorageClass::Workgroup, words)?, false)
+    };
     Ok(TgDecl {
         decl: ArenaDecl {
             arena: Arena::Threadgroup,
             global,
             size,
             tile_base: None,
+            floats,
         },
         regions,
         imageblock,
@@ -422,6 +493,7 @@ fn declare_fragment(mb: &mut ModuleBuilder, shape: &TgShape, coord: usize) -> BR
             global: view.global,
             size: tile_length(mb)?,
             tile_base: None,
+            floats: false,
         },
         regions,
         imageblock: None,
@@ -471,6 +543,7 @@ pub fn declare_payload(mb: &mut ModuleBuilder, size: u64, emulated: bool) -> BRe
         global,
         size: bytes,
         tile_base: None,
+        floats: false,
     })
 }
 
@@ -484,6 +557,7 @@ pub fn declare_private(mb: &mut ModuleBuilder, size: u64) -> BResult<ArenaDecl> 
         global,
         size: bytes,
         tile_base: None,
+        floats: false,
     })
 }
 
@@ -611,6 +685,7 @@ mod tests {
             imageblock: None,
             tile: false,
             fragment: None,
+            words: TgWords::Unseen,
         };
         let check = |s: TgShape| s.check(workgroup_limit(Stage::Kernel, &limits));
         assert_eq!(check(shape(32768, &[])), Ok(()));

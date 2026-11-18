@@ -33,8 +33,20 @@
 //!   memory model's operands the arena's words take; a volatile one's words carry `Volatile`,
 //!   except a load of a read-only typed constant object.
 //!
-//! **Containment** of an arena access is on unless the profile's containment is `UnsafeOff` (no
-//! robustness feature covers arenas): with `inb` the normative check against the arena's exact byte
+//! **A kernel's arena of `float` words** (`memory::arena::TgWords`, on `Device::from_queries`'
+//! profile, whose `ThreadgroupMemory` is `Native`): where every access of a kernel's threadgroup
+//! arena is a whole, aligned `float` word ([`Leaf::float_words`]), with no atomic, memory
+//! intrinsic or pointer cell in it, and its simdgroups are not emulated, the arena is a `float`
+//! array of its own words ([`choose_words`]). An access is one `OpLoad` or `OpStore` of a `float`
+//! per lane, at the word index `off / 4` and the words after it: no branch, no select and no
+//! bitcast. Every other kernel's arena keeps its `u32` words.
+//!
+//! **Containment** of an arena access is on unless the profile's containment is `UnsafeOff`, or
+//! the arena is threadgroup memory on a profile whose `ThreadgroupMemory` is `Native`
+//! ([`contained`]): there no threadgroup access is contained, an arena's, its atomics', memory
+//! intrinsics', pointer cells' and imageblock's alike, nor a typed threadgroup object's index, and
+//! one past the memory is undefined, as in Metal (no robustness feature covers arenas). Contained,
+//! with `inb` the normative check against the arena's exact byte
 //! size, a load reads at `select(inb, off, 0)` and yields `select(inb, v, 0)`, and a store sits in
 //! a builder-closed `if_(inb)`. A dereference of a null private pointer (undefined in Metal) reads
 //! or writes the kept first word, or an object's bytes at a field's offset: inside the arena
@@ -42,8 +54,9 @@
 //! **contained** under
 //! `GuestIsolation::On` (`memory::alloca`), so the access never leaves its object: a thread's own
 //! object's (an alloca's) are checked against their levels' lengths, a load past a level reading
-//! zero and a store past one sitting in a builder-closed `if_` that drops it; a threadgroup or
-//! constant object's are each clamped to the level's last element. A constant index is in range by
+//! zero and a store past one sitting in a builder-closed `if_` that drops it; a threadgroup
+//! object's, where threadgroup memory is contained ([`contained`]), and a constant object's are
+//! each clamped to the level's last element. A constant index is in range by
 //! construction. Each dynamic index is the defining `getelementptr`'s own operand where the GEP's
 //! dynamic indices line up one to one with the path's dynamic levels (`lined_up`), and is
 //! recovered from the pointer's offset otherwise.
@@ -90,12 +103,12 @@ use crate::air::ir::{
     IntPredicate, Type, TypeId, Value, ValueId,
 };
 use crate::budget::{tree_bytes, Meter, PRIVATE_ARENA_BYTES};
-use crate::device::profile::{Containment, GuestIsolation};
+use crate::device::profile::{Containment, GuestIsolation, ThreadgroupMemory};
 use crate::error::{Error, Feature, Limit, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{Plan, SelectCx};
 use crate::memory::alloca::{self, Init, Shape, Step, Strides, TypedPath, TypedTy};
-use crate::memory::arena::{self, Arena, ArenaDecl, ArenaMem, TgDecl, TgShape};
+use crate::memory::arena::{self, Arena, ArenaDecl, ArenaMem, TgDecl, TgShape, TgWords};
 use crate::memory::contain;
 use crate::memory::fragment;
 use crate::memory::leaf::{self, k32, Leaf, WordOps};
@@ -141,7 +154,7 @@ pub struct LocalAccess {
     /// The stored value (stores only).
     pub value: Option<ValueId>,
     pub leaf: Leaf,
-    /// The in-shader containment check (off only for `Containment::UnsafeOff`).
+    /// The in-shader containment check ([`contained`]).
     pub contained: bool,
     /// A volatile access: every word it loads or stores carries `Volatile`.
     pub volatile: bool,
@@ -168,9 +181,9 @@ pub struct TypedAccess {
     /// where its dynamic indices line up one to one with the path's dynamic levels
     /// (`lined_up`); `None` recovers each from the pointer's offset.
     pub indices: Option<Vec<(ValueId, IndexForm)>>,
-    /// Each dynamic index is contained (`GuestIsolation::On`): checked against its level's length
-    /// where the access is [`checked`](Self::checked), clamped to its level's last element
-    /// otherwise.
+    /// Each dynamic index is contained (`GuestIsolation::On`, and for a typed threadgroup object
+    /// where threadgroup memory is, [`contained`]): checked against its level's length where the
+    /// access is [`checked`](Self::checked), clamped to its level's last element otherwise.
     pub clamped: bool,
     /// A volatile access: its load or store carries `Volatile`.
     pub volatile: bool,
@@ -308,9 +321,11 @@ impl LocalStrategy {
         })
     }
 
-    /// The census name (`access.<home>.<op>`).
-    pub fn name(&self) -> &'static str {
+    /// The census name (`access.<home>.<op>`), a threadgroup arena access's as `plan`'s arena
+    /// lowers it: one in an arena of `float` words is named so.
+    pub fn name(&self, plan: &LocalPlan) -> &'static str {
         use LocalStrategy as L;
+        let floats = plan.tg.as_ref().is_some_and(|t| t.words == TgWords::Floats);
         match self {
             L::Alloca { home, .. } => by_home(
                 *home,
@@ -353,6 +368,7 @@ impl LocalStrategy {
                 ],
             ),
             L::Load(a) => match (a.arena, a.contained) {
+                (Arena::Threadgroup, false) if floats => "access.threadgroup.load.floats",
                 (Arena::Threadgroup, true) => "access.threadgroup.load.checked",
                 (Arena::Threadgroup, false) => "access.threadgroup.load",
                 (Arena::Private, true) => "access.private.load.checked",
@@ -361,6 +377,7 @@ impl LocalStrategy {
                 (Arena::Payload, false) => "access.payload.load",
             },
             L::Store(a) => match (a.arena, a.contained) {
+                (Arena::Threadgroup, false) if floats => "access.threadgroup.store.floats",
                 (Arena::Threadgroup, true) => "access.threadgroup.store.checked",
                 (Arena::Threadgroup, false) => "access.threadgroup.store",
                 (Arena::Private, true) => "access.private.store.checked",
@@ -659,6 +676,13 @@ pub(super) fn use_arena(cx: &mut SelectCx<'_>, arena: Arena) -> Result<(), Error
             // pass keeps across its tile dispatches (`tile::wrap_entry`), and so are a fragment
             // function's.
             shape.tile = (fragment || super::tile::is_tile(cx)) && !shape.regions.is_empty();
+            // Only a kernel's own workgroup arena may be of `float` words.
+            let floats = cx.stage == Stage::Kernel
+                && !super::tile::is_tile(cx)
+                && cx.profile.threadgroup_memory() == ThreadgroupMemory::Native;
+            if !floats {
+                shape.words = TgWords::Composed;
+            }
             for &(_, index) in &shape.regions {
                 if shape.tile {
                     cx.facts
@@ -695,6 +719,28 @@ pub(super) fn use_arena(cx: &mut SelectCx<'_>, arena: Arena) -> Result<(), Error
         }
     }
     Ok(())
+}
+
+/// The threadgroup arena keeps its composed `u32` words: `arena`, used by an atomic, a memory
+/// intrinsic, an imageblock, a pointer cell or another use that is not a whole `float` word access.
+pub(super) fn composed(cx: &mut SelectCx<'_>, arena: Arena) {
+    if arena == Arena::Threadgroup {
+        if let Some(tg) = cx.families.access.local.tg.as_mut() {
+            tg.words = TgWords::Composed;
+        }
+    }
+}
+
+/// The form of the threadgroup arena, once every instruction is selected under `tier`: of `float`
+/// words where every access was a whole, aligned `float` word and the simdgroups are not emulated
+/// (the module docs); else composed.
+pub(crate) fn choose_words(cx: &mut SelectCx<'_>, tier: crate::device::subgroup::Tier) {
+    let Some(tg) = cx.families.access.local.tg.as_mut() else {
+        return;
+    };
+    if tg.words != TgWords::Floats || tier == crate::device::subgroup::Tier::Emulated {
+        tg.words = TgWords::Composed;
+    }
 }
 
 /// The refusal of a store into `arena` the function may not write: a mesh function's payload is
@@ -1092,15 +1138,32 @@ pub(crate) fn access(
     let proven = cx.memory.proven_align(cx.entry, ptr);
     let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align, proven)?;
     let ptr = access_ptr(cx, ptr, arena, u64::from(leaf.bytes))?;
+    if arena == Arena::Threadgroup {
+        if let Some(tg) = cx.families.access.local.tg.as_mut() {
+            tg.words = match (tg.words, leaf.float_words()) {
+                (TgWords::Unseen | TgWords::Floats, true) => TgWords::Floats,
+                _ => TgWords::Composed,
+            };
+        }
+    }
     let value = stored_value(cx, value)?;
     Ok(LocalAccess {
         arena,
         ptr,
         value,
         leaf,
-        contained: cx.profile.fields().containment != Containment::UnsafeOff,
+        contained: contained(cx, arena),
         volatile: false,
     })
+}
+
+/// Whether an access of `arena` is contained (the module docs): unless the profile's containment
+/// is `UnsafeOff`, or the arena is threadgroup memory on a profile that contains none
+/// (`ThreadgroupMemory::Native`).
+pub(crate) fn contained(cx: &SelectCx<'_>, arena: Arena) -> bool {
+    cx.profile.fields().containment != Containment::UnsafeOff
+        && !(arena == Arena::Threadgroup
+            && cx.profile.threadgroup_memory() == ThreadgroupMemory::Native)
 }
 
 /// A pointer's offset shape while reading its definitions: `Empty` is a join's identity.
@@ -1478,8 +1541,11 @@ fn typed_access(
             (path, fragment, None)
         }
     };
-    let clamped =
-        path.dynamic().next().is_some() && cx.profile.fields().isolation == GuestIsolation::On;
+    // A typed threadgroup object's index is contained as the arena's accesses are ([`contained`]).
+    let shared = matches!(home, Home::Shared(_)) && !contained(cx, Arena::Threadgroup);
+    let clamped = path.dynamic().next().is_some()
+        && cx.profile.fields().isolation == GuestIsolation::On
+        && !shared;
     let indices = match reader {
         Some(at) => lined_up(cx, at, ptr, &path, (obj, count), m)?,
         None => None,
@@ -1862,6 +1928,16 @@ pub(super) fn decl_of(
     Ok(decl)
 }
 
+/// The threadgroup arena of a word atomic: never an arena of `float` words, which an atomic keeps
+/// composed (`composed`).
+pub(super) fn words_decl(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<ArenaDecl> {
+    let decl = decl_of(cx, fb, Arena::Threadgroup)?;
+    if decl.floats {
+        return Err(cx.fail("a word atomic in an arena of float words"));
+    }
+    Ok(decl)
+}
+
 fn ptr_value(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, p: LocalPtr) -> BResult<SValue> {
     match p {
         LocalPtr::Value(v) => cx.operand(fb, v),
@@ -1905,6 +1981,9 @@ pub(super) fn emit_access_at(
         mem: ArenaMem(decl, ops),
         kept,
     };
+    if decl.floats {
+        return float_words(cx, fb, (a, decl, ops), off, stored);
+    }
     if !a.contained {
         return match stored {
             None => leaf::load(fb, &mut mem, &leaf, off).map(Some),
@@ -1942,6 +2021,54 @@ pub(super) fn emit_access_at(
             });
             fb.if_(&mut (), inb, then, None)?;
             Ok(None)
+        }
+    }
+}
+
+/// Load or store (`stored`) `a`'s leaf, whole `float` words, at byte offset `off` of an arena of
+/// `float` words (`ArenaDecl::floats`, the module docs): lane `j` of `lanes` at word
+/// `off / 4 + j`, one typed access each, uncontained (`ThreadgroupMemory::Native`).
+fn float_words(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    (a, decl, ops): (&LocalAccess, ArenaDecl, WordOps),
+    off: SValue,
+    stored: Option<SValue>,
+) -> BResult<Option<SValue>> {
+    let leaf = a.leaf;
+    let lanes = u32::from(leaf.form.lanes);
+    if !leaf.float_words() || a.contained {
+        return Err(cx.fail("an access of another shape, or contained, in an arena of float words"));
+    }
+    let two = k32(fb, 2)?;
+    let first = fb.binary(BinOp::ShiftRightLogical, off, two)?;
+    let base = fb.module().global_value(decl.global)?;
+    let access = ops.access(fb, MemAccess::default(), stored.is_some())?;
+    let mut loaded = Vec::with_capacity(lanes as usize);
+    for j in 0..lanes {
+        let at = match j {
+            0 => first,
+            _ => {
+                let j = k32(fb, j)?;
+                fb.binary(BinOp::IAdd, first, j)?
+            }
+        };
+        let p = fb.access_chain(base, &[at])?;
+        match stored {
+            None => loaded.push(fb.load(p, access)?),
+            Some(v) if lanes == 1 => fb.store(p, v, access)?,
+            Some(v) => {
+                let x = fb.composite_extract(v, &[j])?;
+                fb.store(p, x, access)?;
+            }
+        }
+    }
+    match (stored, loaded.as_slice()) {
+        (Some(_), _) => Ok(None),
+        (None, [x]) => Ok(Some(*x)),
+        (None, xs) => {
+            let ty = crate::lower::arith::ops::ty(fb, leaf.form)?;
+            fb.composite_construct(ty, xs).map(Some)
         }
     }
 }

@@ -62,7 +62,6 @@ use std::borrow::Cow;
 use crate::air::intrinsics::LlvmIntrinsic;
 use crate::air::ir::{Callee, CastOp, Const, Inst, InstId, InstKind, Value, ValueId};
 use crate::budget::Meter;
-use crate::device::profile::Containment;
 use crate::error::{Error, LowerFamily};
 use crate::lower::arith::{Form, Held};
 use crate::lower::emit::EmitCx;
@@ -393,6 +392,7 @@ pub fn endpoint(
     match local::home_of(cx, v) {
         Some(home @ Home::Arena(arena)) => {
             local::use_arena(cx, arena)?;
+            local::composed(cx, arena);
             if write {
                 local::writable(cx, arena)?;
             }
@@ -405,7 +405,7 @@ pub fn endpoint(
                 ptr,
                 value: None,
                 leaf,
-                contained: cx.profile.fields().containment != Containment::UnsafeOff,
+                contained: local::contained(cx, arena),
                 volatile: false,
             }));
         }

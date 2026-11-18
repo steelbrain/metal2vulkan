@@ -526,7 +526,7 @@ impl FamilyStrategy for AccessStrategy {
             AccessStrategy::Pointer(PtrOp::Select { .. }) => "access.pointer_select".into(),
             AccessStrategy::Load(a) => a.name("access.load", slots),
             AccessStrategy::Store(a) => a.name("access.store", slots),
-            AccessStrategy::Local(l) => l.name().into(),
+            AccessStrategy::Local(l) => l.name(&slots.local).into(),
             AccessStrategy::Atomic(a) => a.name(slots),
             AccessStrategy::Blob(b) => b.name().into(),
             AccessStrategy::Memory(m) => m.name(slots),

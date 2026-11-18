@@ -197,6 +197,7 @@ mod engine_texture_tail;
 mod engine_texture_ulong;
 mod engine_texture_unit_bit_test;
 mod engine_texture_unk;
+mod engine_threadgroup_floats;
 mod engine_tile;
 mod engine_tiny_products;
 mod engine_typed_clamp;

@@ -1759,6 +1759,8 @@ fn finish(
     }
     // A fragment function's group operations run full quads, as Metal runs its helpers.
     simd::full_quads(&mut cx)?;
+    // The threadgroup arena's words, now that every access and the tier are known.
+    access::local::choose_words(&mut cx, tier);
     let requirement = SubgroupRequirement {
         // A vertex function's subgroups its driver runs as Metal does without the stage listed: its
         // module needs that fact in place of the stage.

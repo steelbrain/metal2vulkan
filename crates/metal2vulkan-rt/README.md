@@ -757,7 +757,8 @@ that touch blocks first.
 - `setBytes` takes up to 64 KiB, one ring chunk (`Limit::BytesLength`).
 - A dispatch's threadgroup memory, the kernel's own and the lengths set, each rounded up to 16
   bytes, is at most the device's `maxComputeSharedMemorySize` (`Limit::ThreadgroupMemory`), where
-  Metal's is its `maxThreadgroupMemoryLength`.
+  Metal's is its `maxThreadgroupMemoryLength`. A kernel's access past its threadgroup memory is
+  undefined, as in Metal, and the runtime does not confine it.
 
 ## Compute encoders
 

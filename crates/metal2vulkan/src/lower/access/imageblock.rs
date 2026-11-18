@@ -31,7 +31,6 @@
 use crate::air::abi::{ImageblockKind, ParamRole};
 use crate::air::intrinsics::{AirIntrinsic, Imageblock};
 use crate::air::ir::{Callee, Const, Inst, InstKind, Value, ValueId};
-use crate::device::profile::Containment;
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
@@ -148,6 +147,7 @@ pub(crate) fn use_imageblock(cx: &mut SelectCx<'_>, cells: CellUse) -> Result<u3
 /// use: check the arena's static part again, and record [`RuntimeFact::ImageblockSize`].
 pub(crate) fn place_region(cx: &mut SelectCx<'_>, cell_bytes: u32) -> Result<(), Error> {
     local::use_arena(cx, Arena::Threadgroup)?;
+    local::composed(cx, Arena::Threadgroup);
     let limit = crate::lower::mesh::workgroup_limit(cx);
     let Some(shape) = cx.families.access.local.tg.as_mut() else {
         return Err(cx.invariant("a used threadgroup arena without a shape"));
@@ -290,7 +290,7 @@ pub(crate) fn cell_offset(
 
 /// Whether an imageblock access is contained: as every threadgroup arena access.
 pub(crate) fn contained(cx: &SelectCx<'_>) -> bool {
-    cx.profile.fields().containment != Containment::UnsafeOff
+    local::contained(cx, Arena::Threadgroup)
 }
 
 /// Load `leaf` from the threadgroup arena at byte offset `off`, contained when `contained`.

@@ -2005,6 +2005,163 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
         });
     }
 
+    /// A kernel of 256 threads whose every threadgroup access is a whole `float` word, over one
+    /// `[[threadgroup(0)]]` region of `params[0]` words: each thread stores each of its words'
+    /// indices, and after a barrier writes, for each of its words `k`, the word `params[0] - 1 - k`
+    /// to `out[k]`, and for each of its `float4`s `j` the `float4`'s sum to `out[params[0] + j]`.
+    const FLOAT_ARENA: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @float_arena(ptr addrspace(3) %a, ptr addrspace(1) %out, ptr addrspace(2) %params, i32 %t) {
+entry:
+  %w = load i32, ptr addrspace(2) %params, align 4
+  %last = sub i32 %w, 1
+  %w4 = lshr i32 %w, 2
+  br label %fill
+
+fill:
+  %i = phi i32 [ %t, %entry ], [ %i2, %fill ]
+  %f = uitofp i32 %i to float
+  %pa = getelementptr inbounds float, ptr addrspace(3) %a, i32 %i
+  store float %f, ptr addrspace(3) %pa, align 4
+  %i2 = add i32 %i, 256
+  %more = icmp ult i32 %i2, %w
+  br i1 %more, label %fill, label %sync
+
+sync:
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  br label %back
+
+back:
+  %k = phi i32 [ %t, %sync ], [ %k2, %back ]
+  %r = sub i32 %last, %k
+  %q = getelementptr inbounds float, ptr addrspace(3) %a, i32 %r
+  %x = load float, ptr addrspace(3) %q, align 4
+  %xo = fptoui float %x to i32
+  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %k
+  store i32 %xo, ptr addrspace(1) %o, align 4
+  %k2 = add i32 %k, 256
+  %more2 = icmp ult i32 %k2, %w
+  br i1 %more2, label %back, label %vectors
+
+vectors:
+  %j = phi i32 [ %t, %back ], [ %j2, %vectors ]
+  %j4 = shl i32 %j, 2
+  %q4 = getelementptr inbounds float, ptr addrspace(3) %a, i32 %j4
+  %y = load <4 x float>, ptr addrspace(3) %q4, align 16
+  %y0 = extractelement <4 x float> %y, i32 0
+  %y1 = extractelement <4 x float> %y, i32 1
+  %y2 = extractelement <4 x float> %y, i32 2
+  %y3 = extractelement <4 x float> %y, i32 3
+  %ya = fadd float %y0, %y1
+  %yb = fadd float %y2, %y3
+  %ys = fadd float %ya, %yb
+  %yo = fptoui float %ys to i32
+  %at = add i32 %w, %j
+  %o4 = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %at
+  store i32 %yo, ptr addrspace(1) %o4, align 4
+  %j2 = add i32 %j, 256
+  %more3 = icmp ult i32 %j2, %w4
+  br i1 %more3, label %vectors, label %done
+
+done:
+  ret void
+}
+
+declare void @air.wg.barrier(i32, i32)
+
+!air.kernel = !{!0}
+!air.version = !{!7}
+!air.language_version = !{!8}
+!0 = !{ptr @float_arena, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5, !6}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 3, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"float", !"air.arg_name", !"a"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!5 = !{i32 2, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"params"}
+!6 = !{i32 3, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
+!7 = !{i32 2, i32 8, i32 0}
+!8 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+    /// [`FLOAT_ARENA`] with its region filling the device's `maxComputeSharedMemorySize` to the
+    /// byte. The translator holds the arena in `float` words (its accesses are the `.floats`
+    /// ones), and the array is the limit's words exactly, so the dispatch runs where Metal runs
+    /// it, and every answer is the program's.
+    #[test]
+    fn every_device_runs_a_float_arena_that_fills_the_threadgroup_memory_limit() {
+        let bitcode = match metal2vulkan_devtools::llvm_assemble_text(FLOAT_ARENA) {
+            Ok(bitcode) => bitcode,
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("float_arena: {error:?}"),
+        };
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("float_arena").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        each_device("compute_float_arena_at_the_limit", |name, _, device| {
+            let limit = device.core().limits.max_shared_memory;
+            let n = limit / 4;
+            let StageSource::Function(function) = &descriptor.kernel else {
+                unreachable!("a Function descriptor");
+            };
+            let lowered = device
+                .core()
+                .translator
+                .compile_function(function, &descriptor.lowering_inputs(), &Budget::standard())
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let census = &lowered.strategies().entries;
+            for strategy in [
+                "access.threadgroup.store.floats",
+                "access.threadgroup.load.floats",
+            ] {
+                assert!(
+                    census.contains_key(strategy),
+                    "{name}: {strategy} in {:?}",
+                    census.keys().collect::<Vec<_>>()
+                );
+            }
+            let state = state(name, &device, &descriptor);
+            let mut buffers = Buffers::new(&device, 1 << 20);
+            let out = buffers.buffer(5 * u64::from(limit) / 4);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            encoder
+                .set_threadgroup_memory_length(limit, 0)
+                .expect("a length");
+            encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+            encoder
+                .set_bytes(&le_bytes(&[n]), 1)
+                .expect("the parameters");
+            encoder
+                .dispatch_threadgroups([1, 1, 1], [256, 1, 1])
+                .unwrap_or_else(|error| panic!("{name}: a region of {limit} bytes: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let want: Vec<u32> = (0..n)
+                .map(|k| n - 1 - k)
+                .chain((0..n / 4).map(|j| 16 * j + 6))
+                .collect();
+            let got = words(&out, 0, want.len());
+            let first = got.iter().zip(&want).position(|(got, want)| got != want);
+            assert_eq!(first, None, "{name}: the first word that differs");
+            println!(
+                "{name}: a float arena of {limit} bytes, the device's limit, answered all {} words",
+                want.len()
+            );
+        });
+    }
+
     /// A kernel that reads, through the argument buffer at buffer 0 (one `texture2d<float, read>`
     /// member, its 8-byte resource ID), the texture's width, height and texel `(0, 0)`'s red bits
     /// into words 0 to 2 of `out` (buffer 1).

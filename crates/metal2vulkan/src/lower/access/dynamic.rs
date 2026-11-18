@@ -89,7 +89,7 @@ use crate::air::ir::{
 };
 use crate::bind::status::{StatusBits, StatusWord};
 use crate::budget::Meter;
-use crate::device::profile::{BufferAccess, Containment, GuestIsolation};
+use crate::device::profile::{BufferAccess, GuestIsolation};
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith::{Form, Held};
@@ -939,6 +939,7 @@ fn cell(cx: &mut SelectCx<'_>, ptr: Value, leaf: Leaf, write: bool) -> Result<Lo
         return Err(refuse());
     };
     local::use_arena(cx, arena)?;
+    local::composed(cx, arena);
     if write {
         local::writable(cx, arena)?;
     }
@@ -947,7 +948,7 @@ fn cell(cx: &mut SelectCx<'_>, ptr: Value, leaf: Leaf, write: bool) -> Result<Lo
         ptr: local::local_ptr(cx, ptr, home)?,
         value: None,
         leaf,
-        contained: cx.profile.fields().containment != Containment::UnsafeOff,
+        contained: local::contained(cx, arena),
         volatile: false,
     })
 }

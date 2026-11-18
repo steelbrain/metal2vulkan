@@ -150,6 +150,12 @@ impl DeviceProfile {
         self.facts.absent_reads
     }
 
+    /// Whether a threadgroup memory access is contained, and how a kernel's threadgroup arena
+    /// holds its words when every access of it is a whole, aligned `float` word.
+    pub(crate) fn threadgroup_memory(&self) -> ThreadgroupMemory {
+        self.facts.threadgroup_memory
+    }
+
     /// The profile's fields: internal; the profile is opaque to consumers, who compare
     /// [`DeviceProfile::fingerprint`] and read its facts through the accessors.
     pub(crate) fn fields(&self) -> &ProfileFields {
@@ -600,6 +606,9 @@ pub(crate) struct ProfileFacts {
     /// What a read of an argument the pipeline's function constants removed does beside taking
     /// zero.
     pub(crate) absent_reads: AbsentReads,
+    /// Whether a threadgroup memory access is contained, and how a kernel's threadgroup arena
+    /// holds its words when every access of it is a whole, aligned `float` word.
+    pub(crate) threadgroup_memory: ThreadgroupMemory,
 }
 
 impl ProfileFacts {
@@ -616,6 +625,7 @@ impl ProfileFacts {
         oblivious_edge: ObliviousEdge::Partial,
         deep_threadgroups: DeepThreadgroups::Axes,
         absent_reads: AbsentReads::Marked,
+        threadgroup_memory: ThreadgroupMemory::Contained,
     };
 
     /// `Device::from_queries`': each fact the same on every device.
@@ -631,6 +641,7 @@ impl ProfileFacts {
         oblivious_edge: ObliviousEdge::Grid,
         deep_threadgroups: DeepThreadgroups::OneRow,
         absent_reads: AbsentReads::Nil,
+        threadgroup_memory: ThreadgroupMemory::Native,
     };
 }
 
@@ -705,6 +716,26 @@ pub(crate) enum AbsentReads {
     /// It takes zero and writes no status word, a read's zeros and a query's size of 0 being
     /// what the nil texture, set 1's element 0, answers too: `Device::from_queries`' profile.
     Nil,
+}
+
+/// Whether an access of threadgroup memory (a threadgroup arena's, `memory::arena`, its atomics,
+/// memory intrinsics, pointer cells and imageblock, and a typed threadgroup object's) is contained,
+/// and how a kernel's threadgroup arena holds its words when every access of it is a whole, aligned
+/// `float` word: a scalar `float`, or a vector of them, at an offset its alignment proves a
+/// multiple of its bytes, with no atomic, no memory intrinsic and no access of another type
+/// (`lower::access::local`'s `TgWords`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThreadgroupMemory {
+    /// Every access contained, as the profile's containment says (`lower::access::local`): a load
+    /// past the arena reads zero and a store past it is dropped, and a typed object's dynamic index
+    /// is clamped to its level. Every arena is a `u32` array whose words each access composes:
+    /// `Device::new`'s profile.
+    Contained,
+    /// No access contained: one past the memory is undefined, as in Metal, and reads or writes
+    /// what the device's access there does. An arena whose every access is a whole, aligned `float`
+    /// word is a `float` array of its own words, each access one typed load or store per lane at
+    /// its word index, with no branch and no bitcast: `Device::from_queries`' profile.
+    Native,
 }
 
 /// How a kernel whose workgroup is its threadgroup (`lower::dispatch::LocalSizeForm::Spec`) runs

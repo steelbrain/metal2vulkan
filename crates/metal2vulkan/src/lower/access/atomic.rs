@@ -676,6 +676,7 @@ pub fn select(
     };
     let mem = if threadgroup {
         local::use_arena(cx, Arena::Threadgroup)?;
+        local::composed(cx, Arena::Threadgroup);
         super::tile_memory::written(cx)?;
         AtomicMem::Threadgroup {
             ptr: local::access_ptr(
@@ -684,7 +685,7 @@ pub fn select(
                 Arena::Threadgroup,
                 u64::from(r.elem.bits().div_ceil(8)),
             )?,
-            contained: cx.profile.fields().containment != Containment::UnsafeOff,
+            contained: local::contained(cx, Arena::Threadgroup),
         }
     } else if through_root {
         // A wide pointer reaches every candidate through its root entry's device address, so a
@@ -1221,7 +1222,7 @@ pub fn emit(
     // buffer the whole device reaches: its atomics are `Device`-scope, and order it as device
     // memory.
     let tile_base = match a.mem {
-        AtomicMem::Threadgroup { .. } => local::decl_of(cx, fb, Arena::Threadgroup)?.tile_base,
+        AtomicMem::Threadgroup { .. } => local::words_decl(cx, fb)?.tile_base,
         _ => None,
     };
     let (own, scope) = match a.mem {
@@ -1301,7 +1302,7 @@ pub fn emit(
     let result = match &a.mem {
         AtomicMem::Private(leaf) => on_private(cx, fb, leaf, o, a.float)?,
         AtomicMem::Threadgroup { ptr, contained } => {
-            let decl = local::decl_of(cx, fb, Arena::Threadgroup)?;
+            let decl = local::words_decl(cx, fb)?;
             let off = match ptr {
                 LocalPtr::Value(v) => cx.operand(fb, *v)?,
                 LocalPtr::Offset(c) => k32(fb, *c)?,

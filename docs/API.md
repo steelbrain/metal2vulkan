@@ -1052,6 +1052,20 @@ through buffer arguments it reads at any index.
   stitched library itself. A module whose linkage signature has no reading (a linked-constants
   signature on a module that still declares function constants) refuses the pipeline at a call
   that survives specialization, `Unsupported` with `Feature::Linking`.
+- **Threadgroup memory.** On `Device::from_queries`' profile no threadgroup memory access is
+  contained: a load or store, atomic, memory intrinsic, pointer cell or imageblock access of a
+  threadgroup arena, and a typed threadgroup object's index, run as the program states them, and
+  one past the memory is undefined, as in Metal. A kernel whose every threadgroup access is a
+  whole, aligned `float` (a scalar or a vector of two to four), with no atomic, memory intrinsic,
+  imageblock or pointer kept in it, and whose SIMD groups are not emulated, holds its threadgroup
+  memory as a `Workgroup` array of `float`: each access is one typed load or store a lane, with no
+  branch and no bitcast, at the word `offset / 4` and the words after it. The array is the
+  memory's own words (the static part and the specialized `[[threadgroup(n)]]` lengths), at least
+  four: the memory Metal allocates, so its threadgroup memory is Metal's static length and lengths,
+  and a length filling the limit runs. The strategy census names its accesses
+  `access.threadgroup.load.floats` and `access.threadgroup.store.floats`. Every other kernel, and
+  every kernel on `Device::new`'s profile, holds `u32` words; on `Device::new`'s profile each
+  access is contained, a load past the memory reading 0 and its store dropped.
 - **Binary functions, required threadgroup sizes, buffer mutability.** Whether a binary function
   was compiled to a binary (`LinkedFunction::precompiled`), required threadgroup sizes and buffer
   mutability change no translation and are in no compile key; the runtime checks them as Metal

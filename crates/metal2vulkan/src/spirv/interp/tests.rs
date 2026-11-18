@@ -882,6 +882,7 @@ fn a_small_specialized_threadgroup_arena_is_floored_at_eight_words() {
                 imageblock: None,
                 tile: false,
                 fragment: None,
+                words: Default::default(),
             };
             Ok(declare_threadgroup(mb, &shape)?.decl.global)
         });
@@ -906,6 +907,7 @@ fn a_small_specialized_threadgroup_arena_is_floored_at_eight_words() {
             imageblock: None,
             tile: false,
             fragment: None,
+            words: Default::default(),
         };
         Ok(declare_threadgroup(mb, &shape)?.decl.global)
     });
