@@ -298,6 +298,8 @@ struct Kept {
     heap_asked: Vec<(String, usize)>,
     /// Whether it declines the player's snapshots.
     declines_snapshots: bool,
+    /// The GPU start and end it gives each command buffer; one not here has none.
+    gpu: HashMap<u64, (u64, u64)>,
 }
 
 impl Backend for Kept {
@@ -356,6 +358,10 @@ impl Backend for Kept {
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError> {
         self.waits.push(command_buffer);
         Ok(())
+    }
+
+    fn gpu_interval(&mut self, command_buffer: u64) -> Option<(u64, u64)> {
+        self.gpu.get(&command_buffer).copied()
     }
 
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError> {
@@ -1173,6 +1179,37 @@ fn a_frame_end_reports_the_gauges_as_they_stand() {
         .collect();
     assert_eq!(ends.len(), 2, "{lines:?}");
     assert!(ends[1].ends_with(" live calls=3"), "{lines:?}");
+}
+
+/// A frame's end counts the GPU's busy time as the union of the intervals of the command buffers
+/// the frame waited for, where two overlap once, and its line says where the wall time went.
+#[test]
+fn a_frame_end_counts_overlapping_gpu_intervals_once() {
+    let mut kept = Kept {
+        gpu: HashMap::from([(3, (100, 300)), (4, (200, 400)), (5, (1000, 1100))]),
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        for command_buffer in [3, 4, 5] {
+            w.call("commandBuffer", 2, command_buffer, &[], &[])?;
+            w.call("commit", command_buffer, 0, &[], &[])?;
+        }
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])?;
+        Ok(())
+    });
+    ended.unwrap();
+    let busy: Vec<_> = report.ends.iter().map(|end| end.times.gpu_busy).collect();
+    assert_eq!(busy, [400, 0]);
+    let end = &report.ends[0];
+    assert!(end.times.player(end.wall_nanos) <= end.wall_nanos);
+    let lines = report.lines();
+    let line = lines.iter().find(|line| line.starts_with("end 0 "));
+    let line = line.expect("an end line");
+    assert!(line.contains(" times stream="), "{line}");
+    assert!(line.contains(" gpu_busy=400 live"), "{line}");
 }
 
 /// On a backend that takes no snapshots, or with a player that takes none, a dispatch an

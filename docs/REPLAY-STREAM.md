@@ -440,10 +440,19 @@ their times and memory compare. `command-replay dump --stream FILE` prints the c
   line as `none` and counted (`gap_pipeline_ids`).
 
 `report.txt` holds one line per item: `device NAME runtime old|rt snapshots yes|no` first, `completed IDS COUNTS`, `frame N COUNTS`,
-`end N wall_nanos=NANOS resident_bytes=BYTES live KEY=VALUE ...` for each frame (the
-nanoseconds from the frame before's end, or the first call played, to this frame's, the wait for
-its work included; the process's resident memory then where the system tells it, `VmRSS` on
-Linux; and the backend's gauges then, as they stand, never as growth: the new runtime's live
+`end N wall_nanos=NANOS resident_bytes=BYTES times KEY=NANOS ... live KEY=VALUE ...` for each
+frame (the nanoseconds from the frame before's end, or the first call played, to this frame's,
+the wait for its work included; the process's resident memory then where the system tells it,
+`VmRSS` on Linux; where the frame's wall time went on the player's thread, in nanoseconds:
+`stream` reading and decoding the stream and its blobs, `write` putting bytes in the runtime's
+memory, `read` reading bytes back, `wait` waiting for command buffers, `resource` the calls that
+make or release a buffer, texture, heap or block and `resource_max` the longest of them,
+`pipeline` the calls that make a library, a function or a pipeline state and `pipeline_max` the
+longest of them, `other` every other call the runtime ran, `count` reading the runtime's
+counters, and `player` what of the wall time is left, the player's own work; then `gpu_busy`, the
+union of the GPU intervals of the command buffers the frame waited for, where the runtime gives
+them, which runs beside the rest; and the backend's gauges then, as they stand, never as growth:
+the new runtime's live
 blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes and idle Shared and
 Private bytes the pool keeps, and the bytes
 of the blocks the backend holds for the stream by class, `shared_block_bytes` and

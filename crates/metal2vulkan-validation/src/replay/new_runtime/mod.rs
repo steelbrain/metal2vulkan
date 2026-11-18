@@ -1141,6 +1141,15 @@ impl Backend for NewRuntime {
         }
     }
 
+    fn gpu_interval(&mut self, command_buffer: u64) -> Option<(u64, u64)> {
+        let Some(Object::CommandBuffer(done)) = self.objects.get(&command_buffer) else {
+            return None;
+        };
+        // Both are 0 for one that ended with an error.
+        let (start, end) = (done.gpu_start_time(), done.gpu_end_time());
+        (start != 0 && end >= start).then_some((start, end))
+    }
+
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError> {
         let unread = |why: &str| PlayError::Refused {
             selector: "m2v.check".into(),

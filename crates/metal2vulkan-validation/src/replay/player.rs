@@ -68,6 +68,10 @@ pub trait Backend {
     fn write(&mut self, target: u64, offset: u64, bytes: &[u8]) -> Result<(), PlayError>;
     /// Wait until committed command buffer `command_buffer` completed.
     fn wait(&mut self, command_buffer: u64) -> Result<(), PlayError>;
+    /// Completed command buffer `command_buffer`'s GPU start and end, in nanoseconds of one
+    /// clock, where the runtime gives them: a frame's GPU busy time is their union
+    /// (`Times::gpu_busy`).
+    fn gpu_interval(&mut self, command_buffer: u64) -> Option<(u64, u64)>;
     /// The bytes of buffer or texture `object`, for a checksum.
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError>;
     /// The `gpuResourceID` the runtime gives `object`; none where its getter raises.
@@ -228,6 +232,132 @@ pub struct End {
     pub resident_bytes: Option<u64>,
     /// The runtime's gauges then (`Backend::live`).
     pub live: Counters,
+    /// Where the frame's wall time went.
+    pub times: Times,
+}
+
+/// Where a frame's wall time went, as the player sees it from outside the runtime: the
+/// nanoseconds its thread spent in each kind of work, and beside them the GPU's busy time. The
+/// runtime's own threads are not in it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Times {
+    /// Reading and decoding the stream: its calls, and the blobs a write or a snapshot takes.
+    pub stream: u64,
+    /// Putting bytes in the runtime's memory (`Backend::write`): `m2v.write`s and the snapshots'.
+    pub write: u64,
+    /// Reading bytes back for checks and snapshots (`Backend::read`).
+    pub read: u64,
+    /// Waiting for command buffers to complete (`Backend::wait`).
+    pub wait: u64,
+    /// Calls that make or release a buffer, texture, heap or block, and the longest one.
+    pub resource: u64,
+    pub resource_max: u64,
+    /// Calls that make a library, a function or a pipeline state, and the longest one.
+    pub pipeline: u64,
+    pub pipeline_max: u64,
+    /// Every other call the runtime runs: encoders and their commands, commits, other objects.
+    pub other: u64,
+    /// Reading the runtime's counters (`Backend::counters`).
+    pub count: u64,
+    /// The union of the GPU intervals of the command buffers the frame waited for
+    /// (`Backend::gpu_interval`); 0 where the backend gives none.
+    pub gpu_busy: u64,
+}
+
+impl Times {
+    /// What of `wall` the player's thread spent on none of the kinds above: the player's own
+    /// work.
+    pub fn player(&self, wall: u64) -> u64 {
+        let host = [
+            self.stream,
+            self.write,
+            self.read,
+            self.wait,
+            self.resource,
+            self.pipeline,
+            self.other,
+            self.count,
+        ];
+        wall.saturating_sub(host.iter().sum())
+    }
+
+    fn add(&mut self, cost: Cost, nanos: u64) {
+        match cost {
+            Cost::Resource => {
+                self.resource += nanos;
+                self.resource_max = self.resource_max.max(nanos);
+            }
+            Cost::Pipeline => {
+                self.pipeline += nanos;
+                self.pipeline_max = self.pipeline_max.max(nanos);
+            }
+            Cost::Other => self.other += nanos,
+        }
+    }
+}
+
+/// What a backend call's time counts as (`Times`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Cost {
+    Resource,
+    Pipeline,
+    Other,
+}
+
+impl Cost {
+    /// The cost of a call of `selector`, which makes an object or runs a method; a release's is
+    /// its object's (`Player::resources`).
+    fn of(selector: &str) -> Cost {
+        const RESOURCES: [&str; 5] = [
+            "newBuffer",
+            "newTexture",
+            "newHeap",
+            "m2v.newBlock",
+            "m2v.newBufferInBlock",
+        ];
+        const PIPELINES: [&str; 3] = ["newLibrary", "newDefaultLibrary", "newFunction"];
+        if RESOURCES.iter().any(|p| selector.starts_with(p)) {
+            Cost::Resource
+        } else if PIPELINES.iter().any(|p| selector.starts_with(p))
+            || (selector.starts_with("new") && selector.contains("PipelineState"))
+        {
+            Cost::Pipeline
+        } else {
+            Cost::Other
+        }
+    }
+}
+
+/// The nanoseconds since `began`.
+fn since(began: std::time::Instant) -> u64 {
+    u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// Run `call` on `backend`, its time counted in `times` as `cost`.
+fn timed<B: Backend>(
+    backend: &mut B,
+    times: &mut Times,
+    call: &Call,
+    cost: Cost,
+) -> Result<Made, PlayError> {
+    let began = std::time::Instant::now();
+    let made = backend.call(call);
+    times.add(cost, since(began));
+    made
+}
+
+/// The nanoseconds `intervals` cover, where they overlap counted once.
+fn covered(intervals: &mut [(u64, u64)]) -> u64 {
+    intervals.sort_unstable();
+    let (mut total, mut reach) = (0, 0);
+    for &(start, end) in intervals.iter() {
+        let start = start.max(reach);
+        if end > start {
+            total += end - start;
+            reach = end;
+        }
+    }
+    total
 }
 
 /// The process's resident memory in bytes: `VmRSS` of `/proc/self/status`, where there is one.
@@ -278,9 +408,24 @@ impl Report {
             let live: String = (end.live.iter())
                 .map(|(key, value)| format!(" {key}={value}"))
                 .collect();
+            let t = &end.times;
             lines.push(format!(
-                "end {at} wall_nanos={}{resident} live{live}",
-                end.wall_nanos
+                "end {at} wall_nanos={}{resident} times stream={} write={} read={} wait={} \
+                 resource={} resource_max={} pipeline={} pipeline_max={} other={} count={} \
+                 player={} gpu_busy={} live{live}",
+                end.wall_nanos,
+                t.stream,
+                t.write,
+                t.read,
+                t.wait,
+                t.resource,
+                t.resource_max,
+                t.pipeline,
+                t.pipeline_max,
+                t.other,
+                t.count,
+                t.player(end.wall_nanos),
+                t.gpu_busy,
             ));
         }
         for check in &self.checks {
@@ -515,6 +660,12 @@ pub struct Player<'b, B: Backend> {
     /// Whether the player takes the `m2v.privateBytes` snapshots where the backend does
     /// (`Player::without_snapshots`).
     snapshots: bool,
+    /// Where the frame's wall time went so far, and the GPU intervals of the command buffers it
+    /// waited for.
+    times: Times,
+    intervals: Vec<(u64, u64)>,
+    /// The live objects that calls of `Cost::Resource` made, whose release costs as theirs.
+    resources: HashSet<u64>,
     report: Report,
 }
 
@@ -708,6 +859,9 @@ impl<'b, B: Backend> Player<'b, B> {
             frame: Counts::default(),
             frame_began: None,
             snapshots: true,
+            times: Times::default(),
+            intervals: Vec::new(),
+            resources: HashSet::new(),
             report: Report::default(),
         }
     }
@@ -744,8 +898,14 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     fn all(&mut self, stream: &mut StreamReader, left_out: &mut Counters) -> Result<(), PlayError> {
-        while let Some(call) = stream.next_call()? {
+        loop {
             self.frame_began.get_or_insert_with(std::time::Instant::now);
+            let began = std::time::Instant::now();
+            let next = stream.next_call()?;
+            self.times.stream += since(began);
+            let Some(call) = next else {
+                break;
+            };
             let issued = self.issued(&call);
             match self.ahead.remove(&self.position) {
                 Some(ranges) if self.snapshots && self.backend.snapshots() => {
@@ -910,10 +1070,15 @@ impl<'b, B: Backend> Player<'b, B> {
                 self.frame = Counts::default();
                 let now = std::time::Instant::now();
                 let began = self.frame_began.replace(now).unwrap_or(now);
+                let mut times = self.times;
+                times.gpu_busy = covered(&mut self.intervals);
+                self.times = Times::default();
+                self.intervals.clear();
                 self.report.ends.push(End {
                     wall_nanos: u64::try_from((now - began).as_nanos()).unwrap_or(u64::MAX),
                     resident_bytes: resident_bytes(),
                     live: self.backend.live(),
+                    times,
                 });
                 Ok(())
             }
@@ -963,12 +1128,12 @@ impl<'b, B: Backend> Player<'b, B> {
                     "encodeWaitForEvent:value:" => pending.waits.push((event, value)),
                     _ => pending.signals.push((event, value)),
                 }
-                self.backend.call(&call).map(drop)
+                self.run(&call).map(drop)
             }
             "setSignaledValue:" => {
                 let value = call.args.first().and_then(Value::as_uint);
                 let value = value.ok_or_else(|| invalid("setSignaledValue: of no value"))?;
-                self.backend.call(&call)?;
+                self.run(&call)?;
                 self.events.insert(call.receiver, value);
                 self.drain()
             }
@@ -1006,8 +1171,7 @@ impl<'b, B: Backend> Player<'b, B> {
         let pending = pending.ok_or_else(|| invalid("a commit of no command buffer"))?;
         pending.committed = true;
         self.committed.push(command_buffer);
-        self.backend
-            .call(&own_call("commit", command_buffer, 0, &[]))?;
+        self.run(&own_call("commit", command_buffer, 0, &[]))?;
         *self.fixed.entry(COMMITS).or_default() += 1;
         self.drain()
     }
@@ -1021,7 +1185,7 @@ impl<'b, B: Backend> Player<'b, B> {
     /// Make `part`, a command buffer of `queue`.
     fn part(&mut self, queue: u64, part: u64) -> Result<(), PlayError> {
         let call = own_call("commandBuffer", queue, part, &[]);
-        self.backend.call(&call)?;
+        self.run(&call)?;
         self.made(&call, part);
         Ok(())
     }
@@ -1085,13 +1249,16 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         let resolved = self.placed(Call { args, ..call });
         let resolved = self.uploaded(resolved)?;
-        let made = self.backend.call(&resolved)?;
+        let made = self.run(&resolved)?;
         self.track(&resolved);
         let object = resolved.result;
         if object == 0 {
             return Ok(());
         }
         self.made(&resolved, object);
+        if Cost::of(&resolved.selector) == Cost::Resource {
+            self.resources.insert(object);
+        }
         let address = resolved.answer("gpuAddress");
         let length = resolved.answer("gpuLength");
         if address.is_some() || length.is_some() {
@@ -1224,7 +1391,7 @@ impl<'b, B: Backend> Player<'b, B> {
             let offset = offset.ok_or_else(|| invalid("m2v.write of no offset"))?;
             let data = match data {
                 Value::Bytes(data) => data.clone(),
-                Value::Blob(hash) => stream.blob(hash)?,
+                Value::Blob(hash) => self.blob(stream, hash)?,
                 _ => return Err(invalid("m2v.write of no data")),
             };
             self.put(target, offset, data)?;
@@ -1239,7 +1406,7 @@ impl<'b, B: Backend> Player<'b, B> {
             self.relocate(&mut data, offset);
         }
         *self.fixed.entry(WRITTEN_BYTES).or_default() += data.len() as u64;
-        self.backend.write(target, offset, &data)
+        self.write_bytes(target, offset, &data)
     }
 
     /// Relocate `data`, which starts `offset` bytes into its target, and count what it found.
@@ -1256,7 +1423,7 @@ impl<'b, B: Backend> Player<'b, B> {
         recorded: Option<Hash>,
         left_out: &mut Counters,
     ) -> Result<(), PlayError> {
-        let bytes = self.uncounted(left_out, |player| player.backend.read(object))?;
+        let bytes = self.uncounted(left_out, |player| player.read_back(object))?;
         self.report.checks.push(Check {
             object,
             sha256: Sha256::digest(&bytes).into(),
@@ -1272,9 +1439,9 @@ impl<'b, B: Backend> Player<'b, B> {
         left_out: &mut Counters,
         work: impl FnOnce(&mut Self) -> Result<T, PlayError>,
     ) -> Result<T, PlayError> {
-        let before = self.backend.counters();
+        let before = self.counters();
         let done = work(self);
-        let own = grown(&self.backend.counters(), &before);
+        let own = grown(&self.counters(), &before);
         add(left_out, &own);
         add(&mut self.baseline, &own);
         done
@@ -1320,7 +1487,7 @@ impl<'b, B: Backend> Player<'b, B> {
         args: &[Value],
     ) -> Result<(), PlayError> {
         let call = own_call(selector, receiver, result, args);
-        self.backend.call(&call).map(drop)
+        self.run(&call).map(drop)
     }
 
     /// Play dispatch `call` with the Private buffer `ranges` around it: put each range's bytes
@@ -1365,13 +1532,13 @@ impl<'b, B: Backend> Player<'b, B> {
         self.own(device, "newBufferWithLength:options:", staging, &length)?;
         self.own(device, "newFence", fence, &[])?;
         for &(around, at) in &placed {
-            let mut before = stream.blob(&around.before)?;
+            let mut before = self.blob(stream, &around.before)?;
             sized(&around, &before)?;
             if self.addresses.holds(around.buffer) {
                 self.relocate(&mut before, around.location);
             }
             *self.fixed.entry(WRITTEN_BYTES).or_default() += around.length;
-            self.backend.write(staging, at, &before)?;
+            self.write_bytes(staging, at, &before)?;
         }
         self.blit_between(&made, fence, placed.iter().map(copy_in))?;
         self.step(stream, call, left_out)?;
@@ -1422,12 +1589,17 @@ impl<'b, B: Backend> Player<'b, B> {
         self.own(blit, "updateFence:", 0, &fenced)?;
         self.own(blit, "endEncoding", 0, &[])?;
         self.backend_release(blit)?;
-        self.backend.call(made)?;
+        self.run(made)?;
         self.report.splits += 1;
         self.own(encoder, "waitForFence:", 0, &fenced)?;
         if let Some(open) = self.encoders.get(&encoder) {
             for state in &open.state {
-                self.backend.call(state)?;
+                timed(
+                    &mut *self.backend,
+                    &mut self.times,
+                    state,
+                    Cost::of(&state.selector),
+                )?;
             }
         }
         Ok(())
@@ -1443,7 +1615,7 @@ impl<'b, B: Backend> Player<'b, B> {
         while let Some(snapshot) = self.done.pop_front() {
             let (staging, fence) = (snapshot.staging, snapshot.fence);
             let bytes = self.uncounted(left_out, |player| {
-                let bytes = player.backend.read(staging)?;
+                let bytes = player.read_back(staging)?;
                 player.backend_release(staging)?;
                 player.backend_release(fence)?;
                 Ok(bytes)
@@ -1510,9 +1682,54 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     fn backend_release(&mut self, object: u64) -> Result<(), PlayError> {
-        self.backend
-            .call(&own_call("release", object, 0, &[]))
-            .map(drop)
+        let cost = match self.resources.remove(&object) {
+            true => Cost::Resource,
+            false => Cost::Other,
+        };
+        let call = own_call("release", object, 0, &[]);
+        timed(&mut *self.backend, &mut self.times, &call, cost).map(drop)
+    }
+
+    /// Run `call` on the backend, its time counted by its selector (`Cost::of`).
+    fn run(&mut self, call: &Call) -> Result<Made, PlayError> {
+        timed(
+            &mut *self.backend,
+            &mut self.times,
+            call,
+            Cost::of(&call.selector),
+        )
+    }
+
+    /// Put `bytes` at `offset` of `target` on the backend, timed (`Times::write`).
+    fn write_bytes(&mut self, target: u64, offset: u64, bytes: &[u8]) -> Result<(), PlayError> {
+        let began = std::time::Instant::now();
+        let written = self.backend.write(target, offset, bytes);
+        self.times.write += since(began);
+        written
+    }
+
+    /// The bytes of `object` on the backend, timed (`Times::read`).
+    fn read_back(&mut self, object: u64) -> Result<Vec<u8>, PlayError> {
+        let began = std::time::Instant::now();
+        let bytes = self.backend.read(object);
+        self.times.read += since(began);
+        bytes
+    }
+
+    /// The runtime's counters now, timed (`Times::count`).
+    fn counters(&mut self) -> Counters {
+        let began = std::time::Instant::now();
+        let counters = self.backend.counters();
+        self.times.count += since(began);
+        counters
+    }
+
+    /// The bytes of blob `hash` of `stream`, timed (`Times::stream`).
+    fn blob(&mut self, stream: &mut StreamReader, hash: &Hash) -> Result<Vec<u8>, PlayError> {
+        let began = std::time::Instant::now();
+        let bytes = stream.blob(hash);
+        self.times.stream += since(began);
+        Ok(bytes?)
     }
 
     /// The committed command buffers that can complete, in commit order: each one whose queue's
@@ -1561,7 +1778,12 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         let mut split = false;
         for id in &ready {
+            let began = std::time::Instant::now();
             self.backend.wait(*id)?;
+            self.times.wait += since(began);
+            if let Some(interval) = self.backend.gpu_interval(*id) {
+                self.intervals.push(interval);
+            }
             let pending = self.pending.remove(id).expect("a pending command buffer");
             split |= !pending.snapshots.is_empty();
             self.done.extend(pending.snapshots);
@@ -1574,7 +1796,7 @@ impl<'b, B: Backend> Player<'b, B> {
             }
         }
         self.committed.retain(|id| !ready.contains(id));
-        let now = self.backend.counters();
+        let now = self.counters();
         let executed = grown(&now, &self.baseline);
         let executed = match split {
             false => executed,

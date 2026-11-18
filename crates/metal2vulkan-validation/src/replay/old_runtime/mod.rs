@@ -823,6 +823,16 @@ impl Backend for OldRuntime {
         }
     }
 
+    fn gpu_interval(&mut self, command_buffer: u64) -> Option<(u64, u64)> {
+        let Some(Object::CommandBuffer(done)) = self.objects.get(&command_buffer) else {
+            return None;
+        };
+        // Seconds of one host clock, as Metal's.
+        let (start, end) = (done.gpu_start_time().ok()?, done.gpu_end_time().ok()?);
+        let nanos = |seconds: f64| (seconds * 1e9) as u64;
+        (start > 0.0 && end >= start).then(|| (nanos(start), nanos(end)))
+    }
+
     fn read(&mut self, object: u64) -> Result<Vec<u8>, PlayError> {
         match self.objects.get(&object) {
             Some(Object::Buffer(buffer)) => {
@@ -892,6 +902,16 @@ impl Backend for OldRuntime {
                     + c.cmd_fill_buffer,
             ),
             ("pipelines_made", counts.variant_pipelines_made),
+            (
+                "compute_pipeline_create_nanos",
+                counts.compute_pipeline_create_nanos,
+            ),
+            (
+                "render_pipeline_create_nanos",
+                counts.render_pipeline_create_nanos,
+            ),
+            ("shader_cache_read_nanos", counts.shader_cache_read_nanos),
+            ("shader_cache_write_nanos", counts.shader_cache_write_nanos),
             ("device_memory_allocated", counts.device_memory_allocated),
             (
                 "vk_memory_allocations",
