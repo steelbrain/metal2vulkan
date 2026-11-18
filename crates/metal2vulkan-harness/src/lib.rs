@@ -363,6 +363,9 @@ pub trait BlitCommandEncoder<D: ComputeDevice> {
         value: u8,
     ) -> Result<()>;
 
+    /// `synchronizeResource:` of a buffer.
+    fn synchronize_resource(&mut self, buffer: &D::Buffer) -> Result<()>;
+
     /// `endEncoding`.
     fn end_encoding(self) -> Result<()>;
 }

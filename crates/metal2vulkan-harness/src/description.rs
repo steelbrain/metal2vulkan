@@ -43,6 +43,8 @@
 //!                                        copyFromTexture:...toBuffer: the other way
 //! fill-buffer BUFFER OFFSET LENGTH VALUE fillBuffer:range:value: of LENGTH bytes of BUFFER at
 //!                                        OFFSET with the byte VALUE, as copy-texture goes
+//! synchronize BUFFER                     synchronizeResource: of BUFFER, a managed one, as
+//!                                        copy-texture goes
 //! set-sampler INDEX FILTER ADDRESS COORDS
 //!                                        setSamplerState:atIndex: before the next dispatch, of a
 //!                                        sampler state of FILTER (nearest or linear) as its min
@@ -375,6 +377,8 @@ fn line(words: &[&str]) -> std::result::Result<Line, String> {
         ["fill-buffer", ..] => {
             return Err("fill-buffer takes BUFFER OFFSET LENGTH VALUE".to_owned())
         }
+        ["synchronize", buffer] => Line::Blit(Blit::Synchronize(number(buffer)?)),
+        ["synchronize", ..] => return Err("synchronize takes BUFFER".to_owned()),
         ["set-sampler", index, filter, address, coordinates] => Line::Binding(Binding::Sampler {
             index: number(index)?,
             sampler: SamplerPlan {

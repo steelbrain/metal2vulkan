@@ -574,6 +574,7 @@ impl<D: ComputeDevice> Harness<D> {
                             fill.range.clone(),
                             fill.value,
                         )?,
+                        &Blit::Synchronize(at) => encoder.synchronize_resource(buffer(at)?)?,
                     }
                 }
                 encoder.end_encoding()?;

@@ -352,6 +352,13 @@ impl crate::BlitCommandEncoder<runtime::Device> for runtime::BlitCommandEncoder 
         )?)
     }
 
+    fn synchronize_resource(&mut self, buffer: &runtime::Buffer) -> Result<()> {
+        let resource = runtime::ResourceRef::Buffer(buffer);
+        Ok(runtime::BlitCommandEncoder::synchronize_resource(
+            self, resource,
+        )?)
+    }
+
     fn end_encoding(self) -> Result<()> {
         Ok(runtime::BlitCommandEncoder::end_encoding(self)?)
     }

@@ -640,6 +640,13 @@ impl crate::BlitCommandEncoder<Device> for rt::BlitCommandEncoder {
         rt::BlitCommandEncoder::fill_buffer(self, &buffer.buffer, range, value).map_err(error)
     }
 
+    /// Nothing for a `Managed` buffer, a `Private` one here (the module's docs), as for any buffer
+    /// without a device copy.
+    fn synchronize_resource(&mut self, buffer: &Buffer) -> Result<()> {
+        let resource = rt::Resource::Buffer(&buffer.buffer);
+        rt::BlitCommandEncoder::synchronize_resource(self, resource).map_err(error)
+    }
+
     fn end_encoding(self) -> Result<()> {
         rt::BlitCommandEncoder::end_encoding(self);
         Ok(())

@@ -388,6 +388,8 @@ pub enum Blit {
     ToBuffer(BufferCopy),
     /// `fillBuffer:range:value:`.
     Fill(Fill),
+    /// `synchronizeResource:` of one of the plan's buffers, by index.
+    Synchronize(usize),
 }
 
 impl Blit {
@@ -397,6 +399,14 @@ impl Blit {
             Blit::Texture(copy) => copy.problem(textures),
             Blit::FromBuffer(copy) | Blit::ToBuffer(copy) => copy.problem(buffers, textures),
             Blit::Fill(fill) => fill.problem(buffers),
+            &Blit::Synchronize(buffer) => match buffers.get(buffer) {
+                None => Some(format!("buffer {buffer} is not made before it")),
+                Some(made) if made.storage != Storage::Managed => Some(format!(
+                    "buffer {buffer} is not managed, and Metal's validation stops a synchronize \
+                     of it"
+                )),
+                Some(_) => None,
+            },
         }
     }
 }

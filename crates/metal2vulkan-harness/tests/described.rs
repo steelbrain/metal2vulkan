@@ -17,8 +17,9 @@ use metal2vulkan_harness::{authored, description, old, rt};
 /// The description: each fill, both storage modes, a binding at an offset, bindings that stay
 /// set for the dispatches after, both dispatch calls, `repeat`, both comparisons, a threadgroup
 /// memory length, textures of each source with their bytes written by the CPU, a sampler
-/// state, a texture copy from a slice of an array into a 2D texture, and a Private texture
-/// written from a buffer and read into another around a fill.
+/// state, a texture copy from a slice of an array into a 2D texture, a Private texture
+/// written from a buffer and read into another around a fill, and a Managed buffer filled and
+/// synchronized.
 const DESCRIPTION: &str = "\
 # Synthetic workloads over the authored kernels.
 workload scale kernels.metallib
@@ -130,6 +131,15 @@ set-bytes 1 4 hex 20000000
 dispatch texels_out threadgroups 2 1 1 16 16 1
 check 1 exact
 check 2 exact
+
+workload synced kernels.metallib
+buffer 1024 managed words 41
+fill-buffer 0 16 64 90
+synchronize 0
+set-buffer 0 0
+set-bytes 1 4 words 3
+dispatch lcg_step threadgroups 1 1 1 256 1 1
+check 0 exact
 ";
 
 #[test]
@@ -295,7 +305,7 @@ fn described_workloads_match_between_the_old_runtime_and_the_new() {
             assert_eq!(got, want);
         }
     }
-    assert_eq!(described.len(), 11);
+    assert_eq!(described.len(), 12);
 }
 
 /// The bytes of `count` of SplitMix64's words from `seed`, as a description's `words` fill.

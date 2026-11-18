@@ -610,6 +610,12 @@ fn a_faulty_description_is_refused_naming_its_line() {
             "fill-buffer 1 0",
             "fill-buffer takes BUFFER OFFSET LENGTH VALUE",
         ),
+        ("synchronize 2", "buffer 2 is not made before it"),
+        (
+            "synchronize 1",
+            "buffer 1 is not managed, and Metal's validation stops a synchronize of it",
+        ),
+        ("synchronize", "synchronize takes BUFFER"),
     ];
     for (line, why) in refusals {
         assert_eq!(blit(line), format!("line 7: {why}"), "{line}");
