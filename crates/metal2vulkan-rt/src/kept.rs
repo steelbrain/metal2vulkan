@@ -4,7 +4,9 @@
 //! every later use, and every binding slot an encoder fills with it, borrows the kept one
 //! ([`Lent`]) and changes no count. The lists and their address sets keep their capacity from
 //! one recording of a queue to the next, so a recording past the first allocates for its objects
-//! only where it uses more than any before it did.
+//! only where it uses more than any before it did. They live in one allocation that moves whole
+//! between the queue and its command buffers ([`Objects`]), so a command buffer allocates and frees
+//! none of it.
 
 use crate::buffer::Buffer;
 use crate::pipeline::ComputePipelineState;
@@ -14,7 +16,7 @@ use crate::texture::Texture;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::mem::ManuallyDrop;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 /// A handle to a shared object that is one `Arc` and nothing else.
@@ -147,9 +149,31 @@ impl<T: Handle> Kept<T> {
     }
 }
 
-/// Every object a recording keeps, by kind.
+/// Every object a recording keeps, by kind ([`ByKind`]), in one allocation that moves whole: from
+/// its queue to a command buffer made, and back at the command buffer's retirement, for the next
+/// one made. The thread that makes a command buffer allocates none of it, so the thread that
+/// retires one frees nothing the making thread allocated; only a queue's first command buffers,
+/// one per command buffer it holds at once, allocate one.
 #[derive(Default)]
-pub(crate) struct Objects {
+pub(crate) struct Objects(Box<ByKind>);
+
+impl Deref for Objects {
+    type Target = ByKind;
+
+    fn deref(&self) -> &ByKind {
+        &self.0
+    }
+}
+
+impl DerefMut for Objects {
+    fn deref_mut(&mut self) -> &mut ByKind {
+        &mut self.0
+    }
+}
+
+/// The lists of each kind a recording keeps.
+#[derive(Default)]
+pub(crate) struct ByKind {
     pub(crate) buffers: Kept<Buffer>,
     pub(crate) textures: Kept<Texture>,
     pub(crate) samplers: Kept<SamplerState>,
@@ -157,7 +181,7 @@ pub(crate) struct Objects {
     pub(crate) render_pipelines: Kept<RenderPipelineState>,
 }
 
-impl Objects {
+impl ByKind {
     /// Releases every object, keeping each list's capacity for the next recording.
     pub(crate) fn clear(&mut self) {
         self.buffers.clear();

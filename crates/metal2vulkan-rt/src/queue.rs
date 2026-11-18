@@ -35,8 +35,9 @@ pub(crate) struct QueueInner {
 }
 
 /// A queue's live command buffers: those made and not yet retired, and the kept-object lists
-/// of retired ones, empty, with their capacity (`crate::kept`): together at most the queue's
-/// maximum, since each list is a live command buffer's or one retired since.
+/// of retired ones, empty, with their capacity, each in the allocation it came in
+/// (`crate::kept::Objects`): together at most the queue's maximum, since each list is a live
+/// command buffer's or one retired since.
 struct Live {
     count: u32,
     objects: Vec<Objects>,
@@ -101,7 +102,7 @@ impl CommandQueue {
         Ok(CommandBuffer::new(
             Arc::clone(&self.inner),
             self.device.clone(),
-            Box::new(kept),
+            kept,
         ))
     }
 
@@ -154,9 +155,8 @@ impl QueueInner {
     /// and `kept`, its kept-object lists emptied, for the next command buffer made. Its gauge
     /// falls first, so a command buffer made in the freed place never reads one more live than
     /// the queue holds.
-    pub(crate) fn release(&self, kept: Box<Objects>) {
+    pub(crate) fn release(&self, kept: Objects) {
         self.counters.fall(Gauge::CommandBuffers);
-        let kept = *kept;
         let mut live = lock(&self.live);
         live.count -= 1;
         live.objects.push(kept);
