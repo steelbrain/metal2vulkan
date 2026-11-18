@@ -171,35 +171,38 @@ impl Ring {
     }
 }
 
-/// The device's staging region: its buffer, the allocation of its own that the buffer spans, its
-/// mapping, and its ring.
+/// A ring of host-visible bytes: its buffer, the allocation of its own that the buffer spans, its
+/// mapping, and its ring. The device's staging region is one, of [`REGION_LEN`] bytes; the
+/// capture ring of Managed buffers' changed ranges is another (`crate::capture`).
 pub(crate) struct Region {
     pub(crate) buffer: vk::Buffer,
     memory: vk::DeviceMemory,
     host: Mapping,
+    len: u64,
     pub(crate) ring: Ring,
 }
 
 impl Region {
-    /// A region of [`REGION_LEN`] bytes, its pages written once.
+    /// A region of `len` bytes, its pages written once.
     ///
     /// Err: what [`memory::allocate`] returns; [`Error::Vulkan`] where the buffer cannot be made,
     /// bound or mapped.
-    pub(crate) fn new(core: &Core) -> Result<Region, Error> {
-        let (buffer, memory, host) = host_buffer(core, REGION_LEN)?;
+    pub(crate) fn new(core: &Core, len: u64) -> Result<Region, Error> {
+        let (buffer, memory, host) = host_buffer(core, len)?;
         // SAFETY: the mapping spans the region's bytes, which nothing else uses yet.
-        unsafe { host.get().as_ptr().write_bytes(0, REGION_LEN as usize) };
+        unsafe { host.get().as_ptr().write_bytes(0, len as usize) };
         Ok(Region {
             buffer,
             memory,
             host,
-            ring: Ring::new(REGION_LEN),
+            len,
+            ring: Ring::new(len),
         })
     }
 
-    /// The host address of the byte at `offset`, at most [`REGION_LEN`].
+    /// The host address of the byte at `offset`, at most the region's length.
     pub(crate) fn host(&self, offset: u64) -> Mapping {
-        debug_assert!(offset <= REGION_LEN);
+        debug_assert!(offset <= self.len);
         // SAFETY: the mapping spans the region, and `offset` is in it or one past its end.
         Mapping::new(unsafe { self.host.at(offset) })
     }

@@ -168,18 +168,26 @@ in its memory.
   a block, whether Metal's `newBufferWithLength:`, a heap's or a no-copy buffer stands behind it.
 - `Device::new_managed_buffer(block, offset, length, copied)` makes a Managed buffer over a range
   of a Shared block (`Refusal::ManagedBlockNotShared` for a Private one): the consumer's bytes,
-  which `contents` answers. The device's memory-type query picks its form. Where the Shared type
-  is device-local, the buffer is its bytes, as a Shared buffer is, and `did_modify_range` does
-  nothing. Elsewhere shaders reach a device copy at `gpu_address`: a place in a copy block, a
-  Private block of the pool of 16 MiB (of the copy's own length past that) that holds device
-  copies alone. Its
-  first `copied` bytes are copied from the consumer's and the rest zeroed, in the upload.
-  `Buffer::did_modify_range(start, length)` marks a range changed (`Refusal::ModifiedRange` past
-  the buffer): the upload copies it into the device copy as it goes, ahead of every command buffer
-  committed after the call on every queue, one copy command per buffer with its ranges merged where
-  they overlap or touch, and no CPU copy. The copy reads the consumer's bytes when the GPU reaches
-  it. Each change is one of the upload's 4,096 calls, so changes past them submit it and wait. A
-  command buffer keeps each device copy it uses until it retires; the copy's place is free then.
+  which `contents` answers. Vulkan's device type picks its form, as `Device::has_unified_memory`
+  answers it. On an integrated or CPU device the buffer is its bytes, as a Shared buffer is, and
+  `did_modify_range` does nothing. Elsewhere shaders reach a device copy at `gpu_address`: a place
+  in a copy block, a Private block of the pool of 16 MiB (of the copy's own length past that)
+  that holds device copies alone. The rest past its first `copied` bytes is zeroed in the upload,
+  and those bytes are named as `did_modify_range` names a range.
+  `Buffer::did_modify_range(start, length)` names a range changed (`Refusal::ModifiedRange` past
+  the buffer), merged with the buffer's others where they overlap or touch, and submits nothing.
+  The next commit of a command buffer with commands, on any queue, takes the bytes of every range
+  named since: on the committing thread, before `commit` returns, it copies each once into a
+  64 MiB staging ring of the Shared type, and the copies from the ring into the device copies go
+  ahead of that command buffer's commands, after every earlier command on the device. So the
+  bytes are taken at the commit; Metal takes them shortly after, before the command buffer is
+  scheduled. A write or a `did_modify_range` made while a command buffer runs does not reach it.
+  Commits take turns while they copy, so command buffers keep the order of their captures. A
+  commit that finds the ring full waits for its oldest copy's submission to complete; where that
+  copy belongs to a command buffer not yet submitted, the held groups go at once and the rest is
+  read as below (Known gaps). `Metrics::managed_bytes_captured`, `managed_bytes_live` and
+  `capture_waits` count them. A command buffer keeps each device copy it uses until it retires;
+  the copy's place is free then.
 
 The consumer's ranges follow Metal's retention: it reuses a range only once the work that named
 the buffer there before has completed. A command buffer keeps each block it uses until it retires,
@@ -291,8 +299,7 @@ made, with no lock, and never rewritten for layouts.
   leaves the buffer is refused (`Refusal::ManagedTextureBytes`), as is a buffer the host does not
   reach. `Texture::upload_region(region, level, slice)` copies a region of the named bytes into
   the image by the device, with no CPU copy, ahead of every command buffer committed after the
-  call on every queue, as `did_modify_range` copies a Managed buffer's; the copy reads the bytes
-  when the GPU reaches it. On such a texture `replace_region` writes the named bytes and uploads
+  call on every queue; the copy reads the bytes when the GPU reaches it. On such a texture `replace_region` writes the named bytes and uploads
   them, and `get_bytes` reads the named bytes, with no submission, as Metal reads a Managed
   texture's CPU copy.
 - A heap is a range of a Private block the consumer took at the heap's creation (`HeapRange`:
@@ -345,12 +352,13 @@ made, with no lock, and never rewritten for layouts.
     A guest that waits for a completion before writing has, by that fact, a command buffer not in
     a held group.
   - Over a Managed buffer's device copy, only at Metal's own Managed events, each texture keeping
-    one flag of each kind: in, where a `did_modify_range` met its range (the upload's copy of the
-    range going first) or device work wrote the buffer (a binding whose compiled interface writes
-    it, a blit or fill into it), by the upload that leads the next submission using it, from the
-    device copy; back, where device work wrote the texture, before the next reader of the device
-    copy (a binding that reaches the buffer, a blit from or into it, a copy into another texture
-    over a range that meets its, a `synchronize_resource`, a `did_modify_range` over it): a
+    one flag of each kind: in, after a `did_modify_range` over its range, by the commit that
+    captures the range, after its copies into the device copy; and where device work wrote the
+    buffer (a binding whose compiled interface writes it, a blit or fill into it), by the upload
+    that leads the next submission using it; both from the device copy. Back, where device work
+    wrote the texture, before the next reader of the device copy (a binding that reaches the
+    buffer, a blit from or into it, a copy into another texture over a range that meets its, a
+    `synchronize_resource`, a capture of a range over it, ahead of its copies): a
     reader recorded after the write makes it in its own commands, and the upload that leads a
     submission, which runs before the submission's commands, only once the write's segment was
     submitted; that submission also owes each other texture over a range that meets its a copy
@@ -643,6 +651,13 @@ that touch blocks first.
   and Metal leaves a resource ID that names no live resource of the access undefined; here it can
   fault as a bad address does, with the same consequences. An index within an array that no live
   object owns reads its null descriptor or default sampler, with no fault.
+- A commit that finds the Managed capture ring (64 MiB) full of copies of command buffers not yet
+  submitted, its own among them, does not wait for them: such a command buffer may wait on an
+  event the host signals later. The rest of its ranges are copied into the device copies from the
+  consumer's bytes as the copy runs, so a write the host makes between that commit and the copy
+  reaches the command buffer, where Metal's command buffer reads the bytes of its commit.
+  `Metrics::managed_bytes_live` counts those bytes. A frame that names more than the ring holds
+  takes this path for the rest.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 - A fence orders the encoders of one queue: an encoder of another queue that updates or waits on
   it is refused (`Gap::FenceOtherQueue`), as Metal's fence orders one queue and `MTLEvent` orders
@@ -1255,8 +1270,10 @@ only for a created device, so `PhysicalDevice::check` finds a type with each set
 | Shared | `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT`, `VK_MEMORY_PROPERTY_HOST_CACHED_BIT` | Shared storage, which the host maps and reads |
 | ring | `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`, `VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT`, `VK_MEMORY_PROPERTY_HOST_COHERENT_BIT` | the parameter ring, which the host writes with no flush and the GPU reads |
 
-Whether the Shared type also has `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` decides a Managed buffer's
-form: without it, shaders reach a device copy in Private memory (Memory blocks and buffers).
+Vulkan's device type, not the Shared type's flags, decides a Managed buffer's form: on a device
+that is neither integrated nor a CPU, shaders reach a device copy in Private memory (Memory blocks
+and buffers). A 780M's Shared type lacks `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`, and its Managed
+buffers are their Shared ranges all the same.
 
 On a discrete GPU the Shared type is system memory, as Metal keeps a shared resource on a discrete
 Mac's GPU: shaders read a Shared buffer across the host link, and Private and Managed storage put

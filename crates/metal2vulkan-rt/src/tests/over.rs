@@ -330,7 +330,7 @@ mod on_device {
             assert!(
                 image(name, &over) == rows(&bytes, offset, pitch),
                 "{name}: the image over a Managed buffer after replace_region (device copy: {})",
-                !core.shared_is_device_local()
+                !core.unified_memory()
             );
 
             drop((texture, plain, buffer, command_buffer, queue, over, managed));

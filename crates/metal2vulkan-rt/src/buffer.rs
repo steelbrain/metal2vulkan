@@ -1,12 +1,13 @@
 //! Buffers: views of a range of a block, with no Vulkan object of their own; a Managed buffer's
 //! device copy, where the device has one, is a place in a copy block ([`crate::places`]).
 
+use crate::capture::Named;
 use crate::counters::Gauge;
 use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
 use crate::fill;
 use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
-use crate::over::{self, ManagedOvers};
+use crate::over::ManagedOvers;
 use crate::places::Place;
 use crate::submit::Held;
 use ash::vk;
@@ -45,8 +46,8 @@ struct Inner {
     /// A Managed buffer's device copy, on a device whose Shared memory is not device-local.
     copy: Option<Arc<DeviceCopy>>,
     /// Its textures over it in images of their own, as a Managed buffer with a device copy keeps
-    /// them (`crate::over::ManagedOvers`).
-    overs: ManagedOvers,
+    /// them (`crate::over::ManagedOvers`); a capture of its ranges holds them too.
+    overs: Arc<ManagedOvers>,
 }
 
 /// A Managed buffer's device copy: a place in a copy block of Private memory, which shaders reach.
@@ -160,13 +161,15 @@ impl Device {
     /// holds are the consumer's bytes, which [`Buffer::contents`] answers. Which form the buffer
     /// takes is the device's memory-type query's answer:
     ///
-    /// - where the Shared memory type is device-local, the buffer is its bytes, as a Shared buffer
-    ///   is, and [`Buffer::did_modify_range`] does nothing;
+    /// - where Vulkan's device type is integrated or CPU ([`Device::has_unified_memory`]), the
+    ///   buffer is its bytes, as a Shared buffer is, and [`Buffer::did_modify_range`] does
+    ///   nothing;
     /// - elsewhere shaders reach a device copy in Private memory the device holds, at
-    ///   [`Buffer::gpu_address`]. Its first `copied` bytes (all of them where `copied` is the
-    ///   length or more) are copied from the consumer's bytes, and the rest are zeroed, ahead of
-    ///   every command buffer committed after this call; [`Buffer::did_modify_range`] copies a
-    ///   range again. The consumer's own bytes are as it wrote them.
+    ///   [`Buffer::gpu_address`]. The rest past its first `copied` bytes is zeroed, ahead of every
+    ///   command buffer committed after this call, and those first bytes (all of them where
+    ///   `copied` is the length or more) are named as [`Buffer::did_modify_range`] names a range:
+    ///   the next commit takes them from the consumer's bytes. The consumer's own bytes are as it
+    ///   wrote them.
     ///
     /// Metal keeps such a copy on a Mac with a discrete GPU. The consumer chooses the range of its
     /// bytes, as for [`Device::new_buffer`]. A buffer a command buffer uses holds its device copy
@@ -211,7 +214,7 @@ impl Device {
         // SAFETY: `offset` is inside the block.
         let contents = Some(Mapping::new(unsafe { mapping.at(offset) }));
         let core = self.core();
-        if core.shared_is_device_local() {
+        if core.unified_memory() {
             return Ok(self.buffer(block, offset, length, contents, None));
         }
         let (place, copy_block) = match core.copies.place(core, length, COPY_ALIGN) {
@@ -252,10 +255,11 @@ impl Device {
             )?;
             core.counters.zeroed(length - copied);
         }
+        let buffer = self.buffer(block, offset, length, contents, Some(copy));
         if copied > 0 {
-            core.work.modify(core, &copy, &block, offset, 0, copied)?;
+            buffer.did_modify_range(0, copied)?;
         }
-        Ok(self.buffer(block, offset, length, contents, Some(copy)))
+        Ok(buffer)
     }
 
     /// A new buffer's handle, counted in [`Gauges::buffers`](crate::Gauges::buffers).
@@ -277,7 +281,7 @@ impl Device {
                 length,
                 contents,
                 copy,
-                overs: ManagedOvers::default(),
+                overs: Arc::default(),
             }),
         }
     }
@@ -294,15 +298,20 @@ impl Buffer {
     }
 
     /// `didModifyRange:`: the consumer changed `length` bytes from `start` of the buffer's bytes.
-    /// Of a Managed buffer with a device copy, the next submission's upload copies them into the
-    /// copy, ahead of every command buffer committed after this call on every queue; the copy
-    /// reads the bytes when the GPU reaches it, so a later write the consumer makes before then
-    /// may be seen. Of any other buffer it does nothing, as the GPU reads the consumer's bytes.
+    /// Of a Managed buffer with a device copy, the range is named, and the next commit of a command
+    /// buffer with commands, on any queue, copies the consumer's bytes of every range named since
+    /// into staging memory before it returns, once each, merged where they overlap or touch. The
+    /// copies into the device copy, and into the images of its textures over the range in images
+    /// of their own, go ahead of that command buffer's commands. So the command buffers committed
+    /// after this call read the bytes as they were at that commit; Metal takes them shortly after
+    /// the commit, before the command buffer is scheduled. A write or a didModifyRange made while
+    /// a command buffer runs does not reach it. Where the staging memory is full of copies not yet
+    /// submitted, the rest is read from the consumer's bytes when the copy runs, as
+    /// [`Metrics::managed_bytes_live`](crate::Metrics::managed_bytes_live) counts. Of any other
+    /// buffer it does nothing, as the GPU reads the consumer's bytes.
     ///
     /// Err: [`Refusal::ModifiedRange`] for a range that leaves the buffer; for a copy,
-    /// [`Error::Quiesced`], [`Error::Vulkan`] where the upload's command buffer cannot be made,
-    /// and with `VK_ERROR_DEVICE_LOST` where the device is lost while the call waits for the
-    /// upload to have room.
+    /// [`Error::Quiesced`].
     pub fn did_modify_range(&self, start: u64, length: u64) -> Result<(), Error> {
         let inner = &self.inner;
         let end = (start.checked_add(length))
@@ -318,23 +327,13 @@ impl Buffer {
         if length == 0 {
             return Ok(());
         }
-        let core = inner.device.core();
-        // A texture over the range in an image of its own owes its copy in; its copy back, owed,
-        // goes first, so the consumer's bytes land over it (`crate::over::ManagedOvers`).
-        if inner.overs.any() {
-            for (_, back, image) in over::backs(self, Some((start, end)), false) {
-                let held = [Held::Texture(image), Held::Copy(Arc::clone(copy))];
-                // SAFETY: recording under the work lock; the upload holds the image and the
-                // device copy, and the image is in its home layout between commands.
-                core.work
-                    .upload(core, None, held, |device, command| unsafe {
-                        over::record_side(device, command, &[back], false, &core.counters)
-                    })?;
-            }
-            inner.overs.modified(start, end);
-        }
-        core.work
-            .modify(core, copy, &inner.block, inner.offset, start, end)
+        let named = Named {
+            copy,
+            cpu: &inner.block,
+            offset: inner.offset,
+            overs: &inner.overs,
+        };
+        inner.device.core().work.modify(named, start, end)
     }
 
     /// `length`.
@@ -366,7 +365,7 @@ impl Buffer {
     /// Its textures over its device copy in images of their own, where it is a Managed buffer
     /// with a device copy and has one (`crate::over::ManagedOvers`).
     pub(crate) fn managed_overs(&self) -> Option<&ManagedOvers> {
-        (self.inner.copy.is_some() && self.inner.overs.any()).then_some(&self.inner.overs)
+        (self.inner.copy.is_some() && self.inner.overs.any()).then_some(&*self.inner.overs)
     }
 
     /// Its textures over it in images of their own, as it keeps them.

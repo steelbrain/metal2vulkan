@@ -2,6 +2,7 @@
 //! states from creation to retirement.
 
 use crate::buffer::{Buffer, DeviceCopy};
+use crate::capture::CopyIn;
 use crate::counters::Metric;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
@@ -166,11 +167,14 @@ pub(crate) struct Gpu {
     /// The images of released textures whose copies back the commands make, kept until the
     /// command buffer retires.
     pub(crate) images: Vec<Arc<Image>>,
+    /// What its commit captured of Managed buffers' changed ranges (`crate::capture`): each
+    /// copy-in goes ahead of its first segment's commands, and is kept until it retires.
+    pub(crate) copy_ins: Vec<CopyIn>,
 }
 
 impl Gpu {
     /// Nothing for the GPU: no segment holds commands, a wait or a signal. Such a command buffer
-    /// records no timestamps and takes no submission.
+    /// records no timestamps, takes no submission and captures nothing.
     pub(crate) fn is_empty(&self) -> bool {
         (self.segments.iter()).all(|segment| {
             segment.command.is_none() && segment.waits.is_empty() && segment.signals.is_empty()
@@ -258,6 +262,7 @@ impl CommandBuffer {
                             ring: Writes::default(),
                             managed: false,
                             images: Vec::new(),
+                            copy_ins: Vec::new(),
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -406,28 +411,41 @@ impl CommandBuffer {
         let began = crate::host_time();
         // The device is not quiet: the pool frees no idle allocation for a while.
         core.pool.worked(began);
-        let mut work = core.work.lock();
+        let turn = core.work.turn();
+        let work = core.work.lock();
         core.counters
             .commit_lock_wait(crate::host_time().saturating_sub(began));
         if work.closed() {
             return Err(Error::Quiesced);
         }
+        // With commands, it takes the Managed buffers' ranges named since the last capture
+        // (`crate::capture`); one with none leaves them for the next.
+        let empty = self.state().open()?.gpu.is_empty();
+        let (mut work, copy_ins) = match empty || work.lost() {
+            true => (work, Vec::new()),
+            false => core.work.capture(&core, work)?,
+        };
         let mut state = self.state();
-        state.open()?;
+        if let Err(error) = state.open() {
+            work.carry(copy_ins);
+            return Err(error);
+        }
         let mut building = state
             .building
             .take()
             .expect("an open command buffer is recording");
         if let Err(error) = building.finish() {
             state.building = Some(building);
+            work.carry(copy_ins);
             return Err(error);
         }
         let Building {
             device,
-            gpu,
+            mut gpu,
             handlers,
             ..
         } = building;
+        gpu.copy_ins = copy_ins;
         state.times.kernel_start = times::host_time();
         let pending = Pending {
             seq: work.seq(),
@@ -453,6 +471,7 @@ impl CommandBuffer {
             drop(work);
             core.work.wake();
         }
+        drop(turn);
         drop(core);
         drop(last);
         Ok(())
@@ -1038,9 +1057,13 @@ pub(crate) fn retire(
         ring,
         managed: _,
         images,
+        copy_ins,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
+    }
+    for copy_in in copy_ins {
+        core.recorders.give_back(core, copy_in.recorder);
     }
     ring.give_back(core);
     drop((

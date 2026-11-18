@@ -810,8 +810,10 @@ impl Device {
         let texture = Texture {
             inner: Arc::new(inner),
         };
+        core.work.home(core, &texture.inner.image)?;
         // Over a Managed buffer's device copy, its buffer keeps what Metal's Managed events owe it
-        // (`crate::over::ManagedOvers`).
+        // (`crate::over::ManagedOvers`), once the move to its home layout goes ahead of every
+        // later commit, a capture's copy in among them.
         if let (Some(buffer), Some((_, copy)), Some(unit)) = (
             texture.managed_over(),
             texture.copied_over(),
@@ -825,7 +827,6 @@ impl Device {
             let image = Arc::clone(&texture.inner.image);
             (buffer.over_entries()).add(texture.inner.id, image, copy, (place.offset, end));
         }
-        core.work.home(core, &texture.inner.image)?;
         Ok(texture)
     }
 }
@@ -2571,9 +2572,8 @@ impl Texture {
     /// ([`Device::new_managed_texture`]) of `region` of `level` and `slice`, a 3D texture's slice
     /// being 0, which the consumer has written: what Metal does for a Managed texture's CPU write.
     /// The upload copies them from the named buffer straight into the image, with no CPU copy,
-    /// ahead of every command buffer committed after this call on every queue, as
-    /// [`Buffer::did_modify_range`] copies a Managed buffer's bytes; the copy reads the bytes when
-    /// the GPU reaches it. [`Texture::replace_region`] on such a texture writes the named bytes,
+    /// ahead of every command buffer committed after this call on every queue; the copy reads the
+    /// bytes when the GPU reaches it. [`Texture::replace_region`] on such a texture writes the named bytes,
     /// then calls this. An empty region copies nothing.
     ///
     /// Err: [`Refusal::ManagedTextureBytes`] for a texture without named bytes, or a depth or

@@ -241,7 +241,7 @@ mod on_device {
     #[test]
     fn every_device_copies_a_texture_over_a_managed_buffer_at_its_events() {
         each_device("over managed", |name, _, device| {
-            if device.core().shared_is_device_local() {
+            if device.core().unified_memory() {
                 println!("over managed: {name}: no device copy, the Shared rule");
                 return;
             }
@@ -477,7 +477,7 @@ entry:
             FunctionDescriptor::new(function),
         ));
         each_device("over untouched", |name, _, device| {
-            if device.core().shared_is_device_local() {
+            if device.core().unified_memory() {
                 println!("over untouched: {name}: no device copy, the Shared rule");
                 return;
             }

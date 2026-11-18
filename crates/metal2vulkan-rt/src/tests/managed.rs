@@ -1,16 +1,18 @@
 //! Managed buffers: changed ranges merge where they overlap or touch; and, under a device cfg, on
-//! every device of the cfg's kind, in the form the device's memory-type query picks: with a device
-//! copy where Shared memory is not device-local, the copy holds the consumer's first bytes and
-//! zeros after them, a changed range reaches it at the next submission and a range not marked
-//! changed does not, and changes past the upload's calls submit it; without one, shaders read the
-//! consumer's bytes as they are and a changed range submits nothing. A range past the buffer and a
+//! every device of the cfg's kind, in the form Vulkan's device type picks: with a device copy
+//! where the device is neither integrated nor a CPU, the copy holds the consumer's first bytes and
+//! zeros after them, a changed range reaches it at the next commit and a range not marked changed
+//! does not, and a change submits nothing; without one, shaders read the consumer's bytes as they
+//! are. A command buffer reads the bytes of its commit, not those written and named after it
+//! while it waits, where there is a device copy; a write after the range is named and before the
+//! commit is seen. A range past the capture ring arrives whole. A range past the buffer and a
 //! Managed buffer over a Private block are refused, and every gauge reads zero after teardown.
 //!
 //! Managed textures, on every device: the image takes the named bytes of a region at its upload
 //! and nothing outside it, `get_bytes` reads the named bytes, `replace_region` writes them and
 //! uploads them, and places that do not lie as a copy reads them are refused.
 
-use crate::submit::merge;
+use crate::capture::merge;
 
 #[test]
 fn changed_ranges_merge_where_they_overlap_or_touch() {
@@ -43,19 +45,21 @@ fn changed_ranges_merge_where_they_overlap_or_touch() {
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::submit::UPLOAD_ENTRIES;
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::capture::CAPTURE_LEN;
+    use crate::tests::command::on_device::{each_device, finished, Arena};
+    use crate::tests::compute::on_device::{add, WORDS};
     use crate::{
-        Buffer, BytesPlace, Device, Error, MemoryClass, PixelFormat, Refusal, Region, StorageMode,
-        TextureDescriptor, TextureType, TextureUsage,
+        Buffer, BytesPlace, CommandBuffer, ComputePipelineState, Device, DispatchType, Error,
+        MemoryClass, PixelFormat, Refusal, Region, StorageMode, TextureDescriptor, TextureType,
+        TextureUsage,
     };
     use ash::vk;
 
     const LEN: u64 = 64 << 10;
 
-    /// The bytes shaders reach at `managed`'s address, copied by the GPU into `into`, a Shared
-    /// buffer as long.
-    fn device_bytes(device: &Device, managed: &Buffer, into: &Buffer) -> Vec<u8> {
+    /// The bytes shaders reach at `managed`'s address, `len` of them, copied by the GPU into
+    /// `into`, a Shared buffer as long.
+    fn device_bytes(device: &Device, managed: &Buffer, into: &Buffer, len: u64) -> Vec<u8> {
         let queue = device.new_command_queue(1).expect("a queue");
         let command_buffer = queue.command_buffer().expect("a command buffer");
         let (source, from) = managed.device_range();
@@ -65,7 +69,7 @@ mod on_device {
                 let region = vk::BufferCopy {
                     src_offset: from,
                     dst_offset: to,
-                    size: LEN,
+                    size: len,
                 };
                 // SAFETY: the command buffer is recording; both ranges are the buffers', which it
                 // keeps.
@@ -76,7 +80,7 @@ mod on_device {
         finished("the copy", &command_buffer);
         let contents = into.contents().expect("a Shared buffer");
         // SAFETY: the copy into the buffer completed, and its writes reach the host.
-        unsafe { std::slice::from_raw_parts(contents.as_ptr(), LEN as usize) }.to_vec()
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) }.to_vec()
     }
 
     /// Writes `bytes` at `at` in the consumer's bytes of `managed`.
@@ -90,11 +94,18 @@ mod on_device {
         };
     }
 
+    /// The first `len` bytes of a Shared buffer.
+    fn read(buffer: &Buffer, len: usize) -> Vec<u8> {
+        let contents = buffer.contents().expect("a Shared buffer");
+        // SAFETY: the buffer is at least `len` long, and no GPU work writes it meanwhile.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr(), len) }.to_vec()
+    }
+
     #[test]
     fn every_device_copies_a_managed_buffer_s_changed_ranges() {
         each_device("managed", |name, _, device| {
             let core = device.core();
-            let copied = !core.shared_is_device_local();
+            let copied = !core.unified_memory();
             let counters = device.counters();
             let cpu = (device.take_block(MemoryClass::Shared, 2 * LEN))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -114,7 +125,7 @@ mod on_device {
                 expected[LEN as usize / 2..].fill(0);
             }
             assert!(
-                device_bytes(&device, &managed, &into) == expected,
+                device_bytes(&device, &managed, &into, LEN) == expected,
                 "{name}: the bytes at creation (device copy: {copied})"
             );
 
@@ -131,22 +142,22 @@ mod on_device {
                 expected[20_000..20_100].fill(0x5A);
             }
             assert!(
-                device_bytes(&device, &managed, &into) == expected,
+                device_bytes(&device, &managed, &into, LEN) == expected,
                 "{name}: the bytes after the changes (device copy: {copied})"
             );
 
-            // Changes past the upload's calls submit it; without a copy nothing is submitted.
+            // A change only names its range: nothing is submitted until a commit.
             let before = counters.metrics().submissions;
-            for change in 0..UPLOAD_ENTRIES as u64 + 8 {
+            for change in 0..10_000 {
                 managed
                     .did_modify_range((change * 8) % LEN, 4)
                     .unwrap_or_else(|error| panic!("{name}: change {change}: {error}"));
             }
-            let submitted = counters.metrics().submissions - before;
-            match copied {
-                true => assert!(submitted >= 1, "{name}: the changes went"),
-                false => assert_eq!(submitted, 0, "{name}: nothing to copy"),
-            }
+            assert_eq!(
+                counters.metrics().submissions - before,
+                0,
+                "{name}: changes submit nothing"
+            );
 
             match managed.did_modify_range(LEN - 4, 8) {
                 Err(Error::Refused(Refusal::ModifiedRange {
@@ -174,6 +185,173 @@ mod on_device {
                 device
                     .release_block(block)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+        });
+    }
+
+    /// The add kernel over `managed`, a zeroed buffer and `out`, encoded into `command_buffer`:
+    /// `out` takes the bytes the kernel reads of `managed`.
+    fn kernel(
+        command_buffer: &CommandBuffer,
+        state: &ComputePipelineState,
+        [managed, zero, out]: [&Buffer; 3],
+    ) {
+        let mut encoder =
+            (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+        encoder.set_compute_pipeline_state(state).expect("a state");
+        encoder.set_buffer(Some(managed), 0, 0).expect("a buffer");
+        encoder.set_buffer(Some(zero), 0, 1).expect("a buffer");
+        encoder.set_buffer(Some(out), 0, 2).expect("a buffer");
+        (encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1])).expect("a dispatch");
+        encoder.end_encoding();
+    }
+
+    /// A kernel reads a Managed buffer's bytes as they were at its commit where it has a device
+    /// copy: written and named, committed behind an event wait, then written and named again
+    /// before the event lets it run, it reads the first bytes (the old live read at submission
+    /// read the second). Without a device copy it reads the bytes as they are when it runs. And a
+    /// write after a range is named and before the commit is what the kernel reads, on both.
+    #[test]
+    fn every_device_takes_a_managed_buffer_s_bytes_at_the_commit() {
+        each_device("managed at commit", |name, _, device| {
+            let copied = !device.core().unified_memory();
+            let counters = device.counters();
+            let mut arena = Arena::new(&device);
+            let (zero, out) = (arena.buffer(), arena.buffer());
+            let cpu = (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed = (device.new_managed_buffer(cpu.id, 0, 256, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let state = add(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let buffers = [&managed, &zero, &out];
+            let (a, b) = (vec![0xA1; 256], vec![0xB2; 256]);
+            let before = counters.metrics();
+
+            write(&managed, 0, &a);
+            (managed.did_modify_range(0, 256)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let event = device.new_shared_event().expect("an event");
+            let held = queue.command_buffer().expect("a command buffer");
+            (held.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            kernel(&held, &state, buffers);
+            held.commit().expect("a commit");
+            write(&managed, 0, &b);
+            (managed.did_modify_range(0, 256)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            event.set_signaled_value(1);
+            finished("the held kernel", &held);
+            assert_eq!(held.error(), None, "{name}");
+            let want = if copied { &a } else { &b };
+            assert!(
+                read(&out, 256) == *want,
+                "{name}: the bytes at the commit (device copy: {copied})"
+            );
+
+            write(&managed, 0, &a);
+            (managed.did_modify_range(0, 256)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            write(&managed, 0, &b);
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            kernel(&command_buffer, &state, buffers);
+            command_buffer.commit().expect("a commit");
+            finished("the kernel", &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert!(
+                read(&out, 256) == b,
+                "{name}: the bytes written before the commit (device copy: {copied})"
+            );
+
+            // The first commit took the first range; the second, the range named twice, once.
+            let metrics = counters.metrics();
+            let captured = metrics.managed_bytes_captured - before.managed_bytes_captured;
+            assert_eq!(captured, if copied { 512 } else { 0 }, "{name}: captured");
+            let live = metrics.managed_bytes_live - before.managed_bytes_live;
+            assert_eq!(live, 0, "{name}: none live");
+            println!("managed at commit: {name}: device copy {copied}; metrics {metrics:?}");
+            drop((managed, zero, out, arena));
+            (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// A range longer than the capture ring arrives whole: the ring takes what it holds and the
+    /// rest is read from the consumer's bytes as the copy runs, counted. Two commits of three
+    /// quarters of the ring each, the first scheduled before the second's commit, arrive whole
+    /// too.
+    #[test]
+    fn every_device_captures_more_than_the_ring_holds() {
+        each_device("managed past the ring", |name, _, device| {
+            if device.core().unified_memory() {
+                println!("managed past the ring: {name}: no device copy");
+                return;
+            }
+            let counters = device.counters();
+            let len = CAPTURE_LEN + (16 << 20);
+            let cpu = (device.take_block(MemoryClass::Shared, len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let side = (device.take_block(MemoryClass::Shared, len))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let into = (device.new_buffer(side.id, 0, len, false))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let managed = (device.new_managed_buffer(cpu.id, 0, len, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut bytes: Vec<u8> = (0..len).map(|i| (i % 253) as u8).collect();
+            write(&managed, 0, &bytes);
+            (managed.did_modify_range(0, len)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let before = counters.metrics();
+            assert!(
+                device_bytes(&device, &managed, &into, len) == bytes,
+                "{name}: the bytes past the ring"
+            );
+            let metrics = counters.metrics();
+            let captured = metrics.managed_bytes_captured - before.managed_bytes_captured;
+            let live = metrics.managed_bytes_live - before.managed_bytes_live;
+            assert_eq!(captured + live, len, "{name}: every byte once");
+            assert!(live > 0, "{name}: past the ring, read live");
+
+            // Two commits of three quarters each.
+            let part = CAPTURE_LEN / 4 * 3;
+            let queue = device.new_command_queue(4).expect("a queue");
+            let before = counters.metrics();
+            let mut commits = Vec::new();
+            for (index, fill) in [0x3C_u8, 0xC3].into_iter().enumerate() {
+                let at = index as u64 * part;
+                bytes[at as usize..(at + part) as usize].fill(fill);
+                write(&managed, at, &bytes[at as usize..(at + part) as usize]);
+                (managed.did_modify_range(at, part))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let (source, from) = managed.device_range();
+                let (target, to) = into.device_range();
+                command_buffer
+                    .record_for_test(&[&managed, &into], |device, command| {
+                        let region = vk::BufferCopy {
+                            src_offset: from + at,
+                            dst_offset: to + at,
+                            size: part,
+                        };
+                        // SAFETY: the command buffer is recording; both ranges are the buffers',
+                        // which it keeps.
+                        unsafe { device.cmd_copy_buffer(command, source, target, &[region]) };
+                    })
+                    .expect("a copy");
+                command_buffer.commit().expect("a commit");
+                command_buffer.wait_until_scheduled();
+                commits.push(command_buffer);
+            }
+            for command_buffer in &commits {
+                finished("a part", command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            assert!(
+                read(&into, (2 * part) as usize) == bytes[..(2 * part) as usize],
+                "{name}: the two parts"
+            );
+            let metrics = counters.metrics();
+            let captured = metrics.managed_bytes_captured - before.managed_bytes_captured;
+            let live = metrics.managed_bytes_live - before.managed_bytes_live;
+            assert_eq!(captured + live, 2 * part, "{name}: every byte once");
+            println!("managed past the ring: {name}: metrics {metrics:?}");
+            drop((managed, into, commits, queue));
+            for block in [cpu, side] {
+                (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
             }
         });
     }

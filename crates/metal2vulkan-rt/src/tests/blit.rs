@@ -1667,7 +1667,7 @@ pub(crate) mod on_device {
 
             // Into a Managed buffer: its bytes shaders reach, brought to the host by a
             // synchronize.
-            let copied = !device.core().shared_is_device_local();
+            let copied = !device.core().unified_memory();
             let managed = (device.new_managed_buffer(block.id, 512, 64, 64))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -1715,7 +1715,7 @@ pub(crate) mod on_device {
     #[test]
     fn every_device_synchronizes_a_managed_buffer() {
         each_device("blit_synchronize", |name, _, device| {
-            let copied = !device.core().shared_is_device_local();
+            let copied = !device.core().unified_memory();
             let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
             let before = pattern(64, 21);
             let start = (device.new_buffer(block.id, 256, 64, None)).expect("a buffer");

@@ -1033,10 +1033,10 @@ impl Core {
         false
     }
 
-    /// Whether the Shared memory type is device-local, by the device's memory-type query: then a
+    /// Whether Vulkan's device type is integrated or CPU ([`Device::has_unified_memory`]): then a
     /// Managed buffer is its Shared range, with no device copy.
-    pub(crate) fn shared_is_device_local(&self) -> bool {
-        self.device_local & (1 << self.memory_types.shared) != 0
+    pub(crate) fn unified_memory(&self) -> bool {
+        self.unified_memory
     }
 
     /// A block of `class` for `len` bytes ([`Pool::take`]).
@@ -1116,6 +1116,10 @@ impl Drop for Core {
         // it, which may give a texture block back to the pool), and then the pools of the queues
         // still alive.
         self.reaper.drain(self);
+        if let Some(region) = self.work.take_capture_region() {
+            // SAFETY: every command buffer whose copy-in read it retired, and no commit runs.
+            unsafe { region.free(self) };
+        }
         if let Some(region) = self.work.take_region() {
             // SAFETY: every upload that copied through it retired, and no call reads it.
             unsafe { region.free(self) };

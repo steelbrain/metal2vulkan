@@ -43,6 +43,8 @@ pub(crate) enum Metric {
     AllocationsFreed,
     /// [`Metrics::submissions_during_frees`].
     SubmissionsDuringFrees,
+    /// [`Metrics::capture_waits`].
+    CaptureWaits,
 }
 
 /// A gauge the runtime moves.
@@ -126,6 +128,9 @@ struct Atomics {
     over_copies: AtomicU64,
     allocations_freed: AtomicU64,
     submissions_during_frees: AtomicU64,
+    managed_bytes_captured: AtomicU64,
+    managed_bytes_live: AtomicU64,
+    capture_waits: AtomicU64,
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
@@ -180,6 +185,7 @@ impl Counters {
             Metric::OverCopies => &a.over_copies,
             Metric::AllocationsFreed => &a.allocations_freed,
             Metric::SubmissionsDuringFrees => &a.submissions_during_frees,
+            Metric::CaptureWaits => &a.capture_waits,
         };
         atomic.fetch_add(1, Relaxed);
     }
@@ -232,6 +238,15 @@ impl Counters {
     /// `bytes` more of a new buffer zeroed ([`Metrics::bytes_zeroed`]).
     pub(crate) fn zeroed(&self, bytes: u64) {
         self.atomics.bytes_zeroed.fetch_add(bytes, Relaxed);
+    }
+
+    /// A commit's capture: `captured` bytes copied into the capture ring, and `live` bytes left to
+    /// be copied from the consumer's bytes ([`Metrics::managed_bytes_captured`],
+    /// [`Metrics::managed_bytes_live`]).
+    pub(crate) fn captured(&self, captured: u64, live: u64) {
+        let a = &self.atomics;
+        a.managed_bytes_captured.fetch_add(captured, Relaxed);
+        a.managed_bytes_live.fetch_add(live, Relaxed);
     }
 
     /// `bytes` more written to the cache directory ([`Metrics::cache_bytes_written`]).
@@ -349,6 +364,9 @@ impl Counters {
             over_copies: a.over_copies.load(Relaxed),
             allocations_freed: a.allocations_freed.load(Relaxed),
             submissions_during_frees: a.submissions_during_frees.load(Relaxed),
+            managed_bytes_captured: a.managed_bytes_captured.load(Relaxed),
+            managed_bytes_live: a.managed_bytes_live.load(Relaxed),
+            capture_waits: a.capture_waits.load(Relaxed),
         }
     }
 
@@ -495,6 +513,17 @@ pub struct Metrics {
     /// `vkFreeMemory`. A driver may hold such a submission until the free returns: on the NVIDIA
     /// cards measured in Thunderbolt enclosures, about 1.1 ms per MiB of host-visible memory.
     pub submissions_during_frees: u64,
+    /// Bytes commits copied on the host from Managed buffers' bytes into staging memory: each range
+    /// `didModifyRange:` named since the last capture, once, on a device whose Managed buffers have
+    /// device copies ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
+    pub managed_bytes_captured: u64,
+    /// Bytes of such ranges a commit found no room for in staging memory, behind copies of command
+    /// buffers not yet submitted: their copy into the device copy reads the consumer's bytes as it
+    /// runs.
+    pub managed_bytes_live: u64,
+    /// Commits that waited for a submission to complete for room in staging memory for such
+    /// ranges.
+    pub capture_waits: u64,
 }
 
 /// No Metal counterpart: the live count of each kind of resource. Every one is zero once the

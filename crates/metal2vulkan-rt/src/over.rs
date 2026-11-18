@@ -366,8 +366,8 @@ struct Entry {
     copy: OverCopy,
     /// Its bytes in the buffer: `start..end`.
     range: (u64, u64),
-    /// An event named its range since its last copy in: a didModifyRange over it, or submitted
-    /// device work that wrote the buffer or another texture over a range that meets its.
+    /// An event named its range since its last copy in: its making, or submitted device work that
+    /// wrote the buffer or another texture over a range that meets its.
     into: bool,
     /// Submitted device work wrote it since its last copy back: the upload that leads a
     /// submission may take the copy.
@@ -395,17 +395,17 @@ impl Entry {
 /// A Managed buffer's textures over its device copy in an image of their own (`Entry`), each owing
 /// copies only at Metal's own Managed events, with no tracking of commands:
 ///
-/// - **In** where an event named its range since the last copy in: a didModifyRange over it (the
-///   upload's copy of the changed range first), or device work that wrote the buffer (a binding
-///   whose compiled interface writes it, a blit or fill into it) or another texture over a range
-///   that meets its, from the submission after that work's. The upload that leads a submission
-///   using the texture makes it, from the device copy, never from the consumer's bytes a second
-///   time. Apple GPUs may alias Managed memory; the documented contract, not one GPU's answer, is
-///   the rule here.
+/// - **In** after a didModifyRange over its range: the capture of the range at the next commit
+///   (`crate::capture`) makes it, after its copies into the device copy, in the same command
+///   buffer. And where device work wrote the buffer (a binding whose compiled interface writes it,
+///   a blit or fill into it) or another texture over a range that meets its, from the submission
+///   after that work's: the upload that leads a submission using the texture makes it. Both copy
+///   from the device copy, never from the consumer's bytes a second time. Apple GPUs may alias
+///   Managed memory; the documented contract, not one GPU's answer, is the rule here.
 /// - **Back** where device work wrote the texture since the last copy back: before the next
 ///   reader of the device copy (a binding whose interface reads the buffer, a blit from it, a copy
-///   into another texture over a range that meets its, a synchronize, a didModifyRange over it),
-///   not after each write. A reader recorded after the write takes it in its own commands; the
+///   into another texture over a range that meets its, a synchronize, a capture of a range over
+///   it), not after each write. A reader recorded after the write takes it in its own commands; the
 ///   upload that leads a submission takes it only once the write's segment was submitted, as the
 ///   upload runs before the submission's commands. A texture released while its copy back is owed
 ///   leaves its image with the buffer until a reader takes it or the buffer is released, which
@@ -516,13 +516,41 @@ impl ManagedOvers {
         self.count.store(entries.len(), Relaxed);
     }
 
-    /// A didModifyRange of `start..end`: each texture whose range it meets owes its copy in.
-    pub(crate) fn modified(&self, start: u64, end: u64) {
-        for entry in lock(&self.entries).iter_mut() {
-            if meets(entry.range, (start, end)) {
-                entry.into = true;
+    /// A capture copies `ranges` of the consumer's bytes into the device copy (`crate::capture`):
+    /// each live texture whose range meets one of them takes its copy in after those copies, in the
+    /// same command buffer, and owes none for the events before it, its copy and image going to
+    /// `into`. Before the copies, the copies back owed by submitted writes of textures whose ranges
+    /// meet one of `ranges` or of those textures' are taken into `backs`, so the consumer's bytes
+    /// land over them.
+    pub(crate) fn captured(
+        &self,
+        ranges: &[(u64, u64)],
+        backs: &mut Vec<Back>,
+        into: &mut Vec<(OverCopy, Arc<Image>)>,
+    ) {
+        let mut entries = lock(&self.entries);
+        let meets_any = |ranges: &[(u64, u64)], range| ranges.iter().any(|&r| meets(r, range));
+        let targets: Vec<(u64, u64)> = (entries.iter())
+            .filter(|entry| !entry.released && meets_any(ranges, entry.range))
+            .map(|entry| entry.range)
+            .collect();
+        if targets.is_empty() && !entries.iter().any(|entry| entry.back) {
+            return;
+        }
+        for entry in entries.iter_mut() {
+            if entry.back && (meets_any(ranges, entry.range) || meets_any(&targets, entry.range)) {
+                backs.push((entry.texture, entry.copy, Arc::clone(&entry.image)));
+                entry.back = false;
+                // A write not yet submitted stays fresh for the readers recorded after it.
+                entry.fresh &= entry.pending > 0;
+            }
+            if !entry.released && meets_any(ranges, entry.range) {
+                entry.into = false;
+                into.push((entry.copy, Arc::clone(&entry.image)));
             }
         }
+        entries.retain(|entry| !entry.released || entry.back || entry.pending > 0);
+        self.count.store(entries.len(), Relaxed);
     }
 
     /// The copy in texture `texture` owes, taken, for the upload that leads a submission: after
