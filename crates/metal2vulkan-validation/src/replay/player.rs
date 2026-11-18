@@ -84,6 +84,11 @@ pub trait Backend {
     ) -> Result<(u64, u64), PlayError>;
     /// The runtime's counters now.
     fn counters(&mut self) -> Counters;
+    /// Whether the player takes the `m2v.privateBytes` snapshots on this backend: they split the
+    /// program's compute encoders around a dispatch with blits between buffers and fences of the
+    /// player's own. Where it does not, those dispatches play as they are, counted
+    /// (`Report::unsnapshotted`).
+    fn snapshots(&self) -> bool;
 }
 
 /// Why a play stopped.
@@ -190,6 +195,9 @@ pub struct Report {
     /// there (a runtime may record the barriers a split needs at the program's next command or at
     /// the commit).
     pub split_executed: Counters,
+    /// The dispatches an `m2v.privateBytes` record names that played without the snapshot, as the
+    /// backend takes none (`Backend::snapshots`).
+    pub unsnapshotted: u64,
     /// The placement heaps the player laid out again for the runtime's sizes and alignments
     /// (`relay`).
     pub relaid: Relaid,
@@ -264,6 +272,9 @@ impl Report {
                 .map(|(key, value)| format!(" {key}={value}"))
                 .collect();
             lines.push(format!("split {} executed{executed}", self.splits));
+        }
+        if self.unsnapshotted > 0 {
+            lines.push(format!("unsnapshotted {}", self.unsnapshotted));
         }
         let relaid = self.relaid;
         if relaid.heaps > 0 {
@@ -675,7 +686,13 @@ impl<'b, B: Backend> Player<'b, B> {
         while let Some(call) = stream.next_call()? {
             let issued = self.issued(&call);
             match self.ahead.remove(&self.position) {
-                Some(ranges) => self.split(stream, call, ranges, left_out)?,
+                Some(ranges) if self.backend.snapshots() => {
+                    self.split(stream, call, ranges, left_out)?
+                }
+                Some(_) => {
+                    self.report.unsnapshotted += 1;
+                    self.step(stream, call, left_out)?
+                }
                 None => self.step(stream, call, left_out)?,
             }
             self.position += 1;

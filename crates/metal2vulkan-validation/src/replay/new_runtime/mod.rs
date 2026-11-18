@@ -290,15 +290,20 @@ impl NewRuntime {
         matches!(self.objects.get(&id), Some(Object::Skipped(_)))
     }
 
-    /// Whether any object argument of `call` is one the play skipped.
+    /// Whether any argument of `call` names an object the play skipped, in its lists and maps
+    /// too.
     fn names_skipped(&self, call: &Call) -> bool {
-        call.args.iter().any(|value| match value {
+        call.args.iter().any(|value| self.holds_skipped(value))
+    }
+
+    /// Whether `value` names an object the play skipped, at any depth.
+    fn holds_skipped(&self, value: &Value) -> bool {
+        match value {
             Value::Object(id) => self.skipped(*id),
-            Value::List(items) => items
-                .iter()
-                .any(|item| item.as_object().is_some_and(|id| self.skipped(id))),
+            Value::List(items) => items.iter().any(|item| self.holds_skipped(item)),
+            Value::Map(entries) => entries.iter().any(|(_, item)| self.holds_skipped(item)),
             _ => false,
-        })
+        }
     }
 
     fn buffer_of(&self, call: &Call, id: u64) -> Result<rt::Buffer, PlayError> {
@@ -696,7 +701,10 @@ impl NewRuntime {
             }
             "newRenderPipelineStateWithDescriptor:error:" => self.skip_object("render pipeline"),
             "newDepthStencilStateWithDescriptor:" => self.skip_object("depth-stencil state"),
-            "MTLRenderPassDescriptor.new" => self.skip_object("render pass descriptor"),
+            "MTLRenderPassDescriptor.new" | "MTLRenderPassDescriptor.renderPassDescriptor" => {
+                self.skip_object("render pass descriptor")
+            }
+            "newLibraryWithSource:options:error:" => self.skip_object("library from source"),
             "newFence" => self.skip_object("fence"),
             "newSamplerStateWithDescriptor:" => {
                 let (mut descriptor, f) = translator::sampler(call)?;
@@ -775,17 +783,27 @@ impl NewRuntime {
         range: rt::HeapRange,
         class: rt::MemoryClass,
     ) -> Result<Option<(Object, Made)>, PlayError> {
+        // A buffer of `length` bytes and storage options `raw` at `offset` in the block.
+        let device = self.device.clone();
+        let placed = |length: u64, raw: u64, offset: u64| {
+            let at = range.offset + offset;
+            let buffer = match storage(call, raw)? {
+                rt::StorageMode::Managed if class == rt::MemoryClass::Shared => {
+                    device.new_managed_buffer(range.block, at, length, length)
+                }
+                _ => device.new_buffer(range.block, at, length, false),
+            };
+            addressed(buffer.map_err(failed(call))?, None)
+        };
         match &*call.selector {
             "newBufferWithLength:options:offset:" => {
-                let (length, offset) = (uint(call, 0)?, uint(call, 2)?);
-                let at = range.offset + offset;
-                let buffer = match storage(call, uint(call, 1)?)? {
-                    rt::StorageMode::Managed if class == rt::MemoryClass::Shared => self
-                        .device
-                        .new_managed_buffer(range.block, at, length, length),
-                    _ => self.device.new_buffer(range.block, at, length, false),
-                };
-                addressed(buffer.map_err(failed(call))?, None)
+                placed(uint(call, 0)?, uint(call, 1)?, uint(call, 2)?)
+            }
+            "m2v.newBufferInBlock:offset:length:options:" => {
+                if Self::id(call, 0)? != call.receiver {
+                    return Err(refuse(call, "a block other than its receiver"));
+                }
+                placed(uint(call, 2)?, uint(call, 3)?, uint(call, 1)?)
             }
             "newTextureWithDescriptor:offset:" => {
                 let descriptor = self.texture_descriptor(call, 0)?;
@@ -809,17 +827,23 @@ impl NewRuntime {
                 did.map_err(failed(call))?;
                 Ok(None)
             }
-            "newTextureWithDescriptor:offset:bytesPerRow:" => {
+            "newTextureWithDescriptor:offset:bytesPerRow:"
+            | "newTiledTextureWithDescriptor:offset:bytesPerRow:"
+            | "newTextureWithDescriptor:iosurface:plane:" => {
                 self.skip_object("texture over a buffer")
             }
             _ => Err(refuse(call, "not played on a buffer")),
         }
     }
 
-    /// A call of texture `texture`.
-    fn texture_call(&mut self, call: &Call, texture: &rt::Texture) -> Result<(), PlayError> {
+    /// A call of texture `texture`, and the view it made.
+    fn texture_call(
+        &mut self,
+        call: &Call,
+        texture: &rt::Texture,
+    ) -> Result<Option<(Object, Made)>, PlayError> {
         let region = |at| encoders::region(call, arg(call, at)?);
-        match &*call.selector {
+        let replaced = match &*call.selector {
             "replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:" => texture
                 .replace_region(
                     region(0)?,
@@ -837,9 +861,16 @@ impl NewRuntime {
                 uint(call, 3)?,
                 0,
             ),
+            // The runtime makes no texture views yet.
+            "newTextureViewWithPixelFormat:"
+            | "newTextureViewWithPixelFormat:resourceIndex:"
+            | "newTextureViewWithPixelFormat:textureType:levels:slices:"
+            | "newTextureViewWithPixelFormat:textureType:levels:slices:resourceIndex:" => {
+                return self.skip_object("texture view")
+            }
             _ => return Err(refuse(call, "not played on a texture")),
-        }
-        .map_err(failed(call))
+        };
+        replaced.map(|()| None).map_err(failed(call))
     }
 }
 
@@ -883,6 +914,17 @@ impl Backend for NewRuntime {
             }
             return Ok(Made::default());
         }
+        let encodes = matches!(
+            self.objects.get(&call.receiver),
+            Some(Object::CommandBuffer(_) | Object::Compute(_) | Object::Blit(_))
+        );
+        if call.result != 0 && !encodes && self.names_skipped(call) {
+            // What a call makes of a skipped object is skipped too.
+            self.skips.objects += 1;
+            self.objects
+                .insert(call.result, Object::Skipped("made of a skipped object"));
+            return Ok(Made::default());
+        }
         let made = match call.receiver {
             0 => self.device_call(call)?,
             id => match self.get(call, id)? {
@@ -918,8 +960,7 @@ impl Backend for NewRuntime {
                 }
                 Object::Texture(texture) => {
                     let texture = texture.clone();
-                    self.texture_call(call, &texture)?;
-                    None
+                    self.texture_call(call, &texture)?
                 }
                 Object::TextureDescriptor(_) => {
                     let Some(Object::TextureDescriptor(descriptor)) = self.objects.get_mut(&id)
@@ -1052,6 +1093,7 @@ impl Backend for NewRuntime {
 
     fn counters(&mut self) -> Counters {
         let metrics = self.device.counters().metrics();
+        // Every metric that sums: a frame's is the difference of two reads.
         Counters::from([
             ("submissions", metrics.submissions),
             ("passes", metrics.passes),
@@ -1059,12 +1101,23 @@ impl Backend for NewRuntime {
             ("bytes_copied", metrics.bytes_copied),
             ("pipelines_created", metrics.pipelines_created),
             ("first_use_waits", metrics.first_use_waits),
+            ("first_use_wait_nanos", metrics.first_use_wait_nanos),
+            ("blocks_made", metrics.blocks_made),
+            ("translations", metrics.translations),
+            ("translations_loaded", metrics.translations_loaded),
+            ("ring_writes", metrics.ring_writes),
             ("upload_waits", metrics.upload_waits),
+            ("synchronizations", metrics.synchronizations),
             ("skipped_encoders", self.skips.encoders),
             ("skipped_objects", self.skips.objects),
             ("skipped_dispatches", self.skips.dispatches),
             ("skipped_blits", self.skips.blits),
             ("skipped_calls", self.skips.calls),
         ])
+    }
+
+    /// The runtime makes no blits between buffers or fences yet.
+    fn snapshots(&self) -> bool {
+        false
     }
 }

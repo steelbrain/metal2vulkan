@@ -334,8 +334,8 @@ and the (name id, value) answer pairs.
 ## 10. The player
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
-[--blobs DIR]` plays a stream (its first segment) on one runtime device and writes
-`DIR/report.txt`. `command-replay dump --stream FILE` prints the call records as text, and
+[--blobs DIR] [--runtime old|rt]` plays a stream (its first segment) on one device through the
+old runtime (the default) or the new one (`rt`), and writes `DIR/report.txt`. `command-replay dump --stream FILE` prints the call records as text, and
 `command-replay shapes --stream FILE` each selector's argument shapes, with no data.
 
 - It relocates (section 5) and plays the host's plumbing as the plain calls it stands for
@@ -353,7 +353,9 @@ and the (name id, value) answer pairs.
   same way. A fence of its own orders each of these encoders after the one before it. Once the
   command buffer completed, it reads the bytes after back and counts the 4-byte words of each
   range that differ from the recording's, relocated the same way. A difference is reported, and
-  the play goes on. Its own objects take ids from 2^63 + 1.
+  the play goes on. Its own objects take ids from 2^63 + 1. On a backend that takes no snapshots
+  (the new runtime's, which has no blits between buffers or fences yet), each such dispatch plays
+  as it is and is counted on the report's `unsnapshotted` line.
 - It lays each placement heap out again for the runtime's sizes and alignments, as a program that
   lays out its heap by `heapTextureSizeAndAlignWithDescriptor:` and
   `heapBufferSizeAndAlignWithLength:options:` does: the stream's offsets and heap sizes are the
@@ -402,6 +404,26 @@ and the (name id, value) answer pairs.
   `isDrawable` other than their defaults; it does not play `defaultColorSampleCount`, which changes
   nothing a pass shows. It plays a no-copy buffer as a buffer of its length, so one of the
   read-only option (bit 24) is made without it and keeps the GPU writes Metal drops.
+- The new runtime's backend plays compute, blits, `synchronizeResource:`, events and queues. What
+  the new runtime does not build yet it skips and counts, and never fakes:
+  - objects: render pipelines, depth-stencil states, render pass descriptors, fences, libraries
+    from source, textures over a buffer (`bytesPerRow`, tiled and surface textures), texture
+    views, and whatever a call makes of a skipped object (`skipped_objects`);
+  - render and parallel render encoders (`skipped_encoders`), and every call of a skipped object
+    (`skipped_calls`, with `useResource:usage:` of one and a compute encoder's `useHeap:`,
+    `updateFence:` and `waitForFence:`);
+  - dispatches whose pipeline state or bound buffer or texture is a skipped object
+    (`skipped_dispatches`);
+  - blit commands that name a skipped object, and buffer-to-buffer copies,
+    `synchronizeTexture:slice:level:`, fences, mipmaps, `optimizeContentsForGPUAccess:` and the
+    host's copies to and from the guest's RAM (`skipped_blits`).
+
+  The counts are among its executed counters. A play with any of them above zero is no gate
+  result: `report.txt` says so on a `skipped` line. It places buffers of their own in pooled
+  256 MiB blocks of the runtime (a larger one in a block of its own), a range freed for reuse once every command buffer committed
+  before its release completed, and gives textures and sampler states indices from the whole of
+  each index class. Its readback serves Shared and Managed buffers only; a check of anything else
+  is a refusal.
 
 `report.txt` holds one line per item: `device NAME`, `completed IDS COUNTS`, `frame N COUNTS`,
 `check ID SHA256 match|differs|unrecorded`, `id ID RECORDED PLAYED` for each object whose runtime
@@ -409,10 +431,12 @@ gives another `gpuResourceID` than the program saw (both in hex, `PLAYED` `none`
 runtime's getter raises), `private ID DISPATCH LOCATION+LENGTH match|differs N/WORDS` for each
 `m2v.privateBytes` range compared, `split N executed COUNTS` where the player split compute
 encoders around them (`N` the encoders split, `COUNTS` the executed counts of their groups),
+`unsnapshotted N` where the backend took none of them (`N` the dispatches played as they are),
 `relaid HEAPS moved OFFSETS grown BYTES` where it laid placement heaps out again (the heaps, the
 offsets it moved in them and the bytes it added to their sizes), `total COUNTS` (its `calls` the
 calls played: where
 the play stopped, the stopping call is the next), `cut SEGMENT OFFSET` where the last segment ends
-in a record cut short, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
+in a record cut short, `skipped KEY=VALUE ...: no gate result` where the new runtime's backend
+skipped anything, then `ok` or `error WHAT`. `COUNTS` is `stream KEY=VALUE ... executed
 KEY=VALUE ...`. The exit status is 0 for `ok`, 1 for a run that stopped and 2 for a harness
 failure (a bad command line or an unreadable stream).

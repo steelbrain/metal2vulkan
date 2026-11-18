@@ -837,4 +837,8 @@ impl Backend for OldRuntime {
             ("pipelines_made", counts.variant_pipelines_made),
         ])
     }
+
+    fn snapshots(&self) -> bool {
+        true
+    }
 }

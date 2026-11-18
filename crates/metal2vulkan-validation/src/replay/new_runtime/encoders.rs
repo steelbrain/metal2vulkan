@@ -11,10 +11,12 @@ use crate::replay::value::Value;
 use metal2vulkan_rt as rt;
 use std::collections::HashSet;
 
-/// A compute encoder, and its buffer and texture slots that hold a skipped object.
+/// A compute encoder, its buffer and texture slots that hold a skipped object, and whether its
+/// pipeline state is a skipped one.
 pub(super) struct Compute {
     encoder: rt::ComputeCommandEncoder,
     skipped: HashSet<(bool, u32)>,
+    skipped_pipeline: bool,
 }
 
 /// `[x, y, z]` of a map of `keys`.
@@ -115,6 +117,7 @@ impl NewRuntime {
             let compute = Compute {
                 encoder,
                 skipped: HashSet::new(),
+                skipped_pipeline: false,
             };
             super::unaddressed(Object::Compute(Box::new(compute)))
         };
@@ -184,10 +187,16 @@ impl NewRuntime {
             }
             "setComputePipelineState:" => {
                 let state = match self.get(call, Self::id(call, 0)?)? {
-                    Object::ComputePipeline(state) => state.clone(),
+                    Object::ComputePipeline(state) => Some(state.clone()),
+                    Object::Skipped(_) => None,
                     _ => return Err(refuse(call, "argument 0 is no compute pipeline state")),
                 };
-                self.compute(id).encoder.set_compute_pipeline_state(&state)
+                let compute = self.compute(id);
+                compute.skipped_pipeline = state.is_none();
+                match state {
+                    Some(state) => compute.encoder.set_compute_pipeline_state(&state),
+                    None => Ok(()),
+                }
             }
             "setBuffer:offset:atIndex:" => {
                 let buffer = self.optional_buffer(call, arg(call, 0)?)?;
@@ -271,7 +280,8 @@ impl NewRuntime {
             | "dispatchThreads:threadsPerThreadgroup:" => {
                 let grid = size(call, arg(call, 0)?)?;
                 let threads = size(call, arg(call, 1)?)?;
-                if !self.compute(id).skipped.is_empty() {
+                let compute = self.compute(id);
+                if compute.skipped_pipeline || !compute.skipped.is_empty() {
                     self.skips.dispatches += 1;
                     return Ok(());
                 }
@@ -342,12 +352,14 @@ impl NewRuntime {
                 Ok(())
             }
             "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:\
+             toTexture:destinationSlice:destinationLevel:destinationOrigin:"
+            | "copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:\
              toTexture:destinationSlice:destinationLevel:destinationOrigin:options:" => {
                 let (from, to) = (
                     self.buffer_of(call, Self::id(call, 0)?)?,
                     self.texture_of(call, Self::id(call, 5)?)?,
                 );
-                if uint(call, 9)? != 0 {
+                if call.args.get(9).is_some() && uint(call, 9)? != 0 {
                     return Err(refuse(call, "a blit option"));
                 }
                 let (layout, region) = (buffer_layout(call, 1)?, size(call, arg(call, 4)?)?);
@@ -377,6 +389,19 @@ impl NewRuntime {
                 self.blit(id)
                     .copy_from_texture(&from, place, region, &to, to_place)
             }
+            "synchronizeResource:" => match self.get(call, Self::id(call, 0)?)? {
+                Object::Buffer(buffer, _) => {
+                    let buffer = buffer.clone();
+                    self.blit(id)
+                        .synchronize_resource(rt::Resource::Buffer(&buffer))
+                }
+                Object::Texture(texture) => {
+                    let texture = texture.clone();
+                    self.blit(id)
+                        .synchronize_resource(rt::Resource::Texture(&texture))
+                }
+                _ => return Err(refuse(call, "argument 0 is no buffer or texture")),
+            },
             "fillBuffer:range:value:" => {
                 let buffer = self.buffer_of(call, Self::id(call, 0)?)?;
                 let span = range(call, arg(call, 1)?)?;
@@ -384,10 +409,9 @@ impl NewRuntime {
                     .map_err(|_| refuse(call, "a fill value past a byte"))?;
                 self.blit(id).fill_buffer(&buffer, span, value)
             }
-            // Not built by the runtime yet: buffer-to-buffer copies, synchronization, fences,
-            // mipmaps and the host's guest-RAM copies.
+            // Not built by the runtime yet: buffer-to-buffer copies, a texture slice's and level's
+            // synchronization, fences, mipmaps and the host's guest-RAM copies.
             "copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:"
-            | "synchronizeResource:"
             | "synchronizeTexture:slice:level:"
             | "updateFence:"
             | "waitForFence:"

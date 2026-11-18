@@ -281,6 +281,8 @@ struct Kept {
     /// Each heap size it was asked: the placing selector and how many calls made and set the
     /// texture descriptor.
     heap_asked: Vec<(String, usize)>,
+    /// Whether it declines the player's snapshots.
+    declines_snapshots: bool,
 }
 
 impl Backend for Kept {
@@ -370,6 +372,10 @@ impl Backend for Kept {
             counters.insert("copies", self.copies);
         }
         counters
+    }
+
+    fn snapshots(&self) -> bool {
+        !self.declines_snapshots
     }
 }
 
@@ -1055,6 +1061,40 @@ fn a_dispatch_plays_between_its_private_bytes() {
     assert!(report.frames.is_empty());
     let total = &report.total.executed;
     assert!(total.values().all(|&value| value == 0), "{total:?}");
+}
+
+/// On a backend that takes no snapshots, a dispatch an `m2v.privateBytes` record names plays as it
+/// is, with none of the player's own calls, and the report counts it.
+#[test]
+fn a_backend_without_snapshots_plays_the_dispatch_as_it_is() {
+    let bytes: Vec<u8> = (0..4).collect();
+    let mut kept = Kept {
+        declines_snapshots: true,
+        ..Kept::default()
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        let word = w.blob(&bytes)?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let private = [Value::Uint(4), Value::Uint(0x20)];
+        w.call("newBufferWithLength:options:", 1, 3, &private, &[])?;
+        w.call("commandBuffer", 2, 4, &[], &[])?;
+        w.call("computeCommandEncoder", 4, 5, &[], &[])?;
+        let threads = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, 5, 0, &[threads.clone(), threads], &[])?;
+        w.call("endEncoding", 5, 0, &[], &[])?;
+        w.call("commit", 4, 0, &[], &[])?;
+        let range = map(&[("location", Value::Uint(0)), ("length", Value::Uint(4))]);
+        let args = [Value::Uint(5), range, Value::Blob(word), Value::Blob(word)];
+        w.call("m2v.privateBytes", 3, 0, &args, &[])?;
+        Ok(())
+    });
+    ended.unwrap();
+    assert!(kept.calls.iter().all(|c| !c.contains(&format!("#{OWN}"))));
+    assert_eq!((report.unsnapshotted, report.splits), (1, 0));
+    assert!(report.private.is_empty());
+    assert!(report.lines().contains(&"unsnapshotted 1".to_string()));
 }
 
 /// A record must name an earlier call, and that call a compute encoder's dispatch; a blob must hold
