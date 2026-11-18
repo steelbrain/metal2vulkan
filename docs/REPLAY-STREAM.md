@@ -182,7 +182,10 @@ and the (name id, value) answer pairs.
   indices:indexCount:`), as Metal's pool hands out a sampler state's ID. A reserved index is taken
   only where the stream names it. A named index a live object of the play holds is taken from
   it, as Metal's later texture at an ID takes the ID: the earlier object's release leaves the
-  index. Where the runtime refuses a named index (it lies outside the object's class), the object
+  index. A placement at an index waits first for the commits that named an object holding it,
+  live or released, to retire (their completed handlers have run, which the runtime runs once it
+  has let go of what they held): Metal leaves it to the program never to take an element from
+  under work that runs, and the program's own timing kept that. Where the runtime refuses a named index (it lies outside the object's class), the object
   takes the lowest free one, and the report counts it. A constexpr sampler, which the stream names
   no index for, takes the highest free sampler index on the new runtime, outside the sequence the
   program's sampler states take, so none of theirs takes its index.
@@ -569,7 +572,8 @@ counted from 0), completes the work committed so far, reports as at the stream's
   the runtime back a block or heap of the stream at its release (`release_block`), and gives
   textures and sampler states indices from the whole of each index class (section 5): its
   `indices named N: ...` line counts the objects placed at the index the stream named, those
-  whose named index the runtime refused, and the indices the program reserved. Its
+  whose named index the runtime refused, the indices the program reserved, and the placements
+  that waited for an index's holders' commits, with the time waited. Its
   `unbound buffer reads N: ...` line counts the draws and dispatches whose pipeline state reads a
   buffer argument (one its reflection lists as used) that its encoder bound nothing to: no
   `setBuffer`, `setBuffers` or `setBytes` of that stage at that index since the encoder was made,

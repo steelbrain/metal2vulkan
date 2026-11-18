@@ -5,9 +5,15 @@
 //! as Metal's pool hands out a sampler state's ID. An index is held by the object placed there
 //! last, as the runtime's is: a later object at an index an earlier one holds takes it, and the
 //! earlier one's release leaves it.
+//!
+//! An index is owed to the commits that named any object holding it, live or released: a
+//! placement there takes the index's element from under that work, which Metal leaves to the
+//! program never to do while the work runs (docs/RESOURCE-ID.md), and the program's own timing
+//! kept that duty. The player keeps it by waiting for those commits to retire before such a
+//! placement, and counts the waits and their time.
 
 use metal2vulkan_rt as rt;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// The slot of `class`: textures, samplers (and any class the runtime adds, which the backend
 /// asks for no index of).
@@ -32,6 +38,15 @@ pub(in crate::replay) struct Indices {
     /// The objects the stream named an index for that the runtime refused (it is outside the
     /// object's class): placed at the lowest free index instead.
     refused: u64,
+    /// Each released object that command buffers not yet committed named: its class slot and
+    /// index, and how many of them.
+    pending: HashMap<u64, ((usize, u32), usize)>,
+    /// Each index's last commit that named an object holding it, until a placement there finds
+    /// it retired.
+    owed: HashMap<(usize, u32), u64>,
+    /// The placements that waited for an index's owed commits, and the nanoseconds they waited.
+    waits: u64,
+    wait_nanos: u64,
 }
 
 impl Indices {
@@ -57,12 +72,90 @@ impl Indices {
         }
     }
 
-    /// The index `object` held, free again where no later object was placed there.
-    pub(in crate::replay) fn give(&mut self, object: u64) {
+    /// The index `object` held, free again where no later object was placed there; owed to the
+    /// `users` command buffers not yet committed that named it, once they are.
+    pub(in crate::replay) fn give(&mut self, object: u64, users: usize) {
         if let Some((slot, index)) = self.objects.remove(&object) {
             if self.held[slot].get(&index) == Some(&Some(object)) {
                 self.held[slot].remove(&index);
             }
+            if users > 0 {
+                self.pending.insert(object, ((slot, index), users));
+            }
+        }
+    }
+
+    fn owe(&mut self, key: (usize, u32), commit: u64) {
+        let owed = self.owed.entry(key).or_default();
+        *owed = commit.max(*owed);
+    }
+
+    /// A command buffer that named `named` committed as commit `commit`: the index of each
+    /// object among them that holds one, or held one, is owed to it.
+    pub(in crate::replay) fn committed(&mut self, named: &HashSet<u64>, commit: u64) {
+        for object in named {
+            let key = match self.objects.get(object) {
+                Some(&key) => Some(key),
+                None => self.ended_one(*object),
+            };
+            if let Some(key) = key {
+                self.owe(key, commit);
+            }
+        }
+    }
+
+    /// A command buffer that named `named` released uncommitted: it runs nothing.
+    pub(in crate::replay) fn ended(&mut self, named: &HashSet<u64>) {
+        for object in named {
+            self.ended_one(*object);
+        }
+    }
+
+    /// One of released `object`'s uncommitted users ended: its index, where it had one.
+    fn ended_one(&mut self, object: u64) -> Option<(usize, u32)> {
+        let (key, users) = self.pending.get_mut(&object)?;
+        let key = *key;
+        *users -= 1;
+        if *users == 0 {
+            self.pending.remove(&object);
+        }
+        Some(key)
+    }
+
+    /// The commit a placement at `index` of `class` waits for: the last that named an object
+    /// holding it, where that has not retired (`retired`, the commits that have).
+    pub(in crate::replay) fn owed(
+        &mut self,
+        class: rt::IndexClass,
+        index: u32,
+        retired: u64,
+    ) -> Option<u64> {
+        let key = (slot(class), index);
+        let commit = *self.owed.get(&key)?;
+        if commit <= retired {
+            self.owed.remove(&key);
+            return None;
+        }
+        Some(commit)
+    }
+
+    /// A placement waited `nanos` for an index's owed commits, which have retired.
+    pub(in crate::replay) fn waited(&mut self, class: rt::IndexClass, index: u32, nanos: u64) {
+        self.owed.remove(&(slot(class), index));
+        self.waits += 1;
+        self.wait_nanos += nanos;
+    }
+
+    /// The index [`place`](Self::place) takes for `named`: it where the runtime takes it (an
+    /// index of the class), else the lowest free one.
+    pub(in crate::replay) fn target(
+        &self,
+        class: rt::IndexClass,
+        named: Option<u32>,
+    ) -> Option<u32> {
+        match named {
+            Some(index) if class.range().contains(&index) => Some(index),
+            _ => self.lowest(class, 0),
         }
     }
 
@@ -135,13 +228,15 @@ impl Indices {
     }
 
     /// The report's line: the objects placed at the index the stream named, those whose named
-    /// index the runtime refused, and the indices the program reserved.
+    /// index the runtime refused, the indices the program reserved, and the placements that
+    /// waited for an index's owed commits, with the time waited.
     pub(in crate::replay) fn line(&self) -> String {
         let reserved: usize = self.reserved.iter().map(BTreeSet::len).sum();
         format!(
             "indices named {}: objects placed at the index the stream named; {} whose named index \
-             the runtime refused, placed at the lowest free one; {reserved} reserved",
-            self.named, self.refused
+             the runtime refused, placed at the lowest free one; {reserved} reserved; {} placed \
+             at an index whose holders' commits were in flight, after waiting for them ({} ns)",
+            self.named, self.refused, self.waits, self.wait_nanos
         )
     }
 }

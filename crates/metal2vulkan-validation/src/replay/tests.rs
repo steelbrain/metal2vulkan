@@ -16,7 +16,7 @@ use super::value::{hex, Value};
 use crate::ScratchDir;
 use metal2vulkan_rt as rt;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::PathBuf;
 
@@ -1200,25 +1200,80 @@ fn objects_take_the_named_index_else_the_lowest_free_one() {
     assert_eq!(take(&mut indices, 4, None), start + 3);
     // A named index an object holds: taken, and the earlier object's release leaves it.
     assert_eq!(take(&mut indices, 5, Some(start + 7)), start + 7);
-    indices.give(1);
+    indices.give(1, 0);
     assert_eq!(indices.lowest(class, start + 7), Some(start + 8));
     assert_eq!(
         take(&mut indices, 6, Some(start + 2)),
         start + 2,
         "the stream names a reserved index"
     );
-    indices.give(2);
+    indices.give(2, 0);
     assert_eq!(
         take(&mut indices, 7, None),
         start,
         "free again after the release"
     );
-    indices.give(5);
+    indices.give(5, 0);
     assert_eq!(indices.lowest(class, start + 7), Some(start + 7));
     assert!(
         indices.line().starts_with("indices named 3:"),
         "{}",
         indices.line()
+    );
+}
+
+/// An index is owed to the last commit that named an object holding it, live or released, and to
+/// the commits of the command buffers not yet committed that named a released holder once they
+/// are; a placement there waits only while the owed commit has not retired, and the line counts
+/// the waits and their time. A command buffer released uncommitted owes nothing.
+#[test]
+fn an_index_is_owed_to_the_commits_that_named_its_holders() {
+    let class = rt::IndexClass::Texture;
+    let made = |index: u32| Ok::<u32, rt::Error>(index);
+    let mut indices = Indices::default();
+    let placed = indices.place(1, class, Some(10), made);
+    assert_eq!(placed.expect("a free index").expect("made"), 10);
+    indices.committed(&HashSet::from([1]), 3);
+    assert_eq!(
+        indices.owed(class, 10, 2),
+        Some(3),
+        "a live holder's commit"
+    );
+    // Released while one more command buffer not yet committed named it.
+    indices.give(1, 1);
+    indices.committed(&HashSet::from([1]), 5);
+    assert_eq!(
+        indices.owed(class, 10, 4),
+        Some(5),
+        "the later user's commit"
+    );
+    assert_eq!(indices.owed(class, 10, 5), None, "retired");
+    assert_eq!(indices.owed(class, 10, 0), None, "owed no more");
+    let placed = indices.place(2, class, Some(10), made);
+    assert_eq!(placed.expect("a free index").expect("made"), 10);
+    indices.committed(&HashSet::from([2]), 6);
+    assert_eq!(indices.owed(class, 10, 5), Some(6));
+    indices.waited(class, 10, 7);
+    assert_eq!(indices.owed(class, 10, 0), None, "waited for");
+    // An object only an uncommitted command buffer named, which is released uncommitted.
+    let placed = indices.place(3, class, Some(11), made);
+    assert_eq!(placed.expect("a free index").expect("made"), 11);
+    indices.give(3, 1);
+    indices.ended(&HashSet::from([3]));
+    indices.committed(&HashSet::from([3]), 9);
+    assert_eq!(indices.owed(class, 11, 0), None, "nothing owed");
+    assert_eq!(
+        indices.target(class, Some(0)),
+        Some(1),
+        "outside the class: the lowest"
+    );
+    let line = indices.line();
+    assert!(
+        line.ends_with(
+            "1 placed at an index whose holders' commits were in flight, after waiting for them \
+             (7 ns)"
+        ),
+        "{line}"
     );
 }
 

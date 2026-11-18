@@ -28,6 +28,7 @@ use metal2vulkan_rt as rt;
 use places::{class_index, Place, Places};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// What the play skipped because the runtime does not build it yet.
@@ -215,9 +216,10 @@ pub struct NewRuntime {
     outside: HashSet<u64>,
     /// Each constexpr sampler's index, by its state words.
     constexprs: HashMap<[u64; 2], u32>,
-    /// The commits so far, and the committed command buffers not yet seen complete, in order.
+    /// The commits so far, and the committed command buffers not yet seen retired, in order, each
+    /// with the flag its completed handler sets ([`commit`](Self::commit)).
     commits: u64,
-    in_flight: VecDeque<(u64, rt::CommandBuffer)>,
+    in_flight: VecDeque<(u64, rt::CommandBuffer, Arc<AtomicBool>)>,
     /// The commits that have completed, every earlier one with them.
     completed: u64,
     skips: Skips,
@@ -247,8 +249,10 @@ pub struct NewRuntime {
     /// The staging places of each command buffer not yet committed, which hold the bytes of its
     /// guest-RAM copies: given back at its commit, free once it completes.
     staging: HashMap<u64, Vec<Place>>,
-    /// The buffers in a place of the play's own that an encoder of each command buffer not yet
-    /// committed named: a release of one waits for those command buffers (`Places::give`).
+    /// The buffers in a place of the play's own, textures and sampler states that an encoder of
+    /// each command buffer not yet committed named: a release of a buffer waits for those command
+    /// buffers (`Places::give`), and a placement at a texture's or sampler state's index for
+    /// their commits (`Indices::owed`).
     users: HashMap<u64, HashSet<u64>>,
     /// The CPU copies of a two-copy stream's Managed buffers on a one-copy device
     /// (`second`).
@@ -657,18 +661,45 @@ impl NewRuntime {
         Ok(())
     }
 
-    /// The commits that have completed, every earlier one with them.
+    /// Commits `command_buffer` as the next commit, in flight until its completed handler runs:
+    /// the runtime runs it once it has let go of what the command buffer held, the textures and
+    /// samplers it named with their indices among them, which its status alone does not say
+    /// (the status changes first).
+    fn commit(&mut self, command_buffer: rt::CommandBuffer) -> Result<(), rt::Error> {
+        let retired = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&retired);
+        command_buffer.add_completed_handler(move |_| flag.store(true, Ordering::Release))?;
+        command_buffer.commit()?;
+        self.commits += 1;
+        self.in_flight
+            .push_back((self.commits, command_buffer, retired));
+        Ok(())
+    }
+
+    /// The commits that have retired ([`commit`](Self::commit)), every earlier one with them.
     fn completed(&mut self) -> u64 {
-        while let Some((at, front)) = self.in_flight.front() {
-            match front.status() {
-                rt::CommandBufferStatus::Completed | rt::CommandBufferStatus::Error => {
-                    self.completed = *at;
-                    self.in_flight.pop_front();
-                }
-                _ => break,
+        while let Some((at, _, retired)) = self.in_flight.front() {
+            if !retired.load(Ordering::Acquire) {
+                break;
             }
+            self.completed = *at;
+            self.in_flight.pop_front();
         }
         self.completed
+    }
+
+    /// Waits until the commits up to `commit` have retired: `waitUntilCompleted` returns once the
+    /// command buffer's handlers have run.
+    fn wait_for(&mut self, commit: u64) {
+        while self.completed() < commit {
+            let Some((_, front, retired)) = self.in_flight.front() else {
+                return;
+            };
+            front.wait_until_completed();
+            if !retired.load(Ordering::Acquire) {
+                return;
+            }
+        }
     }
 
     /// `make` at the index the stream names for the object `call` makes (`indices`): the call's
@@ -684,9 +715,24 @@ impl NewRuntime {
         // The ID's low half is its index (docs/RESOURCE-ID.md).
         let recorded = recorded.map(|(_, id)| id as u32);
         let named = self.named.or(recorded);
+        if let Some(index) = self.indices.target(class, named) {
+            self.settle(class, index);
+        }
         match self.indices.place(call.result, class, named, make) {
             Some(made) => made.map_err(failed(call)),
             None => Err(refuse(call, format!("every {class:?} index is in use"))),
+        }
+    }
+
+    /// Before a placement at `index` of `class`: waits for the commits that named an object
+    /// holding it to retire, where they have not (`Indices::owed`), and counts the wait.
+    fn settle(&mut self, class: rt::IndexClass, index: u32) {
+        let retired = self.completed();
+        if let Some(commit) = self.indices.owed(class, index, retired) {
+            let began = std::time::Instant::now();
+            self.wait_for(commit);
+            let nanos = u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            self.indices.waited(class, index, nanos);
         }
     }
 
@@ -698,6 +744,9 @@ impl NewRuntime {
         class: rt::IndexClass,
         make: impl Fn(u32) -> Result<T, rt::Error>,
     ) -> Result<T, PlayError> {
+        if let Some(index) = self.indices.highest(class, |_| false) {
+            self.settle(class, index);
+        }
         match self.indices.top(call.result, class, make) {
             Some(made) => made.map_err(failed(call)),
             None => Err(refuse(call, format!("every {class:?} index is in use"))),
@@ -1574,7 +1623,8 @@ impl Backend for NewRuntime {
                 let users = self.users_of(call.receiver);
                 self.places.give(place, self.commits, users);
             }
-            self.indices.give(call.receiver);
+            let users = self.users_of(call.receiver).len();
+            self.indices.give(call.receiver, users);
             self.resource_indices.remove(&call.receiver);
             match self.objects.remove(&call.receiver) {
                 Some(Object::Buffer(_, Some(place))) => {
@@ -1596,7 +1646,8 @@ impl Backend for NewRuntime {
                     for place in self.staging.remove(&call.receiver).unwrap_or_default() {
                         self.places.give(place, self.commits, Vec::new());
                     }
-                    if self.users.remove(&call.receiver).is_some() {
+                    if let Some(named) = self.users.remove(&call.receiver) {
+                        self.indices.ended(&named);
                         self.places.ended(call.receiver, self.commits);
                     }
                 }
@@ -1611,7 +1662,12 @@ impl Backend for NewRuntime {
             self.unbound.encoded(call, self.at.0, self.at.1);
             let mut named = Vec::new();
             objects_named(&call.args, &mut named);
-            named.retain(|id| matches!(self.objects.get(id), Some(Object::Buffer(_, Some(_)))));
+            named.retain(|id| {
+                matches!(
+                    self.objects.get(id),
+                    Some(Object::Buffer(_, Some(_)) | Object::Texture(_) | Object::Sampler(_))
+                )
+            });
             if !named.is_empty() {
                 self.users.entry(command_buffer).or_default().extend(named);
             }

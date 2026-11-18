@@ -123,9 +123,7 @@ impl NewRuntime {
             }
         }
         blit.end_encoding();
-        command_buffer.commit().map_err(failed(call))?;
-        self.commits += 1;
-        self.in_flight.push_back((self.commits, command_buffer));
+        self.commit(command_buffer).map_err(failed(call))?;
         for place in places {
             self.places.give(place, self.commits, Vec::new());
         }
@@ -174,17 +172,16 @@ impl NewRuntime {
             "parallelRenderCommandEncoderWithDescriptor:" => self.skip_encoder(),
             "commit" => {
                 self.copy_named(call)?;
-                command_buffer.commit().map_err(failed(call))?;
-                self.commits += 1;
+                self.commit(command_buffer).map_err(failed(call))?;
                 // Its first use committed, a no-copy Managed buffer's GPU copy changes only by
                 // `didModifyRange:` from here.
                 self.fresh.retain(|_, user| *user != Some(call.receiver));
                 self.unwritten.committed(call.receiver);
-                self.in_flight.push_back((self.commits, command_buffer));
                 for place in self.staging.remove(&call.receiver).unwrap_or_default() {
                     self.places.give(place, self.commits, Vec::new());
                 }
-                if self.users.remove(&call.receiver).is_some() {
+                if let Some(named) = self.users.remove(&call.receiver) {
+                    self.indices.committed(&named, self.commits);
                     self.places.ended(call.receiver, self.commits);
                 }
                 Ok(None)
