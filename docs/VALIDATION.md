@@ -299,6 +299,14 @@ note under `refs/notes/matrix`: one JSON document per commit, kept in the local 
 never pushed. `scripts/matrix/matrix show SHA` prints a note's verdicts, one line per leg.
 CONTRIBUTING.md says how to run it.
 
+Both end with one table: every harness row over its limit on every leg (the harness budget
+below), with its kind (GPU time, host time, or count for the instructions gate), its ratio and
+limit, the frozen arm's verdict on it (`VOID`, `stands`, `rebased` or `no base`), and its
+status, from `scripts/matrix/status.tsv` by card and row: an open record, with its owner and its
+age in rounds; a known gap, with the place it was ruled; or, for a row with neither, `NEW` in the
+first round it is over and `UNOWNED` after. A row of a card's own variance (`CARD_VARIANCE`)
+reads as its card's known gap. The table changes no verdict.
+
 A leg is one GPU, named by its PCI `vendor:device`, or `lavapipe`, or `lint`. Each GPU runs on one node, and
 the nodes run at once; a node with several leg GPUs runs their device tests in turn in one job that
 holds them, then times each GPU in a job of its own.

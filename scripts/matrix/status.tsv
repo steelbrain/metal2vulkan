@@ -1,0 +1,28 @@
+# The status of each harness row the matrix's report lists over its limit (results.over_rows),
+# by card and row, read by results.read_status: one entry a line, `|` between its fields.
+#   card    a GPU leg's card, vendor:device; its extra legs (vendor:device@node) take its entries
+#   row     a harness row; `*` matches any run of characters
+#   status  open: an open record, its owner in `who`, the round it first went over in `since`
+#           gap: a known gap, the place it was ruled in `who`
+#           note: a note alone; the row reads NEW or UNOWNED as a row with no entry does
+#   note    shown beside the status, or `-`
+# A row with no open record or gap reads NEW in the first round it is over and UNOWNED after.
+# An open record leaves when its row is within its limit again; a gap carries its row's ceiling.
+card      | row                      | status | who                                  | since      | note
+10de:1e87 | create_64MiB/first_take  | gap    | the planner's ruling of 2026-11-18   | -          | -
+10de:2204 | create_64MiB/first_take  | gap    | the planner's ruling of 2026-11-18   | -          | -
+1002:15bf | create_64MiB*            | note   | -                                    | -          | not a known gap: unjudged until the first interleaved round
+1002:1900 | create_64MiB*            | note   | -                                    | -          | not a known gap: unjudged until the first interleaved round
+1002:699f | create_64MiB*            | note   | -                                    | -          | not a known gap: unjudged until the first interleaved round
+1002:744c | create_64MiB*            | note   | -                                    | -          | not a known gap: unjudged until the first interleaved round
+8086:a7a0 | row_cells                | open   | identity                             | 795c834ded | -
+10de:1e87 | frame_5cb                | open   | core                                 | 140714ceae | latency from idle equal; throughput 8-14% behind
+10de:1e87 | frame                    | note   | -                                    | -          | new ahead in throughput and in latency from idle
+8086:a7a0 | frame_5cb                | open   | core                                 | 140714ceae | latency from idle ahead; throughput about 8% behind, the ranges overlapping
+8086:a7a0 | frame                    | note   | -                                    | -          | new ahead in throughput and in latency from idle
+8086:a7a0 | constant_*               | note   | -                                    | -          | one time-boxed investigation after the first interleaved round
+8086:a7a0 | constexpr_sampling       | note   | -                                    | -          | one time-boxed investigation after the first interleaved round
+8086:a7a0 | sampling_deep*           | note   | -                                    | -          | one time-boxed investigation after the first interleaved round
+8086:a7a0 | sampling_distinct*       | note   | -                                    | -          | one time-boxed investigation after the first interleaved round
+8086:a7a0 | threadgroup_scan         | note   | -                                    | -          | one time-boxed investigation after the first interleaved round
+8086:a7a0 | waves                    | note   | -                                    | -          | one time-boxed investigation after the first interleaved round

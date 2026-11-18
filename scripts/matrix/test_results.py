@@ -784,5 +784,91 @@ class HarnessBudgetTests(unittest.TestCase):
                 self.assertGreater(ceiling, results.HARNESS_BUDGET, f"{leg} {row}")
 
 
+class OverTableTests(unittest.TestCase):
+    def setUp(self):
+        for name, value in (("HARNESS_FLOORS", {}), ("HARNESS_GPU_FLOORS", {}), ("CARD_VARIANCE", {}),
+                            ("HARNESS_CEILINGS", {"a:0001": {"listed": 2.0}}), ("STORED_INSTRUCTIONS", {})):
+            patch = mock.patch.object(results, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_the_stored_status_table_reads_and_a_malformed_entry_is_refused(self):
+        stored = results.read_status((Path(results.__file__).parent / "status.tsv").read_text())
+        self.assertTrue(stored)
+        self.assertTrue(all(status in results.STATUSES for _, _, status, _, _, _ in stored))
+        head = "card | row | status | who | since | note\n"
+        self.assertEqual(results.read_status(head + "10de:1e87 | frame | open | core | 140714ceae | -\n"),
+                         [("10de:1e87", "frame", "open", "core", "140714ceae", "-")])
+        for bad in ("10de:1e87 | frame | open | core | - | -",  # an open record without its first round
+                    "10de:1e87 | frame | gap | - | - | -",  # a gap without its place
+                    "10de:1e87 | frame | closed | core | - | -",  # no such status
+                    "nvidia | frame | gap | here | - | -",  # not a card
+                    "10de:1e87 | frame | gap | here | -"):  # a field short
+            with self.assertRaises(ValueError, msg=bad):
+                results.read_status(head + bad + "\n")
+
+    def test_every_row_past_its_limit_is_listed_with_its_kind_and_the_ratio_it_is_judged_by(self):
+        row = "create_state/first"
+        times = {"harness-old/alu": 100.0, "harness-new/alu": 110.0,
+                 "harness-old/frame": 100.0, "harness-new/frame": 102.0,
+                 "harness-old/listed": 100.0, "harness-new/listed": 150.0,
+                 "harness-old/sampling": 30.0, "harness-new/sampling": 30.0,
+                 "harness-gpu-old/sampling": 20.0, "harness-gpu-new/sampling": 30.0,
+                 "harness-old/bandwidth": 100.0, "harness-new/bandwidth": 120.0,
+                 f"harness-old/{row}": 1000.0, f"harness-new/{row}": 3000.0,
+                 "harness-old/create_state/first_call": 1000.0, "harness-new/create_state/first_call": 9000.0}
+        for n in range(2, results.FIRST_RUNS + 1):
+            for runtime, value in (("old", 1000.0), ("new", 1200.0)):
+                times[f"{results.HARNESS_FIRST}{row}/{n}/{runtime}"] = value
+                times[f"{results.HARNESS_FIRST}create_state/first_call/{n}/{runtime}"] = 9 * value
+        # bandwidth's re-timed pairs bring it within; alu's keep it past, judged by their median.
+        for pair, (old, new) in enumerate(((100.0, 101.0), (100.0, 102.0)), 1):
+            times[f"{results.HARNESS_RETIME}bandwidth/{pair}/old"] = old
+            times[f"{results.HARNESS_RETIME}bandwidth/{pair}/new"] = new
+            times[f"{results.HARNESS_RETIME}alu/{pair}/old"] = old
+            times[f"{results.HARNESS_RETIME}alu/{pair}/new"] = new + 7.0
+        counted = {"harness-new/frame/per_run": 3000, "harness-old/frame/per_run": 2000,
+                   "harness-new/frame/own_per_run": 2500}
+        with mock.patch.object(results, "stored_count", lambda leg_id, r: 2000 if r == "frame" else None):
+            over = results.over_rows("a:0001", recs(time=times, instructions=counted))
+        # frame's time is within; its own count is past both of the instructions gate's limits.
+        # listed is within its ceiling; the creation call alone is shown, never judged.
+        self.assertEqual([(r, kind, round(ratio, 3), round(limit, 3)) for r, kind, ratio, limit in over], [
+            ("alu", "host time", 1.085, 1.03), (row, "host time", 1.2, 1.03),
+            ("frame", "count", 1.25, 1.03), ("frame", "count", 1.25, 1.0),
+            ("sampling", "GPU time", 1.5, 1.03)])
+
+    def test_a_listed_row_reads_its_status_and_an_unlisted_one_new_then_unowned(self):
+        entries = [("a:0001", "frame", "open", "core", "abc1234", "-"),
+                   ("a:0001", "sampling_*", "gap", "a ruling", "-", "its ceiling holds"),
+                   ("a:0001", "alu", "note", "-", "-", "looked at once")]
+        times = {"harness-old/frame": 100.0, "harness-new/frame": 150.0,
+                 "harness-old/sampling_deep": 100.0, "harness-new/sampling_deep": 150.0,
+                 "harness-old/alu": 100.0, "harness-new/alu": 150.0,
+                 "harness-old/waves": 100.0, "harness-new/waves": 150.0}
+        base = recs(time=dict(times, **{"harness-new/waves": 100.0, "harness-old/frame": 80.0}))
+        rounds = {"abc1234": 3}
+        with mock.patch.object(results, "STATUS", entries):
+            lines = results.over_lines("a:0001@node", recs(time=times), base, None, rounds.get)
+            self.assertEqual([line.split(None, 1)[1] for line in lines], [
+                "alu                                  host time  1.500 over 1.030  stands   UNOWNED; looked at once",
+                "frame                                host time  1.500 over 1.030  VOID     open, core's, 3 rounds",
+                "sampling_deep                        host time  1.500 over 1.030  stands   known gap: a ruling; "
+                "its ceiling holds",
+                "waves                                host time  1.500 over 1.030  stands   NEW"])
+            self.assertTrue(lines[0].startswith("a:0001@node "))
+            # Without a base, every unlisted row is new and the arm has nothing to say; on another
+            # harness, only the creation rows are compared.
+            lines = results.over_lines("a:0001", recs(time=times), None, None, rounds.get)
+            self.assertEqual([line.split()[-1] for line in lines], ["once", "rounds", "holds", "NEW"])
+            self.assertEqual({line.split("  ")[-2].strip() for line in
+                              results.over_lines("a:0001", recs(time=times), base, results.REBASED_TREES,
+                                                 rounds.get)}, {"rebased"})
+        with mock.patch.object(results, "STATUS", []), \
+                mock.patch.object(results, "CARD_VARIANCE", {"a:0001": {"waves": "it varies"}}):
+            self.assertEqual(results.row_status("a:0001", "waves", True, rounds.get),
+                             "known gap: the card's own variance (CARD_VARIANCE)")
+
+
 if __name__ == "__main__":
     unittest.main()

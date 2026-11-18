@@ -871,6 +871,117 @@ def harness_budget(leg_id, leg, base=None, rebased=None):
     return problems, parked
 
 
+def over_rows(leg_id, records):
+    """Every harness row of a leg's RECORDS past its limit on LEG_ID as harness_budget judges it,
+    each `(row, kind, ratio, limit)`, in row order: kind `GPU time` for a row judged on its GPU
+    time (gpu_judged), `host time` for one judged on its time, `count` for the instructions gate
+    (EXACT against the stored count, LENIENT against the old runtime's whole count), the ratio
+    new over old (the median of the re-timed pairs where the row was re-timed, of the FIRST_RUNS
+    processes' medians for a creation row's first sample). A row its re-timed pairs bring within
+    is not over; a shown first sample (SHOWN_FIRST) is never judged, so never over."""
+    times, counted = records["time"], records["instructions"]
+    out = []
+    for key in sorted(times):
+        row = key[len(HARNESS_NEW):]
+        if not key.startswith(HARNESS_NEW) or not times.get(HARNESS_OLD + row):
+            continue
+        new_i, old_i = (counted.get(f"harness-{runtime}/{row}{INSTRUCTIONS_PER_RUN}") for runtime in ("new", "old"))
+        own = counted.get(f"harness-new/{row}{OWN_PER_RUN}")
+        if row.startswith(WALL_ROWS) and new_i and old_i and own is not None:
+            stored = stored_count(leg_id, row)
+            if stored and own > HARNESS_BUDGET * stored:
+                out.append((row, "count", own / stored, HARNESS_BUDGET))
+            if own > old_i:
+                out.append((row, "count", own / old_i, 1.0))
+        if first_row(row) and any(row.endswith(end) for end in SHOWN_FIRST):
+            continue
+        if first_row(row):
+            samples = first_samples(times, row)
+            if samples is None:
+                continue
+            old, new = (statistics.median(values) for values in samples)
+            kind, ratio, limit = "host time", new / old, row_limit(leg_id, row)
+        else:
+            gpu = gpu_judged(times, row)
+            prefix = HARNESS_GPU if gpu else "harness-"
+            new, old = (times[f"{prefix}{runtime}/{row}"] for runtime in ("new", "old"))
+            kind, ratio, limit = ("GPU time" if gpu else "host time"), new / old, row_limit(leg_id, row, gpu)
+            ratios = retimed(times, row, gpu) if ratio > limit else None
+            if ratios is not None:
+                ratio = statistics.median(ratios)
+        if ratio > limit:
+            out.append((row, kind, ratio, limit))
+    return out
+
+
+#: The status of each row a report lists over its limit (over_rows), by card and row, read from
+#: status.tsv (read_status): `open`, an open record, with its owner and the round it first went
+#: over; `gap`, a known gap, with the place it was ruled; `note`, a note alone. A row with no open
+#: record or gap reads NEW in the first round it is over (not over in its leg's base) and UNOWNED
+#: after; a CARD_VARIANCE row reads as its card's known gap.
+STATUSES = ("open", "gap", "note")
+
+
+def read_status(text):
+    """The status table's TEXT: `#` comments, a header line, then one entry a line, `|` between
+    its fields: card (`vendor:device`), row (`*` matches any run of characters), status
+    (STATUSES), who owns it or where it was ruled, since (an open record's first round, a commit;
+    else `-`) and a note (or `-`). Returns [(card, row, status, who, since, note)]; a malformed
+    line raises ValueError."""
+    entries = []
+    lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    for line in lines[1:]:
+        fields = [field.strip() for field in line.split("|")]
+        if len(fields) != 6:
+            raise ValueError(f"status.tsv: {len(fields)} fields, not 6: {line}")
+        card, row, status, who, since, note = fields
+        if (not re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{4}", card) or status not in STATUSES or not row
+                or (status == "open") != bool(re.fullmatch(r"[0-9a-f]{7,40}", since))
+                or (status != "note" and who == "-")):
+            raise ValueError(f"status.tsv: malformed entry: {line}")
+        entries.append((card, row, status, who, since, note))
+    return entries
+
+
+STATUS = read_status((Path(__file__).resolve().parent / "status.tsv").read_text())
+
+
+def row_status(leg_id, row, over_before, rounds_since):
+    """ROW's status on LEG_ID for the report's table: `open, <who>'s, <n> rounds` (ROUNDS_SINCE
+    gives the rounds from a commit on, this one's included, or None), `known gap: <where>`,
+    `NEW`, or `UNOWNED` where OVER_BEFORE (the row was over in the leg's base), each with the
+    entries' notes."""
+    entries = [entry for entry in STATUS
+               if entry[0] == card_of(leg_id) and re.fullmatch(re.escape(entry[1]).replace(r"\*", ".*"), row)]
+    notes = "".join(f"; {note}" for _, _, _, _, _, note in entries if note != "-")
+    for _, _, status, who, since, _ in entries:
+        if status == "open":
+            age = rounds_since(since)
+            return f"open, {who}'s, {'?' if age is None else age} round{'' if age == 1 else 's'}" + notes
+        if status == "gap":
+            return f"known gap: {who}" + notes
+    if row in CARD_VARIANCE.get(card_of(leg_id), {}):
+        return "known gap: the card's own variance (CARD_VARIANCE)" + notes
+    return ("UNOWNED" if over_before else "NEW") + notes
+
+
+def over_lines(leg_id, records, base, rebased, rounds_since):
+    """The report's table on LEG_ID: one line per row over its limit in the leg's RECORDS
+    (over_rows): its kind, its ratio and limit, the frozen arm's verdict against BASE, the base
+    leg's records (`VOID`, `stands`, `rebased` where REBASED leaves it uncompared, `no base`; `-`
+    for a count), and its status (row_status)."""
+    base_times = base and base["time"]
+    before = {(row, kind) for row, kind, _, _ in over_rows(leg_id, base)} if base else set()
+    lines = []
+    for row, kind, ratio, limit in over_rows(leg_id, records):
+        move = frozen_move(records["time"], base_times, row)
+        meter = ("-" if kind == "count" else "no base" if move is None else "rebased" if frozen_rebased(row, rebased)
+                 else "VOID" if abs(move[2]) > FROZEN_DRIFT else "stands")
+        status = row_status(leg_id, row, (row, kind) in before, rounds_since)
+        lines.append(f"{leg_id:<24} {row:<36} {kind:<9} {ratio:6.3f} over {limit:.3f}  {meter:<7}  {status}")
+    return lines
+
+
 def harness_rows(records, base=None, rebased=None):
     """Every harness row timed on either runtime in a leg's RECORDS, one line each: its time, its
     GPU time (HARNESS_GPU) and, where recorded, its instructions per run (with its own threads'

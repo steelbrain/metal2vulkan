@@ -925,6 +925,7 @@ def run_cmd(sha, only, dry):
     git("notes", f"--ref={NOTES}", "add", "-f", "-F", str(path), sha)
     for leg_id in sorted(entries):
         print_leg(sha, leg_id, doc["legs"][leg_id])
+    print_over(sha, doc)
     failed = sum(1 for e in entries.values() if e["verdict"] != "pass")
     print(f"matrix {sha[:12]}: {len(entries) - failed} of {len(entries)} legs pass, {wall} min wall; note {NOTES}")
     return 1 if failed else 0
@@ -949,12 +950,43 @@ def print_leg(sha, leg_id, leg):
               + "".join(f"; {row} {move:+.1%}" for row, _, _, move in void))
 
 
+def rounds_since(sha, since):
+    """How many rounds ran on SHA's first-parent line from the commit SINCE on, SHA's included:
+    its noted commits; None where SINCE is not on that line within 500 commits."""
+    noted = {line.split()[1] for line in git("notes", f"--ref={NOTES}", "list").splitlines() if line}
+    since = git("rev-parse", "--verify", "--quiet", f"{since}^{{commit}}", check=False)
+    count = 0
+    for commit in git("rev-list", "--first-parent", "--max-count=500", sha, check=False).splitlines():
+        count += commit in noted
+        if commit == since:
+            return count
+    return None
+
+
+def print_over(sha, doc):
+    """The report's one table: every row over its limit on each leg of SHA's note DOC
+    (results.over_lines), with the frozen arm's verdict on its base and its status
+    (results.row_status, status.tsv)."""
+    lines = []
+    for leg_id, leg in sorted(doc["legs"].items()):
+        if not (leg.get("records") or {}).get("time"):
+            continue
+        base = leg.get("base") and (note(leg["base"]) or {}).get("legs", {}).get(leg_id)
+        rebased = base and frozen_rebase(sha, leg.get("shape"), leg["base"], base)
+        lines += results.over_lines(leg_id, leg["records"], base and base["records"], rebased,
+                                    lambda since: rounds_since(sha, since))
+    print(f"rows over their limits: {len(lines)}")
+    for line in lines:
+        print(f"  {line}")
+
+
 def show_cmd(sha):
     doc = note(sha)
     if not doc:
         sys.exit(f"no matrix note on {sha}")
     for leg_id in sorted(doc["legs"]):
         print_leg(sha, leg_id, doc["legs"][leg_id])
+    print_over(sha, doc)
     last = doc["runs"][-1]
     print(f"matrix {sha[:12]}: last run {last['started']}, {last['minutes']} min wall, jobs {' '.join(last['jobs'])}")
 
