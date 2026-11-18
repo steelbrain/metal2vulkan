@@ -11,25 +11,9 @@ pub(crate) mod on_device {
     use crate::device::lock;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-    Block,
-    BlockId,
-    BlockMappings,
-    Buffer,
-    CommandBuffer,
-    CommandBufferError,
-    CommandBufferStatus,
-    CommandQueue,
-    Device,
-    DeviceOptions,
-    DispatchType,
-    Error,
-    Fence,
-    Gauges,
-    Instance,
-    MemoryClass,
-    Refusal,
-    SharedEvent,
-    host_time,
+        host_time, Block, BlockId, BlockMappings, Buffer, CommandBuffer, CommandBufferError,
+        CommandBufferStatus, CommandQueue, Device, DeviceOptions, DispatchType, Error, Fence,
+        Gauges, Instance, MemoryClass, Refusal, SharedEvent,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
