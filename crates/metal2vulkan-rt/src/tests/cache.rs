@@ -2,10 +2,11 @@
 //! a lookup that reads no state, the state file read at open with no listing and rebuilt where it
 //! is torn or missing, a removal cut short (a process's exit in it included) finished by the next
 //! open, an earlier version's pipeline data removed at open, torn files removed, a blob that does
-//! not check refused, and stores in threads and processes sharing one directory without losing a
-//! count or reading a file another was writing.
+//! not check refused, a blob named by its device's whole pipeline cache header, at most four
+//! blobs kept, and stores in threads and processes sharing one directory without losing a count
+//! or reading a file another was writing.
 
-use crate::cache::{checksum, frame, unframe, State, Store};
+use crate::cache::{blob_name, checksum, frame, prune_blobs, unframe, State, Store, BLOBS_KEPT};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -437,6 +438,74 @@ fn the_checksum_changes_with_any_one_bit() {
 
 /// The `pipelines/` directories an earlier version kept pipeline data in under young and old are
 /// removed by the store's removal thread at open, and the lowerings stay.
+/// A pipeline cache header of version one: its length, version, vendor and device words, and the
+/// `pipelineCacheUUID`.
+fn header(vendor: u32, device: u32, uuid: [u8; 16]) -> [u8; 32] {
+    let mut header = [0; 32];
+    header[..4].copy_from_slice(&32u32.to_le_bytes());
+    header[4..8].copy_from_slice(&1u32.to_le_bytes());
+    header[8..12].copy_from_slice(&vendor.to_le_bytes());
+    header[12..16].copy_from_slice(&device.to_le_bytes());
+    header[16..].copy_from_slice(&uuid);
+    header
+}
+
+#[test]
+fn a_blob_is_named_by_its_devices_whole_header() {
+    let name = blob_name(&header(1, 2, [3; 16]));
+    // Two driver versions of one device: their headers differ only in the UUID.
+    let mut uuid = [3; 16];
+    uuid[15] = 4;
+    assert_ne!(name, blob_name(&header(1, 2, uuid)), "a new driver's UUID");
+    assert_ne!(name, blob_name(&header(1, 5, [3; 16])), "another device");
+    assert_eq!(name, blob_name(&header(1, 2, [3; 16])));
+    assert_eq!(name.len(), "pipelines-".len() + 64, "{name}");
+}
+
+/// The fill past capacity: six blobs of other headers, a temporary file and the state beside them;
+/// a device's seed keeps its own blob and the three most recently used of the others, removes the
+/// rest and touches nothing else, whether or not its own blob is there yet.
+#[test]
+fn a_directory_keeps_at_most_four_blobs_the_least_recently_used_removed() {
+    let scratch = Scratch::new("blobs");
+    fs::create_dir_all(&scratch.0).expect("the directory");
+    let base = std::time::SystemTime::now() - Duration::from_secs(600);
+    let others: Vec<String> = (0..6u8)
+        .map(|n| {
+            let name = blob_name(&header(1, 2, [n; 16]));
+            let file = fs::File::create(scratch.0.join(&name)).expect("a blob");
+            let time = base + Duration::from_secs(u64::from(n) * 10);
+            file.set_modified(time).expect("its time");
+            name
+        })
+        .collect();
+    let temp = format!("{}.1234.0.tmp", others[0]);
+    fs::write(scratch.0.join(&temp), b"half").expect("a temporary file");
+    fs::write(scratch.0.join("state"), b"state").expect("a state");
+    let own = blob_name(&header(1, 2, [9; 16]));
+    let blobs = || {
+        let mut names: Vec<String> = fs::read_dir(&scratch.0)
+            .expect("the directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("pipelines-") && !name.ends_with(".tmp"))
+            .collect();
+        names.sort();
+        names
+    };
+    let mut kept = others[6 - (BLOBS_KEPT - 1)..].to_vec();
+    kept.sort();
+    prune_blobs(&scratch.0, &own);
+    assert_eq!(blobs(), kept, "the three most recently used of the others");
+    fs::write(scratch.0.join(&own), b"own").expect("its own blob");
+    prune_blobs(&scratch.0, &own);
+    kept.push(own.clone());
+    kept.sort();
+    assert_eq!(blobs(), kept, "its own and those three: four");
+    assert!(scratch.0.join(&temp).exists(), "the temporary file stays");
+    assert!(scratch.0.join("state").exists(), "the state stays");
+}
+
 #[test]
 fn an_earlier_versions_pipeline_data_is_removed_at_open() {
     let scratch = Scratch::new("store-earlier");

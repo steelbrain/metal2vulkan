@@ -25,6 +25,8 @@ pub(crate) enum Metric {
     Translations,
     /// [`Metrics::translations_loaded`].
     TranslationsLoaded,
+    /// [`Metrics::creations_before_seed`].
+    CreationsBeforeSeed,
     /// [`Metrics::ring_writes`].
     RingWrites,
     /// [`Metrics::upload_waits`].
@@ -133,6 +135,7 @@ struct Atomics {
     blocks_reused: AtomicU64,
     translations: AtomicU64,
     translations_loaded: AtomicU64,
+    creations_before_seed: AtomicU64,
     ring_writes: AtomicU64,
     upload_waits: AtomicU64,
     synchronizations: AtomicU64,
@@ -202,6 +205,7 @@ impl Counters {
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
+            Metric::CreationsBeforeSeed => &a.creations_before_seed,
             Metric::RingWrites => &a.ring_writes,
             Metric::UploadWaits => &a.upload_waits,
             Metric::Synchronizations => &a.synchronizations,
@@ -407,6 +411,7 @@ impl Counters {
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
+            creations_before_seed: a.creations_before_seed.load(Relaxed),
             cache_bytes_written: a.cache_bytes_written.load(Relaxed),
             ring_writes: a.ring_writes.load(Relaxed),
             upload_waits: a.upload_waits.load(Relaxed),
@@ -534,6 +539,13 @@ pub struct Metrics {
     pub translations: u64,
     /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
     pub translations_loaded: u64,
+    /// `VkPipeline` creations that went through the device's empty pipeline cache while the
+    /// reaper read and took in the device's blob ([`DeviceOptions::pipeline_cache_dir`]): each
+    /// compiled without the blob's data, and is in the blob only where the merge took it. Zero
+    /// with no directory, or where the device's first creation came after the seed.
+    ///
+    /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
+    pub creations_before_seed: u64,
     /// Bytes written to the cache directory ([`DeviceOptions::pipeline_cache_dir`]): lowered
     /// kernels, and the device's pipeline cache blob each time it is written: once creation is
     /// quiet where the cache grew by more than an eighth since the last write, and at the

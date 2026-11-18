@@ -250,9 +250,10 @@ pub struct DeviceOptions {
     /// ([`Metrics::translations_loaded`]). The lowerings take at most
     /// [`pipeline_cache_cap`](Self::pipeline_cache_cap) bytes, in two generations of half of it
     /// each: a file used again moves into the young one, and the old one is removed whole when
-    /// the young one fills. Beside them, one file per kind of device (named by its pipeline cache
-    /// header) holds the data of the `VkPipelineCache` every `VkPipeline` of the device is made
-    /// through, at most 32 MiB: the device's cache takes it in off every guest thread, and it is
+    /// the young one fills. Beside them, one file per pipeline cache header (a kind of device and
+    /// driver version; at most four such files, the least recently used removed) holds the data
+    /// of the `VkPipelineCache` every `VkPipeline` of the device is made through, at most 32 MiB:
+    /// the device's cache takes it in off every guest thread, and it is
     /// replaced, never appended to, once pipeline creation has been quiet for 20 ms after the
     /// cache grew by more than an eighth, and at the device's drop where the cache changed. A
     /// file that does not check, or a failed read or write, is a miss and never fails a call.

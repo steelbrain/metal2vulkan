@@ -934,11 +934,12 @@ device's, internally synchronized, which threads that create at once share.
 the lowerings from one device to the next:
 
 - `pipelines-<header>`: the pipeline cache's blob, its data as `vkGetPipelineCacheData` gave it
-  after a magic, its length and its checksum, named by the hex of the first 16 bytes of the
-  pipeline cache header the device's driver writes (everything in it but the
-  `pipelineCacheUUID`, so a driver update replaces the blob rather than leaving it beside a new
-  one). One per kind of device: devices of one kind, in one process or several, start from it,
-  and each replaces it.
+  after a magic, its length and its checksum, named by the hex of the whole 32-byte pipeline
+  cache header the device's driver writes, opaque bytes: a device or driver version whose header
+  differs in any byte, its `pipelineCacheUUID` included, has a blob of its own. Devices with one
+  header, in one process or several, start from it, and each replaces it. The directory keeps at
+  most four blobs: a device's seed removes the least recently used past that (a blob's time is
+  its last write, or the last seed that took it), its own counted among the four.
 - `translations/`: each function's lowering, a kernel's or a render pipeline's vertex or fragment
   function's, named by its `FunctionCompileKey`, which covers everything that changes the
   lowering: the function's AIR, entry, constants and linked functions, its lowering inputs (a
@@ -953,8 +954,9 @@ a cache from it, merges into that cache what creations compiled in the empty one
 (`vkMergePipelineCaches`), and makes it the cache creations take; the empty one is destroyed once no
 creation holds it. So no creation waits for the blob's read or the driver's parse of it, which for a
 blob near 32 MiB take tens of milliseconds; a creation that started in the empty cache and ends
-after the merge is not in this run's blob. A blob that does not check, whose data does not begin
-with the device's pipeline cache header (whole, the `pipelineCacheUUID` a new driver version changes
+after the merge is not in this run's blob. `Metrics::creations_before_seed` counts the creations
+that went through the empty cache. A blob that does not check, whose data does not begin with the
+device's pipeline cache header (whole, the `pipelineCacheUUID` a new driver version changes
 included), or that the driver refuses, is removed, and the empty cache stays. Once pipeline creation
 has been quiet for 20 ms (no creation running and none ending) after a creation, the reaper reads
 the cache's size (`vkGetPipelineCacheData` with no buffer), and where it grew by more than an eighth

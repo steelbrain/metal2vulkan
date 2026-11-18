@@ -5,9 +5,11 @@
 //! own, internally synchronized, which threads that create at once share. With a cache directory
 //! ([`DeviceOptions::pipeline_cache_dir`]) the cache starts from the device's blob there: the
 //! cache's data as `vkGetPipelineCacheData` gave it, after a magic, its length and its checksum,
-//! named `pipelines-` and the hex of the first 16 bytes of the pipeline cache header the device's
-//! driver writes (everything in the header but the `pipelineCacheUUID`, which a driver update
-//! changes, so the update replaces the blob rather than leaving it beside a new one). The reaper
+//! named `pipelines-` and the hex of the whole 32-byte pipeline cache header the device's driver
+//! writes, opaque bytes: a device or driver version whose header differs in any byte, its
+//! `pipelineCacheUUID` included, has a blob of its own. A directory keeps at most
+//! [`BLOBS_KEPT`] blobs: a device's seed removes the least recently used past that, its own
+//! counted among the kept. The reaper
 //! makes an empty cache first when it starts, which a creation that comes before it waits for
 //! (microseconds); then it reads the blob and makes a cache from it, merges into that what
 //! creations compiled in the empty cache meanwhile, and makes it the cache creations take. So no
@@ -68,7 +70,7 @@
 //! [`DeviceOptions::pipeline_cache_cap`]: crate::DeviceOptions::pipeline_cache_cap
 //! [`Gauges::pipeline_cache_bytes`]: crate::Gauges::pipeline_cache_bytes
 
-use crate::counters::{Counters, Gauge};
+use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::memory::QUIET_NANOS;
 use crate::times::host_time;
@@ -79,7 +81,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// The cap of the lowerings in a cache directory where the consumer names none: half of it, what
 /// the store is sure to keep, is about seven times the 9.16 MB a long recorded session's 282
@@ -93,6 +95,8 @@ pub(crate) const PIPELINE_CACHE_BOUND: u64 = 32 << 20;
 const MAGIC: &[u8; 8] = b"m2vblob1";
 /// The start of a device's blob's name, under the cache directory.
 const BLOB: &str = "pipelines";
+/// The most blobs a cache directory keeps: four kinds of device or driver versions.
+pub(crate) const BLOBS_KEPT: usize = 4;
 /// What a translation file holds where the translator refused the lowering: bytes no lowering
 /// encodes to, and that a file cut short is not.
 const REFUSED: &[u8] = b"m2v-refused";
@@ -537,6 +541,36 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// The name of the blob of a device whose driver writes the pipeline cache header `header`: the
+/// whole header in hex, opaque bytes.
+pub(crate) fn blob_name(header: &[u8; 32]) -> String {
+    format!("{BLOB}-{}", hex(header))
+}
+
+/// Removes the blobs in `dir` past the [`BLOBS_KEPT`] most recently used (a blob's time is its
+/// last write, or the last seed that took it), the blob named `own` counted among the kept
+/// whether or not it is there yet. A temporary file, and anything not named as a blob, stays.
+pub(crate) fn prune_blobs(dir: &Path, own: &str) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut others: Vec<(SystemTime, PathBuf)> = (entries.flatten())
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            let digits = name.strip_prefix(BLOB)?.strip_prefix('-')?;
+            let blob = digits.len() == 64 && digits.bytes().all(|byte| byte.is_ascii_hexdigit());
+            (blob && name != own).then_some(())?;
+            let time = entry.metadata().and_then(|meta| meta.modified()).ok()?;
+            Some((time, entry.path()))
+        })
+        .collect();
+    others.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    for (_, path) in others.into_iter().skip(BLOBS_KEPT - 1) {
+        let _ = fs::remove_file(path);
+    }
+}
+
 /// Writes `parts`, one after another, to `path` through a temporary file beside it, named for this
 /// process and this write, then renamed over it.
 fn write_whole(path: &Path, parts: &[&[u8]]) -> io::Result<()> {
@@ -632,6 +666,9 @@ pub(crate) struct Caches {
 struct Pipelines {
     /// Whether the reaper made the cache, or found the driver makes none.
     made: bool,
+    /// Whether the reaper is reading and taking in the device's blob, creations going through
+    /// the empty cache meanwhile.
+    seeding: bool,
     /// The cache creations take; none where the driver made none.
     current: Option<Arc<PipelineCache>>,
     /// The caches a fresh one replaced, each destroyed once no creation holds it.
@@ -681,6 +718,9 @@ pub(crate) fn creation(core: &Core) -> Creation<'_> {
     while !pipelines.made {
         pipelines = (caches.made.wait(pipelines)).unwrap_or_else(PoisonError::into_inner);
     }
+    if pipelines.seeding {
+        core.counters.count(Metric::CreationsBeforeSeed);
+    }
     let cache = pipelines.current.clone();
     Creation { core, cache }
 }
@@ -729,6 +769,7 @@ impl Caches {
             blob: OnceLock::new(),
             pipelines: Mutex::new(Pipelines {
                 made: false,
+                seeding: false,
                 current: None,
                 retired: Vec::new(),
                 written: 0,
@@ -835,9 +876,8 @@ impl Caches {
     /// of milliseconds; a creation that ends in the empty cache after the merge is not in this
     /// run's blob.
     ///
-    /// The blob is named by the hex of the header's first 16 bytes: everything in it but the
-    /// `pipelineCacheUUID`, so a driver update replaces a device's blob rather than leaving it
-    /// beside a new one.
+    /// The blob is named by the whole header in hex ([`blob_name`]); before its read, the blobs
+    /// past the [`BLOBS_KEPT`] most recently used are removed, and a blob taken is marked used.
     ///
     /// # Safety
     ///
@@ -857,10 +897,13 @@ impl Caches {
         pipelines.current = empty.map(|cache| Arc::new(PipelineCache(cache)));
         pipelines.written = size;
         pipelines.made = true;
+        pipelines.seeding = self.dir.is_some() && header.is_some();
         drop(pipelines);
         self.made.notify_all();
         if let (Some(dir), Some(header)) = (&self.dir, header) {
-            let path = dir.join(format!("{BLOB}-{}", hex(&header[..16])));
+            let name = blob_name(&header);
+            prune_blobs(dir, &name);
+            let path = dir.join(name);
             let file = read_whole(&path, None).ok().flatten();
             let data = (file.as_deref())
                 .and_then(unframe)
@@ -869,8 +912,13 @@ impl Caches {
             // whole, as its length and checksum show.
             let seeded = data.and_then(|data| unsafe { make_cache(device, data) });
             match seeded {
-                // SAFETY: the cache is the device's, and this thread's alone.
-                Some(seeded) => unsafe { self.take_seeded(device, seeded, counters) },
+                Some(seeded) => {
+                    // Marked used, so the least recently used blobs are the ones removed.
+                    let _ = (File::options().write(true).open(&path))
+                        .and_then(|file| file.set_modified(SystemTime::now()));
+                    // SAFETY: the cache is the device's, and this thread's alone.
+                    unsafe { self.take_seeded(device, seeded, counters) };
+                }
                 None if file.is_some() => {
                     let _ = fs::remove_file(&path);
                 }
@@ -878,6 +926,7 @@ impl Caches {
             }
             let _ = self.blob.set(path);
         }
+        lock(&self.pipelines).seeding = false;
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         self.seeded
             .store(true, std::sync::atomic::Ordering::Release);
@@ -910,6 +959,7 @@ impl Caches {
         let empty = pipelines.current.replace(Arc::new(PipelineCache(seeded)));
         pipelines.retired.extend(empty);
         pipelines.written = written;
+        pipelines.seeding = false;
         drop(pipelines);
         counters.set(Gauge::PipelineCacheBytes, size);
         // SAFETY: the caller's contract.
