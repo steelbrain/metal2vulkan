@@ -41,6 +41,7 @@ fn plan(form: LocalSizeForm, multi_region: bool) -> DispatchPlan {
         grid_edge: false,
         identity_region: None,
         pinned_subgroup_size: None,
+        deep: false,
     }
 }
 
@@ -223,6 +224,12 @@ fn run_region(
     if form == LocalSizeForm::Flat {
         spec.insert(SpecKey::FlatLocalSize, u64::from(n));
     }
+    // A module that declares it runs a region deeper than `DEEP_THREADGROUP` as one row; any other
+    // reads no such key.
+    spec.insert(
+        SpecKey::DeepThreadgroup,
+        u64::from(r.local[2] > DEEP_THREADGROUP),
+    );
     let mut push = Vec::new();
     if let Some((base, threads, nominal)) = r.multi {
         spec.insert(SpecKey::MultiRegion, 1);
@@ -398,6 +405,48 @@ fn single_region_builtins_match_metal() {
             }
         }
     }
+}
+
+/// A kernel that declares `SpecKey::DeepThreadgroup` ([`DispatchPlan::deep`]) runs a region
+/// deeper than `DEEP_THREADGROUP` as one row of its threads, and every builtin keeps Metal's value:
+/// single regions 320 and 100 deep, with and without `MultiRegion`, at both modelled subgroup
+/// widths, and the regions of a `dispatchThreads` grid of threadgroups 128 deep whose edge along
+/// `z` is 60 deep, which runs at its own size. So does a region no deeper.
+#[test]
+fn a_deep_threadgroup_keeps_every_builtin() {
+    for mr in [false, true] {
+        let mut dp = plan(LocalSizeForm::Spec, mr);
+        dp.deep = true;
+        let m = module(&dp);
+        for sg in [SubgroupSize::W32, SubgroupSize::W64] {
+            for (l, groups) in [
+                ([1, 1, 320], [2, 1, 1]),
+                ([2, 3, 100], [1, 2, 1]),
+                ([8, 4, 2], [3, 2, 1]),
+            ] {
+                let r = Region {
+                    local: l,
+                    groups,
+                    multi: None,
+                };
+                let threads = std::array::from_fn(|i| l[i] * groups[i]);
+                check_dispatch(&m, LocalSizeForm::Spec, &[r], threads, l, sg);
+            }
+        }
+    }
+    let mut dp = plan(LocalSizeForm::Spec, true);
+    dp.deep = true;
+    let m = module(&dp);
+    let (threads, l) = ([3, 5, 316], [2, 2, 128]);
+    let regions = thread_regions(threads, l);
+    check_dispatch(
+        &m,
+        LocalSizeForm::Spec,
+        &regions,
+        threads,
+        l,
+        SubgroupSize::W32,
+    );
 }
 
 /// A flattened kernel whose pipeline pins its subgroup size reads no `SubgroupSize` builtin: its
