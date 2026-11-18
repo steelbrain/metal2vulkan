@@ -520,6 +520,7 @@ pub enum Refusal {
         destination_offset: u64,
         /// The bytes copied.
         size: u64,
+    },
     /// A render pass attachment
     /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder))
     /// whose texture was made without `RenderTarget` usage.
@@ -1196,6 +1197,7 @@ impl fmt::Display for Refusal {
             } => write!(
                 f,
                 "a copy of {size} bytes from {source_offset} to {destination_offset} reads bytes it writes"
+            ),
             Refusal::AttachmentUsage { pixel_format } => write!(
                 f,
                 "an attachment's texture of {pixel_format:?} was made without RenderTarget usage"
