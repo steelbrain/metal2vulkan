@@ -7,8 +7,9 @@
 //! grid whose sides the translator's rule picks from the grid's extents (`grid_tile`) and its
 //! region carries, on one `VkPipeline` made with the state, or, for an image-only kernel
 //! (`CompiledFunction::is_image_only`), in workgroups of 16x16x1 on that one; a grid more than one
-//! deep runs in its tiles on a `VkPipeline` that folds the tile, one per tile, made at its first
-//! dispatch; an indirect dispatch runs at its own threadgroup size. A
+//! deep runs in its tiles on a `VkPipeline` that folds the tile, or, for an image-only kernel, in
+//! workgroups of its tile, one `VkPipeline` per tile, made at its first dispatch; an indirect
+//! dispatch runs at its own threadgroup size. A
 //! kernel that observes its partition is lowered
 //! once more, plainly: its whole grids, threadgroup dispatches and indirect dispatches run that
 //! module at their own threadgroup size, and a `dispatchThreads` grid that is not a whole number
@@ -230,9 +231,10 @@ pub(crate) enum Form {
     /// ([`Variant::fold`]).
     Tiled,
     /// The kernel does not observe its partition and is image-only
-    /// (`CompiledFunction::is_image_only`): `whole` runs a direct dispatch of a grid one deep in
-    /// workgroups of [`SQUARE`] at `MultiRegion` 0, whatever the threadgroup size, and a deeper
-    /// grid as [`Form::Tiled`] does.
+    /// (`CompiledFunction::is_image_only`): `whole` runs a direct dispatch at `MultiRegion` 0,
+    /// whatever the threadgroup size, in workgroups of [`SQUARE`] over a grid one deep and of the
+    /// grid's `grid_tile` tile over a deeper one, a tile past the device's
+    /// `maxComputeWorkGroupSize` as [`Form::Tiled`] does.
     Square,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, and a
     /// `dispatchThreads` grid that is not a whole number of threadgroups on the

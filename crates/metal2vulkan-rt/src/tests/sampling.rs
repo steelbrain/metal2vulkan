@@ -303,8 +303,8 @@ mod on_device {
     /// An image-only kernel that does not observe its threadgroup partition (`sample_down`) runs a
     /// grid one deep in 16x16x1 workgroups on the one `VkPipeline` its state made, testing its
     /// edge: over a grid of 20 by 12, ragged in both, a 32x32 destination holds the sample in the
-    /// grid's texels and nothing past them, with no first-use wait. A grid two deep runs in its
-    /// tiles on a `VkPipeline` that folds the tile, made at that dispatch: one wait, the same
+    /// grid's texels and nothing past them, with no first-use wait. A grid two deep runs in
+    /// workgroups of its tile on a `VkPipeline` made at that dispatch: one wait, the same
     /// texels.
     #[test]
     fn every_device_runs_an_image_only_kernel_in_square_workgroups() {

@@ -210,17 +210,18 @@ pub(crate) struct Choice {
 }
 
 /// How a state of `form` runs a dispatch of threadgroup size `size`, direct over `direct` or
-/// indirect:
+/// indirect, on a device whose `maxComputeWorkGroupSize` is `max`:
 /// - indirect: the whole module at its own size;
-/// - an image-only kernel's grid one deep ([`Form::Square`]): the whole module in workgroups of
-///   [`SQUARE`] at `MultiRegion` 0, the region carrying them, flagged where they do not divide
-///   the grid;
-/// - a tiling kernel's grid one deep ([`Form::Tiled`]): its tiles, workgroups of
-///   `GRID_TILE_THREADS`, each one `grid_tile` tile of the grid, which its region carries;
-/// - either's grid more than one deep: the same tiles on a `VkPipeline` that folds the tile;
+/// - an image-only kernel ([`Form::Square`]): the whole module at `MultiRegion` 0 in workgroups
+///   of [`SQUARE`] over a grid one deep, and of the grid's `grid_tile` tile over a deeper one,
+///   the region carrying them, flagged where they do not divide the grid; a tile past `max` runs
+///   as a tiling kernel's does;
+/// - a tiling kernel ([`Form::Tiled`]): its tiles, workgroups of `GRID_TILE_THREADS`, each one
+///   `grid_tile` tile of the grid, which its region carries, a grid more than one deep on a
+///   `VkPipeline` that folds the tile;
 /// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
 ///   partial-threadgroups variant.
-pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3]) -> Choice {
+pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3], max: [u32; 3]) -> Choice {
     let Some(direct) = direct else {
         return Choice {
             module: Module::Whole,
@@ -240,22 +241,26 @@ pub(crate) fn choose(form: &Form, direct: Option<Direct>, size: [u32; 3]) -> Cho
         let ragged = (0..3).any(|axis| !threads[axis].is_multiple_of(shape[axis]));
         Some((threads, groups, ragged))
     };
+    let whole = |shape: [u32; 3]| Choice {
+        module: Module::Whole,
+        local: shape,
+        nominal: shape,
+        fold: None,
+        direct: over(shape),
+    };
     match form {
-        Form::Square if threads[2] == 1 => Choice {
-            module: Module::Whole,
-            local: SQUARE,
-            nominal: SQUARE,
-            fold: None,
-            direct: over(SQUARE),
-        },
+        Form::Square if threads[2] == 1 => whole(SQUARE),
         Form::Tiled | Form::Square => {
             let tile = grid_tile(threads);
-            Choice {
-                module: Module::Tiles,
-                local: [GRID_TILE_THREADS, 1, 1],
-                nominal: tile,
-                fold: (threads[2] > 1).then_some(tile),
-                direct: over(tile),
+            match form {
+                Form::Square if fits(tile, max) => whole(tile),
+                _ => Choice {
+                    module: Module::Tiles,
+                    local: [GRID_TILE_THREADS, 1, 1],
+                    nominal: tile,
+                    fold: (threads[2] > 1).then_some(tile),
+                    direct: over(tile),
+                },
             }
         }
         Form::Sized { .. } => Choice {
@@ -712,9 +717,10 @@ impl ComputeCommandEncoder {
             nominal,
             fold,
             direct,
-        } = choose(&inner.form, direct, size);
+        } = choose(&inner.form, direct, size, limits.max_group_size);
         // The workgroup Vulkan runs is within the device's sizes: the threadgroup itself where it
-        // is the workgroup, else the tiles' or the square workgroup, which the floor holds.
+        // is the workgroup, else the tiles' or the square workgroup, which the floor holds, or a
+        // tile, which `choose` held to them.
         if !fits(local, limits.max_group_size) {
             return Err(Error::Limit(Limit::ThreadgroupShape {
                 size: local,

@@ -782,19 +782,23 @@ that touch blocks first.
   threadgroup or SIMD-group scope, SIMD-group or quad function, and reads no builtin of the
   partition; the translator decides from its AIR) keeps that module alone, which runs a direct
   dispatch in workgroups of the runtime's, whatever its threadgroup size:
-  - a grid one deep of a kernel that is image-only (`CompiledFunction::is_image_only`: it samples,
+  - a grid of a kernel that is image-only (`CompiledFunction::is_image_only`: it samples,
     gathers or reads a texture, and loads, stores and updates atomically nothing through a
     `device` pointer; `constant` loads and texture writes are allowed) in workgroups of 16 by 16
-    by 1 on one `VkPipeline`, made with the state, each thread's position the workgroup's origin
-    plus its place in it, with no decode;
+    by 1 where it is one deep, on one `VkPipeline` made with the state, and of its tile (below)
+    where it is deeper, on one `VkPipeline` per tile, made at the kernel's first dispatch at that
+    tile, which waits for it, each thread's position the workgroup's origin plus its place in it,
+    with no decode. A tile past the device's `maxComputeWorkGroupSize` runs as the last item's;
   - a grid one deep of any other such kernel in tiles: workgroups of 256 threads on one
     `VkPipeline`, made with the state, each one tile of the grid, which its region carries. A
     thread's position is the tile's origin plus its index masked and shifted by the tile's sides,
     with no division;
-  - a grid more than one deep of either in tiles on a `VkPipeline` that folds the tile, so the
-    driver folds the masks and shifts when it specializes it: one per tile (of the 45 a rule's tile
-    can be), made at the kernel's first dispatch at that tile, which waits for it, and kept with
-    the kernel's other pipelines.
+  - a grid more than one deep of any other such kernel in tiles on a `VkPipeline` that folds the
+    tile, so the driver folds the masks and shifts when it specializes it: one per tile, made at
+    the kernel's first dispatch at that tile, which waits for it.
+
+  A kernel's pipelines of a tile are kept with its other pipelines, at most one per tile of the 45
+  a rule's tile can be.
 
   The translator's `pipeline::grid_tile` picks the tile from the grid's extents alone:
   power-of-two sides whose product is 256, launching the fewest threads past the grid, then with

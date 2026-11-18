@@ -1706,8 +1706,8 @@ fn an_oblivious_kernels_partial_variant_runs_its_grid_in_tiles() {
 
 /// On `Device::from_queries`' profile the module of a kernel's grid tiles runs a direct dispatch
 /// at a size its runtime picks, at `MultiRegion` 0: over grids ragged along every axis, along
-/// one, and whole, in workgroups of 16x16x1, the region flagged `NONUNIFORM` where they do not
-/// divide the grid, each of the grid's threads stores Metal's position once and no invocation
+/// one, and whole, in workgroups of 16x16x1 and of the grid's tile, the region flagged
+/// `NONUNIFORM` where they do not divide the grid, each of the grid's threads stores Metal's position once and no invocation
 /// past the grid stores anything. A pipeline that folds the tile (`SpecKey::FoldedTile`, the
 /// tile packed as the region packs its nominal size) runs the tile it folds whatever the region
 /// states: with each region stating 256x1x1, the folded tile's workgroups store the grid's
@@ -1744,6 +1744,7 @@ fn an_oblivious_kernels_tiles_run_at_a_chosen_size_and_fold_their_tile() {
         ] {
             for (local, fold) in [
                 ([16, 16, 1], None),
+                (grid_tile(grid), None),
                 ([GRID_TILE_THREADS, 1, 1], Some(grid_tile(grid))),
             ] {
                 let tile = fold.unwrap_or(local);
