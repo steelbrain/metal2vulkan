@@ -438,6 +438,21 @@ class HarnessBudgetTests(unittest.TestCase):
         # The later processes' samples are parked records: the budget judges them.
         self.assertTrue(f"{results.HARNESS_FIRST}{row}/2/new".startswith(results.PARKED_RECORDS))
 
+    def test_a_creation_call_alone_is_shown_beside_its_first_use_and_never_judged(self):
+        row = "create_state/first_call"
+        times = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 5000.0}
+        for n in range(2, results.FIRST_RUNS + 1):
+            times[f"{results.HARNESS_FIRST}{row}/{n}/old"] = 1000.0 + n
+            times[f"{results.HARNESS_FIRST}{row}/{n}/new"] = 5000.0 + n
+        with mock.patch.object(results, "HARNESS_CEILINGS", {}):
+            self.assertEqual(self.budget("a", times), ([], [
+                f"harness budget {row}: median of 5 processes, new 5003.0 us over old 1003.0 us is 4.988: "
+                "shown, not judged: the creation call alone, which old returns from before it makes its "
+                "pipeline"]))
+            # One process's sample alone is not shown, and judges nothing either.
+            one = {f"harness-old/{row}": 1000.0, f"harness-new/{row}": 5000.0}
+            self.assertEqual(self.budget("a", one), ([], []))
+
     def test_the_creation_processes_record_each_key_once_beside_the_other_rows(self):
         others = ["M2V-MATRIX time harness-new/alu 10.000", "M2V-MATRIX gauge harness-new/device/blocks@drop 0"]
         creates = ["M2V-MATRIX time harness-new/create_64MiB 700.000",

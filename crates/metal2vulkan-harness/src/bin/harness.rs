@@ -528,6 +528,15 @@ fn print_create(runtime: &str, create: &Create, report: &CreateReport, store: &s
             create.name
         );
     }
+    // A compute state's first sample holds its first dispatch; the creation call alone beside it.
+    if let (Some(_), Some(call), Makes::States { .. }) =
+        (report.first_us, report.first_create_us, &create.makes)
+    {
+        println!(
+            "M2V-MATRIX time harness-{runtime}/{}/first_call {call:.3}",
+            create.name
+        );
+    }
     if let (None, Some(first), Some(again)) =
         (report.first_us, report.first_create_us, report.again_us)
     {

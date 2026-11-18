@@ -495,6 +495,11 @@ HARNESS_CREATES = "create_"
 #: processes' `harness-first/<row>/<n>/<runtime>`. A first sample alone is never past its limit.
 FIRST_RUNS = 5
 HARNESS_FIRST = "harness-first/"
+#: A compute creation row's `/first` sample is its creation and one dispatch through to completion,
+#: as Metal compiles at the creation and a runtime may compile at the dispatch instead (the old
+#: runtime does); its `/first_call` sample, the creation call alone, is shown beside it with the
+#: ratio of its medians, and never judged.
+SHOWN_FIRST = "/first_call"
 #: The sed program the first creation process's output goes through: its device's gauges at drop
 #: become `harness-<runtime>/creates/device/...`, apart from the other rows' process's, so each
 #: key is recorded once.
@@ -637,6 +642,14 @@ def harness_budget(leg_id, leg):
         gated, named = instruction_gate(leg_id, row, records)
         problems += gated
         parked += named
+        if first_row(row) and row.endswith(SHOWN_FIRST):
+            samples = first_samples(times, row)
+            if samples is not None:
+                old, new = (statistics.median(values) for values in samples)
+                parked.append(f"harness budget {row}: median of {FIRST_RUNS} processes, new {new:.1f} us "
+                              f"over old {old:.1f} us is {new / old:.3f}: shown, not judged: the creation "
+                              "call alone, which old returns from before it makes its pipeline")
+            continue
         if first_row(row):
             samples = first_samples(times, row)
             if samples is None:

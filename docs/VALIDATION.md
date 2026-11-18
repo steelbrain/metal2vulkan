@@ -333,7 +333,7 @@ Both runs skip the creation rows (the harness's `--skip 'create_*'`): those run 
 `--only 'create_*'`, in five processes per runtime, each with a fresh empty cache directory and
 store, so no row before them moves their times. The first process's records are kept whole, its
 device's gauges at drop as `harness-<runtime>/creates/device/...`; of each later process, only the
-creation rows' first samples (`<row>/first`, `/first_take`, `/next_take`,
+creation rows' first samples (`<row>/first`, `/first_call`, `/first_take`, `/next_take`,
 `/first_allocation_total`, one sample per process), as `harness-first/<row>/<n>/<runtime>`,
 parked for the `time` rule.
 
@@ -367,7 +367,10 @@ A listed row fails its leg past its ceiling times 1.03, the noise allowance pari
 within that is named on the leg's line. A fix lowers its row's ceiling to the ratio it reaches,
 and a row within 1.03 leaves the list. A creation row's first sample is judged by the ratio of
 the medians of its five processes, the new runtime's over the old's; a first sample alone is
-never past its limit. A row whose time
+never past its limit. A compute pipeline state row's `/first` is its creation and one dispatch
+through to completion, since Metal compiles at the creation and a runtime may compile at the
+first dispatch instead, as the old runtime does; its `/first_call`, the creation call alone, is
+shown beside it with the ratio of its medians and never judged. A row whose time
 either runtime recorded more than once fails, uncompared. A row whose size follows the device
 (`long_4cb`) is sized by the first runtime's run, and the later runs, warm and re-timed ones
 included, are given that size (the harness's `--size`); each run records it as
