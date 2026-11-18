@@ -1127,11 +1127,12 @@ fn check_over(
 }
 
 /// The format features an image of `usage` is used by, which a linear image is to keep where the
-/// device's optimal image of its format has them: copies and blits; sampling and its linear
-/// filter; a shader's reads, writes and atomics without a format; rendering and blending.
+/// device's optimal image of its format has them: copies (a blit encoder's copies and fills are
+/// transfers; the runtime records no image blit); sampling and its linear filter; a shader's
+/// reads, writes and atomics without a format; rendering and blending.
 fn kept_features(usage: vk::ImageUsageFlags) -> vk::FormatFeatureFlags2 {
     type F = vk::FormatFeatureFlags2;
-    let mut kept = F::TRANSFER_SRC | F::TRANSFER_DST | F::BLIT_SRC | F::BLIT_DST;
+    let mut kept = F::TRANSFER_SRC | F::TRANSFER_DST;
     if usage.contains(vk::ImageUsageFlags::SAMPLED) {
         kept |= F::SAMPLED_IMAGE | F::SAMPLED_IMAGE_FILTER_LINEAR;
     }

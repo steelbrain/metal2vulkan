@@ -417,8 +417,8 @@ made, with no lock, and never rewritten for layouts.
   format and usage lays its rows at `bytes_per_row` from the image's start
   (`vkGetImageSubresourceLayout`), the place meets the image's memory alignment and memory type,
   and the format's linear tiling has every feature of its optimal tiling that the usage uses
-  (copies and blits, sampling and linear filtering, a shader's reads, writes and atomics without
-  a format, rendering and blending). `replace_region` writes the buffer's bytes, and copies the
+  (copies, which a blit encoder's copies and fills are, sampling and linear filtering, a
+  shader's reads, writes and atomics without a format, rendering and blending). `replace_region` writes the buffer's bytes, and copies the
   rows' span into a Managed buffer's device copy as `did_modify_range` does; `get_bytes` reads
   the buffer's bytes, with no submission; a dispatch's use of the texture is a use of the buffer in the
   hazard sets, and a write to it reaches the host as a write to a Shared buffer does. The texture
