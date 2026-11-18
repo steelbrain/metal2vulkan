@@ -1,8 +1,8 @@
 //! The cache directory on the host: two generations under one cap, a hit in old moved into young,
-//! the state file read at open with no listing and rebuilt where it is torn or missing, a removal
-//! cut short (a process's exit in it included) finished by the next open, torn files removed, and
-//! stores in threads and processes
-//! sharing one directory without losing a count or reading a file another was writing.
+//! a lookup that reads no state, the state file read at open with no listing and rebuilt where it
+//! is torn or missing, a removal cut short (a process's exit in it included) finished by the next
+//! open, torn files removed, and stores in threads and processes sharing one directory without
+//! losing a count or reading a file another was writing.
 
 use crate::cache::{frame, unframe, State, Store};
 use std::fs;
@@ -137,6 +137,43 @@ fn a_hit_in_old_moves_into_young_and_outlives_the_next_generation() {
     assert_eq!(state(&store).young, 3);
     assert_eq!(store.get(&name(1), whole), None);
     assert_eq!(store.get(&name(0), whole), Some(vec![0; 100]));
+}
+
+#[test]
+fn a_lookup_reads_no_state_and_sees_another_stores_move_at_its_next_write() {
+    let scratch = Scratch::new("store-young");
+    let first = Store::open(scratch.0.clone(), 1000);
+    let second = Store::open(scratch.0.clone(), 1000);
+    assert!(first.put(&name(0), &[0; 100]));
+    let reads = first.state_reads.load(Relaxed);
+    for _ in 0..10 {
+        assert_eq!(first.get(&name(0), whole), Some(vec![0; 100]));
+        assert_eq!(first.get(&name(1), whole), None);
+    }
+    assert_eq!(
+        first.state_reads.load(Relaxed),
+        reads,
+        "no lookup read the state"
+    );
+    // The second store's fifth write makes generation 2 young. The first still knows generation
+    // 1, so the file the second wrote there is a miss for it.
+    for n in 1..6 {
+        assert!(second.put(&name(2 * n), &[n as u8; 100]));
+    }
+    assert_eq!(state(&second).young, 2);
+    assert_eq!(
+        first.get(&name(10), whole),
+        None,
+        "a move the first has not seen"
+    );
+    assert_eq!(
+        first.get(&name(0), whole),
+        Some(vec![0; 100]),
+        "what it knew"
+    );
+    // The first's next write reads the state under its lock, and its lookups follow.
+    assert!(first.put(&name(12), &[6; 100]));
+    assert_eq!(first.get(&name(10), whole), Some(vec![5; 100]));
 }
 
 #[test]

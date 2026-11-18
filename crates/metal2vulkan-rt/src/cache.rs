@@ -26,10 +26,13 @@
 //! number, its bytes and a checksum of both, read and written under a lock on the file, which
 //! every store on the directory, in this process or another, holds open for its life. The write
 //! that takes young past half the cap makes the next generation young: young becomes old, and the
-//! old one is dead. A thread of the store's own removes the dead generation and ends, so no
-//! thread that submits, waits for or completes work removes files. So a file stays at least half
-//! the cap and at most the cap of other writes and moves after its last use, opening reads one
-//! file whatever the store holds, and nothing per file is kept in memory.
+//! old one is dead. A store keeps young's number as it last read or wrote the state, so a lookup
+//! reads no state: a move another store made is seen at this store's next write, and until then
+//! its lookups try the generations it knew, a miss at worst. A thread of the store's own removes
+//! the dead generation and ends, so no thread that submits, waits for or completes work removes
+//! files. So a file stays at least half the cap and at most the cap of other writes and moves
+//! after its last use, opening reads one file whatever the store holds, and nothing per file is
+//! kept in memory.
 //!
 //! Every write is a temporary file renamed over its name, counted before it is written and given
 //! back where it fails, so the count is never below what young holds. Every file checks itself
@@ -94,9 +97,15 @@ pub(crate) struct Store {
     writer: Mutex<()>,
     /// Set while the store's removal thread runs.
     removing: AtomicBool,
+    /// Young's number as this store last read or wrote the state file, 0 before it has: what a
+    /// lookup tries, without reading the file. It only grows.
+    young: AtomicU64,
     /// The times the store listed the cache directory.
     #[cfg(test)]
     pub(crate) listings: AtomicUsize,
+    /// The times the store read the state file outside its lock.
+    #[cfg(test)]
+    pub(crate) state_reads: AtomicUsize,
 }
 
 impl Store {
@@ -122,10 +131,14 @@ impl Store {
             writable,
             writer: Mutex::new(()),
             removing: AtomicBool::new(false),
+            young: AtomicU64::new(0),
             #[cfg(test)]
             listings: AtomicUsize::new(0),
+            #[cfg(test)]
+            state_reads: AtomicUsize::new(0),
         });
         if let Some(state) = store.current() {
+            store.young.fetch_max(state.young, Relaxed);
             if state.young >= 2 && store.generation(state.young - 2).exists() {
                 store.remove_dead();
             }
@@ -175,7 +188,22 @@ impl Store {
     /// The state, read without the lock where it checks, else under it, rebuilt where it is
     /// missing or does not check.
     pub(crate) fn current(&self) -> Option<State> {
+        #[cfg(test)]
+        self.state_reads.fetch_add(1, Relaxed);
         read_state(self.state.as_ref()?).or_else(|| self.update(|state| Some(*state)))
+    }
+
+    /// Young's number as this store last read or wrote it, read from the state file only where
+    /// it has not been yet.
+    fn young(&self) -> Option<u64> {
+        match self.young.load(Relaxed) {
+            0 => {
+                let young = self.current()?.young;
+                self.young.fetch_max(young, Relaxed);
+                Some(young)
+            }
+            young => Some(young),
+        }
     }
 
     /// Generation `number`'s directory.
@@ -202,7 +230,7 @@ impl Store {
         decode: impl FnOnce(&[u8]) -> Option<T>,
         torn: bool,
     ) -> Option<T> {
-        let young = self.current()?.young;
+        let young = self.young()?;
         let mut decode = Some(decode);
         for (number, old) in [(young, false), (young.saturating_sub(1), true)] {
             let path = self.generation(number).join(file);
@@ -277,6 +305,7 @@ impl Store {
             let mut state = read_state(file).or_else(|| self.rebuild(file))?;
             let answer = change(&mut state)?;
             write_state(file, state).ok()?;
+            self.young.fetch_max(state.young, Relaxed);
             Some(answer)
         })();
         let _ = file.unlock();
