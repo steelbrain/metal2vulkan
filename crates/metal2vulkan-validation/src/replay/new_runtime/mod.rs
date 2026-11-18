@@ -768,13 +768,16 @@ impl NewRuntime {
         }
     }
 
-    /// The index `call` names for the texture it makes: its descriptor's resource index, or a
-    /// view's `resourceIndex:`.
+    /// The index `call` names for the texture it makes: its descriptor's resource index (an
+    /// ordinary texture made in place of a surface's or a tiled one takes it too), or a view's
+    /// `resourceIndex:`.
     fn named_index(&self, call: &Call) -> Result<Option<u32>, PlayError> {
         let at = match &*call.selector {
             "newTextureWithDescriptor:"
             | "newTextureWithDescriptor:offset:"
-            | "newTextureWithDescriptor:offset:bytesPerRow:" => {
+            | "newTextureWithDescriptor:offset:bytesPerRow:"
+            | "newTextureWithDescriptor:iosurface:plane:"
+            | "newTiledTextureWithDescriptor:offset:bytesPerRow:" => {
                 return match arg(call, 0)? {
                     Value::Object(id) => Ok(self.resource_indices.get(id).copied()),
                     map @ Value::Map(_) => {

@@ -15,6 +15,10 @@
 //!   program did not reserve: made and released past the class's 3,999 indices, they reuse the
 //!   released ones. A reserved index is taken only where the stream names it, by a descriptor's
 //!   resource index or by the ID the program saw of the state.
+//! - A texture over a surface, made as an ordinary texture in its place, takes the index its
+//!   descriptor names, inside a reservation of every storage-capable index (as a program that
+//!   reserves Metal's texture IDs 1 to 16,320 for its own textures makes them): made and released
+//!   past the class's 4,095 indices, each takes its own.
 //!
 //! The new runtime's device is opened behind the hang tripwire, as every device open in this crate
 //! is (`gpu.rs`), its kernels kept in a cache the test owns ([`ScratchCache`]).
@@ -401,6 +405,66 @@ fn a_reserved_sampler_index_is_taken_only_where_the_stream_names_it() {
     });
     let (_, _, indices) = played("reserved", &path, &[2, 3]);
     assert_eq!(indices, [3, 2]);
+}
+
+#[test]
+fn surface_textures_take_the_reserved_index_their_descriptor_names() {
+    let dir = ScratchDir::new("rt-replay-surfaces").unwrap();
+    // RGBA8Unorm, 1 by 1, shader-read and shader-write, at index `index`, forced.
+    let texture = |index: u64| {
+        let index = Value::List(vec![Value::Uint(index), Value::Bool(true)]);
+        let Value::Map(mut fields) = uints(&[
+            ("textureType", 2),
+            ("pixelFormat", 70),
+            ("width", 1),
+            ("height", 1),
+            ("usage", 3),
+        ]) else {
+            unreachable!("a map");
+        };
+        fields.push(("resourceIndex".into(), index));
+        Value::Map(fields)
+    };
+    // Plane 0 of the surface's pages from their start, 4 bytes a row, its facts not read.
+    let plane = Value::Map(vec![
+        ("plane".into(), Value::Uint(0)),
+        ("offset".into(), Value::Uint(0)),
+        ("bytesPerRow".into(), Value::Uint(4)),
+        ("planar".into(), Value::Bool(false)),
+        ("facts".into(), Value::Nil),
+    ]);
+    let made = "newTextureWithDescriptor:iosurface:plane:";
+    let path = written(&dir, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        // The texture type's indices 1 to 16,320 reserved: every storage-capable texture's index.
+        let indices = Value::List((1..=16_320).map(Value::Uint).collect());
+        let reserve = [Value::Uint(0), indices, Value::Uint(16_320)];
+        let selector = "reserveResourceIndicesForResourceType:indices:indexCount:";
+        w.call(selector, 1, 0, &reserve, &[])?;
+        // #2, the surface's pages: a Shared buffer of 4 bytes.
+        let pages = [Value::Uint(4), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 2, &pages, &[])?;
+        // More than the class's 4,095 indices, each texture released before the next is made.
+        for object in 10..4110 {
+            w.call(
+                made,
+                2,
+                object,
+                &[texture(object % 4095 + 1), plane.clone()],
+                &[],
+            )?;
+            w.call("release", object, 0, &[], &[])?;
+        }
+        w.call(made, 2, 3, &[texture(4095), plane.clone()], &[])?;
+        w.call(made, 2, 4, &[texture(7), plane.clone()], &[])
+    });
+    let (_, lines, indices) = played("surfaces", &path, &[3, 4]);
+    assert_eq!(indices, [4095, 7]);
+    let named = "indices named 4102:";
+    assert!(
+        lines.iter().any(|line| line.starts_with(named)),
+        "{lines:?}"
+    );
 }
 
 #[test]
