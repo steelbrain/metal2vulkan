@@ -49,9 +49,11 @@
 //! the rendering ends, one barrier orders every earlier command before the copies and moves what
 //! they copy to the transfer layouts (the image's rendered level and layer from the attachment
 //! layout, the rest of it from home, the shadow from home), the copies are recorded, one barrier
-//! moves both back, and the rendering begins again. A memory barrier after draws leaves every
-//! shadow holding nothing, so the next draw that reads an attachment copies what it reads again,
-//! after what the earlier draws rendered; it records nothing itself.
+//! moves both back, and the rendering begins again. At the pass's first draw, what it reads of the
+//! level and layer the pass cleared, inside the render area, is a clear of the shadow's to the
+//! pass's clear colour instead, between the same barriers. A memory barrier after draws leaves
+//! every shadow holding nothing, so the next draw that reads an attachment copies what it reads
+//! again, after what the earlier draws rendered; it records nothing itself.
 //!
 //! A draw sets Metal's state as dynamic state: every state at the encoder's first draw, Metal's
 //! defaults where the encoder set none, and after that what changed. A viewport is Vulkan's with
@@ -174,6 +176,10 @@ struct Shadowed {
     /// The bytes of a texel.
     texel: u64,
     held: Held,
+    /// The colour the pass cleared the rendered level and layer to, where the shadow is of the
+    /// attachment's format, so that a clear of the shadow with it writes the texels the pass's
+    /// clear wrote (`crate::shadow`); `None` elsewhere.
+    cleared: Option<vk::ClearColorValue>,
 }
 
 /// What a buffer slot holds.
@@ -295,6 +301,8 @@ pub struct RenderCommandEncoder {
     wrote: bool,
     /// A draw since the encoder last ordered its draws rendered.
     drew: bool,
+    /// A draw of the pass recorded: what the pass cleared may hold more than its clear colour.
+    pass_drew: bool,
     /// A memory barrier after draws that wrote no memory, which the next draw that reads an
     /// attachment pays.
     owed: bool,
@@ -360,6 +368,7 @@ impl CommandBuffer {
                     topology: None,
                     wrote: false,
                     drew: false,
+                    pass_drew: false,
                     owed: false,
                     moved: Vec::new(),
                     loop_aspects: vk::ImageAspectFlags::NONE,
@@ -876,6 +885,7 @@ impl RenderCommandEncoder {
                         .find(|t| t.texture.hazard_id() == hazard)
                         .expect("an attachment a draw reads is one of its pass's");
                     let a = &target.attachment;
+                    let same = texture.shadow_format() == Some(a.format);
                     self.shadowed.push(Shadowed {
                         hazard,
                         image: a.image,
@@ -886,6 +896,7 @@ impl RenderCommandEncoder {
                         home: a.home,
                         texel: target.texture.texel_bytes(),
                         held: Held::default(),
+                        cleared: target.clear_color().filter(|_| same),
                     });
                     self.shadowed.len() - 1
                 }
@@ -906,7 +917,9 @@ impl RenderCommandEncoder {
         );
         let read_only = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         let (mut away, mut back, mut copies) = (Vec::new(), Vec::new(), Vec::new());
+        let mut clears = Vec::new();
         let (mut count, mut bytes) = (0, 0);
+        let (untouched, render_area) = (!self.pass_drew, self.pass.area);
         for (s, areas) in self.shadowed.iter().zip(&planned) {
             if areas.is_empty() {
                 continue;
@@ -918,10 +931,24 @@ impl RenderCommandEncoder {
                 base_array_layer: first,
                 layer_count: end - first,
             };
-            let ranges = shadow::ranges(areas);
-            let (rendered, rest) = shadow::parted(&ranges, s.rendered);
+            let (level, layer) = s.rendered;
+            // At the pass's first draw, the level and layer it cleared holds only its clear
+            // colour inside the render area: the shadow's is cleared to it in place of a copy.
+            let clear =
+                (s.cleared).filter(|_| untouched && shadow::clears(areas, s.rendered, render_area));
+            let copied: Vec<Area> = match clear {
+                Some(color) => {
+                    clears.push((s.shadow, color, range((level, [layer, layer + 1]))));
+                    (areas.iter())
+                        .filter(|area| !area.reaches(s.rendered))
+                        .copied()
+                        .collect()
+                }
+                None => areas.clone(),
+            };
+            let sources = shadow::ranges(&copied);
+            let (rendered, rest) = shadow::parted(&sources, s.rendered);
             if rendered {
-                let (level, layer) = s.rendered;
                 let at = range((level, [layer, layer + 1]));
                 away.push(layout_barrier(s.image, at, s.layout, source));
                 back.push(layout_barrier(s.image, at, source, s.layout));
@@ -930,14 +957,18 @@ impl RenderCommandEncoder {
                 away.push(layout_barrier(s.image, at, s.home, source));
                 back.push(layout_barrier(s.image, at, source, s.home));
             }
-            for at in ranges.into_iter().map(range) {
+            for at in shadow::ranges(areas).into_iter().map(range) {
                 away.push(layout_barrier(s.shadow, at, read_only, destination));
                 back.push(layout_barrier(s.shadow, at, destination, read_only));
             }
-            let regions: Vec<vk::ImageCopy> =
-                (areas.iter()).map(|area| region(area, s.aspects)).collect();
-            count += areas.len() as u64;
-            bytes += (areas.iter())
+            if copied.is_empty() {
+                continue;
+            }
+            let regions: Vec<vk::ImageCopy> = (copied.iter())
+                .map(|area| region(area, s.aspects))
+                .collect();
+            count += copied.len() as u64;
+            bytes += (copied.iter())
                 .map(|area| area.texels() * s.texel)
                 .sum::<u64>();
             copies.push((s.image, s.shadow, regions));
@@ -951,7 +982,9 @@ impl RenderCommandEncoder {
             // it retires (its pass's attachment texture holds it, and it its shadow); each range
             // is in the layout it moves from: the rendered level and layer in the one the pass
             // renders it in, the rest of the image and the shadow at home; each region lies in
-            // both images, in their transfer layouts between the barriers.
+            // both images, in their transfer layouts between the barriers; each cleared range is
+            // a colour level and layer of its shadow, in the transfer destination layout, which
+            // no region of the copies reaches.
             unsafe {
                 device.cmd_pipeline_barrier2(
                     command,
@@ -959,6 +992,9 @@ impl RenderCommandEncoder {
                         .memory_barriers(&memory)
                         .image_memory_barriers(&away),
                 );
+                for (shadow, color, range) in &clears {
+                    device.cmd_clear_color_image(command, *shadow, destination, color, &[*range]);
+                }
                 for (image, shadow, regions) in &copies {
                     device.cmd_copy_image(command, *image, source, *shadow, destination, regions);
                 }
@@ -1316,7 +1352,7 @@ impl RenderCommandEncoder {
             building.wrote_host();
         }
         self.wrote |= draws.writes_memory;
-        self.drew = true;
+        (self.drew, self.pass_drew) = (true, true);
         let (bind, first) = building.bind_graphics(pipeline);
         self.fill_push(&state);
         let building = (self.building.as_mut())

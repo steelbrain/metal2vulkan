@@ -1044,9 +1044,10 @@ mod on_device {
     /// fragment's own pixel and at another pixel. Through the feedback loop, the rendering is
     /// ended and begun again around one barrier, and the pass's first such draw moves the image to
     /// the feedback layout, a barrier of its own. Through a copy, on a device without the loop,
-    /// the pass's first such draw and the one after the memory barrier each copy what they read
-    /// into the image's shadow, between two barriers of their own, and the memory barrier records
-    /// nothing; the copies, their bytes and the live shadows are printed. A device without the
+    /// the pass's first such draw, the pass's first draw, clears the image's shadow to the pass's
+    /// clear colour, and the one after the memory barrier copies what it reads into the shadow,
+    /// each between two barriers of their own, and the memory barrier records nothing; the
+    /// copies, their bytes and the live shadows are printed. A device without the
     /// attachment reads refuses the draw, `Gap::Draw { AttachmentRead }`, and records nothing for
     /// it.
     #[test]
@@ -1124,9 +1125,9 @@ mod on_device {
                 let after = counters.metrics();
                 let shadows = counters.gauges();
                 // Through the loop: the pass's two, the move, the memory barrier's, the segment's
-                // end. Through a copy: the pass's two, two around each of the two copies, the
-                // segment's end, and the upload's end, which moves the new shadow home ahead of
-                // the pass.
+                // end. Through a copy: the pass's two, two around the shadow's clear and two
+                // around the copy, the segment's end, and the upload's end, which moves the new
+                // shadow home ahead of the pass.
                 let barriers = match looped {
                     true => 5,
                     false => 8,
@@ -1139,8 +1140,8 @@ mod on_device {
                     (barriers, 1),
                     "{name} {case}: barriers, passes"
                 );
-                // The whole target each time: its own pixels under a scissor over it, or the
-                // texture's one level and layer.
+                // The whole target, after the memory barrier: its own pixels under a scissor over
+                // it, or the texture's one level and layer. The first read is the clear's.
                 let bytes = u64::from(SIDE * SIDE * 4);
                 let copies = (
                     after.attachment_read_copies - before.attachment_read_copies,
@@ -1149,7 +1150,7 @@ mod on_device {
                 );
                 let want = match looped {
                     true => (0, 0, 0),
-                    false => (2, 2 * bytes, 2 * bytes),
+                    false => (1, bytes, bytes),
                 };
                 assert_eq!(
                     copies, want,
@@ -1186,10 +1187,102 @@ mod on_device {
         });
     }
 
+    /// The pass's first draw reads the attachment its pass cleared, at its own pixel. Through a
+    /// copy, on a device without the feedback loop, a clear of the image's shadow to the pass's
+    /// clear colour stands for the copy, which no copy counts, and every pixel reads the clear
+    /// colour; after one draw of the pass, of a pipeline that reads no texture, the reading draw
+    /// copies the whole target. Through the feedback loop, neither copies.
+    #[test]
+    fn every_device_reads_its_cleared_attachment_at_its_pass_first_draw() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let plain = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let own = descriptor(&library, "own_pixel_fragment", PixelFormat::RGBA8Unorm);
+        each_device("attachment_clear", |name, _, device| {
+            if !device.core().attachment_reads {
+                println!("{name}: no attachment reads");
+                return;
+            }
+            (device.grant_indices(IndexClass::Texture, 4096, 4))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let looped = device.core().feedback.is_some();
+            let plain = state(name, &device, &plain);
+            let reading = state(name, &device, &own);
+            let mut buffers = Buffers::new(&device);
+            // Two triangles over the whole target: the reading one adds nothing, the plain one is
+            // blue.
+            let whole = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+            let positions = buffers.of(&device, &floats(&[whole; 2].concat()));
+            let colors: Vec<f32> = [[0.0; 4], BLUE]
+                .iter()
+                .flat_map(|c| [*c; 3].concat())
+                .collect();
+            let colors = buffers.of(&device, &floats(&colors));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let color = readable(&device, PixelFormat::RGBA8Unorm, 1, 4096);
+            let counters = device.counters();
+            for (case, drawn) in [("no draw before", false), ("one draw before", true)] {
+                settled(&device);
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut d = pass(&color, None);
+                d.color_attachments[0].clear_color = crate::ClearColor::new(0.2, 0.4, 0.6, 1.0);
+                let mut encoder = (command_buffer.render_command_encoder(&d))
+                    .unwrap_or_else(|error| panic!("{name} {case}: {error}"));
+                let draw = |result: Result<(), Error>| {
+                    result.unwrap_or_else(|e| panic!("{name} {case}: {e}"))
+                };
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                draw(encoder.set_fragment_texture(Some(&color), 0));
+                if drawn {
+                    draw(encoder.set_render_pipeline_state(&plain));
+                    draw(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+                }
+                draw(encoder.set_render_pipeline_state(&reading));
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                let after = counters.metrics();
+                let copies = (
+                    after.attachment_read_copies - before.attachment_read_copies,
+                    after.attachment_read_copy_bytes - before.attachment_read_copy_bytes,
+                );
+                let want = match (looped, drawn) {
+                    (false, true) => (1, u64::from(SIDE * SIDE * 4)),
+                    _ => (0, 0),
+                };
+                assert_eq!(
+                    copies, want,
+                    "{name} {case}: copies into the shadow and their bytes"
+                );
+                assert_eq!(
+                    counters.gauges().shadows > 0,
+                    !looped,
+                    "{name} {case}: the target's shadow"
+                );
+                println!(
+                    "{name} {case}: attachment_read_copies {}, attachment_read_copy_bytes {}",
+                    copies.0, copies.1
+                );
+                if !drawn {
+                    let want = [51, 102, 153, 255].repeat((SIDE * SIDE) as usize);
+                    assert_eq!(
+                        read(&color, 4),
+                        want,
+                        "{name} {case}: every pixel the clear colour, read"
+                    );
+                }
+            }
+        });
+    }
+
     /// A pass that renders a texture's second level reads its first through a view of both
     /// levels, which reaches the rendered one, and samples the level an earlier pass rendered:
-    /// through the feedback loop, its whole image moved, or through a copy of both levels into
-    /// its shadow, one copy a level.
+    /// through the feedback loop, its whole image moved, or through its shadow, the lower level
+    /// copied into it and the rendered one, which the pass cleared and no draw rendered yet,
+    /// cleared.
     #[test]
     fn every_device_samples_a_lower_level_while_its_pass_renders_the_next() {
         let Some(library) = examples() else {
@@ -1239,9 +1332,9 @@ mod on_device {
                 copies,
                 match looped {
                     true => 0,
-                    false => 2,
+                    false => 1,
                 },
-                "{name}: copies into the shadow, one a level"
+                "{name}: copies into the shadow, the lower level's"
             );
             println!("{name}: attachment_read_copies {copies}");
             let side = SIDE / 2;

@@ -10,8 +10,10 @@
 //! - A held area that covers another drops it, and past eight the oldest goes.
 //! - A copy's barriers move each subresource once, the rendered level and layer apart from the
 //!   rest.
+//! - A clear of the level and layer its pass cleared stands for the copy where every read that
+//!   reaches it lies in it alone and inside the render area, and one does.
 
-use crate::shadow::{own_pixel, parted, ranges, whole, Area, Held};
+use crate::shadow::{clears, own_pixel, parted, ranges, whole, Area, Held};
 
 /// An area of level 0, layer 0.
 fn rect(x: [u32; 2], y: [u32; 2]) -> Area {
@@ -210,4 +212,63 @@ fn a_copys_barriers_move_each_subresource_once_the_rendered_one_apart() {
     );
     assert_eq!(parted(&[(0, [2, 3])], (0, 2)), (true, Vec::new()));
     assert_eq!(parted(&joined, (1, 1)), (false, joined.clone()));
+}
+
+#[test]
+fn a_clear_stands_for_the_copy_of_reads_of_the_cleared_level_and_layer_inside_the_render_area() {
+    let rendered = (0, 0);
+    // Reads of the rendered level and layer inside the render area: a clear.
+    assert!(clears(&[rect([0, 64], [0, 64])], rendered, [64, 64]));
+    assert!(clears(&[rect([7, 17], [3, 13])], rendered, [32, 32]));
+    // A read past the render area reads texels the pass did not clear.
+    assert!(!clears(&[rect([0, 33], [0, 8])], rendered, [32, 32]));
+    assert!(!clears(&[rect([0, 8], [0, 33])], rendered, [32, 32]));
+    // No read of the rendered level and layer: nothing to clear.
+    let other_level = Area {
+        level: 1,
+        ..rect([0, 32], [0, 32])
+    };
+    assert!(!clears(&[other_level], rendered, [64, 64]));
+    assert!(!clears(&[rect([4, 4], [0, 64])], rendered, [64, 64]));
+    // Beside a read of another level, which is copied, the rendered one's is still a clear.
+    assert!(clears(
+        &[other_level, rect([0, 64], [0, 64])],
+        rendered,
+        [64, 64]
+    ));
+    // A read of the rendered layer among others reaches layers the pass did not clear.
+    let layers = Area {
+        layers: [0, 6],
+        ..rect([0, 16], [0, 16])
+    };
+    assert!(!clears(&[layers], rendered, [16, 16]));
+    assert!(!clears(
+        &[layers, rect([0, 16], [0, 16])],
+        rendered,
+        [16, 16]
+    ));
+    // Another layer of the level: the rendered layer 3 alone.
+    let third = Area {
+        layers: [3, 4],
+        ..rect([0, 16], [0, 16])
+    };
+    assert!(clears(&[third], (0, 3), [16, 16]));
+    assert!(!clears(&[third], rendered, [16, 16]));
+}
+
+#[test]
+fn an_area_reaches_the_levels_and_layers_it_holds_a_texel_of() {
+    let layers = Area {
+        level: 2,
+        layers: [1, 4],
+        x: [0, 4],
+        y: [0, 4],
+    };
+    assert!(layers.reaches((2, 1)) && layers.reaches((2, 3)));
+    assert!(!layers.reaches((2, 4)) && !layers.reaches((2, 0)) && !layers.reaches((1, 1)));
+    let empty = Area {
+        x: [4, 4],
+        ..layers
+    };
+    assert!(!empty.reaches((2, 1)));
 }

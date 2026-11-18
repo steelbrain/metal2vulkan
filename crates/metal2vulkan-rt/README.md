@@ -1359,7 +1359,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   A slot the fragment function reads only at its own pixel reads the draw's scissor, a pixel
   wider each way, clamped into its level; any other slot reads every level and layer its texture
   reaches. What is new to the shadow is copied as one area where it is one (a wider scissor's
-  band), else as the whole read, with no look-ahead.
+  band), else as the whole read, with no look-ahead. At the pass's first draw, where the pass
+  cleared the attachment and every read of its level and layer lies in it alone and inside the
+  render area, the shadow's level and layer is cleared to the pass's clear colour between the
+  same barriers instead of copied (the shadow is of the attachment's format, so the clear writes
+  the texels the pass's did); a draw of the pass before it, of any pipeline, leaves the copy.
 - `memory_barrier` after a draw of the encoder that wrote memory ends the rendering, records one
   barrier and begins the rendering again, loading what it stored. After draws that only rendered,
   in a pass that moved an image to the feedback layout, the barrier is owed to the next draw that

@@ -2524,6 +2524,11 @@ impl Texture {
         Ok(Some(shadow))
     }
 
+    /// The format its image's shadow is made in, the image's; `None` for an image of no shadow.
+    pub(crate) fn shadow_format(&self) -> Option<vk::Format> {
+        (self.inner.image.shadowing.as_ref()).map(|shadowing| shadowing.made.2.format)
+    }
+
     /// What a draw reads of its image through it (`crate::shadow`): with `own_pixel`, the draw's
     /// scissor (per axis `[first, end)`), the rectangle a fragment function that reads only at its
     /// own pixel reads of its first level and layer; else every level and layer it reaches.

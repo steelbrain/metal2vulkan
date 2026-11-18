@@ -597,7 +597,8 @@ pub struct Metrics {
     /// after a draw that wrote memory, one at a draw that moves an attachment's image to the
     /// feedback layout, one at a draw that reads an attachment after a memory barrier owed to it,
     /// and two around the copies a draw that reads an attachment makes into its image's shadow
-    /// ([`attachment_read_copies`](Self::attachment_read_copies)). Any other draw takes none.
+    /// ([`attachment_read_copies`](Self::attachment_read_copies)), or the clear of the shadow
+    /// that stands for a copy of what its pass cleared. Any other draw takes none.
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
     /// between a texture over a buffer and its image of its own
@@ -715,7 +716,8 @@ pub struct Metrics {
     /// not make: one for each area of a level, a range of its layers and a rectangle, at the
     /// pass's first draw that reads the image and at a draw after a memory barrier after draws,
     /// of what the draw reads, and at another draw, of what it reads that the shadow does not
-    /// hold yet.
+    /// hold yet. What the pass's first draw reads of the level and layer the pass cleared,
+    /// inside the render area, is no copy: the shadow's is cleared to the pass's clear colour.
     pub attachment_read_copies: u64,
     /// The bytes of those copies, which count in [`bytes_copied`](Self::bytes_copied) too.
     pub attachment_read_copy_bytes: u64,

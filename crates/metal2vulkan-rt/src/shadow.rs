@@ -12,6 +12,13 @@
 //! a memory barrier after draws, which orders what they rendered before later reads, leaves it
 //! holding nothing, so the next draw that reads the image copies what it reads again.
 //!
+//! Where the pass cleared the attachment and the draw is the pass's first, the rendered level and
+//! layer holds only the clear colour inside the render area: where every read of that level and
+//! layer lies in it alone and inside the render area, the shadow's is cleared to the same colour
+//! (the pass's clear value, the shadow of the attachment's format) in place of the copy, and the
+//! rest of what the draw reads is copied. A draw of the pass recorded before, of any pipeline,
+//! leaves the copy.
+//!
 //! A slot the fragment function reads only at its own pixel (`StageModule::own_pixel_textures`)
 //! reads the rectangle of the draw's scissor, a pixel wider each way for its helper invocations,
 //! clamped into its level; any other slot reads every level and layer its texture reaches.
@@ -44,6 +51,11 @@ impl Area {
             .iter()
             .map(|&[first, end]| u64::from(end.saturating_sub(first)))
             .product()
+    }
+
+    /// Whether it holds a texel of level `level`'s layer `layer`.
+    pub(crate) fn reaches(&self, (level, layer): (u32, u32)) -> bool {
+        !self.is_empty() && self.level == level && self.layers[0] <= layer && layer < self.layers[1]
     }
 
     /// Whether it holds every texel of `other`.
@@ -126,6 +138,18 @@ pub(crate) fn whole(level: u32, levels: u32, layer: u32, layers: u32, size: [u32
             y: [0, (size[1] >> level).max(1)],
         })
         .collect()
+}
+
+/// Whether a clear of `rendered`, the level and layer a pass cleared that no draw of the pass has
+/// rendered since, gives the shadow what the image holds of each of `areas` that reaches it: one
+/// does, and each such lies in that level and layer alone and inside the render area `area`
+/// (`[width, height]` from the level's origin), which holds only the clear colour.
+pub(crate) fn clears(areas: &[Area], rendered: (u32, u32), area: [u32; 2]) -> bool {
+    let layer = rendered.1;
+    let mut reaching = areas.iter().filter(|a| a.reaches(rendered)).peekable();
+    reaching.peek().is_some()
+        && reaching
+            .all(|a| a.layers == [layer, layer + 1] && a.x[1] <= area[0] && a.y[1] <= area[1])
 }
 
 /// The subresources `areas` reach, each a level and a range of its layers, the ranges of one level
