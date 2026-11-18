@@ -153,7 +153,7 @@ mod on_device {
         fn of(&mut self, device: &Device, bytes: &[u8]) -> Buffer {
             let len = bytes.len() as u64;
             let buffer =
-                (device.new_buffer(self.block.id, self.next, len, true)).expect("a buffer");
+                (device.new_buffer(self.block.id, self.next, len, Some(0))).expect("a buffer");
             self.next += len.next_multiple_of(256);
             let contents = buffer.contents().expect("a Shared buffer");
             // SAFETY: the range lies in the buffer, which is alive, and no GPU work uses it.
