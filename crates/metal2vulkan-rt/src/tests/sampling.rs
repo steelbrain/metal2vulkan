@@ -523,12 +523,13 @@ mod on_device {
                 near(&got, &flats),
                 "{name}: sampled through the index: {got:?}"
             );
+            // `sample_down` into a texture of the source's side samples each source texel at its
+            // center, in the first half of each side.
             pass([&source, &b]);
-            let mean = means();
             let want: Vec<f32> = (0..SIDE)
                 .flat_map(|y| (0..SIDE).flat_map(move |x| (0..4).map(move |c| (x, y, c))))
                 .map(|(x, y, c)| match x < half && y < half {
-                    true => mean[(4 * (y * half + x) + c) as usize],
+                    true => texel(x, y)[c as usize],
                     false => flat(x, y)[c as usize],
                 })
                 .collect();
