@@ -98,8 +98,9 @@ impl BlockId {
 /// Nearest Metal counterpart: the memory of a placement `MTLHeap`, which the consumer places
 /// buffers in ([`Device::new_buffer`](crate::Device::new_buffer)).
 ///
-/// Plain data, not a handle: the block lives until it is released and its last buffer is gone, or
-/// until the device is torn down. One `VkBuffer` spans it, with every buffer usage and a device
+/// Plain data, which the block's handle ([`Block`](crate::Block)) derefs to: the block lives
+/// until its last handle and its last buffer, command buffer or upload are gone, or until the
+/// device is torn down. One `VkBuffer` spans it, with every buffer usage and a device
 /// address. Nothing in it is exportable.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug)]

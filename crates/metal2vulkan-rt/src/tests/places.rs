@@ -228,7 +228,7 @@ mod on_device {
                     "{name}: a dedicated {class:?} block"
                 );
                 for block in [pooled, dedicated] {
-                    (device.release_block(block.id))
+                    (device.release_block(block))
                         .unwrap_or_else(|error| panic!("{name}: a release: {error}"));
                 }
             }

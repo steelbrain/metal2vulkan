@@ -17,7 +17,7 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, within};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        host_time, BlockId, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
+        host_time, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
         DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Instance, Library, Limit,
         MemoryClass, PrecisionNote, StageSource, MAX_BUFFER_LENGTH,
     };
@@ -160,7 +160,7 @@ mod on_device {
     /// Zeroed Shared buffers in one block, each at a 256-byte boundary.
     struct Buffers {
         device: Device,
-        block: BlockId,
+        block: Block,
         next: u64,
     }
 
@@ -171,7 +171,7 @@ mod on_device {
                 .expect("a Shared block");
             Buffers {
                 device: device.clone(),
-                block: block.id,
+                block,
                 next: 0,
             }
         }
@@ -179,7 +179,7 @@ mod on_device {
         fn buffer(&mut self, len: u64) -> Buffer {
             let buffer = self
                 .device
-                .new_buffer(self.block, self.next, len, true)
+                .new_buffer(self.block.id, self.next, len, true)
                 .expect("a buffer");
             self.next += len.next_multiple_of(256);
             buffer

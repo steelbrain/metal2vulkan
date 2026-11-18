@@ -91,10 +91,8 @@ mod on_device {
                 .expect("a grant");
             let flat = parent(&device, false, 4096);
             let array = parent(&device, true, 4097);
-            let block = (device.take_block(MemoryClass::Shared, 256))
-                .expect("a Shared block")
-                .id;
-            let out = (device.new_buffer(block, 0, 256, true)).expect("a buffer");
+            let block = (device.take_block(MemoryClass::Shared, 256)).expect("a Shared block");
+            let out = (device.new_buffer(block.id, 0, 256, true)).expect("a buffer");
             let queue = device.new_command_queue(1).expect("a queue");
             let read = |view: &Texture| bytes(&queue, view, &out);
             use TextureType::{Type2D, Type2DArray};
@@ -293,10 +291,8 @@ mod on_device {
     #[test]
     fn every_device_views_a_managed_texture_s_named_bytes() {
         each_device("managed texture views", |name, _, device| {
-            let block = (device.take_block(MemoryClass::Shared, 1))
-                .expect("a Shared block")
-                .id;
-            let named = (device.new_buffer(block, 0, 4096, true)).expect("a buffer");
+            let block = (device.take_block(MemoryClass::Shared, 1)).expect("a Shared block");
+            let named = (device.new_buffer(block.id, 0, 4096, true)).expect("a buffer");
             // A 4x4 2D array of 2 slices and 2 levels, each level and slice's rows 64 bytes
             // apart, 512 bytes after the one before.
             let places: Vec<BytesPlace> = (0..4)

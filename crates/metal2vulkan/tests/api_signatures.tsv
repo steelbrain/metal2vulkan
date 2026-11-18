@@ -9368,9 +9368,9 @@ method	metal2vulkan-rt::Device::new_shared_event	pub fn new_shared_event(&self) 
 method	metal2vulkan-rt::Device::new_texture	pub fn new_texture(&self, descriptor: &TextureDescriptor, index: Option<u32>) -> Result<Texture, Error>
 method	metal2vulkan-rt::Device::quiesce	pub fn quiesce(&self, timeout: Duration) -> bool
 method	metal2vulkan-rt::Device::raw	pub fn raw(&self) -> RawDevice<'_>
-method	metal2vulkan-rt::Device::release_block	pub fn release_block(&self, block: BlockId) -> Result<(), Error>
+method	metal2vulkan-rt::Device::release_block	pub fn release_block(&self, block: Block) -> Result<(), Error>
 method	metal2vulkan-rt::Device::release_indices	pub fn release_indices(&self, grant: IndexGrant) -> Result<(), Error>
-method	metal2vulkan-rt::Device::take_block	pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<BlockInfo, Error>
+method	metal2vulkan-rt::Device::take_block	pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<Block, Error>
 method	metal2vulkan-rt::Device::with_present_queue	pub fn with_present_queue<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R
 method	metal2vulkan-rt::DeviceExtension::name	pub fn name(&self) -> &CStr
 method	metal2vulkan-rt::DeviceExtension::new	pub fn new(name: &CStr) -> DeviceExtension
@@ -11451,6 +11451,7 @@ struct	metal2vulkan-air::ir::ValueIndex	#[derive(Clone, Copy, Debug, PartialEq, 
 struct	metal2vulkan-air::tensor_ops::Descriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct Descriptor
 struct	metal2vulkan-air::tensor_ops::RunForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct RunForm
 struct	metal2vulkan-rt::BlitCommandEncoder	pub struct BlitCommandEncoder
+struct	metal2vulkan-rt::Block	#[derive(Clone)] pub struct Block
 struct	metal2vulkan-rt::BlockId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub struct BlockId(u32)
 struct	metal2vulkan-rt::BlockInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct BlockInfo
 struct	metal2vulkan-rt::Buffer	#[derive(Clone)] pub struct Buffer
@@ -12033,6 +12034,9 @@ trait-impl	metal2vulkan-air::ir::Body impl Graph	impl Graph for Body
 trait-impl	metal2vulkan-air::ir::DataLayout impl Default	impl Default for DataLayout
 trait-impl	metal2vulkan-air::tensor_ops::Descriptor impl fmt::Display	impl fmt::Display for Descriptor
 trait-impl	metal2vulkan-rt::BlitCommandEncoder impl Drop	impl Drop for BlitCommandEncoder
+trait-impl	metal2vulkan-rt::Block impl Deref	impl Deref for Block
+trait-impl	metal2vulkan-rt::Block impl Drop	impl Drop for Block
+trait-impl	metal2vulkan-rt::Block impl fmt::Debug	impl fmt::Debug for Block
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Send	unsafe impl Send for BlockInfo
 trait-impl	metal2vulkan-rt::BlockInfo impl fe impl Sync	unsafe impl Sync for BlockInfo
 trait-impl	metal2vulkan-rt::ComputeCommandEncoder impl Drop	impl Drop for ComputeCommandEncoder

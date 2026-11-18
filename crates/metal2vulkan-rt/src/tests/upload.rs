@@ -215,8 +215,9 @@ mod on_device {
                 .new_buffer(released.id, 0, 256, true)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
+            let released_id = released.id;
             device
-                .release_block(released.id)
+                .release_block(released)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let (_, bytes, _) = core.work.pending();
             assert!(
@@ -231,7 +232,7 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(buffer);
             wait_until("the released block back in the pool", || {
-                core.pool.holds(released.id)
+                core.pool.holds(released_id)
             });
 
             // Zero fills past the upload's calls.
@@ -251,7 +252,7 @@ mod on_device {
 
             drop(targets);
             device
-                .release_block(fills.id)
+                .release_block(fills)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             drop(device);
             wait_until("the teardown", || counters.gauges() == Gauges::default());

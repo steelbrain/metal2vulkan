@@ -46,8 +46,7 @@ mod on_device {
                 Ok(block) => {
                     assert!(!block.device_local, "{name}: a spilled block");
                     assert_eq!(counters.gauges().spilled_bytes, block.len, "{name}");
-                    (device.release_block(block.id))
-                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
                     wait_until("the spilled block freed", || {
                         counters.gauges().spilled_bytes == 0
                     });
@@ -100,7 +99,7 @@ mod on_device {
                 counters.gauges()
             );
             drop((texture, managed));
-            for block in [plain.id, shared.id] {
+            for block in [plain, shared] {
                 device
                     .release_block(block)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));

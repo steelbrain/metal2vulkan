@@ -34,11 +34,9 @@ mod on_device {
     #[test]
     fn every_device_orders_a_wait_after_an_update_and_records_nothing_for_either() {
         each_device("fences", |name, _, device| {
-            let block = (device.take_block(MemoryClass::Shared, 4096))
-                .expect("a Shared block")
-                .id;
-            let filled = (device.new_buffer(block, 0, 64, false)).expect("a buffer");
-            let out = (device.new_buffer(block, 256, 64, false)).expect("a buffer");
+            let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
+            let filled = (device.new_buffer(block.id, 0, 64, false)).expect("a buffer");
+            let out = (device.new_buffer(block.id, 256, 64, false)).expect("a buffer");
             let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
             d.usage = TextureUsage::RENDER_TARGET;
             let texture = device.new_texture(&d, None).expect("a texture");

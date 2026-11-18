@@ -33,8 +33,8 @@ pub enum Error {
     Refused(Refusal),
     /// One of the device's or the runtime's fixed limits.
     Limit(Limit),
-    /// A block the consumer does not hold: never taken, or already released. Metal has no
-    /// counterpart: blocks are the consumer's memory, not Metal objects.
+    /// A block the consumer holds no handle of: never taken, or its last handle gone. Metal has
+    /// no counterpart: blocks are the consumer's memory, not Metal objects.
     NoSuchBlock(BlockId),
     /// The runtime could not start one of its threads. Metal has no counterpart.
     Thread(io::Error),
@@ -121,10 +121,11 @@ pub enum Refusal {
     /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event),
     /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event), or a
     /// [`ComputeCommandEncoder`](crate::ComputeCommandEncoder) or
-    /// [`BlitCommandEncoder`](crate::BlitCommandEncoder) call).
+    /// [`BlitCommandEncoder`](crate::BlitCommandEncoder) call), or a block of another device
+    /// given to [`Device::release_block`](crate::Device::release_block).
     ///
-    /// Basis: ours (an event's semaphore, a buffer's block, a texture's image and a pipeline
-    /// belong to the `VkDevice` that made them).
+    /// Basis: ours (an event's semaphore, a buffer's block, a texture's image, a pipeline and a
+    /// block belong to the `VkDevice` that made them).
     OtherDevice,
     /// A queue that may hold no command buffer
     /// ([`Device::new_command_queue`](crate::Device::new_command_queue) with a count of 0).

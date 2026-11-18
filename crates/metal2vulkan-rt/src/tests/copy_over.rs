@@ -234,7 +234,7 @@ mod on_device {
                 "{name}: the texture's write in the buffer"
             );
             drop((texture, scratch, source, buffer, queue));
-            (device.release_block(cpu.id)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
         });
     }
 
@@ -435,7 +435,7 @@ mod on_device {
 
             drop((texture, second, scratch, written, target, synced, first));
             drop((buffer, kept, zero, out, arena, state, sum, queue));
-            (device.release_block(cpu.id)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
         });
     }
 
@@ -518,7 +518,7 @@ entry:
             assert!(held(&out)[..WORDS * 4] == ran, "{name}: the kernel ran");
             used("a use after the kernel that leaves the buffer", 0);
             drop((texture, scratch, buffer, out, arena, state, queue));
-            (device.release_block(cpu.id)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
         });
     }
 }

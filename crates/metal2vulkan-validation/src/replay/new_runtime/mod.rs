@@ -46,8 +46,9 @@ enum Object {
     Blit(Box<rt::BlitCommandEncoder>),
     /// A buffer, and its place where the backend placed it.
     Buffer(rt::Buffer, Option<Place>),
-    /// A block of the stream (`m2v.newBlockWithLength:storageMode:`) or a heap: its range.
-    Block(rt::HeapRange, rt::MemoryClass),
+    /// A block of the stream (`m2v.newBlockWithLength:storageMode:`) or a heap: its range, and
+    /// the handle that keeps the block while the object lives.
+    Block(rt::HeapRange, rt::MemoryClass, rt::Block),
     Texture(rt::Texture),
     TextureDescriptor(Box<rt::TextureDescriptor>),
     Library(rt::Library),
@@ -747,20 +748,20 @@ impl NewRuntime {
                     2 => rt::MemoryClass::Private,
                     other => return Err(refuse(call, format!("a block of storage mode {other}"))),
                 };
-                let info = self
+                let block = self
                     .device
                     .take_block(class, length)
                     .map_err(failed(call))?;
                 self.block_bytes[class_index(class)] += length;
                 let made = Made {
-                    address: Some(info.gpu_address),
+                    address: Some(block.gpu_address),
                 };
                 let range = rt::HeapRange {
-                    block: info.id,
+                    block: block.id,
                     offset: 0,
                     len: length,
                 };
-                Ok(Some((Object::Block(range, class), made)))
+                Ok(Some((Object::Block(range, class, block), made)))
             }
             "newLibraryWithData:error:" => {
                 let library = rt::Library::from_metallib(data(call, 0)?);
@@ -983,10 +984,8 @@ impl Backend for NewRuntime {
                 Some(Object::Buffer(_, Some(place))) => self.places.give(place, self.commits),
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a
                 // heap's resources keep the heap.
-                Some(Object::Block(range, class)) => {
-                    self.device
-                        .release_block(range.block)
-                        .map_err(failed(call))?;
+                Some(Object::Block(range, class, block)) => {
+                    self.device.release_block(block).map_err(failed(call))?;
                     self.block_bytes[class_index(class)] -= range.len;
                 }
                 _ => {}
@@ -1040,7 +1039,7 @@ impl Backend for NewRuntime {
                     let buffer = buffer.clone();
                     self.buffer_call(call, &buffer)?
                 }
-                Object::Block(range, class) => {
+                Object::Block(range, class, _) => {
                     let (range, class) = (*range, *class);
                     self.block_call(call, range, class)?
                 }
@@ -1108,7 +1107,7 @@ impl Backend for NewRuntime {
     fn write(&mut self, target: u64, offset: u64, bytes: &[u8]) -> Result<(), PlayError> {
         match self.objects.get(&target) {
             Some(Object::Buffer(buffer, _)) => write_into(buffer, offset, bytes),
-            Some(Object::Block(range, rt::MemoryClass::Shared)) => {
+            Some(Object::Block(range, rt::MemoryClass::Shared, _)) => {
                 let whole = self
                     .device
                     .new_buffer(range.block, range.offset, range.len, false);

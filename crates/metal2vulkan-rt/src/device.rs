@@ -2,17 +2,18 @@
 //! its queues, its memory blocks, its threads, quiesce and teardown.
 
 use crate::arrays::Arrays;
+use crate::block::{Block, Claim};
 use crate::cache::{self, Caches};
 use crate::complete::{self, Done};
 use crate::counters::{Counters, Gauge};
-use crate::error::Error;
+use crate::error::{Error, Refusal};
 use crate::extension::{self, ConsumerFeature, DeviceExtension};
 use crate::fill::Filler;
 use crate::floor;
 use crate::hazard::Ids;
 use crate::instance::{Instance, PhysicalDevice};
 use crate::kernel_map::KernelMap;
-use crate::memory::{self, Block, BlockId, BlockInfo, BlockMappings, Memory, MemoryClass, Pool};
+use crate::memory::{self, BlockId, BlockMappings, Memory, MemoryClass, Pool};
 use crate::pipeline::PUSH_BYTES;
 use crate::places::Places;
 use crate::reaper::{self, Job, Reaper};
@@ -30,7 +31,7 @@ use std::collections::HashMap;
 use std::ffi::{c_char, CString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -58,11 +59,10 @@ pub struct Device {
     shared: Arc<Shared>,
 }
 
-/// What the device's handles share: the core, the blocks the consumer holds, and the runtime's
-/// threads, which hold the core but no handle.
+/// What the device's handles share: the core and the runtime's threads, which hold the core but
+/// no handle.
 struct Shared {
     core: Arc<Core>,
-    claims: Mutex<HashMap<BlockId, Arc<Block>>>,
     threads: Mutex<Threads>,
 }
 
@@ -161,6 +161,9 @@ pub(crate) struct Core {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fail_private: std::sync::atomic::AtomicU32,
     pub(crate) pool: Pool,
+    /// The blocks the consumer holds handles of, by number ([`Block`]): each claim goes once its
+    /// last handle drops, or at teardown.
+    pub(crate) claims: Mutex<HashMap<BlockId, Weak<Claim>>>,
     /// The blocks textures are placed in.
     pub(crate) places: Places,
     /// The blocks Managed buffers' device copies are placed in.
@@ -447,6 +450,7 @@ impl Device {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             fail_private: std::sync::atomic::AtomicU32::new(0),
             pool,
+            claims: Mutex::new(HashMap::new()),
             places: Places::new(),
             copies: Places::new(),
             filler,
@@ -473,7 +477,6 @@ impl Device {
         let device = Device {
             shared: Arc::new(Shared {
                 core,
-                claims: Mutex::new(HashMap::new()),
                 threads: Mutex::new(Threads::default()),
             }),
         };
@@ -549,7 +552,7 @@ impl Device {
     }
 
     /// No Metal counterpart: takes a block of `class` memory at least `len` bytes long, for the
-    /// consumer to place buffers in.
+    /// consumer to place buffers in: a handle ([`Block`]) whose last drop gives it back.
     ///
     /// For `len` up to the class's [`MemoryClass::block_len`] (16 MiB Shared, 64 MiB Private) it
     /// is a pooled block of that length. The device's making makes one of each class, and the
@@ -569,7 +572,7 @@ impl Device {
     /// [`Limit::MemoryAllocations`](crate::Limit::MemoryAllocations) where the block takes an
     /// allocation past the device's count; [`Error::Vulkan`] where the device is out of memory or
     /// lost; [`Error::Quiesced`].
-    pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<BlockInfo, Error> {
+    pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<Block, Error> {
         let core = &self.shared.core;
         if core.closed() {
             return Err(Error::Quiesced);
@@ -577,8 +580,8 @@ impl Device {
         let memory = core.take_memory(class, len)?;
         let info = memory.info();
         core.pool.hand(memory.id);
-        lock(&self.shared.claims).insert(memory.id, Arc::new(Block::new(memory, Arc::clone(core))));
-        Ok(info)
+        let block = memory::Block::new(memory, Arc::clone(core));
+        Ok(Block::claim(core, info, block))
     }
 
     /// No Metal counterpart: stops the runtime's threads and its GPU work, for a process about to
@@ -615,7 +618,8 @@ impl Device {
         )
     }
 
-    /// No Metal counterpart: gives a block back.
+    /// No Metal counterpart: gives a block back where `block` is its last handle: the drop of the
+    /// handle, made explicit ([`Block`]).
     ///
     /// It takes effect once no [`Buffer`](crate::Buffer) of the block remains and every command
     /// buffer that used it has retired. The block-maker thread then zeroes it and keeps it idle,
@@ -625,13 +629,13 @@ impl Device {
     /// block serves a later [`take_block`](Device::take_block) past the pooled length that it
     /// fits and that fills at least half of it.
     ///
-    /// Err: [`Error::NoSuchBlock`] for a block the consumer does not hold.
-    pub fn release_block(&self, block: BlockId) -> Result<(), Error> {
-        let held = lock(&self.shared.claims)
-            .remove(&block)
-            .ok_or(Error::NoSuchBlock(block))?;
-        self.shared.core.work.release_block(&held);
-        drop(held);
+    /// Err: [`Refusal::OtherDevice`] for another device's block, whose handle is dropped all the
+    /// same.
+    pub fn release_block(&self, block: Block) -> Result<(), Error> {
+        if !block.is_of(&self.shared.core) {
+            return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        drop(block);
         Ok(())
     }
 
@@ -656,11 +660,13 @@ impl Device {
         Arc::strong_count(&self.shared)
     }
 
-    /// A block the consumer holds. Err: [`Error::NoSuchBlock`].
-    pub(crate) fn block(&self, id: BlockId) -> Result<Arc<Block>, Error> {
-        lock(&self.shared.claims)
+    /// A block the consumer holds a handle of. Err: [`Error::NoSuchBlock`].
+    pub(crate) fn block(&self, id: BlockId) -> Result<Arc<memory::Block>, Error> {
+        let claim = lock(&self.shared.core.claims)
             .get(&id)
-            .cloned()
+            .and_then(Weak::upgrade);
+        claim
+            .and_then(|claim| claim.block())
             .ok_or(Error::NoSuchBlock(id))
     }
 
@@ -1071,16 +1077,18 @@ pub struct RawDevice<'a> {
 impl Drop for Shared {
     fn drop(&mut self) {
         let threads = self.take_threads();
-        // The blocks the consumer still holds go back to the pool once the threads have stopped,
-        // for the core to free. No buffer of them is left: each holds a handle of the device.
-        let claims = std::mem::take(
-            self.claims
-                .get_mut()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
         let teardown = move |core: &Arc<Core>| {
             halt(core, threads, None, false);
-            drop(claims);
+            // The blocks the consumer still holds handles of go back to the pool once the threads
+            // have stopped and the consumer's unmap hook has returned for each (`halt`), for the
+            // core to free; a handle dropped later finds its claim empty. No buffer of them is
+            // left: each holds a handle of the device.
+            let claims: Vec<Weak<Claim>> = lock(&core.claims).drain().map(|(_, c)| c).collect();
+            let blocks: Vec<Arc<memory::Block>> = (claims.iter())
+                .filter_map(Weak::upgrade)
+                .filter_map(|claim| claim.take())
+                .collect();
+            drop(blocks);
             // The map's kernels hold the core: a kernel no state holds goes now, its modules and
             // pipelines freed with the core.
             core.kernels.clear(&core.counters);

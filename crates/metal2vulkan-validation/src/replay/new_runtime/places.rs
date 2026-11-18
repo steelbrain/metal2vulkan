@@ -10,17 +10,17 @@ use std::ops::Range;
 /// Where a buffer's place starts: Metal's buffers lie at multiples of 256 bytes.
 const ALIGN: u64 = 256;
 
-/// A buffer's place: its block, its bytes there, and the block's class where the block is its
+/// A buffer's place: its block, its bytes there, and the block's handle where the block is its
 /// own.
 pub(super) struct Place {
     pub(super) block: rt::BlockId,
     pub(super) range: Range<u64>,
-    own: Option<rt::MemoryClass>,
+    own: Option<rt::Block>,
 }
 
-/// One pooled block: its free ranges, in order.
+/// One pooled block: its handle, and its free ranges, in order.
 struct Block {
-    info: rt::BlockInfo,
+    info: rt::Block,
     free: Vec<Range<u64>>,
 }
 
@@ -68,12 +68,12 @@ impl Places {
     ) -> Result<Place, rt::Error> {
         self.free_completed(completed)?;
         if len > class.block_len() {
-            let info = self.device.take_block(class, len)?;
+            let block = self.device.take_block(class, len)?;
             self.bytes[class_index(class)] += len;
             return Ok(Place {
-                block: info.id,
+                block: block.id,
                 range: 0..len,
-                own: Some(class),
+                own: Some(block),
             });
         }
         let span = len.next_multiple_of(ALIGN);
@@ -117,9 +117,10 @@ impl Places {
                 continue;
             }
             let (place, _) = self.held.swap_remove(at);
-            if let Some(class) = place.own {
+            if let Some(own) = place.own {
+                let class = own.class;
                 // The runtime keeps the block for the command buffers that use it.
-                self.device.release_block(place.block)?;
+                self.device.release_block(own)?;
                 self.bytes[class_index(class)] -= place.range.end;
                 continue;
             }

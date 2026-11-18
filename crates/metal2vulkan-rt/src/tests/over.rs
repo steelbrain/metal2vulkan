@@ -335,7 +335,7 @@ mod on_device {
             );
 
             drop((texture, plain, buffer, command_buffer, queue, over, managed));
-            (device.release_block(cpu.id)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
 }

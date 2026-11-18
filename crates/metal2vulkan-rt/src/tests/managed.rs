@@ -170,7 +170,7 @@ mod on_device {
                 counters.metrics()
             );
             drop((managed, into));
-            for block in [cpu.id, private.id] {
+            for block in [cpu, private] {
                 device
                     .release_block(block)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -357,7 +357,7 @@ mod on_device {
                 Ok(()) => panic!("{name}: a level past the texture went"),
             }
             drop((texture, plain, named, unmapped));
-            for block in [cpu.id, private.id] {
+            for block in [cpu, private] {
                 device
                     .release_block(block)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));

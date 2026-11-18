@@ -63,9 +63,9 @@ static destructor or an `atexit` handler: the consumer drops every handle, or ca
 A device the consumer dropped is never handed out again: only `Device::new` makes a `Device`, and
 the runtime's threads hold the device's core, never a handle. A call that configures what has
 started refuses typed, never answering Ok for nothing: every call of a committed command buffer
-(`Refusal::Committed`), the release of a block not held (`Error::NoSuchBlock`), and a call that
-needs a runtime thread after `Device::quiesce` (`Error::Quiesced`). `DeviceOptions` are read once,
-by `Device::new`.
+(`Refusal::Committed`), a call naming a block whose last handle is gone (`Error::NoSuchBlock`),
+and a call that needs a runtime thread after `Device::quiesce` (`Error::Quiesced`).
+`DeviceOptions` are read once, by `Device::new`.
 
 ### Counters
 
@@ -82,9 +82,10 @@ in its memory.
 
 - `Device::take_block(class, len)` gives a block of `MemoryClass::Private` (device-local, no host
   mapping) or `MemoryClass::Shared` (host-visible, host-coherent and host-cached, mapped for the
-  block's life) memory, as a `BlockInfo`: its number, class, length, device address and, for
-  Shared, its host address. One `VkBuffer` spans each block, with every buffer usage and a device
-  address. Nothing in a block is exportable.
+  block's life) memory, as a `Block`: rt's own handle, with no Metal counterpart, which derefs to
+  the block's `BlockInfo` (its number, class, length, device address and, for Shared, its host
+  address). One `VkBuffer` spans each block, with every buffer usage and a device address.
+  Nothing in a block is exportable.
 - Up to its class's `MemoryClass::block_len`, 16 MiB of Shared memory and 64 MiB of Private on
   every device, a block is pooled. `Device::new` makes one block of each class before it returns,
   and the block-maker thread keeps one of each class ready after that, made off every caller's
@@ -116,17 +117,22 @@ in its memory.
 - Every block reads zero when it is handed out, new or taken again, as Metal's new buffers do. A
   Shared block is zeroed through its mapping, which also makes every page resident before anyone
   holds it; a Private block by a GPU fill.
-- `Device::release_block` gives a block back. It takes effect once no buffer of the block remains.
-  The block-maker thread then zeroes it and keeps it idle, pooled or dedicated, with the same
-  number, address and mapping, as its class's latest idle block. Each class keeps at most a bound
-  of idle bytes, 256 MiB of Shared memory and 128 MiB of Private, beside its ready block, which is
-  a reserve outside the bound: past it the oldest kept block is freed (after
-  `BlockMappings::unmap`), and a block longer than the bound is freed at once. A take
-  past the pooled length takes a kept dedicated block that it fits and fills at least half of
+- Dropping a block's last handle gives the block back; `Device::release_block` consumes a handle,
+  that drop made explicit. Clones of a handle share one claim, so dropping one of two gives nothing
+  back. It takes effect once no buffer, command buffer or upload using the block remains. The
+  block-maker thread then zeroes it and keeps it idle, pooled or dedicated, with the same number,
+  address and mapping, as its class's latest idle block. Each class keeps at most a bound of idle
+  bytes, 256 MiB of Shared memory and 128 MiB of Private, beside its ready block, which is a
+  reserve outside the bound: past it the oldest kept block is freed (after
+  `BlockMappings::unmap`), and a block longer than the bound is freed at once. A take past the
+  pooled length takes a kept dedicated block that it fits and fills at least half of
   (`Metrics::dedicated_blocks_reused`) before it allocates, so a program that makes and releases
   large buffers frame after frame pays the allocation, and the driver's hold on the device's other
   calls that comes with it, once. `Gauges::shared_idle_bytes` and `Gauges::private_idle_bytes`
-  count what is kept. Block numbers are never reused during the device's life.
+  count what is kept. Once the last handle is gone the block's number names nothing
+  (`Error::NoSuchBlock`), and numbers are never reused during the device's life. The device's
+  teardown frees every block still claimed, after the consumer's `BlockMappings::unmap` returned
+  for it; a handle dropped after that does nothing.
 - `Device::new_buffer(block, offset, length, zeroed)` makes a `Buffer`: a view of the range, with
   no Vulkan object of its own. Its `gpu_address` is the block's address plus the offset, and its
   `contents` the block's mapping plus the offset, or `None` in a Private block. `zeroed` zeroes the

@@ -208,61 +208,70 @@ struct Heap {
 
 /// A pooled block the harness took.
 struct Block {
-    id: rt::BlockId,
+    block: rt::Block,
     class: rt::MemoryClass,
     free: Ranges,
 }
 
-/// Where a buffer lies: a range of a pooled block, or a dedicated block of its own (`None`).
-struct Placed {
-    block: rt::BlockId,
-    range: Option<Range<u64>>,
+/// Where a buffer lies.
+enum Placed {
+    /// A range of a pooled block.
+    Pooled {
+        block: rt::BlockId,
+        range: Range<u64>,
+    },
+    /// A dedicated block of its own, whose handle the buffer holds: the runtime frees it once the
+    /// handle, the buffer and the work that used it are gone.
+    Dedicated(rt::Block),
+}
+
+impl Placed {
+    /// The block's number and the buffer's offset in it.
+    fn at(&self) -> (rt::BlockId, u64) {
+        match self {
+            Placed::Pooled { block, range } => (*block, range.start),
+            Placed::Dedicated(block) => (block.id, 0),
+        }
+    }
 }
 
 impl Heap {
     /// A place for a buffer of `length` bytes in `class` memory.
     fn place(&mut self, class: rt::MemoryClass, length: u64) -> Result<Placed> {
         if length > class.block_len() {
-            let block = self.device.take_block(class, length).map_err(error)?.id;
-            return Ok(Placed { block, range: None });
+            let block = self.device.take_block(class, length).map_err(error)?;
+            return Ok(Placed::Dedicated(block));
         }
         let span = length.next_multiple_of(ALIGN);
         let found = (self.blocks.iter_mut())
             .filter(|block| block.class == class)
-            .find_map(|block| Some((block.id, block.free.take(span)?)));
+            .find_map(|block| Some((block.block.id, block.free.take(span)?)));
         let (block, start) = match found {
             Some(found) => found,
             None => {
-                let info = self.device.take_block(class, span).map_err(error)?;
-                let mut free = Ranges::new(info.len);
+                let block = self.device.take_block(class, span).map_err(error)?;
+                let mut free = Ranges::new(block.len);
                 let start =
                     (free.take(span)).ok_or("a new pooled block is shorter than a buffer")?;
-                self.blocks.push(Block {
-                    id: info.id,
-                    class,
-                    free,
-                });
-                (info.id, start)
+                let id = block.id;
+                self.blocks.push(Block { block, class, free });
+                (id, start)
             }
         };
-        Ok(Placed {
+        Ok(Placed::Pooled {
             block,
-            range: Some(start..start + span),
+            range: start..start + span,
         })
     }
 
-    /// Frees `placed`: its range, or its dedicated block, which the runtime frees once its last
-    /// buffer is gone.
+    /// Frees `placed`'s range of a pooled block; a dedicated block goes with its handle, which
+    /// `placed` holds.
     fn free(&mut self, placed: &Placed) {
-        match &placed.range {
-            Some(range) => {
-                let block = (self.blocks.iter_mut())
-                    .find(|block| block.id == placed.block)
-                    .expect("the harness keeps every pooled block it placed a buffer in");
-                block.free.give(range.clone());
-            }
-            None => (self.device.release_block(placed.block))
-                .expect("the harness holds each dedicated block until its buffer is dropped"),
+        if let Placed::Pooled { block, range } = placed {
+            let pooled = (self.blocks.iter_mut())
+                .find(|kept| kept.block.id == *block)
+                .expect("the harness keeps every pooled block it placed a buffer in");
+            pooled.free.give(range.clone());
         }
     }
 }
@@ -327,8 +336,8 @@ impl crate::Device for Device {
             Storage::Private | Storage::Managed => rt::MemoryClass::Private,
         };
         let placed = self.heap.borrow_mut().place(class, length)?;
-        let start = placed.range.as_ref().map_or(0, |range| range.start);
-        match self.device.new_buffer(placed.block, start, length, true) {
+        let (block, start) = placed.at();
+        match self.device.new_buffer(block, start, length, true) {
             Ok(buffer) => Ok(Buffer {
                 buffer,
                 placed,

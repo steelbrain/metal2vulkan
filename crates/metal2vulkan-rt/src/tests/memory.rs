@@ -85,8 +85,8 @@ mod on_device {
     use crate::device::lock;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus, Device, DeviceOptions,
-        Error, Gauges, Instance, Limit, MemoryClass, Refusal, MAX_BUFFER_LENGTH,
+        Block, BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus, Device,
+        DeviceOptions, Error, Gauges, Instance, Limit, MemoryClass, Refusal, MAX_BUFFER_LENGTH,
     };
     use ash::vk;
     use std::collections::HashMap;
@@ -147,7 +147,7 @@ mod on_device {
     }
 
     /// A Shared block's bytes.
-    fn bytes(block: BlockInfo) -> &'static mut [u8] {
+    fn bytes(block: &BlockInfo) -> &'static mut [u8] {
         let contents = block.contents.expect("a Shared block's contents");
         // SAFETY: the mapping spans the block, which the test holds while it uses the slice.
         unsafe { std::slice::from_raw_parts_mut(contents.as_ptr(), block.len as usize) }
@@ -373,7 +373,7 @@ mod on_device {
                 "{name}: only the 2 GiB buffer"
             );
             drop(buffer);
-            device.release_block(block.id).expect("a release");
+            device.release_block(block).expect("a release");
             drop(device);
             let gauges = counters.gauges();
             print_gauges_at_drop("buffer_2_gib", gauges);
@@ -410,7 +410,7 @@ mod on_device {
                 (MemoryClass::Shared, MemoryClass::Shared.block_len())
             );
             assert_ne!(shared.gpu_address, 0, "{name}: a Shared block's address");
-            let host = bytes(shared);
+            let host = bytes(&shared);
             assert!(
                 host.iter().all(|&byte| byte == 0),
                 "{name}: a new Shared block"
@@ -554,7 +554,7 @@ mod on_device {
                 .take_block(MemoryClass::Shared, past + 1)
                 .expect("a dedicated block");
             assert_eq!(dedicated.len, past + (64 << 10));
-            let dedicated_host = bytes(dedicated);
+            let dedicated_host = bytes(&dedicated);
             assert!(
                 dedicated_host.iter().all(|&byte| byte == 0),
                 "{name}: a dedicated block"
@@ -567,14 +567,11 @@ mod on_device {
 
             // Released, it lives while its buffer does, then, longer than the bound, is freed
             // through the hook on the block-maker thread, still mapped.
-            device.release_block(dedicated.id).expect("a release");
+            let dedicated_id = dedicated.id;
+            device.release_block(dedicated).expect("a release");
             assert!(matches!(
-                device.release_block(dedicated.id),
-                Err(Error::NoSuchBlock(id)) if id == dedicated.id
-            ));
-            assert!(matches!(
-                device.new_buffer(dedicated.id, 0, 16, false),
-                Err(Error::NoSuchBlock(_))
+                device.new_buffer(dedicated_id, 0, 16, false),
+                Err(Error::NoSuchBlock(id)) if id == dedicated_id
             ));
             assert!(
                 hook.unmapped().is_empty(),
@@ -589,7 +586,7 @@ mod on_device {
             });
             let unmapped = hook.unmapped();
             assert_eq!(unmapped.len(), 1, "{name}: {unmapped:?}");
-            assert_eq!(unmapped[0].block, dedicated.id.get());
+            assert_eq!(unmapped[0].block, dedicated_id.get());
             assert_eq!(unmapped[0].thread.as_deref(), Some("m2v-blocks"));
             assert_eq!(
                 unmapped[0].first,
@@ -603,7 +600,7 @@ mod on_device {
             let gauges = counters.gauges();
             print_gauges_at_drop("blocks_teardown", gauges);
             assert_eq!(gauges, Gauges::default(), "{name}: gauges after teardown");
-            assert_each_unmapped_once(name, &hook, &[shared.id, private.id, dedicated.id]);
+            assert_each_unmapped_once(name, &hook, &[shared.id, private.id, dedicated_id]);
             for unmapped in &hook.unmapped()[1..] {
                 assert_eq!(unmapped.thread, this_thread, "{name}: {unmapped:?}");
             }
@@ -673,7 +670,7 @@ mod on_device {
 
             let shared_len = MemoryClass::Shared.block_len();
             let room = MemoryClass::Shared.idle_bound() / shared_len;
-            let taken: Vec<BlockInfo> = (0..room + 2)
+            let taken: Vec<Block> = (0..room + 2)
                 .map(|_| {
                     device
                         .take_block(MemoryClass::Shared, shared_len)
@@ -682,7 +679,7 @@ mod on_device {
                 .collect();
             for block in &taken {
                 handed.push(block.id);
-                let host = bytes(*block);
+                let host = bytes(block);
                 host[0] = 0x5A;
                 host[host.len() - 1] = 0x5A;
                 hook.record(block);
@@ -691,8 +688,9 @@ mod on_device {
             wait_until("a ready block of each class", || {
                 counters.gauges().blocks == ZERO_SOURCE + 2 + room + 2
             });
-            for block in &taken {
-                device.release_block(block.id).expect("a release");
+            let infos: Vec<BlockInfo> = taken.iter().map(|block| **block).collect();
+            for block in taken {
+                device.release_block(block).expect("a release");
             }
             // The bound's worth of Shared blocks kept beside the ready one, the ready Private
             // block, the zero source.
@@ -715,7 +713,7 @@ mod on_device {
                 MemoryClass::Shared.idle_bound() + shared_len,
                 "{name}: the bound's worth kept beside the ready block"
             );
-            let kept: Vec<&BlockInfo> = taken
+            let kept: Vec<&BlockInfo> = infos
                 .iter()
                 .filter(|block| unmapped.iter().all(|u| u.block != block.id.get()))
                 .collect();
@@ -732,7 +730,7 @@ mod on_device {
                 .unwrap_or_else(|| panic!("{name}: a kept block"));
             assert_eq!(again.gpu_address, was.gpu_address);
             assert_eq!(again.contents, was.contents);
-            let host = bytes(again);
+            let host = bytes(&again);
             assert!(
                 host.iter().all(|&byte| byte == 0),
                 "{name}: a block taken again"
@@ -741,9 +739,10 @@ mod on_device {
 
             // A Private block written by the GPU and released reads zero when taken again.
             let gpu = Gpu::new(&device);
-            let private = device
+            let private_block = device
                 .take_block(MemoryClass::Private, 1)
                 .expect("a Private block");
+            let private = *private_block;
             handed.push(private.id);
             gpu.fill(
                 vk_buffer(&device, private.id),
@@ -751,9 +750,9 @@ mod on_device {
                 MemoryClass::Private.block_len(),
                 u32::MAX,
             );
-            device.release_block(private.id).expect("a release");
+            device.release_block(private_block).expect("a release");
             // The pool zeroes and keeps it before it makes anything, so it is one of the next two.
-            let next: Vec<BlockInfo> = (0..2)
+            let next: Vec<Block> = (0..2)
                 .map(|_| device.take_block(MemoryClass::Private, 1).expect("a block"))
                 .collect();
             handed.extend(next.iter().map(|block| block.id));
@@ -807,7 +806,7 @@ mod on_device {
             let device = device_with(&hook, physical, name);
             let counters = device.counters();
             let shared_len = MemoryClass::Shared.block_len();
-            let taken: Vec<BlockInfo> = (0..3)
+            let taken: Vec<Block> = (0..3)
                 .map(|_| {
                     (device.take_block(MemoryClass::Shared, 100 * MIB))
                         .unwrap_or_else(|error| panic!("{name}: a dedicated block: {error}"))
@@ -816,14 +815,15 @@ mod on_device {
             let mut handed: Vec<BlockId> = taken.iter().map(|block| block.id).collect();
             for block in &taken {
                 assert_eq!(block.len, 100 * MIB, "{name}: a dedicated block");
-                let host = bytes(*block);
+                let host = bytes(block);
                 host[0] = 0x5A;
                 host[host.len() - 1] = 0x5A;
                 hook.record(block);
             }
             assert_eq!(counters.metrics().dedicated_blocks_reused, 0, "{name}");
-            for block in &taken {
-                device.release_block(block.id).expect("a release");
+            let infos: Vec<BlockInfo> = taken.iter().map(|block| **block).collect();
+            for block in taken {
+                device.release_block(block).expect("a release");
             }
             // Two kept beside the ready block; the oldest freed.
             wait_until("one dedicated block freed", || hook.unmapped().len() == 1);
@@ -832,7 +832,7 @@ mod on_device {
             });
             let unmapped = hook.unmapped();
             assert_eq!(unmapped[0].thread.as_deref(), Some("m2v-blocks"), "{name}");
-            let kept: Vec<&BlockInfo> = taken
+            let kept: Vec<&BlockInfo> = infos
                 .iter()
                 .filter(|block| block.id.get() != unmapped[0].block)
                 .collect();
@@ -852,7 +852,7 @@ mod on_device {
                 "{name}: the kept block as it was"
             );
             assert!(
-                bytes(again).iter().all(|&byte| byte == 0),
+                bytes(&again).iter().all(|&byte| byte == 0),
                 "{name}: a kept block taken again"
             );
             assert_eq!(counters.metrics().blocks_made, made, "{name}: a block made");
@@ -863,22 +863,26 @@ mod on_device {
                 "{name}: one kept block left"
             );
 
-            // A request that fills less than half of it, and one it does not fit, make their own.
+            // A request that fills less than half of it, and one it does not fit, make their own,
+            // held to the teardown.
+            let mut owns = Vec::new();
             for len in [40 * MIB, 101 * MIB] {
                 let own = (device.take_block(MemoryClass::Shared, len))
                     .unwrap_or_else(|error| panic!("{name}: {len}: {error}"));
                 assert_eq!(own.len, len, "{name}: a block of its own");
                 handed.push(own.id);
+                owns.push(own);
             }
             assert_eq!(counters.metrics().blocks_made, made + 2, "{name}");
             assert_eq!(counters.metrics().dedicated_blocks_reused, 1, "{name}");
 
             // A dedicated Private block is kept beside the Private ready block, and taken again.
             let private_len = MemoryClass::Private.block_len();
-            let private = (device.take_block(MemoryClass::Private, private_len + 1))
+            let private_block = (device.take_block(MemoryClass::Private, private_len + 1))
                 .unwrap_or_else(|error| panic!("{name}: a dedicated Private block: {error}"));
+            let private = *private_block;
             handed.push(private.id);
-            device.release_block(private.id).expect("a release");
+            device.release_block(private_block).expect("a release");
             wait_until("the Private block kept", || {
                 counters.gauges().private_idle_bytes == private_len + private.len
             });

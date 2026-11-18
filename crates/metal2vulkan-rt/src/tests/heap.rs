@@ -150,7 +150,7 @@ mod on_device {
                 heap.len
             );
             drop((textures, alias));
-            for block in [block.id, shared.id] {
+            for block in [block, shared] {
                 device
                     .release_block(block)
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
