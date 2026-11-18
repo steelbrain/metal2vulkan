@@ -362,6 +362,10 @@ struct Snapshot {
     ranges: Vec<(Around, u64)>,
 }
 
+/// What a placement heap holds at each recorded offset: the largest size and alignment the
+/// runtime answers for the resources placed there.
+type Placements = BTreeMap<u64, (u64, u64)>;
+
 /// A placement heap's layout on the runtime: its size, and the offset the player places each
 /// resource at by the offset the stream places it at.
 struct Layout {
@@ -377,7 +381,7 @@ struct Layout {
 /// the resources there. Resources at one offset still share it; resources at different offsets no
 /// longer meet. Where every resource ends before the next offset and every offset is aligned, the
 /// layout is the stream's.
-fn relay(size: u64, at: &BTreeMap<u64, (u64, u64)>) -> Layout {
+fn relay(size: u64, at: &Placements) -> Layout {
     let mut offsets = HashMap::with_capacity(at.len());
     let mut below: Option<(u64, u64, u64)> = None;
     for (&recorded, &(bytes, align)) in at {
@@ -694,7 +698,7 @@ impl<'b, B: Backend> Player<'b, B> {
         let mut descriptors: HashMap<u64, Vec<Call>> = HashMap::new();
         // Each placement heap's recorded size and, by offset, the most bytes and the largest
         // alignment the runtime answers for what the stream places there.
-        let mut heaps: HashMap<u64, (u64, BTreeMap<u64, (u64, u64)>)> = HashMap::new();
+        let mut heaps: HashMap<u64, (u64, Placements)> = HashMap::new();
         while let Ok(Some(call)) = ahead.next_call() {
             match &*call.selector {
                 PRIVATE_BYTES => {
