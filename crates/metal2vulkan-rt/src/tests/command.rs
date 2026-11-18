@@ -454,7 +454,7 @@ pub(crate) mod on_device {
             // An empty command buffer committed while its queue holds a group, waited for alone.
             let queue = self::queue(&device);
             let mut held = Vec::new();
-            behind_busy(name, &device, &queue, |running, _| {
+            behind_busy(name, &device, &queue, |running, _, _| {
                 let work = filled(&queue, &a, 1);
                 commit(&work);
                 let nothing = empty(&queue);
@@ -589,7 +589,7 @@ pub(crate) mod on_device {
             for abandoned in [false, true] {
                 let case = if abandoned { "ended NotRun" } else { "empty" };
                 let mut kept = Vec::new();
-                behind_busy(name, &device, &queue, |running, before| {
+                behind_busy(name, &device, &queue, |running, before, _| {
                     let work = queue_fill(&queue, &a, 1);
                     within(name, || work.status() != CommandBufferStatus::Committed);
                     let held = submissions();
@@ -948,20 +948,24 @@ pub(crate) mod on_device {
     /// Runs `body` with as many command buffers of busy work committed on `queue` as a queue
     /// keeps in flight ([`IN_FLIGHT`]), so its next commit is held, each of more fills each time,
     /// until `body` answers that it checked what it holds while they ran: that the work did not
-    /// end first.
+    /// end first. `body` takes the busy ones, the submissions counted before them, and the
+    /// progress the completion thread had seen before them (`Done::completed`): every earlier
+    /// command buffer's, so the progress stays there until it sees a busy one complete, and a held
+    /// group goes no earlier than that.
     fn behind_busy(
         name: &str,
         device: &Device,
         queue: &CommandQueue,
-        mut body: impl FnMut(&[CommandBuffer], u64) -> bool,
+        mut body: impl FnMut(&[CommandBuffer], u64, u64) -> bool,
     ) {
         let buffer = private(device);
         let checked = [16, 64, 256, 1024].into_iter().any(|fills| {
             let before = device.counters().metrics().submissions;
+            let seen = device.core().done.completed();
             let running: Vec<CommandBuffer> = (0..IN_FLIGHT)
                 .map(|_| busy(queue, &buffer, fills))
                 .collect();
-            let checked = body(&running, before);
+            let checked = body(&running, before, seen);
             for command_buffer in &running {
                 finished(name, command_buffer);
             }
@@ -1080,7 +1084,7 @@ pub(crate) mod on_device {
             let mut arena = Arena::new(&device);
             let buffer = arena.buffer();
             let queue = queue(&device);
-            behind_busy(name, &device, &queue, |_, before| {
+            behind_busy(name, &device, &queue, |_, before, _| {
                 let held = queue.command_buffer().expect("a command buffer");
                 fill(&held, &buffer, 7);
                 held.commit().expect("a commit");
@@ -1166,7 +1170,7 @@ pub(crate) mod on_device {
                 command_buffer.commit().expect("a commit");
                 command_buffer
             };
-            behind_busy(name, &device, &queue, |_, before| {
+            behind_busy(name, &device, &queue, |_, before, _| {
                 let log = Log::default();
                 let first = member("1", &log, &buffers[0], 1);
                 let rest = [
@@ -1241,7 +1245,7 @@ pub(crate) mod on_device {
             let mut arena = Arena::new(&device);
             let buffer = arena.buffer();
             let queue = queue(&device);
-            behind_busy(name, &device, &queue, |running, _| {
+            behind_busy(name, &device, &queue, |running, _, _| {
                 within(name, || {
                     (running.iter()).all(|command_buffer| {
                         command_buffer.status() != CommandBufferStatus::Committed
@@ -1277,7 +1281,7 @@ pub(crate) mod on_device {
             let buffer = arena.buffer();
             let queue = queue(&device);
             let other = device.new_command_queue(4).expect("a queue");
-            behind_busy(name, &device, &queue, |running, before| {
+            behind_busy(name, &device, &queue, |running, before, _| {
                 let held = queue.command_buffer().expect("a command buffer");
                 fill(&held, &buffer, 9);
                 held.commit().expect("a commit");
@@ -1989,7 +1993,10 @@ pub(crate) mod on_device {
     /// same words committed behind three busy submissions, held in groups, as committed one at a
     /// time. The groups pass two submit infos for the mix's four command buffers with commands:
     /// one for the fills up to the signal, which ends the group, and one the wait leads. One at a
-    /// time passes one each.
+    /// time passes one each. The groups are counted only where the completion thread had seen no
+    /// busy one complete when the mix's last commit returned: a completion seen sooner sends the
+    /// held group with what the mix had committed by then, which splits it where the completion
+    /// happened to arrive.
     #[test]
     fn every_device_shares_submit_infos_within_a_group_and_records_what_it_records_alone() {
         each_device("command_infos", |name, _, device| {
@@ -2039,13 +2046,14 @@ pub(crate) mod on_device {
             };
 
             // Behind three busy submissions, each try with more work: the mix is held in groups,
-            // counted where the busy work still ran once the mix was committed.
+            // counted where the completion thread had seen none of the busy work complete once the
+            // mix was committed.
             let mut signal = 0;
             let mut kept = Vec::new();
             let mut counted = None;
             // The submit infos counted once the last try's work completed.
             let mut mark = infos();
-            behind_busy(name, &device, &queue, |running, submitted| {
+            behind_busy(name, &device, &queue, |running, submitted, seen| {
                 signal += 1;
                 // The busy ones are submitted and counted, one submit info each, before the mix's
                 // counts start: `behind_busy` runs the body once they are committed, which may be
@@ -2058,9 +2066,11 @@ pub(crate) mod on_device {
                 let grouped = mix(10, 0x5a, signal, &|command_buffer| {
                     command_buffer.commit().expect("a commit")
                 });
-                let ran = (running.iter()).all(|command_buffer| {
-                    command_buffer.status() != CommandBufferStatus::Completed
-                });
+                // The held group goes once the completion thread has seen a busy one complete,
+                // which then sends what the mix had committed so far: the split turns on when the
+                // completion arrives. Its progress moves before the group may go, and a command
+                // buffer's status turns `Completed` only after that, so the progress decides.
+                let ran = device.core().done.completed() == seen;
                 for command_buffer in running.iter().chain(&grouped) {
                     finished(name, command_buffer);
                     assert_eq!(command_buffer.error(), None, "{name}");
