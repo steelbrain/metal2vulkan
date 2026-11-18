@@ -1,12 +1,14 @@
-//! The cache directory on the host: lowered kernels and pipelines' data share one cap, past which
-//! the least recently used files go, by their time on disk across stores; stores on one directory
-//! share its files, a file another removed is a miss, and pipeline data that does not check is a
-//! miss.
+//! The cache directory on the host: two generations under one cap, a hit in old moved into young,
+//! the state file read at open with no listing and rebuilt where it is torn or missing, a removal
+//! cut short finished by the next open, torn files removed, and stores in threads and processes
+//! sharing one directory without losing a count or reading a file another was writing.
 
-use crate::cache::{frame, unframe, Store};
+use crate::cache::{frame, unframe, State, Store};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// A directory of its own under the OS temp dir, removed when dropped.
 struct Scratch(PathBuf);
@@ -18,22 +20,9 @@ impl Scratch {
         Scratch(dir)
     }
 
-    /// The bytes of every file under the directory.
+    /// The bytes of every file under the directory but the state file.
     fn bytes(&self) -> u64 {
-        fn under(dir: &Path) -> u64 {
-            fs::read_dir(dir)
-                .expect("the directory")
-                .map(|entry| {
-                    let entry = entry.expect("an entry");
-                    let meta = entry.metadata().expect("its metadata");
-                    match meta.is_dir() {
-                        true => under(&entry.path()),
-                        false => meta.len(),
-                    }
-                })
-                .sum()
-        }
-        under(&self.0)
+        bytes_under(&self.0) - fs::metadata(self.0.join("state")).map_or(0, |meta| meta.len())
     }
 }
 
@@ -43,92 +32,261 @@ impl Drop for Scratch {
     }
 }
 
+/// The bytes of every file under `dir`; none where it is missing.
+fn bytes_under(dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .map(|entry| {
+            let entry = entry.expect("an entry");
+            let meta = entry.metadata().expect("its metadata");
+            match meta.is_dir() {
+                true => bytes_under(&entry.path()),
+                false => meta.len(),
+            }
+        })
+        .sum()
+}
+
 /// A file the store keeps: a lowering for even `n`, a pipeline's data for odd.
-fn name(n: u8) -> String {
+fn name(n: u32) -> String {
     match n % 2 {
         0 => format!("translations/{n:064x}"),
         _ => format!("pipelines/{:032x}/{n:064x}", 7),
     }
 }
 
-/// Writes `bytes` as `file` under `root`, as another device would, with its time on disk
-/// `age` ago.
-fn written(root: &Path, file: &str, bytes: &[u8], age: Duration) {
-    let path = root.join(file);
-    fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
-    fs::write(&path, bytes).expect("the file");
-    let opened = fs::File::options().write(true).open(&path).expect("open");
-    opened
-        .set_modified(SystemTime::now() - age)
-        .expect("its time");
+/// Every byte as it is.
+fn whole(bytes: &[u8]) -> Option<Vec<u8>> {
+    Some(bytes.to_vec())
+}
+
+fn state(store: &Store) -> State {
+    store.current().expect("the state")
 }
 
 #[test]
-fn a_store_filled_past_its_cap_keeps_the_most_recently_used_within_it() {
+fn a_store_filled_past_its_cap_stays_within_it_and_moves_on() {
     let scratch = Scratch::new("store-cap");
     let store = Store::open(scratch.0.clone(), 1000);
-    for n in 0..10 {
-        assert!(store.put(&name(n), &[n; 300]), "file {n} written");
-        // Read after every write, the first file stays the most recently used.
-        assert_eq!(store.get(&name(0)), Some(vec![0; 300]), "file 0 after {n}");
-        assert!(store.total() <= 1000, "{} bytes after {n}", store.total());
-        assert_eq!(scratch.bytes(), store.total(), "the disk after {n}");
+    assert_eq!(state(&store), State { young: 1, bytes: 0 });
+    for n in 0..40 {
+        assert!(store.put(&name(n), &[n as u8; 100]), "file {n} written");
+        // While a removal runs, the dead generation is on disk beside old and young.
+        assert!(
+            scratch.bytes() <= 1500,
+            "{} bytes after {n}",
+            scratch.bytes()
+        );
+        store.settle();
+        let now = state(&store);
+        assert!(now.bytes <= 500, "{now:?} after {n}");
+        assert_eq!(
+            bytes_under(&store.generation(now.young)),
+            now.bytes,
+            "young after {n}"
+        );
+        assert!(
+            scratch.bytes() <= 1000,
+            "{} bytes after {n}",
+            scratch.bytes()
+        );
     }
-    // Two lowerings (0, 8) and a pipeline's data (9) are the three most recent: both kinds share
-    // the cap.
-    let kept: Vec<bool> = (0..10).map(|n| store.get(&name(n)).is_some()).collect();
-    let mut want = [false; 10];
-    for n in [0, 8, 9] {
-        want[n] = true;
-    }
-    assert_eq!(kept, want, "the files kept");
-    // A file past the cap alone is not kept, and evicts nothing.
-    assert!(!store.put(&name(10), &[10; 1001]));
-    assert_eq!(store.get(&name(10)), None);
-    assert_eq!(store.total(), 900);
-    // Reopened with a smaller cap, the store evicts down to it.
-    drop(store);
-    let reopened = Store::open(scratch.0.clone(), 600);
-    assert_eq!(reopened.total(), 600);
-    assert_eq!(scratch.bytes(), 600);
+    // Five files of 100 bytes a generation: the fortieth file is in the eighth.
+    assert_eq!(state(&store).young, 8);
+    // The last ten files are kept, in old and young, and none before them. (A lookup would move
+    // a file of old into young, and young is full.)
+    let kept: Vec<bool> = (0..40)
+        .map(|n| {
+            [7, 8]
+                .iter()
+                .any(|&g| store.generation(g).join(name(n)).exists())
+        })
+        .collect();
+    assert_eq!(kept, (0..40).map(|n| n >= 30).collect::<Vec<_>>());
+    // A file of more than half the cap is not kept.
+    assert!(!store.put(&name(40), &[0; 501]));
+    assert_eq!(store.get(&name(40), whole), None);
 }
 
 #[test]
-fn a_store_opened_on_files_others_wrote_evicts_the_least_recently_used_on_disk() {
-    let scratch = Scratch::new("store-age");
-    let hour = Duration::from_secs(3600);
-    // Four files of 100 bytes, written 5, 4, 3 and 2 hours ago by other devices.
-    for n in 0..4u8 {
-        written(&scratch.0, &name(n), &[n; 100], hour * u32::from(5 - n));
-    }
-    // A use moves an hours-old file's time forward: file 0 becomes the most recent on disk.
+fn a_hit_in_old_moves_into_young_and_outlives_the_next_generation() {
+    let scratch = Scratch::new("store-old");
     let store = Store::open(scratch.0.clone(), 1000);
-    assert_eq!(store.total(), 400);
-    assert_eq!(store.get(&name(0)), Some(vec![0; 100]));
-    drop(store);
-    // Reopened with room for two, the store keeps file 0 and file 3, the latest used.
-    let reopened = Store::open(scratch.0.clone(), 200);
-    let kept: Vec<bool> = (0..4).map(|n| reopened.get(&name(n)).is_some()).collect();
-    assert_eq!(kept, [true, false, false, true], "the files kept");
-    assert_eq!(scratch.bytes(), 200);
+    for n in 0..6 {
+        assert!(store.put(&name(n), &[n as u8; 100]));
+    }
+    // The sixth write made generation 2 young: files 0 to 4 are in old.
+    let young = state(&store).young;
+    assert_eq!(young, 2);
+    let (old, new) = (
+        store.generation(1).join(name(0)),
+        store.generation(2).join(name(0)),
+    );
+    assert!(old.exists() && !new.exists());
+    assert_eq!(store.get(&name(0), whole), Some(vec![0; 100]));
+    assert!(!old.exists() && new.exists(), "moved into young");
+    assert_eq!(state(&store).bytes, 200, "the move counted");
+    // Four more writes make generation 3 young; file 0 is in old, file 1 is gone.
+    for n in 6..10 {
+        assert!(store.put(&name(n), &[n as u8; 100]));
+    }
+    store.settle();
+    assert_eq!(state(&store).young, 3);
+    assert_eq!(store.get(&name(1), whole), None);
+    assert_eq!(store.get(&name(0), whole), Some(vec![0; 100]));
 }
 
 #[test]
-fn stores_on_one_directory_share_its_files() {
+fn a_reopened_store_reads_its_state_and_lists_no_directory() {
+    let scratch = Scratch::new("store-reopen");
+    let store = Store::open(scratch.0.clone(), 1000);
+    assert_eq!(
+        store.listings.load(Relaxed),
+        1,
+        "a new store lists its directory once"
+    );
+    for n in 0..23 {
+        assert!(store.put(&name(n), &[n as u8; 100]));
+    }
+    store.settle();
+    let before = state(&store);
+    drop(store);
+    let reopened = Store::open(scratch.0.clone(), 1000);
+    assert_eq!(state(&reopened), before);
+    // Files 20 to 22 in young, file 15 in old.
+    for n in [20, 21, 22, 15] {
+        assert_eq!(
+            reopened.get(&name(n), whole),
+            Some(vec![n as u8; 100]),
+            "file {n}"
+        );
+    }
+    assert_eq!(reopened.get(&name(0), whole), None);
+    assert_eq!(reopened.listings.load(Relaxed), 0, "no listing");
+}
+
+#[test]
+fn a_removal_cut_short_is_finished_by_the_next_open() {
+    let scratch = Scratch::new("store-cut");
+    let store = Store::open(scratch.0.clone(), 1000);
+    for n in 0..16 {
+        assert!(store.put(&name(n), &[n as u8; 100]));
+    }
+    store.settle();
+    let young = state(&store).young;
+    assert_eq!(young, 4);
+    drop(store);
+    // A run ended in the middle of removing generation 2, and an earlier one left generation 1.
+    for (number, n) in [(1, 90), (2, 91), (2, 92)] {
+        let path = scratch.0.join(format!("g{number}")).join(name(n));
+        fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
+        fs::write(&path, [0; 100]).expect("the file");
+    }
+    let reopened = Store::open(scratch.0.clone(), 1000);
+    reopened.settle();
+    assert!(!reopened.generation(2).exists() && !reopened.generation(1).exists());
+    assert!(reopened.generation(3).exists() && reopened.generation(4).exists());
+    assert_eq!(
+        reopened.listings.load(Relaxed),
+        0,
+        "the open stats, never lists"
+    );
+    assert_eq!(reopened.get(&name(15), whole), Some(vec![15; 100]));
+}
+
+#[test]
+fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
+    let scratch = Scratch::new("store-state");
+    let store = Store::open(scratch.0.clone(), 1000);
+    for n in 0..13 {
+        assert!(store.put(&name(n), &[n as u8; 100]));
+    }
+    store.settle();
+    assert_eq!(state(&store).young, 3);
+    drop(store);
+    for torn in [&b"cut short"[..], &[7; 24][..], &[][..]] {
+        fs::write(scratch.0.join("state"), torn).expect("the state torn");
+        let reopened = Store::open(scratch.0.clone(), 1000);
+        assert_eq!(
+            reopened.listings.load(Relaxed),
+            1,
+            "rebuilt from one listing"
+        );
+        // Young is the highest generation, counted full.
+        assert_eq!(
+            state(&reopened),
+            State {
+                young: 3,
+                bytes: 500
+            }
+        );
+        assert_eq!(reopened.get(&name(12), whole), Some(vec![12; 100]));
+    }
+    fs::remove_file(scratch.0.join("state")).expect("the state removed");
+    let reopened = Store::open(scratch.0.clone(), 1000);
+    assert_eq!(
+        state(&reopened),
+        State {
+            young: 3,
+            bytes: 500
+        }
+    );
+    // The next write moves on, and the removal takes generation 2.
+    assert!(reopened.put(&name(13), &[13; 100]));
+    reopened.settle();
+    assert_eq!(
+        state(&reopened),
+        State {
+            young: 4,
+            bytes: 100
+        }
+    );
+    assert!(!reopened.generation(2).exists());
+    assert!(scratch.bytes() <= 1000);
+}
+
+#[test]
+fn a_torn_file_is_a_miss_and_is_removed() {
+    let scratch = Scratch::new("store-torn");
+    let store = Store::open(scratch.0.clone(), 1000);
+    let data: Vec<u8> = (0..=255).collect();
+    assert!(store.put(&name(1), &frame(&data)));
+    let path = store.generation(1).join(name(1));
+    let held = fs::read(&path).expect("the file");
+    fs::write(&path, &held[..held.len() - 1]).expect("cut short");
+    let check = |bytes: &[u8]| unframe(bytes).map(<[u8]>::to_vec);
+    assert_eq!(store.get(&name(1), check), None);
+    assert!(!path.exists(), "removed");
+    // A file that holds other bytes of the same length than `holds` asks for stays.
+    assert!(store.put(&name(2), b"lowered"));
+    assert!(!store.holds(&name(2), b"refused"));
+    assert!(store.holds(&name(2), b"lowered"));
+    assert!(store.generation(1).join(name(2)).exists());
+}
+
+#[test]
+fn stores_on_one_directory_share_its_files_and_its_count() {
     let scratch = Scratch::new("store-share");
     let first = Store::open(scratch.0.clone(), 1000);
     let second = Store::open(scratch.0.clone(), 1000);
-    first.put(&name(1), b"compiled");
-    assert_eq!(second.get(&name(1)), Some(b"compiled".to_vec()));
-    assert_eq!(second.total(), 8);
-    first.put(&name(2), b"lowered");
+    assert!(first.put(&name(1), b"compiled"));
+    assert_eq!(second.get(&name(1), whole), Some(b"compiled".to_vec()));
+    assert_eq!(state(&second).bytes, 8);
+    assert!(first.put(&name(2), b"lowered"));
     assert!(second.holds(&name(2), b"lowered"));
-    assert!(!second.holds(&name(2), b"refused"));
     assert!(!second.holds(&name(4), b""));
-    // A file another removed is a miss, and leaves the store's count.
-    fs::remove_file(scratch.0.join(name(1))).expect("removed");
-    assert_eq!(second.get(&name(1)), None);
-    assert_eq!(second.total(), 7);
+    // A file another removed is a miss.
+    fs::remove_file(first.generation(1).join(name(1))).expect("removed");
+    assert_eq!(second.get(&name(1), whole), None);
+    // A write renames over a file another holds open, which keeps reading what it opened.
+    let mut open = fs::File::open(first.generation(1).join(name(2))).expect("open");
+    assert!(second.put(&name(2), b"relowered"));
+    let mut held = Vec::new();
+    std::io::Read::read_to_end(&mut open, &mut held).expect("read");
+    assert_eq!(held, b"lowered");
+    assert_eq!(first.get(&name(2), whole), Some(b"relowered".to_vec()));
 }
 
 #[test]
@@ -142,4 +300,119 @@ fn pipeline_data_that_does_not_check_is_a_miss() {
     assert_eq!(unframe(&flipped), None, "a flipped bit");
     assert_eq!(unframe(&[]), None, "empty");
     assert_eq!(unframe(&frame(&[])), Some(&[][..]), "no data");
+}
+
+/// The stress's cap: a generation of about twelve files, so the stores move on every few writes.
+const STRESS_CAP: u64 = 4096;
+/// The directory a stress child works in, named by the parent.
+const STRESS_DIR: &str = "M2V_RT_STORE_STRESS_DIR";
+
+/// The bytes of key `k`'s file, framed: a length and content of the key's own.
+fn content(k: u32) -> Vec<u8> {
+    frame(&vec![k as u8; 40 + 13 * k as usize])
+}
+
+/// `rounds` lookups of keys a seeded generator picks, each written where it missed; the count of
+/// files read that were not the key's own bytes, whole.
+fn stress(store: &Arc<Store>, seed: u64, rounds: usize) -> usize {
+    let wrong = AtomicUsize::new(0);
+    let mut x = seed | 1;
+    for _ in 0..rounds {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let k = (x % 24) as u32;
+        let want = content(k);
+        let found = store.get(&name(k), |bytes| {
+            if bytes != want {
+                wrong.fetch_add(1, Relaxed);
+            }
+            Some(())
+        });
+        if found.is_none() {
+            store.put(&name(k), &want);
+        }
+    }
+    wrong.into_inner()
+}
+
+/// A child of the multi-process stress: runs it on the directory the parent names, and does
+/// nothing when run alone.
+#[test]
+#[ignore = "a child of the multi-process stress"]
+fn store_stress_child() {
+    let Some(dir) = std::env::var_os(STRESS_DIR) else {
+        return;
+    };
+    let store = Store::open(PathBuf::from(dir), STRESS_CAP);
+    assert_eq!(stress(&store, u64::from(std::process::id()), 4000), 0);
+    store.settle();
+}
+
+#[test]
+fn stores_in_threads_and_processes_racing_writes_moves_and_flips_corrupt_nothing() {
+    let scratch = Scratch::new("store-stress");
+    let exe = std::env::current_exe().expect("the test binary");
+    let mut children: Vec<_> = (0..3)
+        .map(|_| {
+            std::process::Command::new(&exe)
+                .args(["tests::cache::store_stress_child", "--exact", "--ignored"])
+                .env(STRESS_DIR, &scratch.0)
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .expect("a child")
+        })
+        .collect();
+    let stores: Vec<Arc<Store>> = (0..3)
+        .map(|_| Store::open(scratch.0.clone(), STRESS_CAP))
+        .collect();
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..6)
+            .map(|t| {
+                let store = &stores[t % 3];
+                scope.spawn(move || stress(store, 0x9e37_79b9 + t as u64, 4000))
+            })
+            .collect();
+        for worker in workers {
+            assert_eq!(worker.join().expect("a worker"), 0, "files read whole");
+        }
+    });
+    let start = Instant::now();
+    for child in &mut children {
+        let status = loop {
+            if let Some(status) = child.try_wait().expect("the child") {
+                break status;
+            }
+            if start.elapsed() > Duration::from_secs(120) {
+                let _ = child.kill();
+                panic!("a child ran past two minutes");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            status.success(),
+            "a child read a file whole each time: {status}"
+        );
+    }
+    for store in &stores {
+        store.settle();
+    }
+    // With every writer done, young counts at least what it holds: no count was lost.
+    let now = state(&stores[0]);
+    assert!(
+        now.bytes >= bytes_under(&stores[0].generation(now.young)),
+        "{now:?}"
+    );
+    assert!(now.young > 10, "the stores moved on: {now:?}");
+    // Old and young, and at most a generation a removal could not finish while a writer still
+    // wrote into it.
+    assert!(
+        scratch.bytes() <= STRESS_CAP * 3 / 2,
+        "{} bytes",
+        scratch.bytes()
+    );
+    for k in 0..24 {
+        let read = stores[0].get(&name(k), |bytes| Some(bytes == content(k)));
+        assert_ne!(read, Some(false), "key {k} whole");
+    }
 }

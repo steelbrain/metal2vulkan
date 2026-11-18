@@ -675,10 +675,9 @@ pub(crate) fn lower(
 ) -> Result<CompiledFunction, TranslationError> {
     let translator = &core.translator;
     let key = translator.function_compile_key(function, inputs);
-    let kept = core
-        .caches
-        .translation(key.digest())
-        .and_then(|bytes| CompiledFunction::from_bytes_for_key(&bytes, &key, translator).ok());
+    let kept = (core.caches).translation(key.digest(), |bytes| {
+        CompiledFunction::from_bytes_for_key(bytes, &key, translator).ok()
+    });
     if let Some(kept) = kept {
         core.counters.count(Metric::TranslationsLoaded);
         return Ok(kept);
