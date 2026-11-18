@@ -339,7 +339,7 @@ mod on_device {
                     after.pipelines_created - before.pipelines_created,
                     after.bytes_copied - before.bytes_copied,
                 ),
-                (1, 3, 1, 0, 0),
+                (1, 1, 1, 0, 0),
                 "{name}: submissions, barriers, passes, pipelines made, bytes copied"
             );
             let want = texels(|x, y| match (x, y) {
@@ -348,7 +348,7 @@ mod on_device {
                 _ => BLUE,
             });
             assert_eq!(read(&color, 4), want, "{name}: the texels");
-            println!("{name}: three draws in one pass, 3 barriers, no pipeline made");
+            println!("{name}: three draws in one pass, 1 barrier, no pipeline made");
         });
     }
 
@@ -946,7 +946,7 @@ mod on_device {
                     after.barriers - before.barriers,
                     after.passes - before.passes,
                 ),
-                (1, 3, 1),
+                (1, 1, 1),
                 "{name}: submissions, barriers, passes"
             );
             let want = texels(|_, y| match y {
@@ -1018,7 +1018,7 @@ mod on_device {
                     after.barriers - before.barriers,
                     after.passes - before.passes,
                 ),
-                (1, 3, 1),
+                (1, 1, 1),
                 "{name}: submissions, barriers, passes"
             );
             let want = texels(|_, y| match y {

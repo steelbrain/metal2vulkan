@@ -5,8 +5,14 @@
 //! command, makes their writes visible to it, and moves each attachment whose home is
 //! shader-read-only to the attachment layout; an attachment whose home is general or the
 //! attachment layout renders in it. It pays the barrier an earlier encoder owed, and the hazard
-//! sets start again. Its second, after `vkCmdEndRendering`, moves those attachments home and makes
-//! the pass's writes visible to every later command. A pass is two barriers, whatever it renders.
+//! sets start again. A pass that opens its segment's command buffer with no attachment to move
+//! records none: every earlier command is in a command buffer whose end barrier orders it before
+//! every later command (`record::end`). Its second, after `vkCmdEndRendering`, moves those
+//! attachments home and makes the pass's writes visible to every later command. Where none moves,
+//! that barrier is owed instead (`Building::owe_pass`): the segment's next command records it
+//! first, reaching every later command, and where none follows, the segment's end barrier is it.
+//! So a command buffer of one pass whose attachments render at home records one barrier, its
+//! end's.
 //!
 //! Draws record into the rendering with no barrier between them, as Metal orders the memory
 //! accesses of no two draws of one encoder: what a draw writes, a later draw of the encoder sees
@@ -14,7 +20,7 @@
 //! records one barrier and begins the rendering again, loading what it stored; so does a draw that
 //! needs a copy first (a texture over a buffer in an image of its own, or one over a Managed
 //! buffer's device copy, `crate::over`), recording the copy between. A memory barrier after no
-//! such draw records nothing: the pass's first barrier ordered everything before it.
+//! such draw records nothing: everything before the pass is ordered before it.
 //!
 //! A draw may read an attachment of its own pass through a texture, as Metal reads a render target
 //! (`floor::Capabilities::attachment_reads`): through the attachment feedback loop. Its image is a
@@ -335,7 +341,8 @@ impl CommandBuffer {
     }
 }
 
-/// Checks `descriptor` and records its pass's first barrier and its `vkCmdBeginRendering`.
+/// Checks `descriptor` and records its pass's first barrier, where it has one, and its
+/// `vkCmdBeginRendering`.
 fn begin(
     building: &mut Building,
     descriptor: &RenderPassDescriptor,
@@ -350,6 +357,7 @@ fn begin(
         building.wrote_texture_managed(&t.texture);
     }
     building.overs_before(&overs, false)?;
+    let opens = building.opens_command_buffer();
     let command = building.ordered_command()?;
     // Marked after `ordered_command`, as a blit's copy marks it: the host reads a texture over a
     // Shared buffer's bytes in the buffer.
@@ -364,19 +372,26 @@ fn begin(
         .map(|t| t.barrier(t.attachment.home, t.layout))
         .collect();
     let device = &core.device;
-    // SAFETY: the command buffer records outside any render pass and keeps each attachment's
-    // texture until it retires; each attachment is in its home layout between commands, which
-    // the barrier moves to the layout the pass names.
-    unsafe {
-        device.cmd_pipeline_barrier2(
-            command,
-            &vk::DependencyInfo::default()
-                .memory_barriers(&earlier)
-                .image_memory_barriers(&away),
-        );
-        pass.begin(device, command, false);
+    // A pass that opens its command buffer and moves no attachment needs no first barrier: each
+    // earlier command buffer on the queue ended with one that orders it before every later
+    // command.
+    if !(opens && away.is_empty()) {
+        // SAFETY: the command buffer records outside any render pass and keeps each attachment's
+        // texture until it retires; each attachment is in its home layout between commands,
+        // which the barrier moves to the layout the pass names.
+        unsafe {
+            device.cmd_pipeline_barrier2(
+                command,
+                &vk::DependencyInfo::default()
+                    .memory_barriers(&earlier)
+                    .image_memory_barriers(&away),
+            );
+        }
+        core.counters.count(Metric::Barriers);
     }
-    core.counters.count(Metric::Barriers);
+    // SAFETY: the command buffer records outside any render pass and keeps each attachment's
+    // texture until it retires; each attachment is in the layout the pass names.
+    unsafe { pass.begin(device, command, false) };
     Ok((pass, command))
 }
 
@@ -724,8 +739,8 @@ impl RenderCommandEncoder {
     /// rendering begins again, loading what it stored. After draws that only rendered, where the
     /// pass moved an image to the feedback layout, the barrier is owed to the next draw that reads
     /// an attachment through a texture, which records it first (the module's documentation);
-    /// otherwise nothing is recorded, as the pass's first barrier ordered everything before it and
-    /// no draw reads an attachment before a move that orders everything before it.
+    /// otherwise nothing is recorded, as everything before the pass is ordered before it and no
+    /// draw reads an attachment before a move that orders everything before it.
     ///
     /// Err: [`Error::Vulkan`] where the command buffer cannot record.
     pub fn memory_barrier(&mut self) -> Result<(), Error> {
@@ -791,7 +806,7 @@ impl RenderCommandEncoder {
 
     /// `updateFence:afterStages:`: encoders that wait on `fence` after this one see what this
     /// encoder and the ones before it wrote. It records nothing ([`Fence`]): the pass's second
-    /// barrier already reaches them.
+    /// barrier, recorded or owed, already reaches them.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's fence; [`Gap::FenceOtherQueue`] for a
     /// fence another queue used first.
@@ -801,7 +816,8 @@ impl RenderCommandEncoder {
     }
 
     /// `waitForFence:beforeStages:`: this encoder sees what the encoders up to `fence`'s last
-    /// update wrote. It records nothing ([`Fence`]): the pass's first barrier already orders them.
+    /// update wrote. It records nothing ([`Fence`]): everything before the pass is ordered before
+    /// it, by its first barrier or the one that ends each earlier command buffer.
     ///
     /// Err: as [`update_fence`](Self::update_fence).
     pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error> {
@@ -1362,13 +1378,14 @@ impl RenderCommandEncoder {
         recorded
     }
 
-    /// `endEncoding`: ends the pass, one `vkCmdEndRendering` and the pass's second barrier.
+    /// `endEncoding`: ends the pass, one `vkCmdEndRendering` and the pass's second barrier, owed
+    /// where no attachment moves home.
     pub fn end_encoding(mut self) {
         self.end();
     }
 
     fn end(&mut self) {
-        let Some(building) = self.building.take() else {
+        let Some(mut building) = self.building.take() else {
             return;
         };
         let core = Arc::clone(building.device.core());
@@ -1386,18 +1403,25 @@ impl RenderCommandEncoder {
             .collect();
         let device = &core.device;
         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
-        // into while the encoder holds it; each attachment the barrier moves is in the layout the
-        // pass rendered it in.
-        unsafe {
-            device.cmd_end_rendering(self.command);
-            device.cmd_pipeline_barrier2(
-                self.command,
-                &vk::DependencyInfo::default()
-                    .memory_barriers(&later)
-                    .image_memory_barriers(&back),
-            );
+        // into while the encoder holds it.
+        unsafe { device.cmd_end_rendering(self.command) };
+        if back.is_empty() {
+            // Nothing moves home: the barrier that orders the pass before later commands is the
+            // segment's next command's, or its end's.
+            building.owe_pass();
+        } else {
+            // SAFETY: the command buffer records outside any rendering; each attachment the
+            // barrier moves is in the layout the pass rendered it in.
+            unsafe {
+                device.cmd_pipeline_barrier2(
+                    self.command,
+                    &vk::DependencyInfo::default()
+                        .memory_barriers(&later)
+                        .image_memory_barriers(&back),
+                );
+            }
+            core.counters.count(Metric::Barriers);
         }
-        core.counters.count(Metric::Barriers);
         self.command_buffer.close_encoder(building);
     }
 }

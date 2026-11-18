@@ -52,9 +52,11 @@ pub(crate) enum Reach {
     /// Within a segment: the dispatches after it after the dispatches before it, their shader
     /// reads and writes seeing the earlier shader writes, and where `indirect` (the dispatch that
     /// follows it reads its arguments from a buffer), their indirect argument reads too. The
-    /// other commands a segment records that read or write memory, blit copies, order
-    /// themselves against every command before and after them with barriers of their own, so it
-    /// orders the segment's commands as [`Reach::Commands`] would.
+    /// other commands a segment records that read or write memory, blit copies and render
+    /// passes, order themselves against every command before and after them with barriers of
+    /// their own, a pass's after it owed where it moves no attachment and recorded as
+    /// [`Reach::Commands`] whatever reach pays it (`Building::owe_pass`), so it orders the
+    /// segment's commands as [`Reach::Commands`] would.
     Dispatches { indirect: bool },
     /// Every later command, in this submission and every later one on the queue.
     Commands,

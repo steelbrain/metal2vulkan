@@ -121,11 +121,12 @@ fn a_clear_color_is_a_float_or_a_saturated_integer() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::blit::on_device::settled;
-    use crate::tests::command::on_device::{each_device, finished, within};
+    use crate::tests::command::on_device::{each_device, finished, within, Arena};
+    use crate::tests::compute::on_device::step;
     use crate::{
-        ClearColor, CommandBuffer, Device, Error, Gap, IndexClass, LoadAction, PixelFormat,
-        Refusal, Region, RenderPassDescriptor, RenderPassKind, StorageMode, StoreAction, Texture,
-        TextureDescriptor, TextureType, TextureUsage,
+        ClearColor, CommandBuffer, Device, DispatchType, Error, Gap, IndexClass, LoadAction,
+        PixelFormat, Refusal, Region, RenderPassDescriptor, RenderPassKind, StorageMode,
+        StoreAction, Texture, TextureDescriptor, TextureType, TextureUsage,
     };
 
     fn texture(
@@ -210,8 +211,9 @@ mod on_device {
     }
 
     /// Clears and stores land, loads keep, the area cuts, a slice of an array is its own; a pass
-    /// alone is one submission, three barriers and one pass; each view is made once and freed
-    /// with its texture.
+    /// alone is one submission, three barriers and one pass where an attachment moves (a
+    /// shader-read texture's), and one barrier, its command buffer's end, where every attachment
+    /// renders at home; each view is made once and freed with its texture.
     #[test]
     fn every_device_clears_loads_and_stores_render_attachments() {
         each_device("render_passes", |name, _, device| {
@@ -372,6 +374,72 @@ mod on_device {
             expect[..8].copy_from_slice(&[255, 0, 51, 153, 255, 0, 51, 153]);
             assert_eq!(read(&colors, 1, 0, 4), expect, "{name}: the area alone");
 
+            // Passes whose attachments render at home. The first opens its command buffer and
+            // records no first barrier; each owes its second, which the next pass's first barrier
+            // or the segment's end pays: two passes are two barriers, the second loading what the
+            // first cleared. A dispatch after such a pass records the owed barrier first.
+            let mut whole = RenderPassDescriptor::default();
+            whole.color_attachments[0].texture = Some(words.clone());
+            whole.color_attachments[0].load_action = LoadAction::Clear;
+            whole.color_attachments[0].clear_color = ClearColor::new(7.0, 8.0, 9.0, 10.0);
+            let mut corner = whole.clone();
+            corner.color_attachments[0].clear_color = ClearColor::new(1.0, 2.0, 3.0, 4.0);
+            corner.render_target_width = 2;
+            corner.render_target_height = 1;
+            let at_home = |passes: &[&RenderPassDescriptor], dispatch: bool| {
+                settled(&device);
+                let before = counters.metrics();
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                for pass in passes {
+                    command_buffer
+                        .render_command_encoder(pass)
+                        .unwrap_or_else(|error| panic!("{name}: {error}"))
+                        .end_encoding();
+                }
+                let mut arena = Arena::new(&device);
+                let x = arena.buffer();
+                if dispatch {
+                    let state = step(&device);
+                    let mut encoder = (command_buffer
+                        .compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                    encoder.set_compute_pipeline_state(&state).expect("a state");
+                    encoder.set_buffer(Some(&x), 0, 0).expect("a buffer");
+                    (encoder.dispatch_threadgroups([4, 1, 1], [16, 1, 1])).expect("a dispatch");
+                    encoder.end_encoding();
+                }
+                run(name, &command_buffer);
+                let after = counters.metrics();
+                (
+                    after.submissions - before.submissions,
+                    after.barriers - before.barriers,
+                    after.passes - before.passes,
+                )
+            };
+            assert_eq!(
+                at_home(&[&whole], false),
+                (1, 1, 1),
+                "{name}: one pass at home: submissions, barriers, passes"
+            );
+            assert_eq!(
+                at_home(&[&whole, &corner], false),
+                (1, 2, 2),
+                "{name}: two passes at home: submissions, barriers, passes"
+            );
+            let mut expect = filled(&[7, 8, 9, 10], 8);
+            expect[..8].copy_from_slice(&[1, 2, 3, 4, 1, 2, 3, 4]);
+            assert_eq!(
+                read(&words, 0, 0, 4),
+                expect,
+                "{name}: the second loads the first"
+            );
+            // The compute encoder is a pass of its own in `Metrics::passes`.
+            assert_eq!(
+                at_home(&[&whole], true),
+                (1, 2, 2),
+                "{name}: a pass at home, then a dispatch: submissions, barriers, passes"
+            );
+
             // One slice of a 2D array.
             let mut one = RenderPassDescriptor::default();
             one.color_attachments[0].texture = Some(array.clone());
@@ -389,7 +457,9 @@ mod on_device {
             assert_eq!(read(&array, 0, 2, 1), filled(&[153], 4), "{name}: slice 2");
 
             // Each view goes with its texture.
-            drop((colors, words, stencil, array, d, keep, cut, one));
+            drop((
+                colors, words, stencil, array, d, keep, cut, one, whole, corner,
+            ));
             within("the attachment views' free", || {
                 counters.gauges().attachment_views == views
             });

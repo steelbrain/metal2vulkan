@@ -131,9 +131,12 @@ pub(crate) struct Building {
     /// Whether the start timestamp is recorded.
     started: bool,
     /// A barrier owed before the next command: an encoder that wrote ended, a memory barrier was
-    /// asked for, or a dispatch wrote through an address outside its resources. The segment's
-    /// own end barrier pays it too.
+    /// asked for, a dispatch wrote through an address outside its resources, or a render pass
+    /// ended. The segment's own end barrier pays it too.
     owed: bool,
+    /// The barrier owed orders a render pass before what follows it ([`Building::owe_pass`]): it
+    /// reaches every later command ([`Reach::Commands`]), whatever the command that pays it names.
+    owed_pass: bool,
     /// A dispatch wrote since the last barrier that reached indirect argument reads: a barrier
     /// between dispatches leaves them out unless the dispatch after it is indirect, so an
     /// indirect dispatch after such a write needs one that reaches them.
@@ -304,6 +307,7 @@ impl CommandBuffer {
                         stamps,
                         started: false,
                         owed: false,
+                        owed_pass: false,
                         args_unordered: false,
                         bound: None,
                         drawn: None,
@@ -704,6 +708,7 @@ impl Building {
                 }
                 // Its end barrier pays what is owed and starts the hazard sets again.
                 self.owed = false;
+                self.owed_pass = false;
                 self.args_unordered = false;
                 if let Some(recorder) = &mut self.gpu.recorder {
                     recorder.hazards.clear();
@@ -761,6 +766,7 @@ impl Building {
     pub(crate) fn ordered_command(&mut self) -> Result<vk::CommandBuffer, Error> {
         let command = self.current()?;
         self.owed = false;
+        self.owed_pass = false;
         self.args_unordered = false;
         self.hazards().clear();
         Ok(command)
@@ -782,10 +788,16 @@ impl Building {
     /// next (`reach`), and pays what is owed. The caller starts the hazard sets again where it
     /// has not.
     pub(crate) fn barrier(&mut self, command: vk::CommandBuffer, reach: Reach) {
+        // One owed after a render pass reaches every later command, whatever the caller names.
+        let reach = match self.owed && self.owed_pass {
+            true => Reach::Commands,
+            false => reach,
+        };
         let core = self.device.core();
         record::barrier(&core.device, command, reach);
         core.counters.count(Metric::Barriers);
         self.owed = false;
+        self.owed_pass = false;
         if reach.reaches_indirect() {
             self.args_unordered = false;
         }
@@ -824,6 +836,24 @@ impl Building {
         if let Some(recorder) = &mut self.gpu.recorder {
             recorder.hazards.clear();
         }
+    }
+
+    /// A render pass ended with no attachment to move home: the barrier that orders it before
+    /// later commands is owed, recorded first by the segment's next command, reaching every later
+    /// command, or paid by the segment's end barrier where none follows. A command buffer that
+    /// ends with a pass records one barrier after it, its end's.
+    pub(crate) fn owe_pass(&mut self) {
+        self.owe();
+        self.owed_pass = true;
+    }
+
+    /// Whether the next command opens a command buffer of the segments: the last segment has
+    /// none begun, or a signal ends it first. Every command before it is then in a command buffer
+    /// that ended on the queue, whose end barrier orders it before every later command
+    /// (`record::end`), as it does for a copy-in (`crate::capture`).
+    pub(crate) fn opens_command_buffer(&mut self) -> bool {
+        let last = self.last();
+        last.command.is_none() || !last.signals.is_empty()
     }
 
     /// Owes a barrier where anything was read or written since the last one.

@@ -1290,10 +1290,16 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - A pass orders itself as a blit's copy does, with two barriers. The first runs it after every
   earlier command, makes their writes visible to it, and moves each attachment whose home layout
   is shader-read-only to the attachment layout; one whose home is general or the attachment layout
-  renders there. It pays a barrier an encoder owed, and the hazard sets start again. The second,
-  after the rendering ends, moves those attachments home and makes the pass's writes visible to
-  every later command. A command buffer of one pass has three barriers, the segment's end among
-  them, one pass in `Metrics::passes`, and copies nothing.
+  renders there. It pays a barrier an encoder owed, and the hazard sets start again. A pass that
+  opens its command buffer (its command buffer's first command, or the first after an event's
+  signal or wait) and moves no attachment records no first barrier: every command before it is
+  in a command buffer that ended with a barrier ordering it before every later command on the
+  queue. The second, after the rendering ends, moves those attachments home and makes the pass's
+  writes visible to every later command. Where no attachment moves, it is owed instead: the next
+  command records it first, reaching every later command, and where the pass is the last command
+  before the command buffer's end, the end's barrier is it. A command buffer of one pass whose
+  attachments render at home has one barrier, its end's, one pass in `Metrics::passes`, and
+  copies nothing.
 - Refused, as Metal's validation stops them: an attachment's texture made without
   `RenderTarget` usage (`Refusal::AttachmentUsage`), a level or slice past its texture's
   (`Refusal::AttachmentPlace`), a color attachment of a depth or stencil format or a stencil
@@ -1317,7 +1323,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   push and 2,000 `vkCmdDraw`s, as Metal's bindings set once stay for the draws after them.
   `Counters::metrics`' `pushes` counts each push recorded and `pushes_held` each one skipped.
   A draw takes no barrier, as Metal orders none between the draws of one encoder, so a pass of
-  any number of draws is still its two barriers. A draw of no vertices, indices or instances
+  any number of draws records the barriers a pass of one does. A draw of no vertices, indices or instances
   records nothing.
 - A viewport is Vulkan's with its height negated (from `y + height`): framebuffer rows, the
   fragment position and derivatives follow Metal's clip space, whose y points up, and Metal's
@@ -1344,7 +1350,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   in a pass that moved an image to the feedback layout, the barrier is owed to the next draw that
   reads an attachment: the rendering ends, one global barrier is recorded and it begins again,
   which orders every pixel the draw reads, its own and any other. Elsewhere it records nothing:
-  the pass's first barrier ordered everything before it, and a move orders everything before it.
+  everything before the pass is ordered before it, and a move orders everything before it.
   A draw that needs a copy first, of a texture over a buffer in an image of its own or over a
   Managed buffer's device copy, records it the same way, between the rendering's end and its new
   beginning. Fences record nothing, as in a compute encoder.
