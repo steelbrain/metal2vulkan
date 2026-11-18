@@ -228,14 +228,14 @@ impl CommandBuffer {
     /// `vkCmdBeginRendering` between the pass's first barrier and its commands. The command
     /// buffer keeps each attachment's texture until it retires.
     ///
-    /// Err: [`Refusal::Committed`](crate::Refusal::Committed);
-    /// [`Refusal::EncoderOpen`](crate::Refusal::EncoderOpen) while another encoder of the command
-    /// buffer is open; [`Refusal::OtherDevice`](crate::Refusal::OtherDevice) for another device's
-    /// texture; [`Refusal::AttachmentUsage`](crate::Refusal::AttachmentUsage);
-    /// [`Refusal::AttachmentPlace`](crate::Refusal::AttachmentPlace);
-    /// [`Refusal::AttachmentFormat`](crate::Refusal::AttachmentFormat);
-    /// [`Gap::RenderPass`](crate::Gap::RenderPass);
-    /// [`Limit::ColorAttachments`](crate::Limit::ColorAttachments); [`Error::Vulkan`] where an
+    /// Err: [`Refusal::Committed`];
+    /// [`Refusal::EncoderOpen`] while another encoder of the command
+    /// buffer is open; [`Refusal::OtherDevice`] for another device's
+    /// texture; [`Refusal::AttachmentUsage`];
+    /// [`Refusal::AttachmentPlace`];
+    /// [`Refusal::AttachmentFormat`];
+    /// [`Gap::RenderPass`];
+    /// [`Limit::ColorAttachments`]; [`Error::Vulkan`] where an
     /// attachment's view cannot be made or the command buffer cannot record. A refused
     /// descriptor leaves the command buffer as it was, open for another encoder.
     pub fn render_command_encoder(

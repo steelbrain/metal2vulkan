@@ -402,7 +402,7 @@ mod on_device {
         let mut d = plain.clone();
         d.stencil_format = Some(PixelFormat::Stencil8);
         each_device("draw_stencil", |name, _, device| {
-            let state = state(name, &device, &d);
+            let stenciled = state(name, &device, &d);
             let mut buffers = Buffers::new(&device);
             let (positions, colors) = vertices(&device, &mut buffers);
             let color = target(
@@ -432,7 +432,7 @@ mod on_device {
                 .render_command_encoder(&pass(&color, Some(&stencil))))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_render_pipeline_state(&stenciled));
             draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
             draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
             // 0x1a5 saturates to 255 as Metal stores it; the test compares what the first draw
