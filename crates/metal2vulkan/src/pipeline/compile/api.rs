@@ -960,6 +960,12 @@ impl Device {
             m,
         )?;
         check_call_stack(vertex.artifact(), d.max_vertex_call_stack_depth)?;
+        // On the floor the fragment function's push fields follow the vertex function's.
+        let base = vertex.fragment_push_base();
+        let pass = || FragmentPass {
+            push_base: base,
+            ..pass()
+        };
         let written = raw_indices_written(vertex.artifact());
         let varyings = varyings_written(vertex.artifact());
         let uniform = uniform_written(vertex.artifact());

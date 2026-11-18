@@ -392,6 +392,7 @@ fn a_regions_variant_draws_its_vertex_function_s_copies() {
     v.interface.push = crate::lower::push::place(
         Stage::Vertex,
         crate::device::profile::PushWindow::Guaranteed,
+        0,
         &fields,
     );
     let offset = match v.interface.push.fields.as_slice() {

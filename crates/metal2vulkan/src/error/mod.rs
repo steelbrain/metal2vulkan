@@ -2094,6 +2094,13 @@ pub enum DescriptorError {
     /// pipeline's vertex or fragment depth. The stack would hold another number of frames than the
     /// pipeline's Metal stage has. Compile the stage under the pipeline's depth.
     MaxCallStackDepth { compiled: u32, given: u32 },
+    /// A `StageSource::Compiled` fragment function whose push fields start at `fragment` in a
+    /// render pipeline whose vertex function's push fields end past it, at `vertex_end`: on
+    /// `Device::from_queries`' profile a render pipeline's two stages share one push range, and a
+    /// fragment function compiles under its vertex function's
+    /// [`CompiledFunction::fragment_push_base`](crate::library::CompiledFunction::fragment_push_base)
+    /// (`LoweringInputs::push_base`). Compile the fragment under that base.
+    PushBase { fragment: u32, vertex_end: u32 },
     /// A `StageSource::Compiled` kernel compiled in another OpenCL mode than its compute
     /// pipeline's (`RuntimeFact::OpenClMode`; `compiled` says whether it was compiled in OpenCL
     /// mode): its arguments sit at other indices than the pipeline's Metal kernel takes them at.

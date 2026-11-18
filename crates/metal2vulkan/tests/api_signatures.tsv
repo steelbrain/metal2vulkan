@@ -5533,6 +5533,7 @@ field	metal2vulkan::pipeline::LoweringInputs.primitive_id_varying	pub primitive_
 field	metal2vulkan::pipeline::LoweringInputs.primitive_varyings	pub primitive_varyings: BTreeSet<VaryingKey>
 field	metal2vulkan::pipeline::LoweringInputs.private_list	pub private_list: bool
 field	metal2vulkan::pipeline::LoweringInputs.psb_slots	pub psb_slots: BTreeSet<SlotRef>
+field	metal2vulkan::pipeline::LoweringInputs.push_base	pub push_base: u32
 field	metal2vulkan::pipeline::LoweringInputs.quad_primitive_ids	pub quad_primitive_ids: bool
 field	metal2vulkan::pipeline::LoweringInputs.read_only_tests	pub read_only_tests: bool
 field	metal2vulkan::pipeline::LoweringInputs.region_copies	pub region_copies: bool
@@ -10968,6 +10969,7 @@ method	metal2vulkan::error::Unsupported::not_implemented	pub fn not_implemented(
 method	metal2vulkan::error::Unsupported::not_representable	pub fn not_representable(feature: Feature) -> Unsupported
 method	metal2vulkan::error::Unsupported::runtime_driver_defect	pub fn runtime_driver_defect(feature: Feature, defect: RuntimeDriverDefect) -> Unsupported
 method	metal2vulkan::library::CompiledFunction::attribute_fetches	pub fn attribute_fetches(&self) -> BTreeMap<u32, AttributeFetch>
+method	metal2vulkan::library::CompiledFunction::fragment_push_base	pub fn fragment_push_base(&self) -> u32
 method	metal2vulkan::library::CompiledFunction::from_bytes	pub fn from_bytes(bytes: &[u8], device: &Device) -> Result<CompiledFunction, ArtifactError>
 method	metal2vulkan::library::CompiledFunction::from_bytes_for_key	pub fn from_bytes_for_key(bytes: &[u8], key: &FunctionCompileKey, device: &Device) -> Result<CompiledFunction, ArtifactError>
 method	metal2vulkan::library::CompiledFunction::key	pub fn key(&self) -> &FunctionCompileKey
@@ -15795,6 +15797,7 @@ variant	metal2vulkan::error::DescriptorError::OpenClMode	OpenClMode { compiled: 
 variant	metal2vulkan::error::DescriptorError::OverlappingArgument	OverlappingArgument { param: u32, index: u32, count: u32 }
 variant	metal2vulkan::error::DescriptorError::PixelFormatUsage	PixelFormatUsage { format: u32, usage: FormatUsage }
 variant	metal2vulkan::error::DescriptorError::PlaceholderEnumValue	PlaceholderEnumValue { ty: &'static str, value: u32 }
+variant	metal2vulkan::error::DescriptorError::PushBase	PushBase { fragment: u32, vertex_end: u32 }
 variant	metal2vulkan::error::DescriptorError::RasterizedVoidVertex	RasterizedVoidVertex
 variant	metal2vulkan::error::DescriptorError::SamplerLodClamp	SamplerLodClamp
 variant	metal2vulkan::error::DescriptorError::SpecializationConflict	SpecializationConflict { key: SpecKey }

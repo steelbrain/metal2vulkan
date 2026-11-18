@@ -1217,8 +1217,9 @@ struct Census {
     /// Under the identity domains a device-address slot reads its own address
     /// ([`address_field`]), not the root table.
     identity: bool,
-    /// The profile's push window, which decides where the fields spill.
-    window: PushWindow,
+    /// The profile's push window and the stage's push base, which decide where the fields
+    /// spill.
+    window: (PushWindow, u32),
 }
 
 impl Census {
@@ -1226,7 +1227,7 @@ impl Census {
     /// pointer reads the root table.
     fn new(
         push: &BTreeSet<PushField>,
-        (dynamic, identity, window): (bool, bool, PushWindow),
+        (dynamic, identity, window): (bool, bool, (PushWindow, u32)),
         forms: impl Iterator<Item = (SlotRef, SlotLowering)>,
         m: &mut Meter,
     ) -> Result<Census, Error> {
@@ -1272,7 +1273,7 @@ impl Census {
             // Under the identity domains the spilled fields are a parameter block at a pushed
             // address, no descriptor.
             uniform_buffers: u32::from(
-                !self.identity && table::spills(stage, self.window, &self.fields),
+                !self.identity && table::spills(stage, self.window.0, self.window.1, &self.fields),
             )
             .saturating_add(self.uniform),
             storage_buffers: self.storage,
@@ -1439,7 +1440,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         (
             cx.families.access.dynamic.used,
             identity(p),
-            p.push_window(),
+            (p.push_window(), cx.inputs.push_base),
         ),
         forms,
         m,
@@ -1672,7 +1673,35 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     }
     let counts = census.counts(stage);
     cx.descriptors = cx.descriptors.plus(&counts);
-    cx.families.access.argument_table = table::spills(stage, p.push_window(), &cx.push);
+    cx.families.access.argument_table =
+        table::spills(stage, p.push_window(), cx.inputs.push_base, &cx.push);
+    // Under the identity domains a render pipeline's stages share the floor's one range, which no
+    // stream's pair outgrows: a vertex or fragment function whose fields do not fit in it is
+    // refused, never spilled into a parameter block.
+    if cx.families.access.argument_table
+        && identity(p)
+        && p.push_window() == PushWindow::Floor
+        && matches!(
+            stage,
+            crate::pipeline::sym::Stage::Vertex | crate::pipeline::sym::Stage::Fragment
+        )
+    {
+        let placed =
+            crate::lower::push::place(stage, PushWindow::Floor, cx.inputs.push_base, &cx.push);
+        let (start, _) = crate::lower::push::window(stage, PushWindow::Floor, cx.inputs.push_base);
+        let pushed = placed
+            .push_range
+            .map_or(start, |(offset, size)| offset + size);
+        return Err(Unsupported::needs(
+            Feature::IdentityDomains,
+            Capability::Limit {
+                limit: VkLimit::MaxPushConstantsSize,
+                required: u64::from(pushed) + u64::from(placed.argument_table_size),
+                available: u64::from(crate::lower::push::FLOOR_BYTES),
+            },
+        )
+        .into());
+    }
     if cx.families.access.argument_table && identity(p) {
         cx.push.insert(PushField::ArgumentTableAddress);
     }

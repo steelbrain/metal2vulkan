@@ -914,6 +914,13 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   `Gauges::render_contents` counts the compiled render contents alive, and
   `Gauges::kernel_entries` the map's entries, compute and render together. Two descriptors that
   differ only in a field their compile does not read are two contents, each compiled.
+- A render pipeline's two functions push their values (each buffer's address, each constexpr
+  sampler's index) in one range of the floor's 256 bytes, dense by link: the vertex function's
+  from 0, the fragment function's from the vertex function's end rounded up to 8, so only the
+  values the pair uses take space. Compute and render pipelines share the device's one pipeline
+  layout and its one push range. A pair whose values do not fit is refused,
+  `Error::Translation` with `maxPushConstantsSize`'s limit; no pair in the replay streams comes
+  near it (the most is 248 bytes).
 - A `VkPipeline` bakes what Vulkan 1.3 cannot leave dynamic: the content and the topology class
   (point, line or triangle) of the draws it serves. It takes as dynamic state the viewport,
   scissor, cull mode, front face, primitive topology within its class, primitive restart, depth
@@ -1046,7 +1053,7 @@ Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. A Boolean limit's
 | `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
 | `maxPerStageUpdateAfterBindResources` | `69632` | both texture arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
 | `maxUpdateAfterBindDescriptorsInAllPools` | `81632` | all five arrays |
-| `maxPushConstantsSize` | `256` | per-command values: a dispatch region and 28 buffer addresses; anything larger goes in a block whose address is pushed |
+| `maxPushConstantsSize` | `256` | per-command values: a compute kernel's dispatch region and 28 buffer addresses, anything larger in a block whose address is pushed; a render pipeline's vertex and fragment functions' values in the same 256 bytes, dense by link, a pair that does not fit refused |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |

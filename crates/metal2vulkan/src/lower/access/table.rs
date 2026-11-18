@@ -37,8 +37,8 @@ pub struct Table {
 
 /// Whether `stage`'s placement of `fields` in push window `w` spills into the `ArgumentTable`
 /// (`push::spills`).
-pub fn spills(stage: Stage, w: PushWindow, fields: &BTreeSet<PushField>) -> bool {
-    push::spills(stage, w, fields)
+pub fn spills(stage: Stage, w: PushWindow, base: u32, fields: &BTreeSet<PushField>) -> bool {
+    push::spills(stage, w, base, fields)
 }
 
 /// The binding symbol of `stage`'s `ArgumentTable`.

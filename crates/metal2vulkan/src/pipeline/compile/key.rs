@@ -556,6 +556,10 @@ pub fn function_key(
     if inputs.unit_axes != 0 {
         h.bytes(b"unit-axes").u64(u64::from(inputs.unit_axes));
     }
+    // Appended only when set.
+    if inputs.push_base != 0 {
+        h.bytes(b"push-base").u64(u64::from(inputs.push_base));
+    }
     // Appended only when present, so a stage that links nothing keeps its key: the tag's length
     // prefix keeps the encoding unambiguous.
     if !linked.is_empty() {

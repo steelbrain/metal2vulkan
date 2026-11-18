@@ -1680,7 +1680,12 @@ fn finish(
     }
 
     stage_io::finish_merged(&mut cx)?;
-    let placement = push::place(stage, cx.profile.push_window(), &cx.push);
+    let placement = push::place(
+        stage,
+        cx.profile.push_window(),
+        cx.inputs.push_base,
+        &cx.push,
+    );
     access::accept_placement(&cx, &placement)?;
 
     // A kernel compiled for dispatches with a partial simdgroup emulates its simdgroups whatever

@@ -9,12 +9,18 @@
 //!   both modules pass L3.
 //! - On `Device::new`'s profile, the same pipeline is refused as `Unsupported{IdentityDomains}`
 //!   (not implemented), as before: its push window is not the floor's.
+//! - On `Device::from_queries`' profile the two stages push one range, dense by link: with
+//!   `sampled_fragment`, which pushes its constexpr sampler's index, the fragment function's
+//!   fields start at the vertex function's end rounded up to 8 (16), where the fixed windows put
+//!   them at 64. A fragment compiled on its own at base 0 and linked after that vertex function is
+//!   `InvalidDescriptor(PushBase)`; compiled under the vertex function's
+//!   `CompiledFunction::fragment_push_base` it links.
 //!
 //! `llvm-as` assembles the fixture; a missing tool skips visibly. No GPU is used.
 
 use crate::budget::Budget;
 use crate::device::{Device, DevicePolicy, HandleDomain, PointerDomain};
-use crate::error::{Error, Feature, Needs};
+use crate::error::{DescriptorError, Error, Feature, Needs};
 use crate::library::Library;
 use crate::metal::PixelFormat;
 use crate::pipeline::descriptor::{
@@ -109,6 +115,74 @@ fn from_queries_lowers_a_vertex_function_over_its_pushed_buffer_addresses() {
             check_words_valid(&stage.spirv, &p.requirements, device.profile())
                 .unwrap_or_else(|e| panic!("{stem}: {:?}: {e}", stage.stage));
         }
+    }
+}
+
+#[test]
+fn from_queries_pushes_a_render_pipeline_dense_by_link() {
+    let Some(library) = library() else {
+        return;
+    };
+    let mut d = descriptor(&library);
+    d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+        library.function("sampled_fragment").expect("the function"),
+    )));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
+    for stem in PROFILES {
+        let desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
+        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let budget = Budget::standard();
+        let p = (device.compile_render_pipeline(&d, &budget))
+            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        let ranges: Vec<Option<(u32, u32)>> =
+            p.interface.push.iter().map(|s| s.push_range).collect();
+        assert_eq!(
+            ranges[0],
+            Some((0, 16)),
+            "{stem}: two buffer addresses from 0"
+        );
+        let fragment = ranges[1].unwrap_or_else(|| panic!("{stem}: the fragment pushes"));
+        assert_eq!(
+            fragment.0, 16,
+            "{stem}: the fragment's fields follow the vertex's"
+        );
+        // The stages compiled apart, then linked.
+        let keys = (device.render_pipeline_key(&d, &budget)).unwrap_or_else(|e| panic!("{e:?}"));
+        let function = |s: &Option<StageSource>| match s {
+            Some(StageSource::Function(f)) => f.clone(),
+            _ => panic!("a function stage"),
+        };
+        let vertex = (device.compile_function(
+            &function(&Some(d.vertex.clone())),
+            keys.vertex_inputs.as_ref().expect("vertex inputs"),
+            &budget,
+        ))
+        .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        assert_eq!(vertex.fragment_push_base(), 16, "{stem}");
+        let mut inputs = keys.fragment_inputs.clone().expect("fragment inputs");
+        let compiled = |inputs| {
+            (device.compile_function(&function(&d.fragment), inputs, &budget))
+                .unwrap_or_else(|e| panic!("{stem}: {e:?}"))
+        };
+        let mut apart = d.clone();
+        apart.vertex = StageSource::Compiled(vertex.clone());
+        apart.fragment = Some(StageSource::Compiled(compiled(&inputs)));
+        match device.compile_render_pipeline(&apart, &budget) {
+            Err(Error::InvalidDescriptor(DescriptorError::PushBase {
+                fragment,
+                vertex_end,
+            })) => assert_eq!((fragment, vertex_end), (0, 16), "{stem}"),
+            other => panic!("{stem}: {:?}", other.map(|_| "linked")),
+        }
+        inputs.push_base = vertex.fragment_push_base();
+        apart.fragment = Some(StageSource::Compiled(compiled(&inputs)));
+        let linked = (device.compile_render_pipeline(&apart, &budget))
+            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        assert_eq!(
+            linked.interface.push[1].push_range.map(|r| r.0),
+            Some(16),
+            "{stem}"
+        );
     }
 }
 

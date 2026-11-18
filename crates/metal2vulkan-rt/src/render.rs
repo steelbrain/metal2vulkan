@@ -367,10 +367,18 @@ impl RenderCompiled {
             let function = lower(core, function, inputs, budget, entries);
             lowered.vertex = StageSource::Compiled(function.map_err(Error::Translation)?);
         }
+        // The fragment function's push fields follow the vertex function's in the floor's one
+        // range, from the vertex function's end rounded up to 8.
+        let base = match &lowered.vertex {
+            StageSource::Compiled(vertex) => vertex.fragment_push_base(),
+            StageSource::Function(_) => 0,
+        };
         if let (Some(StageSource::Function(function)), Some(inputs)) =
             (&descriptor.fragment, &keys.fragment_inputs)
         {
-            let function = lower(core, function, inputs, budget, entries);
+            let mut inputs = inputs.clone();
+            inputs.push_base = base;
+            let function = lower(core, function, &inputs, budget, entries);
             lowered.fragment = Some(StageSource::Compiled(function.map_err(Error::Translation)?));
         }
         let pipeline =

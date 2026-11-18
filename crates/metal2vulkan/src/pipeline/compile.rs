@@ -164,6 +164,10 @@ pub struct FragmentPass<'a> {
     /// (`LoweringInputs::color_group`), whose variant's descriptor `color_attachments` is
     /// (`color_group::descriptor`); `None` from a descriptor, set by the compile layer.
     pub(crate) color_group: Option<&'a crate::pipeline::lower_inputs::ColorGroup>,
+    /// Where the function's push fields start on the floor (`LoweringInputs::push_base`): 0 from
+    /// a render descriptor, set by the compile layer from the vertex function it compiled; past
+    /// the object and mesh functions' windows for a mesh pipeline's.
+    pub(crate) push_base: u32,
 }
 
 impl<'a> From<&'a RenderPipelineDescriptor> for FragmentPass<'a> {
@@ -185,6 +189,7 @@ impl<'a> From<&'a RenderPipelineDescriptor> for FragmentPass<'a> {
             logic_operation: None,
             depth_compare_clamp_mask: d.private.fragment_depth_compare_clamp_mask,
             color_group: None,
+            push_base: 0,
         }
     }
 }
@@ -205,6 +210,12 @@ impl<'a> From<&'a MeshPipelineDescriptor> for FragmentPass<'a> {
             logic_operation: None,
             depth_compare_clamp_mask: 0,
             color_group: None,
+            push_base: crate::lower::push::window(
+                crate::pipeline::sym::Stage::Mesh,
+                crate::device::profile::PushWindow::Floor,
+                0,
+            )
+            .1,
         }
     }
 }
@@ -2483,6 +2494,10 @@ pub(crate) fn fragment_inputs(
     out.logic_operation = d.logic_operation;
     out.depth_compare_clamp_mask = d.depth_compare_clamp_mask;
     out.texture_write_rounding = d.texture_write_rounding_mode;
+    // Only the floor's one render range moves the fragment function's fields.
+    if p.push_window() == crate::device::profile::PushWindow::Floor {
+        out.push_base = d.push_base;
+    }
     out
 }
 

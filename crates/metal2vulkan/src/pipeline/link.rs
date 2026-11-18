@@ -341,6 +341,29 @@ impl SymbolTable for Linked {
     }
 }
 
+/// A render pipeline's fragment function pushes after its vertex function: its push fields
+/// start at or past the vertex function's end, which the fixed windows always give and the
+/// floor's one range gives where the fragment compiled under its vertex function's
+/// `CompiledFunction::fragment_push_base`. `InvalidDescriptor(PushBase)` where it does not.
+fn check_push_base(ifaces: &[&StageInterface]) -> Result<(), Error> {
+    let [vertex, fragment, ..] = ifaces else {
+        return Ok(());
+    };
+    if vertex.stage != Stage::Vertex || fragment.stage != Stage::Fragment {
+        return Ok(());
+    }
+    let vertex_end = (vertex.push.push_range).map_or(0, |(offset, size)| offset + size);
+    match fragment.push.push_range {
+        Some((start, _)) if start < vertex_end => {
+            Err(Error::InvalidDescriptor(DescriptorError::PushBase {
+                fragment: start,
+                vertex_end,
+            }))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Link the stages of one pipeline (see the module docs). `stages` are in pipeline order
 /// (vertex, then fragment).
 pub fn link(
@@ -350,6 +373,7 @@ pub fn link(
 ) -> Result<Linked, Error> {
     let ifaces: Vec<&StageInterface> = stages.iter().map(|a| &a.interface).collect();
     check_stages(&ifaces, inputs)?;
+    check_push_base(&ifaces)?;
     // A render pipeline whose vertex function is post-tessellation adds the synthesized vertex
     // and control stages: the control stage's factor and patch index buffers and push range.
     // On a device without `tessellationShader` the vertex function draws the tessellator's

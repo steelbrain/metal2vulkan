@@ -1063,7 +1063,8 @@ pub struct PushPlacement {
     /// Every field, in placement order.
     pub fields: Vec<PlacedField>,
     /// `(offset, size)` of the stage's push-constant range, when any field is pushed. The offset
-    /// is the stage window's start (vertex 0, fragment 64, compute 0).
+    /// is the stage window's start: vertex 0, fragment 64, compute 0; on `Device::from_queries`'
+    /// profile a fragment function's `LoweringInputs::push_base`.
     pub push_range: Option<(u32, u32)>,
     /// Byte size of the stage's `ArgumentTable` uniform buffer (a multiple of 16); 0 without one.
     /// Under the identity domains it is the size of the parameter block at

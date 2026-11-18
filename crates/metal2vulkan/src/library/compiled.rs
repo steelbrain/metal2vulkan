@@ -326,6 +326,16 @@ impl CompiledFunction {
         self.0.kernel.max_total_threads.filter(|&n| n > 0)
     }
 
+    /// Where a fragment function linked after this vertex function pushes its fields on
+    /// `Device::from_queries`' profile (`LoweringInputs::push_base`): this function's push end
+    /// rounded up to 8, 0 where it pushes nothing. A consumer compiling a render pipeline's
+    /// fragment function on its own compiles it under this offset.
+    pub fn fragment_push_base(&self) -> u32 {
+        (self.0.interface.push.push_range)
+            .map_or(0, |(offset, size)| offset + size)
+            .next_multiple_of(8)
+    }
+
     /// Whether the function is a vertex function whose module writes its `[[point_size]]`
     /// output, read from its stage's built-in outputs: Metal refuses such a function in a render
     /// pipeline of the line or triangle input primitive topology class.
