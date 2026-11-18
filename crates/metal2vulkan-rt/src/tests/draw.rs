@@ -484,8 +484,15 @@ mod on_device {
             let (positions, colors) = vertices(&device, &mut buffers);
             let (other, _) = vertices(&device, &mut buffers);
             let positions = [positions, other];
-            let textures = [(), ()]
-                .map(|()| target(&device, PixelFormat::RGBA8Unorm, TextureUsage::SHADER_READ));
+            (device.grant_indices(IndexClass::Texture, 4096, 2))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let textures = [4096, 4097].map(|index| {
+                let mut d =
+                    TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 4);
+                d.usage = TextureUsage::SHADER_READ;
+                (device.new_texture(&d, Some(index)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
             let color = target(
                 &device,
                 PixelFormat::RGBA8Unorm,
