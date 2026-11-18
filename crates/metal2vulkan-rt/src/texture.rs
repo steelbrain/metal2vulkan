@@ -843,13 +843,22 @@ impl Transfer {
         self.row * self.rows * self.images
     }
 
-    /// Each row's offset in the caller's bytes and in the staging buffer.
-    fn rows(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        (0..self.images).flat_map(move |image| {
-            (0..self.rows).map(move |row| {
+    /// The runs of bytes between the caller's bytes and the staging buffer, which holds the
+    /// region's rows packed: each run's offset in the caller's bytes, its offset in the staging
+    /// buffer and its length. One run where the caller's rows lie packed too, else one a row.
+    fn runs(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
+        let packed = self.bytes_per_row == self.row
+            && (self.images == 1 || self.bytes_per_image == self.row * self.rows);
+        let (images, rows, len) = match packed {
+            true => (1, 1, self.len()),
+            false => (self.images, self.rows, self.row),
+        };
+        (0..images).flat_map(move |image| {
+            (0..rows).map(move |row| {
                 (
                     (image * self.bytes_per_image + row * self.bytes_per_row) as usize,
                     ((image * self.rows + row) * self.row) as usize,
+                    len as usize,
                 )
             })
         })
@@ -1133,16 +1142,15 @@ impl Texture {
         }
         let core = inner.device.core();
         let stage = core.work.stage(core, copy.len(), false)?;
-        let row = copy.row as usize;
         let host = stage.host().as_ptr();
-        for (from, to) in copy.rows() {
+        for (from, to, len) in copy.runs() {
             // SAFETY: `copy` checked that each row lies in `bytes`, and the stage holds every row
             // packed; it is this call's alone until its copy is recorded.
             unsafe {
                 bytes
                     .as_ptr()
                     .add(from)
-                    .copy_to_nonoverlapping(host.add(to), row)
+                    .copy_to_nonoverlapping(host.add(to), len)
             };
         }
         core.counters.copied(copy.len());
@@ -1195,14 +1203,7 @@ impl Texture {
             // SAFETY: the stage holds every row packed, the copy into it completed and its writes
             // are visible to the host, and no other call takes its span while this one reads it;
             // `copy` checked that each row lies in `bytes`.
-            unsafe {
-                crate::readback::texels(
-                    stage.host().as_ptr(),
-                    bytes,
-                    copy.rows(),
-                    copy.row as usize,
-                )
-            };
+            unsafe { crate::readback::texels(stage.host().as_ptr(), bytes, copy.runs()) };
             core.counters.copied(copy.len());
         }
         if let Stage::Region { number, .. } = stage {
