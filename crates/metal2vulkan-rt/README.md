@@ -1818,6 +1818,9 @@ device-local host-visible type is no alternative: the host reads it at 18 MB/s (
 37 MB/s (RX 550), against about 5,500 MB/s from the Shared type, and where resizable BAR is off it
 is a 246 MiB heap (both NVIDIA boards above).
 
+The replay streams recorded on a discrete GPU bind no Shared buffer. Their buffers are Managed,
+apart from 1.8 to 3% Private, so the host link's rate above is not on their path.
+
 ### Chosen by a query
 
 Five features choose between two forms by the device's answer: 16-bit floats, storage-image reads
