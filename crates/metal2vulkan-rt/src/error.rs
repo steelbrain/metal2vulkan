@@ -617,6 +617,21 @@ pub enum Refusal {
         /// The buffer's length.
         length: u64,
     },
+    /// An indirect dispatch's arguments, or an indexed draw's indices, at a byte of the block
+    /// the buffer lies in (its device copy's, for a Managed buffer with one) that is not a
+    /// multiple of 4, or of the index size: a buffer the consumer placed at such a byte, read at
+    /// an offset Metal takes.
+    ///
+    /// Basis: ours (`vkCmdDispatchIndirect` reads its arguments at a multiple of 4 in the
+    /// `VkBuffer`, and `vkCmdBindIndexBuffer` takes indices at a multiple of their size in the
+    /// memory; a Metal buffer starts at an aligned address, so Metal's offset rule alone keeps
+    /// both aligned there).
+    ArgumentPlace {
+        /// The byte of the block the arguments or indices start at.
+        place: u64,
+        /// The multiple Vulkan reads them at: 4, or the index size.
+        alignment: u64,
+    },
     /// A viewport with a field that is NaN or infinite (but its origin's x, which draws nothing).
     ///
     /// Basis: metal-measured (an Apple M4, macOS 27.0.1: Metal's validation stops a NaN or
@@ -1336,6 +1351,10 @@ impl fmt::Display for Refusal {
             Refusal::IndexBufferOffset { offset, length } => write!(
                 f,
                 "indices at offset {offset} of a {length}-byte buffer are misaligned or past its end"
+            ),
+            Refusal::ArgumentPlace { place, alignment } => write!(
+                f,
+                "arguments at byte {place} of their block are not at a multiple of {alignment}"
             ),
             Refusal::ViewportNotFinite => f.write_str("a viewport field is NaN or infinite"),
             Refusal::StencilAttachment => {

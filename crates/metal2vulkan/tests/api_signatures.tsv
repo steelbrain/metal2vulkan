@@ -13688,6 +13688,7 @@ variant	metal2vulkan-rt::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGro
 variant	metal2vulkan-rt::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
 variant	metal2vulkan-rt::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan-rt::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
+variant	metal2vulkan-rt::Refusal::ArgumentPlace	ArgumentPlace { place: u64, alignment: u64 }
 variant	metal2vulkan-rt::Refusal::AttachmentFormat	AttachmentFormat { pixel_format: PixelFormat }
 variant	metal2vulkan-rt::Refusal::AttachmentPlace	AttachmentPlace { level: u32, slice: u32 }
 variant	metal2vulkan-rt::Refusal::AttachmentUsage	AttachmentUsage { pixel_format: PixelFormat }

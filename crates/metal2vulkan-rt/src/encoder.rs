@@ -658,7 +658,8 @@ impl ComputeCommandEncoder {
     ///
     /// Err: as [`dispatch_threadgroups`](Self::dispatch_threadgroups); [`Refusal::OtherDevice`];
     /// [`Refusal::IndirectOffset`] for an offset not a multiple of 4 or without 12 bytes after
-    /// it in the buffer.
+    /// it in the buffer; [`Refusal::ArgumentPlace`] for arguments at a byte of the buffer's block
+    /// that is not a multiple of 4, as a buffer placed at such a byte has.
     pub fn dispatch_threadgroups_with_indirect_buffer(
         &mut self,
         buffer: &Buffer,
@@ -676,6 +677,13 @@ impl ComputeCommandEncoder {
             return Err(Error::Refused(Refusal::IndirectOffset {
                 offset,
                 length: buffer.length(),
+            }));
+        }
+        let place = buffer.device_range().1 + offset;
+        if !place.is_multiple_of(4) {
+            return Err(Error::Refused(Refusal::ArgumentPlace {
+                place,
+                alignment: 4,
             }));
         }
         self.dispatch(Grid::Indirect(buffer, offset), threads_per_threadgroup)

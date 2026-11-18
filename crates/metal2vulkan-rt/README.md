@@ -216,7 +216,11 @@ so a block released meanwhile goes back to the pool only then. Placement is the 
 is the slack past a buffer's length: the runtime writes no byte of a block outside the ranges of
 the buffers placed in it (a zero fill, a Managed buffer's copy-in and its device copy's zeroing
 each cover exactly the buffer's bytes), so what lies between and after them is as the consumer
-left it.
+left it. Vulkan reads an indirect dispatch's arguments only at a multiple of 4 of the block, and an
+indexed draw's indices only at a multiple of their size; a Metal buffer starts at an aligned
+address, where Metal's offset rules keep both so. A dispatch or draw whose arguments or indices a
+consumer's placement puts at a byte that misses that multiple is refused
+(`Refusal::ArgumentPlace`).
 
 ### The consumer's mappings
 

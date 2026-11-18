@@ -742,7 +742,9 @@ impl RenderCommandEncoder {
     /// Metal's. A draw of no indices or no instances records nothing.
     ///
     /// Err: as [`draw_primitives`](Self::draw_primitives); [`Refusal::OtherDevice`] for another
-    /// device's index buffer; [`Refusal::IndexBufferOffset`].
+    /// device's index buffer; [`Refusal::IndexBufferOffset`]; [`Refusal::ArgumentPlace`] for
+    /// indices at a byte of the buffer's block that is not a multiple of the index size, as a
+    /// buffer placed at such a byte has.
     pub fn draw_indexed_primitives(
         &mut self,
         primitive_type: PrimitiveType,
@@ -816,13 +818,15 @@ impl RenderCommandEncoder {
                     }));
                 }
                 let (reached, at) = buffer.device_range();
+                let place = at + offset;
+                if !place.is_multiple_of(size) {
+                    return Err(Error::Refused(Refusal::ArgumentPlace {
+                        place,
+                        alignment: size,
+                    }));
+                }
                 let ty = metal2vulkan::metal::state::index_type(index_type);
-                Some((
-                    buffer,
-                    reached,
-                    at + offset,
-                    vk::IndexType::from_raw(ty.as_raw()),
-                ))
+                Some((buffer, reached, place, vk::IndexType::from_raw(ty.as_raw())))
             }
         };
         // The vertex buffers the vertex descriptor reads.

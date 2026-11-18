@@ -25,6 +25,8 @@
 //!     for every vertex and instance, from a base instance of 1.
 //!   - a draw whose vertex buffer is bound off its argument's alignment is refused before
 //!     anything is recorded, and the same buffers bound aligned draw.
+//!   - 32-bit indices at byte 2 of their block are refused before anything is recorded, and
+//!     16-bit indices there draw.
 //!   - what Metal refuses is refused, and what a draw does not build is a gap: no pipeline state,
 //!     a pipeline state of other formats than the pass's, points, a depth test, a stencil test
 //!     without a stencil attachment, a misaligned index offset, a non-finite viewport and a
@@ -156,10 +158,15 @@ mod on_device {
 
         /// A buffer of `bytes`.
         fn of(&mut self, device: &Device, bytes: &[u8]) -> Buffer {
+            self.at(device, bytes, 0)
+        }
+
+        /// A buffer of `bytes`, `skew` bytes past the place [`of`](Self::of) would take.
+        fn at(&mut self, device: &Device, bytes: &[u8], skew: u64) -> Buffer {
             let len = bytes.len() as u64;
-            let buffer =
-                (device.new_buffer(self.block.id, self.next, len, Some(0))).expect("a buffer");
-            self.next += len.next_multiple_of(256);
+            let at = self.next + skew;
+            let buffer = (device.new_buffer(self.block.id, at, len, Some(0))).expect("a buffer");
+            self.next += (skew + len).next_multiple_of(256);
             let contents = buffer.contents().expect("a Shared buffer");
             // SAFETY: the range lies in the buffer, which is alive, and no GPU work uses it.
             unsafe {
@@ -873,6 +880,76 @@ mod on_device {
             });
             assert_eq!(read(&color, 4), want, "{name}: the texels");
             println!("{name}: binds off 8 and 16 refused before recording; aligned binds drew");
+        });
+    }
+
+    /// Vulkan binds indices only at a multiple of their size in the memory: in a buffer the
+    /// consumer placed 2 bytes into its block, 32-bit indices at offset 0, which Metal takes, are
+    /// refused before anything is recorded (`Refusal::ArgumentPlace`), and 16-bit indices there
+    /// draw the top half's triangle from where they lie; the pass is its two barriers and the
+    /// segment's end.
+    #[test]
+    fn every_device_takes_indices_only_at_a_multiple_of_their_size_in_their_block() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("draw_index_place", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let indices = buffers.at(&device, &[0, 0, 1, 0, 2, 0, 0, 0, 0, 0, 0, 0], 2);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            run(name, &first);
+            let counters = device.counters();
+            settled(&device);
+            let before = counters.metrics();
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            let indexed = |index_type| IndexBuffer {
+                buffer: &indices,
+                offset: 0,
+                index_type,
+            };
+            let triangle = PrimitiveType::Triangle;
+            match encoder.draw_indexed_primitives(triangle, 3, indexed(IndexType::UInt32), 1, 0, 0)
+            {
+                Err(Error::Refused(Refusal::ArgumentPlace { place, alignment })) => {
+                    assert_eq!((place, alignment), (2, 4), "{name}: 32-bit indices");
+                }
+                other => panic!("{name}: 32-bit indices at byte 2: {other:?}"),
+            }
+            draw(encoder.draw_indexed_primitives(triangle, 3, indexed(IndexType::UInt16), 1, 0, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.submissions - before.submissions,
+                    after.barriers - before.barriers,
+                    after.passes - before.passes,
+                ),
+                (1, 3, 1),
+                "{name}: submissions, barriers, passes"
+            );
+            let want = texels(|_, y| match y {
+                0..4 => GREEN,
+                _ => BLACK,
+            });
+            assert_eq!(read(&color, 4), want, "{name}: the texels");
+            println!("{name}: 32-bit indices at byte 2 refused before recording; 16-bit ones drew");
         });
     }
 

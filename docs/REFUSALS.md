@@ -37,7 +37,7 @@ Columns:
 | What a call did wrong | 73 | 73 | 0 | 0 | 0 | 0 | 0 |
 | What a call did wrong, in detail | 174 | 157 | 0 | 0 | 0 | 0 | 0 |
 | Devices below the new runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 54 | 54 | 0 | 0 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 55 | 55 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 10 | 10 | 0 | 0 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 20 | 20 | 0 | 0 | 0 | 0 | 0 |
 
@@ -55,7 +55,7 @@ Columns:
 | What a call did wrong | 22 | 3 | 5 | 0 | 18 | 8 | 17 | 0 |
 | What a call did wrong, in detail | 60 | 26 | 23 | 0 | 39 | 26 | 0 | 0 |
 | Devices below the new runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 23 | 0 | 0 | 0 |
+| The new runtime's `Refusal` | 16 | 15 | 0 | 0 | 24 | 0 | 0 | 0 |
 | The new runtime's `Limit` | 0 | 0 | 0 | 7 | 3 | 0 | 0 | 0 |
 | The new runtime's `Gap` | 0 | 0 | 0 | 0 | 20 | 0 | 0 | 0 |
 
@@ -668,6 +668,7 @@ Columns:
 | `AttachmentFormat` | A render pass color attachment of a depth or stencil pixel format, or a stencil attachment of a format without stencil | every device (a public call's own check of its arguments) | `metal-documented`: a color attachment takes a color-renderable format and a stencil attachment a format with stencil; Metal's validation stops the descriptor | 2: `crates/metal2vulkan-rt/src/pass.rs (check, 2 sites)` | `-` |
 | `VertexBufferOffset` | A draw whose vertex descriptor reads a vertex buffer at an offset at or past the buffer's length | every device (a public call's own check of its arguments) | `metal-documented`: a buffer's offset lies inside it; Metal's validation stops the bind | 1: `crates/metal2vulkan-rt/src/render_encoder.rs (draw)` | `-` |
 | `IndexBufferOffset` | An indexed draw whose index buffer offset is not a multiple of the index size, or whose indices leave the buffer | every device (a public call's own check of its arguments) | `metal-documented`: the offset is a multiple of the index size and the indices lie in the buffer; Metal's validation stops the draw | 1: `crates/metal2vulkan-rt/src/render_encoder.rs (draw)` | `-` |
+| `ArgumentPlace` | An indirect dispatch's arguments, or an indexed draw's indices, at a byte of the block the buffer lies in (its device copy's, for a Managed buffer... | every device (a public call's own check of its arguments) | `ours`: `vkCmdDispatchIndirect` reads its arguments at a multiple of 4 in the `VkBuffer`, and `vkCmdBindIndexBuffer` takes indices at a multiple of their size in the memory; a Metal buffer starts at an aligned address, so Metal's offset rule alone keeps both aligned there | 2: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`, `crates/metal2vulkan-rt/src/render_encoder.rs (draw)` | `-` |
 | `ViewportNotFinite` | A viewport with a field that is NaN or infinite (but its origin's x, which draws nothing) | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M4, macOS 27.0.1: Metal's validation stops a NaN or infinite origin; the other fields are taken by the same rule | 1: `crates/metal2vulkan-rt/src/render_encoder.rs (set_viewport)` | `-` |
 | `StencilAttachment` | A draw under a depth-stencil state that tests the stencil, in a pass without a stencil attachment | every device (a public call's own check of its arguments) | `metal-measured`: an Apple M4, macOS 27.0.1: Metal's validation stops the draw; plain Metal tests it against a hidden stencil of 0 that the runtime does not keep | 1: `crates/metal2vulkan-rt/src/render_encoder.rs (draw)` | `-` |
 
@@ -1253,6 +1254,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::AttachmentFormat`: `crates/metal2vulkan-rt/src/pass.rs (check, 2 sites)`
 - `rt:Refusal::VertexBufferOffset`: `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`
 - `rt:Refusal::IndexBufferOffset`: `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`
+- `rt:Refusal::ArgumentPlace`: `crates/metal2vulkan-rt/src/encoder.rs (dispatch_threadgroups_with_indirect_buffer)`; `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`
 - `rt:Refusal::ViewportNotFinite`: `crates/metal2vulkan-rt/src/render_encoder.rs (set_viewport)`
 - `rt:Refusal::StencilAttachment`: `crates/metal2vulkan-rt/src/render_encoder.rs (draw)`
 - `rt:Limit::BlockLen`: `crates/metal2vulkan-rt/src/memory.rs (round)`

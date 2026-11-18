@@ -1,6 +1,7 @@
 //! Compute encoders, under a device cfg on every device of the cfg's kind: dispatches over bound
 //! buffers and `set_bytes`, parameters past the push window
-//! through the ring, indirect dispatch, barriers only at hazards in a serial encoder and only on
+//! through the ring, indirect dispatch, indirect arguments read only at a multiple of 4 of their
+//! block, barriers only at hazards in a serial encoder and only on
 //! request in a concurrent one, end barriers that reach the host only after Shared writes and
 //! signals, a dispatch of a kernel without effects that records nothing, and Metal's refusals.
 
@@ -510,6 +511,55 @@ pub(crate) mod on_device {
             }
             encoder
                 .dispatch_threadgroups_with_indirect_buffer(&arguments, 16, [16, 1, 1])
+                .expect("an indirect dispatch");
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            let expected: Vec<u32> = (0..WORDS as u32).map(|index| 1001 * index).collect();
+            assert_eq!(words(&o), expected, "{name}");
+        });
+    }
+
+    /// Vulkan reads indirect arguments only at a multiple of 4 of the `VkBuffer`: in a buffer the
+    /// consumer placed 2 bytes into its block, arguments at offsets Metal takes are refused
+    /// (`Refusal::ArgumentPlace`), and arguments in a buffer placed at byte 4100, a multiple of 4
+    /// no Metal buffer starts at, are read where they lie.
+    #[test]
+    fn every_device_reads_indirect_arguments_only_at_a_multiple_of_4_of_their_block() {
+        each_device("compute_indirect_place", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (a, b, o) = (arena.buffer(), arena.buffer(), arena.buffer());
+            write_words(&a, |index| index);
+            write_words(&b, |index| 1000 * index);
+            let block = (device.take_block(MemoryClass::Shared, 8192)).expect("a Shared block");
+            let placed = |at| (device.new_buffer(block.id, at, 256, Some(0))).expect("a buffer");
+            let (off, on) = (placed(2), placed(4100));
+            write_words(&on, |index| match index {
+                4 => 4,
+                5 | 6 => 1,
+                _ => 0,
+            });
+            let state = add(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            for (slot, buffer) in [&a, &b, &o].into_iter().enumerate() {
+                encoder
+                    .set_buffer(Some(buffer), 0, slot as u32)
+                    .expect("a buffer");
+            }
+            for offset in [0, 16] {
+                match encoder.dispatch_threadgroups_with_indirect_buffer(&off, offset, [16, 1, 1]) {
+                    Err(Error::Refused(Refusal::ArgumentPlace { place, alignment })) => {
+                        assert_eq!((place, alignment), (2 + offset, 4), "{name}: at {offset}");
+                    }
+                    other => panic!("{name}: arguments at {offset}: {other:?}"),
+                }
+            }
+            encoder
+                .dispatch_threadgroups_with_indirect_buffer(&on, 16, [16, 1, 1])
                 .expect("an indirect dispatch");
             encoder.end_encoding();
             run(name, &command_buffer);
