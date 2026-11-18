@@ -75,5 +75,7 @@ pub use metal2vulkan::pipeline::{
 pub use pipeline::ComputePipelineState;
 pub use queue::CommandQueue;
 pub use sampler::SamplerState;
-pub use texture::{BytesPlace, Region, StorageMode, Texture, TextureDescriptor};
+pub use texture::{
+    BytesPlace, HeapRange, Region, SizeAndAlign, StorageMode, Texture, TextureDescriptor,
+};
 pub use times::{host_time, HOST_DOMAIN};

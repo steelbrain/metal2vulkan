@@ -376,6 +376,25 @@ pub enum Refusal {
         /// The slice of the first place refused; 0 where the count of places is wrong.
         slice: u32,
     },
+    /// A heap texture whose image does not lie in its heap
+    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture)): past the heap's end at
+    /// its offset, at an offset in the block that is not a multiple of the image's alignment, or
+    /// in a heap range that leaves its block. The size and alignment are the device's image's,
+    /// as [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align)
+    /// answers them, which may exceed what another device answered for the same descriptor.
+    ///
+    /// Basis: ours (an image bound past its heap's range would take memory the heap does not
+    /// hold, and Vulkan binds an image only at its alignment).
+    HeapTexturePlace {
+        /// The texture's offset in the heap.
+        offset: u64,
+        /// The bytes the texture takes.
+        size: u64,
+        /// What its offset in the block is to be a multiple of.
+        align: u64,
+        /// The heap's bytes.
+        heap_len: u64,
+    },
 }
 
 /// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
@@ -490,6 +509,18 @@ pub enum Gap {
         source: PixelFormat,
         /// The destination texture's pixel format.
         destination: PixelFormat,
+    },
+    /// A heap texture the runtime does not place
+    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture) and
+    /// [`Device::heap_texture_size_and_align`](crate::Device::heap_texture_size_and_align)): in a
+    /// Shared block, or one whose image the device requires an allocation of its own for, or
+    /// that does not take the Private memory type. No recorded stream makes a Shared heap, and
+    /// every optimal image measured on the lab's devices takes the Private type.
+    ///
+    /// Basis: ours (heap textures are built for Private heaps of placeable images).
+    HeapTexture {
+        /// The texture's pixel format.
+        pixel_format: PixelFormat,
     },
 }
 
@@ -757,6 +788,15 @@ impl fmt::Display for Refusal {
                 f,
                 "a Managed texture's bytes of level {level}, slice {slice} are not where a copy reads them in place"
             ),
+            Refusal::HeapTexturePlace {
+                offset,
+                size,
+                align,
+                heap_len,
+            } => write!(
+                f,
+                "a heap texture of {size} bytes aligned to {align} does not lie at offset {offset} of a heap of {heap_len} bytes"
+            ),
         }
     }
 }
@@ -805,6 +845,10 @@ impl fmt::Display for Gap {
             } => write!(
                 f,
                 "this copy from a texture of {source:?} to one of {destination:?} is not built"
+            ),
+            Gap::HeapTexture { pixel_format } => write!(
+                f,
+                "a heap texture of {pixel_format:?} is not placed in this heap on this device"
             ),
         }
     }

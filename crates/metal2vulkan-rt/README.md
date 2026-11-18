@@ -236,6 +236,19 @@ made, with no lock, and never rewritten for layouts.
   when the GPU reaches it. On such a texture `replace_region` writes the named bytes and uploads
   them, and `get_bytes` reads the named bytes, with no submission, as Metal reads a Managed
   texture's CPU copy.
+- A heap is a range of a Private block the consumer took at the heap's creation (`HeapRange`:
+  block, offset, length). `Device::heap_texture_size_and_align(descriptor)` answers Metal's
+  `heapTextureSizeAndAlignWithDescriptor:` with the device's own image requirements, not Metal's:
+  the size rounded up to, and the alignment raised to, the device's `bufferImageGranularity`, so
+  a buffer placed by the same answers never shares a granularity page with the texture. The
+  answers differ by device, so the consumer places by this device's.
+  `Device::new_heap_texture(descriptor, index, heap, offset)` binds the texture's image at that
+  offset in the heap, where the consumer's own placement put it: no allocation and no texture
+  block, the bytes those the memory holds, as Metal does not zero heap textures. Textures may
+  alias one another and the heap's buffers. A placement past the heap's end, an offset in the
+  block off the image's alignment, or a heap range past its block is refused
+  (`Refusal::HeapTexturePlace`); the image is never bound outside its heap. The texture holds
+  the block, so a released block goes back to the pool only once its textures' images are gone.
 - The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
   copy, its pages written then, and kept for the device's life, so no copy allocates memory and
   the host writes resident pages. It is a ring: each copy takes a span at a multiple of 256 bytes,
@@ -265,7 +278,8 @@ made, with no lock, and never rewritten for layouts.
   (`Gap::TextureBytes`).
 - A texture's memory is device-local; where the device has none left, the call fails
   (`Error::Vulkan`).
-- Texture views, heap textures and textures over a swapchain image are not built yet.
+- Texture views and textures over a swapchain image are not built yet. Heap textures are
+  placed only in Private heaps (`Gap::HeapTexture` for a Shared block).
 
 ## Sampler states
 

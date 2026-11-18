@@ -26,7 +26,7 @@ use crate::buffer::Buffer;
 use crate::counters::Gauge;
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal};
-use crate::memory::{self, MemoryClass, BLOCK_LEN};
+use crate::memory::{self, Block, BlockId, MemoryClass, BLOCK_LEN};
 use crate::places::Place;
 use crate::reaper::{Free, Job};
 use crate::staging::Stage;
@@ -126,6 +126,28 @@ pub struct BytesPlace {
     pub bytes_per_image: u64,
 }
 
+/// No Metal counterpart: a heap's memory, `len` bytes at `offset` in a Private block the consumer
+/// holds, taken at the heap's creation; [`Device::new_heap_texture`] places textures in it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HeapRange {
+    /// The block.
+    pub block: BlockId,
+    /// The heap's first byte in the block.
+    pub offset: u64,
+    /// The heap's bytes.
+    pub len: u64,
+}
+
+/// `MTLSizeAndAlign`: the bytes a resource takes in a heap, and what its offset there is a
+/// multiple of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SizeAndAlign {
+    /// `size`.
+    pub size: u64,
+    /// `align`, a power of two.
+    pub align: u64,
+}
+
 /// `MTLRegion`: an origin and a size in texels, `[x, y, z]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Region {
@@ -188,6 +210,8 @@ pub(crate) struct Image {
     aspects: vk::ImageAspectFlags,
     /// An upload recorded its move from undefined to `home`. Read and set under the work lock.
     homed: AtomicBool,
+    /// A heap texture's block, which the image's memory is, held while anything holds the image.
+    _heap: Option<Arc<Block>>,
 }
 
 impl Image {
@@ -230,6 +254,8 @@ pub(crate) enum Backing {
     Placed(Place),
     /// An allocation of its own.
     Own(vk::DeviceMemory),
+    /// A place in a heap's range of a block the image holds ([`Device::new_heap_texture`]).
+    Heap,
 }
 
 /// The unit of a copy between an image and bytes or another image: the aspect, an element's
@@ -318,7 +344,60 @@ impl Device {
         descriptor: &TextureDescriptor,
         index: Option<u32>,
     ) -> Result<Texture, Error> {
-        self.texture(descriptor, index, None)
+        self.texture(descriptor, index, None, None)
+    }
+
+    /// `heapTextureSizeAndAlignWithDescriptor:`: the bytes and alignment a texture of
+    /// `descriptor` takes in a heap ([`Device::new_heap_texture`]) on this device. They are the
+    /// device's image's own memory requirements, not Metal's, so they differ by device: the size
+    /// rounded up to, and the alignment raised to, the device's buffer-image granularity, so that
+    /// a buffer placed by the same answers never shares a granularity page with the texture.
+    ///
+    /// Err: as [`Device::new_texture`], but for the index and allocation errors;
+    /// [`Gap::HeapTexture`] for an image the device requires an allocation of its own for, or
+    /// that does not take the Private memory type.
+    pub fn heap_texture_size_and_align(
+        &self,
+        descriptor: &TextureDescriptor,
+    ) -> Result<SizeAndAlign, Error> {
+        let (shape, plan, _) = self.prepare(descriptor)?;
+        let core = self.core();
+        let info = image_info(descriptor, &shape, &plan);
+        let mut dedicated = vk::MemoryDedicatedRequirements::default();
+        let mut needs = vk::MemoryRequirements2::default().push_next(&mut dedicated);
+        let query = vk::DeviceImageMemoryRequirements::default().create_info(&info);
+        // SAFETY: the device is live, and `plan` was checked against its image format query.
+        unsafe { (core.device).get_device_image_memory_requirements(&query, &mut needs) };
+        let requirements = needs.memory_requirements;
+        heap_fit(core, descriptor, &requirements, &dedicated)
+    }
+
+    /// `MTLHeap`'s `newTextureWithDescriptor:`, at `index`: a texture as [`Device::new_texture`]
+    /// makes it, its image bound at `offset` in `heap`, where the consumer's own placement put it
+    /// by [`Device::heap_texture_size_and_align`]. Nothing is allocated, and the bytes are those
+    /// the heap's memory holds there, as Metal's heap textures are not zeroed. Textures may alias
+    /// one another and the heap's buffers, as Metal's aliasable heap resources do; what one reads
+    /// after another wrote is undefined, as in Metal. The texture holds the block.
+    ///
+    /// Err: as [`Device::new_texture`]; [`Error::NoSuchBlock`] for a block the consumer does not
+    /// hold; [`Gap::HeapTexture`] for a Shared block, or as
+    /// [`Device::heap_texture_size_and_align`]; [`Refusal::HeapTexturePlace`] for a heap range
+    /// that leaves its block, or an image that does not fit in the heap at `offset` or is not
+    /// aligned there as the device requires.
+    pub fn new_heap_texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        index: Option<u32>,
+        heap: HeapRange,
+        offset: u64,
+    ) -> Result<Texture, Error> {
+        let block = self.block(heap.block)?;
+        if block.memory.class != MemoryClass::Private {
+            return Err(Error::Unsupported(Gap::HeapTexture {
+                pixel_format: descriptor.pixel_format,
+            }));
+        }
+        self.texture(descriptor, index, None, Some((block, heap, offset)))
     }
 
     /// `newTextureWithDescriptor:` with `MTLStorageModeManaged`, at `index`: as
@@ -348,16 +427,15 @@ impl Device {
         }
         let mut d = *descriptor;
         d.storage_mode = StorageMode::Managed;
-        self.texture(&d, index, Some((bytes, places)))
+        self.texture(&d, index, Some((bytes, places)), None)
     }
 
-    /// [`Device::new_texture`], and [`Device::new_managed_texture`] with its bytes.
-    fn texture(
+    /// A descriptor's checks, as Metal makes them, and what its texture is made of: the shape,
+    /// the plan, and the usage taken.
+    fn prepare(
         &self,
         descriptor: &TextureDescriptor,
-        index: Option<u32>,
-        managed: Option<(&Buffer, &[BytesPlace])>,
-    ) -> Result<Texture, Error> {
+    ) -> Result<(Shape, Plan, TextureUsage), Error> {
         let d = *descriptor;
         let shape = shape(&d)?;
         if d.storage_mode == StorageMode::Memoryless {
@@ -377,6 +455,21 @@ impl Device {
         {
             return Err(Error::Refused(Refusal::TextureSwizzleWithWrites));
         }
+        let plan = plan(self.core(), &d, usage, &shape)?;
+        Ok((shape, plan, usage))
+    }
+
+    /// [`Device::new_texture`]; [`Device::new_managed_texture`] with its bytes; and
+    /// [`Device::new_heap_texture`] with its block, heap and offset.
+    fn texture(
+        &self,
+        descriptor: &TextureDescriptor,
+        index: Option<u32>,
+        managed: Option<(&Buffer, &[BytesPlace])>,
+        heap: Option<(Arc<Block>, HeapRange, u64)>,
+    ) -> Result<Texture, Error> {
+        let d = *descriptor;
+        let (shape, plan, usage) = self.prepare(&d)?;
         let reached = usage.intersects(TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE);
         if reached != index.is_some() {
             return Err(Error::Refused(Refusal::TextureIndex { index }));
@@ -386,7 +479,6 @@ impl Device {
             false => IndexClass::Texture,
         };
         let core = self.core();
-        let plan = plan(core, &d, usage, &shape)?;
         if let Some((bytes, places)) = managed {
             check_places(&d, plan.unit, bytes, places)?;
         }
@@ -398,8 +490,18 @@ impl Device {
             }
             None => None,
         };
-        // SAFETY: the device is live, and `plan` was checked against its image format query.
-        let made = unsafe { make(core, &d, &shape, &plan) };
+        let bind = match &heap {
+            Some((block, heap, offset)) => Bind::Heap {
+                memory: block.memory.device_memory(),
+                block_len: block.memory.len,
+                heap: *heap,
+                offset: *offset,
+            },
+            None => Bind::Pooled,
+        };
+        // SAFETY: the device is live, and `plan` was checked against its image format query; a
+        // heap's block is the device's, and the texture holds it.
+        let made = unsafe { make(core, &d, &shape, &plan, bind) };
         let (image, backing, bytes, sampled, storage) = match made {
             Ok(made) => made,
             Err(error) => {
@@ -421,6 +523,7 @@ impl Device {
             home: plan.home,
             aspects: plan.aspects,
             homed: AtomicBool::new(false),
+            _heap: heap.map(|(block, ..)| block),
         });
         let inner = TextureInner {
             device: self.clone(),
@@ -806,21 +909,83 @@ type Objects = (
 ///
 /// # Safety
 ///
-/// `core`'s device is live, and `plan` was checked against its image format query for `shape`.
+/// `core`'s device is live, and `plan` was checked against its image format query for `shape`; a
+/// heap's memory is the device's, and lives while the image does.
 unsafe fn make(
     core: &Core,
     d: &TextureDescriptor,
     shape: &Shape,
     plan: &Plan,
+    bind: Bind,
 ) -> Result<Objects, Error> {
     let mut made = Made::default();
     // SAFETY: the caller's contract; what was made is destroyed where a later step fails.
-    let objects = unsafe { made.make(core, d, shape, plan) };
+    let objects = unsafe { made.make(core, d, shape, plan, bind) };
     if objects.is_err() {
         // SAFETY: nothing else holds what was made: no descriptor and no command names it.
         unsafe { made.destroy(core) };
     }
     objects
+}
+
+/// Where [`make`] binds the image.
+enum Bind {
+    /// A place in a texture block, or memory of its own.
+    Pooled,
+    /// `offset` in `heap`, whose block's memory is `memory`, of `block_len` bytes.
+    Heap {
+        memory: vk::DeviceMemory,
+        block_len: u64,
+        heap: HeapRange,
+        offset: u64,
+    },
+}
+
+/// The image of a texture of `d`, of `shape`, as `plan` makes it.
+fn image_info(d: &TextureDescriptor, shape: &Shape, plan: &Plan) -> vk::ImageCreateInfo<'static> {
+    let [width, height, depth] = shape.extent;
+    vk::ImageCreateInfo::default()
+        .flags(shape.flags)
+        .image_type(shape.image_type)
+        .format(plan.format)
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth,
+        })
+        .mip_levels(d.mipmap_level_count)
+        .array_layers(shape.layers)
+        .samples(plan.samples)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(plan.usage)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+}
+
+/// A heap texture's size and alignment from its image's `requirements`: rounded to the device's
+/// buffer-image granularity, so that no buffer shares a granularity page with the image.
+///
+/// Err: [`Gap::HeapTexture`] where the image requires an allocation of its own or does not take
+/// the Private memory type.
+fn heap_fit(
+    core: &Core,
+    d: &TextureDescriptor,
+    requirements: &vk::MemoryRequirements,
+    dedicated: &vk::MemoryDedicatedRequirements,
+) -> Result<SizeAndAlign, Error> {
+    let private = 1 << core.memory_type(MemoryClass::Private);
+    if dedicated.requires_dedicated_allocation != vk::FALSE
+        || requirements.memory_type_bits & private == 0
+    {
+        return Err(Error::Unsupported(Gap::HeapTexture {
+            pixel_format: d.pixel_format,
+        }));
+    }
+    let granularity = core.granularity.max(1);
+    Ok(SizeAndAlign {
+        size: requirements.size.next_multiple_of(granularity),
+        align: requirements.alignment.max(granularity),
+    })
 }
 
 /// What [`make`] has made so far.
@@ -841,25 +1006,10 @@ impl Made {
         d: &TextureDescriptor,
         shape: &Shape,
         plan: &Plan,
+        bind: Bind,
     ) -> Result<Objects, Error> {
         let device = &core.device;
-        let [width, height, depth] = shape.extent;
-        let info = vk::ImageCreateInfo::default()
-            .flags(shape.flags)
-            .image_type(shape.image_type)
-            .format(plan.format)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth,
-            })
-            .mip_levels(d.mipmap_level_count)
-            .array_layers(shape.layers)
-            .samples(plan.samples)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(plan.usage)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let info = image_info(d, shape, plan);
         // SAFETY: the caller's contract: the device makes such an image.
         let image =
             unsafe { device.create_image(&info, None) }.map_err(Error::vulkan("vkCreateImage"))?;
@@ -876,7 +1026,31 @@ impl Made {
         let placed = dedicated.requires_dedicated_allocation == vk::FALSE
             && requirements.size <= BLOCK_LEN
             && bits & (1 << core.memory_type(MemoryClass::Private)) != 0;
-        let (backing, memory, offset) = if placed {
+        let (backing, memory, offset) = if let Bind::Heap {
+            memory,
+            block_len,
+            heap,
+            offset,
+        } = bind
+        {
+            let fit = heap_fit(core, d, &requirements, &dedicated)?;
+            let refused = Error::Refused(Refusal::HeapTexturePlace {
+                offset,
+                size: fit.size,
+                align: fit.align,
+                heap_len: heap.len,
+            });
+            let heap_end = heap.offset.checked_add(heap.len);
+            let at = heap.offset.checked_add(offset);
+            let end = offset.checked_add(fit.size);
+            let fits = heap_end.is_some_and(|heap_end| heap_end <= block_len)
+                && end.is_some_and(|end| end <= heap.len)
+                && at.is_some_and(|at| at.is_multiple_of(fit.align));
+            match (fits, at) {
+                (true, Some(at)) => (Backing::Heap, memory, at),
+                _ => return Err(refused),
+            }
+        } else if placed {
             let (place, block) =
                 (core.places).place(core, requirements.size, requirements.alignment)?;
             (Backing::Placed(place), block.device_memory(), place.offset)
@@ -951,7 +1125,7 @@ impl Made {
                     core.counters.fall(Gauge::Blocks);
                 }
                 Some(Backing::Placed(place)) => core.places.release(core, place),
-                None => {}
+                Some(Backing::Heap) | None => {}
             }
         }
     }
@@ -1402,6 +1576,12 @@ impl Texture {
             index: self.inner.index.map_or(0, |(_, index)| index),
             word: self.inner.word,
         }
+    }
+
+    /// For the device tests: the bytes its image's memory requirements name.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn image_size(&self) -> u64 {
+        self.inner.image.bytes
     }
 
     /// `textureType`, `pixelFormat`, `width` and the rest, as made.

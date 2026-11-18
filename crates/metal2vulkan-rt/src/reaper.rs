@@ -183,6 +183,7 @@ fn free(core: &Core, object: Free) {
                     core.counters.fall(Gauge::Blocks);
                 }
                 Backing::Placed(place) => core.places.release(core, place),
+                Backing::Heap => {}
             }
             core.counters.fall(Gauge::Textures);
         }

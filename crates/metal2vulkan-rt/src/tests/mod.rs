@@ -6,6 +6,7 @@ mod compute;
 mod device;
 mod floor;
 mod hazard;
+mod heap;
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod kernels;
 mod managed;

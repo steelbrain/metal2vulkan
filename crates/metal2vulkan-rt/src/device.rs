@@ -154,6 +154,9 @@ pub(crate) struct Core {
     /// The device's `maxMemoryAllocationCount`: the most allocations live at once
     /// ([`memory::allocate`]).
     pub(crate) max_allocations: u32,
+    /// The device's `bufferImageGranularity`, which a heap texture's size and alignment are
+    /// rounded to.
+    pub(crate) granularity: u64,
     pub(crate) pool: Pool,
     /// The blocks textures are placed in.
     pub(crate) places: Places,
@@ -352,6 +355,7 @@ impl Device {
         unsafe { vk_instance.get_physical_device_properties2(raw, &mut properties) };
         answer(&mut properties.properties.limits);
         let max_allocations = properties.properties.limits.max_memory_allocation_count;
+        let granularity = properties.properties.limits.buffer_image_granularity;
         let directory = options.pipeline_cache_dir.as_deref();
         let uuid = properties.properties.pipeline_cache_uuid;
         // SAFETY: the device is live.
@@ -435,6 +439,7 @@ impl Device {
             calibrated,
             max_block_len,
             max_allocations,
+            granularity,
             pool: Pool::new(options.block_mappings),
             places: Places::new(),
             copies: Places::new(),
