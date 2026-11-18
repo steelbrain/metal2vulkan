@@ -64,14 +64,22 @@ mod on_device {
                 core.pool.idle(MemoryClass::Private) == 1
                     && core.pool.idle(MemoryClass::Shared) == 1
             });
-            let base = counters.gauges().blocks;
             device
                 .grant_indices(IndexClass::Texture, 4096, 8)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let submissions = || counters.metrics().submissions;
+            // The first texture takes the ready Private block as its texture block, which the pool
+            // makes again, zeroing it in a submission of its own.
+            drop(
+                (device.new_texture(&square(256), Some(4096)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}")),
+            );
+            wait_until("the pool's block made again", || {
+                core.pool.idle(MemoryClass::Private) == 1 && counters.gauges().textures == 0
+            });
+            let base = counters.gauges().blocks;
 
-            // Textures made and released: nothing holds them, and nothing is submitted. The first
-            // takes the ready Private block as its texture block, which the pool makes again.
+            // Textures made and released: nothing holds them, and nothing is submitted.
             let before = submissions();
             for _ in 0..4 * HOMES_PRUNE {
                 let texture = device
@@ -86,7 +94,7 @@ mod on_device {
             }
             wait_until("the released textures freed", || {
                 let gauges = counters.gauges();
-                (gauges.textures, gauges.blocks) == (0, base + 1)
+                (gauges.textures, gauges.blocks) == (0, base)
             });
             assert_eq!(submissions(), before, "{name}: textures made and released");
 
@@ -104,7 +112,7 @@ mod on_device {
                         .unwrap_or_else(|error| panic!("{name}: {error}"))
                 })
                 .collect();
-            let ceiling = base + 2;
+            let ceiling = base + 1;
             let pattern = |seed: u64| -> Vec<u8> {
                 (0..call)
                     .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed as u8))
