@@ -308,7 +308,7 @@ mod on_device {
         let Some(library) = library() else {
             return;
         };
-        each_device("sampling", |name, _, device| {
+        each_device("sampling_constexpr_refused", |name, _, device| {
             let grant = device
                 .grant_indices(IndexClass::Sampler, 1, 4)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
