@@ -80,6 +80,11 @@ pub struct BlockInfo {
     /// `contents` of the block's first byte: the host mapping of a Shared block, `None` for a
     /// Private one.
     pub contents: Option<NonNull<u8>>,
+    /// Whether its memory type is device-local. A Private block is, unless the device-local type
+    /// was out of memory when it was made and it went to the next type its buffer takes (counted
+    /// in [`Gauges::spilled_bytes`](crate::Gauges::spilled_bytes)); a Shared block is where the
+    /// device's Shared type is.
+    pub device_local: bool,
 }
 
 // SAFETY: plain data. `contents` is an address; reading or writing through it is the consumer's
@@ -117,6 +122,10 @@ pub(crate) struct Memory {
     memory: vk::DeviceMemory,
     pub(crate) address: u64,
     pub(crate) mapping: Option<Mapping>,
+    /// Its memory type is device-local.
+    device_local: bool,
+    /// A Private block in another memory type than the Private one, which was out of memory.
+    spilled: bool,
 }
 
 impl Memory {
@@ -130,6 +139,11 @@ impl Memory {
         self.pooled
     }
 
+    /// Whether it is a Private block in another memory type than the Private one.
+    pub(crate) fn spilled(&self) -> bool {
+        self.spilled
+    }
+
     pub(crate) fn info(&self) -> BlockInfo {
         BlockInfo {
             id: self.id,
@@ -137,6 +151,7 @@ impl Memory {
             len: self.len,
             gpu_address: self.address,
             contents: self.mapping.map(Mapping::get),
+            device_local: self.device_local,
         }
     }
 }
@@ -356,7 +371,10 @@ pub(crate) fn run(core: Arc<Core>) {
             return;
         }
         if let Some(memory) = state.returned.pop() {
-            let room = memory.pooled && state.idle[memory.class.index()].len() < IDLE_MAX;
+            // A spilled block is freed, so the pool's next block tries device-local memory again.
+            let room = memory.pooled
+                && !memory.spilled
+                && state.idle[memory.class.index()].len() < IDLE_MAX;
             drop(state);
             // Only this thread adds idle blocks, so the room is still there once it is zeroed. A
             // block that cannot be zeroed is freed.
@@ -400,6 +418,47 @@ pub(crate) fn dedicated_len(len: u64, max: u64) -> Result<u64, Error> {
             max,
         })),
     }
+}
+
+/// [`allocate`] of `info`, and for Private memory, where the device-local type is out of device
+/// memory, of each other type `bits` allows in the device's order until one is not: the spill
+/// the plan decided, on the allocation's own error and never a budget poll. Returns the memory
+/// and whether it spilled.
+///
+/// # Safety
+///
+/// As [`allocate`], for every type `bits` allows.
+pub(crate) unsafe fn allocate_spilling(
+    core: &Core,
+    class: MemoryClass,
+    bits: u32,
+    info: &vk::MemoryAllocateInfo<'_>,
+) -> Result<(vk::DeviceMemory, bool), Error> {
+    let out = |result: &Result<vk::DeviceMemory, Error>| {
+        result.as_ref().is_err_and(Error::is_out_of_device_memory)
+    };
+    let first = info.memory_type_index;
+    let mut result = match core.fails_private(class) {
+        true => Err(Error::out_of_device_memory()),
+        // SAFETY: the caller's.
+        false => unsafe { allocate(&core.device, &core.counters, core.max_allocations, info) },
+    };
+    if class == MemoryClass::Shared {
+        return result.map(|memory| (memory, false));
+    }
+    for index in (0..u32::BITS).filter(|&index| index != first && bits & (1 << index) != 0) {
+        if !out(&result) {
+            break;
+        }
+        let mut next = *info;
+        next.memory_type_index = index;
+        // SAFETY: the caller's; `bits` allows the type.
+        result = unsafe { allocate(&core.device, &core.counters, core.max_allocations, &next) };
+        if let Ok(memory) = result {
+            return Ok((memory, true));
+        }
+    }
+    result.map(|memory| (memory, false))
 }
 
 /// `vkAllocateMemory`, every allocation the runtime makes: one more live allocation in
@@ -454,10 +513,11 @@ pub(crate) fn make(
         .allocation_size(requirements.size)
         .memory_type_index(core.memory_type(class))
         .push_next(&mut flags);
+    let bits = requirements.memory_type_bits;
     // SAFETY: the floor chose the memory type for buffers of this usage on this device, and
-    // `bufferDeviceAddress` is enabled.
-    let allocated = unsafe { allocate(device, &core.counters, core.max_allocations, &allocation) };
-    let memory = match allocated {
+    // `bufferDeviceAddress` is enabled; a spill takes a type the buffer's requirements allow.
+    let allocated = unsafe { allocate_spilling(core, class, bits, &allocation) };
+    let (memory, spilled) = match allocated {
         Ok(memory) => memory,
         Err(error) => {
             // SAFETY: `buffer` is unused.
@@ -466,6 +526,13 @@ pub(crate) fn make(
         }
     };
     core.counters.count(Metric::BlocksMade);
+    let device_local = match spilled {
+        true => false,
+        false => core.device_local & (1 << core.memory_type(class)) != 0,
+    };
+    if spilled {
+        core.counters.rise_by(Gauge::SpilledBytes, len);
+    }
     let mut block = Memory {
         id,
         class,
@@ -475,6 +542,8 @@ pub(crate) fn make(
         memory,
         address: 0,
         mapping: None,
+        device_local,
+        spilled,
     };
     match finish(core, &mut block) {
         Ok(()) => Ok(block),
@@ -541,4 +610,7 @@ pub(crate) fn free(core: &Core, memory: Memory) {
         device.free_memory(memory.memory, None);
     }
     core.counters.fall(Gauge::Blocks);
+    if memory.spilled {
+        core.counters.fall_by(Gauge::SpilledBytes, memory.len);
+    }
 }

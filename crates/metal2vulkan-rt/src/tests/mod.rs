@@ -19,6 +19,7 @@ mod push_window;
 mod readback;
 mod sampler;
 mod sampling;
+mod spill;
 mod staging;
 mod texture;
 mod translate;

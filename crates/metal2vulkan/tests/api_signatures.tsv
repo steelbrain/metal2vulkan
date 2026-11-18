@@ -2230,6 +2230,7 @@ field	metal2vulkan-air::tensor_ops::RunForm.single_thread	pub single_thread: boo
 field	metal2vulkan-air::tensor_ops::RunForm.v2	pub v2: bool
 field	metal2vulkan-rt::BlockInfo.class	pub class: MemoryClass
 field	metal2vulkan-rt::BlockInfo.contents	pub contents: Option<NonNull<u8>>
+field	metal2vulkan-rt::BlockInfo.device_local	pub device_local: bool
 field	metal2vulkan-rt::BlockInfo.gpu_address	pub gpu_address: u64
 field	metal2vulkan-rt::BlockInfo.id	pub id: BlockId
 field	metal2vulkan-rt::BlockInfo.len	pub len: u64
@@ -2264,6 +2265,7 @@ field	metal2vulkan-rt::Gauges.device_samplers	pub device_samplers: u64
 field	metal2vulkan-rt::Gauges.events	pub events: u64
 field	metal2vulkan-rt::Gauges.pipelines	pub pipelines: u64
 field	metal2vulkan-rt::Gauges.samplers	pub samplers: u64
+field	metal2vulkan-rt::Gauges.spilled_bytes	pub spilled_bytes: u64
 field	metal2vulkan-rt::Gauges.textures	pub textures: u64
 field	metal2vulkan-rt::HeapRange.block	pub block: BlockId
 field	metal2vulkan-rt::HeapRange.len	pub len: u64

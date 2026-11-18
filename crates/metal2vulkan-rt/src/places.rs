@@ -73,6 +73,12 @@ impl Places {
             }
             drop(blocks);
             let memory = core.take_memory(MemoryClass::Private, len)?;
+            // A block that spilled out of device-local memory holds no place: textures then take
+            // memory of their own, and a Managed buffer its Shared range.
+            if memory.spilled() {
+                core.pool.give_back(memory);
+                return Err(Error::out_of_device_memory());
+            }
             blocks = lock(&self.blocks);
             blocks.push(PlaceBlock {
                 memory,

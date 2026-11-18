@@ -177,10 +177,11 @@ fn free(core: &Core, object: Free) {
                 device.destroy_image(image, None);
             }
             match backing {
-                Backing::Own(memory) => {
+                Backing::Own(memory, spilled) => {
                     // SAFETY: the image bound to it is destroyed.
                     unsafe { device.free_memory(memory, None) };
                     core.counters.fall(Gauge::Blocks);
+                    core.counters.fall_by(Gauge::SpilledBytes, spilled);
                 }
                 Backing::Placed(place) => core.places.release(core, place),
                 Backing::Heap => {}

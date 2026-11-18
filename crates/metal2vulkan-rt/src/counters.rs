@@ -48,6 +48,8 @@ pub(crate) enum Gauge {
     Events,
     /// [`Gauges::device_samplers`].
     DeviceSamplers,
+    /// [`Gauges::spilled_bytes`].
+    SpilledBytes,
 }
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
@@ -84,6 +86,7 @@ struct Atomics {
     blocks: AtomicU64,
     events: AtomicU64,
     device_samplers: AtomicU64,
+    spilled_bytes: AtomicU64,
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
@@ -173,6 +176,16 @@ impl Counters {
         self.gauge(gauge).fetch_sub(1, Relaxed);
     }
 
+    /// `amount` more of `gauge`'s kind: bytes, for [`Gauge::SpilledBytes`].
+    pub(crate) fn rise_by(&self, gauge: Gauge, amount: u64) {
+        self.gauge(gauge).fetch_add(amount, Relaxed);
+    }
+
+    /// `amount` fewer of `gauge`'s kind.
+    pub(crate) fn fall_by(&self, gauge: Gauge, amount: u64) {
+        self.gauge(gauge).fetch_sub(amount, Relaxed);
+    }
+
     fn gauge(&self, gauge: Gauge) -> &AtomicU64 {
         let a = &self.atomics;
         match gauge {
@@ -185,6 +198,7 @@ impl Counters {
             Gauge::CommandBuffers => &a.command_buffers,
             Gauge::Events => &a.events,
             Gauge::DeviceSamplers => &a.device_samplers,
+            Gauge::SpilledBytes => &a.spilled_bytes,
         }
     }
 
@@ -221,6 +235,7 @@ impl Counters {
             blocks: a.blocks.load(Relaxed),
             events: a.events.load(Relaxed),
             device_samplers: a.device_samplers.load(Relaxed),
+            spilled_bytes: a.spilled_bytes.load(Relaxed),
         }
     }
 }
@@ -297,4 +312,8 @@ pub struct Gauges {
     /// sampler states' device samplers, one for each create info. They count against the
     /// device's `maxSamplerAllocationCount`.
     pub device_samplers: u64,
+    /// Bytes of Private memory that went to another memory type because the device-local one
+    /// was out of memory: blocks whose [`BlockInfo::device_local`](crate::BlockInfo) is false and
+    /// textures' allocations of their own.
+    pub spilled_bytes: u64,
 }

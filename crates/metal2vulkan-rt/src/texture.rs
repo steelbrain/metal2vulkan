@@ -252,8 +252,9 @@ impl Drop for Image {
 pub(crate) enum Backing {
     /// A place in a texture block.
     Placed(Place),
-    /// An allocation of its own.
-    Own(vk::DeviceMemory),
+    /// An allocation of its own, and its bytes where it spilled out of device-local memory (else
+    /// 0).
+    Own(vk::DeviceMemory, u64),
     /// A place in a heap's range of a block the image holds ([`Device::new_heap_texture`]).
     Heap,
 }
@@ -1026,6 +1027,15 @@ impl Made {
         let placed = dedicated.requires_dedicated_allocation == vk::FALSE
             && requirements.size <= BLOCK_LEN
             && bits & (1 << core.memory_type(MemoryClass::Private)) != 0;
+        // Where the device-local memory has no texture block left, memory of its own.
+        let pooled = match placed && matches!(bind, Bind::Pooled) {
+            true => match (core.places).place(core, requirements.size, requirements.alignment) {
+                Ok(found) => Some(found),
+                Err(error) if error.is_out_of_device_memory() => None,
+                Err(error) => return Err(error),
+            },
+            false => None,
+        };
         let (backing, memory, offset) = if let Bind::Heap {
             memory,
             block_len,
@@ -1050,9 +1060,7 @@ impl Made {
                 (true, Some(at)) => (Backing::Heap, memory, at),
                 _ => return Err(refused),
             }
-        } else if placed {
-            let (place, block) =
-                (core.places).place(core, requirements.size, requirements.alignment)?;
+        } else if let Some((place, block)) = pooled {
             (Backing::Placed(place), block.device_memory(), place.offset)
         } else {
             // Vulkan gives every image of no external handle type a device-local type.
@@ -1066,11 +1074,16 @@ impl Made {
                 .allocation_size(requirements.size)
                 .memory_type_index(memory_type)
                 .push_next(&mut own);
-            // SAFETY: the type is one the image's requirements allow, and the allocation its own.
-            let memory = unsafe {
-                memory::allocate(device, &core.counters, core.max_allocations, &allocate)
-            }?;
-            (Backing::Own(memory), memory, 0)
+            // SAFETY: the type, and each a spill takes, is one the image's requirements allow, and
+            // the allocation its own.
+            let (memory, spilled) =
+                unsafe { memory::allocate_spilling(core, MemoryClass::Private, bits, &allocate) }?;
+            let spilled = match spilled {
+                true => requirements.size,
+                false => 0,
+            };
+            core.counters.rise_by(Gauge::SpilledBytes, spilled);
+            (Backing::Own(memory, spilled), memory, 0)
         };
         self.backing = Some(backing);
         // SAFETY: the place or allocation holds the image's size at its alignment, in memory of a
@@ -1120,9 +1133,10 @@ impl Made {
                 device.destroy_image(image, None);
             }
             match self.backing {
-                Some(Backing::Own(memory)) => {
+                Some(Backing::Own(memory, spilled)) => {
                     device.free_memory(memory, None);
                     core.counters.fall(Gauge::Blocks);
+                    core.counters.fall_by(Gauge::SpilledBytes, spilled);
                 }
                 Some(Backing::Placed(place)) => core.places.release(core, place),
                 Some(Backing::Heap) | None => {}

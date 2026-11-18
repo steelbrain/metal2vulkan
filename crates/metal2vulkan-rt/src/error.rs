@@ -644,6 +644,25 @@ impl Error {
     pub(crate) fn vulkan(call: &'static str) -> impl FnOnce(vk::Result) -> Error {
         move |result| Error::Vulkan { call, result }
     }
+
+    /// An allocation's out-of-device-memory error.
+    pub(crate) fn out_of_device_memory() -> Error {
+        Error::Vulkan {
+            call: "vkAllocateMemory",
+            result: vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+        }
+    }
+
+    /// Whether it is an allocation's out-of-device-memory error.
+    pub(crate) fn is_out_of_device_memory(&self) -> bool {
+        matches!(
+            self,
+            Error::Vulkan {
+                result: vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+                ..
+            }
+        )
+    }
 }
 
 impl fmt::Display for Error {

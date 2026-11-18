@@ -88,6 +88,14 @@ in its memory.
   class ready, made off every caller's path, so a take waits only when none is ready. Past
   `BLOCK_LEN` a block is dedicated: the length rounded up to 64 KiB, made in the call, up to the
   device's `maxMemoryAllocationSize` and `maxBufferSize` (`Limit::BlockLen` past them).
+- A Private allocation takes the device-local Private type. Where that allocation itself fails
+  out of device memory (never a budget poll), it takes the next memory type the resource allows,
+  in the device's order: `BlockInfo::device_local` is false for such a block, and
+  `Gauges::spilled_bytes` counts the bytes until they are freed. A spilled pooled block is freed
+  when given back, so the pool's next block tries device-local memory again. Textures are not
+  placed in a spilled block: a texture then takes an allocation of its own, which spills in the
+  same way where the image allows another type. A Managed buffer whose device copy finds no
+  device-local room is its Shared range, as on a unified device, for its life.
 - Every `VkDeviceMemory` the runtime holds counts against the device's `maxMemoryAllocationCount`:
   each block (texture blocks among them), each texture's own allocation, the staging region (from
   the first texture copy on), the staging buffer of a copy larger than the region while it runs, the
@@ -427,8 +435,7 @@ that touch blocks first.
   resource IDs it made up, with no fault. The consumer treats every byte on the device as
   guest-writable and keeps nothing there that it parses or trusts.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
-- A Managed buffer's and a Managed texture's `synchronizeResource` come with blit encoders. A Private allocation does not
-  yet go on to another memory type when device memory runs out.
+- A Managed buffer's and a Managed texture's `synchronizeResource` come with blit encoders.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
   dispatch past it is split into dispatches of at most that many, each told its first

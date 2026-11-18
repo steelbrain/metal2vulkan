@@ -153,7 +153,9 @@ impl Device {
     ///
     /// Metal keeps such a copy on a Mac with a discrete GPU. The consumer chooses the range of its
     /// bytes, as for [`Device::new_buffer`]. A buffer a command buffer uses holds its device copy
-    /// until the command buffer retires.
+    /// until the command buffer retires. Where device-local memory has no room for the copy, the
+    /// buffer is its bytes, as on a device whose Shared type is device-local: Metal never fails a
+    /// Managed buffer for want of video memory, and no second copy is kept in system memory.
     ///
     /// Err: as [`Device::new_buffer`]; [`Refusal::ManagedBlockNotShared`] for a Private block;
     /// [`Error::Quiesced`], and what taking a Private block or the upload's command buffer can
@@ -195,7 +197,15 @@ impl Device {
         if core.shared_is_device_local() {
             return Ok(self.buffer(block, offset, length, contents, None));
         }
-        let (place, copy_block) = core.copies.place(core, length, COPY_ALIGN)?;
+        let (place, copy_block) = match core.copies.place(core, length, COPY_ALIGN) {
+            Ok(found) => found,
+            // No device-local room for the copy: the consumer's Shared range, as on a unified
+            // device, chosen here for the buffer's life.
+            Err(error) if error.is_out_of_device_memory() => {
+                return Ok(self.buffer(block, offset, length, contents, None));
+            }
+            Err(error) => return Err(error),
+        };
         let copy = Arc::new(DeviceCopy {
             core: Arc::clone(core),
             place,

@@ -157,6 +157,10 @@ pub(crate) struct Core {
     /// The device's `bufferImageGranularity`, which a heap texture's size and alignment are
     /// rounded to.
     pub(crate) granularity: u64,
+    /// For the device tests: how many more Private allocations of the Private type fail as out
+    /// of device memory, before the driver is called.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fail_private: std::sync::atomic::AtomicU32,
     pub(crate) pool: Pool,
     /// The blocks textures are placed in.
     pub(crate) places: Places,
@@ -440,6 +444,8 @@ impl Device {
             max_block_len,
             max_allocations,
             granularity,
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            fail_private: std::sync::atomic::AtomicU32::new(0),
             pool: Pool::new(options.block_mappings),
             places: Places::new(),
             copies: Places::new(),
@@ -963,6 +969,22 @@ impl Core {
             MemoryClass::Private => self.memory_types.private,
             MemoryClass::Shared => self.memory_types.shared,
         }
+    }
+
+    /// Whether an allocation of `class` in its own type is to fail as out of device memory: the
+    /// device tests' stand-in for a full device, which only they set.
+    pub(crate) fn fails_private(&self, class: MemoryClass) -> bool {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if class == MemoryClass::Private {
+            let fail = |left: u32| left.checked_sub(1);
+            let ordering = Ordering::Relaxed;
+            return self
+                .fail_private
+                .try_update(ordering, ordering, fail)
+                .is_ok();
+        }
+        let _ = class;
+        false
     }
 
     /// Whether the Shared memory type is device-local, by the device's memory-type query: then a
