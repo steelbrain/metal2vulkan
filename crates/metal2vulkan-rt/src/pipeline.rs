@@ -256,7 +256,7 @@ pub(crate) enum Form {
     /// `dispatchThreads` grid that is not a whole number of threadgroups on the
     /// partial-threadgroups variant, lowered at the first such grid where the content has a
     /// function to lower it from.
-    Sized { partial: Option<Later> },
+    Sized { partial: Option<Box<Later>> },
 }
 
 /// One translated module of a state, its interface, and the `VkPipeline`s made of it so far.
@@ -572,12 +572,12 @@ impl Compiled {
                     _ => {
                         let plain = lower(&plain).and_then(compiled);
                         let plain = plain.map_err(Error::Translation)?;
-                        let partial = Later {
+                        let partial = Box::new(Later {
                             descriptor: descriptor.clone(),
                             function: function.clone(),
                             inputs,
                             lowered: OnceLock::new(),
-                        };
+                        });
                         (plain, Some(Some(partial)), false, Some(source))
                     }
                 }
@@ -1084,7 +1084,7 @@ impl Compiled {
     fn later(&self, which: Which) -> Option<&Later> {
         match (which, &self.form) {
             (Which::Emulated, _) => self.emulated.as_ref(),
-            (Which::Partial, Form::Sized { partial }) => partial.as_ref(),
+            (Which::Partial, Form::Sized { partial }) => partial.as_deref(),
             (Which::Partial, Form::Tiled | Form::Square) => None,
         }
     }
@@ -1307,7 +1307,7 @@ impl Drop for Compiled {
         self.core.counters.fall(Gauge::Kernels);
         self.whole.release(&self.core);
         let partial = match &mut self.form {
-            Form::Sized { partial } => partial.as_mut(),
+            Form::Sized { partial } => partial.as_deref_mut(),
             Form::Tiled | Form::Square => None,
         };
         for later in [self.emulated.as_mut(), partial].into_iter().flatten() {
