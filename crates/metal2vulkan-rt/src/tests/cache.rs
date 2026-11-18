@@ -6,6 +6,7 @@
 
 use crate::cache::{frame, unframe, State, Store};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::Arc;
@@ -33,18 +34,21 @@ impl Drop for Scratch {
     }
 }
 
-/// The bytes of every file under `dir`; none where it is missing.
+/// The bytes of every file under `dir`; none where it is missing. A file or directory the store's
+/// removal thread takes while the walk lists it counts nothing: what the walk finds is never more
+/// than the directory held when it started.
 fn bytes_under(dir: &Path) -> u64 {
     let Ok(entries) = fs::read_dir(dir) else {
         return 0;
     };
     entries
         .map(|entry| {
-            let entry = entry.expect("an entry");
-            let meta = entry.metadata().expect("its metadata");
-            match meta.is_dir() {
-                true => bytes_under(&entry.path()),
-                false => meta.len(),
+            let meta = entry.and_then(|entry| Ok((entry.metadata()?, entry.path())));
+            match meta {
+                Ok((meta, path)) if meta.is_dir() => bytes_under(&path),
+                Ok((meta, _)) => meta.len(),
+                Err(error) if error.kind() == ErrorKind::NotFound => 0,
+                Err(error) => panic!("{}: {error}", dir.display()),
             }
         })
         .sum()
