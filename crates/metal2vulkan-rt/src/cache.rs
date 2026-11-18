@@ -942,7 +942,7 @@ impl Caches {
         }
         self.merge_waiting.store(true, Release);
         while self.merge_held.load(Acquire) {
-            thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::from_millis(1));
         }
         self.merge_waiting.store(false, Release);
     }
