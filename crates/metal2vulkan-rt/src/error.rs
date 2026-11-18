@@ -122,6 +122,28 @@ pub enum Refusal {
         /// The block named.
         block: BlockId,
     },
+    /// A zero fill whose range leaves its block
+    /// ([`Device::zero_block_range`](crate::Device::zero_block_range)), as a buffer placed there
+    /// would.
+    ///
+    /// Basis: ours (the fill stands for the zeroed contents of a buffer placed in the range, and
+    /// Metal answers nil for a buffer placed past the end of its heap).
+    ZeroRangePastBlock {
+        /// The range's offset in the block.
+        offset: u64,
+        /// The range's length.
+        length: u64,
+        /// The block's length.
+        block_len: u64,
+    },
+    /// A zero fill of a Shared block ([`Device::zero_block_range`](crate::Device::zero_block_range)).
+    ///
+    /// Basis: ours (the host maps a Shared block, and its bytes are zeroed through the mapping, as
+    /// a zeroed Shared buffer's are; the fill is for the memory the host does not map).
+    ZeroRangeShared {
+        /// The block named.
+        block: BlockId,
+    },
     /// A changed range that leaves its buffer ([`Buffer::did_modify_range`](crate::Buffer::did_modify_range)).
     ///
     /// Basis: ours (the copy of such a range would write past the buffer's device copy).
@@ -1164,6 +1186,19 @@ impl fmt::Display for Refusal {
             Refusal::ManagedCopyNotPrivate { block } => write!(
                 f,
                 "a Managed buffer's device copy is placed in block {}, which is not Private",
+                block.get()
+            ),
+            Refusal::ZeroRangePastBlock {
+                offset,
+                length,
+                block_len,
+            } => write!(
+                f,
+                "a zero fill of {length} bytes at offset {offset} leaves its block of {block_len} bytes"
+            ),
+            Refusal::ZeroRangeShared { block } => write!(
+                f,
+                "a zero fill of block {}, which is Shared: the host zeroes its bytes",
                 block.get()
             ),
             Refusal::ModifiedRange {

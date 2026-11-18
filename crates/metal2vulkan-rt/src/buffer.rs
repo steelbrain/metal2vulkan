@@ -100,7 +100,10 @@ impl Device {
     /// `newBufferWithLength:options:` zeroes a new buffer in Metal, and `None` none, for a buffer
     /// placed in a heap, whose memory Metal does not zero, or one whose bytes the consumer writes
     /// itself. An offset at or past the length zeroes nothing. In a Shared block the bytes are
-    /// zeroed through the mapping, before the call returns; in a Private block by a GPU fill in the
+    /// zeroed through the mapping, before the call returns, but those the block's zero mark still
+    /// covers ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)), which read zero already: a
+    /// buffer lowers the mark to its offset, the consumer's bytes from there on; in a Private
+    /// block by a GPU fill in the
     /// upload, which is submitted ahead of every command buffer committed after this call and ends
     /// with a barrier that orders the fill before every later command (a copy into the buffer
     /// among them), and which holds the block until it completes. The bytes zeroed are counted in
@@ -133,17 +136,26 @@ impl Device {
             // SAFETY: `offset` is inside the block.
             Mapping::new(unsafe { mapping.at(offset) })
         });
+        // The buffer's bytes are the consumer's from now; those the block's zero mark covered
+        // read zero already.
+        let clean = block.place_at(offset).saturating_sub(offset).min(length);
         if let Some(from) = zero_from.filter(|&from| from < length) {
             match contents {
-                // SAFETY: `from..length` lies in the new buffer, whose range is in the block.
-                Some(contents) => unsafe {
-                    (contents.get().as_ptr())
-                        .add(from as usize)
-                        .write_bytes(0, (length - from) as usize)
-                },
-                None => (self.core().work).zero(self.core(), &block, offset + from, end)?,
+                Some(contents) => {
+                    let start = from.max(clean);
+                    // SAFETY: `start..length` lies in the new buffer, whose range is in the block.
+                    unsafe {
+                        (contents.get().as_ptr())
+                            .add(start as usize)
+                            .write_bytes(0, (length - start) as usize)
+                    };
+                    self.core().counters.zeroed(length - start);
+                }
+                None => {
+                    (self.core().work).zero(self.core(), &block, offset + from, end)?;
+                    self.core().counters.zeroed(length - from);
+                }
             }
-            self.core().counters.zeroed(length - from);
         }
         Ok(self.buffer(block, offset, length, contents, None))
     }
@@ -221,6 +233,8 @@ impl Device {
                 Some((copy_block, copy_offset))
             }
         };
+        // The consumer's bytes are its own to write: the block's zero mark stops before them.
+        block.place_at(offset);
         // SAFETY: `offset` is inside the block.
         let contents = Some(Mapping::new(unsafe { mapping.at(offset) }));
         let Some((copy_block, copy_offset)) = copy else {
@@ -264,6 +278,50 @@ impl Device {
             buffer.did_modify_range(0, copied)?;
         }
         Ok(buffer)
+    }
+
+    /// Nearest Metal counterpart: the zeroed contents of a new buffer of
+    /// `newBufferWithLength:options:`, for `length` bytes at `offset` of a Private block the
+    /// consumer holds, where the consumer places such a buffer.
+    ///
+    /// What differs: the consumer asks, and the runtime infers nothing. A take zeroes no Private
+    /// block ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed) is 0 for one), and this zeroes only
+    /// the range named. The range is zeroed by a GPU fill in the upload, as
+    /// [`Device::new_buffer`]'s zeroing of a Private buffer is: submitted ahead of every command
+    /// buffer committed after this call, ending with a barrier that orders the fill before every
+    /// later command, and holding the block until it completes. The call never waits for the
+    /// GPU. Metal owes zeros for that call's buffers only, not for a heap's memory or a
+    /// texture's. [`Metrics::block_zero_fills`](crate::Metrics::block_zero_fills) and
+    /// [`Metrics::block_zero_fill_bytes`](crate::Metrics::block_zero_fill_bytes) count the fills
+    /// and their bytes. A length of 0 zeroes nothing.
+    ///
+    /// Err: [`Error::NoSuchBlock`] for a block the consumer does not hold;
+    /// [`Refusal::ZeroRangePastBlock`] for a range that leaves the block;
+    /// [`Refusal::ZeroRangeShared`] for a Shared block, whose bytes the consumer writes through
+    /// the mapping; [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer
+    /// cannot be made.
+    pub fn zero_block_range(&self, block: BlockId, offset: u64, length: u64) -> Result<(), Error> {
+        let block = self.block(block)?;
+        let block_len = block.memory.len;
+        let end = offset
+            .checked_add(length)
+            .filter(|&end| end <= block_len)
+            .ok_or(Error::Refused(Refusal::ZeroRangePastBlock {
+                offset,
+                length,
+                block_len,
+            }))?;
+        if block.memory.class != MemoryClass::Private {
+            return Err(Error::Refused(Refusal::ZeroRangeShared {
+                block: block.memory.id,
+            }));
+        }
+        if length == 0 {
+            return Ok(());
+        }
+        (self.core().work).zero(self.core(), &block, offset, end)?;
+        self.core().counters.zero_filled(length);
+        Ok(())
     }
 
     /// The block `block`, which the consumer holds, where `length` bytes at `offset` lie in it.

@@ -6,8 +6,9 @@
 //! kept for a take of its length, its bytes as written, that a take beside kept blocks of other
 //! lengths allocates and their bytes are given back after the hook, and taken where its allocation
 //! fails, that each idle allocation is freed at its idle age, under steady commits too, that
-//! seeded takes and releases of mixed lengths all return, and that teardown frees everything with
-//! the gauges at zero.
+//! seeded takes and releases of mixed lengths all return, that a take answers its zero mark (a
+//! kept Shared block zeroed in steps) and a Private range is zeroed when the consumer asks, and
+//! that teardown frees everything with the gauges at zero.
 
 use crate::fill::{plan, Plan};
 use crate::memory::{base_align, idle_due, round, IDLE_AGE_NANOS};
@@ -109,12 +110,14 @@ fn the_idle_clock_is_due_at_the_idle_age() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::device::lock;
-    use crate::memory::IDLE_AGE_NANOS;
+    use crate::memory::{IDLE_AGE_NANOS, ZERO_STEP};
+    use crate::tests::command::on_device::finished;
+    use crate::tests::compute::on_device::{add, WORDS};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        Block, BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus, Device,
-        DeviceOptions, Error, Gauges, Instance, Limit, MemoryClass, PixelFormat, Refusal,
-        TextureDescriptor, TextureType, MAX_BUFFER_LENGTH,
+        Block, BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus,
+        ComputePipelineState, Device, DeviceOptions, DispatchType, Error, Gauges, Instance, Limit,
+        MemoryClass, PixelFormat, Refusal, TextureDescriptor, TextureType, MAX_BUFFER_LENGTH,
     };
     use ash::vk;
     use std::collections::HashMap;
@@ -401,6 +404,9 @@ mod on_device {
             let hook = Arc::new(Hook::default());
             let device = device_with(&hook, physical, name);
             let core = device.core();
+            // The bytes of kept blocks stay as written: the block-maker thread zeroes none of
+            // them here (the zero mark's own test zeroes them).
+            core.pool.zero_steps(Some(0));
             let counters = device.counters();
             let gpu = Gpu::new(&device);
 
@@ -717,6 +723,9 @@ mod on_device {
             let hook = Arc::new(Hook::default());
             let device = device_with(&hook, physical, name);
             let core = device.core();
+            // The bytes of kept blocks stay as written: the block-maker thread zeroes none of
+            // them here (the zero mark's own test zeroes them).
+            core.pool.zero_steps(Some(0));
             let counters = device.counters();
             let lens = [MemoryClass::Shared.block_len(), MIB, 40 * MIB];
             let taken: Vec<Block> = (lens.iter())
@@ -856,6 +865,9 @@ mod on_device {
             let hook = Arc::new(Hook::default());
             let device = device_with(&hook, physical, name);
             let core = device.core();
+            // The bytes of kept blocks stay as written: the block-maker thread zeroes none of
+            // them here (the zero mark's own test zeroes them).
+            core.pool.zero_steps(Some(0));
             let counters = device.counters();
             let kept: Vec<Block> = (0..3)
                 .map(|_| {
@@ -1656,6 +1668,290 @@ mod on_device {
                 "memory: {name}: zeroed Private buffers filled before copies into them; metrics {:?}",
                 counters.metrics()
             );
+        }
+    }
+
+    /// The zero mark ([`BlockInfo::zeroed`]): a take answers how many of the block's first bytes
+    /// the runtime zeroed, and they read zero. A Shared block carved from the allocation the device
+    /// made ahead of need is zeroed whole. Written, given back and kept, the block-maker thread
+    /// zeroes it again from its first byte in steps: a take after three steps answers three steps'
+    /// bytes, zero, and the rest as written. A buffer zeroed over the block zeroes only past the
+    /// mark and lowers the mark to its offset, so a later buffer there is zeroed whole. Given back
+    /// again, the block is zeroed to its end. A Private block's mark is 0. The zeroing is counted.
+    #[test]
+    fn every_device_answers_a_take_s_zero_mark_and_zeroes_kept_shared_blocks_in_steps() {
+        const LEN: u64 = 4 << 20;
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let core = device.core();
+            let counters = device.counters();
+            let made = counters.metrics();
+            assert!(
+                made.allocations_zeroed >= 1,
+                "{name}: the device's first Shared allocation is zeroed ahead of need"
+            );
+
+            // A block of the allocation made ahead of need: zeroed whole.
+            let block = (device.take_block(MemoryClass::Shared, LEN))
+                .unwrap_or_else(|error| panic!("{name}: a Shared block: {error}"));
+            assert_eq!(block.zeroed, LEN, "{name}: a block of a zeroed allocation");
+            let id = block.id;
+            let host = bytes(&block);
+            assert!(host.iter().all(|&byte| byte == 0), "{name}: it reads zero");
+            host.fill(0xCD);
+
+            // Given back and kept, then zeroed three steps from its first byte.
+            core.pool.zero_steps(Some(0));
+            device.release_block(block).expect("a release");
+            wait_until("the block kept", || {
+                core.pool.kept_zeroed(MemoryClass::Shared) == [(id, 0)]
+            });
+            core.pool.zero_steps(Some(3));
+            wait_until("three steps", || {
+                core.pool.kept_zeroed(MemoryClass::Shared) == [(id, 3 * ZERO_STEP)]
+            });
+            let again = (device.take_block(MemoryClass::Shared, LEN))
+                .unwrap_or_else(|error| panic!("{name}: the block again: {error}"));
+            assert_eq!(
+                (again.id, again.zeroed),
+                (id, 3 * ZERO_STEP),
+                "{name}: the kept block, its mark three steps"
+            );
+            let host = bytes(&again);
+            let mark = again.zeroed as usize;
+            assert!(
+                host[..mark].iter().all(|&byte| byte == 0),
+                "{name}: zero inside the mark"
+            );
+            assert!(
+                host[mark..].iter().all(|&byte| byte == 0xCD),
+                "{name}: as written past the mark"
+            );
+
+            // A zeroed buffer over the block zeroes the bytes past the mark alone, and lowers
+            // the mark to its offset: a buffer placed there after it is zeroed whole.
+            let before = counters.metrics().bytes_zeroed;
+            let whole = (device.new_buffer(id, 0, LEN, Some(0)))
+                .unwrap_or_else(|error| panic!("{name}: a zeroed buffer: {error}"));
+            assert_eq!(
+                counters.metrics().bytes_zeroed - before,
+                LEN - 3 * ZERO_STEP,
+                "{name}: the bytes zeroed past the mark"
+            );
+            assert!(host.iter().all(|&byte| byte == 0), "{name}: the buffer");
+            host[..4096].fill(0xCD);
+            drop(whole);
+            let before = counters.metrics().bytes_zeroed;
+            let first = (device.new_buffer(id, 0, 4096, Some(0)))
+                .unwrap_or_else(|error| panic!("{name}: a zeroed buffer: {error}"));
+            assert_eq!(
+                counters.metrics().bytes_zeroed - before,
+                4096,
+                "{name}: the mark fell to the first buffer's offset"
+            );
+            assert!(host[..4096].iter().all(|&byte| byte == 0), "{name}");
+            drop(first);
+
+            // Given back again: zeroed to its end.
+            host.fill(0xEF);
+            core.pool.zero_steps(None);
+            device.release_block(again).expect("a release");
+            wait_until("the block zeroed to its end", || {
+                core.pool.kept_zeroed(MemoryClass::Shared) == [(id, LEN)]
+            });
+            let third = (device.take_block(MemoryClass::Shared, LEN))
+                .unwrap_or_else(|error| panic!("{name}: the block a third time: {error}"));
+            assert_eq!((third.id, third.zeroed), (id, LEN), "{name}");
+            assert!(bytes(&third).iter().all(|&byte| byte == 0), "{name}");
+
+            let private = (device.take_block(MemoryClass::Private, LEN))
+                .unwrap_or_else(|error| panic!("{name}: a Private block: {error}"));
+            assert_eq!(private.zeroed, 0, "{name}: a Private block's mark");
+
+            let metrics = counters.metrics();
+            assert_eq!(
+                metrics.kept_bytes_zeroed - made.kept_bytes_zeroed,
+                3 * ZERO_STEP + LEN,
+                "{name}: the kept bytes zeroed"
+            );
+            assert_eq!(
+                metrics.zeroed_bytes_taken - made.zeroed_bytes_taken,
+                LEN + 3 * ZERO_STEP + LEN,
+                "{name}: the marks of the three Shared takes"
+            );
+            let per = |nanos: u64, count: u64| nanos as f64 / count.max(1) as f64 / 1e3;
+            println!(
+                "memory: {name}: zero mark; {} Shared allocations zeroed ahead, {:.1} us each; kept \
+                 bytes zeroed {} in {:.1} us per MiB",
+                metrics.allocations_zeroed,
+                per(metrics.allocation_zeroing_nanos, metrics.allocations_zeroed),
+                metrics.kept_bytes_zeroed,
+                per(metrics.kept_zeroing_nanos, metrics.kept_bytes_zeroed >> 20),
+            );
+            drop((third, private));
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
+        }
+    }
+
+    /// The add kernel over `a`, `b` and `out`, committed on `queue` and waited for.
+    fn add_into(
+        name: &str,
+        queue: &crate::CommandQueue,
+        state: &ComputePipelineState,
+        [a, b, out]: [&Buffer; 3],
+    ) {
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder =
+            (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+        encoder.set_compute_pipeline_state(state).expect("a state");
+        encoder.set_buffer(Some(a), 0, 0).expect("a buffer");
+        encoder.set_buffer(Some(b), 0, 1).expect("a buffer");
+        encoder.set_buffer(Some(out), 0, 2).expect("a buffer");
+        (encoder.dispatch_threads([WORDS as u32, 1, 1], [16, 1, 1])).expect("a dispatch");
+        encoder.end_encoding();
+        command_buffer.commit().expect("a commit");
+        finished(name, &command_buffer);
+        assert_eq!(command_buffer.error(), None, "{name}");
+    }
+
+    /// A Shared buffer's words.
+    fn words(buffer: &Buffer) -> Vec<u32> {
+        let contents = buffer.contents().expect("a Shared buffer").cast::<u32>();
+        // SAFETY: the buffer is alive and holds `WORDS` words, and its work completed.
+        (0..WORDS)
+            .map(|index| unsafe { contents.as_ptr().add(index).read_volatile() })
+            .collect()
+    }
+
+    /// A zero fill the consumer asks of a Private block ([`Device::zero_block_range`]): a block a
+    /// kernel wrote, given back, kept and taken again, holds the kernel's words; a fill of its
+    /// first half reads zero to a kernel of the next command buffer, the rest as the first kernel
+    /// wrote it, counted once with its bytes. A range past the block, a Shared block and a block
+    /// the consumer does not hold are refused, and a fill of no bytes does nothing.
+    #[test]
+    fn every_device_zeroes_a_range_of_a_private_block_ahead_of_the_next_commit() {
+        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let hook = Arc::new(Hook::default());
+            let device = device_with(&hook, physical, name);
+            let core = device.core();
+            let counters = device.counters();
+            let len = (WORDS * 4) as u64;
+            let shared = (device.take_block(MemoryClass::Shared, 3 * len))
+                .unwrap_or_else(|error| panic!("{name}: a Shared block: {error}"));
+            let buffer = |block: BlockId, at: u64| {
+                (device.new_buffer(block, at, len, Some(0)))
+                    .unwrap_or_else(|error| panic!("{name}: a buffer: {error}"))
+            };
+            let (ones, zero, out) = (
+                buffer(shared.id, 0),
+                buffer(shared.id, len),
+                buffer(shared.id, 2 * len),
+            );
+            let contents = ones.contents().expect("a Shared buffer").cast::<u32>();
+            for index in 0..WORDS {
+                // SAFETY: the buffer is alive and holds `WORDS` words, and no GPU work uses it.
+                unsafe { (contents.as_ptr().add(index)).write_volatile(index as u32 + 1) };
+            }
+            let state = add(&device);
+            let queue = device.new_command_queue(2).expect("a queue");
+
+            let private = (device.take_block(MemoryClass::Private, len))
+                .unwrap_or_else(|error| panic!("{name}: a Private block: {error}"));
+            let id = private.id;
+            let target = (device.new_buffer(id, 0, len, None))
+                .unwrap_or_else(|error| panic!("{name}: a Private buffer: {error}"));
+            add_into(name, &queue, &state, [&ones, &zero, &target]);
+            drop(target);
+            device.release_block(private).expect("a release");
+            wait_until("the Private block kept", || {
+                core.pool.kept(MemoryClass::Private) == 1
+            });
+            let again = (device.take_block(MemoryClass::Private, len))
+                .unwrap_or_else(|error| panic!("{name}: the Private block again: {error}"));
+            assert_eq!((again.id, again.zeroed), (id, 0), "{name}: the kept block");
+
+            let before = counters.metrics();
+            device
+                .zero_block_range(id, 0, len / 2)
+                .unwrap_or_else(|error| panic!("{name}: a zero fill: {error}"));
+            device
+                .zero_block_range(id, len, 0)
+                .unwrap_or_else(|error| panic!("{name}: a zero fill of no bytes: {error}"));
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.block_zero_fills - before.block_zero_fills,
+                    after.block_zero_fill_bytes - before.block_zero_fill_bytes,
+                ),
+                (1, len / 2),
+                "{name}: the fills counted"
+            );
+            let source = (device.new_buffer(id, 0, len, None))
+                .unwrap_or_else(|error| panic!("{name}: a Private buffer: {error}"));
+            add_into(name, &queue, &state, [&source, &zero, &out]);
+            let expected: Vec<u32> = (0..WORDS as u32)
+                .map(|index| {
+                    if index < WORDS as u32 / 2 {
+                        0
+                    } else {
+                        index + 1
+                    }
+                })
+                .collect();
+            assert_eq!(
+                words(&out),
+                expected,
+                "{name}: zero in the range, as written past it"
+            );
+
+            let past = device.zero_block_range(id, again.len - 4, 8);
+            assert!(
+                matches!(
+                    past,
+                    Err(Error::Refused(Refusal::ZeroRangePastBlock { offset, length: 8, block_len }))
+                        if offset == again.len - 4 && block_len == again.len
+                ),
+                "{name}: {past:?}"
+            );
+            let overflow = device.zero_block_range(id, u64::MAX, 2);
+            assert!(
+                matches!(
+                    overflow,
+                    Err(Error::Refused(Refusal::ZeroRangePastBlock { .. }))
+                ),
+                "{name}: {overflow:?}"
+            );
+            let host = device.zero_block_range(shared.id, 0, 4);
+            assert!(
+                matches!(
+                    host,
+                    Err(Error::Refused(Refusal::ZeroRangeShared { block })) if block == shared.id
+                ),
+                "{name}: {host:?}"
+            );
+            let gone = shared.id;
+            drop((ones, zero, out, source));
+            device.release_block(shared).expect("a release");
+            let missing = device.zero_block_range(gone, 0, 4);
+            assert!(
+                matches!(missing, Err(Error::NoSuchBlock(block)) if block == gone),
+                "{name}: {missing:?}"
+            );
+            println!(
+                "memory: {name}: a zero fill of a Private block ahead of the next commit; metrics {:?}",
+                counters.metrics()
+            );
+            drop((again, queue, state));
+            drop(device);
+            wait_until("the teardown", || counters.gauges() == Gauges::default());
         }
     }
 }

@@ -127,17 +127,40 @@ in its memory.
   refused before the driver is called; `Gauges::blocks` counts those live. The limit is about 4.29
   billion on RADV, NVIDIA's Linux driver and ANV, 8,401,685 on Intel's Windows driver for the UHD
   Graphics 630, and 4,096 at Vulkan's minimum.
-- A taken block's bytes are undefined, new or taken again: the runtime zeroes no block, and a
-  Shared block's pages become resident as they are first written. A buffer reads zero because
+- A take answers a zero mark, `BlockInfo::zeroed`: how many of the block's first bytes the
+  runtime zeroed itself and nothing held since. They read zero; the bytes past it are undefined,
+  new or taken again. Bytes outside the mark are the consumer's to zero where Metal owes zeros. The
+  runtime zeroes from a block's first byte only, on the block-maker thread, off the consumer's
+  threads: each Shared allocation it makes ahead of need, whole, before any take lands in it
+  (each device's first one in its making), and each Shared block given back and kept, in steps of
+  256 KiB while it waits for a take of its length. A take waits at most for the step that runs and
+  answers the bytes zeroed so far, so a mark is any length up to the block's. Nothing else counts:
+  not the driver, the memory type or a new allocation. A Private block's mark is 0, as is a block
+  of an allocation a take makes itself. The consumer writes the bytes inside the mark only
+  through a buffer it places over them, which lowers the mark to the buffer's offset; a zeroed
+  buffer (below) zeroes only its bytes past the mark. `Metrics::allocations_zeroed`,
+  `allocation_zeroing_nanos`, `kept_bytes_zeroed` and `kept_zeroing_nanos` count the zeroing,
+  `zeroed_bytes_taken` the marks the takes answered, and `zeroed_bytes_freed` the bytes zeroed
+  for a take that never came, freed with their idle allocation. A buffer reads zero where
   `Device::new_buffer` zeroes its range (below), as Metal zeroes a buffer from
-  `newBufferWithLength:options:`. The bytes a texture placed in a block sees are undefined, as
-  Metal is silent on them. The consumer passes `zero_from` for a buffer Metal zeroes, or zeroes
-  the range at its own carve, once.
+  `newBufferWithLength:options:`, and Metal owes zeros for that call's buffers alone: not for a
+  heap's memory or a texture's, whose bytes are undefined, as Metal is silent on them. The
+  consumer passes `zero_from` for a buffer Metal zeroes, or zeroes the range at its own carve,
+  once.
+- `Device::zero_block_range(block, offset, length)` zeroes a range of a Private block the
+  consumer holds, where it places a buffer Metal zeroes: by a GPU fill in the upload, ahead of
+  every command buffer committed after the call, as a zeroed Private buffer's fill is. The
+  consumer asks; the runtime infers nothing and zeroes no Private block at a take. The call
+  never waits for the GPU. `Metrics::block_zero_fills` and `block_zero_fill_bytes` count the
+  fills. A range past the block (`Refusal::ZeroRangePastBlock`) and a Shared block, whose bytes
+  the consumer zeroes through the mapping (`Refusal::ZeroRangeShared`), are refused.
 - Dropping a block's last handle gives the block back; `Device::release_block` consumes a handle,
   that drop made explicit. Clones of a handle share one claim, so dropping one of two gives nothing
   back. It takes effect once no buffer, command buffer or upload using the block remains. The
-  block-maker thread then keeps it, with the same number, address, mapping and bytes, for a
-  later take of its length (`Metrics::blocks_reused`). A take that no free range fits while the
+  block-maker thread then keeps it, with the same number, address and mapping, for a later take
+  of its length (`Metrics::blocks_reused`): a Private block with its bytes, a Shared one with
+  its bytes zeroed from the front as far as the thread got (its zero mark). A take that no free
+  range fits while the
   class keeps blocks of other lengths makes its allocation at once, and the block-maker thread then
   gives those blocks' bytes back to their allocations, after `BlockMappings::unmap` of each; only
   where the take's allocation fails does it wait for those bytes and take a range of them. An
@@ -164,7 +187,8 @@ in its memory.
   zeroes the buffer's bytes from that offset in it to its end: `Some(0)` all of them, as
   `newBufferWithLength:options:` does, and `None` none, for a buffer placed in a heap (Metal does
   not zero heap memory) or one whose bytes the consumer writes itself; an offset at or past the
-  length zeroes nothing. A Shared range is zeroed through the mapping, before the call returns; a
+  length zeroes nothing. A Shared range is zeroed through the mapping, before the call returns,
+  past the block's zero mark, as the bytes inside it read zero already; a
   Private one by a GPU fill of exactly the range, recorded into the upload, which goes ahead of
   every command buffer committed after the call and ends with a barrier that orders the fill
   before every later command (a copy into the buffer among them), and holds the block until it
@@ -228,7 +252,10 @@ known gaps below).
 A consumer that maps blocks itself, into a guest for instance, passes `DeviceOptions::block_mappings`.
 Before the runtime frees a block it handed out, it calls `BlockMappings::unmap(block)`, which
 returns once every mapping the consumer made of it is gone and none of its threads touches the
-block. The memory stays mapped and valid until then. It runs once per block: on the block-maker
+block. The memory stays mapped and valid until then. A Shared block given back and kept has not
+had its hook run, and the block-maker thread zeroes its bytes from the front while the consumer's
+mappings of it may still stand: from its give-back to its next take, its bytes are the
+runtime's. It runs once per block: on the block-maker
 thread; in `Device::quiesce`, on the calling thread, for every block still handed out; or at
 teardown, on the thread that tears down, after the runtime's other threads are joined. It never calls
 into the runtime. Blocks the consumer never took are freed without it, and so is every block freed

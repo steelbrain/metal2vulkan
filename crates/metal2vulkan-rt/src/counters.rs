@@ -150,6 +150,14 @@ struct Atomics {
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
     bytes_zeroed: AtomicU64,
+    allocations_zeroed: AtomicU64,
+    allocation_zeroing_nanos: AtomicU64,
+    kept_bytes_zeroed: AtomicU64,
+    kept_zeroing_nanos: AtomicU64,
+    zeroed_bytes_taken: AtomicU64,
+    zeroed_bytes_freed: AtomicU64,
+    block_zero_fills: AtomicU64,
+    block_zero_fill_bytes: AtomicU64,
     cache_bytes_written: AtomicU64,
     pipelines_created: AtomicU64,
     first_use_waits: AtomicU64,
@@ -354,6 +362,38 @@ impl Counters {
         self.atomics.bytes_zeroed.fetch_add(bytes, Relaxed);
     }
 
+    /// A Shared allocation zeroed ahead of need, in `nanos` ([`Metrics::allocations_zeroed`]).
+    pub(crate) fn zeroed_ahead(&self, nanos: u64) {
+        let a = &self.atomics;
+        a.allocations_zeroed.fetch_add(1, Relaxed);
+        a.allocation_zeroing_nanos.fetch_add(nanos, Relaxed);
+    }
+
+    /// A step of a kept block zeroed, `bytes` in `nanos` ([`Metrics::kept_bytes_zeroed`]).
+    pub(crate) fn zeroed_kept(&self, bytes: u64, nanos: u64) {
+        let a = &self.atomics;
+        a.kept_bytes_zeroed.fetch_add(bytes, Relaxed);
+        a.kept_zeroing_nanos.fetch_add(nanos, Relaxed);
+    }
+
+    /// A take whose zero mark is `bytes` ([`Metrics::zeroed_bytes_taken`]).
+    pub(crate) fn zeroed_taken(&self, bytes: u64) {
+        self.atomics.zeroed_bytes_taken.fetch_add(bytes, Relaxed);
+    }
+
+    /// `bytes` zeroed and then freed before a take ([`Metrics::zeroed_bytes_freed`]).
+    pub(crate) fn zeroed_freed(&self, bytes: u64) {
+        self.atomics.zeroed_bytes_freed.fetch_add(bytes, Relaxed);
+    }
+
+    /// A zero fill of `bytes` the consumer asked of a Private block
+    /// ([`Metrics::block_zero_fills`]).
+    pub(crate) fn zero_filled(&self, bytes: u64) {
+        let a = &self.atomics;
+        a.block_zero_fills.fetch_add(1, Relaxed);
+        a.block_zero_fill_bytes.fetch_add(bytes, Relaxed);
+    }
+
     /// `bytes` more of Managed buffers' bytes a commit copied ([`Metrics::managed_bytes_captured`]).
     pub(crate) fn captured(&self, bytes: u64) {
         self.atomics
@@ -481,6 +521,14 @@ impl Counters {
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
             bytes_zeroed: a.bytes_zeroed.load(Relaxed),
+            allocations_zeroed: a.allocations_zeroed.load(Relaxed),
+            allocation_zeroing_nanos: a.allocation_zeroing_nanos.load(Relaxed),
+            kept_bytes_zeroed: a.kept_bytes_zeroed.load(Relaxed),
+            kept_zeroing_nanos: a.kept_zeroing_nanos.load(Relaxed),
+            zeroed_bytes_taken: a.zeroed_bytes_taken.load(Relaxed),
+            zeroed_bytes_freed: a.zeroed_bytes_freed.load(Relaxed),
+            block_zero_fills: a.block_zero_fills.load(Relaxed),
+            block_zero_fill_bytes: a.block_zero_fill_bytes.load(Relaxed),
             pipelines_created: a.pipelines_created.load(Relaxed),
             first_use_waits: a.first_use_waits.load(Relaxed),
             first_use_wait_nanos: a.first_use_wait_nanos.load(Relaxed),
@@ -608,9 +656,35 @@ pub struct Metrics {
     pub bytes_copied: u64,
     /// Bytes of new buffers zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s from its
     /// `zero_from` to the buffer's end, and a Managed buffer's device copy's past its copied bytes
-    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)). Nothing else the
-    /// runtime makes is zeroed.
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)), less the bytes of a
+    /// Shared buffer that its block's zero mark still covered ([`BlockInfo::zeroed`]), which read
+    /// zero already.
+    ///
+    /// [`BlockInfo::zeroed`]: crate::BlockInfo::zeroed
     pub bytes_zeroed: u64,
+    /// Shared allocations the runtime zeroed whole ahead of need, before any take landed in them:
+    /// the block-maker thread's and each device's first. A zero mark ([`BlockInfo::zeroed`]) of a
+    /// block in one counts those bytes.
+    ///
+    /// [`BlockInfo::zeroed`]: crate::BlockInfo::zeroed
+    pub allocations_zeroed: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) that zeroing took, in total.
+    pub allocation_zeroing_nanos: u64,
+    /// Bytes of Shared blocks given back and kept that the block-maker thread zeroed, in steps of
+    /// 256 KiB from each one's first byte.
+    pub kept_bytes_zeroed: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) those steps took, in total.
+    pub kept_zeroing_nanos: u64,
+    /// The zero marks of every take, summed: the bytes the takes found zeroed.
+    pub zeroed_bytes_taken: u64,
+    /// Bytes the runtime zeroed that an idle allocation's free gave back before any take found
+    /// them: its clean bytes and its kept blocks' zeroed ones.
+    pub zeroed_bytes_freed: u64,
+    /// Zero fills the consumer asked of Private blocks
+    /// ([`Device::zero_block_range`](crate::Device::zero_block_range)).
+    pub block_zero_fills: u64,
+    /// The bytes of those fills.
+    pub block_zero_fill_bytes: u64,
     /// `VkPipeline`s created.
     pub pipelines_created: u64,
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,

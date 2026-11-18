@@ -609,8 +609,14 @@ impl Device {
     /// [`BlockMappings::unmap`]; the take waits for that only where its own allocation fails, and
     /// then takes a range of those bytes where one fits.
     ///
-    /// A block's bytes are undefined, new or taken again: nothing zeroes them, and a Shared
-    /// block's pages become resident as they are first written. A buffer reads zero where
+    /// A block's bytes are undefined, new or taken again, past its zero mark
+    /// ([`BlockInfo::zeroed`](crate::BlockInfo::zeroed)): how many of its first bytes the runtime
+    /// zeroed itself, on the block-maker thread, and nothing held since. The block-maker thread
+    /// zeroes each Shared allocation it makes ahead of need before any take lands in it, and each
+    /// Shared block given back and kept, in steps of 256 KiB from its first byte; a take waits at
+    /// most for the step that runs, never for the rest. A Private block's mark is 0
+    /// ([`Device::zero_block_range`] zeroes a range of one ahead of the next commit). Bytes past
+    /// the mark are the consumer's to zero where Metal owes zeros. A buffer reads zero where
     /// [`Device::new_buffer`] zeroes its range, as `newBufferWithLength:options:` does in Metal;
     /// Metal is silent on the bytes of a placement heap's memory and of a texture placed there.
     ///

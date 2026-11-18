@@ -2246,6 +2246,7 @@ field	metal2vulkan-rt::BlockInfo.device_local	pub device_local: bool
 field	metal2vulkan-rt::BlockInfo.gpu_address	pub gpu_address: u64
 field	metal2vulkan-rt::BlockInfo.id	pub id: BlockId
 field	metal2vulkan-rt::BlockInfo.len	pub len: u64
+field	metal2vulkan-rt::BlockInfo.zeroed	pub zeroed: u64
 field	metal2vulkan-rt::BufferLayout.bytes_per_image	pub bytes_per_image: u64
 field	metal2vulkan-rt::BufferLayout.bytes_per_row	pub bytes_per_row: u64
 field	metal2vulkan-rt::BufferLayout.offset	pub offset: u64
@@ -2326,11 +2327,15 @@ field	metal2vulkan-rt::IndexBuffer.offset	pub offset: u64
 field	metal2vulkan-rt::IndexGrant.class	pub class: IndexClass
 field	metal2vulkan-rt::IndexGrant.count	pub count: u32
 field	metal2vulkan-rt::IndexGrant.first	pub first: u32
+field	metal2vulkan-rt::Metrics.allocation_zeroing_nanos	pub allocation_zeroing_nanos: u64
 field	metal2vulkan-rt::Metrics.allocations_freed	pub allocations_freed: u64
+field	metal2vulkan-rt::Metrics.allocations_zeroed	pub allocations_zeroed: u64
 field	metal2vulkan-rt::Metrics.attachment_read_copies	pub attachment_read_copies: u64
 field	metal2vulkan-rt::Metrics.attachment_read_copy_bytes	pub attachment_read_copy_bytes: u64
 field	metal2vulkan-rt::Metrics.barriers	pub barriers: u64
 field	metal2vulkan-rt::Metrics.block_bytes_made	pub block_bytes_made: u64
+field	metal2vulkan-rt::Metrics.block_zero_fill_bytes	pub block_zero_fill_bytes: u64
+field	metal2vulkan-rt::Metrics.block_zero_fills	pub block_zero_fills: u64
 field	metal2vulkan-rt::Metrics.blocks_made	pub blocks_made: u64
 field	metal2vulkan-rt::Metrics.blocks_reused	pub blocks_reused: u64
 field	metal2vulkan-rt::Metrics.bytes_copied	pub bytes_copied: u64
@@ -2357,6 +2362,8 @@ field	metal2vulkan-rt::Metrics.forced_flushes_across_queues	pub forced_flushes_a
 field	metal2vulkan-rt::Metrics.groups_beside_another_queue	pub groups_beside_another_queue: u64
 field	metal2vulkan-rt::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-rt::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
+field	metal2vulkan-rt::Metrics.kept_bytes_zeroed	pub kept_bytes_zeroed: u64
+field	metal2vulkan-rt::Metrics.kept_zeroing_nanos	pub kept_zeroing_nanos: u64
 field	metal2vulkan-rt::Metrics.lone_submissions_across_queues	pub lone_submissions_across_queues: u64
 field	metal2vulkan-rt::Metrics.maker_allocation_nanos	pub maker_allocation_nanos: u64
 field	metal2vulkan-rt::Metrics.managed_bytes_captured	pub managed_bytes_captured: u64
@@ -2373,6 +2380,8 @@ field	metal2vulkan-rt::Metrics.synchronizations	pub synchronizations: u64
 field	metal2vulkan-rt::Metrics.translations	pub translations: u64
 field	metal2vulkan-rt::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-rt::Metrics.upload_waits	pub upload_waits: u64
+field	metal2vulkan-rt::Metrics.zeroed_bytes_freed	pub zeroed_bytes_freed: u64
+field	metal2vulkan-rt::Metrics.zeroed_bytes_taken	pub zeroed_bytes_taken: u64
 field	metal2vulkan-rt::RawDevice.device	pub device: &'a ash::Device
 field	metal2vulkan-rt::RawDevice.instance	pub instance: &'a ash::Instance
 field	metal2vulkan-rt::RawDevice.physical_device	pub physical_device: vk::PhysicalDevice
@@ -9524,6 +9533,7 @@ method	metal2vulkan-rt::Device::release_block	pub fn release_block(&self, block:
 method	metal2vulkan-rt::Device::release_indices	pub fn release_indices(&self, grant: IndexGrant) -> Result<(), Error>
 method	metal2vulkan-rt::Device::take_block	pub fn take_block(&self, class: MemoryClass, len: u64) -> Result<Block, Error>
 method	metal2vulkan-rt::Device::with_present_queue	pub fn with_present_queue<R>(&self, f: impl FnOnce(vk::Queue) -> R) -> R
+method	metal2vulkan-rt::Device::zero_block_range	pub fn zero_block_range(&self, block: BlockId, offset: u64, length: u64) -> Result<(), Error>
 method	metal2vulkan-rt::DeviceExtension::name	pub fn name(&self) -> &CStr
 method	metal2vulkan-rt::DeviceExtension::new	pub fn new(name: &CStr) -> DeviceExtension
 method	metal2vulkan-rt::DeviceExtension::with_features	pub fn with_features<T>(name: &CStr, wanted: T, needs: fn(&T) -> bool) -> DeviceExtension where T: vk::ExtendsPhysicalDeviceFeatures2 + vk::ExtendsDeviceCreateInfo + Copy + Default + Send + Sync + 'static,
@@ -13762,6 +13772,8 @@ variant	metal2vulkan-rt::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-rt::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
 variant	metal2vulkan-rt::Refusal::VertexBufferOffset	VertexBufferOffset { index: u32, offset: u64, length: u64 }
 variant	metal2vulkan-rt::Refusal::ViewportNotFinite	ViewportNotFinite
+variant	metal2vulkan-rt::Refusal::ZeroRangePastBlock	ZeroRangePastBlock { offset: u64, length: u64, block_len: u64 }
+variant	metal2vulkan-rt::Refusal::ZeroRangeShared	ZeroRangeShared { block: BlockId }
 variant	metal2vulkan-rt::RenderPassKind::ClearFormat	ClearFormat
 variant	metal2vulkan-rt::RenderPassKind::DepthAttachment	DepthAttachment
 variant	metal2vulkan-rt::RenderPassKind::Multisample	Multisample

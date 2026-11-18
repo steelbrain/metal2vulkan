@@ -139,6 +139,39 @@ impl Ranges {
         }
     }
 
+    /// No bytes free.
+    pub(crate) fn empty() -> Ranges {
+        Ranges { free: Vec::new() }
+    }
+
+    /// How many bytes from `offset` on, at most `len`, are free without a break.
+    pub(crate) fn run_at(&self, offset: u64, len: u64) -> u64 {
+        let index = self.free.partition_point(|&(_, end)| end <= offset);
+        match self.free.get(index) {
+            Some(&(start, end)) if start <= offset => (end - offset).min(len),
+            _ => 0,
+        }
+    }
+
+    /// Takes whatever of `offset..offset + len` is free, free or not.
+    pub(crate) fn cut(&mut self, offset: u64, len: u64) {
+        let stop = offset + len;
+        let mut kept = Vec::with_capacity(self.free.len() + 1);
+        for &(start, end) in &self.free {
+            if end <= offset || stop <= start {
+                kept.push((start, end));
+                continue;
+            }
+            if start < offset {
+                kept.push((start, offset));
+            }
+            if stop < end {
+                kept.push((stop, end));
+            }
+        }
+        self.free = kept;
+    }
+
     /// Takes `len` bytes, more than 0, at the first offset that is a multiple of `align`, a power
     /// of two, with the bytes free from it; `None` where there is none.
     pub(crate) fn take(&mut self, len: u64, align: u64) -> Option<u64> {

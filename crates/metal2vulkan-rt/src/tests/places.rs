@@ -42,6 +42,39 @@ fn ranges_take_the_first_aligned_room_and_join_as_places_are_freed() {
     assert_eq!(ranges.free(), &[(0, 1024)]);
 }
 
+/// The runs an allocation's zeroed bytes are kept as: the run from an offset ends at the first
+/// byte outside the set or at the length asked, and a cut takes whatever part of a range the set
+/// holds, splitting a run it lands inside.
+#[test]
+fn ranges_answer_the_run_at_an_offset_and_cut_what_they_hold() {
+    let mut ranges = Ranges::empty();
+    assert_eq!(ranges.run_at(0, 64), 0, "nothing in an empty set");
+    ranges.give(100, 100);
+    ranges.give(300, 100);
+    assert_eq!(ranges.run_at(100, 50), 50, "capped by the length asked");
+    assert_eq!(ranges.run_at(150, 100), 50, "up to the run's end");
+    assert_eq!(ranges.run_at(199, 10), 1);
+    assert_eq!(ranges.run_at(200, 10), 0, "the byte past a run");
+    assert_eq!(ranges.run_at(50, 100), 0, "an offset before a run");
+    assert_eq!(ranges.run_at(400, 10), 0, "past every run");
+    ranges.cut(150, 200);
+    assert_eq!(ranges.free(), &[(100, 150), (350, 400)], "across a gap");
+    ranges.cut(110, 20);
+    assert_eq!(
+        ranges.free(),
+        &[(100, 110), (130, 150), (350, 400)],
+        "inside a run"
+    );
+    ranges.cut(0, 1000);
+    assert_eq!(ranges.free(), &[], "all of it");
+    ranges.cut(0, 10);
+    assert_eq!(ranges.free(), &[], "nothing to cut");
+    let mut whole = Ranges::new(1024);
+    whole.cut(0, 64);
+    assert_eq!(whole.free(), &[(64, 1024)], "from the front");
+    assert_eq!(whole.run_at(64, 2048), 960);
+}
+
 /// A long run of places of many lengths and alignments, freed out of order, against the
 /// invariants after every step: no two places overlap, and once all are freed the block is one
 /// free range again.
