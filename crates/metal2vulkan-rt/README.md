@@ -321,8 +321,9 @@ made, with no lock, and never rewritten for layouts.
   and the clocks' drift over 100 ms. Each queue has a pool of two queries per command buffer it
   may have made at once, all reset on the host as it is made (`hostQueryReset`); a command
   buffer's pair is reset on the host as it retires, those of the two its submissions wrote, so no
-  command buffer the GPU runs resets a query. A command buffer with no commands, or whose last segment has none, records a
-  `VkCommandBuffer` for its timestamps. One that ends with an error has GPU times of 0.
+  command buffer the GPU runs resets a query. A command buffer with no commands, or whose last
+  segment has none, records a `VkCommandBuffer` for its timestamps. One that ends with an error
+  has GPU times of 0.
 - `Event` and `SharedEvent` are timeline semaphores whose values are Metal's values. A host set
   (`SharedEvent::set_signaled_value`) raises a floor and never signals the semaphore; a wait the
   floor meets is submitted with no semaphore wait, and a GPU signal not above the highest value
