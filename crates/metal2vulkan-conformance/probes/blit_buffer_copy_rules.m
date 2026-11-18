@@ -22,11 +22,14 @@
 //   block-row      b2t BC1_RGBA 8x8, 4x4 texels, bytesPerRow 20: not whole blocks
 //   depth-offset   t2b Depth16Unorm 8x8, 4x2 texels, offset 2: a whole pixel, not a multiple of 4
 //   t2b-row-pixel  t2b RGBA8Unorm 8x8, 4x2 texels, bytesPerRow 18
+//   one-row-zero   b2t RGBA8Unorm 8x8, 4x1 texels, bytesPerRow 0
+//   past-end       b2t RGBA8Unorm 8x8, 4x2 texels, offset 4080, bytesPerRow 16: past the
+//                  buffer's 4096 bytes
 //
 //   xcrun clang -fobjc-arc -framework Metal -framework Foundation \
 //       -o blit_buffer_copy_rules blit_buffer_copy_rules.m
 //   for c in fine offset-pixel offset-four row-pixel row-short image-2d image-odd image-short \
-//       array-1d block-row depth-offset t2b-row-pixel; do
+//       array-1d block-row depth-offset t2b-row-pixel one-row-zero past-end; do
 //       MTL_DEBUG_LAYER=1 ./blit_buffer_copy_rules $c; done
 //
 // WHAT IT MEASURED: see the rt crate's buffer copy refusals, with the run they came from.
@@ -58,6 +61,8 @@ static const Case cases[] = {
     {"block-row", NO, MTLTextureType2D, MTLPixelFormatBC1_RGBA, 8, 8, 1, 1, 0, 0, 4, 4, 1, 0, 20, 0},
     {"depth-offset", YES, MTLTextureType2D, MTLPixelFormatDepth16Unorm, 8, 8, 1, 1, 0, 0, 4, 2, 1, 2, 8, 0},
     {"t2b-row-pixel", YES, MTLTextureType2D, MTLPixelFormatRGBA8Unorm, 8, 8, 1, 1, 0, 0, 4, 2, 1, 0, 18, 0},
+    {"one-row-zero", NO, MTLTextureType2D, MTLPixelFormatRGBA8Unorm, 8, 8, 1, 1, 0, 0, 4, 1, 1, 0, 0, 0},
+    {"past-end", NO, MTLTextureType2D, MTLPixelFormatRGBA8Unorm, 8, 8, 1, 1, 0, 0, 4, 2, 1, 4080, 16, 0},
 };
 
 int main(int argc, const char **argv) {
