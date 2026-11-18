@@ -78,6 +78,23 @@ fn play(test: &str, device: &Device, path: &Path) -> Report {
     report
 }
 
+/// What of `report` the stream fixes: its executed counts and frame ends left out. Those differ
+/// between plays (the runtime's pipeline and shader-cache nanoseconds among them), and only the
+/// stream's counts compare between plays (`docs/REPLAY-STREAM.md`, section 10).
+fn fixed_by_stream(report: &Report) -> Report {
+    let mut fixed = report.clone();
+    for (_, counts) in &mut fixed.completed {
+        counts.executed.clear();
+    }
+    for counts in &mut fixed.frames {
+        counts.executed.clear();
+    }
+    fixed.total.executed.clear();
+    fixed.split_executed.clear();
+    fixed.ends.clear();
+    fixed
+}
+
 /// The pointer chain: `root` (a buffer at the block's start) holds the recorded address of
 /// `node` (a buffer 0x100 into the block) and 7, `node` holds null and 11; two steps from `root`
 /// sum 7 + 11 + 11 = 29 in each of four lanes. The write comes before the commit, as a recorder
@@ -188,7 +205,7 @@ fn pointer_chain(w: &mut StreamWriter<File>) -> std::io::Result<()> {
 
 /// The kernel reads the node through the relocated pointer: its output is the case's Metal
 /// output, one word was relocated, the write's 32 bytes counted; the same stream on a second
-/// device reports the same.
+/// device reports the same counts of the stream's and the same checks.
 #[test]
 fn a_pointer_written_at_a_recorded_address_is_relocated() {
     let dir = ScratchDir::new("replay-pointer-chain").unwrap();
@@ -211,7 +228,8 @@ fn a_pointer_written_at_a_recorded_address_is_relocated() {
         "{:?}",
         report.total
     );
-    assert_eq!(reports[0], reports[1], "two plays on two devices");
+    let fixed = reports.iter().map(fixed_by_stream).collect::<Vec<_>>();
+    assert_eq!(fixed[0], fixed[1], "two plays on two devices");
 }
 
 /// Queue 2's command buffer waits for event 4 at 1, which the CPU sets only after queue 3's
