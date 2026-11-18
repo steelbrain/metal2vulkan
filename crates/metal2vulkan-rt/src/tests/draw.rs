@@ -882,10 +882,8 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
             encoder.end_encoding();
             run(name, &command_buffer);
             let texels = read(&color, 16);
-            let words: Vec<[u32; 4]> = (texels.chunks_exact(16))
-                .map(|t| {
-                    std::array::from_fn(|c| u32::from_le_bytes(t[4 * c..][..4].try_into().unwrap()))
-                })
+            let words: Vec<[u32; 4]> = (texels.as_chunks::<16>().0.iter())
+                .map(|t| std::array::from_fn(|c| u32::from_le_bytes(t.as_chunks::<4>().0[c])))
                 .collect();
             for (at, word) in words.iter().enumerate() {
                 assert_eq!(
