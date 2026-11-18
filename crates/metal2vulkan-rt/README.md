@@ -604,6 +604,14 @@ that touch blocks first.
   kernel and took the second without a fault. A bad address that the old runtime survived ends the
   GPU's work for every guest process under the new runtime on NVIDIA and RADV: the consequence of
   one device and direct addresses, which the owner accepted.
+- An index past a set 1 array's length is a fault of the same kind. A kernel indexes the arrays
+  with a resource ID's index as the guest gave it, with no clamp: an index of 4,096 or more used
+  through the storage-image array of 4,096 elements (a texture of the `Texture` class written or
+  read as a storage image), 65,536 or more through the sampled-image array, or 4,000 or more
+  through a sampler array, reads a descriptor from past the array. Vulkan leaves that undefined,
+  and Metal leaves a resource ID that names no live resource of the access undefined; here it can
+  fault as a bad address does, with the same consequences. An index within an array that no live
+  object owns reads its null descriptor or default sampler, with no fault.
 - Presenting (the binary semaphore a command buffer signals for a present) comes with presenting.
 - A fence orders the encoders of one queue: an encoder of another queue that updates or waits on
   it is refused (`Gap::FenceOtherQueue`), as Metal's fence orders one queue and `MTLEvent` orders
