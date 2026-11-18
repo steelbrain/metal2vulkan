@@ -1125,7 +1125,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             vk::api_version_patch(api)
         );
         // SAFETY: as above.
-        let capabilities = match unsafe { check(&instance, physical) } {
+        let capabilities = match unsafe { check(&entry, &instance, physical) } {
             Ok(capabilities) => capabilities,
             Err(refusal) => {
                 below.push(format!("{name} ({version}, {info}): {refusal}"));
@@ -1194,5 +1194,5 @@ fn a_device_that_does_not_calibrate_the_host_clock_is_below_the_floor() {
             Missing::TimeDomain(host)
         ]
     );
-    assert_eq!(TIME_DOMAINS[1], crate::HOST_DOMAIN);
+    assert!(TIME_DOMAINS[1] == crate::HOST_DOMAIN);
 }
