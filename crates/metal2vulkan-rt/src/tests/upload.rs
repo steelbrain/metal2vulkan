@@ -23,8 +23,8 @@ mod on_device {
     use crate::submit::{HOMES_PRUNE, UPLOAD_BYTES, UPLOAD_ENTRIES};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        Device, DeviceOptions, Gauges, IndexClass, Instance, MemoryClass, PixelFormat, Region,
-        StorageMode, TextureDescriptor, TextureType,
+        Device, DeviceOptions, Gauges, IndexClass, MemoryClass, PixelFormat, Region, StorageMode,
+        TextureDescriptor, TextureType,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -55,7 +55,7 @@ mod on_device {
     #[test]
     fn every_device_bounds_the_pending_upload() {
         const MIB: u64 = 1 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -302,7 +302,7 @@ mod on_device {
 
     #[test]
     fn every_device_counts_its_staging_bytes() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {

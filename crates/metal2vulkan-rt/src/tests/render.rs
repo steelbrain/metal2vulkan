@@ -23,7 +23,7 @@ mod on_device {
     use crate::tests::{devices_of_the_cfgs_kind, keeps_a_blob};
     use crate::{
         ColorAttachmentDescriptor, Device, DeviceOptions, Error, FunctionDescriptor, Gap, Gauges,
-        Instance, Library, Metrics, PixelFormat, RenderPipelineDescriptor, RenderPipelineKind,
+        Library, Metrics, PixelFormat, RenderPipelineDescriptor, RenderPipelineKind,
         RenderPipelineState, StageSource,
     };
     use metal2vulkan::metal::BlendFactor;
@@ -273,7 +273,7 @@ mod on_device {
             return;
         };
         let d = descriptor(&library, "colored_fragment", PixelFormat::BGRA8Unorm);
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {

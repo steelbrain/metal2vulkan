@@ -116,7 +116,7 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Block, BlockId, BlockInfo, BlockMappings, Buffer, CommandBufferStatus,
-        ComputePipelineState, Device, DeviceOptions, DispatchType, Error, Gauges, Instance, Limit,
+        ComputePipelineState, Device, DeviceOptions, DispatchType, Error, Gauges, Limit,
         MemoryClass, PixelFormat, Refusal, TextureDescriptor, TextureType, MAX_BUFFER_LENGTH,
     };
     use ash::vk;
@@ -328,7 +328,7 @@ mod on_device {
     /// largest block or memory is smaller skips the 2 GiB buffer visibly.
     #[test]
     fn a_buffer_of_2_gib_is_made_and_a_longer_one_refused() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
             !devices.is_empty(),
@@ -393,7 +393,7 @@ mod on_device {
     /// zero.
     #[test]
     fn every_device_hands_out_blocks_and_buffers_and_frees_them_through_the_hook() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
             !devices.is_empty(),
@@ -645,7 +645,7 @@ mod on_device {
     #[test]
     fn every_device_makes_an_allocation_only_while_a_class_s_free_bytes_run_low() {
         const MIB: u64 = 1 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -716,7 +716,7 @@ mod on_device {
     #[test]
     fn every_device_keeps_given_back_blocks_for_takes_of_their_length() {
         const MIB: u64 = 1 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -858,7 +858,7 @@ mod on_device {
     #[test]
     fn every_device_allocates_beside_kept_blocks_of_other_lengths_and_gives_their_bytes_back() {
         const MIB: u64 = 1 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -965,7 +965,7 @@ mod on_device {
     fn every_device_takes_kept_blocks_bytes_where_its_allocation_fails() {
         const MIB: u64 = 1 << 20;
         const MAX: u32 = ZERO_SOURCE as u32 + 3;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1035,7 +1035,7 @@ mod on_device {
     #[test]
     fn every_device_takes_a_long_block_given_back_again_at_once() {
         const LEN: u64 = 64 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1108,7 +1108,7 @@ mod on_device {
     /// oldest idle age gauge reads 0. Nothing commits.
     #[test]
     fn every_device_frees_each_idle_allocation_at_its_idle_age() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1247,7 +1247,7 @@ mod on_device {
     /// and one committed once the free ended is not.
     #[test]
     fn every_device_frees_idle_allocations_at_their_idle_age_under_steady_commits() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1369,7 +1369,7 @@ mod on_device {
         const OPS: usize = 300;
         /// The most live bytes of a class the run keeps: past it, it releases.
         const MOST: u64 = 192 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         let this_thread = thread::current().name().map(str::to_string);
@@ -1467,7 +1467,7 @@ mod on_device {
     fn every_device_refuses_an_allocation_past_its_count() {
         use crate::{IndexClass, PixelFormat, Region, TextureDescriptor, TextureType};
         const MAX: u32 = ZERO_SOURCE as u32 + 3;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1551,7 +1551,7 @@ mod on_device {
         const SPAN: u64 = 2 * AT + LEN;
         // The copies' source, at 64 KiB in the Shared block: a pattern with no zero byte.
         const SOURCE: u64 = 64 << 10;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1681,7 +1681,7 @@ mod on_device {
     #[test]
     fn every_device_answers_a_take_s_zero_mark_and_zeroes_kept_shared_blocks_in_steps() {
         const LEN: u64 = 4 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1858,7 +1858,7 @@ mod on_device {
     /// the consumer does not hold are refused, and a fill of no bytes does nothing.
     #[test]
     fn every_device_zeroes_a_range_of_a_private_block_ahead_of_the_next_commit() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {

@@ -194,8 +194,8 @@ mod on_device {
     use super::refused;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        Device, DeviceOptions, Error, Gap, IndexClass, Instance, PixelFormat, Refusal, Region,
-        StorageMode, Texture, TextureDescriptor, TextureType, TextureUsage,
+        Device, DeviceOptions, Error, Gap, IndexClass, PixelFormat, Refusal, Region, StorageMode,
+        Texture, TextureDescriptor, TextureType, TextureUsage,
     };
     use metal2vulkan::metal::resource_word::TextureWord;
     use metal2vulkan::metal::TextureSwizzleChannels;
@@ -291,7 +291,7 @@ mod on_device {
     /// every gauge comes back to zero.
     #[test]
     fn every_device_round_trips_texture_bytes() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
             !devices.is_empty(),

@@ -51,7 +51,8 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
     use crate::floor::{PRIVATE_MEMORY, RING_MEMORY, SHARED_MEMORY};
     use ash::vk;
 
-    let instance = Instance::new(&[]).expect("an instance at the floor");
+    // The instance's handle drops before what it made: its watch checks the log after them.
+    let (instance, watch) = crate::tests::validation::instance(&[]).split();
     let physicals = instance.physical_devices().expect("the physical devices");
     let mut opened = Vec::new();
     for physical in &physicals {
@@ -182,6 +183,7 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
         .expect("a device after the instance's handle dropped");
     drop(physical);
     drop(device);
+    drop(watch);
 }
 
 /// A device torn down while its cache directory's removal thread runs waits for it: opened on a
@@ -197,7 +199,7 @@ fn every_device_joins_its_cache_directory_s_removal_at_teardown() {
     REMOVAL_PAUSE.store(200, Relaxed);
     use crate::tests::devices_of_the_cfgs_kind;
 
-    let instance = Instance::new(&[]).expect("an instance at the floor");
+    let instance = crate::tests::validation::instance(&[]);
     let devices = devices_of_the_cfgs_kind(&instance);
     assert!(!devices.is_empty(), "no device of this cfg's kind");
     for (name, physical) in &devices {
@@ -256,14 +258,13 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
         ash::khr::get_surface_capabilities2::NAME,
         ash::ext::surface_maintenance1::NAME,
     ];
-    let instance = Instance::new(&[
+    let instance = crate::tests::validation::instance(&[
         surface[0],
         missing,
         surface[1],
         floor::INSTANCE_EXTENSIONS[0],
         surface[0],
-    ])
-    .expect("an instance at the floor");
+    ]);
     let (entry, vk_instance) = instance.raw();
     // SAFETY: the loader is loaded.
     let offered = unsafe { entry.enumerate_instance_extension_properties(None) }
@@ -368,7 +369,7 @@ fn every_device_of_the_cfgs_kind_gives_the_translator_only_what_it_enables() {
     use crate::tests::devices_of_the_cfgs_kind;
     use metal2vulkan::device::VkFeature;
 
-    let instance = Instance::new(&[]).expect("an instance at the floor");
+    let instance = crate::tests::validation::instance(&[]);
     let devices = devices_of_the_cfgs_kind(&instance);
     assert!(
         !devices.is_empty(),

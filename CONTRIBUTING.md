@@ -61,6 +61,9 @@ cargo test --workspace --all-features --doc
 None of these opens a device. Device tests compile only under `--cfg m2v_gpu` or
 `--cfg m2v_cpu_icd`, and on a GPU the tests that fault it, hold it for long or allocate toward its
 limits only with `--cfg m2v_gpu_hazards` too ([docs/VALIDATION.md](docs/VALIDATION.md)).
+`metal2vulkan-rt`'s device tests run under the Khronos validation layer and fail without it: point
+`VK_LAYER_PATH` at the layer's directory (`scripts/validation-layer`; docs/VALIDATION.md, "The
+validation layer under `metal2vulkan-rt`'s device tests").
 
 To build the command:
 

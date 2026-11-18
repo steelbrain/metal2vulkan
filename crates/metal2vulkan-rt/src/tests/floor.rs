@@ -1323,7 +1323,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         memory.map_err(|below| below.to_string())
     }
 
-    let runtime = crate::Instance::new(&[]).expect("the runtime's instance");
+    let runtime = crate::tests::validation::instance(&[]);
     let (entry, instance) = runtime.raw();
     // SAFETY: `instance` is live.
     let physicals = unsafe { instance.enumerate_physical_devices() }.expect("the physical devices");

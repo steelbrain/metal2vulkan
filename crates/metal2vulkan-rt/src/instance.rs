@@ -18,10 +18,10 @@ use std::sync::Arc;
 /// consumer makes with [`Instance::raw`] (a window surface) it destroys before that.
 #[derive(Clone)]
 pub struct Instance {
-    shared: Arc<Shared>,
+    pub(crate) shared: Arc<Shared>,
 }
 
-struct Shared {
+pub(crate) struct Shared {
     entry: ash::Entry,
     instance: ash::Instance,
     extensions: Vec<CString>,

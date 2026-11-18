@@ -16,12 +16,17 @@ The cluster's own facts come from potluck (its nodes, their GPUs and CPUs) and f
 
     {"builders": [{"node": "A", "gate": "SHELL COMMAND", "portable": true}, {"node": "B"}],
      "setup": {"A": "SHELL"},
-     "skip_gpus": ["vendor:device"]}
+     "skip_gpus": ["vendor:device"],
+     "validation_layer": "PATH"}
 
 The first builder whose gate command exits 0 (no gate: always) builds the GPU legs' test archive
 and runs the lavapipe leg. Its archive runs on every Linux node when it is `portable`, else only
 on nodes of its CPU model; any other node builds its own. `setup` is shell each job on that node
-runs first. A GPU in `skip_gpus` gets no leg.
+runs first. A GPU in `skip_gpus` gets no leg. `validation_layer` is the carry
+`scripts/validation-layer make` made (default ~/.cache/metal2vulkan-matrix/validation-layer):
+every job that runs rt's device tests (each GPU leg's, lavapipe's, the Windows host's) unpacks
+its OS's directory in its workspace and points the loader at it, and its note gives the layer's
+version (`layer`); the harness's timing jobs run without it.
 """
 
 import fcntl
@@ -49,6 +54,8 @@ CONFIG = Path.home() / ".config/metal2vulkan/matrix.json"
 STATE = Path.home() / ".cache/metal2vulkan-matrix"
 TREE = STATE / "tree"
 NOTES = "refs/notes/matrix"
+#: The validation layer's carry where the config names none (scripts/validation-layer).
+LAYER = STATE / "validation-layer"
 ARCHIVE = "m2v-matrix-gpu.tar.zst"
 HARNESS = "m2v-matrix-harness"
 #: The runtimes the harness command times (`harness --runtime NAME`), each its own suite of the leg,
@@ -200,6 +207,25 @@ def builder(cfg, nodes):
 
 # --- job scripts ---------------------------------------------------------------------------------
 
+def layer_lines(layer, os_name, leg):
+    """Shell that unpacks the carried validation layer's OS_NAME directory in the job's workspace,
+    points the loader at it and prints its version as a device fact of LEG (`validationLayer`).
+    Where there is none, it says so there and points the loader at a directory with no layer, so
+    the device tests, which check that a validation tool is active, fail rather than run under
+    another version the node has."""
+    none = (f'export VK_LAYER_PATH="$PWD/.no-validation-layer"; '
+            f'echo "M2V-DEVICE {leg} validationLayer missing: ')
+    if not layer:
+        return none + 'the matrix has no layer carry (scripts/validation-layer)"'
+    mirror, rev = layer
+    point = ('export VK_LAYER_PATH="$(cygpath -w "$L")" PATH="$L:$PATH"' if os_name == "windows"
+             else 'export VK_LAYER_PATH="$L"')
+    return (f'L="$PWD/.validation-layer"; rm -rf "$L"; mkdir -p "$L" && '
+            f'git --git-dir="${mirror}" archive "{rev}" {os_name} | tar -x -C "$L" && L="$L/{os_name}" && '
+            f'test -f "$L/VERSION" && {point} && echo "M2V-DEVICE {leg} validationLayer $(head -1 "$L/VERSION")" || '
+            f'{{ {none}the carry\'s {os_name} directory did not unpack"; }}')
+
+
 def linux_head(short, setup):
     """Every Linux job: the per-commit source path the GPU legs' archive is built and run at (the
     archive holds the build's paths, so every node lays the tree out at the same one), without
@@ -231,14 +257,16 @@ echo "M2V-BUILD exit $a $h"
 """
 
 
-def gpu_script(short, setup, legs, mirror, rev, suite, last):
-    """A node's legs in turn, running SUITE: `rt` (the device tests) or `harness` (the timed
-    workloads, one run per runtime). The node's LAST job removes the tree and its carry's mirror
-    there (no other job reads it; potluck never prunes one), and any left by a job that never ran."""
+def gpu_script(short, setup, legs, mirror, rev, suite, last, layer=None):
+    """A node's legs in turn, running SUITE: `rt` (the device tests, under the validation layer
+    LAYER carries, layer_lines) or `harness` (the timed workloads, one run per runtime, without
+    it). The node's LAST job removes the tree and its carry's mirror there (no other job reads
+    it; potluck never prunes one), and any left by a job that never ran."""
     runs = "\n".join(" ".join(["leg", leg.id, leg.icd, shlex.quote(leg.id + "!" if leg.select else "")])
                      for leg in legs)
     if suite == "rt":
-        file, body = ARCHIVE, f"""cargo nextest run --archive-file "$F" --workspace-remap "$S" {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+        file, body = ARCHIVE, f"""{layer_lines(layer, 'linux', '$1')}
+    cargo nextest run --archive-file "$F" --workspace-remap "$S" {NEXTEST_OUT} 2>&1 | awk "$KEEP"
     exit ${{PIPESTATUS[0]}}"""
     else:
         file, body = HARNESS, harness_runs('"$S/crates/metal2vulkan-harness"', '"$F"', '$1')
@@ -361,9 +389,9 @@ def harness_runs(manifest_dir, command, leg, windows=False):
     exit $rc"""
 
 
-def lavapipe_script(setup):
+def lavapipe_script(setup, layer=None):
     """The gate's suites and the CPU-ICD device tests in one build: `m2v_cpu_icd` adds the device
-    tests to every test the plain build has."""
+    tests to every test the plain build has; rt's run under the validation layer LAYER carries."""
     return f"""set -u
 {setup}
 export RUSTFLAGS='--cfg m2v_cpu_icd' RUSTDOCFLAGS='--cfg m2v_cpu_icd' CARGO_TARGET_DIR=target/cpuicd
@@ -371,6 +399,7 @@ export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json LP_NUM_THREADS=1
 KEEP='{KEEP}'
 echo "M2V-LEG lavapipe begin"
 {DEVICE_LINES.format(leg="lavapipe")}
+{layer_lines(layer, 'linux', 'lavapipe')}
 cargo nextest run --workspace --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
 a=${{PIPESTATUS[0]}}
 echo "M2V-SUITE lavapipe workspace exit $a"
@@ -424,9 +453,10 @@ echo "M2V-BUILD exit $a $h"
 """
 
 
-def winrun_script(leg, suite):
+def winrun_script(leg, suite, layer=None):
     if suite == "rt":
-        body = f"""cargo nextest run -p metal2vulkan-rt --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
+        body = f"""{layer_lines(layer, 'windows', leg.id)}
+cargo nextest run -p metal2vulkan-rt --all-features {NEXTEST_OUT} 2>&1 | awk "$KEEP"
 rc=${{PIPESTATUS[0]}}"""
     else:
         body = f"""(
@@ -444,6 +474,15 @@ exit $rc
 
 # --- running jobs --------------------------------------------------------------------------------
 
+def layer_carry(path):
+    """The validation layer's carry at PATH, a git repository (scripts/validation-layer): its
+    (--carry value, mirror variable, commit), or None where there is none."""
+    if not (path / ".git").is_dir():
+        return None
+    rev = git("rev-parse", "HEAD", cwd=path)
+    return f"{path}@{rev}", "POTLUCK_MIRROR_" + re.sub(r"[^A-Za-z0-9_]", "_", path.name), rev
+
+
 class Run:
     def __init__(self, sha, cfg, nodes, legs, build_node, rdir):
         self.sha, self.short, self.cfg, self.nodes = sha, sha[:12], cfg, nodes
@@ -456,6 +495,8 @@ class Run:
         #: Whether the commit has the harness, whose timed workloads each GPU leg runs.
         self.harness = subprocess.run(["git", "cat-file", "-e", f"{sha}:crates/metal2vulkan-harness/Cargo.toml"],
                                       cwd=REPO, capture_output=True).returncode == 0
+        #: The validation layer's carry: (--carry value, mirror variable, commit), or None.
+        self.layer = layer_carry(Path(cfg.get("validation_layer", LAYER)).expanduser())
         #: The messages of the commits since the golden table's last bless, which
         #: results.old_path_moved reads for the one phrase that lets the old path move.
         blessed = git("log", "-1", "--format=%H", sha, "--", GOLDEN_TABLE)
@@ -484,7 +525,7 @@ class Run:
             minutes = max(minutes, math.ceil(1.5 * max(r["minutes"] for r in runs[-3:])))
         return max(ram, 2), minutes
 
-    def job(self, kind, node, script, name, gpus=(), carry=None, space=None, exclusive=False, room=None):
+    def job(self, kind, node, script, name, gpus=(), carries=(), space=None, exclusive=False, room=None):
         """Dispatch SCRIPT on NODE, wait for it, and return (exit code, output, job record).
         SPACE names a workspace kept for this kind on this node across runs (incremental builds,
         and no fresh checkout of the tree). A job that times anything is EXCLUSIVE. It is sized as
@@ -506,7 +547,7 @@ class Run:
             args += ["--on", "os=windows"]
         for gpu in gpus:
             args += ["--gpu", gpu]
-        if carry:
+        for carry in carries:
             args += ["--carry", carry]
         if exclusive:
             args += ["--exclusive"]
@@ -553,7 +594,7 @@ class Run:
         cap = max(DEFAULTS[kind][0], ram)
         if killed and ram < cap:
             log(f"{name}: wanted more than its {ram} GiB; again with {min(2 * ram, cap)} GiB")
-            return self.job(kind, node, script, name, gpus, carry, space, exclusive,
+            return self.job(kind, node, script, name, gpus, carries, space, exclusive,
                             room=min(2 * ram, cap))
         return w.returncode, out, rec
 
@@ -621,9 +662,12 @@ class Run:
         jobs = [("rt", legs, f"rt-{node}")] + ([("harness", [leg], f"harness-{leg.id}") for leg in legs]
                                                if self.harness else [])
         for suite, these, name in jobs:
-            script = gpu_script(self.short, self.setup(node), these, mirror, rev, suite, name == jobs[-1][2])
+            layer = self.layer if suite == "rt" else None
+            script = gpu_script(self.short, self.setup(node), these, mirror, rev, suite, name == jobs[-1][2],
+                                layer and layer[1:])
             code, out, rec = self.job("gpu" if suite == "rt" else "time", node, script, name,
-                                      gpus=[leg.gpu for leg in these], carry=carry, space="gpu",
+                                      gpus=[leg.gpu for leg in these],
+                                      carries=[carry] + ([layer[0]] if layer else []), space="gpu",
                                       exclusive=suite == "harness")
             self.finish(these, code, out, rec, suite)
 
@@ -657,15 +701,19 @@ class Run:
             return self.fail([leg], f"the Windows build (job {rec and rec.get('id')}) failed: exit {code}", rec)
         leg.started = time.time()
         for suite in ["rt"] + (["harness"] if self.harness else []):
-            code, out, rec = self.job("winrun" if suite == "rt" else "wintime", leg.node, winrun_script(leg, suite),
-                                      f"win{suite}-{leg.id}", gpus=[leg.gpu], space="win", exclusive=suite == "harness")
+            layer = self.layer if suite == "rt" else None
+            code, out, rec = self.job("winrun" if suite == "rt" else "wintime", leg.node,
+                                      winrun_script(leg, suite, layer and layer[1:]), f"win{suite}-{leg.id}",
+                                      gpus=[leg.gpu], carries=[layer[0]] if layer else [], space="win",
+                                      exclusive=suite == "harness")
             self.finish([leg], code, out, rec, suite)
 
     def lavapipe(self, leg):
         leg.node = self.build_node["node"]
         leg.started = time.time()
-        code, out, rec = self.job("lavapipe", leg.node, lavapipe_script(self.setup(leg.node)), "lavapipe",
-                                  space="lavapipe")
+        layer = self.layer
+        code, out, rec = self.job("lavapipe", leg.node, lavapipe_script(self.setup(leg.node), layer and layer[1:]),
+                                  "lavapipe", carries=[layer[0]] if layer else [], space="lavapipe")
         self.finish([leg], code, out, rec, "lavapipe")
 
     def lint(self, leg):
@@ -758,10 +806,14 @@ def leg_entry(run, leg):
     if not parsed["suites"] and leg.id not in run.failures:
         problems.append("no suite reported")
     dev = parsed["device"]
+    layer = dev.get("validationLayer")
+    if layer and layer.startswith("missing"):
+        problems.append(f"validation layer {layer}")
     return dict(
         node=leg.node, gpu=leg.id if leg.id not in CPU_LEGS else None, jobs=leg.jobs,
         device=dev.get("deviceName"), driver=" ".join(v for v in (dev.get("driverName"), dev.get("driverInfo"))
                                                 if v) + (f" ({dev['driverVersion']})" if dev.get("driverVersion") else "") or None,
+        layer=layer,
         started=leg.started and datetime.fromtimestamp(leg.started, timezone.utc).isoformat(timespec="seconds"),
         minutes=leg.started and leg.ended and round((leg.ended - leg.started) / 60, 2),
         suites={name: {k: s[k] for k in ("exit", "run", "passed", "failed")} for name, s in parsed["suites"].items()},

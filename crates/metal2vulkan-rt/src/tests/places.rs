@@ -124,8 +124,8 @@ fn ranges_under_load_never_overlap_and_end_whole() {
 mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        Device, DeviceOptions, Gauges, IndexClass, Instance, MemoryClass, PixelFormat,
-        TextureDescriptor, TextureType,
+        Device, DeviceOptions, Gauges, IndexClass, MemoryClass, PixelFormat, TextureDescriptor,
+        TextureType,
     };
     use std::thread;
     use std::time::{Duration, Instant};
@@ -141,7 +141,7 @@ mod on_device {
     #[test]
     fn every_device_places_textures_in_blocks() {
         const MIB: u64 = 1 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -242,7 +242,7 @@ mod on_device {
     #[test]
     fn every_device_takes_blocks_from_16_mib_allocations() {
         const MIB: u64 = 1 << 20;
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {

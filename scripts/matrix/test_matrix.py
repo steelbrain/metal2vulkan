@@ -81,5 +81,35 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(code, 137)
 
 
+class LayerTests(unittest.TestCase):
+    """The shell a device-test job runs to unpack the carried validation layer, run for real."""
+
+    def run_lines(self, layer, cwd, env=None):
+        lines = matrix.layer_lines(layer, "linux", "leg")
+        script = lines + '\necho "path $VK_LAYER_PATH"'
+        return subprocess.run(["bash", "-c", script], cwd=cwd, env=env, capture_output=True, text=True).stdout
+
+    def test_a_job_unpacks_its_os_directory_and_points_the_loader_at_it(self):
+        with tempfile.TemporaryDirectory() as carry, tempfile.TemporaryDirectory() as work:
+            (Path(carry) / "linux").mkdir()
+            (Path(carry) / "linux/VERSION").write_text("1.2.3 (from somewhere)\n")
+            for args in (["init", "-q"], ["add", "linux"],
+                         ["-c", "user.name=t", "-c", "user.email=t@localhost", "commit", "-q", "-m", "layer"]):
+                subprocess.run(["git", *args], cwd=carry, check=True)
+            rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=carry, capture_output=True, text=True).stdout.strip()
+            env = {"PATH": "/usr/bin:/bin", "POTLUCK_MIRROR_layer": str(Path(carry) / ".git")}
+            out = self.run_lines(("POTLUCK_MIRROR_layer", rev), work, env)
+            self.assertIn("M2V-DEVICE leg validationLayer 1.2.3 (from somewhere)", out)
+            pointed = Path(out.split("path ", 1)[1].strip())
+            self.assertEqual(pointed.resolve(), (Path(work) / ".validation-layer/linux").resolve())
+
+    def test_a_job_with_no_layer_says_so_and_finds_none(self):
+        with tempfile.TemporaryDirectory() as work:
+            for layer in (None, ("POTLUCK_MIRROR_absent", "0" * 40)):
+                out = self.run_lines(layer, work, {"PATH": "/usr/bin:/bin"})
+                self.assertIn("M2V-DEVICE leg validationLayer missing: ", out)
+                self.assertIn("/.no-validation-layer", out)
+
+
 if __name__ == "__main__":
     unittest.main()

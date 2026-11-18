@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""The Khronos validation layer that `metal2vulkan-rt`'s device tests run under, one version on
+every leg, as a directory a job unpacks in its own workspace.
+
+    scripts/validation-layer make OUT [--linux-from HOST] [--macos-from PREFIX] [--no-windows]
+
+makes OUT, a git repository of one commit (a potluck carry), with a directory per OS:
+
+    linux/    libVkLayer_khronos_validation.so      copied from HOST, whose distro package
+                                                    (pacman) is VERSION and unaltered
+    windows/  VkLayer_khronos_validation.dll        MSYS2's clang64 packages, each checked
+              libSPIRV-Tools.dll, -opt.dll          against the SHA-256 the package database
+              libc++.dll, libunwind.dll             lists for it
+    macos/    libVkLayer_khronos_validation.dylib   copied from PREFIX's Homebrew install at
+              libSPIRV-Tools.dylib, -opt.dylib      VERSION (Homebrew checked each bottle's
+                                                    checksum when it installed it)
+
+each with the layer's manifest, VkLayer_khronos_validation.json, its `library_path` relative to
+the manifest, and VERSION, the layer's version and where it came from. Nothing is installed
+anywhere. A job points the loader at its OS's directory (docs/VALIDATION.md, "The validation
+layer"):
+
+    Linux    VK_LAYER_PATH=DIR/linux
+    Windows  VK_LAYER_PATH=<DIR\\windows, as a Windows path>  PATH=DIR/windows:$PATH
+    macOS    VK_LAYER_PATH=DIR/macos  DYLD_LIBRARY_PATH=DIR/macos
+
+and the device tests enable the layer for their own process (`crates/metal2vulkan-rt/src/tests/
+validation.rs`).
+"""
+
+import argparse
+import hashlib
+import io
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+from pathlib import Path
+
+#: The layer's version on every leg.
+VERSION = "1.4.363.0"
+MANIFEST = "VkLayer_khronos_validation.json"
+#: MSYS2's clang64 repository and its package database, which lists each package's SHA-256.
+MSYS2 = "https://repo.msys2.org/mingw/clang64"
+#: The MSYS2 packages of the Windows layer, and the files taken from each (under clang64/bin).
+#: The layer links SPIRV-Tools and LLVM's C++ runtime dynamically; those DLLs sit beside it.
+WINDOWS = {
+    "mingw-w64-clang-x86_64-vulkan-validation-layers-1.4.363.0-1": ["VkLayer_khronos_validation.dll", MANIFEST],
+    "mingw-w64-clang-x86_64-spirv-tools-3~1.4.363.0-1": ["libSPIRV-Tools.dll", "libSPIRV-Tools-opt.dll"],
+    "mingw-w64-clang-x86_64-libc++-23.1.5-1": ["libc++.dll"],
+    "mingw-w64-clang-x86_64-libunwind-23.1.5-1": ["libunwind.dll"],
+}
+
+
+def run(*cmd, **kw):
+    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw).stdout
+
+
+def fetch(url):
+    with urllib.request.urlopen(url, timeout=120) as reply:
+        return reply.read()
+
+
+def untar_zst(data):
+    """A .tar.zst's members, by name."""
+    try:
+        archive = tarfile.open(fileobj=io.BytesIO(data), mode="r:zst")
+    except (tarfile.CompressionError, ValueError):
+        plain = subprocess.run(["zstd", "-dc"], input=data, check=True, capture_output=True).stdout
+        archive = tarfile.open(fileobj=io.BytesIO(plain), mode="r:")
+    with archive:
+        return {m.name: archive.extractfile(m).read() for m in archive.getmembers() if m.isfile()}
+
+
+def relative_manifest(text, library):
+    """The manifest with its library found beside it."""
+    manifest = json.loads(text)
+    manifest["layer"]["library_path"] = f"./{library}"
+    return json.dumps(manifest, indent=4) + "\n"
+
+
+def linux(out, host):
+    """HOST's packaged layer: its package's version and integrity checked by pacman there."""
+    ssh = ("ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host)
+    version = run(*ssh, "pacman -Q vulkan-validation-layers").split()[1]
+    if not version.startswith(VERSION + "-"):
+        sys.exit(f"{host}: vulkan-validation-layers {version}, not {VERSION}")
+    check = subprocess.run([*ssh, "pacman -Qkk vulkan-validation-layers"], capture_output=True, text=True)
+    if check.returncode or not re.search(r" 0 altered files", check.stdout):
+        sys.exit(f"{host}: the package's files are not its own: {check.stdout.strip()} {check.stderr.strip()}")
+    library = "libVkLayer_khronos_validation.so"
+    run("scp", "-q", "-o", "BatchMode=yes", f"{host}:/usr/lib/{library}",
+        f"{host}:/usr/share/vulkan/explicit_layer.d/{MANIFEST}", str(out))
+    (out / MANIFEST).write_text(relative_manifest((out / MANIFEST).read_text(), library))
+    return f"{VERSION} (vulkan-validation-layers {version}, copied from a node's distro package)"
+
+
+def windows(out):
+    """MSYS2's packages, each checked against the package database's SHA-256."""
+    with tempfile.TemporaryDirectory() as scratch:
+        db = Path(scratch) / "db"
+        db.mkdir()
+        for name, data in untar_zst(fetch(f"{MSYS2}/clang64.db")).items():
+            (db / name.replace("/", "__")).write_bytes(data)
+        for package, files in WINDOWS.items():
+            desc = db / f"{package}__desc"
+            if not desc.is_file():
+                sys.exit(f"{package}: not in MSYS2's package database (a newer one replaced it)")
+            fields = dict(re.findall(r"%([A-Z0-9]+)%\n([^\n]*)", desc.read_text()))
+            data = fetch(f"{MSYS2}/{fields['FILENAME']}")
+            if hashlib.sha256(data).hexdigest() != fields["SHA256SUM"]:
+                sys.exit(f"{package}: its SHA-256 is not the package database's")
+            members = untar_zst(data)
+            for file in files:
+                (out / file).write_bytes(members[f"clang64/bin/{file}"])
+    manifest = json.loads((out / MANIFEST).read_text())
+    if manifest["layer"]["library_path"] != ".\\VkLayer_khronos_validation.dll":
+        sys.exit(f"the Windows manifest's library is {manifest['layer']['library_path']}, not beside it")
+    return f"{VERSION} (MSYS2 clang64 packages {', '.join(WINDOWS)})"
+
+
+def macos(out, prefix):
+    """PREFIX's Homebrew layer and SPIRV-Tools, both at VERSION."""
+    for formula in ("vulkan-validationlayers", "spirv-tools"):
+        cellar = (prefix / "opt" / formula).resolve()
+        if cellar.name != VERSION:
+            sys.exit(f"{prefix}: {formula} is {cellar.name}, not {VERSION}")
+    layer = (prefix / "opt/vulkan-validationlayers").resolve()
+    library = "libVkLayer_khronos_validation.dylib"
+    shutil.copyfile(layer / "lib" / library, out / library)
+    for name in ("libSPIRV-Tools.dylib", "libSPIRV-Tools-opt.dylib"):
+        shutil.copyfile((prefix / "opt/spirv-tools/lib" / name).resolve(), out / name)
+    text = (layer / "share/vulkan/explicit_layer.d" / MANIFEST).read_text()
+    (out / MANIFEST).write_text(relative_manifest(text, library))
+    return f"{VERSION} (Homebrew vulkan-validationlayers and spirv-tools {VERSION})"
+
+
+def make(args):
+    out = Path(args.out)
+    if out.exists():
+        sys.exit(f"{out} exists")
+    made = []
+    out.mkdir(parents=True)
+    for os_name, maker in (("linux", args.linux_from and (lambda d: linux(d, args.linux_from))),
+                           ("windows", not args.no_windows and windows),
+                           ("macos", args.macos_from and (lambda d: macos(d, Path(args.macos_from))))):
+        if not maker:
+            continue
+        d = out / os_name
+        d.mkdir()
+        (d / "VERSION").write_text(maker(d) + "\n")
+        made.append(os_name)
+        print(f"{os_name}: {(d / 'VERSION').read_text().strip()}")
+    run("git", "init", "-q", cwd=out)
+    run("git", "add", *made, cwd=out)
+    run("git", "-c", "user.name=validation-layer", "-c", "user.email=validation-layer@localhost",
+        "commit", "-q", "-m", f"VK_LAYER_KHRONOS_validation {VERSION}: {', '.join(made)}", cwd=out)
+    print(f"{out}: {run('git', 'rev-parse', 'HEAD', cwd=out).strip()}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    m = sub.add_parser("make", help="make the layer's directory")
+    m.add_argument("out")
+    m.add_argument("--linux-from", metavar="HOST", help="a Linux host whose pacman package is VERSION")
+    m.add_argument("--macos-from", metavar="PREFIX", help="a Homebrew prefix with the layer at VERSION")
+    m.add_argument("--no-windows", action="store_true", help="make no Windows directory")
+    args = parser.parse_args()
+    make(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -19,7 +19,7 @@ mod on_device {
     use crate::tests::{devices_of_the_cfgs_kind, keeps_a_blob};
     use crate::{
         host_time, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
-        DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Instance, Library, Limit,
+        DeviceOptions, DispatchType, Error, FunctionDescriptor, Gauges, Library, Limit,
         MemoryClass, PrecisionNote, Refusal, StageSource, MAX_BUFFER_LENGTH,
     };
     use metal2vulkan::pipeline::{RuntimeFact, StageEntries};
@@ -1141,7 +1141,7 @@ mod on_device {
         ) else {
             return;
         };
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1200,7 +1200,7 @@ mod on_device {
         let Some(tiled) = descriptor("a1_bool_from_float") else {
             return;
         };
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1267,7 +1267,7 @@ mod on_device {
         ) else {
             panic!("the kernels");
         };
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         let (name, physical) = (devices.iter())
             .find(|(name, _)| *name == wanted)
@@ -1329,7 +1329,7 @@ mod on_device {
         ) else {
             return;
         };
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1406,7 +1406,7 @@ mod on_device {
         ) else {
             return;
         };
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1466,7 +1466,7 @@ mod on_device {
         let Some(tiled) = descriptor("a1_bool_from_float") else {
             return;
         };
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1531,7 +1531,7 @@ mod on_device {
         let Some(tiled) = descriptor("a1_bool_from_float") else {
             return;
         };
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1585,7 +1585,7 @@ mod on_device {
         ) else {
             return;
         };
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {

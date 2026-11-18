@@ -11,7 +11,6 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
-    use crate::Instance;
     use ash::vk;
     use std::ffi::c_char;
 
@@ -740,7 +739,7 @@ mod on_device {
     /// sample answers zero and each store is dropped, on every device of the cfg's kind.
     #[test]
     fn a_null_texture_descriptor_answers_zero_and_drops_stores() {
-        let instance = Instance::new(&[]).expect("an instance");
+        let instance = crate::tests::validation::instance(&[]);
         let (_, vk_instance) = instance.raw();
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(

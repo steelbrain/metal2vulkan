@@ -39,6 +39,8 @@ mod submit_infos;
 mod texture;
 mod translate;
 mod upload;
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod validation;
 mod view;
 
 /// This crate's directory: the test process's `CARGO_MANIFEST_DIR` where it holds the crate's

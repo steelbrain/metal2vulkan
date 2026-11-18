@@ -46,7 +46,7 @@ fn a_device_sampler_is_shared_by_create_info_up_to_the_cap() {
 mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        CompareFunction, Device, DeviceOptions, Error, Gap, IndexClass, Instance, Refusal,
+        CompareFunction, Device, DeviceOptions, Error, Gap, IndexClass, Refusal,
         SamplerBorderColor, SamplerDescriptor, SamplerMinMagFilter, SamplerState,
     };
     use metal2vulkan::metal::sampler::SamplerWord;
@@ -62,7 +62,7 @@ mod on_device {
 
     #[test]
     fn every_device_shares_sampler_states_device_samplers() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
             !devices.is_empty(),

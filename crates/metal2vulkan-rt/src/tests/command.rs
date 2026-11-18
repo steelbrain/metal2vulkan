@@ -66,7 +66,7 @@ pub(crate) mod on_device {
     /// Opens each device of the cfg's kind with `options`, runs `body`, which drops the device,
     /// and checks that every gauge reaches zero.
     pub(crate) fn each_device(test: &str, mut body: impl FnMut(&str, &Instance, Device)) {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1786,7 +1786,7 @@ pub(crate) mod on_device {
     /// answers at once. The last drop then frees everything without the hook.
     #[test]
     fn every_device_quiesces_with_handles_alive() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -1862,7 +1862,7 @@ pub(crate) mod on_device {
     /// buffer's up before the command buffer could complete.
     #[test]
     fn every_device_tears_down_from_a_completed_handler() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(!devices.is_empty(), "no device of this cfg's kind");
         for (name, physical) in &devices {
@@ -2123,7 +2123,7 @@ pub(crate) mod on_device {
         if mode == "before-instance" {
             register_exit_handler();
         }
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let (_, physical) = devices_of_the_cfgs_kind(&instance)
             .into_iter()
             .next()
@@ -2174,9 +2174,10 @@ pub(crate) mod on_device {
 
     /// In a process of its own, a consumer's `atexit` handler quiesces a live device with blocks
     /// taken, a reader thread on one, the block-maker busy and a command buffer held, then the
-    /// process exits through `exit()` with no release: exit code 0 and no validation error. The
-    /// handler is registered after `Device::new` (`M2V_EXIT_MODES` adds `before-instance`), once
-    /// per mode (`M2V_EXIT_RUNS` runs each more often).
+    /// process exits through `exit()` with no release: exit code 0 and nothing in the child's
+    /// validation log (its instance never drops, so its own guard never reads it). The handler is
+    /// registered after `Device::new` (`M2V_EXIT_MODES` adds `before-instance`), once per mode
+    /// (`M2V_EXIT_RUNS` runs each more often).
     #[test]
     fn every_device_quiesces_in_an_exit_handler() {
         let modes = std::env::var("M2V_EXIT_MODES").unwrap_or_else(|_| "after-device".into());
@@ -2189,7 +2190,7 @@ pub(crate) mod on_device {
         for mode in modes.split_whitespace() {
             let mut held = 0;
             for run in 0..runs {
-                let output = std::process::Command::new(&executable)
+                let child = std::process::Command::new(&executable)
                     .args([
                         "--exact",
                         "tests::command::on_device::exit_child",
@@ -2197,16 +2198,22 @@ pub(crate) mod on_device {
                         "--test-threads=1",
                     ])
                     .env("M2V_EXIT_CHILD", mode)
-                    .output()
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
                     .expect("the child");
+                let log = crate::tests::validation::log_of(child.id());
+                let output = child.wait_with_output().expect("the child's output");
+                let validation = std::fs::read_to_string(&log).unwrap_or_default();
+                let _ = std::fs::remove_file(&log);
                 let text = format!(
-                    "{}{}",
+                    "{}{}{validation}",
                     String::from_utf8_lossy(&output.stdout),
                     String::from_utf8_lossy(&output.stderr)
                 );
                 let clean = output.status.success()
                     && text.contains("M2V exit: quiesced true true")
-                    && !text.contains("Validation Error");
+                    && validation.trim().is_empty();
                 if clean {
                     held += 1;
                 } else {

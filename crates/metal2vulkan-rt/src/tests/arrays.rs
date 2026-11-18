@@ -115,8 +115,8 @@ mod on_device {
     use crate::arrays::{supported, with_arrays_layout, Arrays, BINDINGS};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        Device, DeviceOptions, IndexClass, Instance, PixelFormat, Refusal, SamplerDescriptor,
-        StorageMode, TextureDescriptor, TextureType, TextureUsage,
+        Device, DeviceOptions, IndexClass, PixelFormat, Refusal, SamplerDescriptor, StorageMode,
+        TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
     use std::ops::Range;
@@ -173,7 +173,7 @@ mod on_device {
     /// another held.
     #[test]
     fn every_device_fills_set_1_past_its_capacity() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
             !devices.is_empty(),
@@ -219,7 +219,7 @@ mod on_device {
     /// set 0 and set 1 of the arrays, which `Device::new` asks before it makes them.
     #[test]
     fn every_device_supports_the_runtimes_set_layouts() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
             !devices.is_empty(),
@@ -245,7 +245,7 @@ mod on_device {
     /// work through it, and making a second set 1 with every element written is timed.
     #[test]
     fn set_1_is_filled_at_creation() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = crate::tests::validation::instance(&[]);
         let devices = devices_of_the_cfgs_kind(&instance);
         assert!(
             !devices.is_empty(),

@@ -61,6 +61,36 @@ CARGO_TARGET_DIR=target/gpuhazards RUSTFLAGS='-Dwarnings --cfg m2v_gpu --cfg m2v
 A site that stops announcing, or any other failing assertion, still compiles: the lint sees none of
 it, and only a run does.
 
+### The validation layer under `metal2vulkan-rt`'s device tests
+
+Every instance `metal2vulkan-rt`'s device tests open runs under `VK_LAYER_KHRONOS_validation`, at
+one version on every device (1.4.363.0), through one test helper (`src/tests/validation.rs`). The
+product holds none of it: the helper enables the layer for its own test process with the loader's
+and the layer's own variables (`VK_INSTANCE_LAYERS`, and `VK_KHRONOS_VALIDATION_REPORT_FLAGS`
+`error,warn`, `VK_KHRONOS_VALIDATION_DEBUG_ACTION` `VK_DBG_LAYER_ACTION_LOG_MSG` and
+`VK_KHRONOS_VALIDATION_LOG_FILENAME`, one log file per process). Every device of the cfg's kind
+an instance lists must name an active validation tool (`vkGetPhysicalDeviceToolProperties`), or
+the test fails: the loader ignores a layer it cannot find, so a run without the layer fails rather
+than passes. Once the instance is gone, the helper reads the log: any error or warning fails the
+test, each line printed with the test's name. One test makes a deliberately invalid call and
+checks that its log holds exactly that message. A test process opens one instance at a time, and
+the variables are set before it starts a thread: run the tests one at a time per process (nextest
+does; libtest's runner with `--test-threads=1`).
+
+The run points the loader at the layer's directory, never at a system copy:
+
+| OS | Variables |
+|---|---|
+| Linux | `VK_LAYER_PATH=DIR/linux` |
+| Windows | `VK_LAYER_PATH` = `DIR\windows` as a Windows path, and `DIR/windows` first on `PATH` (the layer's SPIRV-Tools and C++ runtime DLLs) |
+| macOS | `VK_LAYER_PATH=DIR/macos DYLD_LIBRARY_PATH=DIR/macos` (the layer's SPIRV-Tools) |
+
+`scripts/validation-layer make DIR --linux-from HOST --macos-from PREFIX` makes `DIR`, a git
+repository a job can carry: Linux's layer copied from a host whose distro package is that version
+and unaltered (`pacman -Qkk`), Windows's from MSYS2's clang64 packages, each checked against the
+SHA-256 the package database lists, and macOS's from a Homebrew install at that version. Each
+directory's `VERSION` says where it came from.
+
 **A GPU hazard** is a device test that, on purpose, faults a real GPU (a GPU write into read-only
 host pages), holds one for long (a command buffer past about a second, or a dispatch that spins on
 a word the GPU may never see the host raise, which only its cap ends), or allocates toward the
@@ -275,14 +305,20 @@ holds them, then times each GPU in a job of its own.
 
 | Leg | Runs | Built |
 |---|---|---|
-| Each GPU of a Linux node | `metal2vulkan-rt`'s tests under `--cfg m2v_gpu`, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`harness --runtime <runtime>`, `crates/metal2vulkan-harness`), each runtime its own suite, `harness-<runtime>` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
-| The Windows host's GPU | The same tests and harness, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
-| `lavapipe` | The gate's suites and the device tests in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
+| Each GPU of a Linux node | `metal2vulkan-rt`'s tests under `--cfg m2v_gpu`, under the validation layer, the GPU chosen by `VK_DRIVER_FILES` and, on Mesa, `MESA_VK_DEVICE_SELECT='vendor:device!'`; then, in a job that holds the node alone (`--exclusive`) and times this one GPU, the harness's timed workloads (`harness --runtime <runtime>`, `crates/metal2vulkan-harness`), each runtime its own suite, `harness-<runtime>` | Once per commit on a CPU node: the tests as a nextest archive, the harness as a release build; both carried to the GPU nodes, which only run them. The archive holds its build's paths, so every node lays the tree out at the same per-commit path. Its binaries run only where the builder's do: a node of another CPU builds its own, in a job that holds no GPU |
+| The Windows host's GPU | The same tests (under the validation layer) and harness, built on the host under MSYS2 CLANG64 (the pinned nightly's `x86_64-pc-windows-gnullvm` toolchain) | On the host, in a job that holds no GPU |
+| `lavapipe` | The gate's suites and the device tests (`metal2vulkan-rt`'s under the validation layer) in one build under `--cfg m2v_cpu_icd` (`cargo nextest run --workspace`, then the doctests), `LP_NUM_THREADS=1` | In place, on the builder |
 | `lint` | The gate's `cargo fmt --all --check`, clippy with `-D warnings` plain, under `--cfg m2v_gpu` and under `--cfg m2v_cpu_icd`, and Rustdoc with `-D warnings`, each its own suite | In place, on the builder, beside its other jobs |
 
 A leg passes when every suite passed and no rule below fails. Its line names the device and
 driver as `vulkaninfo` reported them, the node, the tests passed of those run, the records, the
 base it was compared with and the job.
+
+Every job that runs `metal2vulkan-rt`'s device tests unpacks the validation layer's carry (the
+config's `validation_layer`, made by `scripts/validation-layer`) in its workspace and points the
+loader at its OS's directory; the leg's note gives the layer's version (`layer`). A job without
+the layer says so there, which is a problem of the leg, and points the loader at no layer, so its
+device tests fail. The harness's timing jobs run without the layer.
 
 ### Records and rules
 
