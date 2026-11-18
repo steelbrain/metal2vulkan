@@ -848,6 +848,16 @@ a miss. With no directory, nothing is kept on disk, and each `VkPipeline` is mad
   `maxComputeSharedMemorySize`.
 - A kernel that observes its threadgroup partition makes a `VkPipeline` per threadgroup size it
   is dispatched at.
+- A kernel that observes its threadgroup partition runs in workgroups of its own threadgroup
+  size, never in tiles. On Intel's Windows driver (101.2145) for the UHD 630, a kernel that
+  touches a buffer per thread through its device address runs slower in narrow square workgroups
+  than in tiles or in wide workgroups. Over a 2048x2048 grid of `RGBA16Float` texels, a kernel
+  reading one texel and storing 16 bytes per thread took 7,775 µs in 16x16 workgroups, against
+  3,721 µs in tiles and 3,735 µs in 128x2 workgroups; one reading 16 bytes and writing one texel
+  took 6,554 µs, against 4,634 and 4,735 µs. Bound through storage-buffer descriptors, the two
+  took 3,585 and 4,605 µs in 16x16 workgroups; the runtime binds buffers only by address. In the
+  two recorded streams measured, kernels that observe their partition, store to device memory and
+  run threadgroups 32 threads wide or narrower ran 2.0% and 3.4% of the threads dispatched.
 - A dispatch of a size other than the descriptor's `requiredThreadsPerThreadgroup`, which Metal's
   validation stops, runs at the size it gives.
 - NVIDIA 615.71.09 on GA10x gives sign-extended bits for a mask over a signed clamp, to exactly N
