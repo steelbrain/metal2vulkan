@@ -5,7 +5,7 @@
 //! signals, a dispatch of a kernel without effects that records nothing, and Metal's refusals.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use crate::hazard::Access;
     use crate::pipeline::{Constant, Field, FieldValue, Interface, Memory, OwnMemory, Place};
     use crate::tests::command::on_device::{each_device, finished, shared_event, Arena, PATIENCE};
@@ -16,7 +16,7 @@ mod on_device {
     };
 
     /// Words in each test buffer: 256 bytes.
-    const WORDS: usize = 64;
+    pub(crate) const WORDS: usize = 64;
 
     fn region() -> Field {
         Field {
@@ -63,7 +63,7 @@ mod on_device {
     }
 
     /// `o = a + b` over slots 0, 1 and 2.
-    fn add(device: &Device) -> ComputePipelineState {
+    pub(crate) fn add(device: &Device) -> ComputePipelineState {
         let fields = vec![
             region(),
             address(0, Place::Push(32)),
@@ -76,7 +76,7 @@ mod on_device {
     }
 
     /// `x = x * 2 + 1` over slot 0.
-    fn step(device: &Device) -> ComputePipelineState {
+    pub(crate) fn step(device: &Device) -> ComputePipelineState {
         let fields = vec![region(), address(0, Place::Push(32))];
         let buffers = vec![(0, Access::ReadWrite)];
         ComputePipelineState::for_test(device, &kernels::STEP, interface(buffers, fields, 40))

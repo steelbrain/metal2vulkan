@@ -278,24 +278,39 @@ made, with no lock, and never rewritten for layouts.
   the buffer's bytes, with no submission; a dispatch's use of the texture is a use of the buffer in the
   hazard sets, and a write to it reaches the host as a write to a Shared buffer does. The texture
   holds the buffer.
-- Where the device's linear image does not take a texture over a buffer of no device copy (a
-  Shared buffer, or a Managed one without a device copy) for another pitch, an offset off the
-  image's alignment, a format or usage the linear tiling lacks, or a spilled block, the texture is
-  an optimal image of its own, and the device copies the buffer's bytes into it and back, one
-  `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, the buffer's rows
+- Where the device's linear image does not take the texture (another pitch, an offset off the
+  image's alignment, a format or usage the linear tiling lacks, a spilled block), the texture is
+  an optimal image of its own, and the device copies the bytes shaders reach into it and back,
+  one `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, the buffer's rows
   `bytes_per_row` apart, with no CPU copy. Each copy counts in `Metrics::over_copies` and its
-  bytes in `Metrics::bytes_copied`. The upload that leads a submission copies the bytes into every
-  such texture a segment of it uses before any command of the segment wrote the buffer, between
-  one pair of barriers. Inside a segment a command that uses the texture after a command wrote the
-  buffer copies them in again first; a segment that leans on the leading copy for a buffer an
-  earlier segment of the held group wrote leads a new group. A command that wrote the texture
-  leaves it to go back to the buffer before the next command of the segment that reaches the
-  buffer, and at the segment's end, whose end barrier then reaches the host. Metal reads Shared
-  memory when the command buffer executes; every member of a group was committed before the group
-  was submitted and none has been seen complete, so a CPU write between two members' commits races
-  an uncompleted command buffer, and Metal does not define which bytes it sees; the bytes at the
-  group's execution are one of the allowed outcomes. A guest that waits for a completion before
-  writing has, by that fact, a command buffer not in a held group.
+  bytes in `Metrics::bytes_copied`. When is decided by the buffer's storage:
+  - Over a Shared buffer (or a Managed one without a device copy), once a submission: the upload
+    that leads it copies the bytes into every such texture a segment of it uses before any command
+    of the segment wrote the buffer, between one pair of barriers. Inside a segment a command that
+    uses the texture after a command wrote the buffer copies them in again first; a segment that
+    leans on the leading copy for a buffer an earlier segment of the held group wrote leads a new
+    group. A command that wrote the texture leaves it to go back to the buffer before the next
+    command of the segment that reaches the buffer, and at the segment's end, whose end barrier
+    then reaches the host. Metal reads Shared memory when the command buffer executes; every member
+    of a group was committed before the group was submitted and none has been seen complete, so a
+    CPU write between two members' commits races an uncompleted command buffer, and Metal does not
+    define which bytes it sees; the bytes at the group's execution are one of the allowed outcomes.
+    A guest that waits for a completion before writing has, by that fact, a command buffer not in
+    a held group.
+  - Over a Managed buffer's device copy, only at Metal's own Managed events, each texture keeping
+    one flag of each kind: in, where a `did_modify_range` met its range (the upload's copy of the
+    range going first) or device work wrote the buffer (a binding whose compiled interface writes
+    it, a blit or fill into it), by the upload that leads the next submission using it, from the
+    device copy; back, where device work wrote the texture, before the next reader of the device
+    copy (a binding that reaches the buffer, a blit from or into it, a copy into another texture
+    over a range that meets its, a `synchronize_resource`, a `did_modify_range` over it): a
+    reader recorded after the write makes it in its own commands, and the upload that leads a
+    submission, which runs before the submission's commands, only once the write's segment was
+    submitted; that submission also owes each other texture over a range that meets its a copy
+    in. A texture released while its copy back is owed leaves its image with the buffer until a reader takes it
+    or the buffer is released, which drops it uncopied; `Gauges::textures` counts it meanwhile.
+    The texture over a buffer's bytes on an Apple GPU may alias the Managed memory itself; the
+    documented contract, not one GPU's answer, is the rule here.
 - `Device::minimum_linear_texture_alignment(pixel_format)` answers
   `minimumLinearTextureAlignmentForPixelFormat:` with the device's linear row rounding: the
   smallest power of two from 16 to 4,096 at which the device lays the rows of a 3-row linear
@@ -306,7 +321,7 @@ made, with no lock, and never rewritten for layouts.
   the device's life. The answer leaves out the image's memory alignment
   (`VkMemoryRequirements::alignment`): a texture whose pitch is a multiple of the answer is in
   place, at the widths tried, only where its place in the buffer's memory is a multiple of that
-  alignment too, and copied elsewhere (over a Managed buffer's device copy, refused). NVIDIA and
+  alignment too, and copied elsewhere. NVIDIA and
   AMD give the same number for both; the UHD 630 rounds rows to 64 bytes and aligns its linear
   images' memory to 4,096. The answer promises nothing for widths not tried.
 - The staging region is 16 MiB of the Shared type in an allocation of its own, made at the first
@@ -353,13 +368,12 @@ made, with no lock, and never rewritten for layouts.
 - A texture's memory is device-local; where the device has none left, the call fails
   (`Error::Vulkan`).
 - A texture over a buffer other than 2D of one level, sample and slice, or of a depth, stencil
-  or compressed format, is not made (`Gap::TextureOverBuffer`); nor is one over a Managed
-  buffer's device copy that the device's linear image does not take.
-- A texture over a buffer of no device copy whose pitch, place, memory type or format features
-  the device's linear image does not meet is copied between the buffer and an image of its own:
-  the copies Metal does not make, counted (`Metrics::over_copies`). A program that rounds its
-  pitch past the device's own (`Device::minimum_linear_texture_alignment`), or offsets its texture
-  off the image's memory alignment, takes them: NVIDIA lays a linear image's rows at the row
+  or compressed format, is not made (`Gap::TextureOverBuffer`).
+- A texture over a buffer whose pitch, place, memory type or format features the device's
+  linear image does not meet is copied between the buffer and an image of its own: the copies
+  Metal does not make, counted (`Metrics::over_copies`). A program that rounds its pitch past the
+  device's own (`Device::minimum_linear_texture_alignment`), or offsets its texture off the
+  image's memory alignment, takes them: NVIDIA lays a linear image's rows at the row
   rounded to 128 bytes, AMD to 256, so a pitch rounded to 256 is copied on NVIDIA. A render
   target over a buffer is copied on NVIDIA, whose linear tiling does not take it in place.
 - Texture views that change what the replay streams' views keep are not built

@@ -1,8 +1,10 @@
 //! Textures over a buffer in an image of their own: where the device's linear image does not hold
-//! a texture over a buffer of no device copy in place
-//! ([`Buffer::new_texture`](crate::Buffer::new_texture)), its texels live in an optimal image of
-//! the runtime's, and the device copies the buffer's bytes into it and back, one
-//! `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, with no CPU copy:
+//! a texture over a buffer in place ([`Buffer::new_texture`](crate::Buffer::new_texture)), its
+//! texels live in an optimal image of the runtime's, and the device copies the bytes shaders
+//! reach (a Managed buffer's device copy, where it has one) into it and back, one
+//! `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, with no CPU copy. Over a
+//! Managed buffer's device copy, only Metal's Managed events copy ([`ManagedOvers`]); over any
+//! other buffer, the Shared rules:
 //!
 //! - **In, once a submission.** The upload that leads a submission copies the bytes into the
 //!   image of every such texture a segment of the submission uses before any command of the
@@ -27,11 +29,15 @@
 //! tracking is by buffer: a write of any of a buffer's bytes makes every such texture over it
 //! stale.
 
+use crate::buffer::Buffer;
 use crate::counters::{Counters, Metric};
+use crate::device::lock;
 use crate::hazard::Access;
 use crate::record::{memory_barrier, Reach};
-use crate::texture::{OverCopy, Texture};
+use crate::texture::{Image, OverCopy, Texture};
 use ash::vk;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
 
 /// What a segment does to its textures over a buffer in an image of their own. Once it has
 /// ended ([`Overs::end`]), what the submit thread reads of it: the textures whose images the
@@ -120,14 +126,14 @@ impl Overs {
                 if used.image_stale {
                     copies
                         .into
-                        .extend(used.texture.copied_over().map(|(_, copy)| copy));
+                        .extend(used.texture.copied_shared().map(|(_, copy)| copy));
                     used.image_stale = false;
                 }
                 continue;
             }
             let found = (kept.iter().rev())
                 .find(|texture| texture.id() == id)
-                .and_then(|texture| Some((texture, texture.copied_over()?)));
+                .and_then(|texture| Some((texture, texture.copied_shared()?)));
             if let Some((texture, (buffer, copy))) = found {
                 let buffer = buffer.id();
                 let wrote = self.unbound || self.written.iter().any(|&(b, _)| b == buffer);
@@ -147,7 +153,7 @@ impl Overs {
                 if used.buffer_stale && (unbound || used.buffer == id) {
                     copies
                         .back
-                        .extend(used.texture.copied_over().map(|(_, copy)| copy));
+                        .extend(used.texture.copied_shared().map(|(_, copy)| copy));
                     used.buffer_stale = false;
                     self.written.push((used.buffer, Some(used.texture.id())));
                 }
@@ -158,7 +164,7 @@ impl Overs {
                 if used.buffer_stale {
                     copies
                         .back
-                        .extend(used.texture.copied_over().map(|(_, copy)| copy));
+                        .extend(used.texture.copied_shared().map(|(_, copy)| copy));
                     used.buffer_stale = false;
                     self.written.push((used.buffer, Some(used.texture.id())));
                 }
@@ -204,7 +210,7 @@ impl Overs {
         let mut back = Vec::new();
         for used in &mut self.used {
             if used.buffer_stale {
-                back.extend(used.texture.copied_over().map(|(_, copy)| copy));
+                back.extend(used.texture.copied_shared().map(|(_, copy)| copy));
                 used.buffer_stale = false;
                 self.written.push((used.buffer, Some(used.texture.id())));
             }
@@ -344,4 +350,206 @@ pub(crate) unsafe fn record_side(
     }
     counters.count(Metric::Barriers);
     counters.count(Metric::Barriers);
+}
+
+/// A copy back a reader of a Managed buffer's device copy takes ([`ManagedOvers::backs`]): the
+/// texture's id, its copy and its image, which the reader's command buffer or upload keeps.
+pub(crate) type Back = (u32, OverCopy, Arc<Image>);
+
+/// A texture over a Managed buffer's device copy in an image of its own, as its buffer keeps it
+/// ([`ManagedOvers`]): the copies Metal's Managed events owe it.
+struct Entry {
+    /// The texture's id.
+    texture: u32,
+    /// Its image, held while the entry lives.
+    image: Arc<Image>,
+    copy: OverCopy,
+    /// Its bytes in the buffer: `start..end`.
+    range: (u64, u64),
+    /// An event named its range since its last copy in: a didModifyRange over it, or submitted
+    /// device work that wrote the buffer or another texture over a range that meets its.
+    into: bool,
+    /// Submitted device work wrote it since its last copy back: the upload that leads a
+    /// submission may take the copy.
+    back: bool,
+    /// Device work wrote it since a reader last took its copy back, submitted or not: a reader
+    /// recorded after the write takes the copy in its own commands.
+    fresh: bool,
+    /// The segments that wrote it and are not yet submitted. The upload that leads a submission
+    /// runs before them, so it takes no copy back for their writes; each one's submission makes
+    /// the copy back owed to it, unless a reader recorded after the write took it. One whose
+    /// command buffer is never committed leaves the entry until the buffer is released.
+    pending: u32,
+    /// The texture is released: the entry lives for its copy back alone, and its id may name a
+    /// texture made since, which a lookup by id finds instead.
+    released: bool,
+}
+
+impl Entry {
+    /// Whether it is live texture `texture`'s entry.
+    fn of(&self, texture: u32) -> bool {
+        self.texture == texture && !self.released
+    }
+}
+
+/// A Managed buffer's textures over its device copy in an image of their own (`Entry`), each owing
+/// copies only at Metal's own Managed events, with no tracking of commands:
+///
+/// - **In** where an event named its range since the last copy in: a didModifyRange over it (the
+///   upload's copy of the changed range first), or device work that wrote the buffer (a binding
+///   whose compiled interface writes it, a blit or fill into it) or another texture over a range
+///   that meets its, from the submission after that work's. The upload that leads a submission
+///   using the texture makes it, from the device copy, never from the consumer's bytes a second
+///   time. Apple GPUs may alias Managed memory; the documented contract, not one GPU's answer, is
+///   the rule here.
+/// - **Back** where device work wrote the texture since the last copy back: before the next
+///   reader of the device copy (a binding whose interface reads the buffer, a blit from it, a copy
+///   into another texture over a range that meets its, a synchronize, a didModifyRange over it),
+///   not after each write. A reader recorded after the write takes it in its own commands; the
+///   upload that leads a submission takes it only once the write's segment was submitted, as the
+///   upload runs before the submission's commands. A texture released while its copy back is owed
+///   leaves its image with the buffer until a reader takes it or the buffer is released, which
+///   drops it uncopied.
+#[derive(Default)]
+pub(crate) struct ManagedOvers {
+    entries: Mutex<Vec<Entry>>,
+    /// The entries' count, read without the lock.
+    count: AtomicUsize,
+}
+
+/// Whether two ranges meet.
+fn meets(a: (u64, u64), b: (u64, u64)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+impl ManagedOvers {
+    /// Whether the buffer has an entry.
+    pub(crate) fn any(&self) -> bool {
+        self.count.load(Relaxed) > 0
+    }
+
+    /// Keeps texture `texture`'s entry: its image, its copy and its bytes' `range` in the buffer,
+    /// owing its first copy in.
+    pub(crate) fn add(&self, texture: u32, image: Arc<Image>, copy: OverCopy, range: (u64, u64)) {
+        let mut entries = lock(&self.entries);
+        entries.push(Entry {
+            texture,
+            image,
+            copy,
+            range,
+            into: true,
+            back: false,
+            fresh: false,
+            pending: 0,
+            released: false,
+        });
+        self.count.store(entries.len(), Relaxed);
+    }
+
+    /// Texture `texture` is released: its entry goes, but for a copy back owed.
+    pub(crate) fn release(&self, texture: u32) {
+        let mut entries = lock(&self.entries);
+        entries.retain_mut(|entry| {
+            if entry.of(texture) {
+                entry.released = true;
+            }
+            !entry.released || entry.back || entry.pending > 0
+        });
+        self.count.store(entries.len(), Relaxed);
+    }
+
+    /// A segment not yet submitted wrote texture `texture`; `first` where it had not written it
+    /// before, which its submission settles ([`ManagedOvers::settle`]).
+    pub(crate) fn pend(&self, texture: u32, first: bool) {
+        if let Some(entry) = lock(&self.entries).iter_mut().find(|e| e.of(texture)) {
+            entry.pending += u32::from(first);
+            entry.fresh = true;
+        }
+    }
+
+    /// A segment that wrote texture `texture` was submitted: the texture owes its copy back where
+    /// no reader recorded after the write took it, and each other texture whose range meets its
+    /// owes its copy in, which takes that copy back first.
+    pub(crate) fn settle(&self, texture: u32) {
+        let mut entries = lock(&self.entries);
+        let Some(range) = (entries.iter_mut())
+            .find(|entry| entry.of(texture))
+            .map(|entry| {
+                entry.pending = entry.pending.saturating_sub(1);
+                entry.back |= entry.fresh;
+                entry.range
+            })
+        else {
+            return;
+        };
+        for entry in entries.iter_mut() {
+            if !entry.of(texture) && meets(entry.range, range) {
+                entry.into = true;
+            }
+        }
+    }
+
+    /// Device work wrote the buffer: each texture owes its copy in.
+    pub(crate) fn written(&self) {
+        for entry in lock(&self.entries).iter_mut() {
+            entry.into = true;
+        }
+    }
+
+    /// A reader of the device copy comes, over `range` of the buffer (all of it where `None`):
+    /// each copy back owed by a texture whose range meets it, taken, into `backs`; with `pending`,
+    /// a reader recorded after the writes, also those of writes not yet submitted. A released
+    /// texture's entry goes once nothing is owed.
+    pub(crate) fn backs(&self, range: Option<(u64, u64)>, pending: bool, backs: &mut Vec<Back>) {
+        let mut entries = lock(&self.entries);
+        for entry in entries.iter_mut() {
+            let owed = entry.back || (pending && entry.fresh);
+            if owed && range.is_none_or(|range| meets(entry.range, range)) {
+                backs.push((entry.texture, entry.copy, Arc::clone(&entry.image)));
+                entry.back = false;
+                // A write not yet submitted stays fresh for the readers recorded after it, where
+                // the upload took the copy before it runs.
+                entry.fresh &= !pending && entry.pending > 0;
+            }
+        }
+        entries.retain(|entry| !entry.released || entry.back || entry.pending > 0);
+        self.count.store(entries.len(), Relaxed);
+    }
+
+    /// A didModifyRange of `start..end`: each texture whose range it meets owes its copy in.
+    pub(crate) fn modified(&self, start: u64, end: u64) {
+        for entry in lock(&self.entries).iter_mut() {
+            if meets(entry.range, (start, end)) {
+                entry.into = true;
+            }
+        }
+    }
+
+    /// The copy in texture `texture` owes, taken, for the upload that leads a submission: after
+    /// the copies back owed by submitted writes of textures whose ranges meet its, its own among
+    /// them, into `backs`.
+    pub(crate) fn take_into(&self, texture: u32, backs: &mut Vec<Back>) -> Option<OverCopy> {
+        let (range, copy) = {
+            let mut entries = lock(&self.entries);
+            let entry = entries.iter_mut().find(|entry| entry.of(texture))?;
+            if !entry.into {
+                return None;
+            }
+            entry.into = false;
+            (entry.range, entry.copy)
+        };
+        self.backs(Some(range), false, backs);
+        Some(copy)
+    }
+}
+
+/// The copies back owed to readers of `buffer`'s device copy over `range` (all of it where
+/// `None`), where it has textures over it in images of their own; with `pending`, a reader
+/// recorded after the writes, also those of writes not yet submitted.
+pub(crate) fn backs(buffer: &Buffer, range: Option<(u64, u64)>, pending: bool) -> Vec<Back> {
+    let mut backs = Vec::new();
+    if let Some(overs) = buffer.managed_overs() {
+        overs.backs(range, pending, &mut backs);
+    }
+    backs
 }

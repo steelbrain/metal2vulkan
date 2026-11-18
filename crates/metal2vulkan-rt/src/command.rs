@@ -15,7 +15,7 @@ use crate::readback;
 use crate::record::{self, Reach, Recorder};
 use crate::ring::Writes;
 use crate::sampler::SamplerState;
-use crate::texture::Texture;
+use crate::texture::{Image, OverCopy, Texture};
 use crate::times::{self, Stamps, Times};
 use ash::vk;
 use std::sync::atomic::Ordering;
@@ -160,6 +160,12 @@ pub(crate) struct Gpu {
     pub(crate) samplers: Vec<SamplerState>,
     /// What the commands wrote into the parameter ring.
     pub(crate) ring: Writes,
+    /// A texture over a Managed buffer's device copy in an image of its own is kept: the submit
+    /// thread looks for the copies in it owes (`crate::over::ManagedOvers`).
+    pub(crate) managed: bool,
+    /// The images of released textures whose copies back the commands make, kept until the
+    /// command buffer retires.
+    pub(crate) images: Vec<Arc<Image>>,
 }
 
 impl Gpu {
@@ -182,6 +188,12 @@ pub(crate) struct Segment {
     /// What its commands did to textures over a buffer in an image of their own; once it ends,
     /// what the submit thread needs of that (`crate::over`).
     pub(crate) overs: Overs,
+    /// The Managed buffers with textures over their device copies that its commands wrote: each
+    /// such texture owes its copy in from the next submission (`crate::over::ManagedOvers`).
+    pub(crate) managed_written: Vec<Buffer>,
+    /// The textures over a Managed buffer's device copy in an image of their own that its
+    /// commands wrote: its submission settles their copies back (`crate::over::ManagedOvers`).
+    pub(crate) managed_wrote: Vec<Texture>,
 }
 
 pub(crate) struct Handlers {
@@ -239,6 +251,8 @@ impl CommandBuffer {
                             textures: Vec::new(),
                             samplers: Vec::new(),
                             ring: Writes::default(),
+                            managed: false,
+                            images: Vec::new(),
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -810,6 +824,7 @@ impl Building {
     pub(crate) fn keep_texture(&mut self, texture: &Texture) {
         let textures = &mut self.gpu.textures;
         if !textures.iter().rev().any(|kept| kept.id() == texture.id()) {
+            self.gpu.managed |= texture.managed_over().is_some();
             textures.push(texture.clone());
         }
     }
@@ -853,6 +868,55 @@ impl Building {
         let host = unsafe { over::record(&core.device, command, &copies, &core.counters) };
         self.host_written |= host;
         Ok(())
+    }
+
+    /// Before a command that reads or writes a Managed buffer's device copy: records the copies
+    /// back `backs` owed by textures over it (`crate::over::ManagedOvers`), ordered as a blit's
+    /// copy is, and keeps their images until the command buffer retires.
+    ///
+    /// Err: [`Error::Vulkan`] where the command buffer cannot record.
+    pub(crate) fn managed_backs(&mut self, backs: Vec<over::Back>) -> Result<(), Error> {
+        if backs.is_empty() {
+            return Ok(());
+        }
+        let command = self.ordered_command()?;
+        let core = Arc::clone(self.device.core());
+        let copies: Vec<OverCopy> = backs.iter().map(|(_, copy, _)| *copy).collect();
+        // SAFETY: the command buffer records outside any render pass and keeps each image, and
+        // each buffer through its texture or below, until it retires; each image is in its home
+        // layout between commands.
+        unsafe { over::record_side(&core.device, command, &copies, false, &core.counters) };
+        self.gpu
+            .images
+            .extend(backs.into_iter().map(|(_, _, image)| image));
+        Ok(())
+    }
+
+    /// A command writes `texture`: where it is over a Managed buffer's device copy in an image of
+    /// its own, it owes its copy back to the readers recorded after the command, and from the
+    /// segment's submission to every later reader (`crate::over::ManagedOvers`).
+    pub(crate) fn wrote_texture_managed(&mut self, texture: &Texture) {
+        let Some(buffer) = texture.managed_over() else {
+            return;
+        };
+        let wrote = &mut self.last().managed_wrote;
+        let first = !wrote.iter().any(|kept| kept.id() == texture.id());
+        if first {
+            wrote.push(texture.clone());
+        }
+        buffer.over_entries().pend(texture.id(), first);
+    }
+
+    /// A command writes `buffer`: where it is a Managed buffer with textures over its device copy,
+    /// each owes its copy in from the next submission (`crate::over::ManagedOvers`).
+    pub(crate) fn wrote_managed(&mut self, buffer: &Buffer) {
+        if buffer.managed_overs().is_none() {
+            return;
+        }
+        let written = &mut self.last().managed_written;
+        if !written.iter().any(|kept| kept.id() == buffer.id()) {
+            written.push(buffer.clone());
+        }
     }
 
     /// After a command that made `accesses` (by hazard id), `unbound` where it wrote through an
@@ -960,12 +1024,16 @@ pub(crate) fn retire(
         textures,
         samplers,
         ring,
+        managed: _,
+        images,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
     ring.give_back(core);
-    drop((segments, blocks, copies, pipelines, textures, samplers));
+    drop((
+        segments, blocks, copies, pipelines, textures, samplers, images,
+    ));
     times::reset(
         &core.device,
         inner.queue.stamps.pool,

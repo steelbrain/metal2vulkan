@@ -29,6 +29,7 @@ use crate::encoder::Resource;
 use crate::error::{Error, Gap, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
+use crate::over;
 use crate::record::{memory_barrier, Reach};
 use crate::texture::{place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor};
 use ash::vk;
@@ -136,6 +137,7 @@ impl BlitCommandEncoder {
         };
         building.keep_texture(source);
         building.keep_texture(destination);
+        building.wrote_texture_managed(destination);
         let overs = [
             (source.hazard_id(), Access::Read),
             (destination.hazard_id(), Access::ReadWrite),
@@ -284,6 +286,13 @@ impl BlitCommandEncoder {
         let vk_buffer = buffer.device_range().0;
         building.keep_texture(texture);
         building.keep(buffer);
+        // The device copy's textures' copies back go first; a copy into the buffer owes them
+        // their copies in, and one into the texture its copy back (`crate::over::ManagedOvers`).
+        building.managed_backs(over::backs(buffer, None, true))?;
+        match into_image {
+            true => building.wrote_texture_managed(texture),
+            false => building.wrote_managed(buffer),
+        }
         let overs = match into_image {
             true => [
                 (texture.hazard_id(), Access::ReadWrite),
@@ -393,6 +402,8 @@ impl BlitCommandEncoder {
         let (vk_buffer, base) = buffer.device_range();
         let (offset, length) = fill_range(base, buffer.length(), range)?;
         building.keep(buffer);
+        building.managed_backs(over::backs(buffer, None, true))?;
+        building.wrote_managed(buffer);
         let overs = [(buffer.id(), Access::Write)];
         building.overs_before(&overs, false)?;
         let command = building.ordered_command()?;
@@ -520,6 +531,8 @@ impl BlitCommandEncoder {
                 size: buffer.length(),
             };
             building.keep(buffer);
+            // The textures over the device copy go back to it first (`crate::over`).
+            building.managed_backs(over::backs(buffer, None, true))?;
             let command = building.ordered_command()?;
             // Marked after `ordered_command`, as a copy into a Shared buffer is.
             building.wrote_host();

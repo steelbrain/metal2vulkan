@@ -6,6 +6,7 @@ use crate::device::{Core, Device};
 use crate::error::{Error, Refusal};
 use crate::fill;
 use crate::memory::{Block, BlockId, Mapping, Memory, MemoryClass};
+use crate::over::{self, ManagedOvers};
 use crate::places::Place;
 use crate::submit::Held;
 use ash::vk;
@@ -43,6 +44,9 @@ struct Inner {
     contents: Option<Mapping>,
     /// A Managed buffer's device copy, on a device whose Shared memory is not device-local.
     copy: Option<Arc<DeviceCopy>>,
+    /// Its textures over it in images of their own, as a Managed buffer with a device copy keeps
+    /// them (`crate::over::ManagedOvers`).
+    overs: ManagedOvers,
 }
 
 /// A Managed buffer's device copy: a place in a copy block of Private memory, which shaders reach.
@@ -264,6 +268,7 @@ impl Device {
                 length,
                 contents,
                 copy,
+                overs: ManagedOvers::default(),
             }),
         }
     }
@@ -305,6 +310,20 @@ impl Buffer {
             return Ok(());
         }
         let core = inner.device.core();
+        // A texture over the range in an image of its own owes its copy in; its copy back, owed,
+        // goes first, so the consumer's bytes land over it (`crate::over::ManagedOvers`).
+        if inner.overs.any() {
+            for (_, back, image) in over::backs(self, Some((start, end)), false) {
+                let held = [Held::Texture(image), Held::Copy(Arc::clone(copy))];
+                // SAFETY: recording under the work lock; the upload holds the image and the
+                // device copy, and the image is in its home layout between commands.
+                core.work
+                    .upload(core, None, held, |device, command| unsafe {
+                        over::record_side(device, command, &[back], false, &core.counters)
+                    })?;
+            }
+            inner.overs.modified(start, end);
+        }
         core.work
             .modify(core, copy, &inner.block, inner.offset, start, end)
     }
@@ -333,6 +352,17 @@ impl Buffer {
     /// Whether shaders reach the buffer in Shared memory, which the host reads.
     pub(crate) fn is_shared(&self) -> bool {
         self.inner.copy.is_none() && self.inner.block.memory.class == MemoryClass::Shared
+    }
+
+    /// Its textures over its device copy in images of their own, where it is a Managed buffer
+    /// with a device copy and has one (`crate::over::ManagedOvers`).
+    pub(crate) fn managed_overs(&self) -> Option<&ManagedOvers> {
+        (self.inner.copy.is_some() && self.inner.overs.any()).then_some(&self.inner.overs)
+    }
+
+    /// Its textures over it in images of their own, as it keeps them.
+    pub(crate) fn over_entries(&self) -> &ManagedOvers {
+        &self.inner.overs
     }
 
     /// The device it was made on.

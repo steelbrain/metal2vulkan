@@ -211,8 +211,8 @@ enum Form {
     Managed,
     /// A texture over a buffer in place ([`Buffer::new_texture`]): the image lies in them.
     InPlace,
-    /// A texture over a buffer of no device copy that the device's linear image does not hold:
-    /// an image of its own, which the submissions copy them into and back (`crate::over`).
+    /// A texture over a buffer the device's linear image does not hold: an image of its own,
+    /// which the submissions copy them into and back (`crate::over`).
     Copied,
 }
 
@@ -360,8 +360,15 @@ impl Drop for TextureInner {
         let core = self.device.core();
         // A view's id and image are its parent's, which it keeps.
         if self.view.is_none() {
-            if (self.named.as_ref()).is_some_and(|named| named.form == Form::Copied) {
-                core.copied_overs.fetch_sub(1, Ordering::Relaxed);
+            if let Some(named) = (self.named.as_ref()).filter(|named| named.form == Form::Copied) {
+                match named.buffer.held().1 {
+                    // Its buffer keeps its image where a copy back is owed
+                    // (`crate::over::ManagedOvers`).
+                    Some(_) => named.buffer.over_entries().release(self.id),
+                    None => {
+                        core.copied_overs.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
             }
             core.ids.give_back(self.id);
             // An upload holds the image past the texture: the pending one's bound counts it.
@@ -452,7 +459,7 @@ impl Device {
     /// A texture over a buffer ([`Buffer::new_texture`]) whose pitch is a multiple of the answer
     /// is in place where its place in the buffer's memory is also a multiple of the linear
     /// image's memory alignment (`VkMemoryRequirements::alignment`), which the answer does not
-    /// include; at any other place it is copied, or over a Managed buffer's device copy refused.
+    /// include; at any other place it is copied.
     ///
     /// Err: [`Gap::TextureFormat`] for a format no texture is made of.
     pub fn minimum_linear_texture_alignment(
@@ -696,11 +703,10 @@ impl Device {
         // heap's or a buffer's block is the device's, and the texture holds it.
         let mut made = unsafe { make(core, &d, &shape, &plan, bind) };
         // Where the device's linear image does not take the texture's layout, an image of its own
-        // that the submissions copy the bytes into and back, over a buffer of no device copy.
-        if let (Err(Error::Unsupported(Gap::TextureOverBuffer { .. })), Some(named)) = (
-            &made,
-            (named.as_mut()).filter(|named| named.buffer.held().1.is_none()),
-        ) {
+        // that the submissions copy the bytes into and back.
+        if let (Err(Error::Unsupported(Gap::TextureOverBuffer { .. })), Some(named)) =
+            (&made, &mut named)
+        {
             named.form = Form::Copied;
             (first, home) = (vk::ImageLayout::UNDEFINED, plan.home);
             block = None;
@@ -743,8 +749,10 @@ impl Device {
             named,
             view: None,
         };
-        // The commands track what they write while it lives (`crate::over`).
-        if (inner.named.as_ref()).is_some_and(|named| named.form == Form::Copied) {
+        // Over a buffer of no device copy, the commands track what they write while it lives
+        // (`crate::over`).
+        let copied = (inner.named.as_ref()).filter(|named| named.form == Form::Copied);
+        if copied.is_some_and(|named| named.buffer.held().1.is_none()) {
             core.copied_overs.fetch_add(1, Ordering::Relaxed);
         }
         if let Some((class, index)) = index {
@@ -764,6 +772,21 @@ impl Device {
         let texture = Texture {
             inner: Arc::new(inner),
         };
+        // Over a Managed buffer's device copy, its buffer keeps what Metal's Managed events owe it
+        // (`crate::over::ManagedOvers`).
+        if let (Some(buffer), Some((_, copy)), Some(unit)) = (
+            texture.managed_over(),
+            texture.copied_over(),
+            texture.inner.unit,
+        ) {
+            let place =
+                (texture.inner.named.as_ref()).map_or(BytesPlace::default(), |n| n.places[0]);
+            let end = place.offset
+                + u64::from(d.height - 1) * place.bytes_per_row
+                + u64::from(d.width) * u64::from(unit.bytes);
+            let image = Arc::clone(&texture.inner.image);
+            (buffer.over_entries()).add(texture.inner.id, image, copy, (place.offset, end));
+        }
         core.work.home(core, &texture.inner.image)?;
         Ok(texture)
     }
@@ -848,8 +871,7 @@ fn check_places(
 /// format of one texel an element, its first texel a whole number of texels into the bytes
 /// shaders reach. Whether the device's linear image may hold it in place is the answer: in memory
 /// that did not spill, of a format and usage the device makes linear images of, with every format
-/// feature its optimal image has that the usage uses. Over a Managed buffer's device copy, a
-/// texture it may not is a gap.
+/// feature its optimal image has that the usage uses.
 fn check_over(
     core: &Core,
     d: &TextureDescriptor,
@@ -898,11 +920,7 @@ fn check_over(
         .is_some_and(|max| d.width <= max.width && d.height <= max.height);
     let (linear, optimal) = core.format_features(plan.format);
     let features = linear.contains(optimal & kept_features(plan.usage));
-    let in_place = !spilled && extent && features;
-    if !in_place && copy.is_some() {
-        return Err(gap());
-    }
-    Ok(in_place)
+    Ok(!spilled && extent && features)
 }
 
 /// The format features an image of `usage` is used by, which a linear image is to keep where the
@@ -2243,8 +2261,22 @@ impl Texture {
         }
     }
 
+    /// Of a texture over a buffer of no device copy in an image of its own, which the submissions
+    /// copy into and back by the Shared rules (`crate::over`): the buffer and the copy.
+    pub(crate) fn copied_shared(&self) -> Option<(&Buffer, OverCopy)> {
+        self.copied_over()
+            .filter(|(buffer, _)| buffer.held().1.is_none())
+    }
+
+    /// Of a texture over a Managed buffer's device copy in an image of its own, which Metal's
+    /// Managed events owe copies (`crate::over::ManagedOvers`): the buffer.
+    pub(crate) fn managed_over(&self) -> Option<&Buffer> {
+        let named = (self.inner.named.as_ref()).filter(|named| named.form == Form::Copied)?;
+        named.buffer.held().1.map(|_| &named.buffer)
+    }
+
     /// Of a texture over a buffer in an image of its own (`crate::over`): the buffer, and the
-    /// copy between its bytes and the image.
+    /// copy between the bytes shaders reach of it and the image.
     pub(crate) fn copied_over(&self) -> Option<(&Buffer, OverCopy)> {
         let inner = &self.inner;
         let named = (inner.named.as_ref()).filter(|named| named.form == Form::Copied)?;
@@ -2559,18 +2591,17 @@ impl Buffer {
     ///
     /// Where the device's linear image does not take the texture (another pitch, an offset off
     /// its memory alignment, a format or usage its linear tiling lacks, memory that spilled), the
-    /// texture over a buffer of no device copy is an optimal image of its own, which the device
-    /// copies the buffer's bytes into once a submission and back after a write
-    /// (`crate::over`). Each copy counts in
+    /// texture is an optimal image of its own, which the device copies the bytes shaders reach
+    /// into and back (`crate::over`): over a Shared buffer once a submission, over a Managed
+    /// buffer's device copy only at Metal's Managed events. Each copy counts in
     /// [`Metrics::over_copies`](crate::Metrics::over_copies).
     ///
     /// Err: as [`Device::new_texture`]; [`Refusal::BufferTextureLayout`] for rows that are not a
     /// whole number of texels apart or are closer than a row, an offset that is not a whole
     /// number of texels, or texels past the buffer; [`Gap::TextureOverBuffer`] for a texture
     /// other than 2D of one level, sample and slice, or of a format of other than one color texel
-    /// an element, whose first texel in the bytes shaders reach is not a whole number of texels
-    /// in, or over a Managed buffer's device copy where the device's linear image does not take
-    /// it.
+    /// an element, or whose first texel in the bytes shaders reach is not a whole number of
+    /// texels in.
     pub fn new_texture(
         &self,
         descriptor: &TextureDescriptor,
@@ -2599,7 +2630,7 @@ pub(crate) struct OverCopy {
     /// The image's layout outside a copy.
     pub(crate) home: vk::ImageLayout,
     pub(crate) aspects: vk::ImageAspectFlags,
-    /// The buffer's block's `VkBuffer`.
+    /// The `VkBuffer` of the bytes shaders reach: the block's, or a Managed buffer's device copy's.
     pub(crate) buffer: vk::Buffer,
     pub(crate) region: vk::BufferImageCopy,
     /// The texels' bytes.

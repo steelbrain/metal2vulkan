@@ -6,6 +6,7 @@ use crate::counters::Metric;
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::fence::Fence;
 use crate::hazard::Access;
+use crate::over;
 use crate::pipeline::{
     ComputePipelineState, FieldValue, Form, Interface, Kernel, Place, Variant, PUSH_BYTES,
 };
@@ -745,6 +746,28 @@ impl ComputeCommandEncoder {
             if let Some(overs) = &overs {
                 let unbound = interface.reads_unbound || interface.writes_unbound;
                 building.overs_before(overs, unbound)?;
+            }
+            // A binding of a Managed buffer with textures over its device copy takes their copies
+            // back first, and one whose compiled interface writes it owes them their copies in; a
+            // texture slot written owes its copy back (`crate::over::ManagedOvers`).
+            let mut backs = Vec::new();
+            for &(slot, access) in &interface.buffers {
+                if let Some(Slot::Buffer { buffer, .. }) = self.slots.get(slot as usize) {
+                    if buffer.managed_overs().is_some() {
+                        backs.extend(over::backs(buffer, None, true));
+                        if access.writes() {
+                            building.wrote_managed(buffer);
+                        }
+                    }
+                }
+            }
+            building.managed_backs(backs)?;
+            for &(slot, access) in &interface.textures {
+                if let (true, Some(Some(texture))) =
+                    (access.writes(), self.textures.get(slot as usize))
+                {
+                    building.wrote_texture_managed(texture);
+                }
             }
             let wrote = building.dispatch_hazards(serial, interface, &accesses)?;
             match &overs {

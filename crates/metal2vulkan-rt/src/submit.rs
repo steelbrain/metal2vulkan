@@ -18,7 +18,7 @@
 //! device's staging region ([`crate::staging`]), which the work lock guards with the upload; the
 //! upload goes without a wait once its copies' spans take half the region.
 
-use crate::buffer::DeviceCopy;
+use crate::buffer::{Buffer, DeviceCopy};
 use crate::command::{CbInner, CommandBufferError, Handler, Pending, Segment};
 use crate::complete;
 use crate::counters::{Counters, Metric};
@@ -31,7 +31,7 @@ use crate::over::{self, Leans};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
 use crate::staging::{At, Oldest, Region, Stage, Staging, REGION_LEN};
-use crate::texture::{Image, OverCopy};
+use crate::texture::{Image, OverCopy, Texture};
 use crate::times;
 use ash::vk;
 use std::collections::{HashMap, VecDeque};
@@ -250,8 +250,18 @@ struct Batch {
     /// (`crate::over`).
     leans: Leans,
     /// The copies into those textures' images its upload makes first: one for each texture a
-    /// segment leans on the leading copy for.
+    /// segment leans on the leading copy for, and each texture over a Managed buffer's device
+    /// copy a command buffer of it keeps that owes one (`crate::over::ManagedOvers`).
     overs: Vec<OverCopy>,
+    /// The copies back owed first by textures over a Managed buffer's device copy whose ranges
+    /// meet those, for writes already submitted, with their images, which the upload keeps.
+    backs: Vec<over::Back>,
+    /// The Managed buffers its segments wrote whose textures over their device copies owe their
+    /// copies in once it is submitted.
+    written: Vec<Buffer>,
+    /// The textures over a Managed buffer's device copy its segments wrote, one for each segment
+    /// that wrote one, whose copies back its submission settles.
+    wrote: Vec<Texture>,
 }
 
 /// One segment's submit info.
@@ -973,10 +983,32 @@ impl WorkState {
             watch: Vec::new(),
             leans: Leans::default(),
             overs: Vec::new(),
+            backs: Vec::new(),
+            written: Vec::new(),
+            wrote: Vec::new(),
         });
         group.leans.join(&segment.overs);
+        for buffer in &segment.managed_written {
+            if !group.written.iter().any(|kept| kept.id() == buffer.id()) {
+                group.written.push(buffer.clone());
+            }
+        }
+        group.wrote.extend(segment.managed_wrote.iter().cloned());
+        // Each texture over a Managed buffer's device copy the command buffer keeps that an event
+        // owes its copy in (`crate::over::ManagedOvers`).
+        if pending.gpu.managed {
+            for texture in &pending.gpu.textures {
+                let Some(buffer) = texture.managed_over() else {
+                    continue;
+                };
+                let taken = buffer
+                    .over_entries()
+                    .take_into(texture.id(), &mut group.backs);
+                group.overs.extend(taken);
+            }
+        }
         for texture in segment.overs.leaning() {
-            if let Some((_, copy)) = texture.copied_over() {
+            if let Some((_, copy)) = texture.copied_shared() {
                 if !group.overs.iter().any(|kept| kept.image == copy.image) {
                     group.overs.push(copy);
                 }
@@ -1318,6 +1350,9 @@ impl Batch {
             watch: Vec::new(),
             leans: Leans::default(),
             overs: Vec::new(),
+            backs: Vec::new(),
+            written: Vec::new(),
+            wrote: Vec::new(),
         }
     }
 }
@@ -1331,17 +1366,20 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         finished,
         watch,
         overs,
+        backs,
+        written,
+        wrote,
         ..
     } = batch;
     let device = &core.device;
     // An upload begun for textures gone before their move records nothing; one is begun for the
     // copies into textures over a buffer in an image of their own.
     let (mut upload, mut ok) = match upload {
-        Some(upload) if upload.entries == 0 && overs.is_empty() => {
+        Some(upload) if upload.entries == 0 && overs.is_empty() && backs.is_empty() => {
             upload.retire(core);
             (None, true)
         }
-        None if !overs.is_empty() => match Upload::begin(core) {
+        None if !overs.is_empty() || !backs.is_empty() => match Upload::begin(core) {
             Ok(upload) => (Some(upload), true),
             Err(_) => (None, false),
         },
@@ -1352,11 +1390,18 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
     ok &= upload.as_mut().is_none_or(|upload| {
         upload.copy_modified(core);
         // Each texture over a buffer in an image of its own that a segment leans on takes the
-        // buffer's bytes (`crate::over`).
+        // bytes shaders reach, after the Managed buffers' changed ranges (`crate::over`).
         // SAFETY: the upload's command buffer is recording, and only this thread has it; the
         // command buffers of the submission hold each texture, which holds its buffer, until it
         // retires, and each image is in its home layout, any move there recorded before.
-        unsafe { over::record_side(device, upload.command, &overs, true, &core.counters) };
+        unsafe {
+            let copies: Vec<OverCopy> = backs.iter().map(|(_, copy, _)| *copy).collect();
+            over::record_side(device, upload.command, &copies, false, &core.counters);
+            over::record_side(device, upload.command, &overs, true, &core.counters);
+        }
+        upload
+            .held
+            .extend(backs.into_iter().map(|(_, _, image)| Held::Texture(image)));
         record::barrier(device, upload.command, Reach::Host);
         core.counters.count(Metric::Barriers);
         // SAFETY: the upload's command buffer was recording under the work lock, which `close`
@@ -1410,6 +1455,18 @@ fn submit(core: &Core, value: u64, upload: Option<Upload>, batch: Batch) {
         complete::lose(core);
     }
     core.done.submitted(core, value, upload, finished, watch);
+    // Device work of the submission wrote these Managed buffers: their textures over their device
+    // copies owe their copies in from the next submission (`crate::over::ManagedOvers`).
+    for buffer in written {
+        buffer.over_entries().written();
+    }
+    // Its writes of textures over a Managed buffer's device copy are submitted: the upload that
+    // leads a later submission may take their copies back.
+    for texture in wrote {
+        if let Some(buffer) = texture.managed_over() {
+            buffer.over_entries().settle(texture.id());
+        }
+    }
 }
 
 impl Upload {
