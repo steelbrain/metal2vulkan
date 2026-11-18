@@ -4,8 +4,8 @@ use crate::plan::{
     Binding, BufferPlan, Constant, Grid, Plan, SamplerPlan, Scaled, Source, TexturePlan,
 };
 use crate::{
-    clocks, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputeDevice,
-    Device, Failed, Library, Refused, Result, Storage, Texture, Waits,
+    clocks, BlitCommandEncoder, Buffer, Code, CommandBuffer, CommandQueue, ComputeCommandEncoder,
+    ComputeDevice, Device, Failed, Library, Refused, Result, Storage, Texture, Waits,
 };
 use std::collections::HashMap;
 use std::ops::Range;
