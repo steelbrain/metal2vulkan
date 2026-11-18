@@ -21,7 +21,7 @@ pub struct Workload {
 }
 
 /// The authored workloads.
-pub const WORKLOADS: [Workload; 37] = [
+pub const WORKLOADS: [Workload; 38] = [
     Workload {
         name: "bandwidth",
         plan: bandwidth,
@@ -45,6 +45,10 @@ pub const WORKLOADS: [Workload; 37] = [
     Workload {
         name: "dispatch_chain",
         plan: dispatch_chain,
+    },
+    Workload {
+        name: "row_cells",
+        plan: row_cells,
     },
     Workload {
         name: "frame",
@@ -626,6 +630,64 @@ fn image_filter() -> Plan {
                 per_group: [16, 16, 1],
             },
         }],
+        expect: vec![Expect {
+            buffer: 1,
+            values: Values::Words(output),
+        }],
+        textures: Vec::new(),
+        expect_textures: Vec::new(),
+        outputs: Vec::new(),
+        per_command_buffer: None,
+        per_encoder: None,
+        commit_to_complete: false,
+        scaled: None,
+    }
+}
+
+/// `row_cells` over a 2048 by 1024 grid, its width and height, whose rows are 2048 cells apart, in
+/// threadgroups of 32 by 2, 64 by 8 and 512 by 1, four dispatches of each: each SIMD group lies
+/// within one row of its threadgroup, so a runtime that runs a kernel's one-row variant there may
+/// run these grids in its tiles.
+fn row_cells() -> Plan {
+    const WIDTH: usize = 2048;
+    const HEIGHT: usize = 1024;
+    let input: Vec<f32> = (words(7, WIDTH * HEIGHT).into_iter())
+        .map(|word| (word & 1023) as f32)
+        .collect();
+    let mut output = Vec::with_capacity(3 * input.len());
+    for &value in &input {
+        output.extend([value, value * 2.0, value + 1.0].map(f32::to_bits));
+    }
+    let width = word_bytes(&[WIDTH as u32]);
+    let height = word_bytes(&[HEIGHT as u32]);
+    let dispatch = |per_group: [u64; 3]| Dispatch {
+        blits: Vec::new(),
+        function: "row_cells".to_owned(),
+        linked: Vec::new(),
+        constants: Vec::new(),
+        bindings: vec![
+            buffer(0, 0),
+            buffer(1, 1),
+            bytes(2, width.clone()),
+            bytes(3, height.clone()),
+            bytes(4, width.clone()),
+        ],
+        grid: Grid::Threads {
+            threads: [WIDTH as u64, HEIGHT as u64, 1],
+            per_group,
+        },
+    };
+    let mut dispatches = Vec::new();
+    for per_group in [[32, 2, 1], [64, 8, 1], [512, 1, 1]] {
+        for _ in 0..4 {
+            dispatches.push(dispatch(per_group));
+        }
+    }
+    Plan {
+        name: "row_cells".to_owned(),
+        library: Source::Authored,
+        buffers: vec![private(float_bytes(&input)), unset(4 * output.len() as u64)],
+        dispatches,
         expect: vec![Expect {
             buffer: 1,
             values: Values::Words(output),

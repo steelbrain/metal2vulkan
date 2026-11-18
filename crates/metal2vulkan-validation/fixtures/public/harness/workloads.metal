@@ -3,10 +3,12 @@
 // barriers, SIMD reductions, 2D image-like indexing, many tiny dispatches in a chain, narrow
 // integer arithmetic, sampling through a runtime sampler, through a constexpr one and over a grid
 // more than one deep, products by a constant zero of either sign, many buffers bound for each of
-// many dispatches, many one-wave threadgroups that each do almost nothing, and reads of a table
-// of constants. Written
-// from scratch for it; `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir harness` compiles
-// it. The harness holds a CPU reference of every result. No translator sweep reads this directory.
+// many dispatches, many one-wave threadgroups that each do almost nothing, reads of a table of
+// constants, and a grid's cells indexed by row, with the control the harness's tests hold beside
+// it; and one kernel the new runtime's device tests run against Metal's reading of it
+// (row_barrier). Written from scratch for it;
+// `scripts/regen-air-fixtures/regen-air-fixtures.sh --dir harness` compiles it. The harness holds a
+// CPU reference of every workload's result. No translator sweep reads this directory.
 #include <metal_stdlib>
 using namespace metal;
 
@@ -114,6 +116,73 @@ kernel void binomial3x3(device const float4 *source [[buffer(0)]],
         }
     }
     destination[position.y * size.x + position.x] = sum * 0.0625f;
+}
+
+// Cells of a row-major grid: each thread inside the grid's width and height reads its word at
+// y * stride + x and writes three words at (y * width + x) * 3, the rest return first, as
+// row-indexed kernels are commonly written. Two threads of one simdgroup in different rows may
+// meet for all the IR shows, so the lockstep order puts barriers between the stores, in the
+// block past the bounds test, which the threads of one simdgroup may not all run, so they are
+// simdgroup barriers; where each simdgroup lies within one row of its threadgroup they never
+// meet. There are two forms. row_cells computes the cells in int: it compiles to steps that carry
+// nsw, and from them the order proves two threads of one row apart, so its one-row variant needs
+// no barrier. row_cells_uint, the control, computes them in uint: its steps carry no flags and
+// may wrap, so the order does not prove them apart in rows and its one-row variant keeps the
+// barriers.
+kernel void row_cells(device const float *source [[buffer(0)]],
+                      device float *destination [[buffer(1)]],
+                      constant int &width [[buffer(2)]],
+                      constant int &height [[buffer(3)]],
+                      constant int &stride [[buffer(4)]],
+                      uint2 position [[thread_position_in_grid]]) {
+    int x = int(position.x);
+    int y = int(position.y);
+    if (x >= width || y >= height) {
+        return;
+    }
+    float value = source[y * stride + x];
+    int cell = y * width + x;
+    destination[3 * cell] = value;
+    destination[3 * cell + 1] = value * 2.0f;
+    destination[3 * cell + 2] = value + 1.0f;
+}
+
+kernel void row_cells_uint(device const float *source [[buffer(0)]],
+                           device float *destination [[buffer(1)]],
+                           constant uint &width [[buffer(2)]],
+                           constant uint &height [[buffer(3)]],
+                           constant uint &stride [[buffer(4)]],
+                           uint2 position [[thread_position_in_grid]]) {
+    uint x = position.x;
+    uint y = position.y;
+    if (x >= width || y >= height) {
+        return;
+    }
+    float value = source[y * stride + x];
+    uint cell = y * width + x;
+    destination[3 * cell] = value;
+    destination[3 * cell + 1] = value * 2.0f;
+    destination[3 * cell + 2] = value + 1.0f;
+}
+// A grid's cells written, then read across rows after a threadgroup barrier: each thread stores
+// its own word, waits at threadgroup_barrier(mem_flags::mem_device), and reads the word the thread
+// of its column in the other row of its pair (y ^ 1) stored, where that row is in the grid. The
+// barrier orders device memory among the threads of one threadgroup, so in threadgroups an even
+// number of rows high, aligned to the pairs, every read sees the other row's word. The kernel holds
+// no threadgroup memory, and observes its partition through the barrier: run in tiles of one row,
+// the pairs would split. The probe metal2vulkan-conformance/probes/row_barrier_reads.m runs the
+// same source on Metal.
+kernel void row_barrier(device uint *cells [[buffer(0)]],
+                        device uint *seen [[buffer(1)]],
+                        uint2 position [[thread_position_in_grid]],
+                        uint2 grid [[threads_per_grid]]) {
+    uint cell = position.y * grid.x + position.x;
+    cells[cell] = ((position.y << 16) | position.x) + 1;
+    threadgroup_barrier(mem_flags::mem_device);
+    uint other = position.y ^ 1;
+    if (other < grid.y) {
+        seen[cell] = cells[other * grid.x + position.x];
+    }
 }
 
 // Many tiny dispatches in a chain: one step of a linear congruential generator on each word, its
