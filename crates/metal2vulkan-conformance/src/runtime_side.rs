@@ -1235,7 +1235,7 @@ impl<'a> RuntimeSide<'a> {
 }
 
 /// The usage a texture's role is.
-fn usage_of(role: TextureRole) -> TextureUsage {
+pub(crate) fn usage_of(role: TextureRole) -> TextureUsage {
     match role {
         TextureRole::Read => TextureUsage::SHADER_READ,
         TextureRole::Write => TextureUsage::SHADER_WRITE,
@@ -1348,7 +1348,7 @@ fn vertex_descriptor(layout: &crate::render::VertexLayout<'_>) -> VertexDescript
 
 /// The runtime's stage-input descriptor for `stage_input`: the same attribute indices, buffer
 /// indices, formats, strides, steps and rates, since the case's vocabulary is Metal's own.
-fn stage_input_descriptor(stage_input: &StageInput) -> StageInputDescriptor {
+pub(crate) fn stage_input_descriptor(stage_input: &StageInput) -> StageInputDescriptor {
     let mut descriptor = StageInputDescriptor::new();
     for attribute in &stage_input.attributes {
         descriptor.attributes.insert(

@@ -20,7 +20,8 @@
 //! allowances name (`metal2vulkan-degrade-<kind>`).
 
 use crate::case::{
-    Answer, Bindings, Failure, Handle, ShaderSource, Side, StageInRegion, StageInput, Venue,
+    Answer, Bindings, Failure, Handle, SamplerSpec, ShaderSource, Side, StageInRegion, StageInput,
+    TextureSpec, Venue,
 };
 use crate::device::Venues;
 use crate::empty_command_buffers::{
@@ -216,6 +217,7 @@ pub struct RtSide<'a> {
     buffers: Vec<(rt::Buffer, rt::Block)>,
     textures: Vec<rt::Texture>,
     command_buffers: Vec<rt::CommandBuffer>,
+    samplers: Vec<rt::SamplerState>,
     /// The pipelines the case dispatched, whose precision notes [`Side::announced`] answers.
     dispatched: BTreeSet<usize>,
 }
@@ -231,6 +233,7 @@ impl<'a> RtSide<'a> {
             buffers: Vec::new(),
             textures: Vec::new(),
             command_buffers: Vec::new(),
+            samplers: Vec::new(),
             dispatched: BTreeSet::new(),
         }
     }
@@ -269,9 +272,6 @@ impl<'a> RtSide<'a> {
         bindings: &Bindings<'_>,
         dispatch: impl FnOnce(&mut rt::ComputeCommandEncoder) -> Result<(), rt::Error>,
     ) -> Answer<Handle> {
-        if !bindings.samplers.is_empty() {
-            return Err(Failure::unavailable("set_sampler_state"));
-        }
         let at = pipeline.0 as usize;
         let state = (self.pipelines.get(at))
             .ok_or_else(|| Failure::named("NoSuchHandle", format!("pipeline {at}")))?
@@ -282,6 +282,12 @@ impl<'a> RtSide<'a> {
         let textures = (bindings.textures.iter())
             .map(|&handle| self.held_texture(handle).cloned())
             .collect::<Answer<Vec<rt::Texture>>>()?;
+        let samplers = (bindings.samplers.iter())
+            .map(|&handle| {
+                (self.samplers.get(handle.0 as usize).cloned())
+                    .ok_or_else(|| Failure::named("NoSuchHandle", format!("sampler {}", handle.0)))
+            })
+            .collect::<Answer<Vec<rt::SamplerState>>>()?;
         let of_rt = |error: rt::Error| Failure::of_rt(&error);
         let command_buffer = self.queue()?.command_buffer().map_err(of_rt)?;
         let mut encoder =
@@ -292,6 +298,9 @@ impl<'a> RtSide<'a> {
         }
         for (index, texture) in textures.iter().enumerate() {
             (encoder.set_texture(Some(texture), index as u32)).map_err(of_rt)?;
+        }
+        for (index, sampler) in samplers.iter().enumerate() {
+            (encoder.set_sampler_state(Some(sampler), index as u32)).map_err(of_rt)?;
         }
         dispatch(&mut encoder).map_err(of_rt)?;
         encoder.end_encoding();
@@ -479,13 +488,77 @@ impl Side for RtSide<'_> {
         codes.into_iter().map(str::to_owned).collect()
     }
 
+    /// The runtime's own answer to the descriptor, which states the stage input as the old
+    /// runtime's side does.
     fn compute_pipeline_with_stage_input(
         &mut self,
-        _: Handle,
-        _: &str,
-        _: &StageInput,
+        library: Handle,
+        entry: &str,
+        stage_input: &StageInput,
     ) -> Answer<Handle> {
-        Err(Failure::unavailable("compute_pipeline_with_stage_input"))
+        let function = (self.held_library(library)?.function(entry))
+            .map_err(|error| Failure::of_translation(&error))?;
+        let mut descriptor = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(
+            rt::FunctionDescriptor::new(function),
+        ));
+        descriptor.stage_input = Some(crate::runtime_side::stage_input_descriptor(stage_input));
+        let on = self.on;
+        let state = (on.device)
+            .new_compute_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
+            .map_err(|error| Failure::of_rt(&error))?;
+        Ok(keep(&mut self.pipelines, state))
+    }
+
+    /// One level of Shared storage in the role's usage, at the next texture index where a shader
+    /// reaches it.
+    fn texture_2d_in_role(&mut self, spec: &TextureSpec, bytes: &[u8]) -> Answer<Handle> {
+        let mut descriptor = rt::TextureDescriptor::new(
+            rt::TextureType::Type2D,
+            spec.format,
+            spec.size[0],
+            spec.size[1],
+        );
+        descriptor.usage = crate::runtime_side::usage_of(spec.role);
+        descriptor.storage_mode = rt::StorageMode::Shared;
+        let reached = rt::TextureUsage::SHADER_READ | rt::TextureUsage::SHADER_WRITE;
+        let index = (descriptor.usage.intersects(reached))
+            .then(|| self.on.next_index(rt::IndexClass::Texture));
+        let of_rt = |error: rt::Error| Failure::of_rt(&error);
+        let texture = (self.on.device.new_texture(&descriptor, index)).map_err(of_rt)?;
+        if !bytes.is_empty() {
+            let region = rt::Region {
+                origin: [0, 0, 0],
+                size: [spec.size[0], spec.size[1], 1],
+            };
+            (texture.replace_region(region, 0, 0, bytes, spec.row_pitch.into(), 0))
+                .map_err(of_rt)?;
+        }
+        Ok(keep(&mut self.textures, texture))
+    }
+
+    /// At the next sampler index. Every state the runtime makes has a resource ID, so
+    /// `supportArgumentBuffers` asks for nothing more.
+    fn sampler(&mut self, spec: &SamplerSpec) -> Answer<Handle> {
+        let mut descriptor = rt::SamplerDescriptor::new();
+        descriptor.min_filter = spec.min_filter;
+        descriptor.mag_filter = spec.mag_filter;
+        descriptor.mip_filter = spec.mip_filter;
+        descriptor.s_address_mode = spec.s_address_mode;
+        descriptor.t_address_mode = spec.t_address_mode;
+        descriptor.r_address_mode = spec.r_address_mode;
+        descriptor.border_color = spec.border_color;
+        descriptor.normalized_coordinates = spec.normalized_coordinates;
+        descriptor.lod_min_clamp = spec.lod_min_clamp;
+        descriptor.lod_max_clamp = spec.lod_max_clamp;
+        descriptor.lod_average = spec.lod_average;
+        descriptor.max_anisotropy = spec.max_anisotropy;
+        descriptor.compare_function = spec.compare_function;
+        descriptor.reduction_mode = spec.reduction_mode;
+        descriptor.lod_bias = spec.lod_bias;
+        let index = self.on.next_index(rt::IndexClass::Sampler);
+        let sampler = (self.on.device.new_sampler_state(&descriptor, index))
+            .map_err(|error| Failure::of_rt(&error))?;
+        Ok(keep(&mut self.samplers, sampler))
     }
 
     fn dispatch_threads(
